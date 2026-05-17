@@ -8,15 +8,27 @@ import pytest
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import EventScope, PipelineEvent
+from loom.pipeline.reliability import (
+    FailureClassification,
+    ReliabilityPolicy,
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    RetryPolicy,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     AuthoritySchemaError,
+    AuthorityStoreError,
     AuthoritySchemaFailureKind,
     BackendCapability,
     CapabilityScope,
     CapabilitySupport,
     LeaseState,
     LifecycleReason,
+    ReliabilityPolicyFact,
+    ReliabilityPolicyScope,
     path_to_run_uri,
 )
 from loom.pipeline.stores.sqlite_authority import (
@@ -34,6 +46,58 @@ class FrozenClock:
 
     def __call__(self) -> str:
         return self.value
+
+
+def _reliability_status(run_uri: str) -> ReliabilityStatusDetail:
+    return ReliabilityStatusDetail(
+        run_uri=run_uri,
+        run_status=RunStatus.RUNNING,
+        stage_id="build",
+        stage_status=StageStatus.FAILED,
+        attempt=1,
+        created_at="2020-01-01T00:00:00Z",
+    )
+
+
+def _reliability_transaction(run_uri: str) -> StageAttemptTransaction:
+    status = _reliability_status(run_uri)
+    return StageAttemptTransaction(
+        transaction_id="tx-1",
+        run_uri=run_uri,
+        stage_id=status.stage_id,
+        attempt=status.attempt,
+        status=status,
+    )
+
+
+def _retry_decision(run_uri: str) -> RetryDecisionRecord:
+    status = _reliability_status(run_uri)
+    return RetryDecisionRecord(
+        decision_id="retry-1",
+        transaction_id="tx-1",
+        should_retry=False,
+        next_attempt=None,
+        decision_reason="policy_disabled",
+        policy_max_attempts=1,
+        attempt_count=1,
+        status=status,
+        failure=FailureClassification(
+            reason_code="runtime_error",
+            status=status,
+            retriable=False,
+        ),
+    )
+
+
+def _timeout_outcome(run_uri: str) -> TimeoutOutcomeRecord:
+    return TimeoutOutcomeRecord(
+        outcome_id="timeout-1",
+        transaction_id="tx-1",
+        timed_out=False,
+        duration_seconds=1,
+        reason_code="completed",
+        status=_reliability_status(run_uri),
+    )
 
 
 def test_schema_policy_reports_missing_invalid_older_and_newer(
@@ -134,6 +198,63 @@ def test_revisions_advance_with_each_sqlite_mutation(tmp_path: Path) -> None:
 
     assert [first.sequence, second.sequence, third.sequence] == [1, 2, 3]
     assert store.snapshot(run_uri).revision.sequence == 3
+
+
+def test_sqlite_reliability_facts_are_snapshot_backed_and_immutable(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    policy = ReliabilityPolicyFact(
+        run_uri=run_uri,
+        scope=ReliabilityPolicyScope.STAGE,
+        stage_name="build",
+        recorded_at="2020-01-01T00:00:00Z",
+        policy=ReliabilityPolicy(retry=RetryPolicy(enabled=False, max_attempts=1)),
+    )
+    status = _reliability_status(run_uri)
+    transaction = _reliability_transaction(run_uri)
+    decision = _retry_decision(run_uri)
+    timeout = _timeout_outcome(run_uri)
+
+    policy_revision = store.write_reliability_policy_fact(run_uri, policy)
+    store.write_reliability_status_detail(run_uri, status)
+    transaction_revision = store.write_stage_attempt_transaction(run_uri, transaction)
+    same_revision = store.write_stage_attempt_transaction(run_uri, transaction)
+    store.write_retry_decision(run_uri, decision)
+    store.write_timeout_outcome(run_uri, timeout)
+
+    assert same_revision == transaction_revision
+    assert transaction_revision.sequence > policy_revision.sequence
+    assert store.list_reliability_policy_facts(run_uri, stage_name="build") == (
+        policy,
+    )
+    assert store.read_transaction_chain(run_uri, "tx-1") == (transaction,)
+    snapshot = store.snapshot(run_uri)
+    stage = snapshot.stages[0]
+    assert stage.reliability_policy_facts == (policy,)
+    assert stage.reliability_status_details == (status,)
+    assert stage.reliability_transactions == (transaction,)
+    assert stage.retry_decisions == (decision,)
+    assert stage.timeout_outcomes == (timeout,)
+
+    conflicting = StageAttemptTransaction(
+        transaction_id="tx-1",
+        run_uri=run_uri,
+        stage_id="build",
+        attempt=2,
+        status=ReliabilityStatusDetail(
+            run_uri=run_uri,
+            run_status=RunStatus.RUNNING,
+            stage_id="build",
+            stage_status=StageStatus.FAILED,
+            attempt=2,
+            created_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    with pytest.raises(AuthorityStoreError, match="conflicting reliability fact"):
+        store.write_stage_attempt_transaction(run_uri, conflicting)
 
 
 def test_lease_fencing_release_failure_and_audit_sequence(tmp_path: Path) -> None:
@@ -298,23 +419,37 @@ def test_attempt_allocation_after_output_commit_is_rejected(
     ]
 
 
-def test_attempt_allocation_rejects_terminal_stage_state(tmp_path: Path) -> None:
+def test_attempt_allocation_allows_failed_stage_retry(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "run")
     store = SQLitePerRunAuthorityStore(clock=FrozenClock())
     store.create_run(run_uri)
+    allocation = store.allocate_stage_attempt(
+        run_uri,
+        "build",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+    )
+    assert allocation.lease is not None
     store.transition_stage(
         run_uri,
         "build",
-        from_status=None,
+        from_status=StageStatus.RUNNING,
         to_status=StageStatus.FAILED,
     )
+    store.release_lease(
+        allocation.lease.lease_id,
+        owner_id="worker-1",
+        fencing_token=allocation.lease.fencing_token,
+    )
 
-    with pytest.raises(ValueError, match="terminal"):
-        store.allocate_stage_attempt(
-            run_uri,
-            "build",
-            owner_id="worker-1",
-        )
+    retry = store.allocate_stage_attempt(
+        run_uri,
+        "build",
+        owner_id="worker-2",
+    )
+
+    assert retry.attempt.attempt == 2
+    assert retry.attempt.status is StageStatus.RUNNING
 
 
 def test_output_commit_rejects_terminal_stage_state(tmp_path: Path) -> None:

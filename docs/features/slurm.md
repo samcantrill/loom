@@ -65,6 +65,55 @@ run-store lifecycle. Default validation remains fake-command and cluster-free.
 The real SLURM acceptance suite is marked `slurm` and `slow` and runs only when
 the maintainer explicitly enables it.
 
+V18 adds Apptainer/Singularity composition without adding new SLURM executor
+names. The same `slurm-single-job` and `slurm-afterok` planners can wrap their
+generated continuation commands in `apptainer exec` or `singularity exec` when
+the selected runtime/profile provides `adapter_options.container`. If that
+container namespace uses `target`, the CLI resolves the target from
+`adapter_options.container_build`, runs the local Apptainer builder or reuses
+the SIF according to policy, and replaces the target with an explicit
+`container.image.reference` before dry-run rendering or live submission.
+
+Example profile:
+
+```yaml
+runtime_profiles:
+  slurm-apptainer:
+    executor: slurm-afterok
+    adapter_options:
+      container:
+        target: analysis-env
+      container_build:
+        targets:
+          analysis-env:
+            name: analysis-env
+            runtime: apptainer
+            source:
+              kind: definition_file
+              path: containers/analysis.def
+            output:
+              kind: apptainer_sif
+              path: .loom/containers/analysis-env.sif
+      apptainer:
+        cleanenv: true
+        no_home: true
+      slurm:
+        launcher_argv: ["loom"]
+```
+
+Generated scripts contain only the resolved Apptainer execution command, for
+example:
+
+```bash
+apptainer exec --cleanenv --no-home --bind /runs/demo:/runs/demo:rw .loom/containers/analysis-env.sif loom stage-job run --run-uri RUN_URI --stage train --executor local
+```
+
+Build commands remain submit-side/controller-side actions and are not hidden in
+batch scripts. SLURM remains the authority for CPU, memory, GPU allocation,
+wall time, submission IDs, status, and cancellation; Apptainer owns image/SIF,
+binds, workdir, clean environment, explicit environment projection, and runtime
+device flags such as `--nv` or `--rocm`.
+
 ### 0.1 Authority Deployment Profiles
 
 Post-v9 SLURM support must treat authority deployment as an explicit selected

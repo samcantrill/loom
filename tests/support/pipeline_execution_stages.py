@@ -99,6 +99,27 @@ class FailingStage:
         raise RuntimeError("stage failed intentionally")
 
 
+class FailOnceThenProduceStage:
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        _ = inputs
+        marker_path = Path(str(context.stage_config["marker_path"]))
+        if not marker_path.exists():
+            marker_path.write_text("failed-once", encoding="utf-8")
+            raise RuntimeError("stage failed on first attempt")
+        return {
+            "data": context.save_artifact(
+                "data",
+                {"attempt": "retried"},
+                artifact_type="json",
+                codec_key="json.v1",
+            )
+        }
+
+
 class EarlyStopStage:
     def run(
         self,

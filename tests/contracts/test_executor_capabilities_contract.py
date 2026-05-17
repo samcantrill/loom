@@ -11,7 +11,11 @@ import pytest
 
 from loom.pipeline.execution.models import RunRequest, StageExecutionRequest
 from loom.pipeline.errors import RuntimeResourceError
-from loom.pipeline.resources import ResourceEntry, ResourceRequest, ResourceValidatorRegistry
+from loom.pipeline.resources import (
+    ResourceEntry,
+    ResourceRequest,
+    ResourceValidatorRegistry,
+)
 from loom.pipeline.runtime import (
     CapabilityDiagnostic,
     CapabilitySeverity,
@@ -36,6 +40,7 @@ def test_descriptor_and_diagnostic_documents_are_plain_data() -> None:
             "cpu": ResourceCapability(support_level="supported"),
         },
         adapter_namespaces=("batch",),
+        timeout_support="observed",
         details={"owner": "test"},
     )
     diagnostic = CapabilityDiagnostic(
@@ -51,6 +56,7 @@ def test_descriptor_and_diagnostic_documents_are_plain_data() -> None:
     )
 
     assert stable_json_dumps(descriptor.to_dict())
+    assert descriptor.to_dict()["timeout_support"] == "observed"
     assert stable_json_dumps(diagnostic.to_dict())
     assert stable_json_dumps(validate_executor_capabilities(RunOptions()).to_dict())
 
@@ -58,7 +64,9 @@ def test_descriptor_and_diagnostic_documents_are_plain_data() -> None:
 def test_fake_descriptor_contract_does_not_change_resource_schema_validation() -> None:
     def _validate_custom(entry: ResourceEntry, path: str) -> None:
         if entry.unit != "GiB":
-            raise AssertionError(f"{path}.unit should already be validated by the registry")
+            raise AssertionError(
+                f"{path}.unit should already be validated by the registry"
+            )
 
     authored = {
         "entries": {
@@ -129,6 +137,58 @@ def test_default_registry_includes_import_light_subprocess_descriptor() -> None:
     assert descriptor.name == "subprocess"
     assert descriptor.details["process_isolating"] is True
     assert descriptor.details["serial"] is True
+
+
+def test_default_registry_includes_docker_container_descriptor_contract() -> None:
+    result = validate_executor_capabilities(
+        RunOptions(
+            executor="docker",
+            adapter_options={
+                "container": {"image": {"reference": "python"}},
+                "container_build": {},
+                "docker": {},
+            },
+        )
+    )
+
+    assert result.ok
+    descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("docker")
+    assert descriptor.name == "docker"
+    assert descriptor.adapter_namespaces == ("container", "container_build", "docker")
+    assert descriptor.details["docker_cli"] is True
+    assert descriptor.details["docker_sdk_dependency"] is False
+    resource_capabilities = cast(
+        dict[str, object],
+        descriptor.to_dict()["resource_capabilities"],
+    )
+    gpu_capability = cast(dict[str, object], resource_capabilities["gpu"])
+    assert gpu_capability["support_level"] == "unsupported"
+
+
+def test_default_registry_includes_apptainer_and_singularity_descriptor_contracts() -> (
+    None
+):
+    apptainer = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("apptainer")
+    singularity = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("singularity")
+    slurm = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-afterok")
+
+    assert apptainer.adapter_namespaces == (
+        "apptainer",
+        "container",
+        "container_build",
+        "singularity",
+    )
+    assert singularity.adapter_namespaces == apptainer.adapter_namespaces
+    assert apptainer.details["apptainer_cli"] is True
+    assert apptainer.details["singularity_compatible"] is False
+    assert singularity.details["singularity_compatible"] is True
+    assert slurm.adapter_namespaces == (
+        "apptainer",
+        "container",
+        "container_build",
+        "singularity",
+        "slurm",
+    )
 
 
 def test_runtime_capability_imports_do_not_load_diagnostics_or_executors() -> None:

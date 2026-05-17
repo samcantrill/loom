@@ -189,6 +189,7 @@ def test_pipeline_store_public_exports() -> None:
         "RecoveryKind",
         "StaticOutcomeKind",
         "ReadModelWarningCode",
+        "ReliabilityPolicyScope",
         "BackendRevision",
         "LifecycleReason",
         "StageAttempt",
@@ -199,6 +200,7 @@ def test_pipeline_store_public_exports() -> None:
         "CleanupCandidate",
         "RecoveryRecord",
         "StaticOutcomeRecord",
+        "ReliabilityPolicyFact",
         "ReadModelWarning",
         "StageLifecycleSnapshot",
         "AuthoritativeRunSnapshot",
@@ -241,6 +243,7 @@ def test_pipeline_store_public_exports() -> None:
         "RunConfigStore",
         "RunProvenanceStore",
         "RunRuntimeMetadataStore",
+        "RunReliabilityStore",
         "RunSubmittedOperationStore",
         "StageStateStore",
         "StageLogStore",
@@ -317,6 +320,9 @@ def test_pipeline_store_public_exports() -> None:
     assert "read_prepared_run" in stores.RunPreparedRunStore.__dict__
     assert "write_prepared_run" in stores.RunPreparedRunStore.__dict__
     assert "read_run_freshness" in stores.RunFreshnessStore.__dict__
+    assert "write_reliability_status_detail" in stores.RunReliabilityStore.__dict__
+    assert "write_stage_attempt_transaction" in stores.RunReliabilityStore.__dict__
+    assert "list_retry_decisions" in stores.RunReliabilityStore.__dict__
     assert "local_stage_worker_request_path" in stores.LocalRunStorePaths.__dict__
     assert "local_stage_worker_result_path" in stores.LocalRunStorePaths.__dict__
     assert "local_generated_artifact_path" in stores.LocalRunStorePaths.__dict__

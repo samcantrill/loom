@@ -24,6 +24,12 @@ from loom.pipeline import (
     validate_executor_capabilities,
 )
 from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.reliability import (
+    ReliabilityPolicy,
+    RetryPolicy,
+    TimeoutPolicy,
+    TimeoutSupportLevel,
+)
 from loom.pipeline.resources import (
     DEFAULT_RESOURCE_VALIDATOR_REGISTRY,
     ResourceValidatorRegistry,
@@ -75,7 +81,9 @@ def test_executor_descriptor_strips_names_and_serializes_deterministically() -> 
     assert descriptor.name == "local"
     assert tuple(descriptor.resource_capabilities) == ("cpu", "memory")
     assert descriptor.adapter_namespaces == ("docker", "slurm")
+    assert descriptor.timeout_support is TimeoutSupportLevel.UNSUPPORTED
     assert descriptor.to_dict()["name"] == "local"
+    assert descriptor.to_dict()["timeout_support"] == "unsupported"
     assert list(
         cast(dict[str, object], descriptor.to_dict()["resource_capabilities"])
     ) == [
@@ -121,7 +129,10 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     )
 
     assert tuple(DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.descriptors) == (
+        "apptainer",
+        "docker",
         "local",
+        "singularity",
         "slurm-afterok",
         "slurm-single-job",
         "subprocess",
@@ -137,11 +148,59 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     subprocess_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("subprocess")
     assert subprocess_descriptor.details["process_isolating"] is True
     assert subprocess_descriptor.details["serial"] is True
+    assert subprocess_descriptor.timeout_support is TimeoutSupportLevel.ENFORCED
+    docker_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("docker")
+    assert docker_descriptor.adapter_namespaces == (
+        "container",
+        "container_build",
+        "docker",
+    )
+    assert docker_descriptor.details["built_in"] is True
+    assert docker_descriptor.details["containerized"] is True
+    assert docker_descriptor.details["docker_cli"] is True
+    assert docker_descriptor.details["docker_sdk_dependency"] is False
+    assert docker_descriptor.details["security_sandbox"] is False
+    assert docker_descriptor.details["requires_prepared_worker_request"] is True
+    assert docker_descriptor.timeout_support is TimeoutSupportLevel.UNSUPPORTED
+    assert {
+        kind: capability.to_dict()["support_level"]
+        for kind, capability in cast(
+            dict[str, ResourceCapability],
+            docker_descriptor.resource_capabilities,
+        ).items()
+    } == {"cpu": "supported", "memory": "supported", "gpu": "unsupported"}
+    assert {
+        kind: capability.to_dict()["enforcement"]
+        for kind, capability in cast(
+            dict[str, ResourceCapability],
+            docker_descriptor.resource_capabilities,
+        ).items()
+    } == {"cpu": "best_effort", "memory": "best_effort", "gpu": "not_applicable"}
+    apptainer_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("apptainer")
+    assert apptainer_descriptor.adapter_namespaces == (
+        "apptainer",
+        "container",
+        "container_build",
+        "singularity",
+    )
+    assert apptainer_descriptor.details["containerized"] is True
+    assert apptainer_descriptor.details["apptainer_cli"] is True
+    assert apptainer_descriptor.details["singularity_compatible"] is False
+    singularity_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("singularity")
+    assert singularity_descriptor.details["singularity_compatible"] is True
     slurm_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-single-job")
-    assert slurm_descriptor.adapter_namespaces == ("slurm",)
+    assert slurm_descriptor.adapter_namespaces == (
+        "apptainer",
+        "container",
+        "container_build",
+        "singularity",
+        "slurm",
+    )
+    assert slurm_descriptor.timeout_support is TimeoutSupportLevel.DELEGATED
     assert slurm_descriptor.details["dry_run_only"] is False
     assert slurm_descriptor.details["live_submission"] is True
     assert slurm_descriptor.details["scheduler_commands"] is True
+    assert slurm_descriptor.details["container_composition"] is True
     afterok_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-afterok")
     assert afterok_descriptor.details["dry_run_only"] is False
     assert afterok_descriptor.details["live_submission"] is True
@@ -211,6 +270,105 @@ def test_slurm_descriptor_claims_adapter_namespace_and_resources() -> None:
     ]
 
 
+def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None:
+    result = validate_executor_capabilities(
+        RunOptions(
+            executor="docker",
+            adapter_options={
+                "container": {"image": {"reference": "python:3.12"}},
+                "container_build": {
+                    "targets": {
+                        "ci-image": {
+                            "runtime": "docker",
+                            "source": {"kind": "docker_context", "context_path": "."},
+                            "output": {
+                                "kind": "docker_image",
+                                "reference": "example/ci:latest",
+                            },
+                        }
+                    }
+                },
+                "docker": {},
+            },
+            stage_options={
+                "train": StageRuntimeOptions(
+                    resources=ResourceRequest(
+                        entries={
+                            "cpu": ResourceEntry(kind="cpu", amount=2),
+                            "memory": ResourceEntry(
+                                kind="memory",
+                                amount=4,
+                                unit="GiB",
+                            ),
+                            "gpu": ResourceEntry(kind="gpu", amount=1),
+                        }
+                    )
+                )
+            },
+        )
+    )
+
+    assert not result.ok
+    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
+    assert [
+        (
+            item["resource_kind"],
+            item["code"],
+            item["severity"],
+            item["enforcement"],
+        )
+        for item in diagnostics
+    ] == [
+        ("cpu", "resource.supported", "info", "best_effort"),
+        ("gpu", "resource.unsupported", "error", "not_applicable"),
+        ("memory", "resource.supported", "info", "best_effort"),
+    ]
+    assert "adapter_namespace.unclaimed" not in {item["code"] for item in diagnostics}
+
+
+def test_apptainer_and_slurm_descriptors_claim_stage_18_namespaces() -> None:
+    apptainer_result = validate_executor_capabilities(
+        RunOptions(
+            executor="apptainer",
+            adapter_options={
+                "container": {"target": "analysis-env"},
+                "container_build": {
+                    "targets": {
+                        "analysis-env": {
+                            "runtime": "apptainer",
+                            "source": {
+                                "kind": "definition_file",
+                                "path": "containers/analysis.def",
+                            },
+                            "output": {
+                                "kind": "apptainer_sif",
+                                "path": ".loom/containers/analysis-env.sif",
+                            },
+                        }
+                    }
+                },
+                "apptainer": {"cleanenv": True},
+            },
+        )
+    )
+    slurm_result = validate_executor_capabilities(
+        RunOptions(
+            executor="slurm-afterok",
+            adapter_options={
+                "slurm": {"partition": "debug"},
+                "container": {"target": "analysis-env"},
+                "container_build": {},
+                "apptainer": {"cleanenv": True},
+            },
+        )
+    )
+
+    assert apptainer_result.ok
+    assert slurm_result.ok
+    assert "adapter_namespace.unclaimed" not in repr(apptainer_result.to_dict())
+    assert "adapter_namespace.unclaimed" not in repr(slurm_result.to_dict())
+
+
 def test_whitespace_only_executor_returns_unknown_executor_diagnostic() -> None:
     result = validate_executor_capabilities(RunOptions(executor="   "))
 
@@ -265,6 +423,80 @@ def test_local_resource_requests_warn_without_failing_validation() -> None:
     ]
     assert {diagnostic["severity"] for diagnostic in diagnostics} == {"warning"}
     assert {diagnostic["enforcement"] for diagnostic in diagnostics} == {"not_enforced"}
+
+
+def test_reliability_timeout_policy_reports_executor_support() -> None:
+    options = RunOptions(
+        executor="subprocess",
+        reliability=ReliabilityPolicy(
+            timeout=TimeoutPolicy(enabled=True, duration_seconds=4.5),
+        ),
+        stage_options={
+            "train": StageRuntimeOptions(
+                reliability=ReliabilityPolicy(
+                    timeout=TimeoutPolicy(enabled=True, duration_seconds=2),
+                )
+            )
+        },
+    )
+
+    result = validate_executor_capabilities(options)
+
+    assert result.ok
+    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
+    timeout_diagnostics = [
+        diagnostic
+        for diagnostic in diagnostics
+        if str(diagnostic["code"]).startswith("reliability.timeout")
+    ]
+    assert [
+        (item["path"], item["code"], item["severity"]) for item in timeout_diagnostics
+    ] == [
+        ("RunOptions.reliability.timeout", "reliability.timeout.enforced", "info"),
+        (
+            "RunOptions.stage_options['train'].reliability.timeout",
+            "reliability.timeout.enforced",
+            "info",
+        ),
+    ]
+    assert cast(dict[str, object], timeout_diagnostics[0]["details"]) == {
+        "duration_seconds": 4.5,
+        "timeout_support": "enforced",
+        "timeout_domain": "reliability",
+    }
+
+
+def test_unsupported_reliability_timeout_is_warning_not_resource_error() -> None:
+    result = validate_executor_capabilities(
+        RunOptions(
+            executor="local",
+            reliability=ReliabilityPolicy(
+                timeout=TimeoutPolicy(enabled=True, duration_seconds=1),
+            ),
+        )
+    )
+
+    assert result.ok
+    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
+    assert [(item["code"], item["severity"]) for item in diagnostics] == [
+        ("reliability.timeout.unsupported", "warning")
+    ]
+    assert diagnostics[0]["resource_kind"] is None
+
+
+def test_enabled_retry_reports_runner_owned_runtime_diagnostic() -> None:
+    result = validate_executor_capabilities(
+        RunOptions(
+            reliability=ReliabilityPolicy(
+                retry=RetryPolicy(enabled=True, max_attempts=2)
+            )
+        )
+    )
+
+    assert result.ok
+    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
+    assert diagnostics[0]["code"] == "reliability.retry.runner_owned"
+    assert diagnostics[0]["severity"] == "info"
 
 
 def test_omitted_resource_capability_uses_descriptor_fallback_policy() -> None:

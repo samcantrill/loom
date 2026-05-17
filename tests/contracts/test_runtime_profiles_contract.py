@@ -55,6 +55,88 @@ def test_runtime_profiles_are_plain_data_and_deterministically_serialized() -> N
     }
 
 
+def test_runtime_profiles_accept_container_and_docker_adapter_namespaces() -> None:
+    profiles = RuntimeProfileCollection.from_dict(
+        {
+            "containerized": {
+                "executor": "docker",
+                "container": {
+                    "image": {"reference": "python:3.12"},
+                    "workdir": "/workspace",
+                },
+                "docker": {"pull": "never"},
+            }
+        }
+    )
+
+    assert stable_json_dumps(profiles.to_dict())
+    assert profiles.to_dict() == {
+        "containerized": {
+            "adapter_options": {
+                "container": {
+                    "image": {"reference": "python:3.12"},
+                    "workdir": "/workspace",
+                },
+                "docker": {"pull": "never"},
+            },
+            "executor": "docker",
+        }
+    }
+
+
+def test_runtime_profiles_accept_container_build_adapter_namespace() -> None:
+    profiles = RuntimeProfileCollection.from_dict(
+        {
+            "hpc": {
+                "executor": "slurm-afterok",
+                "container_build": {
+                    "targets": {
+                        "analysis-env": {
+                            "runtime": "apptainer",
+                            "source": {
+                                "kind": "definition_file",
+                                "path": "containers/analysis.def",
+                            },
+                            "output": {
+                                "kind": "apptainer_sif",
+                                "path": ".loom/containers/analysis-env.sif",
+                            },
+                        }
+                    }
+                },
+                "container": {"target": "analysis-env"},
+                "apptainer": {"cleanenv": True},
+            }
+        }
+    )
+
+    assert stable_json_dumps(profiles.to_dict())
+    assert profiles.to_dict() == {
+        "hpc": {
+            "adapter_options": {
+                "apptainer": {"cleanenv": True},
+                "container": {"target": "analysis-env"},
+                "container_build": {
+                    "targets": {
+                        "analysis-env": {
+                            "runtime": "apptainer",
+                            "source": {
+                                "kind": "definition_file",
+                                "path": "containers/analysis.def",
+                            },
+                            "output": {
+                                "kind": "apptainer_sif",
+                                "path": ".loom/containers/analysis-env.sif",
+                            },
+                        }
+                    }
+                },
+            },
+            "executor": "slurm-afterok",
+        }
+    }
+
+
 def test_runtime_profile_merge_returns_normalized_run_options_contract() -> None:
     result = merge_run_options(
         base={
@@ -62,9 +144,7 @@ def test_runtime_profile_merge_returns_normalized_run_options_contract() -> None
             "tags": {"team": "base"},
             "stage_options": {
                 "train": {
-                    "resources": {
-                        "entries": {"cpu": {"kind": "cpu", "amount": 2}}
-                    }
+                    "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 2}}}
                 }
             },
         },
@@ -93,9 +173,7 @@ def test_runtime_profile_merge_returns_normalized_run_options_contract() -> None
             "adapter_options": {"slurm": {"partition": "explicit"}},
             "stage_options": {
                 "train": {
-                    "resources": {
-                        "entries": {"cpu": {"kind": "cpu", "amount": 4}}
-                    }
+                    "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 4}}}
                 }
             },
         },

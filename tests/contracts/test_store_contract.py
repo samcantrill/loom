@@ -8,6 +8,12 @@ from loom.diagnostics.inspection import inspect_run_artifact, inspect_run_artifa
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline import RunStatusRecord, StageStatusRecord
+from loom.pipeline.reliability import (
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
     ArtifactStore,
@@ -31,8 +37,10 @@ from loom.pipeline.stores import (
     RunProvenanceStore,
     RunPlanStore,
     RunRuntimeMetadataStore,
+    RunReliabilityStore,
     RunStore,
     RunStateInspection,
+    ReliabilityPolicyFact,
     RunStatusStore,
     RunSubmittedOperationStore,
     StageLogStore,
@@ -184,6 +192,61 @@ class DummyRunStore:
         self, run_uri: str
     ) -> SubmittedOperationRecord | None:
         return None
+
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> None:
+        return None
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]:
+        return ()
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> None:
+        return None
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]:
+        return ()
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> None:
+        return None
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return ()
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return ()
+
+    def write_retry_decision(
+        self, run_uri: str, decision: RetryDecisionRecord
+    ) -> None:
+        return None
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]:
+        return ()
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> None:
+        return None
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]:
+        return ()
 
     def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
         return {}
@@ -518,6 +581,7 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunPreparedRunStore)
     assert isinstance(DummyRunStore(), RunRuntimeMetadataStore)
     assert isinstance(DummyRunStore(), RunSubmittedOperationStore)
+    assert isinstance(DummyRunStore(), RunReliabilityStore)
     assert isinstance(DummyRunStore(), RunArtifactIndexStore)
     assert isinstance(DummyRunStore(), RunConfigStore)
     assert isinstance(DummyRunStore(), RunProvenanceStore)

@@ -10,10 +10,13 @@ def test_pipeline_executor_public_exports_are_phase_scoped() -> None:
     import loom.pipeline.executors as executors
 
     assert executors.__all__ == [
+        "ApptainerExecutor",
         "Executor",
+        "DockerExecutor",
         "ExecutorError",
         "LocalExecutor",
         "LocalExecutorError",
+        "SingularityExecutor",
         "SubprocessExecutor",
         "SubprocessRunResult",
     ]

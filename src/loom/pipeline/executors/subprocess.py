@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 import subprocess
 import sys
-from typing import cast
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Protocol, cast
 
 from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
@@ -16,19 +16,33 @@ from loom.pipeline.execution.models import (
     StageWorkerResult,
     redact_executor_metadata,
 )
+from loom.pipeline.reliability import TimeoutOutcome, TimeoutSupportLevel
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LegacyRunStore as RunStore
 from loom.pipeline.stores.config import AuthorityConfig, authority_config_to_cli_args
 from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
 
+from ._reliability import (
+    metadata_with_timeout,
+    timeout_metadata,
+    timeout_policy_from_request,
+)
 from .errors import ExecutorError
 
 WORKER_MAIN_SNIPPET = "from loom.cli.main import main; raise SystemExit(main())"
 MAX_CAPTURE_SNIPPET_CHARS = 1000
 
-ProcessRunner = Callable[[Sequence[str]], "SubprocessRunResult"]
 Clock = Callable[[], str]
+
+
+class ProcessRunner(Protocol):
+    def __call__(
+        self,
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> "SubprocessRunResult": ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,17 +106,74 @@ class SubprocessExecutor:
             attempt=request.attempt,
             authority_config=_authority_config(self.run_store),
         )
+        policy = timeout_policy_from_request(request)
+        timeout_seconds = None if policy is None else policy.duration_seconds
+        timeout = (
+            None
+            if policy is None
+            else timeout_metadata(
+                policy=policy,
+                support_level=TimeoutSupportLevel.ENFORCED,
+                outcome=TimeoutOutcome.ENFORCED,
+                timed_out=False,
+            )
+        )
         started_at = self.clock()
         try:
-            process = self.process_runner(command)
-        except Exception as exc:  # noqa: BLE001 - process-launch errors become structured failures.
+            process = self.process_runner(command, timeout_seconds=timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
             finished_at = self.clock()
-            metadata = _process_metadata(
-                command=command,
-                process=None,
+            if policy is None:
+                timeout = None
+            else:
+                timeout = timeout_metadata(
+                    policy=policy,
+                    support_level=TimeoutSupportLevel.ENFORCED,
+                    outcome=TimeoutOutcome.TIMED_OUT,
+                    timed_out=True,
+                    message="subprocess worker exceeded reliability timeout",
+                    details=_timeout_expired_details(exc),
+                )
+            metadata = metadata_with_timeout(
+                _process_metadata(
+                    command=command,
+                    process=None,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    launch_error="subprocess.TimeoutExpired",
+                ),
+                timeout,
+            )
+            failure = _failure(
+                request=request,
+                failed_at=finished_at,
+                message="subprocess worker exceeded reliability timeout",
+                exit_code=None,
+                signal=None,
+                metadata=metadata,
+                details={
+                    "timeout": dict(timeout) if timeout is not None else {},
+                    "timeout_expired": True,
+                },
+            )
+            return _failed_result(
+                request=request,
                 started_at=started_at,
                 finished_at=finished_at,
-                launch_error=f"{type(exc).__module__}.{type(exc).__name__}: {exc}",
+                failure=failure,
+                metadata=metadata,
+            )
+        except Exception as exc:  # noqa: BLE001 - process-launch errors become structured failures.
+            finished_at = self.clock()
+            metadata = metadata_with_timeout(
+                _process_metadata(
+                    command=command,
+                    process=None,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    launch_error=f"{type(exc).__module__}.{type(exc).__name__}: {exc}",
+                ),
+                timeout,
             )
             failure = _failure(
                 request=request,
@@ -121,11 +192,14 @@ class SubprocessExecutor:
                 metadata=metadata,
             )
         finished_at = self.clock()
-        metadata = _process_metadata(
-            command=command,
-            process=process,
-            started_at=started_at,
-            finished_at=finished_at,
+        metadata = metadata_with_timeout(
+            _process_metadata(
+                command=command,
+                process=process,
+                started_at=started_at,
+                finished_at=finished_at,
+            ),
+            timeout,
         )
         process_exit_code, process_signal = _process_failure_fields(process.returncode)
         worker_result = _read_worker_result(
@@ -262,12 +336,17 @@ def _authority_config(run_store: RunStore) -> AuthorityConfig | None:
     return None
 
 
-def _run_subprocess(command: Sequence[str]) -> SubprocessRunResult:
+def _run_subprocess(
+    command: Sequence[str],
+    *,
+    timeout_seconds: float | None = None,
+) -> SubprocessRunResult:
     completed = subprocess.run(
         tuple(command),
         check=False,
         capture_output=True,
         text=True,
+        timeout=timeout_seconds,
     )
     return SubprocessRunResult(
         returncode=completed.returncode,
@@ -536,6 +615,23 @@ def _capture_summary(text: str) -> dict[str, PlainData]:
         "truncated": len(text) > MAX_CAPTURE_SNIPPET_CHARS,
         "snippet": text[:MAX_CAPTURE_SNIPPET_CHARS],
     }
+
+
+def _timeout_expired_details(exc: subprocess.TimeoutExpired) -> dict[str, PlainData]:
+    details: dict[str, PlainData] = {"timeout_seconds": float(exc.timeout)}
+    if exc.stdout is not None:
+        details["stdout"] = _capture_summary(_decode_timeout_output(exc.stdout))
+    if exc.stderr is not None:
+        details["stderr"] = _capture_summary(_decode_timeout_output(exc.stderr))
+    return details
+
+
+def _decode_timeout_output(value: str | bytes | object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 __all__ = [

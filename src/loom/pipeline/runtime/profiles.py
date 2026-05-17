@@ -11,12 +11,17 @@ from loom.serialization import PlainData, freeze_plain_data
 
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.resources import ResourceRequest
+from loom.pipeline.reliability import (
+    ReliabilityPolicy,
+    merge_reliability_options,
+)
 from loom.pipeline.runtime.environment import RunEnvironmentRequest, StageEnvironmentRequest
 from loom.pipeline.runtime.options import (
     ExecutionOptions,
     RunOptions,
     StageRuntimeOptions,
     _bool_value,
+    _coerce_reliability,
     _coerce_resource_request,
     _object_mapping,
     _optional_string,
@@ -41,6 +46,7 @@ _RUN_SOURCE_FIELDS = frozenset(
         "notes",
         "selectors",
         "resume",
+        "reliability",
         "execution",
         "stage_options",
         "environment",
@@ -49,6 +55,7 @@ _RUN_SOURCE_FIELDS = frozenset(
 )
 _PROFILE_CORE_FIELDS = _RUN_SOURCE_FIELDS - {"schema_version", "profile"}
 _PROFILE_RESERVED_FIELDS = frozenset({"schema_version", "profile"})
+_LEGACY_RELIABILITY_FIELDS = frozenset({"retry", "timeout", "timeout_seconds"})
 _SELECTOR_FIELDS = frozenset(
     {"force_stages", "from_stage", "only_stages", "skip_stages"}
 )
@@ -56,7 +63,7 @@ _RESUME_FIELDS = frozenset({"enabled"})
 _ENVIRONMENT_FIELDS = frozenset({"inherit", "set_variables", "unset_variables"})
 _EXECUTION_FIELDS = frozenset({"settings"})
 _STAGE_RUNTIME_FIELDS = frozenset(
-    {"resources", "execution", "environment", "adapter_options"}
+    {"resources", "execution", "environment", "reliability", "adapter_options"}
 )
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +256,13 @@ def _normalize_run_source(
         }
 
     mapping = _object_mapping(source, path=path)
+    legacy_reliability_fields = set(mapping) & _LEGACY_RELIABILITY_FIELDS
+    if legacy_reliability_fields:
+        fields = ", ".join(sorted(legacy_reliability_fields))
+        raise RuntimeResourceError(
+            f"{path} contains unsupported reliability field(s): {fields}; "
+            "use reliability.retry or reliability.timeout"
+        )
     if profile_source:
         reserved = set(mapping) & _PROFILE_RESERVED_FIELDS
         if reserved:
@@ -291,6 +305,8 @@ def _normalize_run_field(key: str, value: object, *, path: str) -> object:
         return dict(_str_mapping(value, path=path))
     if key == "notes":
         return list(_str_tuple(value, path=path))
+    if key == "reliability":
+        return _normalize_reliability(value, path=path)
     if key == "selectors":
         return _normalize_selectors(value, path=path)
     if key == "resume":
@@ -394,6 +410,8 @@ def _normalize_stage_runtime(value: object, *, path: str) -> dict[str, object]:
                 path=f"{path}.environment",
                 stage=True,
             )
+        elif key == "reliability":
+            normalized[key] = _normalize_reliability(item, path=f"{path}.reliability")
         elif key == "adapter_options":
             normalized[key] = _plain_adapter_mapping(
                 item,
@@ -440,6 +458,12 @@ def _merge_run_source(target: dict[str, object], source: Mapping[str, object]) -
             _merge_stage_options_field(target, cast(Mapping[str, object], value))
         elif key == "environment":
             _merge_environment_field(target, cast(Mapping[str, object], value))
+        elif key == "reliability":
+            _merge_reliability_field(
+                target,
+                cast(Mapping[str, object], value),
+                path="reliability",
+            )
         elif key == "adapter_options":
             _merge_mapping_field(target, key, cast(Mapping[str, object], value))
 
@@ -455,8 +479,42 @@ def _merge_stage_runtime_source(
             _merge_execution_field(target, cast(Mapping[str, object], value))
         elif key == "environment":
             _merge_environment_field(target, cast(Mapping[str, object], value))
+        elif key == "reliability":
+            _merge_reliability_field(
+                target,
+                cast(Mapping[str, object], value),
+                path="reliability",
+            )
         elif key == "adapter_options":
             _merge_mapping_field(target, key, cast(Mapping[str, object], value))
+
+
+def _normalize_reliability(value: object, *, path: str) -> dict[str, object]:
+    if value is None:
+        return {}
+    if isinstance(value, ReliabilityPolicy):
+        return _object_dict(value.to_dict())
+    policy = _coerce_reliability(value, path=path)
+    if policy is None:
+        return {}
+    return _object_dict(policy.to_dict())
+
+
+def _merge_reliability_field(
+    target: dict[str, object],
+    source: Mapping[str, object],
+    *,
+    path: str,
+) -> None:
+    if not source:
+        return
+    base = _coerce_reliability(target.get(path), path=f"RunOptions.{path}")
+    override = _coerce_reliability(source, path=f"RunOptions.{path}")
+    merged = merge_reliability_options(
+        base,
+        override,
+    )
+    target[path] = merged.to_dict()
 
 
 def _merge_mapping_field(

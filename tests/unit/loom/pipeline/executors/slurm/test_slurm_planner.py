@@ -61,6 +61,33 @@ def test_single_job_planned_submission_uses_prepared_run_continuation() -> None:
     )
 
 
+def test_single_job_planning_wraps_continuation_in_apptainer() -> None:
+    submission = build_single_job_planned_submission(
+        run_uri="file:///runs/run-1",
+        planning_id="planning-1",
+        created_at="2026-05-08T00:00:00Z",
+        options=SlurmOptions(),
+        container_options={"image": {"reference": "analysis.sif"}},
+        apptainer_options={"nv": True},
+    )
+
+    job = cast(tuple[SlurmPlannedJob, ...], submission.jobs)[0]
+    command = cast(SlurmCommandArgv, job.command)
+
+    assert command.argv[:4] == ("apptainer", "exec", "--cleanenv", "--nv")
+    assert command.argv[-7:] == (
+        "loom",
+        "prepared-run",
+        "continue",
+        "--run-uri",
+        "file:///runs/run-1",
+        "--executor",
+        "local",
+    )
+    assert command.metadata["container_runtime"] == "apptainer"
+    assert command.to_dict()["metadata"] == dict(command.metadata)
+
+
 @pytest.mark.parametrize(
     ("stage_upstreams", "expected_dependencies"),
     (
@@ -188,6 +215,48 @@ def test_afterok_planning_applies_stage_slurm_options_to_each_job() -> None:
     assert report_directives["time"] == "00:30:00"
     assert build_command.launcher_argv == ("loom",)
     assert report_command.launcher_argv == ("uv", "run", "loom")
+
+
+def test_afterok_planning_applies_stage_specific_container_options() -> None:
+    plan = _execution_plan({"build": (), "report": ("build",)})
+
+    submission = build_afterok_planned_submission(
+        run_uri="file:///runs/run-1",
+        execution_plan=plan,
+        planning_id="planning-1",
+        created_at="2026-05-08T00:00:00Z",
+        options=SlurmOptions(),
+        container_options={"image": {"reference": "shared.sif"}},
+        stage_container_options={
+            "report": {"image": {"reference": "report.sif"}},
+        },
+        stage_apptainer_options={
+            "report": {"command": "singularity", "cleanenv": False},
+        },
+    )
+
+    jobs = {
+        job.logical_key: job for job in cast(tuple[SlurmPlannedJob, ...], submission.jobs)
+    }
+    build_command = cast(SlurmCommandArgv, jobs["stage:build"].command)
+    report_command = cast(SlurmCommandArgv, jobs["stage:report"].command)
+
+    assert build_command.argv[:3] == ("apptainer", "exec", "--cleanenv")
+    assert "shared.sif" in build_command.argv
+    assert report_command.argv[:2] == ("singularity", "exec")
+    assert "--cleanenv" not in report_command.argv
+    assert "report.sif" in report_command.argv
+    assert report_command.argv[-9:] == (
+        "loom",
+        "stage-job",
+        "run",
+        "--run-uri",
+        "file:///runs/run-1",
+        "--stage",
+        "report",
+        "--executor",
+        "local",
+    )
 
 
 def _execution_plan(

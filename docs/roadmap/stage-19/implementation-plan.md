@@ -1,11 +1,11 @@
 # Roadmap Stage 19 Implementation Plan: Reliability Policies And Transactions
 
-Status: approved for Phase 1 execution planning
+Status: Phase 6 merged
 Roadmap stage: `v19`
 Planning document: `docs/roadmap/stage-19/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 1 execution planning
+Current phase: Phase 6 merged
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -287,12 +287,12 @@ drive core retry or transaction behavior.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `reliability-contracts-runtime-policy` | pending | `codex/reliability-contracts-runtime-policy` | pending | `loom.pipeline.reliability`, `loom.pipeline.runtime` | Add import-light contracts and public runtime policy parsing/merge | Package, unit, runtime contract tests, `make validate-pr`, `make test-summary` | Policy merge, disabled/unset policy, import boundary |
-| 2 | `reliability-persistence-read-models` | pending | `codex/reliability-persistence-read-models` | pending | `loom.pipeline.stores`, read models | Persist and read versioned reliability facts | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Status detail, transaction, timeout, retry-decision records |
-| 3 | `transaction-failure-classification` | pending | `codex/transaction-failure-classification` | pending | `loom.pipeline.execution`, lifecycle, status detail | Record transaction/classification facts around attempts | Classifier unit tests, lifecycle/store integration tests, `make validate-pr`, `make test-summary` | Commit failure, status detail without enum churn |
-| 4 | `timeout-capability-diagnostics` | pending | `codex/timeout-capability-diagnostics` | pending | runtime capabilities, executors, diagnostics, lease compatibility | Add timeout outcomes and reliability diagnostics | Capability, preflight, fake/subprocess tests, `make validate-pr`, `make test-summary` | Unsupported timeout, distinct timeout outcomes, lease diagnostic |
-| 5 | `retry-decisions-runner-automation` | pending | `codex/retry-decisions-runner-automation` | pending | runner, lifecycle, retry evaluator | Implement conservative runner-owned retry | Evaluator matrix, fake runner integration tests, `make validate-pr`, `make test-summary` | Retry-safe failed stage, unsafe transaction denial |
-| 6 | `reliability-inspection-finalization` | pending | `codex/reliability-inspection-finalization` | pending | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
+| 1 | `reliability-contracts-runtime-policy` | merged | `codex/reliability-contracts-runtime-policy` | [#176](https://github.com/samcantrill/loom/pull/176) | `loom.pipeline.reliability`, `loom.pipeline.runtime` | Add import-light contracts and public runtime policy parsing/merge | Package, unit, runtime contract tests, `make validate-pr`, `make test-summary` | Policy merge, disabled/unset policy, import boundary |
+| 2 | `reliability-persistence-read-models` | merged | `codex/reliability-persistence-read-models` | [#177](https://github.com/samcantrill/loom/pull/177) | `loom.pipeline.stores`, read models | Persist and read versioned reliability facts | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Status detail, transaction, timeout, retry-decision records |
+| 3 | `transaction-failure-classification` | merged | `codex/transaction-failure-classification` | [#178](https://github.com/samcantrill/loom/pull/178) | `loom.pipeline.execution`, lifecycle, status detail | Record transaction/classification facts around attempts | Classifier unit tests, lifecycle/store integration tests, `make validate-pr`, `make test-summary` | Commit failure, status detail without enum churn |
+| 4 | `timeout-capability-diagnostics` | merged | `codex/timeout-capability-diagnostics` | [#179](https://github.com/samcantrill/loom/pull/179) | runtime capabilities, executors, diagnostics, lease compatibility | Add timeout outcomes and reliability diagnostics | Capability, preflight, fake/subprocess tests, `make validate-pr`, `make test-summary` | Unsupported timeout, distinct timeout outcomes, lease diagnostic |
+| 5 | `retry-decisions-runner-automation` | merged | `codex/retry-decisions-runner-automation` | [#180](https://github.com/samcantrill/loom/pull/180) | runner, lifecycle, retry evaluator | Implement conservative runner-owned retry | Evaluator matrix, fake runner integration tests, `make validate-pr`, `make test-summary` | Retry-safe failed stage, unsafe transaction denial |
+| 6 | `reliability-inspection-finalization` | merged | `codex/reliability-inspection-finalization` | [#181](https://github.com/samcantrill/loom/pull/181) | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
 
 ## Implementation Readiness Blockers
 
@@ -302,11 +302,11 @@ drive core retry or transaction behavior.
 
 ## Phase 1: Reliability Contracts And Runtime Policy
 
-Status: pending
+Status: merged
 Slug: `reliability-contracts-runtime-policy`
 Branch: `codex/reliability-contracts-runtime-policy`
 Worktree: `/home/samcantrill/work/loom-worktrees/reliability-contracts-runtime-policy`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/176
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase creates public config and
@@ -385,14 +385,16 @@ record/protocol surface
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
+- Phase execution plan: complete
 - Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available because this phase
-  creates public API/config surface
-- PR review budget: one automated review pass available
-- Blocker-resolution budget: unused
+- Implementation/refinement budget: used by manager-local type/lint cleanup
+- PR review budget: used by `loom_phase_reviewer` pre-submit review
+- Blocker-resolution budget: 2/3 used
 - Pre-submit blocker gate: implementation-plan quality gate must pass
-- Merge record: pending
+- Merge record: merged into `develop` at
+  `c7415fd10e285d181481249f3fc06c7104908e17` on 2026-05-16 after automated
+  review, local validation, and GitHub CI passed. Branch retained because
+  Phase 2 was already stacked on `codex/reliability-contracts-runtime-policy`.
 
 ### Risks And Stop Conditions
 
@@ -405,19 +407,27 @@ record/protocol surface
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: complete. Added `loom.pipeline.reliability` policy, record,
+  and protocol contracts plus `runtime.reliability` and stage override
+  parsing/merge behavior.
+- Validation: complete. Targeted suites passed; `make validate-pr` passed
+  Ruff, Pyright, default suite (`1782` passed), config-extra (`446` passed),
+  and build; `make test-summary` passed all suites.
+- PR: opened at https://github.com/samcantrill/loom/pull/176 targeting
+  `develop`.
+- Merge: merged into `develop` at
+  `c7415fd10e285d181481249f3fc06c7104908e17`.
+- Follow-up: Phase 2 was created as stacked continuation from the Phase 1
+  branch and will need retarget/rebase maintenance before merge eligibility if
+  it remains stacked.
 
 ## Phase 2: Reliability Persistence And Read Models
 
-Status: pending
+Status: merged
 Slug: `reliability-persistence-read-models`
 Branch: `codex/reliability-persistence-read-models`
 Worktree: `/home/samcantrill/work/loom-worktrees/reliability-persistence-read-models`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/177
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase creates store/read contracts
@@ -492,13 +502,15 @@ and durable record layout
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
+- Phase execution plan: complete
 - Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available
-- PR review budget: one automated review pass available
+- Implementation/refinement budget: unused; targeted and final validation passed
+- PR review budget: used by manager-local automated review; no blocking findings
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phase 1 merged or valid as stack predecessor
-- Merge record: pending
+- Pre-submit blocker gate: passed; Phase 1 merged and Phase 2 targets `develop`
+- Merge record: merged into `develop` at
+  `7467afc7eb2253bb14ecfde00a885ce6698e457a` on 2026-05-16 after automated
+  manager review, local validation, and GitHub CI passed.
 
 ### Risks And Stop Conditions
 
@@ -512,19 +524,27 @@ and durable record layout
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: complete. Added store-owned reliability policy facts, status
+  details, stage-attempt transactions, retry decisions, and timeout outcomes
+  across local, in-memory, SQLite, and service authority-compatible store paths.
+- Validation: complete. `make validate-pr` passed Ruff, Pyright, default suite
+  (`1788 passed, 26 skipped, 18 deselected`), config-extra suite
+  (`446 passed, 1825 deselected`), and build. `make test-summary` passed
+  overall (`2262 passed, 18 skipped, 1841 deselected`).
+- PR: opened at https://github.com/samcantrill/loom/pull/177 targeting
+  `develop`.
+- Merge: merged into `develop` at
+  `7467afc7eb2253bb14ecfde00a885ce6698e457a`.
+- Follow-up: Phase 3 can branch from updated `develop`; no successor branch
+  depends on the Phase 2 branch.
 
 ## Phase 3: Transaction And Failure Classification Integration
 
-Status: pending
+Status: merged
 Slug: `transaction-failure-classification`
 Branch: `codex/transaction-failure-classification`
 Worktree: `/home/samcantrill/work/loom-worktrees/transaction-failure-classification`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/178
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase changes execution lifecycle and
@@ -598,13 +618,16 @@ failure semantics
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
+- Phase execution plan: complete at
+  `docs/roadmap/stage-19/phases/transaction-failure-classification.md`
 - Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available
-- PR review budget: one automated review pass available
+- Implementation/refinement budget: unused; implementation-pass fixes resolved targeted validation findings
+- PR review budget: used by manager-local automated review; no blocking findings
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phases 1 and 2 merged or valid stack predecessors
-- Merge record: pending
+- Pre-submit blocker gate: passed; Phases 1 and 2 are merged into `develop`
+- Merge record: merged into `develop` at
+  `b78d6d588b7e634e8d31ef02eccc7a101587b547` on 2026-05-16 after automated
+  manager review, local validation, and GitHub CI passed.
 
 ### Risks And Stop Conditions
 
@@ -618,19 +641,21 @@ failure semantics
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: complete. Added stateful stage-attempt transactions, execution-owned failure classification, lifecycle transaction writes, and authority-backed reliability delegation without changing `RunStatus` or `StageStatus`.
+- Validation: complete. `make validate-pr` passed Ruff, Pyright, default suite (`1791 passed, 26 skipped, 18 deselected`), config-extra suite (`446 passed, 1828 deselected`), and build. `make test-summary` passed all suite groups.
+- PR: opened at https://github.com/samcantrill/loom/pull/178 targeting `develop`
+- Merge: merged into `develop` at
+  `b78d6d588b7e634e8d31ef02eccc7a101587b547`.
+- Follow-up: Phase 4 can branch from updated `develop`; no successor branch
+  depends on the Phase 3 branch.
 
 ## Phase 4: Timeout Capability And Reliability Diagnostics
 
-Status: pending
+Status: merged
 Slug: `timeout-capability-diagnostics`
 Branch: `codex/timeout-capability-diagnostics`
 Worktree: `/home/samcantrill/work/loom-worktrees/timeout-capability-diagnostics`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/179
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase crosses runtime capability,
@@ -710,14 +735,21 @@ executor, diagnostics, and lease-compatibility surfaces
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available
-- PR review budget: one automated review pass available
-- Blocker-resolution budget: unused
+- Phase execution plan: complete at
+  `docs/roadmap/stage-19/phases/timeout-capability-diagnostics.md`
+- Planning/refinement budget: expanded path; draft and refine complete by
+  manager-local planning
+- Implementation/refinement budget: not needed; targeted validation and PR gate
+  passed without a refinement blocker
+- PR review budget: used by manager-local automated review
+- Blocker-resolution budget: 0/3 used
 - Pre-submit blocker gate: Phases 1 through 3 merged or valid stack
   predecessors
-- Merge record: pending
+- Merge record: merged into `develop` at
+  `068e2b4a5055d25d71069d1a43d42e28eaccf672` on 2026-05-16 after
+  manager-local automated review, local validation, GitHub CI `checks`
+  success, and target-branch verification. No successor branch depends on the
+  Phase 4 branch.
 
 ### Risks And Stop Conditions
 
@@ -731,19 +763,29 @@ executor, diagnostics, and lease-compatibility surfaces
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: complete. Added timeout support/outcome vocabulary,
+  descriptor-level timeout support diagnostics, subprocess timeout
+  enforcement, local unsupported-timeout metadata, lifecycle timeout outcome
+  persistence, lease capability diagnostics, and docs clarifying timeout
+  domain separation.
+- Validation: complete. Focused package/unit/contract/integration batch passed
+  with `189` tests; `make validate-pr` passed Ruff, Pyright, default suite
+  (`1800` passed), config-extra (`446` passed), and build; `make
+  test-summary` passed all suites.
+- PR: opened at https://github.com/samcantrill/loom/pull/179 targeting
+  `develop`.
+- Merge: merged into `develop` at
+  `068e2b4a5055d25d71069d1a43d42e28eaccf672`.
+- Follow-up: Phase 5 can branch from updated `develop`; no Phase 4 stack
+  maintenance or successor retargeting is required.
 
 ## Phase 5: Retry Decisions And Runner-Owned Automation
 
-Status: pending
+Status: merged
 Slug: `retry-decisions-runner-automation`
 Branch: `codex/retry-decisions-runner-automation`
 Worktree: `/home/samcantrill/work/loom-worktrees/retry-decisions-runner-automation`
-PR: pending
+PR: [#180](https://github.com/samcantrill/loom/pull/180)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase introduces Stage 19's only
@@ -816,40 +858,55 @@ runtime-changing automation
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available
-- PR review budget: one automated review pass available
+- Phase execution plan: complete at
+  `docs/roadmap/stage-19/phases/retry-decisions-runner-automation.md`
+- Planning/refinement budget: expanded path; draft and refine complete by
+  manager-local planning
+- Implementation/refinement budget: not needed; no formal refiner pass consumed
+- PR review budget: used by manager-local automated review; no blocking
+  findings remained after the runtime-option consistency fix
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phases 1 through 4 merged or valid stack
   predecessors
-- Merge record: pending
+- Merge record: PR [#180](https://github.com/samcantrill/loom/pull/180)
+  squash-merged into `develop` at
+  `82fbd748afe0cf36aa5b69177711d3ff511f3485` after CI `checks` passed
 
 ### Risks And Stop Conditions
 
 - Risks: retry loops causing duplicate outputs, in-memory decisions, executor
   retry ownership, accidental retry of validation/config/graph failures.
 - Stop conditions: retry cannot be made safe from recorded transaction state;
-  decision persistence must happen after scheduling; retry behavior requires
-  event sinks or external callbacks.
+  decision persistence cannot be guaranteed before scheduling; retry behavior
+  requires event sinks or external callbacks.
 - Assumptions: initial Stage 19 retry policy supports bounded total attempts
   only; advanced backoff and budgets remain deferred.
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: complete; runner-owned retry records allowed and denied
+  decisions before scheduling additional attempts, keeps executors
+  one-attempt-at-a-time, and preserves no-policy failure behavior.
+- Validation: complete; targeted Phase 5 suite passed with `184 passed`;
+  `make validate-pr` passed Ruff, Pyright, default tests, config-extra tests,
+  and package build; `make test-summary` passed all suites with `2281 passed,
+  18 skipped, 1859 deselected`.
+- PR: opened as [#180](https://github.com/samcantrill/loom/pull/180) against
+  `develop`
+- Merge: PR [#180](https://github.com/samcantrill/loom/pull/180)
+  squash-merged into `develop` at
+  `82fbd748afe0cf36aa5b69177711d3ff511f3485`; GitHub CI `checks` passed
+  before merge.
+- Follow-up: Phase 6 can branch from updated `develop`; no Phase 5 stack
+  successor depends on the merged branch.
 
 ## Phase 6: Read-Only Inspection, Documentation, And Final Validation
 
-Status: pending
+Status: merged
 Slug: `reliability-inspection-finalization`
 Branch: `codex/reliability-inspection-finalization`
 Worktree: `/home/samcantrill/work/loom-worktrees/reliability-inspection-finalization`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/181
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase finalizes user-visible
@@ -932,14 +989,19 @@ inspection, docs, and suite evidence
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
+- Phase execution plan: completed in `docs/roadmap/stage-19/phases/reliability-inspection-finalization.md`
 - Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available
-- PR review budget: one automated review pass available
+- Implementation/refinement budget: not needed; implementation validation
+  passed without a formal refiner pass
+- PR review budget: used by manager-local automated review before merge
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phases 1 through 5 merged or valid stack
   predecessors
-- Merge record: pending
+- PR record: opened as https://github.com/samcantrill/loom/pull/181 with
+  `develop` target and `codex/reliability-inspection-finalization` head.
+- Merge record: PR #181 was squash-merged into `develop` at
+  `6c7feebfa4d73febd9d9dc78bab23df5519b0839` after GitHub CI `checks`
+  passed.
 
 ### Risks And Stop Conditions
 
@@ -954,11 +1016,19 @@ inspection, docs, and suite evidence
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: complete. Persisted selected reliability policy facts at the
+  stage-attempt boundary, added read-only diagnostics summaries for reliability
+  policy, status detail, transaction, retry, timeout, and unsupported-timeout
+  evidence, enriched existing status/backend inspection output, and updated
+  feature docs for final Stage 19 behavior.
+- Validation: `make validate-pr` passed; `make test-summary` passed with
+  package, unit, contract, integration, e2e, and config-extra suite evidence.
+- PR: opened as https://github.com/samcantrill/loom/pull/181 targeting
+  `develop`.
+- Merge: squash-merged into `develop` at
+  `6c7feebfa4d73febd9d9dc78bab23df5519b0839`.
+- Follow-up: no product follow-up; Phase 6 branch cleanup is safe because no
+  successor phase depends on it.
 
 ## Cross-Phase Validation
 

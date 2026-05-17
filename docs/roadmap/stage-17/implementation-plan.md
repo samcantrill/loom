@@ -1,11 +1,11 @@
 # Roadmap Stage 17 Implementation Plan: Docker Container Executor
 
-Status: ready for phase implementation
+Status: complete
 Roadmap stage: `v17`
 Planning document: `docs/roadmap/stage-17/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 1 pending
+Current phase: Phase 5 merged
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -318,11 +318,11 @@ Apptainer/Singularity prove enough common behavior.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `docker-container-contracts` | pending | `codex/docker-container-contracts` | pending | Shared container records, Docker descriptor, runtime/profile adapter contracts | Establish Stage 18-compatible container config and capability surface | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Runtime/profile config snippets |
-| 2 | `docker-command-runner` | pending | `codex/docker-command-runner` | pending | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
-| 3 | `docker-executor-integration` | pending | `codex/docker-executor-integration` | pending | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
-| 4 | `docker-preflight-diagnostics` | pending | `codex/docker-preflight-diagnostics` | pending | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
-| 5 | `docker-examples-acceptance` | pending | `codex/docker-examples-acceptance` | pending | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
+| 1 | `docker-container-contracts` | merged | `codex/docker-container-contracts` | [#171](https://github.com/samcantrill/loom/pull/171) | Shared container records, Docker descriptor, runtime/profile adapter contracts | Establish Stage 18-compatible container config and capability surface | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Runtime/profile config snippets |
+| 2 | `docker-command-runner` | merged | `codex/docker-command-runner` | [#172](https://github.com/samcantrill/loom/pull/172) | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
+| 3 | `docker-executor-integration` | merged | `codex/docker-executor-integration` | [#173](https://github.com/samcantrill/loom/pull/173) | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
+| 4 | `docker-preflight-diagnostics` | merged | `codex/docker-preflight-diagnostics` | [#174](https://github.com/samcantrill/loom/pull/174) | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
+| 5 | `docker-examples-acceptance` | merged | `codex/docker-examples-acceptance` | [#175](https://github.com/samcantrill/loom/pull/175) | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
 
 ## Implementation Readiness Blockers
 
@@ -332,11 +332,11 @@ Apptainer/Singularity prove enough common behavior.
 
 ## Phase 1: Container Contracts And Runtime Descriptor
 
-Status: pending
+Status: merged
 Slug: `docker-container-contracts`
 Branch: `codex/docker-container-contracts`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-container-contracts`
-PR: pending
+PR: [#171](https://github.com/samcantrill/loom/pull/171)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase creates public adapter config
@@ -415,14 +415,15 @@ and reusable records for Stage 18
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  validation fails, coverage is missing, or public contract risk remains
-- PR review budget: one automated review pass available
+- Phase execution plan: complete in
+  `docs/roadmap/stage-17/phases/docker-container-contracts.md`
+- Planning/refinement budget: expanded path draft and refine completed
+- Implementation/refinement budget: not needed; targeted suites and full PR
+  gate passed
+- PR review budget: manager pre-submit review used; no blocking findings remain
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: implementation-plan quality gate must pass
-- Merge record: pending
+- Pre-submit blocker gate: passed; PR opened against verified target branch
+- Merge record: merged to `develop` by squash merge after CI success.
 
 ### Risks And Stop Conditions
 
@@ -436,19 +437,27 @@ and reusable records for Stage 18
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: shared import-light container records, lazy executor package
+  exports, Docker descriptor namespace/resource claims, and focused
+  unit/contract/package coverage added.
+- Validation: targeted phase tests passed (`105 passed`); broader phase suite
+  passed (`479 passed, 3 skipped`); `make validate-pr` passed; `make
+  test-summary` passed with `2180 passed, 18 skipped, 1765 deselected`.
+- PR: [#171](https://github.com/samcantrill/loom/pull/171) opened against
+  `develop` from `codex/docker-container-contracts`.
+- Merge: [#171](https://github.com/samcantrill/loom/pull/171) merged into
+  `develop` after GitHub CI `checks` passed and the PR target was reverified as
+  `develop`.
+- Follow-up: Phase 2 consumes these records for Docker command construction
+  after Phase 1 merges or remains a valid stack predecessor.
 
 ## Phase 2: Docker Command Builder And Runner
 
-Status: pending
+Status: merged
 Slug: `docker-command-runner`
 Branch: `codex/docker-command-runner`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-command-runner`
-PR: pending
+PR: [#172](https://github.com/samcantrill/loom/pull/172)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase creates a command-runner
@@ -524,15 +533,15 @@ protocol, process-result records, and redaction-sensitive metadata
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  validation fails, coverage is missing, or redaction/process-contract risk
-  remains
-- PR review budget: one automated review pass available
+- Phase execution plan: complete in
+  `docs/roadmap/stage-17/phases/docker-command-runner.md`
+- Planning/refinement budget: expanded path draft and refine completed
+- Implementation/refinement budget: not needed; targeted suites and full PR
+  gate passed
+- PR review budget: manager pre-submit review used; no blocking findings remain
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phase 1 merged or valid as stack predecessor
-- Merge record: pending
+- Pre-submit blocker gate: passed; PR opened against verified target branch
+- Merge record: merged to `develop` by squash merge after CI success.
 
 ### Risks And Stop Conditions
 
@@ -546,19 +555,27 @@ protocol, process-result records, and redaction-sensitive metadata
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
+- Implementation: Docker command package, option parsing, deterministic
+  shell-free argv construction, redacted command projections, bounded command
+  results, fake/subprocess runners, and cheap version/local image digest
+  commands added.
+- Validation: targeted phase tests passed (`66 passed`); broader phase suite
+  passed (`460 passed, 3 skipped`); `make validate-pr` passed; `make
+  test-summary` passed with `2194 passed, 18 skipped, 1779 deselected`.
+- PR: [#172](https://github.com/samcantrill/loom/pull/172) opened against
+  `develop` from `codex/docker-command-runner`.
+- Merge: [#172](https://github.com/samcantrill/loom/pull/172) merged into
+  `develop` after GitHub CI `checks` passed and the PR target was reverified as
+  `develop`.
 - Follow-up:
 
 ## Phase 3: Docker Executor Integration
 
-Status: pending
+Status: merged
 Slug: `docker-executor-integration`
 Branch: `codex/docker-executor-integration`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-executor-integration`
-PR: pending
+PR: [#173](https://github.com/samcantrill/loom/pull/173)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase touches execution lifecycle,
@@ -637,15 +654,18 @@ CLI selection, failure semantics, and result metadata
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  validation fails, coverage is missing, or lifecycle/failure semantics are
-  unclear
-- PR review budget: one automated review pass available
+- Phase execution plan: complete in
+  `docs/roadmap/stage-17/phases/docker-executor-integration.md`
+- Planning/refinement budget: expanded path draft and refine completed
+- Implementation/refinement budget: not needed; targeted suites, broad phase
+  suite with config extra, and full PR gate passed
+- PR review budget: manager automated review used; writable required-mount
+  finding fixed before merge, with no blocking findings remaining
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phase 2 merged or valid as stack predecessor
-- Merge record: pending
+- Pre-submit blocker gate: passed; PR opened against verified `develop` target
+- Merge record: PR [#173](https://github.com/samcantrill/loom/pull/173) merged
+  into `develop` by squash merge after GitHub CI `checks` passed; merge commit
+  `2333297486a08df5b694056d709ad9cf9fb75c58`; remote branch deleted.
 
 ### Risks And Stop Conditions
 
@@ -660,19 +680,36 @@ CLI selection, failure semantics, and result metadata
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: added `DockerExecutor` as a prepared-worker executor using
+  Phase 1 container records and the Phase 2 Docker command runner; added
+  required writable run-dir and artifact-root path-parity mounts; mapped Docker
+  command facts and standard worker results into `StageExecutionResult`; kept
+  Docker package/root executor exports lazy; wired `loom run --executor docker`;
+  and added unit, integration, package, and CLI coverage.
+- Validation: targeted Docker executor unit test passed (`14 passed`);
+  `make validate-pr` passed with Ruff, Pyright, default harness (`1743 passed,
+  26 skipped, 18 deselected`), config-extra harness (`440 passed, 1780
+  deselected`), and build; `make test-summary` passed with overall `2211
+  passed, 18 skipped, 1796 deselected`.
+- PR: [#173](https://github.com/samcantrill/loom/pull/173) opened and verified
+  against `develop` from `codex/docker-executor-integration`; GitHub CI
+  `checks` passed.
+- Review: manager automated review found and fixed a required writable
+  run/artifact mount edge case before merge; no blockers remained.
+- Merge: [#173](https://github.com/samcantrill/loom/pull/173) merged into
+  `develop` by squash merge; merge commit
+  `2333297486a08df5b694056d709ad9cf9fb75c58`; remote branch and stale local
+  tracking ref were deleted.
+- Follow-up: Phase 4 consumes the executor/container metadata and path checks
+  for Docker selected-executor preflight diagnostics.
 
 ## Phase 4: Docker Preflight And Diagnostics
 
-Status: pending
+Status: merged
 Slug: `docker-preflight-diagnostics`
 Branch: `codex/docker-preflight-diagnostics`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-preflight-diagnostics`
-PR: pending
+PR: [#174](https://github.com/samcantrill/loom/pull/174)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase creates stable diagnostics and
@@ -742,14 +779,17 @@ selected-executor preflight behavior
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
+- Phase execution plan: complete in
+  `docs/roadmap/stage-17/phases/docker-preflight-diagnostics.md`
+- Planning/refinement budget: expanded path draft and refine completed
 - Implementation/refinement budget: one `loom_phase_refiner` pass available if
   validation fails, check IDs are unstable, or diagnostics leak raw data
-- PR review budget: one automated review pass available
+- PR review budget: manager pre-submit review used; no blocking findings remain
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phase 3 merged or valid as stack predecessor
-- Merge record: pending
+- Pre-submit blocker gate: passed; PR opened against verified `develop` target
+- Merge record: PR [#174](https://github.com/samcantrill/loom/pull/174)
+  merged into `develop` by squash merge after GitHub CI `checks` passed; merge
+  commit `7471538b9fbdeae7f109b6006fd96c28cb5e714b`; remote branch deleted.
 
 ### Risks And Stop Conditions
 
@@ -763,19 +803,36 @@ selected-executor preflight behavior
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: added stable selected-Docker preflight diagnostics for Docker
+  command availability, container/Docker option shape, image reference
+  presence, required host environment variables, authored mount source
+  existence, Stage 17 mount target path parity, run-directory writability,
+  local artifact-root visibility, CPU/memory mapping, and unsupported GPU
+  requests. Details are plain-data and redaction-safe, and default checks avoid
+  Docker daemon, network, registry, image-pull, and SDK behavior.
+- Validation: targeted Phase 4 suite passed (`87 passed, 2 skipped`);
+  `uv run --extra config pytest tests/unit/loom/diagnostics tests/contracts
+  tests/integration tests/package` passed (`666 passed`); `make validate-pr`
+  passed with Ruff, Pyright, default harness (`1751 passed, 26 skipped, 18
+  deselected`), config-extra harness (`442 passed, 1788 deselected`), and
+  build; `make test-summary` passed with overall `2221 passed, 18 skipped,
+  1804 deselected`.
+- PR: [#174](https://github.com/samcantrill/loom/pull/174) opened and verified
+  against `develop` from `codex/docker-preflight-diagnostics`.
+- Merge: [#174](https://github.com/samcantrill/loom/pull/174) merged into
+  `develop` by squash merge after GitHub CI `checks` passed; merge commit
+  `7471538b9fbdeae7f109b6006fd96c28cb5e714b`; remote branch and stale local
+  tracking ref were deleted.
+- Follow-up: Phase 5 consumes the Docker preflight checks for docs, examples,
+  failure inspection guidance, and optional live Docker smoke notes.
 
 ## Phase 5: Examples, Documentation, And Acceptance Hardening
 
-Status: pending
+Status: merged
 Slug: `docker-examples-acceptance`
 Branch: `codex/docker-examples-acceptance`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-examples-acceptance`
-PR: pending
+PR: [#175](https://github.com/samcantrill/loom/pull/175)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: fast path unless docs/example validation exposes a concrete
@@ -846,15 +903,18 @@ blocker or optional live Docker acceptance changes public behavior
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: fast path by default; refine only if examples or
-  validation expose unresolved public behavior
+- Phase execution plan: complete in
+  `docs/roadmap/stage-17/phases/docker-examples-acceptance.md`
+- Planning/refinement budget: fast-path draft complete; refine only if examples
+  or validation expose unresolved public behavior
 - Implementation/refinement budget: zero on fast path, one available if final
   validation fails or example coverage is missing
-- PR review budget: one automated review pass available
+- PR review budget: manager automated review used; no blocking findings remain
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phase 4 merged or valid as stack predecessor
-- Merge record: pending
+- Pre-submit blocker gate: passed; PR opened against verified `develop` target
+- Merge record: PR [#175](https://github.com/samcantrill/loom/pull/175)
+  merged into `develop` by squash merge after GitHub CI `checks` passed; merge
+  commit `0255276fa7303cc6712148b952e97e2d66b1a673`; remote branch deleted.
 
 ### Risks And Stop Conditions
 
@@ -869,11 +929,28 @@ blocker or optional live Docker acceptance changes public behavior
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: added Docker examples, feature docs, catalog coverage, and
+  docs/example tests for normal Docker pipeline execution, selected-Docker
+  preflight, failure inspection, runtime/profile adapter options, path-parity
+  guidance, redaction, and optional live Docker smoke notes.
+- Validation: targeted Phase 5 suite passed (`261 passed`); `make
+  validate-pr` passed with Ruff, Pyright, default harness (`1751 passed, 26
+  skipped, 18 deselected`), config-extra harness (`446 passed, 1788
+  deselected`), and build; `make test-summary` passed with overall `2225
+  passed, 18 skipped, 1804 deselected`.
+- PR: [#175](https://github.com/samcantrill/loom/pull/175) opened and
+  verified against `develop` from `codex/docker-examples-acceptance`.
+- Review: manager automated review found no blocking issues; scope remained
+  docs/examples/tests, default validation remained Docker-free, and no
+  future-phase container behavior was introduced.
+- Merge: [#175](https://github.com/samcantrill/loom/pull/175) merged into
+  `develop` by squash merge after GitHub CI `checks` passed; merge commit
+  `0255276fa7303cc6712148b952e97e2d66b1a673`; remote branch and stale local
+  tracking ref were deleted.
+- Follow-up: none for Stage 17. Later roadmap stages retain the deferred
+  Apptainer/Singularity, SLURM-container composition, live Docker acceptance,
+  retry/timeout, event, cleanup, image-build, registry-auth, and advanced GPU
+  items recorded as out of scope.
 
 ## Cross-Phase Validation
 

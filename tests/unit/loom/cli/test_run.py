@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import io
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -464,6 +465,136 @@ def test_run_build_executor_supports_subprocess(tmp_path: Path) -> None:
     assert getattr(executor, "requires_prepared_worker_request") is True
 
 
+def test_run_build_executor_supports_docker(tmp_path: Path) -> None:
+    executor = run_command._build_executor(
+        "docker",
+        LocalRunStore(tmp_path / "runs"),
+    )
+
+    assert getattr(executor, "name") == "docker"
+    assert getattr(executor, "requires_prepared_worker_request") is True
+
+
+def test_run_build_executor_supports_apptainer_and_singularity(
+    tmp_path: Path,
+) -> None:
+    apptainer = run_command._build_executor(
+        "apptainer",
+        LocalRunStore(tmp_path / "runs"),
+    )
+    singularity = run_command._build_executor(
+        "singularity",
+        LocalRunStore(tmp_path / "runs2"),
+    )
+
+    assert getattr(apptainer, "name") == "apptainer"
+    assert getattr(apptainer, "requires_prepared_worker_request") is True
+    assert getattr(singularity, "name") == "singularity"
+    assert getattr(singularity, "requires_prepared_worker_request") is True
+
+
+def test_slurm_container_target_resolution_rewrites_run_and_stage_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loom.pipeline.executors.containers import (
+        FakeContainerBuilder,
+        LocalContainerBuildService,
+    )
+
+    builder = FakeContainerBuilder(
+        "apptainer",
+        existing_outputs=[
+            ".loom/containers/run.sif",
+            ".loom/containers/report.sif",
+        ],
+    )
+    service = LocalContainerBuildService({"apptainer": builder})
+    monkeypatch.setattr(
+        run_command,
+        "_build_container_build_service",
+        lambda: service,
+    )
+    runtime_options = RunOptions(
+        executor="slurm-afterok",
+        adapter_options=cast(
+            Any,
+            {
+                "container": {"target": "run-env"},
+                "container_build": _container_build_namespace(
+                    "run-env",
+                    ".loom/containers/run.sif",
+                ),
+            },
+        ),
+        stage_options={
+            "report": {
+                "adapter_options": {
+                    "container": {"target": "report-env"},
+                    "container_build": _container_build_namespace(
+                        "report-env",
+                        ".loom/containers/report.sif",
+                    ),
+                }
+            }
+        },
+    )
+
+    resolved, build_results = run_command._resolve_slurm_container_runtime_options(
+        runtime_options,
+        requested_by="unit-test",
+    )
+
+    stage_options = cast(Any, resolved.stage_options["report"])
+    assert resolved.adapter_options["container"] == {
+        "image": {"reference": ".loom/containers/run.sif"}
+    }
+    assert stage_options.adapter_options["container"] == {
+        "image": {"reference": ".loom/containers/report.sif"}
+    }
+    assert [result.target_name for result in build_results] == [
+        "run-env",
+        "report-env",
+    ]
+    assert [call.requested_by for call in builder.calls] == [
+        "unit-test",
+        "unit-test:report",
+    ]
+
+
+def test_run_explicit_docker_executor_uses_generic_run_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _patch_common(monkeypatch)
+
+    @dataclass(frozen=True, slots=True)
+    class FakeDockerExecutor:
+        name: str = "docker"
+
+    def build_executor(executor: str, store: object) -> FakeDockerExecutor:
+        calls["build_executor"] = executor
+        calls["build_executor_store"] = store
+        return FakeDockerExecutor()
+
+    monkeypatch.setattr(run_command, "_build_executor", build_executor)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["run", "base.yaml", "--executor", "docker", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert stderr.getvalue() == ""
+    assert payload["schema_version"] == "loom.cli.run.v2"
+    assert calls["build_executor"] == "docker"
+    assert getattr(calls["executor"], "name") == "docker"
+
+
 def test_run_dry_run_uses_plan_result_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     def build_plan_result(*_args: object, **_kwargs: object) -> PlanCliResult:
         return PlanCliResult(
@@ -662,6 +793,22 @@ def test_run_slurm_live_afterok_partial_returns_run_failed_exit_code(
     assert payload["ok"] is False
     assert payload["result"]["status"] == "PARTIAL"
     assert payload["result"]["failed_submission_count"] == 1
+
+
+def _container_build_namespace(name: str, output_path: str) -> dict[str, object]:
+    return {
+        "targets": {
+            name: {
+                "runtime": "apptainer",
+                "source": {
+                    "kind": "definition_file",
+                    "path": f"containers/{name}.def",
+                },
+                "output": {"kind": "apptainer_sif", "path": output_path},
+                "policy": {"mode": "never"},
+            }
+        }
+    }
 
 
 def test_run_failed_result_returns_run_failed_exit_code(

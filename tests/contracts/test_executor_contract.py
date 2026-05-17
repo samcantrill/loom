@@ -7,7 +7,13 @@ from dataclasses import dataclass
 import pytest
 
 from loom.pipeline.execution import StageExecutionRequest, StageExecutionResult
-from loom.pipeline.executors import Executor, LocalExecutor, SubprocessExecutor
+from loom.pipeline.executors import (
+    ApptainerExecutor,
+    Executor,
+    LocalExecutor,
+    SingularityExecutor,
+    SubprocessExecutor,
+)
 from loom.pipeline.stores import LocalRunStore
 
 
@@ -26,3 +32,5 @@ def test_executor_protocol_is_structural() -> None:
     assert isinstance(StructuralExecutor(), Executor)
     assert isinstance(LocalExecutor(), Executor)
     assert isinstance(SubprocessExecutor(run_store=LocalRunStore()), Executor)
+    assert isinstance(ApptainerExecutor(run_store=LocalRunStore()), Executor)
+    assert isinstance(SingularityExecutor(run_store=LocalRunStore()), Executor)

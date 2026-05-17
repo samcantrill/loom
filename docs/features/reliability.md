@@ -103,28 +103,37 @@ The exact model should align with state and run-store records.
 ## Retry Policy
 
 Retry policy controls whether a failed stage may be attempted again
-automatically within the same run.
+automatically within the same run. Retry is disabled by default and is owned by
+the runner/controller, not by executors.
 
-Recommended shape:
+Current Stage 19 shape:
 
 ```python
 @dataclass(frozen=True)
 class RetryPolicy:
+    enabled: bool = False
     max_attempts: int = 1
-    retry_on_exit_codes: frozenset[int] | None = None
-    retry_on_exception_types: frozenset[str] | None = None
-    backoff_seconds: float | None = None
 ```
 
 YAML example:
 
 ```yaml
-retry:
-  max_attempts: 2
+runtime:
+  reliability:
+    retry:
+      enabled: true
+      max_attempts: 2
 ```
 
 `max_attempts` includes the first attempt. `max_attempts: 1` means no automatic
 retry.
+
+The runner persists a `RetryDecisionRecord` after each failed or cancelled
+stage attempt that reaches the retry gate. It schedules another attempt only
+after an allowed decision has been written. Denied decisions remain inspectable
+with stable reasons such as `retry.disabled`, `retry.max_attempts_exhausted`,
+`retry.cancelled`, `retry.non_retriable_failure`,
+`retry.transaction_missing`, and `retry.unsafe_transaction_state`.
 
 ## Retry Boundaries
 
@@ -150,55 +159,92 @@ artifact type mismatches
 user cancellation unless explicitly designed
 ```
 
-Executor-specific transient failures can be added later through structured
-failure categories.
+Current automatic retry is conservative: retriable failure classifications are
+limited to stage exceptions and executor infrastructure failures, and any
+attempt that reached staged, committed, or commit-failed output transaction
+state is denied as unsafe. Executors report one attempt result at a time and do
+not schedule retries. Advanced backoff, retry windows, cross-run budgets, and
+resource-aware escalation remain future policy work.
+
+Stage 17 Docker failures record process and worker facts but do not introduce
+Docker-specific retry policy. A Docker failure remains inspectable through the
+normal failure record, status view, log paths, executor name, exit code or
+signal when available, redacted command metadata, and bounded process output.
+Stage 19 owns any shared retry, timeout, or failure-category policy that uses
+those facts.
 
 ## Timeout Policy
 
 Timeout policy controls maximum runtime for a stage attempt.
 
-Recommended shape:
+Current Stage 19 shape:
 
 ```python
 @dataclass(frozen=True)
 class TimeoutPolicy:
-    wall_time_seconds: int | None = None
-    grace_seconds: int | None = None
+    enabled: bool = True
+    duration_seconds: float | None = None
 ```
 
-`wall_time_seconds` is not a v0 `ResourceRequest` field; v0 rejects authored
-timeout fields so callers do not assume timeout behavior is honored. A later
-phase may add timeout policy as an explicit reliability policy or as a future
-resource extension, but the design should avoid two conflicting ways to express
-the same timeout.
+YAML example:
+
+```yaml
+runtime:
+  reliability:
+    timeout:
+      enabled: true
+      duration_seconds: 300
+```
+
+`duration_seconds` lives under `runtime.reliability.timeout` or an exact-stage
+`runtime.stage_options.<stage>.reliability.timeout` override. It is not a
+`ResourceRequest` field, an executor resource request, a resource admission wait
+timeout, or an authority-client operational timeout. Authored resource fields
+such as `timeout`, `timeout_seconds`, and `wall_time_seconds` remain rejected so
+callers do not assume resource admission will enforce reliability policy.
 
 ## Timeout Enforcement
 
 Timeout enforcement depends on executor capability.
 
-Local/subprocess:
+Subprocess:
 
 ```text
-controller can terminate the child process after the timeout
-logs and exit status should record timeout as the failure reason
+the executor passes duration_seconds to the worker subprocess boundary
+timeout expiry returns a structured failed attempt
+the timeout outcome is persisted as a reliability fact
+```
+
+Local:
+
+```text
+in-process stage code is not interrupted
+execution records an unsupported timeout outcome when policy is selected
+preflight and capability diagnostics warn that timeout is unsupported
 ```
 
 SLURM:
 
 ```text
-wall time maps to scheduler submission where possible
-controller may observe scheduler timeout after the fact
+timeout intent can be delegated to scheduler submission where possible
+controller may observe scheduler timeout facts after the attempt
 ```
 
 Containers:
 
 ```text
-timeout may wrap the container runtime command
+timeout may wrap the container runtime command in a future adapter
 container runtime-specific stop behavior should be recorded
 ```
 
-If an executor cannot enforce a timeout, preflight or execution should warn and
-record that the timeout was not enforced.
+Stage 17 records Docker process timeout fields when supplied by the command
+runner, but it does not add a user-facing timeout policy.
+
+Executor descriptors classify timeout support as `enforced`, `delegated`,
+`observed`, or `unsupported`. Attempt outcomes use `enforced`, `delegated`,
+`observed`, `unsupported`, or `timed_out`. If an executor cannot enforce or
+observe a timeout, preflight or execution should warn and record that the
+timeout was not enforced.
 
 ## Temporary File Cleanup
 
@@ -468,6 +514,32 @@ Callback failures should be recorded and execution should continue by default.
 A future strict mode may treat callback failures as fatal for audit-heavy
 workflows, but observer failure must not silently alter run correctness.
 
+## Read-Only Inspection
+
+Current Stage 19 reliability facts are inspectable through authoritative read
+models and existing status/backend diagnostics.
+
+`loom status RUN_URI` includes compact per-stage reliability summaries when
+facts exist:
+
+```text
+selected reliability policy
+status detail count
+stage-attempt transaction count and latest state
+retry decision count and latest decision reason
+timeout outcome count and unsupported timeout diagnostics
+```
+
+`loom backend inspect RUN_URI --format json` exposes the raw authoritative
+snapshot fields for reliability policy facts, status details, transactions,
+retry decisions, and timeout outcomes. Text output reports compact counts.
+
+Inspection is read-only. It must not allocate attempts, schedule retries,
+clean files, delete artifacts, emit external events, or contact notification
+services. Stage 20 may project these facts into events. Stage 21 may consume
+transaction and timeout evidence for cleanup and retention planning, but Stage
+19 does not perform deletion.
+
 ## Testing
 
 Tests should cover:
@@ -479,6 +551,7 @@ retry disabled behavior
 non-retryable validation failures
 timeout policy normalization
 executor timeout unsupported warning
+status/backend reliability inspection
 cleanup dry-run reports candidates
 cleanup rejects paths outside managed roots
 cleanup does not follow symlinks
@@ -492,14 +565,15 @@ test environment explicitly provides real commands.
 
 ## Implementation Plan
 
-1. Define reliability policy and event models.
+1. Define reliability policy and record models.
 2. Persist failure metadata for every failed stage attempt.
-3. Add retry planning around atomic output transactions.
+3. Record stage-attempt transactions, timeout outcomes, and retry decisions.
 4. Add timeout support where the selected executor can enforce it.
-5. Add cleanup dry-run reporting for known temporary paths.
-6. Add conservative deletion behind explicit CLI flags.
-7. Add retention metadata before adding automatic deletion behavior.
-8. Add plugin callback hooks on top of generic event records.
+5. Expose read-only reliability facts through diagnostics and CLI status.
+6. Add cleanup dry-run reporting for known temporary paths in later work.
+7. Add conservative deletion behind explicit CLI flags in later work.
+8. Add retention metadata before adding automatic deletion behavior.
+9. Add plugin callback hooks on top of generic event records.
 
 ## Deferred Work
 

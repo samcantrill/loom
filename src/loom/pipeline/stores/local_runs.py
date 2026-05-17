@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import socket
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from threading import Lock
 from typing import cast
@@ -13,6 +14,12 @@ from typing import cast
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.pipeline.events import PipelineEvent, PipelineEventError, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord, RunLockValidationError
+from loom.pipeline.reliability import (
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.submitted import (
     SubmittedOperationError,
     SubmittedOperationRecord,
@@ -58,8 +65,25 @@ from .errors import (
 from .indexes import artifact_index_from_dict, artifact_index_to_dict
 from .inspection import RunStageInspection, RunStateInspection, ensure_failure_payload
 from .prepared_run import validate_prepared_run_document
+from .read_models import ReliabilityPolicyFact
+from .reliability_facts import (
+    reliability_payload_matches,
+    reliability_policy_fact_key,
+    reliability_record_stage_name,
+    reliability_status_detail_key,
+    validate_policy_fact_run,
+    validate_retry_decision_run,
+    validate_status_detail_run,
+    validate_timeout_outcome_run,
+    validate_transaction_run,
+)
 from .run_store import RunFreshnessError, RunFreshnessRecord
-from .run_uri import allocate_local_run_uri, run_uri_to_path, validate_run_uri
+from .run_uri import (
+    allocate_local_run_uri,
+    path_to_run_uri,
+    run_uri_to_path,
+    validate_run_uri,
+)
 
 _SCHEMA_VERSION = 1
 
@@ -479,6 +503,212 @@ class LocalRunStore:
     ) -> SubmittedOperationRecord | None:
         return latest_active_submitted_operation(
             self.list_submitted_operations(run_uri)
+        )
+
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        if not isinstance(fact, ReliabilityPolicyFact):
+            raise UnsafeStorePathError("reliability policy fact must be a record")
+        validate_policy_fact_run(fact, run_uri_text)
+        self._write_reliability_fact(
+            self._reliability_family_path(
+                run_uri_text,
+                "policy_facts",
+                reliability_policy_fact_key(fact),
+                create_parent=True,
+            ),
+            fact.to_dict(),
+            reason="reliability_policy_fact",
+        )
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        stage_name_text = (
+            None
+            if stage_name is None
+            else validate_stage_name(stage_name, field="stage_name")
+        )
+        records = self._list_reliability_records(
+            run_uri_text,
+            family="policy_facts",
+            parser=ReliabilityPolicyFact.from_dict,
+        )
+        filtered = (
+            record
+            for record in records
+            if stage_name_text is None or record.stage_name == stage_name_text
+        )
+        return tuple(
+            sorted(
+                filtered,
+                key=lambda record: (
+                    record.scope.value,
+                    record.stage_name or "",
+                    record.attempt or 0,
+                    record.recorded_at,
+                ),
+            )
+        )
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        if not isinstance(detail, ReliabilityStatusDetail):
+            raise UnsafeStorePathError("reliability status detail must be a record")
+        validate_status_detail_run(detail, run_uri_text)
+        self._write_reliability_fact(
+            self._reliability_family_path(
+                run_uri_text,
+                "status_details",
+                reliability_status_detail_key(detail),
+                create_parent=True,
+            ),
+            detail.to_dict(),
+            reason="reliability_status_detail",
+        )
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]:
+        return self._list_stage_reliability_records(
+            run_uri,
+            family="status_details",
+            parser=ReliabilityStatusDetail.from_dict,
+            stage_name=stage_name,
+            sort_key=lambda record: (
+                record.stage_id,
+                record.attempt,
+                record.created_at,
+            ),
+        )
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        if not isinstance(transaction, StageAttemptTransaction):
+            raise UnsafeStorePathError("stage attempt transaction must be a record")
+        validate_transaction_run(transaction, run_uri_text)
+        self._write_reliability_fact(
+            self._reliability_family_path(
+                run_uri_text,
+                "transactions",
+                _reliability_id_key(transaction.transaction_id),
+                create_parent=True,
+            ),
+            transaction.to_dict(),
+            reason="reliability_transaction",
+        )
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]:
+        if not isinstance(transaction_id, str) or not transaction_id:
+            raise UnsafeStorePathError("transaction_id must be a non-empty string")
+        transactions = {
+            transaction.transaction_id: transaction
+            for transaction in self.list_stage_attempt_transactions(run_uri)
+        }
+        current = transactions.get(transaction_id)
+        if current is None:
+            return ()
+        chain: list[StageAttemptTransaction] = []
+        seen: set[str] = set()
+        while current is not None:
+            if current.transaction_id in seen:
+                raise CorruptStoreDocumentError(
+                    f"reliability transaction chain contains a cycle at {transaction_id!r}"
+                )
+            seen.add(current.transaction_id)
+            chain.append(current)
+            parent_id = current.causal_parent_id
+            current = None if parent_id is None else transactions.get(parent_id)
+        return tuple(reversed(chain))
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return self._list_stage_reliability_records(
+            run_uri,
+            family="transactions",
+            parser=StageAttemptTransaction.from_dict,
+            stage_name=stage_name,
+            sort_key=lambda record: (
+                record.stage_id,
+                record.attempt,
+                record.transaction_id,
+            ),
+        )
+
+    def write_retry_decision(
+        self, run_uri: str, decision: RetryDecisionRecord
+    ) -> None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        if not isinstance(decision, RetryDecisionRecord):
+            raise UnsafeStorePathError("retry decision must be a record")
+        validate_retry_decision_run(decision, run_uri_text)
+        self._write_reliability_fact(
+            self._reliability_family_path(
+                run_uri_text,
+                "retry_decisions",
+                _reliability_id_key(decision.decision_id),
+                create_parent=True,
+            ),
+            decision.to_dict(),
+            reason="retry_decision",
+        )
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]:
+        return self._list_stage_reliability_records(
+            run_uri,
+            family="retry_decisions",
+            parser=RetryDecisionRecord.from_dict,
+            stage_name=stage_name,
+            sort_key=lambda record: (
+                record.status.stage_id,
+                record.status.attempt,
+                record.decision_id,
+            ),
+        )
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        if not isinstance(outcome, TimeoutOutcomeRecord):
+            raise UnsafeStorePathError("timeout outcome must be a record")
+        validate_timeout_outcome_run(outcome, run_uri_text)
+        self._write_reliability_fact(
+            self._reliability_family_path(
+                run_uri_text,
+                "timeout_outcomes",
+                _reliability_id_key(outcome.outcome_id),
+                create_parent=True,
+            ),
+            outcome.to_dict(),
+            reason="timeout_outcome",
+        )
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]:
+        return self._list_stage_reliability_records(
+            run_uri,
+            family="timeout_outcomes",
+            parser=TimeoutOutcomeRecord.from_dict,
+            stage_name=stage_name,
+            sort_key=lambda record: (
+                record.status.stage_id,
+                record.status.attempt,
+                record.outcome_id,
+            ),
         )
 
     def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
@@ -1126,6 +1356,114 @@ class LocalRunStore:
         )
         # Catalog summaries intentionally exclude log contents and log availability.
 
+    def _reliability_family_path(
+        self,
+        run_uri: str,
+        family: str,
+        record_key: str,
+        *,
+        create_parent: bool = False,
+    ) -> Path:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        self.open_run(run_uri_text)
+        directory = self.local_run_dir(run_uri_text) / "reliability" / family
+        if create_parent:
+            directory.mkdir(parents=True, exist_ok=True)
+        return directory / f"{record_key}.json"
+
+    def _write_reliability_fact(
+        self,
+        path: Path,
+        payload: Mapping[str, PlainData],
+        *,
+        reason: str,
+    ) -> None:
+        if path.exists():
+            existing = self._read_optional_json(path)
+            existing_payload = _require_document_object(
+                existing,
+                path,
+                label="reliability fact document",
+            )
+            if reliability_payload_matches(
+                cast(Mapping[str, PlainData], existing_payload),
+                payload,
+            ):
+                return
+            raise UnsafeStorePathError(
+                f"conflicting reliability fact already exists at {path}"
+            )
+        atomic_write_json(path, payload)
+        run_uri = _run_uri_from_reliability_path(path)
+        self._touch_run_freshness(run_uri, reason=reason)
+
+    def _list_reliability_records[T](
+        self,
+        run_uri: str,
+        *,
+        family: str,
+        parser: Callable[[object], T],
+    ) -> tuple[T, ...]:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        self.open_run(run_uri_text)
+        directory = self.local_run_dir(run_uri_text) / "reliability" / family
+        if not directory.exists():
+            return ()
+        if not directory.is_dir():
+            raise CorruptStoreDocumentError(f"Expected directory at {directory}")
+        records: list[T] = []
+        for path in sorted(directory.iterdir(), key=lambda item: item.name):
+            if not path.is_file() or path.suffix != ".json":
+                raise CorruptStoreDocumentError(
+                    f"Expected reliability fact JSON file at {path}"
+                )
+            data = self._read_optional_json(path)
+            try:
+                records.append(parser(data))
+            except ValueError as exc:
+                raise CorruptStoreDocumentError(
+                    f"Malformed reliability fact at {path}: {exc}"
+                ) from exc
+        return tuple(records)
+
+    def _list_stage_reliability_records[T](
+        self,
+        run_uri: str,
+        *,
+        family: str,
+        parser: Callable[[object], T],
+        stage_name: str | None,
+        sort_key: Callable[[T], tuple[object, ...]],
+    ) -> tuple[T, ...]:
+        stage_name_text = (
+            None
+            if stage_name is None
+            else validate_stage_name(stage_name, field="stage_name")
+        )
+        records = self._list_reliability_records(
+            run_uri,
+            family=family,
+            parser=parser,
+        )
+        def matches_stage(record: T) -> bool:
+            if stage_name_text is None:
+                return True
+            typed_record = cast(
+                ReliabilityStatusDetail
+                | StageAttemptTransaction
+                | RetryDecisionRecord
+                | TimeoutOutcomeRecord,
+                record,
+            )
+            return reliability_record_stage_name(typed_record) == stage_name_text
+
+        filtered = (
+            record
+            for record in records
+            if matches_stage(record)
+        )
+        return tuple(sorted(filtered, key=sort_key))
+
     def _read_lock_record(self, run_uri: str, lock_path: Path) -> RunLockRecord:
         if not lock_path.is_file():
             raise CorruptStoreDocumentError(f"Expected run lock file at {lock_path}")
@@ -1547,6 +1885,16 @@ def _deserialize_stage_artifact_index(
                 f"invalid artifact ref for {validated_key!r} at {path}: {exc}"
             ) from exc
     return parsed
+
+
+def _reliability_id_key(value: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise UnsafeStorePathError("reliability fact identifier must be non-empty")
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _run_uri_from_reliability_path(path: Path) -> str:
+    return path_to_run_uri(path.parents[2])
 
 
 __all__ = ["LocalRunStore"]

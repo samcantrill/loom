@@ -161,7 +161,9 @@ attributes empty
 
 ```text
 expected or requested maximum runtime for the stage
-deferred; rejected in v0 so callers do not assume timeout behavior is honored
+not a resource field; reliability timeout policy lives under runtime.reliability.timeout
+and authored resource timeout aliases are rejected so callers do not assume
+resource admission enforces reliability policy
 ```
 
 Qualified resource kinds:
@@ -309,6 +311,7 @@ class StageRuntimeOptions:
     resources: ResourceRequest = field(default_factory=ResourceRequest)
     execution: ExecutionOptions = field(default_factory=ExecutionOptions)
     environment: StageEnvironmentRequest = field(default_factory=StageEnvironmentRequest)
+    reliability: ReliabilityPolicy | None = None
     adapter_options: Mapping[str, object] = field(default_factory=dict)
 ```
 
@@ -323,6 +326,14 @@ Run and stage environment request models carry future isolated-executor
 environment additions and removals. They do not apply local process environment
 changes. Safe metadata summaries record only counts and inheritance mode, never
 environment variable names or values.
+
+Run-level `RunOptions.reliability` and exact-stage
+`StageRuntimeOptions.reliability` carry reliability retry and timeout policy.
+`timeout.duration_seconds` is an executor capability question, not a resource
+request. The subprocess executor can enforce it at the worker subprocess
+boundary, the local in-process executor reports unsupported timeout policy, and
+capability validation reports the selected executor's timeout support before
+execution.
 
 ## Runtime Profiles
 
@@ -355,6 +366,18 @@ runtime_profiles:
     slurm:
       partition: compute
       account: project-a
+
+  docker:
+    executor: docker
+    adapter_options:
+      container:
+        image:
+          reference: python:3.12-slim
+        environment:
+          variables:
+            LOOM_CONTAINER_EXAMPLE: docker-pipeline
+      docker:
+        network: none
 ```
 
 Profiles are useful because the same pipeline may be run locally, on a shared
@@ -380,6 +403,12 @@ exact stage ID. Stage resource requests merge by `ResourceRequest.entries`
 kind, replacing the whole `ResourceEntry` for a conflicting kind. Adapter
 namespaces are opaque plain data; a higher-precedence namespace replaces the
 whole lower-precedence payload.
+
+Container executor profiles should keep generic image, mount, workdir,
+environment, and resource intent under `adapter_options.container`. Docker
+flags such as `network`, `platform`, `user`, `hostname`, and `remove` belong
+under `adapter_options.docker`. Semantic pipeline stage specs should not gain
+Docker-specific fields.
 
 `merge_run_options` can run the existing known-stage validation helper after
 merge when callers supply canonical stage IDs. It does not implement glob,

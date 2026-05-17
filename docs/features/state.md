@@ -818,12 +818,19 @@ started_at
 finished_at
 reason/message
 log paths for failed stages
+compact reliability summaries when policy, transaction, retry, or timeout facts
+exist
 ```
 
 ### 14.3 Machine Output
 
 JSON output should use the serialized status records and state snapshots rather
 than parsing table strings.
+
+Reliability detail must not expand `RunStatus` or `StageStatus` enum values.
+Policy facts, failure classification, transaction state, retry decisions, and
+timeout outcomes live in separate read-model records that status output can
+reference.
 
 ---
 

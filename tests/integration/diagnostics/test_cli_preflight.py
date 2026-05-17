@@ -109,6 +109,63 @@ def test_preflight_explicit_run_uri_enables_path_checks(tmp_path: Path) -> None:
     assert stderr.getvalue() == ""
 
 
+def test_preflight_docker_executor_json_is_redaction_safe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    monkeypatch.setattr(
+        preflight_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "docker" else None,
+    )
+    config_path = tmp_path / "pipeline.yaml"
+    _write_pipeline_config(config_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "runtime:\n"
+            "  executor: docker\n"
+            "  adapter_options:\n"
+            "    container:\n"
+            "      image:\n"
+            "        reference: python:3.11-slim\n"
+            "      environment:\n"
+            "        variables:\n"
+            "          SECRET_TOKEN: top-secret\n"
+        )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "preflight",
+                str(config_path),
+                "--check",
+                "executor",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    raw = stdout.getvalue()
+    payload = json.loads(raw)
+    by_id = {
+        check["check_id"]: check for check in payload["result"]["checks"]
+    }
+    assert payload["result"]["status"] == "PASS"
+    assert by_id["executor.docker.command"]["status"] == "PASS"
+    assert by_id["executor.docker.environment"]["status"] == "PASS"
+    assert "top-secret" not in raw
+    assert "[redacted]" in raw
+    assert stderr.getvalue() == ""
+
+
 def test_preflight_resource_warnings_and_strict_exit(tmp_path: Path) -> None:
     config_path = tmp_path / "pipeline.yaml"
     _write_pipeline_config(config_path)

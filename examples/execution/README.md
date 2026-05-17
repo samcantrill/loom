@@ -1,10 +1,10 @@
 # Execution Examples
 
 Execution examples cover how `loom` runs authored work: local in-process
-execution, subprocess workers, SLURM dry-run planning, manual live SLURM
-templates, runtime profiles, normalized run options, explicit offline-first
-evidence import, artifact storage, provenance snapshots, and same-run resume
-behavior.
+execution, subprocess workers, Docker stage workers, SLURM dry-run planning,
+manual live SLURM templates, runtime profiles, normalized run options, explicit
+offline-first evidence import, artifact storage, provenance snapshots, and
+same-run resume behavior.
 
 Future executor examples should live here too. Docker examples should use
 `examples/execution/containers/docker/`, and containerized SLURM plus Apptainer
@@ -15,6 +15,7 @@ examples should use `examples/execution/containers/slurm-apptainer/`.
 | Example | Demonstrates |
 | --- | --- |
 | `execution.subprocess` | Running the same synthetic pipeline locally and with subprocess workers, inspecting subprocess failure diagnostics, and invoking a prepared stage through `loom stage run`. |
+| `execution.containers.docker` | Running stage attempts through `loom run --executor docker`, selected-Docker preflight diagnostics, Docker failure inspection, and optional live Docker smoke guidance. |
 | `execution.runtime-profile` | Configured runtime profile, CLI tags/notes, resource diagnostics, local run, and safe `runtime.json`. |
 | `execution.offline-first-import` | Explicit `--offline-first` execution, pre-import status behavior, authority import, and post-import authoritative status. |
 | `execution.slurm.dry-run-basics` | Public `slurm-single-job` and `slurm-afterok` dry-runs that generate reviewable scripts and manifests without scheduler submission. |
@@ -37,6 +38,9 @@ uv run python examples/execution/local/run_pipeline.py
 uv run python examples/execution/subprocess/run_subprocess_pipeline.py
 uv run python examples/execution/subprocess/run_failure_diagnostics.py
 uv run python examples/execution/subprocess/run_direct_worker.py
+uv run python examples/execution/containers/docker/run_docker_pipeline.py
+uv run python examples/execution/containers/docker/run_preflight.py
+uv run python examples/execution/containers/docker/run_failure_diagnostics.py
 uv run python examples/execution/runtime-profile/run_runtime_profile.py
 uv run python examples/execution/python-run-options/run_options_api.py
 uv run python examples/execution/offline-first-import/run_offline_first_import.py

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import sys
 import tempfile
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -39,7 +40,56 @@ if TYPE_CHECKING:
 
 
 _SLURM_EXECUTORS = frozenset({"slurm-single-job", "slurm-afterok"})
+_APPTAINER_EXECUTORS = frozenset({"apptainer", "singularity"})
+_CONTAINER_BUILD_RUNTIMES = frozenset({"docker", "apptainer"})
 _plugin_entry_point_provider: "EntryPointProvider | None" = None
+
+
+@dataclass(frozen=True)
+class _ContainerBuildPreflightOptions:
+    owner_id: str
+    adapter_options: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class _ContainerBuildPreflightTarget:
+    owner_id: str
+    name: str
+    target: object
+
+
+@dataclass(frozen=True)
+class _DockerPreflightRawTarget:
+    stage_id: str | None
+    adapter_options: Mapping[str, object]
+    resources: object | None
+
+
+@dataclass(frozen=True)
+class _DockerPreflightTarget:
+    stage_id: str | None
+    container: object
+    docker_options: object
+    resources: object | None
+
+
+@dataclass(frozen=True)
+class _ApptainerPreflightRawTarget:
+    stage_id: str | None
+    adapter_options: Mapping[str, object]
+    resources: object | None
+    executor_name: str
+    selected_executor: str
+
+
+@dataclass(frozen=True)
+class _ApptainerPreflightTarget:
+    stage_id: str | None
+    container: object
+    apptainer_options: object
+    resources: object | None
+    executor_name: str
+    selected_executor: str
 
 
 @dataclass
@@ -259,6 +309,7 @@ def _check_runtime(context: _Context) -> tuple[PreflightCheckResult, ...]:
     return (
         *_check_runtime_options(context),
         *_check_runtime_profile(context),
+        *_check_runtime_container_build_options(context),
         *_check_runtime_slurm_options(context),
         *_check_runtime_stage_options(context),
     )
@@ -311,6 +362,61 @@ def _check_runtime_profile(context: _Context) -> tuple[PreflightCheckResult, ...
             PreflightSeverity.INFO,
             "runtime profile selection is valid",
             {"profile": profile, "selected": profile is not None},
+        ),
+    )
+
+
+def _check_runtime_container_build_options(
+    context: _Context,
+) -> tuple[PreflightCheckResult, ...]:
+    try:
+        sources = _container_build_option_sources(context)
+    except Exception:  # noqa: BLE001 - runtime.options reports normalization failures.
+        return ()
+    if not sources:
+        return ()
+
+    targets: list[PlainData] = []
+    diagnostics: list[PlainData] = []
+    for source in sources:
+        try:
+            parsed = _container_build_options_from_adapter(source.adapter_options)
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _container_build_diagnostic(
+                    source.owner_id,
+                    code="container_build_options_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
+        for name, target in cast(Mapping[str, object], cast(Any, parsed).targets).items():
+            targets.append(
+                {
+                    "owner_id": source.owner_id,
+                    "name": name,
+                    "target": cast(Any, target).to_redacted_metadata(),
+                }
+            )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return (
+        _result(
+            "runtime.container_build.options",
+            PreflightGroup.RUNTIME,
+            status,
+            _severity_for_status(status),
+            (
+                "container build adapter options are valid"
+                if status is PreflightCheckStatus.PASS
+                else "container build adapter options are invalid"
+            ),
+            {
+                "namespace_count": len(sources),
+                "target_count": len(targets),
+                "targets": targets,
+                "diagnostics": diagnostics,
+            },
         ),
     )
 
@@ -1337,6 +1443,9 @@ def _check_executor(context: _Context) -> tuple[PreflightCheckResult, ...]:
         *_check_local_executor(),
         *_check_executor_resolve(context),
         *_check_executor_capabilities(context),
+        *_check_container_build_target_selection(context),
+        *_check_apptainer_executor(context),
+        *_check_docker_executor(context),
         *_check_subprocess_executor(context),
         *_check_slurm_executor(context),
     )
@@ -1450,6 +1559,599 @@ def _check_executor_capabilities(context: _Context) -> tuple[PreflightCheckResul
             ),
             _capability_details(diagnostics),
         ),
+    )
+
+
+def _check_container_build_target_selection(
+    context: _Context,
+) -> tuple[PreflightCheckResult, ...]:
+    try:
+        selections = _selected_container_build_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "executor.container_build.targets",
+                PreflightGroup.EXECUTOR,
+                "container build target selection probe failed",
+                exc,
+            ),
+        )
+    if not selections:
+        return ()
+
+    targets: list[PlainData] = []
+    diagnostics: list[PlainData] = []
+    for raw_target in selections:
+        container = raw_target.adapter_options.get("container")
+        if not isinstance(container, Mapping):
+            diagnostics.append(
+                _container_build_diagnostic(
+                    _target_owner_id(raw_target.stage_id),
+                    code="container_options_invalid",
+                    message="adapter_options.container must be a mapping",
+                )
+            )
+            continue
+        target_name = container.get("target")
+        if not isinstance(target_name, str) or not target_name:
+            continue
+        try:
+            build_options = _container_build_options_from_adapter(
+                raw_target.adapter_options
+            )
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _container_build_diagnostic(
+                    _target_owner_id(raw_target.stage_id),
+                    code="container_build_options_invalid",
+                    message=str(exc) or type(exc).__name__,
+                    detail={"target_name": target_name},
+                )
+            )
+            continue
+        target = cast(Mapping[str, object], cast(Any, build_options).targets).get(
+            target_name
+        )
+        if target is None:
+            diagnostics.append(
+                _container_build_diagnostic(
+                    _target_owner_id(raw_target.stage_id),
+                    code="container_build_target_missing",
+                    message=f"container build target {target_name!r} is not defined",
+                    detail={"target_name": target_name},
+                )
+            )
+            continue
+        runtime = _enum_value(getattr(target, "runtime", None))
+        output = getattr(target, "output", None)
+        output_kind = _enum_value(getattr(output, "kind", None))
+        output_identity = _container_build_output_identity(output)
+        selected_executor = _selected_container_executor_name(raw_target)
+        targets.append(
+            {
+                "stage_id": raw_target.stage_id,
+                "target_name": target_name,
+                "selected_executor": selected_executor,
+                "target_runtime": runtime,
+                "output_kind": output_kind,
+                "output_identity": output_identity,
+            }
+        )
+        if _is_slurm_executor_name(selected_executor):
+            if runtime != "apptainer" or output_kind != "apptainer_sif":
+                diagnostics.append(
+                    _container_build_diagnostic(
+                        _target_owner_id(raw_target.stage_id),
+                        code="container_build_target_incompatible",
+                        message=(
+                            "selected Apptainer execution requires an "
+                            "apptainer target with an apptainer_sif output"
+                        ),
+                        detail={
+                            "target_name": target_name,
+                            "target_runtime": runtime,
+                            "output_kind": output_kind,
+                        },
+                    )
+                )
+        elif selected_executor in _APPTAINER_EXECUTORS:
+            diagnostics.append(
+                _container_build_diagnostic(
+                    _target_owner_id(raw_target.stage_id),
+                    code="container_build_target_not_resolved",
+                    message=(
+                        "direct Apptainer/Singularity preflight does not resolve "
+                        "container.target in Stage 18; use "
+                        "adapter_options.container.image with the built SIF path"
+                    ),
+                    detail={"target_name": target_name},
+                )
+            )
+        elif selected_executor == "docker":
+            diagnostics.append(
+                _container_build_diagnostic(
+                    _target_owner_id(raw_target.stage_id),
+                    code="container_build_target_not_resolved",
+                    message=(
+                        "Docker preflight does not resolve container.target in "
+                        "Stage 18; use adapter_options.container.image"
+                    ),
+                    detail={"target_name": target_name},
+                )
+            )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return (
+        _result(
+            "executor.container_build.targets",
+            PreflightGroup.EXECUTOR,
+            status,
+            _severity_for_status(status),
+            (
+                "selected container build targets are compatible"
+                if status is PreflightCheckStatus.PASS
+                else "selected container build target checks failed"
+            ),
+            {
+                "target_count": len(targets),
+                "targets": targets,
+                "diagnostics": diagnostics,
+                "expensive_probe": False,
+            },
+        ),
+    )
+
+
+def _check_apptainer_executor(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    if not _request_selects_apptainer(context):
+        return ()
+    return (
+        _check_apptainer_command(context),
+        _check_apptainer_container_options(context),
+        _check_apptainer_image(context),
+        _check_apptainer_environment(context),
+    )
+
+
+def _check_apptainer_command(context: _Context) -> PreflightCheckResult:
+    try:
+        targets = _apptainer_raw_targets(context)
+        options = cast(Any, context.runtime_options())
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "executor.apptainer.command",
+            PreflightGroup.EXECUTOR,
+            "Apptainer command availability probe failed",
+            exc,
+        )
+
+    diagnostics: list[PlainData] = []
+    commands: list[PlainData] = []
+    command_required = _apptainer_command_required(options)
+    for target in targets:
+        try:
+            apptainer_options = _apptainer_options_from_adapter(
+                target.adapter_options,
+                executor_name=target.executor_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_options_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
+        command = cast(Any, apptainer_options).command
+        resolved = shutil.which(command)
+        commands.append(
+            {
+                "stage_id": target.stage_id,
+                "command": command,
+                "available": resolved is not None,
+                "path": resolved,
+                "required": command_required,
+            }
+        )
+        if resolved is None:
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_command_unavailable",
+                    message=(
+                        "Apptainer/Singularity command is not available on PATH: "
+                        f"{command}"
+                    ),
+                    detail={"command": command, "required": command_required},
+                )
+            )
+
+    if diagnostics:
+        status = (
+            PreflightCheckStatus.FAIL
+            if command_required
+            else PreflightCheckStatus.WARN
+        )
+    else:
+        status = PreflightCheckStatus.PASS
+    return _result(
+        "executor.apptainer.command",
+        PreflightGroup.EXECUTOR,
+        status,
+        _severity_for_status(status),
+        (
+            "Apptainer/Singularity command is available"
+            if status is PreflightCheckStatus.PASS
+            else "Apptainer/Singularity command availability checks reported issues"
+        ),
+        {
+            "target_count": len(targets),
+            "commands": commands,
+            "diagnostics": diagnostics,
+            "expensive_probe": False,
+        },
+    )
+
+
+def _check_apptainer_container_options(context: _Context) -> PreflightCheckResult:
+    try:
+        parsed, diagnostics = _apptainer_parsed_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "executor.apptainer.container_options",
+            PreflightGroup.EXECUTOR,
+            "Apptainer container adapter option parsing failed",
+            exc,
+        )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return _result(
+        "executor.apptainer.container_options",
+        PreflightGroup.EXECUTOR,
+        status,
+        _severity_for_status(status),
+        (
+            "Apptainer container adapter options are valid"
+            if status is PreflightCheckStatus.PASS
+            else "Apptainer container adapter options are invalid"
+        ),
+        {
+            "target_count": len(parsed) + len(diagnostics),
+            "targets": [_apptainer_target_summary(target) for target in parsed],
+            "diagnostics": list(diagnostics),
+        },
+    )
+
+
+def _check_apptainer_image(context: _Context) -> PreflightCheckResult:
+    try:
+        targets = _apptainer_raw_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "executor.apptainer.image",
+            PreflightGroup.EXECUTOR,
+            "Apptainer image/SIF reference probe failed",
+            exc,
+        )
+
+    diagnostics: list[PlainData] = []
+    images: list[PlainData] = []
+    for target in targets:
+        try:
+            image = _apptainer_image_from_adapter(
+                target.adapter_options,
+                allow_target_resolution=_is_slurm_executor_name(
+                    target.selected_executor
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_image_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
+        reference = cast(Any, image).reference
+        local_path = _local_reference_path(reference, cwd=context.request.cwd)
+        images.append(
+            {
+                "stage_id": target.stage_id,
+                "image": reference,
+                "local_path": None if local_path is None else str(local_path),
+                "local_path_probe": local_path is not None,
+                "exists": None if local_path is None else local_path.exists(),
+            }
+        )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return _result(
+        "executor.apptainer.image",
+        PreflightGroup.EXECUTOR,
+        status,
+        _severity_for_status(status),
+        (
+            "Apptainer image/SIF references are present"
+            if status is PreflightCheckStatus.PASS
+            else "Apptainer image/SIF reference checks failed"
+        ),
+        {
+            "target_count": len(targets),
+            "images": images,
+            "diagnostics": diagnostics,
+            "expensive_probe": False,
+        },
+    )
+
+
+def _check_apptainer_environment(context: _Context) -> PreflightCheckResult:
+    try:
+        parsed, diagnostics = _apptainer_parsed_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "executor.apptainer.environment",
+            PreflightGroup.EXECUTOR,
+            "Apptainer environment readiness probe failed",
+            exc,
+        )
+    if diagnostics:
+        return _result(
+            "executor.apptainer.environment",
+            PreflightGroup.EXECUTOR,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "Apptainer environment checks require valid container options",
+            {"diagnostics": list(diagnostics)},
+        )
+
+    missing: list[PlainData] = []
+    required: list[PlainData] = []
+    explicit_names: list[PlainData] = []
+    cleanenv: list[PlainData] = []
+    for target in parsed:
+        environment = cast(Any, target.container).environment
+        target_required = list(cast(Any, environment).required_host_variables)
+        target_explicit = list(cast(Any, environment).variables)
+        required.append({"stage_id": target.stage_id, "names": target_required})
+        explicit_names.append({"stage_id": target.stage_id, "names": target_explicit})
+        cleanenv.append(
+            {
+                "stage_id": target.stage_id,
+                "cleanenv": bool(getattr(target.apptainer_options, "cleanenv")),
+                "command": str(getattr(target.apptainer_options, "command")),
+            }
+        )
+        for name in target_required:
+            if name not in os.environ:
+                missing.append({"stage_id": target.stage_id, "name": name})
+
+    status = PreflightCheckStatus.FAIL if missing else PreflightCheckStatus.PASS
+    return _result(
+        "executor.apptainer.environment",
+        PreflightGroup.EXECUTOR,
+        status,
+        _severity_for_status(status),
+        (
+            "Apptainer required host environment variables are available"
+            if status is PreflightCheckStatus.PASS
+            else "Apptainer required host environment variables are missing"
+        ),
+        {
+            "required_host_variables": required,
+            "explicit_variable_names": explicit_names,
+            "clean_environment": cleanenv,
+            "missing_required_host_variables": missing,
+            "value_redaction": "values_not_reported",
+        },
+    )
+
+
+def _check_docker_executor(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    if not _request_selects_docker(context):
+        return ()
+    return (
+        _check_docker_command(context),
+        _check_docker_container_options(context),
+        _check_docker_image(context),
+        _check_docker_environment(context),
+    )
+
+
+def _check_docker_command(context: _Context) -> PreflightCheckResult:
+    try:
+        targets = _docker_raw_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "executor.docker.command",
+            PreflightGroup.EXECUTOR,
+            "Docker command availability probe failed",
+            exc,
+        )
+
+    diagnostics: list[PlainData] = []
+    commands: list[PlainData] = []
+    for target in targets:
+        try:
+            docker_options = _docker_options_from_adapter(target.adapter_options)
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _docker_diagnostic(
+                    target.stage_id,
+                    code="docker_options_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
+        command = cast(Any, docker_options).command
+        resolved = shutil.which(command)
+        commands.append(
+            {
+                "stage_id": target.stage_id,
+                "command": command,
+                "available": resolved is not None,
+                "path": resolved,
+            }
+        )
+        if resolved is None:
+            diagnostics.append(
+                _docker_diagnostic(
+                    target.stage_id,
+                    code="docker_command_unavailable",
+                    message=f"Docker command is not available on PATH: {command}",
+                    detail={"command": command},
+                )
+            )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return _result(
+        "executor.docker.command",
+        PreflightGroup.EXECUTOR,
+        status,
+        _severity_for_status(status),
+        (
+            "Docker command is available"
+            if status is PreflightCheckStatus.PASS
+            else "Docker command availability checks failed"
+        ),
+        {
+            "target_count": len(targets),
+            "commands": commands,
+            "diagnostics": diagnostics,
+            "expensive_probe": False,
+        },
+    )
+
+
+def _check_docker_container_options(context: _Context) -> PreflightCheckResult:
+    try:
+        parsed, diagnostics = _docker_parsed_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "executor.docker.container_options",
+            PreflightGroup.EXECUTOR,
+            "Docker adapter option parsing failed",
+            exc,
+        )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return _result(
+        "executor.docker.container_options",
+        PreflightGroup.EXECUTOR,
+        status,
+        _severity_for_status(status),
+        (
+            "Docker container adapter options are valid"
+            if status is PreflightCheckStatus.PASS
+            else "Docker container adapter options are invalid"
+        ),
+        {
+            "target_count": len(parsed) + len(diagnostics),
+            "targets": [_docker_target_summary(target) for target in parsed],
+            "diagnostics": list(diagnostics),
+        },
+    )
+
+
+def _check_docker_image(context: _Context) -> PreflightCheckResult:
+    try:
+        targets = _docker_raw_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "executor.docker.image",
+            PreflightGroup.EXECUTOR,
+            "Docker image reference probe failed",
+            exc,
+        )
+
+    diagnostics: list[PlainData] = []
+    images: list[PlainData] = []
+    for target in targets:
+        try:
+            image = _docker_image_from_adapter(target.adapter_options)
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _docker_diagnostic(
+                    target.stage_id,
+                    code="docker_image_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
+        reference = cast(Any, image).reference
+        images.append({"stage_id": target.stage_id, "image": reference})
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return _result(
+        "executor.docker.image",
+        PreflightGroup.EXECUTOR,
+        status,
+        _severity_for_status(status),
+        (
+            "Docker image references are present"
+            if status is PreflightCheckStatus.PASS
+            else "Docker image reference checks failed"
+        ),
+        {
+            "target_count": len(targets),
+            "images": images,
+            "diagnostics": diagnostics,
+            "expensive_probe": False,
+        },
+    )
+
+
+def _check_docker_environment(context: _Context) -> PreflightCheckResult:
+    try:
+        parsed, diagnostics = _docker_parsed_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "executor.docker.environment",
+            PreflightGroup.EXECUTOR,
+            "Docker environment readiness probe failed",
+            exc,
+        )
+    if diagnostics:
+        return _result(
+            "executor.docker.environment",
+            PreflightGroup.EXECUTOR,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "Docker environment checks require valid container options",
+            {"diagnostics": list(diagnostics)},
+        )
+
+    missing: list[PlainData] = []
+    required: list[PlainData] = []
+    explicit_names: list[PlainData] = []
+    for target in parsed:
+        environment = cast(Any, target.container).environment
+        target_required = list(cast(Any, environment).required_host_variables)
+        target_explicit = list(cast(Any, environment).variables)
+        required.append({"stage_id": target.stage_id, "names": target_required})
+        explicit_names.append({"stage_id": target.stage_id, "names": target_explicit})
+        for name in target_required:
+            if name not in os.environ:
+                missing.append({"stage_id": target.stage_id, "name": name})
+
+    status = PreflightCheckStatus.FAIL if missing else PreflightCheckStatus.PASS
+    return _result(
+        "executor.docker.environment",
+        PreflightGroup.EXECUTOR,
+        status,
+        _severity_for_status(status),
+        (
+            "Docker required host environment variables are available"
+            if status is PreflightCheckStatus.PASS
+            else "Docker required host environment variables are missing"
+        ),
+        {
+            "required_host_variables": required,
+            "explicit_variable_names": explicit_names,
+            "missing_required_host_variables": missing,
+            "value_redaction": "values_not_reported",
+        },
     )
 
 
@@ -1763,6 +2465,9 @@ def _check_resources(context: _Context) -> tuple[PreflightCheckResult, ...]:
         )
     )
     checks.extend(_check_slurm_resource_mapping(context))
+    checks.extend(_check_slurm_container_compatibility(context))
+    checks.extend(_check_apptainer_resource_mapping(context))
+    checks.extend(_check_docker_resource_mapping(context))
     return tuple(checks)
 
 
@@ -1820,6 +2525,375 @@ def _check_slurm_resource_mapping(
     )
 
 
+def _check_slurm_container_compatibility(
+    context: _Context,
+) -> tuple[PreflightCheckResult, ...]:
+    try:
+        options = cast(Any, context.runtime_options())
+    except Exception:  # noqa: BLE001 - runtime checks already report this.
+        return ()
+    if not _is_slurm_executor(options) or not _request_selects_slurm_container(context):
+        return ()
+
+    diagnostics: list[PlainData] = []
+    compatibility: list[PlainData] = []
+    try:
+        targets = _apptainer_raw_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "resources.slurm.container_compatibility",
+                PreflightGroup.RESOURCES,
+                "SLURM container compatibility probe failed",
+                exc,
+            ),
+        )
+    for target in targets:
+        resources = _resource_entries(target.resources)
+        try:
+            apptainer_options = _apptainer_options_from_adapter(
+                target.adapter_options,
+                executor_name=target.executor_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_options_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
+        gpu_requested = _resource_amount(resources.get("gpu")) > 0
+        gpu_flag = _apptainer_gpu_flag(apptainer_options)
+        detail: dict[str, PlainData] = {
+            "stage_id": target.stage_id,
+            "scheduler_authority": "slurm",
+            "container_runtime": target.executor_name,
+            "selected_executor": target.selected_executor,
+            "resource_kinds": cast(list[PlainData], sorted(resources)),
+            "gpu_requested": gpu_requested,
+            "gpu_flag": gpu_flag,
+            "cpu_memory_owner": "slurm",
+            "runtime_device_owner": "apptainer",
+        }
+        compatibility.append(detail)
+        if gpu_requested and gpu_flag is None:
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="slurm_container_gpu_flag_missing",
+                    message=(
+                        "SLURM GPU allocation is selected but Apptainer GPU "
+                        "access flags are not configured"
+                    ),
+                    detail={"resource_kind": "gpu"},
+                )
+            )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return (
+        _result(
+            "resources.slurm.container_compatibility",
+            PreflightGroup.RESOURCES,
+            status,
+            _severity_for_status(status),
+            (
+                "SLURM and Apptainer resource ownership is compatible"
+                if status is PreflightCheckStatus.PASS
+                else "SLURM and Apptainer resource compatibility checks failed"
+            ),
+            {
+                "target_count": len(targets),
+                "compatibility": compatibility,
+                "diagnostics": diagnostics,
+                "expensive_probe": False,
+            },
+        ),
+    )
+
+
+def _check_apptainer_resource_mapping(
+    context: _Context,
+) -> tuple[PreflightCheckResult, ...]:
+    if not _request_selects_apptainer(context):
+        return ()
+    return (
+        _check_apptainer_cpu_memory_mapping(context),
+        _check_apptainer_gpu_resource(context),
+    )
+
+
+def _check_apptainer_cpu_memory_mapping(context: _Context) -> PreflightCheckResult:
+    try:
+        targets = _apptainer_raw_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "resources.apptainer.mapping",
+            PreflightGroup.RESOURCES,
+            "Apptainer resource mapping probe failed",
+            exc,
+        )
+
+    diagnostics: list[PlainData] = []
+    mapped: list[PlainData] = []
+    for target in targets:
+        resources = _resource_entries(target.resources)
+        for kind, entry in sorted(resources.items()):
+            if kind in {"cpu", "memory"}:
+                mapped.append(
+                    {
+                        "stage_id": target.stage_id,
+                        "resource_kind": kind,
+                        "amount": cast(Any, entry).amount,
+                        "unit": cast(Any, entry).unit,
+                        "support_level": (
+                            "supported"
+                            if _is_slurm_executor_name(target.selected_executor)
+                            else "advisory"
+                        ),
+                        "enforcement": (
+                            "slurm_enforced"
+                            if _is_slurm_executor_name(target.selected_executor)
+                            else "external_or_best_effort"
+                        ),
+                    }
+                )
+                continue
+            if kind == "gpu":
+                continue
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_resource_unsupported",
+                    message=f"Apptainer resource kind {kind!r} is unsupported",
+                    detail={"resource_kind": kind},
+                )
+            )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return _result(
+        "resources.apptainer.mapping",
+        PreflightGroup.RESOURCES,
+        status,
+        _severity_for_status(status),
+        (
+            "Apptainer CPU and memory resource mapping is valid"
+            if status is PreflightCheckStatus.PASS
+            else "Apptainer resource mapping checks failed"
+        ),
+        {
+            "target_count": len(targets),
+            "mapped_resources": mapped,
+            "diagnostics": diagnostics,
+            "supported_resources": ["cpu", "memory", "gpu"],
+            "expensive_probe": False,
+        },
+    )
+
+
+def _check_apptainer_gpu_resource(context: _Context) -> PreflightCheckResult:
+    try:
+        targets = _apptainer_raw_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "resources.apptainer.gpu",
+            PreflightGroup.RESOURCES,
+            "Apptainer GPU resource probe failed",
+            exc,
+        )
+
+    diagnostics: list[PlainData] = []
+    gpu_targets: list[PlainData] = []
+    for target in targets:
+        resources = _resource_entries(target.resources)
+        gpu = resources.get("gpu")
+        if _resource_amount(gpu) <= 0:
+            continue
+        try:
+            apptainer_options = _apptainer_options_from_adapter(
+                target.adapter_options,
+                executor_name=target.executor_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_options_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
+        gpu_flag = _apptainer_gpu_flag(apptainer_options)
+        gpu_targets.append(
+            {
+                "stage_id": target.stage_id,
+                "amount": _resource_amount(gpu),
+                "unit": getattr(gpu, "unit", None),
+                "gpu_flag": gpu_flag,
+            }
+        )
+        if gpu_flag is None:
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_gpu_flag_missing",
+                    message=(
+                        "GPU resources are requested but neither Apptainer --nv "
+                        "nor --rocm is configured"
+                    ),
+                    detail={"resource_kind": "gpu"},
+                )
+            )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return _result(
+        "resources.apptainer.gpu",
+        PreflightGroup.RESOURCES,
+        status,
+        _severity_for_status(status),
+        (
+            "Apptainer GPU resources are either not requested or have runtime flags"
+            if status is PreflightCheckStatus.PASS
+            else "Apptainer GPU resource mapping checks failed"
+        ),
+        {
+            "target_count": len(targets),
+            "gpu_targets": gpu_targets,
+            "diagnostics": diagnostics,
+            "expensive_probe": False,
+        },
+    )
+
+
+def _check_docker_resource_mapping(
+    context: _Context,
+) -> tuple[PreflightCheckResult, ...]:
+    if not _request_selects_docker(context):
+        return ()
+    return (
+        _check_docker_cpu_memory_mapping(context),
+        _check_docker_gpu_resource(context),
+    )
+
+
+def _check_docker_cpu_memory_mapping(context: _Context) -> PreflightCheckResult:
+    try:
+        targets = _docker_raw_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "resources.docker.mapping",
+            PreflightGroup.RESOURCES,
+            "Docker resource mapping probe failed",
+            exc,
+        )
+
+    diagnostics: list[PlainData] = []
+    mapped: list[PlainData] = []
+    for target in targets:
+        resources = _resource_entries(target.resources)
+        for kind, entry in sorted(resources.items()):
+            capability = _docker_resource_capability(kind)
+            support_level = cast(Any, capability).support_level.value
+            enforcement = cast(Any, capability).enforcement.value
+            if kind in {"cpu", "memory"}:
+                mapped.append(
+                    {
+                        "stage_id": target.stage_id,
+                        "resource_kind": kind,
+                        "amount": cast(Any, entry).amount,
+                        "unit": cast(Any, entry).unit,
+                        "support_level": support_level,
+                        "enforcement": enforcement,
+                    }
+                )
+                continue
+            diagnostics.append(
+                _docker_diagnostic(
+                    target.stage_id,
+                    code="docker_resource_unsupported",
+                    message=f"Docker resource kind {kind!r} is unsupported",
+                    detail={
+                        "resource_kind": kind,
+                        "support_level": support_level,
+                        "enforcement": enforcement,
+                    },
+                )
+            )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return _result(
+        "resources.docker.mapping",
+        PreflightGroup.RESOURCES,
+        status,
+        _severity_for_status(status),
+        (
+            "Docker CPU and memory resource mapping is valid"
+            if status is PreflightCheckStatus.PASS
+            else "Docker resource mapping checks failed"
+        ),
+        {
+            "target_count": len(targets),
+            "mapped_resources": mapped,
+            "diagnostics": diagnostics,
+            "supported_resources": ["cpu", "memory"],
+            "expensive_probe": False,
+        },
+    )
+
+
+def _check_docker_gpu_resource(context: _Context) -> PreflightCheckResult:
+    try:
+        targets = _docker_raw_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "resources.docker.gpu",
+            PreflightGroup.RESOURCES,
+            "Docker GPU resource probe failed",
+            exc,
+        )
+
+    diagnostics: list[PlainData] = []
+    for target in targets:
+        resources = _resource_entries(target.resources)
+        if "gpu" not in resources:
+            continue
+        capability = _docker_resource_capability("gpu")
+        diagnostics.append(
+            _docker_diagnostic(
+                target.stage_id,
+                code="docker_gpu_unsupported",
+                message="Docker GPU resource mapping is unsupported in Stage 17",
+                detail={
+                    "resource_kind": "gpu",
+                    "amount": cast(Any, resources["gpu"]).amount,
+                    "unit": cast(Any, resources["gpu"]).unit,
+                    "support_level": cast(Any, capability).support_level.value,
+                    "enforcement": cast(Any, capability).enforcement.value,
+                },
+            )
+        )
+
+    status = PreflightCheckStatus.FAIL if diagnostics else PreflightCheckStatus.PASS
+    return _result(
+        "resources.docker.gpu",
+        PreflightGroup.RESOURCES,
+        status,
+        _severity_for_status(status),
+        (
+            "Docker GPU resources are not requested"
+            if status is PreflightCheckStatus.PASS
+            else "Docker GPU resource mapping is unsupported"
+        ),
+        {
+            "target_count": len(targets),
+            "diagnostics": diagnostics,
+            "supported": False,
+            "expensive_probe": False,
+        },
+    )
+
+
 def _check_filesystem(context: _Context) -> tuple[PreflightCheckResult, ...]:
     paths = (
         _resolve_path(context.request.config_path, cwd=context.request.cwd),
@@ -1856,9 +2930,667 @@ def _check_filesystem(context: _Context) -> tuple[PreflightCheckResult, ...]:
                 cast(Mapping[str, PlainData], {"paths": [str(path) for path in paths]}),
             )
         )
+    results.extend(_check_container_build_filesystem(context))
     results.extend(_check_slurm_generated_paths(context))
     results.extend(_check_slurm_generated_paths_writable(context))
+    results.extend(_check_apptainer_filesystem(context))
+    results.extend(_check_docker_filesystem(context))
     return tuple(results)
+
+
+def _check_container_build_filesystem(
+    context: _Context,
+) -> tuple[PreflightCheckResult, ...]:
+    try:
+        targets, diagnostics = _container_build_targets(context)
+    except Exception:  # noqa: BLE001 - runtime checks report normalization failures.
+        return ()
+    if not targets and not diagnostics:
+        return ()
+    return (
+        _check_container_build_sources(context, targets, diagnostics),
+        _check_container_build_outputs(context, targets, diagnostics),
+    )
+
+
+def _check_container_build_sources(
+    context: _Context,
+    targets: tuple[_ContainerBuildPreflightTarget, ...],
+    option_diagnostics: tuple[PlainData, ...],
+) -> PreflightCheckResult:
+    source_checks: list[PlainData] = []
+    missing: list[PlainData] = []
+    diagnostics: list[PlainData] = list(option_diagnostics)
+    for item in targets:
+        source = getattr(item.target, "source", None)
+        for label, raw_path in _container_build_local_source_paths(source):
+            path = _resolve_path(raw_path, cwd=context.request.cwd)
+            detail = {
+                "owner_id": item.owner_id,
+                "target_name": item.name,
+                "source_field": label,
+                "path": str(path),
+                "exists": path.exists(),
+                "expensive_probe": False,
+            }
+            source_checks.append(detail)
+            if not path.exists():
+                missing.append(detail)
+        if not _container_build_local_source_paths(source):
+            source_checks.append(
+                {
+                    "owner_id": item.owner_id,
+                    "target_name": item.name,
+                    "source_kind": _enum_value(getattr(source, "kind", None)),
+                    "local_path_probe": False,
+                    "expensive_probe": False,
+                }
+            )
+
+    status = (
+        PreflightCheckStatus.FAIL
+        if diagnostics or missing
+        else PreflightCheckStatus.PASS
+    )
+    return _result(
+        "filesystem.container_build.sources",
+        PreflightGroup.FILESYSTEM,
+        status,
+        _severity_for_status(status),
+        (
+            "container build local sources are available"
+            if status is PreflightCheckStatus.PASS
+            else "container build source checks failed"
+        ),
+        {
+            "target_count": len(targets),
+            "sources": source_checks,
+            "missing": missing,
+            "diagnostics": diagnostics,
+            "expensive_probe": False,
+        },
+    )
+
+
+def _check_container_build_outputs(
+    context: _Context,
+    targets: tuple[_ContainerBuildPreflightTarget, ...],
+    option_diagnostics: tuple[PlainData, ...],
+) -> PreflightCheckResult:
+    output_checks: list[PlainData] = []
+    missing_required: list[PlainData] = []
+    diagnostics: list[PlainData] = list(option_diagnostics)
+    for item in targets:
+        target = item.target
+        output = getattr(target, "output", None)
+        policy = getattr(getattr(target, "policy", None), "mode", None)
+        policy_mode = _enum_value(policy)
+        path_text = getattr(output, "path", None)
+        reference = getattr(output, "reference", None)
+        if isinstance(path_text, str):
+            path = _resolve_path(path_text, cwd=context.request.cwd)
+            exists = path.exists()
+            detail = {
+                "owner_id": item.owner_id,
+                "target_name": item.name,
+                "kind": _enum_value(getattr(output, "kind", None)),
+                "path": str(path),
+                "exists": exists,
+                "policy": policy_mode,
+                "local_path_probe": True,
+                "expensive_probe": False,
+            }
+            output_checks.append(detail)
+            if policy_mode == "never" and not exists:
+                missing_required.append(detail)
+        else:
+            output_checks.append(
+                {
+                    "owner_id": item.owner_id,
+                    "target_name": item.name,
+                    "kind": _enum_value(getattr(output, "kind", None)),
+                    "reference": reference,
+                    "policy": policy_mode,
+                    "local_path_probe": False,
+                    "expensive_probe": False,
+                }
+            )
+
+    status = (
+        PreflightCheckStatus.FAIL
+        if diagnostics or missing_required
+        else PreflightCheckStatus.PASS
+    )
+    return _result(
+        "filesystem.container_build.outputs",
+        PreflightGroup.FILESYSTEM,
+        status,
+        _severity_for_status(status),
+        (
+            "container build output references are ready for the selected policies"
+            if status is PreflightCheckStatus.PASS
+            else "container build output checks failed"
+        ),
+        {
+            "target_count": len(targets),
+            "outputs": output_checks,
+            "missing_required_outputs": missing_required,
+            "diagnostics": diagnostics,
+            "expensive_probe": False,
+        },
+    )
+
+
+def _check_apptainer_filesystem(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    if not _request_selects_apptainer(context):
+        return ()
+    return (
+        _check_apptainer_bind_sources(context),
+        _check_apptainer_bind_targets(context),
+        _check_apptainer_run_dir_writable(context),
+        _check_apptainer_artifact_root_visible(context),
+    )
+
+
+def _check_apptainer_bind_sources(context: _Context) -> PreflightCheckResult:
+    try:
+        parsed, diagnostics = _apptainer_parsed_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.apptainer.bind_sources",
+            PreflightGroup.FILESYSTEM,
+            "Apptainer bind source probe failed",
+            exc,
+        )
+    if diagnostics:
+        return _result(
+            "filesystem.apptainer.bind_sources",
+            PreflightGroup.FILESYSTEM,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "Apptainer bind source checks require valid container options",
+            {"diagnostics": list(diagnostics)},
+        )
+
+    bind_sources: list[PlainData] = []
+    missing: list[PlainData] = []
+    for target in parsed:
+        for mount in cast(tuple[Any, ...], cast(Any, target.container).mounts):
+            source = Path(mount.source)
+            exists = source.exists()
+            detail = {
+                "stage_id": target.stage_id,
+                "source": mount.source,
+                "target": mount.target,
+                "exists": exists,
+                "is_dir": source.is_dir() if exists else False,
+                "is_file": source.is_file() if exists else False,
+            }
+            bind_sources.append(detail)
+            if not exists:
+                missing.append(detail)
+
+    status = PreflightCheckStatus.FAIL if missing else PreflightCheckStatus.PASS
+    return _result(
+        "filesystem.apptainer.bind_sources",
+        PreflightGroup.FILESYSTEM,
+        status,
+        _severity_for_status(status),
+        (
+            "Apptainer bind sources exist"
+            if status is PreflightCheckStatus.PASS
+            else "Apptainer bind source checks failed"
+        ),
+        {"target_count": len(parsed), "bind_sources": bind_sources, "missing": missing},
+    )
+
+
+def _check_apptainer_bind_targets(context: _Context) -> PreflightCheckResult:
+    try:
+        parsed, diagnostics = _apptainer_parsed_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.apptainer.bind_targets",
+            PreflightGroup.FILESYSTEM,
+            "Apptainer bind target probe failed",
+            exc,
+        )
+    if diagnostics:
+        return _result(
+            "filesystem.apptainer.bind_targets",
+            PreflightGroup.FILESYSTEM,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "Apptainer bind target checks require valid container options",
+            {"diagnostics": list(diagnostics)},
+        )
+
+    summaries: list[PlainData] = []
+    invalid: list[PlainData] = []
+    for target in parsed:
+        for summary in cast(Any, target.container).path_parity_summaries():
+            detail = {"stage_id": target.stage_id, **summary.to_dict()}
+            summaries.append(detail)
+            if not summary.ok:
+                invalid.append(detail)
+
+    status = PreflightCheckStatus.FAIL if invalid else PreflightCheckStatus.PASS
+    return _result(
+        "filesystem.apptainer.bind_targets",
+        PreflightGroup.FILESYSTEM,
+        status,
+        _severity_for_status(status),
+        (
+            "Apptainer bind targets satisfy path parity"
+            if status is PreflightCheckStatus.PASS
+            else "Apptainer bind target path-parity checks failed"
+        ),
+        {"target_count": len(parsed), "path_parity": summaries, "invalid": invalid},
+    )
+
+
+def _check_apptainer_run_dir_writable(context: _Context) -> PreflightCheckResult:
+    try:
+        run_uri = _selected_run_uri(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.apptainer.run_dir_writable",
+            PreflightGroup.FILESYSTEM,
+            "Apptainer run-directory writability probe failed",
+            exc,
+        )
+    if run_uri is None:
+        return _missing_run_uri(
+            "filesystem.apptainer.run_dir_writable", PreflightGroup.FILESYSTEM
+        )
+    try:
+        resolved = cast(Any, context.run_uri())
+        probe_parent = _nearest_existing_directory(resolved.path)
+        with tempfile.TemporaryDirectory(
+            prefix=".loom-preflight-apptainer-",
+            dir=probe_parent,
+        ) as probe_dir:
+            probe_path = Path(probe_dir) / "run-dir-write-probe"
+            probe_path.write_text("ok\n", encoding="utf-8")
+            probe_path.unlink()
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.apptainer.run_dir_writable",
+            PreflightGroup.FILESYSTEM,
+            "Apptainer run-directory parent is not writable",
+            exc,
+        )
+
+    return _result(
+        "filesystem.apptainer.run_dir_writable",
+        PreflightGroup.FILESYSTEM,
+        PreflightCheckStatus.PASS,
+        PreflightSeverity.INFO,
+        "Apptainer run-directory parent is writable",
+        {
+            "run_uri": resolved.uri,
+            "run_path": str(resolved.path),
+            "probe_parent": str(probe_parent),
+        },
+    )
+
+
+def _check_apptainer_artifact_root_visible(context: _Context) -> PreflightCheckResult:
+    try:
+        run_uri = _selected_run_uri(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.apptainer.artifact_root_visible",
+            PreflightGroup.FILESYSTEM,
+            "Apptainer artifact-root visibility probe failed",
+            exc,
+        )
+    if run_uri is None:
+        return _missing_run_uri(
+            "filesystem.apptainer.artifact_root_visible", PreflightGroup.FILESYSTEM
+        )
+    try:
+        from loom.pipeline.executors.containers import ContainerMountMode
+        from loom.pipeline.stores import LocalRunStore
+
+        parsed, diagnostics = _apptainer_parsed_targets(context)
+        if diagnostics:
+            return _result(
+                "filesystem.apptainer.artifact_root_visible",
+                PreflightGroup.FILESYSTEM,
+                PreflightCheckStatus.FAIL,
+                PreflightSeverity.ERROR,
+                "Apptainer artifact-root checks require valid container options",
+                {"diagnostics": list(diagnostics)},
+            )
+        resolved = cast(Any, context.run_uri())
+        store = LocalRunStore(resolved.path.parent)
+        run_dir = str(store.local_run_dir(resolved.uri))
+        artifact_root = store.local_artifact_root(resolved.uri)
+        required_paths = (run_dir, str(artifact_root))
+        conflicts: list[PlainData] = []
+        for target in parsed:
+            mounts = cast(tuple[Any, ...], cast(Any, target.container).mounts)
+            for required_path in required_paths:
+                existing = next(
+                    (mount for mount in mounts if mount.target == required_path),
+                    None,
+                )
+                if existing is None:
+                    continue
+                mode = cast(Any, existing).mode
+                if (
+                    existing.source != required_path
+                    or mode is not ContainerMountMode.READ_WRITE
+                ):
+                    conflicts.append(
+                        {
+                            "stage_id": target.stage_id,
+                            "path": required_path,
+                            "source": existing.source,
+                            "target": existing.target,
+                            "mode": mode.value,
+                        }
+                    )
+        if artifact_root.exists() and not artifact_root.is_dir():
+            conflicts.append(
+                {
+                    "stage_id": None,
+                    "path": str(artifact_root),
+                    "reason": "artifact_root_not_directory",
+                }
+            )
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.apptainer.artifact_root_visible",
+            PreflightGroup.FILESYSTEM,
+            "Apptainer artifact-root visibility probe failed",
+            exc,
+        )
+
+    status = PreflightCheckStatus.FAIL if conflicts else PreflightCheckStatus.PASS
+    return _result(
+        "filesystem.apptainer.artifact_root_visible",
+        PreflightGroup.FILESYSTEM,
+        status,
+        _severity_for_status(status),
+        (
+            "Apptainer artifact root is path-parity bindable"
+            if status is PreflightCheckStatus.PASS
+            else "Apptainer artifact-root path-parity checks failed"
+        ),
+        {
+            "run_uri": resolved.uri,
+            "artifact_root": str(artifact_root),
+            "artifact_root_exists": artifact_root.exists(),
+            "required_binds": [
+                {"path": path, "mode": "rw", "source_equals_target": True}
+                for path in required_paths
+            ],
+            "conflicts": conflicts,
+        },
+    )
+
+
+def _check_docker_filesystem(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    if not _request_selects_docker(context):
+        return ()
+    return (
+        _check_docker_mount_sources(context),
+        _check_docker_mount_targets(context),
+        _check_docker_run_dir_writable(context),
+        _check_docker_artifact_root_visible(context),
+    )
+
+
+def _check_docker_mount_sources(context: _Context) -> PreflightCheckResult:
+    try:
+        parsed, diagnostics = _docker_parsed_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.docker.mount_sources",
+            PreflightGroup.FILESYSTEM,
+            "Docker mount source probe failed",
+            exc,
+        )
+    if diagnostics:
+        return _result(
+            "filesystem.docker.mount_sources",
+            PreflightGroup.FILESYSTEM,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "Docker mount source checks require valid container options",
+            {"diagnostics": list(diagnostics)},
+        )
+
+    mount_sources: list[PlainData] = []
+    missing: list[PlainData] = []
+    for target in parsed:
+        for mount in cast(tuple[Any, ...], cast(Any, target.container).mounts):
+            source = Path(mount.source)
+            exists = source.exists()
+            is_dir = source.is_dir() if exists else False
+            is_file = source.is_file() if exists else False
+            detail = {
+                "stage_id": target.stage_id,
+                "source": mount.source,
+                "target": mount.target,
+                "exists": exists,
+                "is_dir": is_dir,
+                "is_file": is_file,
+            }
+            mount_sources.append(detail)
+            if not exists:
+                missing.append(detail)
+
+    status = PreflightCheckStatus.FAIL if missing else PreflightCheckStatus.PASS
+    return _result(
+        "filesystem.docker.mount_sources",
+        PreflightGroup.FILESYSTEM,
+        status,
+        _severity_for_status(status),
+        (
+            "Docker mount sources exist"
+            if status is PreflightCheckStatus.PASS
+            else "Docker mount source checks failed"
+        ),
+        {
+            "target_count": len(parsed),
+            "mount_sources": mount_sources,
+            "missing": missing,
+        },
+    )
+
+
+def _check_docker_mount_targets(context: _Context) -> PreflightCheckResult:
+    try:
+        parsed, diagnostics = _docker_parsed_targets(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.docker.mount_targets",
+            PreflightGroup.FILESYSTEM,
+            "Docker mount target probe failed",
+            exc,
+        )
+    if diagnostics:
+        return _result(
+            "filesystem.docker.mount_targets",
+            PreflightGroup.FILESYSTEM,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "Docker mount target checks require valid container options",
+            {"diagnostics": list(diagnostics)},
+        )
+
+    summaries: list[PlainData] = []
+    invalid: list[PlainData] = []
+    for target in parsed:
+        for summary in cast(Any, target.container).path_parity_summaries():
+            detail = {"stage_id": target.stage_id, **summary.to_dict()}
+            summaries.append(detail)
+            if not summary.ok:
+                invalid.append(detail)
+
+    status = PreflightCheckStatus.FAIL if invalid else PreflightCheckStatus.PASS
+    return _result(
+        "filesystem.docker.mount_targets",
+        PreflightGroup.FILESYSTEM,
+        status,
+        _severity_for_status(status),
+        (
+            "Docker mount targets satisfy Stage 17 path parity"
+            if status is PreflightCheckStatus.PASS
+            else "Docker mount target path-parity checks failed"
+        ),
+        {
+            "target_count": len(parsed),
+            "path_parity": summaries,
+            "invalid": invalid,
+        },
+    )
+
+
+def _check_docker_run_dir_writable(context: _Context) -> PreflightCheckResult:
+    try:
+        run_uri = _selected_run_uri(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.docker.run_dir_writable",
+            PreflightGroup.FILESYSTEM,
+            "Docker run-directory writability probe failed",
+            exc,
+        )
+    if run_uri is None:
+        return _missing_run_uri(
+            "filesystem.docker.run_dir_writable", PreflightGroup.FILESYSTEM
+        )
+    try:
+        resolved = cast(Any, context.run_uri())
+        probe_parent = _nearest_existing_directory(resolved.path)
+        with tempfile.TemporaryDirectory(
+            prefix=".loom-preflight-docker-",
+            dir=probe_parent,
+        ) as probe_dir:
+            probe_path = Path(probe_dir) / "run-dir-write-probe"
+            probe_path.write_text("ok\n", encoding="utf-8")
+            probe_path.unlink()
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.docker.run_dir_writable",
+            PreflightGroup.FILESYSTEM,
+            "Docker run-directory parent is not writable",
+            exc,
+        )
+
+    return _result(
+        "filesystem.docker.run_dir_writable",
+        PreflightGroup.FILESYSTEM,
+        PreflightCheckStatus.PASS,
+        PreflightSeverity.INFO,
+        "Docker run-directory parent is writable",
+        {
+            "run_uri": resolved.uri,
+            "run_path": str(resolved.path),
+            "probe_parent": str(probe_parent),
+        },
+    )
+
+
+def _check_docker_artifact_root_visible(context: _Context) -> PreflightCheckResult:
+    try:
+        run_uri = _selected_run_uri(context)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.docker.artifact_root_visible",
+            PreflightGroup.FILESYSTEM,
+            "Docker artifact-root visibility probe failed",
+            exc,
+        )
+    if run_uri is None:
+        return _missing_run_uri(
+            "filesystem.docker.artifact_root_visible", PreflightGroup.FILESYSTEM
+        )
+    try:
+        from loom.pipeline.executors.containers import ContainerMountMode
+        from loom.pipeline.stores import LocalRunStore
+
+        parsed, diagnostics = _docker_parsed_targets(context)
+        if diagnostics:
+            return _result(
+                "filesystem.docker.artifact_root_visible",
+                PreflightGroup.FILESYSTEM,
+                PreflightCheckStatus.FAIL,
+                PreflightSeverity.ERROR,
+                "Docker artifact-root checks require valid container options",
+                {"diagnostics": list(diagnostics)},
+            )
+        resolved = cast(Any, context.run_uri())
+        store = LocalRunStore(resolved.path.parent)
+        run_dir = str(store.local_run_dir(resolved.uri))
+        artifact_root = store.local_artifact_root(resolved.uri)
+        required_paths = (run_dir, str(artifact_root))
+        conflicts: list[PlainData] = []
+        for target in parsed:
+            mounts = cast(tuple[Any, ...], cast(Any, target.container).mounts)
+            for required_path in required_paths:
+                existing = next(
+                    (mount for mount in mounts if mount.target == required_path),
+                    None,
+                )
+                if existing is None:
+                    continue
+                mode = cast(Any, existing).mode
+                if (
+                    existing.source != required_path
+                    or mode is not ContainerMountMode.READ_WRITE
+                ):
+                    conflicts.append(
+                        {
+                            "stage_id": target.stage_id,
+                            "path": required_path,
+                            "source": existing.source,
+                            "target": existing.target,
+                            "mode": mode.value,
+                        }
+                    )
+        if artifact_root.exists() and not artifact_root.is_dir():
+            conflicts.append(
+                {
+                    "stage_id": None,
+                    "path": str(artifact_root),
+                    "reason": "artifact_root_not_directory",
+                }
+            )
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "filesystem.docker.artifact_root_visible",
+            PreflightGroup.FILESYSTEM,
+            "Docker artifact-root visibility probe failed",
+            exc,
+        )
+
+    status = PreflightCheckStatus.FAIL if conflicts else PreflightCheckStatus.PASS
+    return _result(
+        "filesystem.docker.artifact_root_visible",
+        PreflightGroup.FILESYSTEM,
+        status,
+        _severity_for_status(status),
+        (
+            "Docker artifact root is path-parity mountable"
+            if status is PreflightCheckStatus.PASS
+            else "Docker artifact-root path-parity checks failed"
+        ),
+        {
+            "run_uri": resolved.uri,
+            "artifact_root": str(artifact_root),
+            "artifact_root_exists": artifact_root.exists(),
+            "required_mounts": [
+                {"path": path, "mode": "rw", "source_equals_target": True}
+                for path in required_paths
+            ],
+            "conflicts": conflicts,
+        },
+    )
 
 
 def _check_slurm_generated_paths(context: _Context) -> tuple[PreflightCheckResult, ...]:
@@ -2123,6 +3855,39 @@ def _coerce_selectors(value: object) -> object:
     return value
 
 
+def _request_selects_apptainer(context: _Context) -> bool:
+    try:
+        options = cast(Any, context.runtime_options())
+        return _is_apptainer_executor(options) or _request_selects_slurm_container(
+            context
+        )
+    except Exception:  # noqa: BLE001 - caller-specific checks report request failures.
+        runtime_options = context.request.runtime_options
+        executor = None
+        adapter_options: object = None
+        stage_options: object = None
+        if isinstance(runtime_options, Mapping):
+            executor = runtime_options.get("executor")
+            adapter_options = runtime_options.get("adapter_options")
+            stage_options = runtime_options.get("stage_options")
+        else:
+            executor = getattr(runtime_options, "executor", None)
+            adapter_options = getattr(runtime_options, "adapter_options", None)
+            stage_options = getattr(runtime_options, "stage_options", None)
+        return executor in _APPTAINER_EXECUTORS or (
+            executor in _SLURM_EXECUTORS
+            and _adapter_options_include_container(adapter_options, stage_options)
+        )
+
+
+def _request_selects_slurm_container(context: _Context) -> bool:
+    try:
+        options = cast(Any, context.runtime_options())
+    except Exception:  # noqa: BLE001 - caller-specific checks report request failures.
+        return False
+    return _is_slurm_executor(options) and _runtime_options_include_container(options)
+
+
 def _request_selects_slurm(context: _Context) -> bool:
     try:
         return _is_slurm_executor(cast(Any, context.runtime_options()))
@@ -2136,8 +3901,634 @@ def _request_selects_slurm(context: _Context) -> bool:
         return executor in _SLURM_EXECUTORS
 
 
+def _request_selects_docker(context: _Context) -> bool:
+    try:
+        return _is_docker_executor(cast(Any, context.runtime_options()))
+    except Exception:  # noqa: BLE001 - caller-specific checks report request failures.
+        runtime_options = context.request.runtime_options
+        executor = None
+        if isinstance(runtime_options, Mapping):
+            executor = runtime_options.get("executor")
+        else:
+            executor = getattr(runtime_options, "executor", None)
+        return executor == "docker"
+
+
+def _is_apptainer_executor(options: object) -> bool:
+    return (getattr(options, "executor", None) or "local") in _APPTAINER_EXECUTORS
+
+
 def _is_slurm_executor(options: object) -> bool:
     return getattr(options, "executor", None) in _SLURM_EXECUTORS
+
+
+def _is_slurm_executor_name(executor: object) -> bool:
+    return executor in _SLURM_EXECUTORS
+
+
+def _is_docker_executor(options: object) -> bool:
+    return (getattr(options, "executor", None) or "local") == "docker"
+
+
+def _runtime_options_include_container(options: object) -> bool:
+    return _adapter_options_include_container(
+        getattr(options, "adapter_options", None),
+        getattr(options, "stage_options", None),
+    )
+
+
+def _adapter_options_include_container(
+    adapter_options: object,
+    stage_options: object,
+) -> bool:
+    if isinstance(adapter_options, Mapping) and "container" in adapter_options:
+        return True
+    if isinstance(stage_options, Mapping):
+        for value in stage_options.values():
+            raw_adapter_options = (
+                value.get("adapter_options")
+                if isinstance(value, Mapping)
+                else getattr(value, "adapter_options", None)
+            )
+            if isinstance(raw_adapter_options, Mapping) and "container" in raw_adapter_options:
+                return True
+    return False
+
+
+def _container_build_option_sources(
+    context: _Context,
+) -> tuple[_ContainerBuildPreflightOptions, ...]:
+    options = cast(Any, context.runtime_options())
+    sources: list[_ContainerBuildPreflightOptions] = []
+    adapter_options = cast(Mapping[str, object], options.adapter_options)
+    if "container_build" in adapter_options:
+        sources.append(
+            _ContainerBuildPreflightOptions(
+                owner_id="run",
+                adapter_options=adapter_options,
+            )
+        )
+    for stage_id, stage_runtime in cast(
+        Mapping[str, Any],
+        options.stage_options,
+    ).items():
+        stage_adapter_options = cast(Mapping[str, object], stage_runtime.adapter_options)
+        if "container_build" in stage_adapter_options:
+            sources.append(
+                _ContainerBuildPreflightOptions(
+                    owner_id=f"stage:{stage_id}",
+                    adapter_options=stage_adapter_options,
+                )
+            )
+    return tuple(sources)
+
+
+def _container_build_targets(
+    context: _Context,
+) -> tuple[tuple[_ContainerBuildPreflightTarget, ...], tuple[PlainData, ...]]:
+    targets: list[_ContainerBuildPreflightTarget] = []
+    diagnostics: list[PlainData] = []
+    for source in _container_build_option_sources(context):
+        try:
+            parsed = _container_build_options_from_adapter(source.adapter_options)
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _container_build_diagnostic(
+                    source.owner_id,
+                    code="container_build_options_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
+        targets.extend(
+            _ContainerBuildPreflightTarget(
+                owner_id=source.owner_id,
+                name=name,
+                target=target,
+            )
+            for name, target in cast(
+                Mapping[str, object],
+                cast(Any, parsed).targets,
+            ).items()
+        )
+    return tuple(targets), tuple(diagnostics)
+
+
+def _container_build_options_from_adapter(adapter_options: Mapping[str, object]) -> object:
+    from loom.pipeline.executors.containers import parse_container_build_options
+
+    return parse_container_build_options(adapter_options.get("container_build"))
+
+
+def _container_build_output_identity(output: object) -> str | None:
+    if output is None:
+        return None
+    try:
+        from loom.pipeline.executors.containers import container_build_output_identity
+
+        return container_build_output_identity(cast(Any, output))
+    except Exception:  # noqa: BLE001 - identity is best-effort diagnostic metadata.
+        return None
+
+
+def _container_build_local_source_paths(source: object) -> tuple[tuple[str, str], ...]:
+    paths: list[tuple[str, str]] = []
+    for field_name in ("path", "context_path", "recipe_path"):
+        value = getattr(source, field_name, None)
+        if isinstance(value, str):
+            paths.append((field_name, value))
+    return tuple(paths)
+
+
+def _selected_container_build_targets(
+    context: _Context,
+) -> tuple[_ApptainerPreflightRawTarget | _DockerPreflightRawTarget, ...]:
+    targets: list[_ApptainerPreflightRawTarget | _DockerPreflightRawTarget] = []
+    if _request_selects_apptainer(context):
+        targets.extend(_apptainer_raw_targets(context))
+    if _request_selects_docker(context):
+        targets.extend(_docker_raw_targets(context))
+    return tuple(
+        target
+        for target in targets
+        if _container_target_name(target.adapter_options) is not None
+    )
+
+
+def _container_target_name(adapter_options: Mapping[str, object]) -> str | None:
+    container = adapter_options.get("container")
+    if not isinstance(container, Mapping):
+        return None
+    target = container.get("target")
+    return target if isinstance(target, str) and target else None
+
+
+def _selected_container_executor_name(
+    target: _ApptainerPreflightRawTarget | _DockerPreflightRawTarget,
+) -> str:
+    return (
+        target.selected_executor
+        if isinstance(target, _ApptainerPreflightRawTarget)
+        else "docker"
+    )
+
+
+def _target_owner_id(stage_id: str | None) -> str:
+    return "run" if stage_id is None else f"stage:{stage_id}"
+
+
+def _docker_raw_targets(context: _Context) -> tuple[_DockerPreflightRawTarget, ...]:
+    options = cast(Any, context.runtime_options())
+    if not _is_docker_executor(options):
+        return ()
+    stage_ids = _docker_stage_ids(context, options)
+    if not stage_ids:
+        return (
+            _DockerPreflightRawTarget(
+                stage_id=None,
+                adapter_options=cast(Mapping[str, object], options.adapter_options),
+                resources=None,
+            ),
+        )
+    from loom.pipeline.runtime import resolve_run_runtime
+
+    resolved = resolve_run_runtime(options, stage_ids=stage_ids)
+    return tuple(
+        _DockerPreflightRawTarget(
+            stage_id=stage_id,
+            adapter_options=cast(
+                Mapping[str, object],
+                cast(Any, resolved[stage_id]).adapter_options,
+            ),
+            resources=cast(Any, resolved[stage_id]).resources,
+        )
+        for stage_id in stage_ids
+    )
+
+
+def _docker_stage_ids(context: _Context, options: object) -> tuple[str, ...]:
+    try:
+        validation = cast(Any, context.pipeline())
+        stage_names = tuple(str(stage_id) for stage_id in validation.spec.stage_names)
+        if stage_names:
+            return stage_names
+    except Exception:  # noqa: BLE001 - Docker option checks can still inspect explicit runtime input.
+        pass
+    return tuple(str(stage_id) for stage_id in cast(Any, options).stage_options)
+
+
+def _docker_parsed_targets(
+    context: _Context,
+) -> tuple[tuple[_DockerPreflightTarget, ...], tuple[PlainData, ...]]:
+    parsed: list[_DockerPreflightTarget] = []
+    diagnostics: list[PlainData] = []
+    for target in _docker_raw_targets(context):
+        try:
+            container = _docker_container_from_adapter(target.adapter_options)
+            docker_options = _docker_options_from_adapter(target.adapter_options)
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _docker_diagnostic(
+                    target.stage_id,
+                    code="docker_container_options_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
+        parsed.append(
+            _DockerPreflightTarget(
+                stage_id=target.stage_id,
+                container=container,
+                docker_options=docker_options,
+                resources=target.resources,
+            )
+        )
+    return tuple(parsed), tuple(diagnostics)
+
+
+def _apptainer_raw_targets(context: _Context) -> tuple[_ApptainerPreflightRawTarget, ...]:
+    options = cast(Any, context.runtime_options())
+    if not (_is_apptainer_executor(options) or _request_selects_slurm_container(context)):
+        return ()
+    stage_ids = _apptainer_stage_ids(context, options)
+    executor_name = _apptainer_executor_name_for_options(options)
+    selected_executor = str(getattr(options, "executor", None) or "apptainer")
+    if not stage_ids:
+        adapter_options = cast(Mapping[str, object], options.adapter_options)
+        return (
+            _ApptainerPreflightRawTarget(
+                stage_id=None,
+                adapter_options=adapter_options,
+                resources=None,
+                executor_name=_apptainer_executor_name_for_adapter(
+                    adapter_options,
+                    fallback=executor_name,
+                ),
+                selected_executor=selected_executor,
+            ),
+        )
+    from loom.pipeline.runtime import resolve_run_runtime
+
+    resolved = resolve_run_runtime(options, stage_ids=stage_ids)
+    return tuple(
+        _ApptainerPreflightRawTarget(
+            stage_id=stage_id,
+            adapter_options=cast(
+                Mapping[str, object],
+                cast(Any, resolved[stage_id]).adapter_options,
+            ),
+            resources=cast(Any, resolved[stage_id]).resources,
+            executor_name=_apptainer_executor_name_for_adapter(
+                cast(Mapping[str, object], cast(Any, resolved[stage_id]).adapter_options),
+                fallback=executor_name,
+            ),
+            selected_executor=selected_executor,
+        )
+        for stage_id in stage_ids
+        if _is_apptainer_executor(options)
+        or "container" in cast(Any, resolved[stage_id]).adapter_options
+    )
+
+
+def _apptainer_stage_ids(context: _Context, options: object) -> tuple[str, ...]:
+    try:
+        validation = cast(Any, context.pipeline())
+        stage_names = tuple(str(stage_id) for stage_id in validation.spec.stage_names)
+        if stage_names:
+            return stage_names
+    except Exception:  # noqa: BLE001 - checks can still inspect explicit runtime input.
+        pass
+    return tuple(str(stage_id) for stage_id in cast(Any, options).stage_options)
+
+
+def _apptainer_parsed_targets(
+    context: _Context,
+) -> tuple[tuple[_ApptainerPreflightTarget, ...], tuple[PlainData, ...]]:
+    parsed: list[_ApptainerPreflightTarget] = []
+    diagnostics: list[PlainData] = []
+    for target in _apptainer_raw_targets(context):
+        try:
+            container = _apptainer_container_from_adapter(
+                target.adapter_options,
+                allow_target_resolution=_is_slurm_executor_name(
+                    target.selected_executor
+                ),
+            )
+            apptainer_options = _apptainer_options_from_adapter(
+                target.adapter_options,
+                executor_name=target.executor_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(
+                _apptainer_diagnostic(
+                    target.stage_id,
+                    code="apptainer_container_options_invalid",
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+            continue
+        parsed.append(
+            _ApptainerPreflightTarget(
+                stage_id=target.stage_id,
+                container=container,
+                apptainer_options=apptainer_options,
+                resources=target.resources,
+                executor_name=target.executor_name,
+                selected_executor=target.selected_executor,
+            )
+        )
+    return tuple(parsed), tuple(diagnostics)
+
+
+def _apptainer_container_from_adapter(
+    adapter_options: Mapping[str, object],
+    *,
+    allow_target_resolution: bool,
+) -> object:
+    from loom.pipeline.executors.containers import parse_container_options
+
+    if "container" not in adapter_options:
+        raise ValueError(
+            "adapter_options.container is required for Apptainer preflight"
+        )
+    raw = adapter_options["container"]
+    if (
+        allow_target_resolution
+        and isinstance(raw, Mapping)
+        and "target" in raw
+        and "image" not in raw
+    ):
+        raw = _resolve_apptainer_preflight_target(adapter_options, raw)
+    return parse_container_options(raw)
+
+
+def _resolve_apptainer_preflight_target(
+    adapter_options: Mapping[str, object],
+    container: Mapping[str, object],
+) -> Mapping[str, object]:
+    from loom.pipeline.executors.containers import (
+        ContainerBuildOutputKind,
+        ContainerBuildRuntime,
+    )
+
+    target_name = container.get("target")
+    if not isinstance(target_name, str) or not target_name:
+        raise ValueError("adapter_options.container.target must be non-empty")
+    build_options = _container_build_options_from_adapter(adapter_options)
+    target = cast(Mapping[str, object], cast(Any, build_options).targets).get(
+        target_name
+    )
+    if target is None:
+        raise ValueError(f"container build target {target_name!r} is not defined")
+    runtime = getattr(target, "runtime", None)
+    output = getattr(target, "output", None)
+    output_kind = getattr(output, "kind", None)
+    if runtime is not ContainerBuildRuntime.APPTAINER:
+        raise ValueError("Apptainer execution requires an apptainer build target")
+    if output_kind is not ContainerBuildOutputKind.APPTAINER_SIF:
+        raise ValueError("Apptainer execution requires an apptainer_sif output")
+    identity = _container_build_output_identity(output)
+    if identity is None:
+        raise ValueError("Apptainer build target output has no image identity")
+    resolved = dict(container)
+    resolved.pop("target", None)
+    resolved["image"] = {"reference": identity}
+    return cast(Mapping[str, object], resolved)
+
+
+def _apptainer_options_from_adapter(
+    adapter_options: Mapping[str, object],
+    *,
+    executor_name: str,
+) -> object:
+    from loom.pipeline.executors.apptainer import ApptainerExecOptions
+
+    raw_options: object | None
+    if executor_name == "singularity":
+        raw_options = adapter_options.get(
+            "singularity",
+            adapter_options.get("apptainer"),
+        )
+    else:
+        raw_options = adapter_options.get("apptainer")
+    options = ApptainerExecOptions.from_dict(raw_options)
+    if executor_name == "singularity" and not _adapter_options_set_command(
+        raw_options
+    ):
+        return replace(options, command="singularity")
+    return options
+
+
+def _adapter_options_set_command(raw_options: object | None) -> bool:
+    return isinstance(raw_options, Mapping) and "command" in raw_options
+
+
+def _apptainer_executor_name_for_options(options: object) -> str:
+    executor = getattr(options, "executor", None)
+    if executor in _APPTAINER_EXECUTORS:
+        return cast(str, executor)
+    return "apptainer"
+
+
+def _apptainer_executor_name_for_adapter(
+    adapter_options: Mapping[str, object],
+    *,
+    fallback: str,
+) -> str:
+    if "singularity" in adapter_options:
+        return "singularity"
+    return fallback if fallback in _APPTAINER_EXECUTORS else "apptainer"
+
+
+def _apptainer_image_from_adapter(
+    adapter_options: Mapping[str, object],
+    *,
+    allow_target_resolution: bool,
+) -> object:
+    from loom.pipeline.executors.containers import ContainerImageReference
+
+    if "container" not in adapter_options:
+        raise ValueError(
+            "adapter_options.container is required for Apptainer preflight"
+        )
+    raw = adapter_options["container"]
+    if (
+        allow_target_resolution
+        and isinstance(raw, Mapping)
+        and "target" in raw
+        and "image" not in raw
+    ):
+        raw = _resolve_apptainer_preflight_target(adapter_options, raw)
+    if not isinstance(raw, Mapping):
+        raise TypeError("adapter_options.container must be a mapping")
+    if "image" not in raw:
+        raise ValueError("adapter_options.container.image is required")
+    image = raw["image"]
+    return (
+        ContainerImageReference(reference=image)
+        if isinstance(image, str)
+        else ContainerImageReference.from_dict(image)
+    )
+
+
+def _apptainer_target_summary(target: _ApptainerPreflightTarget) -> PlainData:
+    apptainer_options = cast(Any, target.apptainer_options).to_dict()
+    return {
+        "stage_id": target.stage_id,
+        "executor_name": target.executor_name,
+        "selected_executor": target.selected_executor,
+        "container": cast(Any, target.container).to_redacted_metadata(),
+        "apptainer_option_keys": [
+            key for key, value in sorted(apptainer_options.items()) if value is not None
+        ],
+    }
+
+
+def _apptainer_diagnostic(
+    stage_id: str | None,
+    *,
+    code: str,
+    message: str,
+    detail: Mapping[str, PlainData] | None = None,
+) -> PlainData:
+    payload: dict[str, PlainData] = {
+        "stage_id": stage_id,
+        "code": code,
+        "message": message,
+    }
+    if detail:
+        payload["detail"] = dict(detail)
+    return payload
+
+
+def _container_build_diagnostic(
+    owner_id: str,
+    *,
+    code: str,
+    message: str,
+    detail: Mapping[str, PlainData] | None = None,
+) -> PlainData:
+    payload: dict[str, PlainData] = {
+        "owner_id": owner_id,
+        "code": code,
+        "message": message,
+    }
+    if detail:
+        payload["detail"] = dict(detail)
+    return payload
+
+
+def _apptainer_command_required(options: object) -> bool:
+    if _is_apptainer_executor(options):
+        return True
+    if _is_slurm_executor(options):
+        return not bool(getattr(options, "dry_run", False))
+    return False
+
+
+def _apptainer_gpu_flag(apptainer_options: object) -> str | None:
+    if bool(getattr(apptainer_options, "nv", False)):
+        return "nv"
+    if bool(getattr(apptainer_options, "rocm", False)):
+        return "rocm"
+    return None
+
+
+def _resource_amount(resource: object | None) -> float:
+    if resource is None:
+        return 0.0
+    amount = getattr(resource, "amount", 0)
+    if isinstance(amount, int | float) and not isinstance(amount, bool):
+        return float(amount)
+    return 0.0
+
+
+def _local_reference_path(reference: str, *, cwd: str | Path | None) -> Path | None:
+    if "://" in reference or reference.startswith(("docker:", "oras:", "library:")):
+        return None
+    if not (
+        reference.startswith(("/", "."))
+        or "/" in reference
+        or reference.endswith((".sif", ".simg"))
+    ):
+        return None
+    return _resolve_path(reference, cwd=cwd)
+
+
+def _docker_container_from_adapter(adapter_options: Mapping[str, object]) -> object:
+    from loom.pipeline.executors.containers import parse_container_options
+
+    if "container" not in adapter_options:
+        raise ValueError("adapter_options.container is required for Docker preflight")
+    return parse_container_options(adapter_options["container"])
+
+
+def _docker_options_from_adapter(adapter_options: Mapping[str, object]) -> object:
+    from loom.pipeline.executors.docker.commands import DockerOptions
+
+    return DockerOptions.from_dict(adapter_options.get("docker"))
+
+
+def _docker_image_from_adapter(adapter_options: Mapping[str, object]) -> object:
+    from loom.pipeline.executors.containers import ContainerImageReference
+
+    if "container" not in adapter_options:
+        raise ValueError("adapter_options.container is required for Docker preflight")
+    raw = adapter_options["container"]
+    if not isinstance(raw, Mapping):
+        raise TypeError("adapter_options.container must be a mapping")
+    if "image" not in raw:
+        raise ValueError("adapter_options.container.image is required")
+    image = raw["image"]
+    return (
+        ContainerImageReference(reference=image)
+        if isinstance(image, str)
+        else ContainerImageReference.from_dict(image)
+    )
+
+
+def _docker_target_summary(target: _DockerPreflightTarget) -> PlainData:
+    docker_options = cast(Any, target.docker_options).to_dict()
+    return {
+        "stage_id": target.stage_id,
+        "container": cast(Any, target.container).to_redacted_metadata(),
+        "docker_option_keys": [
+            key for key, value in sorted(docker_options.items()) if value is not None
+        ],
+    }
+
+
+def _docker_diagnostic(
+    stage_id: str | None,
+    *,
+    code: str,
+    message: str,
+    detail: Mapping[str, PlainData] | None = None,
+) -> PlainData:
+    payload: dict[str, PlainData] = {
+        "stage_id": stage_id,
+        "code": code,
+        "message": message,
+    }
+    if detail:
+        payload["detail"] = dict(detail)
+    return payload
+
+
+def _resource_entries(resources: object | None) -> Mapping[str, object]:
+    if resources is None:
+        return {}
+    entries = getattr(resources, "entries", None)
+    if isinstance(entries, Mapping):
+        return cast(Mapping[str, object], entries)
+    return {}
+
+
+def _docker_resource_capability(kind: str) -> object:
+    from loom.pipeline.runtime.capabilities import DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
+
+    descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("docker")
+    return descriptor.capability_for(kind)
 
 
 def _slurm_options_from_adapter(

@@ -140,6 +140,7 @@ synthetic complete pipeline
 public Python API workflow path
 future CLI run path
 status/log/artifact inspection
+read-only reliability inspection
 resume behavior
 failure behavior
 ```
@@ -210,12 +211,25 @@ CLI main(argv) tests
 subprocess executor tests
 stage-worker invocation tests
 SLURM fake-command tests
+Docker fake-command tests
 plugin fake-entry-point tests
 sweep runner tests with fake PipelineRunner
 failure injection helpers
 test markers for slow/integration/e2e/slurm/network/optional dependencies
 coverage thresholds for critical packages
 ```
+
+## Container Executor Testing
+
+Default container executor tests should use fake commands and fake command
+runners. Stage 17 Docker validation exercises command construction, selected
+executor preflight, CLI `loom run --executor docker`, failure inspection, and
+example scripts without a real Docker daemon.
+
+Live Docker acceptance should stay opt-in because it can depend on daemon
+availability, image contents, local path parity, registry access, and network
+policy. It must not be required by `make validate-pr` unless a future roadmap
+stage explicitly changes that validation contract.
 
 ### 4.3 Should Not Support by Default
 
@@ -556,9 +570,31 @@ cluster
 network service
 remote storage
 heavy optional dependency
+real Docker
+real Apptainer/Singularity
+real SIF build
 ```
 
 mark them explicitly and skip unless the environment opts in.
+
+Stage 18 real container smoke hooks are acceptance tests, not default CI
+evidence. The repository provides skipped-by-default tests under
+`tests/container_acceptance/` for Docker command availability,
+Apptainer/Singularity command availability, and configured Apptainer SIF build.
+They require explicit environment variables:
+
+```text
+LOOM_RUN_DOCKER_ACCEPTANCE=1
+LOOM_RUN_APPTAINER_ACCEPTANCE=1
+LOOM_RUN_APPTAINER_BUILD_ACCEPTANCE=1
+LOOM_APPTAINER_BUILD_DEFINITION=/path/to/definition.def
+```
+
+The existing real SLURM acceptance suite remains under `tests/slurm_acceptance/`
+and is enabled with `LOOM_RUN_SLURM_ACCEPTANCE=1` plus a shared
+`LOOM_SLURM_ACCEPTANCE_ROOT`. Default `make validate-pr` and
+`make test-summary` do not require these runtimes, clusters, registries, or
+network access.
 
 ---
 
@@ -881,6 +917,7 @@ structured worker failure wrapping
 redacted command/process metadata
 local/subprocess equivalence for synthetic pipelines
 status/log diagnostics compatibility for subprocess failures
+reliability policy, transaction, retry, and timeout inspection compatibility
 ```
 
 Use synthetic stage workers and temporary run directories.

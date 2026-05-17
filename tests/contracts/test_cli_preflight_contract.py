@@ -80,3 +80,52 @@ def test_preflight_slurm_check_ids_are_stable() -> None:
         "filesystem.slurm.generated_writable"
         in STABLE_CHECK_IDS[PreflightGroup.FILESYSTEM]
     )
+
+
+def test_preflight_docker_check_ids_are_stable() -> None:
+    assert "executor.docker.command" in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert (
+        "executor.docker.container_options"
+        in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    )
+    assert "executor.docker.image" in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert "executor.docker.environment" in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert "resources.docker.mapping" in STABLE_CHECK_IDS[PreflightGroup.RESOURCES]
+    assert "resources.docker.gpu" in STABLE_CHECK_IDS[PreflightGroup.RESOURCES]
+    assert (
+        "filesystem.docker.artifact_root_visible"
+        in STABLE_CHECK_IDS[PreflightGroup.FILESYSTEM]
+    )
+
+
+def test_preflight_container_and_apptainer_check_ids_are_stable() -> None:
+    assert (
+        "runtime.container_build.options"
+        in STABLE_CHECK_IDS[PreflightGroup.RUNTIME]
+    )
+    assert (
+        "executor.container_build.targets"
+        in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    )
+    for check_id in (
+        "executor.apptainer.command",
+        "executor.apptainer.container_options",
+        "executor.apptainer.image",
+        "executor.apptainer.environment",
+    ):
+        assert check_id in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert (
+        "resources.slurm.container_compatibility"
+        in STABLE_CHECK_IDS[PreflightGroup.RESOURCES]
+    )
+    assert "resources.apptainer.mapping" in STABLE_CHECK_IDS[PreflightGroup.RESOURCES]
+    assert "resources.apptainer.gpu" in STABLE_CHECK_IDS[PreflightGroup.RESOURCES]
+    for check_id in (
+        "filesystem.container_build.sources",
+        "filesystem.container_build.outputs",
+        "filesystem.apptainer.bind_sources",
+        "filesystem.apptainer.bind_targets",
+        "filesystem.apptainer.run_dir_writable",
+        "filesystem.apptainer.artifact_root_visible",
+    ):
+        assert check_id in STABLE_CHECK_IDS[PreflightGroup.FILESYSTEM]

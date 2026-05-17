@@ -62,6 +62,54 @@ class SubmittedOperationSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class StageReliabilitySummary:
+    stage_name: str
+    policy_count: int = 0
+    status_detail_count: int = 0
+    transaction_count: int = 0
+    retry_decision_count: int = 0
+    timeout_outcome_count: int = 0
+    unsupported_timeout_count: int = 0
+    latest_policy: Mapping[str, PlainData] | None = None
+    latest_status_detail: Mapping[str, PlainData] | None = None
+    latest_transaction: Mapping[str, PlainData] | None = None
+    latest_retry_decision: Mapping[str, PlainData] | None = None
+    latest_timeout_outcome: Mapping[str, PlainData] | None = None
+    diagnostics: tuple[Mapping[str, PlainData], ...] = ()
+    state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "stage_name": self.stage_name,
+            "counts": {
+                "policy_facts": self.policy_count,
+                "status_details": self.status_detail_count,
+                "transactions": self.transaction_count,
+                "retry_decisions": self.retry_decision_count,
+                "timeout_outcomes": self.timeout_outcome_count,
+                "unsupported_timeouts": self.unsupported_timeout_count,
+            },
+            "latest_policy": None
+            if self.latest_policy is None
+            else dict(self.latest_policy),
+            "latest_status_detail": None
+            if self.latest_status_detail is None
+            else dict(self.latest_status_detail),
+            "latest_transaction": None
+            if self.latest_transaction is None
+            else dict(self.latest_transaction),
+            "latest_retry_decision": None
+            if self.latest_retry_decision is None
+            else dict(self.latest_retry_decision),
+            "latest_timeout_outcome": None
+            if self.latest_timeout_outcome is None
+            else dict(self.latest_timeout_outcome),
+            "diagnostics": [dict(diagnostic) for diagnostic in self.diagnostics],
+            "state_source": dict(self.state_source),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class StageStatusSummary:
     stage_name: str
     status: str | None = None
@@ -74,7 +122,10 @@ class StageStatusSummary:
     log_paths: Mapping[str, str | None] = field(default_factory=dict)
     log_available: Mapping[str, bool] = field(default_factory=dict)
     state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
-    log_source: Mapping[str, PlainData] = field(default_factory=local_materialization_source)
+    log_source: Mapping[str, PlainData] = field(
+        default_factory=local_materialization_source
+    )
+    reliability: StageReliabilitySummary | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -90,6 +141,45 @@ class StageStatusSummary:
             "log_available": dict(self.log_available),
             "state_source": dict(self.state_source),
             "log_source": dict(self.log_source),
+            "reliability": None
+            if self.reliability is None
+            else self.reliability.to_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RunReliabilitySummary:
+    run_uri: str
+    run_policy_count: int = 0
+    latest_run_policy: Mapping[str, PlainData] | None = None
+    stages: tuple[StageReliabilitySummary, ...] = ()
+    state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "run_uri": self.run_uri,
+            "counts": {
+                "run_policy_facts": self.run_policy_count,
+                "stage_policy_facts": sum(stage.policy_count for stage in self.stages),
+                "status_details": sum(
+                    stage.status_detail_count for stage in self.stages
+                ),
+                "transactions": sum(stage.transaction_count for stage in self.stages),
+                "retry_decisions": sum(
+                    stage.retry_decision_count for stage in self.stages
+                ),
+                "timeout_outcomes": sum(
+                    stage.timeout_outcome_count for stage in self.stages
+                ),
+                "unsupported_timeouts": sum(
+                    stage.unsupported_timeout_count for stage in self.stages
+                ),
+            },
+            "latest_run_policy": None
+            if self.latest_run_policy is None
+            else dict(self.latest_run_policy),
+            "stages": [stage.to_dict() for stage in self.stages],
+            "state_source": dict(self.state_source),
         }
 
 
@@ -102,6 +192,7 @@ class RunStatusSummary:
     import_provenance: Mapping[str, PlainData] | None = None
     submitted_operations: tuple[SubmittedOperationSummary, ...] = ()
     stages: tuple[StageStatusSummary, ...] = ()
+    reliability: RunReliabilitySummary | None = None
     state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -118,6 +209,9 @@ class RunStatusSummary:
                 operation.to_dict() for operation in self.submitted_operations
             ],
             "stages": [stage.to_dict() for stage in self.stages],
+            "reliability": None
+            if self.reliability is None
+            else self.reliability.to_dict(),
         }
 
 
@@ -130,7 +224,9 @@ class LogStreamSummary:
     line_count: int = 0
     displayed_line_count: int = 0
     truncated: bool = False
-    state_source: Mapping[str, PlainData] = field(default_factory=local_materialization_source)
+    state_source: Mapping[str, PlainData] = field(
+        default_factory=local_materialization_source
+    )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -151,7 +247,9 @@ class StageLogsSummary:
     stage_name: str
     streams: tuple[LogStreamSummary, ...]
     paths_only: bool = False
-    state_source: Mapping[str, PlainData] = field(default_factory=local_materialization_source)
+    state_source: Mapping[str, PlainData] = field(
+        default_factory=local_materialization_source
+    )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -248,6 +346,15 @@ def inspect_run_status(
         snapshot = authoritative.snapshot
         local_store = authoritative.local_store
         source = authoritative.state_source
+        stage_summaries = tuple(
+            _authoritative_stage_summary(
+                local_store,
+                snapshot.run_uri,
+                stage,
+                state_source=source,
+            )
+            for stage in snapshot.stages
+        )
         return RunStatusSummary(
             run_uri=snapshot.run_uri,
             status=snapshot.status.value,
@@ -270,14 +377,11 @@ def inspect_run_status(
                 )
                 for record in snapshot.submitted_operations
             ),
-            stages=tuple(
-                _authoritative_stage_summary(
-                    local_store,
-                    snapshot.run_uri,
-                    stage,
-                    state_source=source,
-                )
-                for stage in snapshot.stages
+            stages=stage_summaries,
+            reliability=_run_reliability_summary(
+                snapshot,
+                stage_summaries,
+                state_source=source,
             ),
         )
 
@@ -334,7 +438,9 @@ def inspect_run_artifacts(
         )
         for key, artifact_ref in sorted(store.read_artifact_index(run_uri).items())
     )
-    return RunArtifactsSummary(run_uri=run_uri, artifacts=artifacts, state_source=source)
+    return RunArtifactsSummary(
+        run_uri=run_uri, artifacts=artifacts, state_source=source
+    )
 
 
 def inspect_run_artifact(
@@ -477,15 +583,21 @@ def _authoritative_stage_summary(
         failure=_safe_plain_mapping(
             lambda: store.read_stage_failure(run_uri, stage_name)
         ),
-        input_count=len(_safe_mapping(lambda: store.read_stage_inputs(run_uri, stage_name))),
+        input_count=len(
+            _safe_mapping(lambda: store.read_stage_inputs(run_uri, stage_name))
+        ),
         output_count=len(tuple(getattr(stage, "artifact_facts"))),
         provenance_available=_safe_plain_mapping(
             lambda: store.read_stage_provenance(run_uri, stage_name)
         )
         is not None,
         log_paths={
-            "stdout": _optional_str(store.local_stage_log_path(run_uri, stage_name, "stdout")),
-            "stderr": _optional_str(store.local_stage_log_path(run_uri, stage_name, "stderr")),
+            "stdout": _optional_str(
+                store.local_stage_log_path(run_uri, stage_name, "stdout")
+            ),
+            "stderr": _optional_str(
+                store.local_stage_log_path(run_uri, stage_name, "stderr")
+            ),
         },
         log_available={
             "stdout": stdout_content is not None,
@@ -493,7 +605,140 @@ def _authoritative_stage_summary(
         },
         state_source=state_source,
         log_source=local_materialization_source(path=str(_run_path_or_uri(run_uri))),
+        reliability=_stage_reliability_summary(stage, state_source=state_source),
     )
+
+
+def _run_reliability_summary(
+    snapshot: object,
+    stages: tuple[StageStatusSummary, ...],
+    *,
+    state_source: Mapping[str, PlainData],
+) -> RunReliabilitySummary | None:
+    policy_facts = tuple(getattr(snapshot, "reliability_policy_facts", ()))
+    stage_reliability = tuple(
+        stage.reliability for stage in stages if stage.reliability is not None
+    )
+    if not policy_facts and not stage_reliability:
+        return None
+    return RunReliabilitySummary(
+        run_uri=str(getattr(snapshot, "run_uri")),
+        run_policy_count=len(policy_facts),
+        latest_run_policy=_latest_record_mapping(policy_facts, "run_policy"),
+        stages=stage_reliability,
+        state_source=state_source,
+    )
+
+
+def _stage_reliability_summary(
+    stage: object,
+    *,
+    state_source: Mapping[str, PlainData],
+) -> StageReliabilitySummary | None:
+    policy_facts = tuple(getattr(stage, "reliability_policy_facts", ()))
+    status_details = tuple(getattr(stage, "reliability_status_details", ()))
+    transactions = tuple(getattr(stage, "reliability_transactions", ()))
+    retry_decisions = tuple(getattr(stage, "retry_decisions", ()))
+    timeout_outcomes = tuple(getattr(stage, "timeout_outcomes", ()))
+    unsupported_timeout_count = sum(
+        1 for outcome in timeout_outcomes if _is_unsupported_timeout(outcome)
+    )
+    if not any(
+        (
+            policy_facts,
+            status_details,
+            transactions,
+            retry_decisions,
+            timeout_outcomes,
+        )
+    ):
+        return None
+    stage_name = str(getattr(stage, "stage_name"))
+    return StageReliabilitySummary(
+        stage_name=stage_name,
+        policy_count=len(policy_facts),
+        status_detail_count=len(status_details),
+        transaction_count=len(transactions),
+        retry_decision_count=len(retry_decisions),
+        timeout_outcome_count=len(timeout_outcomes),
+        unsupported_timeout_count=unsupported_timeout_count,
+        latest_policy=_latest_record_mapping(policy_facts, "policy"),
+        latest_status_detail=_latest_record_mapping(status_details, "status_detail"),
+        latest_transaction=_latest_record_mapping(transactions, "transaction"),
+        latest_retry_decision=_latest_record_mapping(
+            retry_decisions,
+            "retry_decision",
+        ),
+        latest_timeout_outcome=_latest_record_mapping(
+            timeout_outcomes,
+            "timeout_outcome",
+        ),
+        diagnostics=_unsupported_timeout_diagnostics(
+            stage_name=stage_name,
+            outcomes=timeout_outcomes,
+        ),
+        state_source=state_source,
+    )
+
+
+def _latest_record_mapping(
+    records: tuple[object, ...],
+    path: str,
+) -> Mapping[str, PlainData] | None:
+    if not records:
+        return None
+    to_dict = getattr(records[-1], "to_dict", None)
+    payload = to_dict() if callable(to_dict) else records[-1]
+    normalized = ensure_plain_data(payload, path=f"reliability.{path}")
+    if not isinstance(normalized, Mapping):
+        raise DiagnosticsInspectionError(
+            f"reliability {path} record must serialize to a mapping"
+        )
+    return cast(Mapping[str, PlainData], normalized)
+
+
+def _unsupported_timeout_diagnostics(
+    *,
+    stage_name: str,
+    outcomes: tuple[object, ...],
+) -> tuple[Mapping[str, PlainData], ...]:
+    diagnostics: list[Mapping[str, PlainData]] = []
+    for outcome in outcomes:
+        if not _is_unsupported_timeout(outcome):
+            continue
+        status = getattr(outcome, "status", None)
+        diagnostics.append(
+            {
+                "code": "reliability.timeout.unsupported",
+                "message": "timeout policy was selected but not enforced",
+                "details": {
+                    "stage_name": stage_name,
+                    "attempt": getattr(status, "attempt", None),
+                    "reason_code": getattr(outcome, "reason_code", None),
+                    "support_level": _enum_or_none(
+                        getattr(outcome, "support_level", None)
+                    ),
+                    "outcome": _enum_or_none(getattr(outcome, "outcome", None)),
+                },
+            }
+        )
+    return tuple(diagnostics)
+
+
+def _is_unsupported_timeout(outcome: object) -> bool:
+    return (
+        _enum_or_none(getattr(outcome, "outcome", None)) == "unsupported"
+        or _enum_or_none(getattr(outcome, "support_level", None)) == "unsupported"
+    )
+
+
+def _enum_or_none(value: object) -> str | None:
+    if value is None:
+        return None
+    enum_value = getattr(value, "value", None)
+    if enum_value is not None:
+        return str(enum_value)
+    return str(value)
 
 
 def _stream_summary(
@@ -769,9 +1014,11 @@ __all__ = [
     "LOG_STREAMS",
     "DiagnosticsInspectionError",
     "LogStreamSummary",
-    "RunStatusSummary",
     "RunArtifactsSummary",
+    "RunReliabilitySummary",
+    "RunStatusSummary",
     "StageLogsSummary",
+    "StageReliabilitySummary",
     "StageStatusSummary",
     "inspect_run_artifact",
     "inspect_run_artifacts",

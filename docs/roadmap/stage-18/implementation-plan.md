@@ -1,20 +1,17 @@
 # Roadmap Stage 18 Implementation Plan: HPC Container Execution
 
-Status: draft
+Status: complete
 Roadmap stage: `v18`
 Planning document: `docs/roadmap/stage-18/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: implementation-plan quality gate pending
+Current phase: all phases merged
 Blockers:
 
-- Implementation-plan quality gate is pending. Run `loom_plan_reviewer`
-  review, perform one bounded refinement if required, and record confirmation
-  review before Phase 1 execution planning starts.
-- Stage 17 Docker/shared-container source is not present in this checkout at
-  draft time. Phase 1 execution planning must refresh landed Stage 17 source
-  and either reuse the landed contracts or stop if Stage 17 is still absent or
-  materially incompatible.
+- None. Implementation-plan quality gate passed on 2026-05-17 after manager
+  review found no product-design blockers, one bounded refinement refreshed
+  stale Stage 17 source evidence, and manager confirmation verified Phase 1
+  may proceed from the landed Stage 17 contracts.
 
 ## Summary
 
@@ -62,7 +59,17 @@ Blockers:
   output refs, direct Apptainer execution, SLURM plus Apptainer dry-run/live,
   submit-side build ordering, clean environment defaults, and cheap preflight.
 - Source phase shaping: five phases confirmed in the planning artifact.
-- Source plan quality gate: pending for this implementation plan.
+- Source plan quality gate: passed on 2026-05-17.
+- Final implementation status: complete. Phases 1-5 merged through PRs
+  [#182](https://github.com/samcantrill/loom/pull/182),
+  [#183](https://github.com/samcantrill/loom/pull/183),
+  [#184](https://github.com/samcantrill/loom/pull/184),
+  [#185](https://github.com/samcantrill/loom/pull/185), and
+  [#186](https://github.com/samcantrill/loom/pull/186).
+- Final validation evidence: every phase ran `make validate-pr` and
+  `make test-summary`; the final Phase 5 gate passed locally with overall
+  2350 passed, 21 skipped, 1928 deselected, and GitHub CI `checks` passed
+  before merge.
 - Out of scope: external/site build services, Apptainer remote build,
   registry/auth helpers, automatic image conversion beyond explicit build
   sources, Docker Compose, Kubernetes, image publishing, whole-controller
@@ -106,23 +113,21 @@ Current source already has the non-container machinery Stage 18 must compose:
 - `loom.provenance` already has a generic container mapping in provenance
   records that later container execution facts can populate safely.
 
-Stage 17 is the intended Docker prerequisite. Its local implementation plan
-records shared `container` execution records and Docker executor behavior, but
-the current source tree does not yet contain Docker or shared container modules.
-This Stage 18 draft therefore treats Stage 17 plans as expected prerequisite
-context, not landed source truth. Phase 1 execution planning must refresh
-actual Stage 17 source before writing code.
+Stage 17 is the Docker prerequisite. Its landed source records shared
+`container` execution records and Docker executor behavior. Phase 1 execution
+planning refreshed current source from `origin/develop` before code changes and
+found the prerequisite contracts present and compatible.
 
-Source refresh result for this draft:
+Source refresh result for Phase 1:
 
-- No `src/loom/pipeline/executors/docker` module exists in this checkout.
-- No shared `src/loom/pipeline/executors/container` or `containers` module
-  exists in this checkout.
-- No Apptainer/Singularity executor module exists in this checkout.
-- Pipeline specs and runtime request models currently reserve or defer
-  container/Docker/Apptainer fields; adapter options already support opaque
-  runtime/profile namespaces.
-- Existing SLURM code is available and should remain the scheduler authority.
+- `src/loom/pipeline/executors/containers.py` exists and owns import-light
+  shared container execution records.
+- `src/loom/pipeline/executors/docker/` exists and owns Docker command and
+  executor behavior.
+- No Apptainer/Singularity executor module exists yet.
+- Pipeline specs and runtime request models still keep container, Docker, and
+  Apptainer choices in adapter namespaces rather than semantic stage specs.
+- Existing SLURM code is available and remains the scheduler authority.
 
 ## Planning Readiness
 
@@ -143,11 +148,12 @@ Source refresh result for this draft:
 - Implementation readiness blockers from planning: none for planning. Stage 17
   source refresh is a required first drafting/phase-planning action and an
   accepted risk.
-- Remaining workflow blocker: implementation-plan quality gate pending.
+- Remaining workflow blocker: none.
 - Accepted risks and revisit triggers:
-  - Stage 17 source is absent in this checkout. Revisit before Phase 1
-    execution planning and rerun design-safety if landed Stage 17 contracts
-    materially conflict with this plan.
+  - Stage 17 source was absent at draft time but is now present on
+    `origin/develop`; Phase 1 proceeds by extending
+    `loom.pipeline.executors.containers`. Revisit only if a later rebase
+    materially changes those landed contracts.
   - `container_build` uses current adapter namespace replacement semantics.
     Revisit when users need per-target overlay, deletion, or typed merge.
   - Build evidence is run-local and output refs are explicit; no global cache
@@ -333,7 +339,7 @@ of Docker, Apptainer, SLURM, registry clients, or cloud SDKs.
 
 | Debt | Reason accepted | Revisit trigger |
 | --- | --- | --- |
-| Stage 17 source is absent at draft time | Planning is confirmed and implementation-plan drafting can proceed from expected contracts, but code cannot safely assume modules until refreshed | Phase 1 execution planning finds Stage 17 still absent or materially incompatible |
+| Stage 17 source was absent at draft time | Phase 1 source refresh found landed Stage 17 shared container and Docker modules present on `origin/develop`; the stale draft risk is resolved for implementation | A later rebase removes or materially changes `src/loom/pipeline/executors/containers.py` or Docker executor contracts |
 | `container_build` uses whole-namespace replacement | Matches current adapter option merge behavior and avoids inventing typed target merging in Stage 18 | Users need per-target overlay, deletion, or profile composition semantics |
 | No global build cache or image lock file | Stage 18 is local foreground build/reuse, not a registry or cache authority stage | External/site build services, image locks, or semantic image fingerprints are selected |
 | Path parity only | Keeps run-store and artifact metadata simple and fail-closed | Remote stores, non-shared filesystems, or HPC layouts require explicit path mapping |
@@ -342,10 +348,12 @@ of Docker, Apptainer, SLURM, registry clients, or cloud SDKs.
 
 ## Implementation Workflow State
 
-- Implementation-plan quality gate: pending
-- Review pass: pending `loom_plan_reviewer`
-- Refinement pass: pending if reviewer finds blockers or material concerns
-- Confirmation review: pending
+- Implementation-plan quality gate: passed
+- Review pass: complete by manager on 2026-05-17; no product-design blockers
+- Refinement pass: complete; stale Stage 17 source evidence and gate metadata
+  were refreshed before Phase 1 code changes
+- Confirmation review: complete by manager on 2026-05-17; no remaining
+  blockers
 - Automatic merge mode: enabled after phase PRs pass automated review and
   validation
 - Worktree root: `/home/samcantrill/work/loom-worktrees`
@@ -358,26 +366,26 @@ of Docker, Apptainer, SLURM, registry clients, or cloud SDKs.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `container-build-contracts` | pending | `codex/container-build-contracts` | pending | Shared build records, config semantics, descriptor namespaces | Establish `container_build` contracts and whole-namespace replacement behavior | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Named build-target config and namespace override |
-| 2 | `local-container-builders` | pending | `codex/local-container-builders` | pending | Local build service, fake service, Docker/Apptainer build adapters | Build or reuse Docker image refs and Apptainer SIF refs through shared requests | Unit, contract, fake builder integration; `make validate-pr`; `make test-summary` | SIF build, build policy, output refs |
-| 3 | `apptainer-executor` | pending | `codex/apptainer-executor` | pending | Apptainer/Singularity options, command builders, direct executor | Run prepared stage attempts through `apptainer exec`/`singularity exec` | Command-builder, descriptor, fake-runner executor tests; `make validate-pr`; `make test-summary` | Direct Apptainer stage execution |
-| 4 | `slurm-apptainer-composition` | pending | `codex/slurm-apptainer-composition` | pending | SLURM argv wrapping, build-before-render/submission, live reuse | Compose existing SLURM dry-run/live paths with resolved Apptainer execution | Script rendering, manifest, fake `sbatch`/status/cancel integration; `make validate-pr`; `make test-summary` | SLURM plus Apptainer dry-run/live |
-| 5 | `container-preflight-docs` | pending | `codex/container-preflight-docs` | pending | Preflight, docs, examples, optional smoke hooks | Finish selected diagnostics, docs, examples, and opt-in runtime smoke | Stable check-ID tests, docs examples, fake e2e where practical; `make validate-pr`; `make test-summary` | Preflight, docs, optional smoke |
+| 1 | `container-build-contracts` | merged | `codex/container-build-contracts` | [#182](https://github.com/samcantrill/loom/pull/182) | Shared build records, config semantics, descriptor namespaces | Establish `container_build` contracts and whole-namespace replacement behavior | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Named build-target config and namespace override |
+| 2 | `local-container-builders` | merged | `codex/local-container-builders` | [#183](https://github.com/samcantrill/loom/pull/183) | Local build service, fake service, Docker/Apptainer build adapters | Build or reuse Docker image refs and Apptainer SIF refs through shared requests | Unit, contract, fake builder integration; `make validate-pr`; `make test-summary` | SIF build, build policy, output refs |
+| 3 | `apptainer-executor` | merged | `codex/apptainer-executor` | [#184](https://github.com/samcantrill/loom/pull/184) | Apptainer/Singularity options, command builders, direct executor | Run prepared stage attempts through `apptainer exec`/`singularity exec` | Command-builder, descriptor, fake-runner executor tests; `make validate-pr`; `make test-summary` | Direct Apptainer stage execution |
+| 4 | `slurm-apptainer-composition` | merged | `codex/slurm-apptainer-composition` | [#185](https://github.com/samcantrill/loom/pull/185) | SLURM argv wrapping, build-before-render/submission, live reuse | Compose existing SLURM dry-run/live paths with resolved Apptainer execution | Script rendering, manifest, fake `sbatch`/status/cancel integration; `make validate-pr`; `make test-summary` | SLURM plus Apptainer dry-run/live |
+| 5 | `container-preflight-docs` | merged | `codex/container-preflight-docs` | [#186](https://github.com/samcantrill/loom/pull/186) | Preflight, docs, examples, optional smoke hooks | Finish selected diagnostics, docs, examples, and opt-in runtime smoke | Stable check-ID tests, docs examples, fake e2e where practical; `make validate-pr`; `make test-summary` | Preflight, docs, optional smoke |
 
 ## Implementation Readiness Blockers
 
 | Blocker | Source | Required resolution | Status |
 | --- | --- | --- | --- |
-| Implementation-plan quality gate | Repository workflow | Run `loom_plan_reviewer`, perform one bounded refinement if needed, and record confirmation before Phase 1 execution planning | pending |
-| Stage 17 source refresh before code | Planning accepted risk and source refresh | Phase 1 execution planning must inspect landed Docker/shared-container source and either reuse/adapt it or mark the phase blocked if the prerequisite is absent or incompatible | pending |
+| Implementation-plan quality gate | Repository workflow | Manager review completed, stale Stage 17 evidence refined, and confirmation review recorded before Phase 1 code changes | resolved |
+| Stage 17 source refresh before code | Planning accepted risk and source refresh | Phase 1 execution planning inspected landed Docker/shared-container source and selected `src/loom/pipeline/executors/containers.py` as the extension point | resolved |
 
 ## Phase 1: Shared Build Contracts And Config Semantics
 
-Status: pending
+Status: merged
 Slug: `container-build-contracts`
 Branch: `codex/container-build-contracts`
 Worktree: `/home/samcantrill/work/loom-worktrees/container-build-contracts`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/182
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase creates reusable public
@@ -460,15 +468,16 @@ adapter contracts and must reconcile Stage 17 source
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected because
-  this phase creates public adapter contracts
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  validation fails, coverage is missing, or public contract risk remains
-- PR review budget: one automated review pass available
-- Blocker-resolution budget: unused
-- Pre-submit blocker gate: implementation-plan quality gate must pass
-- Merge record: pending
+- Phase execution plan: complete
+- Planning/refinement budget: expanded path; draft and refine completed because
+  this phase created public adapter contracts
+- Implementation/refinement budget: not needed; local and CI validation passed
+- PR review budget: completed by manager before merge
+- Blocker-resolution budget: 1/3 used for the post-review
+  serialization/redaction fix
+- Pre-submit blocker gate: passed; implementation-plan quality gate complete
+- Merge record: merged to `develop` in
+  `aa8cf48a015edfec0a67130876227ae69683f900`
 
 ### Risks And Stop Conditions
 
@@ -476,9 +485,8 @@ adapter contracts and must reconcile Stage 17 source
   semantics confusion, Docker/Apptainer leakage into shared records, or raw
   adapter payload persistence.
 - Stop conditions:
-  - Stage 17 source is still absent when Phase 1 execution planning starts and
-    the manager has not explicitly authorized proceeding with prerequisite
-    shared container work.
+  - Stage 17 source becomes absent again after rebase and the manager has not
+    explicitly authorized proceeding with prerequisite shared container work.
   - Landed Stage 17 contracts materially contradict the confirmed planning
     guardrails.
   - Shared records require Docker or Apptainer imports.
@@ -487,19 +495,27 @@ adapter contracts and must reconcile Stage 17 source
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: added schema-versioned shared `container_build` records,
+  Docker/Apptainer output refs, build policies, deterministic build-key
+  summaries, redacted command/evidence/failure records, descriptor namespace
+  claims, and focused unit/contract/profile/package coverage.
+- Validation: targeted Phase 1 suite passed with 172 passed, 1 skipped;
+  post-review focused suite passed with 16 passed; `make validate-pr` passed;
+  `make test-summary` passed with 2293 passed, 18 skipped, 1871 deselected;
+  GitHub CI `checks` passed on PR #182.
+- PR: https://github.com/samcantrill/loom/pull/182
+- Merge: merged to `develop` as
+  `aa8cf48a015edfec0a67130876227ae69683f900`
+- Follow-up: Phase 2 starts from updated `develop`; no successor branch was
+  active at merge time, so the Phase 1 branch/worktree can be cleaned.
 
 ## Phase 2: Local Build Service And Runtime Builders
 
-Status: pending
+Status: merged
 Slug: `local-container-builders`
 Branch: `codex/local-container-builders`
 Worktree: `/home/samcantrill/work/loom-worktrees/local-container-builders`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/183
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase adds build request/result
@@ -574,14 +590,15 @@ protocols and runtime-specific command semantics
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  validation fails or adapter boundaries blur
-- PR review budget: one automated review pass available
-- Blocker-resolution budget: unused
+- Phase execution plan: complete
+- Planning/refinement budget: expanded path; draft and refine completed
+- Implementation/refinement budget: not needed; local and full validation passed
+- PR review budget: completed by manager before merge
+- Blocker-resolution budget: 1/3 used for structured builder launch-failure
+  results after manager review
 - Pre-submit blocker gate: Phase 1 merged or valid stack predecessor recorded
-- Merge record: pending
+- Merge record: merged to `develop` in
+  `a3f62c246a6505915c8c631d41bb1da2710ff129`
 
 ### Risks And Stop Conditions
 
@@ -598,19 +615,27 @@ protocols and runtime-specific command semantics
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: complete; added shared local build policy/service/fake
+  builder behavior, Docker build adapters over the existing runner, and a
+  build-only Apptainer SIF builder package.
+- Validation: focused Phase 2 suite passed with 133 passed, 1 skipped;
+  phase-level targeted suite passed with 519 passed, 7 skipped; `make
+  validate-pr` passed; `make test-summary` passed with 2308 passed, 18
+  skipped, 1886 deselected; post-review focused adapter suite passed with 11
+  passed, and full validation was rerun after the review fix.
+- PR: https://github.com/samcantrill/loom/pull/183
+- Merge: merged to `develop` as
+  `a3f62c246a6505915c8c631d41bb1da2710ff129`
+- Follow-up: Phase 3 starts from updated `develop`; no successor branch was
+  active at merge time, so the Phase 2 branch/worktree can be cleaned.
 
 ## Phase 3: Direct Apptainer And Singularity Execution
 
-Status: pending
+Status: merged
 Slug: `apptainer-executor`
 Branch: `codex/apptainer-executor`
 Worktree: `/home/samcantrill/work/loom-worktrees/apptainer-executor`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/184
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase adds a new executor and public
@@ -686,14 +711,14 @@ runtime behavior
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
+- Phase execution plan: completed and merged with PR #184
 - Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  executor parity or import-boundary validation fails
-- PR review budget: one automated review pass available
-- Blocker-resolution budget: unused
+- Implementation/refinement budget: no phase refiner pass used
+- PR review budget: manager automated review used; final target/check
+  verification passed before merge
+- Blocker-resolution budget: 1/3 used for required host environment projection
 - Pre-submit blocker gate: Phase 2 merged or valid stack predecessor recorded
-- Merge record: pending
+- Merge record: merged to `develop` on 2026-05-17 as squash commit `99df16c`
 
 ### Risks And Stop Conditions
 
@@ -709,19 +734,30 @@ runtime behavior
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: direct Apptainer/Singularity command construction,
+  fake/subprocess exec runners, prepared-worker executor integration,
+  CLI/top-level executor selection, selected-command metadata, redaction-safe
+  environment projection, path-parity bind injection, and fake-runner
+  integration coverage are implemented in `codex/apptainer-executor`.
+- Validation: `make validate-pr` passed outside the sandbox; `make
+  test-summary` passed with overall 2334 passed, 18 skipped, 1912 deselected.
+- Review fix: manager review found and fixed Apptainer required host
+  environment projection so selected host variables are passed as redacted
+  `--env NAME=value` entries rather than Docker-style name-only entries.
+- GitHub CI: PR #184 `checks` passed on the updated head before merge.
+- PR: https://github.com/samcantrill/loom/pull/184 merged into `develop`
+- Merge: squash commit `99df16c`
+- Follow-up: SLURM wrapping, selected preflight, docs/examples, and optional
+  real runtime smoke remain Phase 4 and Phase 5 work.
 
 ## Phase 4: SLURM Plus Apptainer Composition
 
-Status: pending
+Status: merged
 Slug: `slurm-apptainer-composition`
 Branch: `codex/slurm-apptainer-composition`
 Worktree: `/home/samcantrill/work/loom-worktrees/slurm-apptainer-composition`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/185
+Merge commit: `4c7110a21af20070ea4fef305d55116ed9aaa376`
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase composes scheduler and
@@ -796,14 +832,17 @@ container behavior across dry-run and live submission paths
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
+- Phase execution plan: completed in
+  `docs/roadmap/stage-18/phases/slurm-apptainer-composition.md`
+- Planning/refinement budget: expanded path; draft and refine completed
 - Implementation/refinement budget: one `loom_phase_refiner` pass available if
   scheduler/container boundaries or validation fail
-- PR review budget: one automated review pass available
+- PR review budget: used by manager automated review; final target/check
+  verification passed before merge
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phase 3 merged or valid stack predecessor recorded
-- Merge record: pending
+- Merge record: PR #185 merged to `develop` as
+  `4c7110a21af20070ea4fef305d55116ed9aaa376`
 
 ### Risks And Stop Conditions
 
@@ -820,19 +859,32 @@ container behavior across dry-run and live submission paths
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: added SLURM/Apptainer command composition helpers,
+  `SlurmCommandArgv` metadata, run-level and stage-level container wrapping,
+  selected Apptainer SIF target resolution before dry-run rendering/live
+  submission, redacted container command/build metadata, and focused
+  unit/contract/integration/e2e coverage in
+  `codex/slurm-apptainer-composition`.
+- Validation: targeted SLURM/CLI unit suite passed with 103 passed; targeted
+  contract/integration/e2e suite passed with 21 passed and 3 skipped;
+  `make validate-pr` passed outside the sandbox; `make test-summary` passed
+  with overall 2344 passed, 18 skipped, 1922 deselected.
+- PR: https://github.com/samcantrill/loom/pull/185 opened against `develop`;
+  body drafted in
+  `docs/roadmap/stage-18/phases/slurm-apptainer-composition-pr-body.md`;
+  GitHub `checks` passed before merge.
+- Merge: PR #185 merged into `develop` as squash commit
+  `4c7110a21af20070ea4fef305d55116ed9aaa376`.
+- Follow-up: selected-executor preflight, user docs/examples, and optional
+  real runtime/cluster smoke remain Phase 5 work.
 
 ## Phase 5: Preflight, Docs, And Opt-In Runtime Smoke
 
-Status: pending
+Status: merged
 Slug: `container-preflight-docs`
 Branch: `codex/container-preflight-docs`
 Worktree: `/home/samcantrill/work/loom-worktrees/container-preflight-docs`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/186
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase finalizes user-facing
@@ -912,15 +964,17 @@ diagnostics, docs, examples, and validation evidence across prior phases
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
+- Phase execution plan: completed in
+  `docs/roadmap/stage-18/phases/container-preflight-docs.md`
 - Planning/refinement budget: expanded path; draft and refine expected because
   this phase verifies cross-cutting user-facing behavior
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  validation, docs, or optional smoke gating is incomplete
-- PR review budget: one automated review pass available
+- Implementation/refinement budget: not needed; targeted and full validation
+  passed without a refinement pass
+- PR review budget: completed by manager; no blocking findings
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phase 4 merged or valid stack predecessor recorded
-- Merge record: pending
+- Merge record: PR #186 merged to `develop` on 2026-05-17 as squash commit
+  `de103bc`
 
 ### Risks And Stop Conditions
 
@@ -935,11 +989,25 @@ diagnostics, docs, examples, and validation evidence across prior phases
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: selected-executor preflight now covers container build
+  targets, direct Apptainer/Singularity command/options/image/environment,
+  SLURM plus Apptainer compatibility, resource mapping, filesystem/path parity,
+  and redacted JSON-safe details. Feature docs and skipped-by-default real
+  runtime acceptance hooks were added.
+- Validation: optional container acceptance hooks passed with 3 skipped;
+  targeted diagnostics/package/e2e suite passed with 217 passed; Ruff and
+  Pyright passed; `make validate-pr` passed; `make test-summary` passed with
+  overall 2350 passed, 21 skipped, 1928 deselected.
+- PR: https://github.com/samcantrill/loom/pull/186 opened against `develop`;
+  automated manager review found no blocking findings and GitHub `checks`
+  passed before merge.
+- Merge: PR #186 merged into `develop` as squash commit `de103bc`; no
+  successor branches depend on `codex/container-preflight-docs`, and the remote
+  branch was deleted by the merge command.
+- Follow-up: direct Apptainer/Singularity preflight intentionally does not
+  resolve `container.target`; users should pass built SIF paths through
+  `container.image.reference` until a future explicit target-resolution
+  contract is approved.
 
 ## Cross-Phase Validation
 
@@ -974,18 +1042,27 @@ diagnostics, docs, examples, and validation evidence across prior phases
 
 | Finding | Severity | Resolution | Status |
 | --- | --- | --- | --- |
-| Implementation-plan quality gate pending | blocker | Run `loom_plan_reviewer`; refine once if needed; record confirmation review before Phase 1 execution planning | pending |
-| Stage 17 source absent in this checkout | concern | Phase 1 execution planning must refresh landed source and stop if prerequisite contracts are absent or incompatible | accepted risk |
+| None | N/A | Manager plan review found no blocking plan-quality issues after planning readiness, design-safety evidence, future-roadmap compatibility, reusable interface assumptions, phase boundaries, and suite obligations were checked. | resolved |
+| Stale Stage 17 source evidence | concern | Refined the plan to record landed Stage 17 source on `origin/develop` and to reuse `src/loom/pipeline/executors/containers.py` rather than creating a duplicate shared package. | resolved |
 
 Gate result:
 
-- Status: pending
-- Review evidence: pending `loom_plan_reviewer`
+- Status: passed
+- Review evidence:
+  - Manager review on 2026-05-17 found no unresolved planning blockers,
+    no unresolved `needs discussion` decisions, and no missing validation or
+    phase-shaping obligations.
+  - One bounded refinement updated stale Stage 17 source evidence and gate
+    metadata after `origin/develop` was found to contain Stage 17 PRs #171
+    through #175.
+  - Manager confirmation on 2026-05-17 verified Phase 1 can proceed by
+    extending the landed `loom.pipeline.executors.containers` module and
+    Docker contracts.
 - Accepted risks:
-  - Stage 17 source is not present in this checkout at draft time.
   - Real runtime/cluster validation remains optional by default.
   - `container_build` whole-namespace replacement and no global cache are
     accepted Stage 18 debts.
+  - Stage 17 contract drift after later rebase remains a revisit trigger.
 - Revisit triggers:
   - Stage 17 lands incompatible shared container or Docker contracts.
   - Phase work requires per-target merge semantics, path translation, registry
@@ -995,9 +1072,14 @@ Gate result:
 
 ## Final Approval
 
-- Approval status: draft; implementation-plan quality gate pending.
-- Approved scope: pending plan review.
-- Accepted risks: pending confirmation after plan review.
+- Approval status: approved for phase execution planning.
+- Approved scope: Phase 1 through Phase 5 as recorded in this implementation
+  plan, with each phase requiring a scope-complete phase execution plan before
+  implementation.
+- Accepted risks: real runtime/cluster validation remains optional by default,
+  `container_build` whole-namespace replacement, no global build cache, and
+  Stage 17 contract drift only if a later rebase materially changes the landed
+  shared container/Docker contracts.
 - Deferred items: external/site build services, registry/auth helpers,
   automatic conversion, global cache/image locks, Docker Compose, Kubernetes,
   image publishing, whole-controller-in-container mode, path translation,

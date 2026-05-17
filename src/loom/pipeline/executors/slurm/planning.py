@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from loom.pipeline.execution import PreparedRunRecord
+from loom.pipeline.executors.apptainer import ApptainerExecOptions
+from loom.pipeline.executors.containers import ContainerBuildResult, ContainerOptions
 from loom.pipeline.planning import ExecutionPlan, PlanAction
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.stores import AuthorityConfig
@@ -15,6 +17,11 @@ from loom.serialization import PlainData
 from loom.timestamps import safe_timestamp_for_path, utc_timestamp
 
 from .artifacts import SlurmDryRunPlanningResult, write_slurm_dry_run_artifacts
+from .container import (
+    container_build_results_metadata,
+    prepare_slurm_container_options,
+    wrap_slurm_command_with_apptainer,
+)
 from .errors import SlurmPlanningError
 from .manifest import (
     SlurmDependencyType,
@@ -43,6 +50,10 @@ from .resources import SlurmSbatchDirective, build_sbatch_directives
 type SlurmResourceInput = ResourceRequest | Mapping[str, ResourceEntry]
 type SlurmStageResourceInputs = Mapping[str, SlurmResourceInput]
 type SlurmStageOptionInputs = Mapping[str, SlurmOptions]
+type SlurmContainerInput = ContainerOptions | Mapping[str, object]
+type SlurmStageContainerInputs = Mapping[str, SlurmContainerInput]
+type SlurmApptainerOptionInput = ApptainerExecOptions | Mapping[str, object]
+type SlurmStageApptainerOptionInputs = Mapping[str, SlurmApptainerOptionInput]
 
 SLURM_DRY_RUN_PLAN_METADATA_SCHEMA_VERSION = 1
 
@@ -53,6 +64,9 @@ def plan_single_job_slurm_dry_run(
     run_uri: str,
     options: SlurmOptions | None = None,
     resources: SlurmResourceInput | None = None,
+    container_options: SlurmContainerInput | None = None,
+    apptainer_options: SlurmApptainerOptionInput | None = None,
+    container_build_results: Sequence[ContainerBuildResult] = (),
     planning_id: str | None = None,
     created_at: str | None = None,
 ) -> SlurmDryRunPlanningResult:
@@ -60,6 +74,11 @@ def plan_single_job_slurm_dry_run(
 
     plan, prepared_run = _read_persisted_state(run_store=run_store, run_uri=run_uri)
     _validate_local_store_paths(run_store)
+    prepared_container = _prepare_container_options(
+        container_options,
+        run_store=run_store,
+        run_uri=run_uri,
+    )
     planned_submission = build_single_job_planned_submission(
         run_uri=run_uri,
         planning_id=_planning_id(planning_id, mode=SlurmMode.SINGLE_JOB),
@@ -67,6 +86,8 @@ def plan_single_job_slurm_dry_run(
         options=options or SlurmOptions(),
         resources=resources,
         authority_config=_authority_config_from_run_store(run_store),
+        container_options=prepared_container,
+        apptainer_options=apptainer_options,
     )
     jobs = cast(tuple[SlurmPlannedJob, ...], planned_submission.jobs)
     scripts = {
@@ -80,6 +101,7 @@ def plan_single_job_slurm_dry_run(
         submission=planned_submission,
         plan=plan,
         prepared_run=prepared_run,
+        container_build_results=container_build_results,
     )
     return write_slurm_dry_run_artifacts(
         store_paths=cast(LocalRunStorePaths, run_store),
@@ -97,6 +119,11 @@ def plan_afterok_slurm_dry_run(
     options: SlurmOptions | None = None,
     stage_options: SlurmStageOptionInputs | None = None,
     stage_resources: SlurmStageResourceInputs | None = None,
+    container_options: SlurmContainerInput | None = None,
+    stage_container_options: SlurmStageContainerInputs | None = None,
+    apptainer_options: SlurmApptainerOptionInput | None = None,
+    stage_apptainer_options: SlurmStageApptainerOptionInputs | None = None,
+    container_build_results: Sequence[ContainerBuildResult] = (),
     planning_id: str | None = None,
     created_at: str | None = None,
 ) -> SlurmDryRunPlanningResult:
@@ -104,6 +131,16 @@ def plan_afterok_slurm_dry_run(
 
     plan, prepared_run = _read_persisted_state(run_store=run_store, run_uri=run_uri)
     _validate_local_store_paths(run_store)
+    prepared_container = _prepare_container_options(
+        container_options,
+        run_store=run_store,
+        run_uri=run_uri,
+    )
+    prepared_stage_containers = _prepare_stage_container_options(
+        stage_container_options,
+        run_store=run_store,
+        run_uri=run_uri,
+    )
     planned_submission = build_afterok_planned_submission(
         run_uri=run_uri,
         execution_plan=plan,
@@ -113,6 +150,10 @@ def plan_afterok_slurm_dry_run(
         stage_options=stage_options,
         stage_resources=stage_resources,
         authority_config=_authority_config_from_run_store(run_store),
+        container_options=prepared_container,
+        stage_container_options=prepared_stage_containers,
+        apptainer_options=apptainer_options,
+        stage_apptainer_options=stage_apptainer_options,
     )
     jobs = cast(tuple[SlurmPlannedJob, ...], planned_submission.jobs)
     scripts = {
@@ -130,6 +171,7 @@ def plan_afterok_slurm_dry_run(
         submission=planned_submission,
         plan=plan,
         prepared_run=prepared_run,
+        container_build_results=container_build_results,
     )
     return write_slurm_dry_run_artifacts(
         store_paths=cast(LocalRunStorePaths, run_store),
@@ -148,6 +190,8 @@ def build_single_job_planned_submission(
     options: SlurmOptions,
     resources: SlurmResourceInput | None = None,
     authority_config: AuthorityConfig | None = None,
+    container_options: SlurmContainerInput | None = None,
+    apptainer_options: SlurmApptainerOptionInput | None = None,
 ) -> SlurmPlannedSubmission:
     """Build a deterministic single-job dry-run manifest in memory."""
 
@@ -156,6 +200,11 @@ def build_single_job_planned_submission(
         run_uri,
         launcher_argv=options.launcher_argv,
         authority_config=authority_config,
+    )
+    command = _maybe_wrap_command(
+        command,
+        container_options=container_options,
+        apptainer_options=apptainer_options,
     )
     manifest_relative_path = slurm_manifest_relative_path(planning_id)
     job = _build_job(
@@ -194,6 +243,10 @@ def build_afterok_planned_submission(
     stage_options: SlurmStageOptionInputs | None = None,
     stage_resources: SlurmStageResourceInputs | None = None,
     authority_config: AuthorityConfig | None = None,
+    container_options: SlurmContainerInput | None = None,
+    stage_container_options: SlurmStageContainerInputs | None = None,
+    apptainer_options: SlurmApptainerOptionInput | None = None,
+    stage_apptainer_options: SlurmStageApptainerOptionInputs | None = None,
 ) -> SlurmPlannedSubmission:
     """Build a deterministic afterok dry-run manifest in memory."""
 
@@ -229,6 +282,19 @@ def build_afterok_planned_submission(
             stage_plan.stage_name,
             launcher_argv=job_options.launcher_argv,
             authority_config=authority_config,
+        )
+        command = _maybe_wrap_command(
+            command,
+            container_options=_stage_container_options(
+                stage_plan.stage_name,
+                stage_container_options,
+                fallback=container_options,
+            ),
+            apptainer_options=_stage_apptainer_options(
+                stage_plan.stage_name,
+                stage_apptainer_options,
+                fallback=apptainer_options,
+            ),
         )
         resources = _stage_resources(stage_plan.stage_name, stage_resources)
         jobs.append(
@@ -274,10 +340,11 @@ def build_slurm_plan_metadata(
     submission: SlurmPlannedSubmission,
     plan: ExecutionPlan,
     prepared_run: PreparedRunRecord,
+    container_build_results: Sequence[ContainerBuildResult] = (),
 ) -> dict[str, PlainData]:
     """Build secret-safe dry-run planning metadata from public state."""
 
-    return {
+    metadata: dict[str, PlainData] = {
         "schema_version": SLURM_DRY_RUN_PLAN_METADATA_SCHEMA_VERSION,
         "kind": "loom.slurm_dry_run_plan",
         "run_uri": submission.run_uri,
@@ -320,6 +387,11 @@ def build_slurm_plan_metadata(
         ],
         "manifest_relative_path": submission.manifest_relative_path,
     }
+    if container_build_results:
+        metadata["container_build_results"] = [
+            dict(item) for item in container_build_results_metadata(container_build_results)
+        ]
+    return metadata
 
 
 def _build_job(
@@ -436,6 +508,78 @@ def _stage_resources(
         return None
     logical_key = stage_job_key(stage_name)
     return stage_resources.get(stage_name) or stage_resources.get(logical_key)
+
+
+def _prepare_container_options(
+    container_options: SlurmContainerInput | None,
+    *,
+    run_store: RunStore,
+    run_uri: str,
+) -> ContainerOptions | None:
+    if container_options is None:
+        return None
+    return prepare_slurm_container_options(
+        container_options,
+        run_store=run_store,
+        run_uri=run_uri,
+    )
+
+
+def _prepare_stage_container_options(
+    stage_container_options: SlurmStageContainerInputs | None,
+    *,
+    run_store: RunStore,
+    run_uri: str,
+) -> Mapping[str, ContainerOptions]:
+    if stage_container_options is None:
+        return {}
+    return {
+        stage_name: prepare_slurm_container_options(
+            container,
+            run_store=run_store,
+            run_uri=run_uri,
+        )
+        for stage_name, container in stage_container_options.items()
+    }
+
+
+def _stage_container_options(
+    stage_name: str,
+    stage_container_options: SlurmStageContainerInputs | Mapping[str, ContainerOptions] | None,
+    *,
+    fallback: SlurmContainerInput | None,
+) -> SlurmContainerInput | None:
+    if stage_container_options is None:
+        return fallback
+    logical_key = stage_job_key(stage_name)
+    return stage_container_options.get(stage_name) or stage_container_options.get(logical_key) or fallback
+
+
+def _stage_apptainer_options(
+    stage_name: str,
+    stage_apptainer_options: SlurmStageApptainerOptionInputs | None,
+    *,
+    fallback: SlurmApptainerOptionInput | None,
+) -> SlurmApptainerOptionInput | None:
+    if stage_apptainer_options is None:
+        return fallback
+    logical_key = stage_job_key(stage_name)
+    return stage_apptainer_options.get(stage_name) or stage_apptainer_options.get(logical_key) or fallback
+
+
+def _maybe_wrap_command(
+    command: SlurmCommandArgv,
+    *,
+    container_options: SlurmContainerInput | None,
+    apptainer_options: SlurmApptainerOptionInput | None,
+) -> SlurmCommandArgv:
+    if container_options is None:
+        return command
+    return wrap_slurm_command_with_apptainer(
+        command,
+        container_options=container_options,
+        apptainer_options=apptainer_options,
+    )
 
 
 def _stage_options(

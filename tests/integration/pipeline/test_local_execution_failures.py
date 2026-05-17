@@ -10,6 +10,7 @@ from loom.pipeline.execution.authority_adapter import (
     AuthorityBackedSerialRunStore,
 )
 from loom.pipeline.planning import PlanAction, PlanSelectors
+from loom.pipeline.reliability import StageAttemptTransactionState
 from loom.pipeline.status import RunStatus, StageStatus, StageStatusRecord
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 from loom.pipeline.stores.errors import CorruptStoreDocumentError
@@ -72,6 +73,34 @@ def _failure_config(target: str) -> dict[str, PlainData]:
     )
 
 
+def _retry_once_config(marker_path: Path) -> dict[str, PlainData]:
+    return cast(
+        dict[str, PlainData],
+        {
+            "runtime": {
+                "reliability": {
+                    "retry": {"enabled": True, "max_attempts": 2},
+                }
+            },
+            "pipeline": {
+                "name": "retry-demo",
+                "stages": [
+                    {
+                        "name": "build",
+                        "factory": {
+                            "_target_": "tests.support.pipeline_execution_stages.FailOnceThenProduceStage"
+                        },
+                        "config": {"marker_path": str(marker_path)},
+                        "outputs": {
+                            "data": {"artifact_type": "json", "codec_key": "json.v1"}
+                        },
+                    }
+                ],
+            },
+        },
+    )
+
+
 def _run_uri(tmp_path: Path, name: str = "run1") -> str:
     return path_to_run_uri(tmp_path / "runs" / name)
 
@@ -112,6 +141,19 @@ def test_stage_exception_persists_failure_before_failed_status(tmp_path: Path) -
     assert status is not None
     assert blocked_status is not None
     assert failure["failure_type"] == "stage_exception"
+    details = failure["details"]
+    assert isinstance(details, dict)
+    classification = details["reliability_classification"]
+    assert isinstance(classification, dict)
+    assert classification["reason_code"] == "stage_exception"
+    assert classification["retriable"] is True
+    transactions = run_store.list_stage_attempt_transactions(
+        run_uri,
+        stage_name="build",
+    )
+    assert StageAttemptTransactionState.FAILED in {
+        transaction.state for transaction in transactions
+    }
     assert status.status == StageStatus.FAILED
     assert blocked_status.status == StageStatus.BLOCKED
     assert blocked_status.metadata["blocked_by"] == ["build"]
@@ -128,6 +170,30 @@ def test_stage_exception_persists_failure_before_failed_status(tmp_path: Path) -
         for event in run_store.read_events(run_uri)
     )
     assert run_store.read_events(run_uri)[-1].event_type == "run.failed"
+
+
+def test_retry_policy_retries_safe_failed_stage(tmp_path: Path) -> None:
+    run_store = _run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(
+            config=_retry_once_config(tmp_path / "retry-marker"),
+            run_uri=run_uri,
+        )
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert result.stage_results["build"].status == StageStatus.SUCCEEDED
+    assert result.stage_results["build"].attempt == 2
+    decisions = run_store.list_retry_decisions(run_uri, stage_name="build")
+    assert len(decisions) == 1
+    assert decisions[0].decision_reason == "retry.allowed"
+    assert decisions[0].should_retry is True
+    assert decisions[0].next_attempt == 2
+    status = run_store.read_stage_status(run_uri, "build")
+    assert status is not None
+    assert status.status == StageStatus.SUCCEEDED
+    assert status.attempt == 2
 
 
 def test_invalid_outputs_fail_with_inspectable_state(tmp_path: Path) -> None:

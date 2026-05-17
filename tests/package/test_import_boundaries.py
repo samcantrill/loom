@@ -164,6 +164,73 @@ def test_import_pipeline_does_not_import_forbidden_runtime_layers() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_docker_command_contracts_do_not_import_runtime_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.executors.docker as docker
+
+        assert docker.DockerRunCommand
+        for forbidden in (
+            "docker",
+            "subprocess",
+            "loom.cli",
+            "loom.config",
+            "loom.diagnostics",
+            "loom.pipeline.execution",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} imported through Docker commands")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_import_apptainer_command_contracts_do_not_import_runtime_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.executors.apptainer as apptainer
+
+        assert apptainer.ApptainerExecCommand
+        for forbidden in (
+            "subprocess",
+            "loom.cli",
+            "loom.config",
+            "loom.diagnostics",
+            "loom.pipeline.execution",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} imported through Apptainer commands")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_authority_root_does_not_import_fastapi() -> None:
     script = dedent(
         """
@@ -402,9 +469,55 @@ def test_stage_16_default_preflight_avoids_backend_discovery_and_sdks() -> None:
     assert result.stdout.strip() == "ok"
 
 
-def test_stage_15_bundle_inspect_preserves_metadata_without_backend_imports() -> (
-    None
-):
+def test_default_executor_preflight_does_not_import_docker_modules() -> None:
+    script = dedent(
+        """
+        import sys
+        from types import ModuleType
+
+        from loom.diagnostics import PreflightCheckStatus, PreflightRequest, run_preflight
+
+        class FakeComposedConfig:
+            resolved = {"pipeline": {}}
+            source_artifacts = ()
+
+        config_package = ModuleType("loom.config")
+        config_api = ModuleType("loom.config.api")
+        config_api.compose_config = lambda *_args, **_kwargs: FakeComposedConfig()
+        config_package.api = config_api
+        sys.modules["loom.config"] = config_package
+        sys.modules["loom.config.api"] = config_api
+
+        result = run_preflight(
+            PreflightRequest(
+                config_path="pipeline.yaml",
+                groups=("executor",),
+                runtime_options={"executor": "local"},
+            )
+        )
+        by_id = {check.check_id: check for check in result.checks}
+        assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
+
+        for forbidden in (
+            "loom.pipeline.executors.containers",
+            "loom.pipeline.executors.docker",
+            "loom.pipeline.executors.docker.commands",
+            "loom.pipeline.executors.docker.executor",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported by default executor preflight")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_stage_15_bundle_inspect_preserves_metadata_without_backend_imports() -> None:
     script = dedent(
         """
         import io
@@ -1032,6 +1145,19 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "RuntimeRequest",
             "StageEnvironmentRequest",
             "StageRuntimeOptions",
+            "FailureClassification",
+            "ReliabilityPolicy",
+            "ReliabilityStatusDetail",
+            "RetryDecisionRecord",
+            "RetryPolicy",
+            "RetryEvaluator",
+            "StageAttemptTransaction",
+            "StageAttemptTransactionState",
+            "TimeoutAdapter",
+            "TimeoutOutcome",
+            "TimeoutOutcomeRecord",
+            "TimeoutPolicy",
+            "TimeoutSupportLevel",
             "build_runtime_metadata",
             "merge_config_run_options",
             "merge_run_options",
@@ -1082,6 +1208,38 @@ def test_import_executors_does_not_import_project_layers() -> None:
         for forbidden in ("loom.config", "loom.pipeline.planning", "loom.cli", "project"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.pipeline.executors")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_import_container_records_does_not_import_execution_or_docker_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.executors.containers
+
+        for forbidden in (
+            "loom.cli",
+            "loom.config",
+            "loom.diagnostics",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors.docker",
+            "docker",
+            "subprocess",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through container records")
         print("ok")
         """
     )

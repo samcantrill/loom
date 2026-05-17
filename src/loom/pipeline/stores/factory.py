@@ -6,6 +6,12 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.reliability import (
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData
@@ -35,6 +41,7 @@ from .read_models import (
     LeaseRecord,
     LifecycleReason,
     RecoveryRecord,
+    ReliabilityPolicyFact,
     StageLifecycleSnapshot,
 )
 from .schema_policy import AuthoritySchemaCheck
@@ -227,6 +234,79 @@ class _PerRunAuthorityRunStore:
     ) -> tuple[SubmittedOperationRecord, ...]:
         return self._authority_store.list_submitted_operations(run_uri)
 
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> BackendRevision:
+        return self._authority_store.write_reliability_policy_fact(run_uri, fact)
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]:
+        return self._authority_store.list_reliability_policy_facts(
+            run_uri,
+            stage_name=stage_name,
+        )
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> BackendRevision:
+        return self._authority_store.write_reliability_status_detail(run_uri, detail)
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]:
+        return self._authority_store.list_reliability_status_details(
+            run_uri,
+            stage_name=stage_name,
+        )
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> BackendRevision:
+        return self._authority_store.write_stage_attempt_transaction(
+            run_uri,
+            transaction,
+        )
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return self._authority_store.read_transaction_chain(run_uri, transaction_id)
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return self._authority_store.list_stage_attempt_transactions(
+            run_uri,
+            stage_name=stage_name,
+        )
+
+    def write_retry_decision(
+        self, run_uri: str, decision: RetryDecisionRecord
+    ) -> BackendRevision:
+        return self._authority_store.write_retry_decision(run_uri, decision)
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]:
+        return self._authority_store.list_retry_decisions(
+            run_uri,
+            stage_name=stage_name,
+        )
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> BackendRevision:
+        return self._authority_store.write_timeout_outcome(run_uri, outcome)
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]:
+        return self._authority_store.list_timeout_outcomes(
+            run_uri,
+            stage_name=stage_name,
+        )
+
     def stage_store(self, run_uri: str, stage_name: str) -> StageStore:
         _non_empty(run_uri, "run_uri")
         _non_empty(stage_name, "stage_name")
@@ -349,6 +429,92 @@ class _PerRunAuthorityStageStore:
 
     def list_submitted_operations(self) -> tuple[SubmittedOperationRecord, ...]:
         return self._authority_store.list_submitted_operations(self._run_uri)
+
+    def write_reliability_policy_fact(
+        self, fact: ReliabilityPolicyFact
+    ) -> BackendRevision:
+        if fact.stage_name not in {None, self._stage_name}:
+            raise AuthorityStoreError("reliability policy fact stage_name mismatch")
+        return self._authority_store.write_reliability_policy_fact(
+            self._run_uri,
+            fact,
+        )
+
+    def list_reliability_policy_facts(self) -> tuple[ReliabilityPolicyFact, ...]:
+        return self._authority_store.list_reliability_policy_facts(
+            self._run_uri,
+            stage_name=self._stage_name,
+        )
+
+    def write_reliability_status_detail(
+        self, detail: ReliabilityStatusDetail
+    ) -> BackendRevision:
+        if detail.stage_id != self._stage_name:
+            raise AuthorityStoreError("reliability status detail stage_id mismatch")
+        return self._authority_store.write_reliability_status_detail(
+            self._run_uri,
+            detail,
+        )
+
+    def list_reliability_status_details(
+        self,
+    ) -> tuple[ReliabilityStatusDetail, ...]:
+        return self._authority_store.list_reliability_status_details(
+            self._run_uri,
+            stage_name=self._stage_name,
+        )
+
+    def write_stage_attempt_transaction(
+        self, transaction: StageAttemptTransaction
+    ) -> BackendRevision:
+        if transaction.stage_id != self._stage_name:
+            raise AuthorityStoreError("reliability transaction stage_id mismatch")
+        return self._authority_store.write_stage_attempt_transaction(
+            self._run_uri,
+            transaction,
+        )
+
+    def read_transaction_chain(
+        self, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return self._authority_store.read_transaction_chain(
+            self._run_uri,
+            transaction_id,
+        )
+
+    def list_stage_attempt_transactions(
+        self,
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return self._authority_store.list_stage_attempt_transactions(
+            self._run_uri,
+            stage_name=self._stage_name,
+        )
+
+    def write_retry_decision(
+        self, decision: RetryDecisionRecord
+    ) -> BackendRevision:
+        if decision.status.stage_id != self._stage_name:
+            raise AuthorityStoreError("retry decision stage_id mismatch")
+        return self._authority_store.write_retry_decision(self._run_uri, decision)
+
+    def list_retry_decisions(self) -> tuple[RetryDecisionRecord, ...]:
+        return self._authority_store.list_retry_decisions(
+            self._run_uri,
+            stage_name=self._stage_name,
+        )
+
+    def write_timeout_outcome(
+        self, outcome: TimeoutOutcomeRecord
+    ) -> BackendRevision:
+        if outcome.status.stage_id != self._stage_name:
+            raise AuthorityStoreError("timeout outcome stage_id mismatch")
+        return self._authority_store.write_timeout_outcome(self._run_uri, outcome)
+
+    def list_timeout_outcomes(self) -> tuple[TimeoutOutcomeRecord, ...]:
+        return self._authority_store.list_timeout_outcomes(
+            self._run_uri,
+            stage_name=self._stage_name,
+        )
 
     def record_output_commit(
         self,

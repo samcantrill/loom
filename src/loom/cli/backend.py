@@ -168,9 +168,7 @@ def _backend_error(error: object) -> CliError:
     to_dict = getattr(error, "to_dict", None)
     payload = to_dict() if callable(to_dict) else {}
     context = payload.get("context", {}) if isinstance(payload, Mapping) else {}
-    diagnostics = (
-        payload.get("diagnostics", ()) if isinstance(payload, Mapping) else ()
-    )
+    diagnostics = payload.get("diagnostics", ()) if isinstance(payload, Mapping) else ()
     if not isinstance(context, Mapping):
         context = {}
     return CliError(
@@ -187,10 +185,7 @@ def _format_inspect_text(result: "BackendInspectionResult") -> str:
         f"backend inspect {result.run_uri}: {result.status}",
         f"backend: {result.backend_name}",
         f"source: {_source_label(result.state_source)}",
-        (
-            "revision: "
-            f"{result.revision.get('sequence')}:{result.revision.get('token')}"
-        ),
+        (f"revision: {result.revision.get('sequence')}:{result.revision.get('token')}"),
         (
             "counts: "
             f"stages={counts.get('stages', 0)} "
@@ -198,6 +193,14 @@ def _format_inspect_text(result: "BackendInspectionResult") -> str:
             f"leases={counts.get('active_leases', 0)} "
             f"commits={counts.get('commits', 0)} "
             f"artifacts={counts.get('artifact_facts', 0)}"
+        ),
+        (
+            "reliability: "
+            f"policies={counts.get('reliability_policy_facts', 0)} "
+            f"status_details={counts.get('reliability_status_details', 0)} "
+            f"transactions={counts.get('reliability_transactions', 0)} "
+            f"retries={counts.get('retry_decisions', 0)} "
+            f"timeouts={counts.get('timeout_outcomes', 0)}"
         ),
     ]
     for stage in result.stages:
@@ -207,13 +210,24 @@ def _format_inspect_text(result: "BackendInspectionResult") -> str:
             f"attempts={stage.get('attempt_count', 0)} "
             f"artifacts={stage.get('artifact_count', 0)}"
         )
+        reliability = _stage_reliability_counts(stage)
+        if any(reliability.values()):
+            lines.append(
+                "  reliability: "
+                f"policies={reliability['policies']} "
+                f"status_details={reliability['status_details']} "
+                f"transactions={reliability['transactions']} "
+                f"retries={reliability['retries']} "
+                f"timeouts={reliability['timeouts']}"
+            )
     _extend_warning_lines(lines, result.warnings)
     return "\n".join(lines)
 
 
 def _format_capabilities_text(result: "BackendCapabilitiesResult") -> str:
     supported = sum(
-        1 for capability in result.capabilities
+        1
+        for capability in result.capabilities
         if capability.get("support") == "supported"
     )
     lines = [
@@ -274,6 +288,21 @@ def _warning_envelope(
         }
         for warning in warnings
     )
+
+
+def _stage_reliability_counts(stage: Mapping[str, object]) -> dict[str, int]:
+    return {
+        "policies": _mapping_int(stage, "reliability_policy_count"),
+        "status_details": _mapping_int(stage, "reliability_status_detail_count"),
+        "transactions": _mapping_int(stage, "reliability_transaction_count"),
+        "retries": _mapping_int(stage, "retry_decision_count"),
+        "timeouts": _mapping_int(stage, "timeout_outcome_count"),
+    }
+
+
+def _mapping_int(mapping: Mapping[str, object], key: str) -> int:
+    value = mapping.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 __all__ = [

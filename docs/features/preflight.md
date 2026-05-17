@@ -196,6 +196,7 @@ exact-stage runtime options target known stage IDs
 executor name is known
 executor capability diagnostics can be reported
 resource capability diagnostics can be reported
+reliability retry and timeout capability diagnostics can be reported
 resume, dry-run, selector, tag, and note options are normalized
 ```
 
@@ -309,6 +310,18 @@ launching user stage code. Missing Python or worker command availability is
 reported as selected-executor availability failure, distinct from an unknown
 executor name.
 
+Reliability timeout checks are capability diagnostics, not process probes. A
+selected timeout policy reports whether the executor support level is
+`enforced`, `delegated`, `observed`, or `unsupported`. Subprocess timeout
+support is reported as enforced; local in-process timeout support is reported
+as unsupported. Enabled retry policy is reported as runner-owned runtime
+behavior because executors still run one attempt at a time while the controller
+persists retry decisions before scheduling another attempt.
+
+After execution, unsupported timeout facts are also visible through read-only
+status/backend inspection as timeout outcomes. Preflight remains the place to
+explain capability support before a run starts.
+
 ## SLURM Checks
 
 For SLURM runs, preflight checks:
@@ -365,6 +378,66 @@ required environment variables are available
 
 Preflight should not pull large images by default. Image existence checks should
 be explicit because they may require network access.
+
+Implemented Stage 17 Docker checks run only when Docker is the selected
+executor. Stable Docker check IDs are:
+
+```text
+executor.docker.command
+executor.docker.container_options
+executor.docker.image
+executor.docker.environment
+filesystem.docker.mount_sources
+filesystem.docker.mount_targets
+filesystem.docker.run_dir_writable
+filesystem.docker.artifact_root_visible
+resources.docker.mapping
+resources.docker.gpu
+```
+
+These checks are daemon-free by default. They verify `docker` command presence
+on `PATH`, parse the `container` and `docker` adapter namespaces, check image
+reference presence, summarize required host environment variable names, inspect
+authored mount source paths, verify Stage 17 path-parity targets, and report
+CPU/memory or unsupported GPU resource mapping. They do not run
+`docker version`, inspect images, pull images, contact registries, or read raw
+environment values.
+
+Stage 18 adds cheap selected checks for shared build targets,
+Apptainer/Singularity execution, and SLURM plus Apptainer composition.
+
+Stable container build and Apptainer check IDs include:
+
+```text
+runtime.container_build.options
+executor.container_build.targets
+executor.apptainer.command
+executor.apptainer.container_options
+executor.apptainer.image
+executor.apptainer.environment
+resources.apptainer.mapping
+resources.apptainer.gpu
+resources.slurm.container_compatibility
+filesystem.container_build.sources
+filesystem.container_build.outputs
+filesystem.apptainer.bind_sources
+filesystem.apptainer.bind_targets
+filesystem.apptainer.run_dir_writable
+filesystem.apptainer.artifact_root_visible
+```
+
+These checks parse `container_build`, `container`, `apptainer`, `singularity`,
+and `slurm` adapter namespaces, verify required local paths where statically
+knowable, summarize build target output refs and policies, and inspect command
+availability through `PATH`. They do not run `docker`, `apptainer`,
+`singularity`, or `sbatch` beyond command lookup; they do not build SIF files,
+pull images, contact registries, submit scheduler jobs, read raw environment
+values, or probe fakeroot.
+
+`executor.apptainer.command` fails for direct Apptainer/Singularity execution
+when the selected command is missing. For SLURM dry-run plus Apptainer it warns
+instead, matching the dry-run behavior for missing `sbatch`. Live SLURM plus
+Apptainer treats missing runtime or scheduler commands as run-time blockers.
 
 ## Plugin Checks
 
