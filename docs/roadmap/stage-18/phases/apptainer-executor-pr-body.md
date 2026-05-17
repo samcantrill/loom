@@ -18,6 +18,7 @@ New Apptainer behavior:
 
 - `loom.pipeline.executors.apptainer.commands` owns `ApptainerExecOptions`, `ApptainerExecCommand`, fake/subprocess exec runners, version-command construction, and deterministic `exec` argv construction.
 - `loom.pipeline.executors.apptainer.executor` owns `ApptainerExecutor` and `SingularityExecutor`, mirroring Docker/subprocess prepared-worker result handling.
+- Required host environment variables are resolved into Apptainer-compatible `--env NAME=value` entries and are redacted in persisted argv/metadata.
 - `loom run --executor apptainer` and `loom run --executor singularity` now select the new direct executors.
 
 New tests implemented:
@@ -35,6 +36,7 @@ New tests implemented:
 | Integration slice | Passed | 2 passed outside sandbox; sandbox blocks local authority socket creation |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed |
 | `make test-summary` | Passed | Overall 2334 passed, 18 skipped, 1912 deselected |
+| Post-review focused validation | Passed | Apptainer unit suite: 28 passed; targeted Ruff/Pyright passed |
 | GitHub checks | Pending | To be recorded after PR creation |
 
 ### Test Suite Summary

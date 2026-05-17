@@ -703,10 +703,10 @@ runtime behavior
 
 - Phase execution plan: pending
 - Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  executor parity or import-boundary validation fails
-- PR review budget: one automated review pass available
-- Blocker-resolution budget: unused
+- Implementation/refinement budget: no phase refiner pass used
+- PR review budget: manager automated review used; final target/check
+  verification remains before merge
+- Blocker-resolution budget: 1/3 used for required host environment projection
 - Pre-submit blocker gate: Phase 2 merged or valid stack predecessor recorded
 - Merge record: pending
 
@@ -731,6 +731,9 @@ runtime behavior
   integration coverage are implemented in `codex/apptainer-executor`.
 - Validation: `make validate-pr` passed outside the sandbox; `make
   test-summary` passed with overall 2334 passed, 18 skipped, 1912 deselected.
+- Review fix: manager review found and fixed Apptainer required host
+  environment projection so selected host variables are passed as redacted
+  `--env NAME=value` entries rather than Docker-style name-only entries.
 - PR: https://github.com/samcantrill/loom/pull/184 opened against `develop`
 - Merge: pending
 - Follow-up: SLURM wrapping, selected preflight, docs/examples, and optional

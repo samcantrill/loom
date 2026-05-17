@@ -166,8 +166,9 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: unused
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used by manager automated review; final target/check verification
+  remains before merge
+- Blocker resolution: 1/3 used for required host environment projection
 
 ## Completion Notes
 
@@ -204,6 +205,16 @@ make test-summary
 - Refinement summary: no phase refiner pass used; the only validation issue was
   a pytest module-name collision fixed by renaming new Apptainer unit test
   files to unique basenames.
+- Manager review summary: required host environment variables were initially
+  projected as Docker-style name-only entries; fixed Apptainer projection to
+  resolve selected host values into redacted `--env NAME=value` argv entries
+  and fail setup when a required host variable is absent.
+- Post-review validation:
+  - Focused Apptainer unit suite passed:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/apptainer -q`:
+    28 passed.
+  - Targeted Ruff passed for touched implementation and test files.
+  - Targeted Pyright passed for touched implementation and test files.
 - PR preparation: PR #184 opened against `develop` with body drafted in
   `docs/roadmap/stage-18/phases/apptainer-executor-pr-body.md`.
 - Stack maintenance: root phase from `develop`
