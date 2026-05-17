@@ -156,7 +156,9 @@ make test-summary
 ## Budget Status
 
 - Phase implementation refinement: unused
-- PR review: unused
+- PR review: used by manager local review on 2026-05-17; no blocking findings
+  found, scope confirmed limited to Phase 3 runtime dispatch, request
+  plumbing, tests, and phase artifacts
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
