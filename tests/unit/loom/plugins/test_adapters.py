@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from types import ModuleType
 
 import importlib
@@ -10,14 +11,22 @@ import pytest
 
 from loom.config.recipes import RecipeCatalog
 from loom.io.codecs import CodecRegistry
+from loom.pipeline.event_sinks import (
+    EventObserverLinkRecord,
+    EventSinkContext,
+    EventSinkRegistry,
+)
+from loom.pipeline.events import EventReference, PipelineEventRecord
 from loom.plugins import (
     LOOM_CODECS_GROUP,
+    LOOM_EVENT_SINKS_GROUP,
     LOOM_RECIPES_GROUP,
     PluginDuplicateError,
     PluginLoadError,
     PluginRecord,
     PluginRegistrationError,
     load_codec_entry_points,
+    load_event_sink_entry_points,
     load_recipe_entry_points,
 )
 
@@ -59,6 +68,27 @@ class _FactoryCodec(_ClassCodec):
 
 def _instance_codec_factory() -> _FactoryCodec:
     return _FactoryCodec("factory")
+
+
+@dataclass(slots=True)
+class _SinkContext:
+    run_uri: str
+    event_reference: EventReference
+    links: list[EventObserverLinkRecord] = field(default_factory=list)
+
+    def record_event_observer_link(self, link: EventObserverLinkRecord) -> None:
+        self.links.append(link)
+
+
+def _event_reference() -> EventReference:
+    return EventReference(
+        event_id="event-1",
+        run_uri="run://event-sink-plugin-test",
+        event_type="run.started",
+        occurred_at="2020-01-01T00:00:00Z",
+        durability="durable",
+        sequence=1,
+    )
 
 
 def test_load_recipe_entry_points_registers_selected_names_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -320,5 +350,180 @@ def test_load_codec_entry_points_rejects_duplicate_runtime_keys(monkeypatch: pyt
             records=(duplicate_record_a, duplicate_record_b),
             registry=CodecRegistry(),
             selected=(duplicate_record_a, duplicate_record_b),
+            strict=True,
+        )
+
+
+def test_load_event_sink_entry_points_supports_callable_class_and_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = EventSinkRegistry()
+    calls: list[str] = []
+
+    def function_sink(
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
+    ) -> None:
+        del event, context
+        calls.append("function")
+
+    class _ClassSink:
+        def __call__(
+            self,
+            event: PipelineEventRecord | EventReference,
+            context: EventSinkContext,
+        ) -> None:
+            del event, context
+            calls.append("class")
+
+    def sink_factory() -> object:
+        def factory_sink(
+            event: PipelineEventRecord | EventReference,
+            context: EventSinkContext,
+        ) -> None:
+            del event, context
+            calls.append("factory")
+
+        return factory_sink
+
+    records = (
+        PluginRecord(
+            group=LOOM_EVENT_SINKS_GROUP,
+            name="function",
+            value="loom.plugins._event_sink_function:sink",
+        ),
+        PluginRecord(
+            group=LOOM_EVENT_SINKS_GROUP,
+            name="class",
+            value="loom.plugins._event_sink_class:sink",
+        ),
+        PluginRecord(
+            group=LOOM_EVENT_SINKS_GROUP,
+            name="factory",
+            value="loom.plugins._event_sink_factory:sink",
+        ),
+    )
+    modules = {
+        "loom.plugins._event_sink_function": _module_with_attrs(
+            "loom.plugins._event_sink_function",
+            {"sink": function_sink},
+        ),
+        "loom.plugins._event_sink_class": _module_with_attrs(
+            "loom.plugins._event_sink_class",
+            {"sink": _ClassSink},
+        ),
+        "loom.plugins._event_sink_factory": _module_with_attrs(
+            "loom.plugins._event_sink_factory",
+            {"sink": sink_factory},
+        ),
+    }
+
+    def import_module(name: str, package: str | None = None) -> ModuleType:
+        del package
+        return modules[name]
+
+    monkeypatch.setattr(importlib, "import_module", import_module)
+
+    result = load_event_sink_entry_points(
+        records,
+        registry,
+        selected=records,
+        strict=True,
+    )
+
+    event_reference = _event_reference()
+    dispatch = registry.dispatch(
+        event_reference,
+        _SinkContext(run_uri=event_reference.run_uri, event_reference=event_reference),
+    )
+
+    assert result.loaded_count == 3
+    assert registry.names() == ("class", "factory", "function")
+    assert dispatch.succeeded is True
+    assert calls == ["class", "factory", "function"]
+
+
+def test_load_event_sink_entry_points_reports_invalid_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = EventSinkRegistry()
+
+    class _NeedsArg:
+        def __init__(self, required: str) -> None:
+            self.required = required
+
+        def __call__(
+            self,
+            event: PipelineEventRecord | EventReference,
+            context: EventSinkContext,
+        ) -> None:
+            del event, context
+
+    def invalid_factory() -> object:
+        return object()
+
+    constructor_record = PluginRecord(
+        group=LOOM_EVENT_SINKS_GROUP,
+        name="constructor",
+        value="loom.plugins._event_sink_constructor:sink",
+    )
+    factory_record = PluginRecord(
+        group=LOOM_EVENT_SINKS_GROUP,
+        name="factory",
+        value="loom.plugins._event_sink_factory:sink",
+    )
+    invalid_name_record = PluginRecord(
+        group=LOOM_EVENT_SINKS_GROUP,
+        name="BadName",
+        value="loom.plugins._event_sink_function:sink",
+    )
+
+    def valid_sink(
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
+    ) -> None:
+        del event, context
+
+    modules = {
+        "loom.plugins._event_sink_constructor": _module_with_attrs(
+            "loom.plugins._event_sink_constructor",
+            {"sink": _NeedsArg},
+        ),
+        "loom.plugins._event_sink_factory": _module_with_attrs(
+            "loom.plugins._event_sink_factory",
+            {"sink": invalid_factory},
+        ),
+        "loom.plugins._event_sink_function": _module_with_attrs(
+            "loom.plugins._event_sink_function",
+            {"sink": valid_sink},
+        ),
+    }
+
+    def import_module(name: str, package: str | None = None) -> ModuleType:
+        del package
+        return modules[name]
+
+    monkeypatch.setattr(importlib, "import_module", import_module)
+
+    best_effort = load_event_sink_entry_points(
+        records=(constructor_record, factory_record, invalid_name_record),
+        registry=registry,
+        selected=(constructor_record, factory_record, invalid_name_record),
+        strict=False,
+    )
+
+    assert best_effort.loaded_count == 0
+    assert best_effort.failure_count == 3
+    assert [failure.operation for failure in best_effort.failures] == [
+        "registration",
+        "registration",
+        "registration",
+    ]
+
+    with pytest.raises(PluginRegistrationError):
+        load_event_sink_entry_points(
+            records=(constructor_record, factory_record),
+            registry=EventSinkRegistry(),
+            selected=(constructor_record, factory_record),
             strict=True,
         )

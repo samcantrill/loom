@@ -358,8 +358,13 @@ src/loom/
 
   plugins/
     __init__.py
+    artifact_backends.py
+    codecs.py
+    diagnostics.py
     entrypoints.py
     errors.py
+    event_sinks.py
+    recipes.py
 
   cli/
     __init__.py

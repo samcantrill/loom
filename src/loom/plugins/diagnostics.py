@@ -25,7 +25,11 @@ from .entrypoints import (
     find_plugin_duplicates,
 )
 
-LOADABLE_PLUGIN_GROUPS: tuple[str, ...] = (LOOM_RECIPES_GROUP, LOOM_CODECS_GROUP)
+LOADABLE_PLUGIN_GROUPS: tuple[str, ...] = (
+    LOOM_RECIPES_GROUP,
+    LOOM_CODECS_GROUP,
+    LOOM_EVENT_SINKS_GROUP,
+)
 LISTING_ONLY_PLUGIN_GROUPS: tuple[str, ...] = tuple(
     group for group in KNOWN_PLUGIN_GROUPS if group not in LOADABLE_PLUGIN_GROUPS
 )
@@ -100,9 +104,9 @@ _PLUGIN_GROUP_READINESS_DETAILS: dict[str, PluginGroupReadiness] = {
     ),
     LOOM_EVENT_SINKS_GROUP: PluginGroupReadiness(
         group=LOOM_EVENT_SINKS_GROUP,
-        status="listing-only",
-        reason="Event sink and event sink registry contracts are not source-level APIs yet.",
-        revisit_trigger="Stage 19 lands runtime event records and an event sink registry.",
+        status="registry-ready",
+        reason="EventSinkRegistry owns explicit event sink registration and duplicate-name policy.",
+        revisit_trigger="Event sink plugin constructor or registry policy changes.",
     ),
 }
 PLUGIN_GROUP_READINESS_DETAILS: dict[str, PluginGroupReadiness] = dict(
@@ -336,6 +340,24 @@ def _load_registry_ready_plugins(
             records=all_records,
             registry=CodecRegistry(),
             selected=codec_records,
+            strict=False,
+        )
+        loaded.extend(result.loaded)
+        duplicates.extend(result.duplicates)
+        failures.extend(result.failures)
+
+    event_sink_records = tuple(
+        record for record in selected if record.group == LOOM_EVENT_SINKS_GROUP
+    )
+    if event_sink_records:
+        from loom.pipeline.event_sinks import EventSinkRegistry
+
+        from .event_sinks import load_event_sink_entry_points
+
+        result = load_event_sink_entry_points(
+            records=all_records,
+            registry=EventSinkRegistry(),
+            selected=event_sink_records,
             strict=False,
         )
         loaded.extend(result.loaded)

@@ -23,22 +23,27 @@ from loom.plugins import (
 pytestmark = pytest.mark.contract
 
 
-def test_future_group_readiness_contract_is_listing_only() -> None:
+def test_future_group_readiness_contract_is_listing_only_except_event_sinks() -> None:
     future_groups = (
         LOOM_SOURCES_GROUP,
         LOOM_EXECUTORS_GROUP,
         LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
         LOOM_RUN_EXPORTERS_GROUP,
         LOOM_SWEEP_PROVIDERS_GROUP,
-        LOOM_EVENT_SINKS_GROUP,
     )
 
-    assert LOADABLE_PLUGIN_GROUPS == (LOOM_RECIPES_GROUP, LOOM_CODECS_GROUP)
+    assert LOADABLE_PLUGIN_GROUPS == (
+        LOOM_RECIPES_GROUP,
+        LOOM_CODECS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
+    )
     assert PLUGIN_GROUP_READINESS == {
         LOOM_RECIPES_GROUP: "registry-ready",
         LOOM_CODECS_GROUP: "registry-ready",
+        LOOM_EVENT_SINKS_GROUP: "registry-ready",
         **{group: "listing-only" for group in future_groups},
     }
+    assert plugin_group_readiness(LOOM_EVENT_SINKS_GROUP).status == "registry-ready"
     for group in future_groups:
         assert plugin_group_readiness(group).status == "listing-only"
 

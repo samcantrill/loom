@@ -378,7 +378,9 @@ external tools. The strict event model and local `events.jsonl` persistence use
 append-only audit records, not current-state records. The local runner emits
 lifecycle events for run planning/start/completion/failure and stage
 planned/started/completed, failed, skipped, reused, and blocked outcomes.
-Callback hooks and plugin-discovered event sinks remain deferred.
+Explicit event sink registries can observe committed runtime events, and
+plugin-discovered event sinks can be loaded only through `loom.plugins` into a
+supplied registry.
 
 Events:
 
@@ -398,10 +400,10 @@ stage.reused
 stage.blocked
 ```
 
-Core `loom` should emit generic event records before adding registered
-callbacks. Future callbacks are observe-only event sinks. They receive committed
-runtime facts and must not mutate plans, configs, artifacts, stage outputs,
-status transitions, retry decisions, or store records.
+Core `loom` emits or references generic event records before dispatching
+registered callbacks. Event sinks are observe-only callbacks. They receive
+committed runtime facts and must not mutate plans, configs, artifacts, stage
+outputs, status transitions, retry decisions, or store records.
 
 Plugin-discovered event sinks are owned by `loom.plugins`; this document owns
 event names, event payloads, persistence policy, and callback failure behavior.
@@ -456,8 +458,8 @@ CLI commands that stream or inspect event records
 Service-specific delivery belongs in plugins or external wrappers.
 
 Programmatic callback registration should be available before entry point
-discovery. Future plugin discovery should reserve the `loom.event_sinks` entry
-point group for observe-only sinks.
+discovery. Plugin discovery uses the `loom.event_sinks` entry point group for
+observe-only sinks and remains an explicit setup action.
 
 ## Run Store Integration
 
@@ -473,9 +475,11 @@ retention metadata
 event records when event persistence is enabled
 ```
 
-Local event persistence is available as a run-store capability. When future
-event sinks are configured, event persistence should be enabled by default
-unless the caller explicitly disables it.
+Local event persistence is available as a run-store capability. When event sinks
+are configured, event persistence is enabled by default unless the caller
+explicitly disables it. Disabled persistence dispatches non-durable event
+references with warning metadata rather than fabricating durable event
+sequences.
 
 State transitions must remain atomic enough that a controller crash leaves a
 recoverable record.
@@ -484,8 +488,8 @@ Failed local runs also persist status-only blocked records for downstream
 planned descendants. These records live at `stages/<stage>/status.json` with
 `StageStatus.BLOCKED`; they do not create inputs, outputs, fingerprints,
 failure metadata, provenance, or logs for stages that never executed. Automatic
-retry, timeout enforcement, cleanup, retention, and external event sink delivery
-remain deferred.
+retry, timeout enforcement, cleanup, retention, and service-specific event sink
+delivery remain deferred.
 
 ## Executor Integration
 

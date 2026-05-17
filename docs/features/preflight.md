@@ -445,14 +445,18 @@ Plugin checks should verify:
 
 ```text
 plugin entrypoints can be discovered
-requested executor plugin is registered
-requested artifact store plugin is registered
 requested codecs are registered
+requested recipes are registered
+requested event sink plugins can register into a scratch EventSinkRegistry
+listing-only plugin groups are reported without importing targets
 plugin-provided config schema can be loaded
 ```
 
 A plugin import failure should identify the plugin and the capability being
-loaded.
+loaded. Event sink preflight stays observe-only: it may import explicitly
+selected trusted sink targets and register them into a scratch registry, but it
+must not dispatch events, create runs, or write callback-failure or
+observer-link facts.
 
 ## Environment Checks
 
@@ -539,6 +543,7 @@ invalid runtime option
 unwritable run directory using a temporary permission-controlled path when practical
 missing executor command via controlled PATH
 plugin registry failure with a fake plugin
+event sink plugin registration with a fake scratch registry
 JSON output shape
 strict mode warning behavior
 selected stage validation
