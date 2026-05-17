@@ -22,7 +22,7 @@ from loom.serialization import PlainData, ensure_plain_data
 from loom.timestamps import utc_timestamp
 
 from .errors import PlanExecutionError
-from .eventing import emit_stage_event
+from .eventing import RuntimeEventDispatcher, emit_stage_event
 from .models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
     ExecutionFailure,
@@ -197,6 +197,7 @@ def persist_stage_failure(
     started_at: str | None,
     failure: ExecutionFailure,
     clock: Callable[[], str] = utc_timestamp,
+    event_dispatcher: RuntimeEventDispatcher | None = None,
 ) -> ExecutionFailure:
     detail = build_reliability_status_detail(
         run_store,
@@ -234,6 +235,7 @@ def persist_stage_failure(
         event_type="stage.failed",
         timestamp=clock(),
         payload={"attempt": attempt, "failure_type": failure.failure_type},
+        event_dispatcher=event_dispatcher,
     )
     return failure
 
@@ -248,6 +250,7 @@ def persist_stage_cancellation(
     cancelled_at: str,
     reason: LifecycleReason,
     clock: Callable[[], str] = utc_timestamp,
+    event_dispatcher: RuntimeEventDispatcher | None = None,
 ) -> None:
     detail = build_reliability_status_detail(
         run_store,
@@ -280,6 +283,7 @@ def persist_stage_cancellation(
         event_type="stage.cancelled",
         timestamp=clock(),
         payload={"attempt": attempt, "reason": reason.to_dict()},
+        event_dispatcher=event_dispatcher,
     )
 
 
@@ -295,6 +299,7 @@ def record_stage_failure_and_failed_run(
     failure: ExecutionFailure,
     executor_name: str,
     clock: Callable[[], str] = utc_timestamp,
+    event_dispatcher: RuntimeEventDispatcher | None = None,
 ) -> ExecutionFailure:
     try:
         failure = persist_stage_failure(
@@ -305,6 +310,7 @@ def record_stage_failure_and_failed_run(
             started_at=started_at,
             failure=failure,
             clock=clock,
+            event_dispatcher=event_dispatcher,
         )
     except Exception as exc:
         failure = ExecutionFailure(
@@ -343,6 +349,7 @@ def commit_stage_execution_result(
     execution_result: StageExecutionResult,
     executor_name: str,
     clock: Callable[[], str] = utc_timestamp,
+    event_dispatcher: RuntimeEventDispatcher | None = None,
 ) -> StageRunResult:
     if execution_result.status == StageStatus.FAILED:
         failure = execution_result.failure or ExecutionFailure(
@@ -366,6 +373,7 @@ def commit_stage_execution_result(
             failure=failure,
             executor_name=executor_name,
             clock=clock,
+            event_dispatcher=event_dispatcher,
         )
         record_timeout_outcome_from_metadata(
             run_store,
@@ -400,6 +408,7 @@ def commit_stage_execution_result(
             cancelled_at=execution_result.finished_at,
             reason=reason,
             clock=clock,
+            event_dispatcher=event_dispatcher,
         )
         record_timeout_outcome_from_metadata(
             run_store,
@@ -508,6 +517,7 @@ def commit_stage_execution_result(
             "action": PlanAction.RUN.value,
             "status": StageStatus.SUCCEEDED.value,
         },
+        event_dispatcher=event_dispatcher,
     )
     return StageRunResult(
         stage_name=stage.name,

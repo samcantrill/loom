@@ -6,6 +6,8 @@ from typing import Any, cast
 import pytest
 
 from loom.pipeline import PipelineSpec
+from loom.pipeline.event_sinks import EventSinkContext, EventSinkRegistry
+from loom.pipeline.events import EventReference, PipelineEventRecord
 from loom.pipeline.execution import (
     ConfigSnapshotInputs,
     ExecutionFailure,
@@ -112,6 +114,40 @@ def test_run_request_accepts_plain_mapping_config() -> None:
     request = RunRequest(config=config, run_uri="run1")
 
     assert request.config == config
+
+
+def test_run_request_accepts_explicit_event_sink_registry() -> None:
+    spec = _minimal_pipeline_spec()
+    registry = EventSinkRegistry()
+
+    def sink(
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
+    ) -> None:
+        _ = event, context
+
+    registry.register("audit.capture", sink)
+
+    request = RunRequest(
+        pipeline=spec,
+        run_uri="file:///runs/demo",
+        event_sink_registry=registry,
+        event_persistence="non_durable",
+    )
+
+    assert request.event_sink_registry is registry
+    assert request.event_persistence == "non_durable"
+
+
+def test_run_request_rejects_non_durable_without_sinks() -> None:
+    spec = _minimal_pipeline_spec()
+
+    with pytest.raises(RunRequestError, match="non-empty event_sink_registry"):
+        RunRequest(
+            pipeline=spec,
+            run_uri="file:///runs/demo",
+            event_persistence="non_durable",
+        )
 
 
 def test_run_request_options_are_canonical_invocation_policy() -> None:

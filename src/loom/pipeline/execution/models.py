@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.pipeline.context import StageContext
+from loom.pipeline.event_sinks import EventSinkRegistry
 from loom.pipeline.planning import (
     ExecutionPlan,
     FingerprintContext,
@@ -110,6 +111,8 @@ class RunRequest:
     project_root: Path | None = None
     failure_policy: FailurePolicy = field(default_factory=FailurePolicy)
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    event_sink_registry: EventSinkRegistry | None = None
+    event_persistence: str = "durable"
 
     def __post_init__(self) -> None:
         if self.config is None and self.pipeline is None:
@@ -168,6 +171,19 @@ class RunRequest:
             self, "failure_policy", _coerce_failure_policy(self.failure_policy)
         )
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+        object.__setattr__(
+            self,
+            "event_sink_registry",
+            _coerce_event_sink_registry(self.event_sink_registry),
+        )
+        object.__setattr__(
+            self,
+            "event_persistence",
+            _coerce_event_persistence(
+                self.event_persistence,
+                registry=cast(EventSinkRegistry | None, self.event_sink_registry),
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1032,6 +1048,31 @@ def _coerce_failure_policy(value: object) -> FailurePolicy:
             )
         )
     raise RunRequestError("failure_policy must be FailurePolicy or mapping")
+
+
+def _coerce_event_sink_registry(value: object) -> EventSinkRegistry | None:
+    if value is None:
+        return None
+    if isinstance(value, EventSinkRegistry):
+        return value
+    raise RunRequestError(
+        "event_sink_registry must be EventSinkRegistry when supplied"
+    )
+
+
+def _coerce_event_persistence(
+    value: object,
+    *,
+    registry: EventSinkRegistry | None,
+) -> str:
+    if value not in {"durable", "non_durable"}:
+        raise RunRequestError("event_persistence must be 'durable' or 'non_durable'")
+    mode = cast(str, value)
+    if mode == "non_durable" and (registry is None or len(registry) == 0):
+        raise RunRequestError(
+            "event_persistence='non_durable' requires a non-empty event_sink_registry"
+        )
+    return mode
 
 
 def _is_composed_config(value: object) -> bool:
