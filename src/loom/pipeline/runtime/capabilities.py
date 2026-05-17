@@ -705,13 +705,68 @@ def _slurm_descriptor(name: str) -> ExecutorDescriptor:
             "memory": supported,
             "gpu": supported,
         },
-        adapter_namespaces=("slurm",),
+        adapter_namespaces=(
+            "apptainer",
+            "container",
+            "container_build",
+            "singularity",
+            "slurm",
+        ),
         timeout_support=TimeoutSupportLevel.DELEGATED,
         details={
             "built_in": True,
             "dry_run_only": False,
             "live_submission": True,
             "scheduler_commands": True,
+            "container_composition": True,
+        },
+    )
+
+
+def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
+    advisory = ResourceCapability(
+        support_level=ResourceSupportLevel.ADVISORY,
+        enforcement=ResourceEnforcementExpectation.BEST_EFFORT,
+        severity=CapabilitySeverity.WARNING,
+        details={
+            "reason": (
+                "direct Apptainer execution can expose runtime flags, but scheduler "
+                "allocation and platform enforcement are outside the direct executor"
+            )
+        },
+    )
+    gpu = ResourceCapability(
+        support_level=ResourceSupportLevel.SUPPORTED,
+        enforcement=ResourceEnforcementExpectation.BEST_EFFORT,
+        severity=CapabilitySeverity.INFO,
+        details={
+            "reason": (
+                "Apptainer command construction can expose configured GPU access "
+                "flags; host drivers and scheduler allocation remain external"
+            )
+        },
+    )
+    return ExecutorDescriptor(
+        name=name,
+        resource_capabilities={
+            "cpu": advisory,
+            "memory": advisory,
+            "gpu": gpu,
+        },
+        adapter_namespaces=(
+            "apptainer",
+            "container",
+            "container_build",
+            "singularity",
+        ),
+        timeout_support=TimeoutSupportLevel.UNSUPPORTED,
+        details={
+            "built_in": True,
+            "containerized": True,
+            "apptainer_cli": True,
+            "singularity_compatible": name == "singularity",
+            "security_sandbox": False,
+            "requires_prepared_worker_request": True,
         },
     )
 
@@ -741,7 +796,7 @@ def _docker_descriptor() -> ExecutorDescriptor:
             "memory": mapped,
             "gpu": gpu,
         },
-        adapter_namespaces=("container", "docker"),
+        adapter_namespaces=("container", "container_build", "docker"),
         timeout_support=TimeoutSupportLevel.UNSUPPORTED,
         details={
             "built_in": True,
@@ -1264,8 +1319,10 @@ def _reject_unknown(
 
 DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY = ExecutorDescriptorRegistry(
     {
+        "apptainer": _apptainer_descriptor("apptainer"),
         "docker": _docker_descriptor(),
         "local": _local_descriptor(),
+        "singularity": _apptainer_descriptor("singularity"),
         "slurm-afterok": _slurm_descriptor("slurm-afterok"),
         "slurm-single-job": _slurm_descriptor("slurm-single-job"),
         "subprocess": _subprocess_descriptor(),

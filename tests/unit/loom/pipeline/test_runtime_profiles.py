@@ -106,7 +106,9 @@ def test_runtime_profile_rejects_reserved_and_invalid_fields(data: object) -> No
 
 
 @pytest.mark.parametrize("field", ["retry", "timeout", "timeout_seconds"])
-def test_runtime_profile_rejects_legacy_top_level_reliability_fields(field: str) -> None:
+def test_runtime_profile_rejects_legacy_top_level_reliability_fields(
+    field: str,
+) -> None:
     with pytest.raises(RuntimeResourceError, match="unsupported reliability field"):
         RuntimeProfile.from_dict({field: {"enabled": True}})
     with pytest.raises(RuntimeResourceError, match="unsupported reliability field"):
@@ -182,6 +184,114 @@ def test_runtime_profile_container_shorthand_preserves_namespace_contract() -> N
     }
 
 
+def test_runtime_profile_container_build_shorthand_preserves_namespace_contract() -> (
+    None
+):
+    profile = RuntimeProfile.from_dict(
+        {
+            "executor": "apptainer",
+            "container_build": {
+                "targets": {
+                    "analysis-env": {
+                        "runtime": "apptainer",
+                        "source": {
+                            "kind": "definition_file",
+                            "path": "containers/analysis.def",
+                        },
+                        "output": {
+                            "kind": "apptainer_sif",
+                            "path": ".loom/containers/analysis-env.sif",
+                        },
+                    }
+                }
+            },
+            "container": {"target": "analysis-env"},
+            "apptainer": {"cleanenv": True},
+        }
+    )
+
+    assert profile.to_dict() == {
+        "adapter_options": {
+            "apptainer": {"cleanenv": True},
+            "container": {"target": "analysis-env"},
+            "container_build": {
+                "targets": {
+                    "analysis-env": {
+                        "runtime": "apptainer",
+                        "source": {
+                            "kind": "definition_file",
+                            "path": "containers/analysis.def",
+                        },
+                        "output": {
+                            "kind": "apptainer_sif",
+                            "path": ".loom/containers/analysis-env.sif",
+                        },
+                    }
+                }
+            },
+        },
+        "executor": "apptainer",
+    }
+
+
+def test_merge_run_options_replaces_container_build_namespace_as_a_whole() -> None:
+    result = merge_run_options(
+        base={
+            "adapter_options": {
+                "container_build": {
+                    "targets": {
+                        "base": {
+                            "runtime": "docker",
+                            "source": {"kind": "docker_context", "context_path": "."},
+                            "output": {
+                                "kind": "docker_image",
+                                "reference": "example/base:latest",
+                            },
+                        }
+                    }
+                }
+            }
+        },
+        explicit={
+            "adapter_options": {
+                "container_build": {
+                    "targets": {
+                        "explicit": {
+                            "runtime": "apptainer",
+                            "source": {
+                                "kind": "definition_file",
+                                "path": "containers/explicit.def",
+                            },
+                            "output": {
+                                "kind": "apptainer_sif",
+                                "path": ".loom/containers/explicit.sif",
+                            },
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert result.adapter_options == {
+        "container_build": {
+            "targets": {
+                "explicit": {
+                    "runtime": "apptainer",
+                    "source": {
+                        "kind": "definition_file",
+                        "path": "containers/explicit.def",
+                    },
+                    "output": {
+                        "kind": "apptainer_sif",
+                        "path": ".loom/containers/explicit.sif",
+                    },
+                }
+            }
+        }
+    }
+
+
 def test_merge_run_options_applies_base_profile_explicit_precedence() -> None:
     base = {
         "executor": "local",
@@ -247,9 +357,7 @@ def test_merge_run_options_applies_base_profile_explicit_precedence() -> None:
                     "adapter_options": {"docker": {"image": "profile"}},
                 },
                 "evaluate": {
-                    "resources": {
-                        "entries": {"gpu": {"kind": "gpu", "amount": 0}}
-                    }
+                    "resources": {"entries": {"gpu": {"kind": "gpu", "amount": 0}}}
                 },
             },
         }
@@ -267,9 +375,7 @@ def test_merge_run_options_applies_base_profile_explicit_precedence() -> None:
         "adapter_options": {"slurm": {"partition": "explicit"}},
         "stage_options": {
             "train": {
-                "resources": {
-                    "entries": {"cpu": {"kind": "cpu", "amount": 4}}
-                },
+                "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 4}}},
                 "execution": {"settings": {"priority": "high"}},
                 "environment": {"unset_variables": ["STAGE_EXPLICIT_OLD"]},
                 "adapter_options": {"docker": {"image": "explicit"}},
@@ -347,9 +453,7 @@ def test_sparse_empty_mappings_do_not_delete_lower_mapping_values() -> None:
             "adapter_options": {"slurm": {"partition": "base"}},
             "stage_options": {
                 "train": {
-                    "resources": {
-                        "entries": {"cpu": {"kind": "cpu", "amount": 2}}
-                    },
+                    "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 2}}},
                     "execution": {"settings": {"queue": "base"}},
                     "adapter_options": {"docker": {"image": "base"}},
                 }
@@ -384,7 +488,9 @@ def test_sparse_empty_mappings_do_not_delete_lower_mapping_values() -> None:
     assert train.adapter_options == {"docker": {"image": "base"}}
 
 
-def test_typed_run_options_source_is_fully_supplied_but_mapping_fields_overlay() -> None:
+def test_typed_run_options_source_is_fully_supplied_but_mapping_fields_overlay() -> (
+    None
+):
     explicit = RunOptions()
     result = merge_run_options(
         base={
@@ -458,7 +564,11 @@ def test_known_stage_validation_is_applied_after_merge() -> None:
 def test_merge_run_options_respects_run_level_reliability_precedence() -> None:
     result = merge_run_options(
         base={"reliability": {"retry": {"enabled": True, "max_attempts": 3}}},
-        profiles={"cluster": {"reliability": {"timeout": {"enabled": True, "duration_seconds": 30}}}},
+        profiles={
+            "cluster": {
+                "reliability": {"timeout": {"enabled": True, "duration_seconds": 30}}
+            }
+        },
         explicit={"reliability": {"retry": {"enabled": False, "max_attempts": 1}}},
         profile="cluster",
         known_stage_ids={"train"},
@@ -472,13 +582,21 @@ def test_merge_run_options_respects_run_level_reliability_precedence() -> None:
 
 def test_merge_run_options_merges_stage_reliability_with_run_level_defaults() -> None:
     result = merge_run_options(
-        base={"stage_options": {"train": {"reliability": {"retry": {"enabled": True, "max_attempts": 2}}}}},
+        base={
+            "stage_options": {
+                "train": {
+                    "reliability": {"retry": {"enabled": True, "max_attempts": 2}}
+                }
+            }
+        },
         explicit={"reliability": {"timeout": {"enabled": False}}},
         known_stage_ids={"train"},
     )
     resolved = resolve_run_runtime(result, stage_ids=("train",))
 
-    assert cast(ResolvedStageRuntimeOptions, resolved["train"]).reliability == ReliabilityPolicy(
+    assert cast(
+        ResolvedStageRuntimeOptions, resolved["train"]
+    ).reliability == ReliabilityPolicy(
         retry=RetryPolicy(enabled=True, max_attempts=2),
         timeout=TimeoutPolicy(enabled=False),
     )
