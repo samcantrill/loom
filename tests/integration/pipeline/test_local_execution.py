@@ -12,6 +12,8 @@ from loom.authority.app import create_authority_app
 from loom.authority._repository import initialize_authority_repository
 from loom.authority.services import repository_authority_services
 from loom.pipeline import PipelineRunner, RunRequest
+from loom.pipeline.event_sinks import EventSinkContext, EventSinkRegistry
+from loom.pipeline.events import EventReference, PipelineEventRecord
 from loom.pipeline.execution import (
     create_authority_backed_serial_run_store,
 )
@@ -152,6 +154,92 @@ def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None
         "stage.started",
         "stage.completed",
     ]
+
+
+def test_local_runner_dispatches_sinks_after_committed_facts(
+    tmp_path: Path,
+) -> None:
+    run_store = _run_store(tmp_path)
+    run_uri = _run_uri(tmp_path, "sink-run")
+    registry = EventSinkRegistry()
+    observed_event_types: list[str] = []
+
+    def sink(
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
+    ) -> None:
+        assert isinstance(event, PipelineEventRecord)
+        observed_event_types.append(event.event_type)
+        if event.event_type == "run.started":
+            status = run_store.read_run_status(context.run_uri)
+            assert status is not None
+            assert status.status is RunStatus.RUNNING
+        if event.event_type == "stage.completed":
+            stage_name = event.primary_resource.identifiers["stage_name"]
+            assert isinstance(stage_name, str)
+            status = run_store.read_stage_status(context.run_uri, stage_name)
+            assert status is not None
+            assert status.status is StageStatus.SUCCEEDED
+
+    registry.register("audit.capture", sink)
+
+    result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
+        RunRequest(
+            config=local_execution_config(),
+            run_uri=run_uri,
+            event_sink_registry=registry,
+        )
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert observed_event_types == [event.event_type for event in run_store.read_events(run_uri)]
+    assert run_store.read_event_sink_failures(run_uri) == ()
+
+
+def test_local_runner_non_durable_sink_failure_does_not_fail_run(
+    tmp_path: Path,
+) -> None:
+    run_store = _run_store(tmp_path)
+    run_uri = _run_uri(tmp_path, "non-durable-sink-run")
+    registry = EventSinkRegistry()
+    observed: list[EventReference] = []
+
+    def capture(
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
+    ) -> None:
+        assert isinstance(event, EventReference)
+        observed.append(context.event_reference)
+
+    def failing(
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
+    ) -> None:
+        _ = event, context
+        raise RuntimeError("observer is unavailable")
+
+    registry.register("audit.capture", capture)
+    registry.register("audit.fail", failing)
+
+    result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
+        RunRequest(
+            config=local_execution_config(),
+            run_uri=run_uri,
+            event_sink_registry=registry,
+            event_persistence="non_durable",
+        )
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert run_store.read_events(run_uri) == ()
+    assert observed
+    assert all(reference.durability == "non_durable" for reference in observed)
+    failures = run_store.read_event_sink_failures(run_uri)
+    assert len(failures) == len(observed)
+    assert {failure.sink_name for failure in failures} == {"audit.fail"}
+    warnings = result.metadata["event_sink_warnings"]
+    assert isinstance(warnings, list)
+    assert len(warnings) == len(observed)
 
 
 def test_local_runner_executes_pipeline_through_http_authority_client(

@@ -66,6 +66,7 @@ from .errors import (
     PlanExecutionError,
     RunRequestError,
 )
+from .eventing import EventPersistenceMode, RuntimeEventDispatcher
 from .eventing import emit_run_event, emit_stage_event
 from .lifecycle import (
     bind_stage_inputs,
@@ -206,60 +207,67 @@ class PipelineRunner:
         self._stage_lease_renewal_interval_seconds = (
             _STAGE_LEASE_RENEWAL_INTERVAL_SECONDS
         )
+        self._event_dispatcher: RuntimeEventDispatcher | None = None
 
     def run(self, request: RunRequest) -> RunResult:
         if not isinstance(request, RunRequest):
             raise RunRequestError("PipelineRunner.run requires RunRequest")
-        config_mapping, spec = self._resolve_config_and_spec(request)
-        options = _merged_request_options(
-            request,
-            config_mapping=config_mapping,
-            stage_names=spec.stage_names,
-        )
-        if options.dry_run:
-            raise RunRequestError(
-                "PipelineRunner.run does not execute dry-run requests; use planning APIs instead"
-            )
-        parallel_policy = _parallel_policy_from_request(request, options)
-        self._preflight_authority_admission(parallel_policy)
-
-        started_at = self.clock()
-        local_run_store = self._require_local_run_store()
-        run_uri = self._resolve_request_run_uri(
-            request,
-            local_run_store,
-            options=options,
-        )
-        self._create_or_open_run(run_uri, request)
-        run_dir = local_run_store.local_run_dir(run_uri)
-        lock = acquire_run_lock(
-            self.run_store,
-            run_uri,
-            owner=build_lock_owner(
-                component="PipelineRunner",
-                run_uri=run_uri,
-                executor=str(getattr(self.executor, "name", "unknown")),
-            ),
-        )
+        event_dispatcher = _event_dispatcher_from_request(request)
+        previous_event_dispatcher = self._event_dispatcher
+        self._event_dispatcher = event_dispatcher
         try:
-            self._emit_run_event(
-                run_uri,
-                "run.opened" if request.open_existing else "run.created",
-                timestamp=self.clock(),
-                payload={"open_existing": request.open_existing},
-            )
-            return self._run_locked(
-                request=request,
-                run_uri=run_uri,
-                run_dir=run_dir,
-                local_run_store=local_run_store,
+            config_mapping, spec = self._resolve_config_and_spec(request)
+            options = _merged_request_options(
+                request,
                 config_mapping=config_mapping,
-                spec=spec,
-                options=options,
-                started_at=started_at,
+                stage_names=spec.stage_names,
             )
+            if options.dry_run:
+                raise RunRequestError(
+                    "PipelineRunner.run does not execute dry-run requests; use planning APIs instead"
+                )
+            parallel_policy = _parallel_policy_from_request(request, options)
+            self._preflight_authority_admission(parallel_policy)
+
+            started_at = self.clock()
+            local_run_store = self._require_local_run_store()
+            run_uri = self._resolve_request_run_uri(
+                request,
+                local_run_store,
+                options=options,
+            )
+            self._create_or_open_run(run_uri, request)
+            run_dir = local_run_store.local_run_dir(run_uri)
+            lock = acquire_run_lock(
+                self.run_store,
+                run_uri,
+                owner=build_lock_owner(
+                    component="PipelineRunner",
+                    run_uri=run_uri,
+                    executor=str(getattr(self.executor, "name", "unknown")),
+                ),
+            )
+            try:
+                self._emit_run_event(
+                    run_uri,
+                    "run.opened" if request.open_existing else "run.created",
+                    timestamp=self.clock(),
+                    payload={"open_existing": request.open_existing},
+                )
+                return self._run_locked(
+                    request=request,
+                    run_uri=run_uri,
+                    run_dir=run_dir,
+                    local_run_store=local_run_store,
+                    config_mapping=config_mapping,
+                    spec=spec,
+                    options=options,
+                    started_at=started_at,
+                )
+            finally:
+                release_run_lock(self.run_store, lock)
         finally:
-            release_run_lock(self.run_store, lock)
+            self._event_dispatcher = previous_event_dispatcher
 
     def _preflight_authority_admission(self, policy: ParallelExecutionOptions) -> None:
         if is_offline_evidence_run_store(self.run_store):
@@ -603,6 +611,11 @@ class PipelineRunner:
         if outcome.cancellation_reason is not None:
             result_metadata["reason"] = outcome.cancellation_reason.to_dict()
             result_metadata["reason_code"] = outcome.cancellation_reason.code
+        event_dispatcher = self._event_dispatcher
+        if event_dispatcher is not None and event_dispatcher.warnings:
+            result_metadata["event_sink_warnings"] = [
+                warning.to_dict() for warning in event_dispatcher.warnings
+            ]
         result = RunResult(
             run_uri=run_uri,
             status=run_status,
@@ -1493,6 +1506,7 @@ class PipelineRunner:
             execution_result=execution_result,
             executor_name=str(getattr(self.executor, "name", "unknown")),
             clock=self.clock,
+            event_dispatcher=self._event_dispatcher,
         )
 
     def _execute_stage_request_with_lease_renewal(
@@ -1820,6 +1834,7 @@ class PipelineRunner:
             event_type=event_type,
             timestamp=timestamp,
             payload=payload,
+            event_dispatcher=self._event_dispatcher,
         )
 
     def _emit_stage_event(
@@ -1838,6 +1853,7 @@ class PipelineRunner:
             event_type=event_type,
             timestamp=timestamp,
             payload=payload,
+            event_dispatcher=self._event_dispatcher,
         )
 
     def _block_plan_stage(
@@ -2142,6 +2158,7 @@ class PipelineRunner:
             started_at=started_at,
             failure=failure,
             clock=self.clock,
+            event_dispatcher=self._event_dispatcher,
         )
 
     def _record_stage_failure_and_failed_run(
@@ -2166,6 +2183,7 @@ class PipelineRunner:
             failure=failure,
             executor_name=str(getattr(self.executor, "name", "unknown")),
             clock=self.clock,
+            event_dispatcher=self._event_dispatcher,
         )
 
     def _write_failed_run(
@@ -2299,6 +2317,18 @@ def _parallel_policy_from_request(
             failure_policy="continue_independent",
         )
     return policy
+
+
+def _event_dispatcher_from_request(
+    request: RunRequest,
+) -> RuntimeEventDispatcher | None:
+    registry = request.event_sink_registry
+    if registry is None and request.event_persistence == "durable":
+        return None
+    return RuntimeEventDispatcher(
+        registry=registry,
+        persistence=cast("EventPersistenceMode", request.event_persistence),
+    )
 
 
 def run_pipeline(
