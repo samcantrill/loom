@@ -1,11 +1,11 @@
 # Roadmap Stage 20 Implementation Plan: Runtime Events And Event Sinks
 
-Status: Phase 3 merged; Phase 4 pending
+Status: Phase 4 pr_open
 Roadmap stage: `v20`
 Planning document: `docs/roadmap/stage-20/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 4 `event-sink-plugins-diagnostics` pending
+Current phase: Phase 4 `event-sink-plugins-diagnostics` pr_open
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-17 after
@@ -343,7 +343,7 @@ but must preserve the programmatic-before-plugin-loading sequence.
 | 1 | `event-grammar-compatibility` | merged | `codex/event-grammar-compatibility` | [#187](https://github.com/samcantrill/loom/pull/187) | `loom.pipeline.events`, store event readers | Evolve event grammar and preserve schema-v1 compatibility | Package/import, event unit, store contract/integration, `make validate-pr`, `make test-summary` | Ordered audit log, schema-v1 compatibility |
 | 2 | `event-sink-registry-observer-facts` | merged | `codex/event-sink-registry-observer-facts` | [#188](https://github.com/samcantrill/loom/pull/188) | `loom.pipeline.event_sinks`, store failure/link facets | Add sink registry, dispatch result, callback failure, and observer-link facts | Package/import, sink unit, store contract/integration, `make validate-pr`, `make test-summary` | Observe-only dispatch, callback failure, observer links |
 | 3 | `runtime-event-dispatch` | merged | `codex/runtime-event-dispatch` | [#189](https://github.com/samcantrill/loom/pull/189) | `loom.pipeline.execution`, lifecycle, eventing | Dispatch events from committed runtime and Stage 19 facts | Eventing/runner/lifecycle unit and integration tests, diagnostics tests, `make validate-pr`, `make test-summary` | Committed fact projection, non-durable opt-out dispatch |
-| 4 | `event-sink-plugins-diagnostics` | pending | `codex/event-sink-plugins-diagnostics` | pending | `loom.plugins`, diagnostics, CLI/read models, docs | Add explicit plugin loading, warnings, inspection, docs, and final evidence | Plugin unit/contract, diagnostics/CLI tests as changed, docs, `make validate-pr`, `make test-summary` | Explicit plugin loading, read-only inspection |
+| 4 | `event-sink-plugins-diagnostics` | pr_open | `codex/event-sink-plugins-diagnostics` | [#190](https://github.com/samcantrill/loom/pull/190) | `loom.plugins`, diagnostics, CLI/read models, docs | Add explicit plugin loading, warnings, inspection, docs, and final evidence | Plugin unit/contract, diagnostics/CLI tests as changed, docs, `make validate-pr`, `make test-summary` | Explicit plugin loading, read-only inspection |
 
 ## Implementation Readiness Blockers
 
@@ -753,11 +753,11 @@ failure policy, and persistence defaults
 
 ## Phase 4: Plugins, Diagnostics, Inspection, And Docs
 
-Status: pending
+Status: pr_open
 Slug: `event-sink-plugins-diagnostics`
 Branch: `codex/event-sink-plugins-diagnostics`
 Worktree: `/home/samcantrill/work/loom-worktrees/event-sink-plugins-diagnostics`
-PR: pending
+PR: [#190](https://github.com/samcantrill/loom/pull/190)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase changes plugin readiness,
@@ -850,14 +850,16 @@ diagnostics, possible CLI/read-model surfaces, and feature docs
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available because this phase
-  changes plugin readiness and user-visible diagnostics/docs
-- PR review budget: one automated review pass available
+- Phase execution plan: completed in
+  `docs/roadmap/stage-20/phases/event-sink-plugins-diagnostics.md`
+- Planning/refinement budget: expanded path; draft and refine completed by
+  manager on 2026-05-17
+- Implementation/refinement budget: unused; manager-local validation fixes
+  stayed within the implementation pass
+- PR review budget: used by manager local review on 2026-05-17; no blocking
+  findings found
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phases 1 through 3 merged or valid stack
-  predecessors
+- Pre-submit blocker gate: passed; Phases 1 through 3 merged into `develop`
 - Merge record: pending
 
 ### Risks And Stop Conditions
@@ -872,11 +874,21 @@ diagnostics, possible CLI/read-model surfaces, and feature docs
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: added explicit `loom.event_sinks` plugin loading through
+  `load_event_sink_entry_points`, lazy public exports, registry-ready plugin
+  diagnostics, scratch-registry preflight loading for selected event sinks,
+  CLI/readiness contract updates, docs, and phase artifacts.
+- Validation: targeted Phase 4 plugin/preflight suite passed with 84 tests;
+  targeted plugin CLI diagnostics suite passed with 27 tests; `make
+  validate-pr` passed Ruff, Pyright, default harness, config-extra harness, and
+  build; `make test-summary` passed with overall 2385 passed, 21 skipped, and
+  1961 deselected.
+- PR: [#190](https://github.com/samcantrill/loom/pull/190) opened against
+  `develop`; verification confirmed base `develop`, head
+  `codex/event-sink-plugins-diagnostics`, state `OPEN`.
 - Merge: pending
-- Follow-up: pending
+- Follow-up: merge Phase 4 after GitHub CI passes and final target-branch
+  verification confirms `develop`.
 
 ## Cross-Phase Validation
 
