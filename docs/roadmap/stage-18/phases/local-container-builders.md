@@ -104,7 +104,7 @@ Implement deterministic local build/reuse behavior for Phase 1 `container_build`
 ### Unit Suite
 
 - Status: required.
-- Expected paths: `tests/unit/loom/pipeline/executors/test_containers.py`, `tests/unit/loom/pipeline/executors/docker/test_build.py`, `tests/unit/loom/pipeline/executors/apptainer/test_build.py`.
+- Expected paths: `tests/unit/loom/pipeline/executors/test_containers.py`, `tests/unit/loom/pipeline/executors/docker/test_docker_build.py`, `tests/unit/loom/pipeline/executors/apptainer/test_apptainer_build.py`.
 - Required assertions or deferral reason: policy decisions, fake service, Docker argv/redaction, Apptainer argv/redaction, local output probes, failure records, and bounded evidence.
 
 ### Contract Suite
@@ -143,7 +143,7 @@ Implement deterministic local build/reuse behavior for Phase 1 `container_build`
 Targeted development commands:
 
 ```sh
-uv run pytest tests/unit/loom/pipeline/executors/test_containers.py tests/unit/loom/pipeline/executors/docker/test_build.py tests/unit/loom/pipeline/executors/apptainer/test_build.py
+uv run pytest tests/unit/loom/pipeline/executors/test_containers.py tests/unit/loom/pipeline/executors/docker/test_docker_build.py tests/unit/loom/pipeline/executors/apptainer/test_apptainer_build.py
 uv run pytest tests/contracts/test_container_executor_contract.py
 uv run pytest tests/integration/pipeline/test_container_builders.py
 uv run pytest tests/package

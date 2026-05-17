@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import cast
+from typing import Protocol, cast
 
 from loom.fingerprints import hash_mapping
 from loom.pipeline.errors import RuntimeResourceError
@@ -49,6 +49,17 @@ _BUILD_OUTPUT_FIELDS = frozenset(
     {"schema_version", "kind", "reference", "path", "metadata"}
 )
 _BUILD_POLICY_FIELDS = frozenset({"schema_version", "mode"})
+_BUILD_POLICY_DECISION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "target_name",
+        "action",
+        "expected_status",
+        "reason",
+        "output_exists",
+        "source_stale",
+    }
+)
 _BUILD_TARGET_FIELDS = frozenset(
     {
         "schema_version",
@@ -144,6 +155,14 @@ class ContainerBuildStatus(StrEnum):
     REUSED = "reused"
     FAILED = "failed"
     SKIPPED = "skipped"
+
+
+class ContainerBuildAction(StrEnum):
+    """Policy decision actions for foreground local builders."""
+
+    BUILD = "build"
+    REUSE = "reuse"
+    FAIL = "fail"
 
 
 @dataclass(frozen=True, slots=True)
@@ -848,6 +867,129 @@ class ContainerBuildPolicy:
             mode=_string(
                 mapping.get("mode", ContainerBuildPolicyMode.IF_STALE.value),
                 path="ContainerBuildPolicy.mode",
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildPolicyDecision:
+    """Deterministic policy decision before a local builder runs."""
+
+    target_name: str
+    action: ContainerBuildAction | str
+    expected_status: ContainerBuildStatus | str
+    reason: str
+    output_exists: bool
+    source_stale: bool | None = None
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "schema_version",
+            _schema_version(
+                self.schema_version,
+                path="ContainerBuildPolicyDecision.schema_version",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "target_name",
+            _build_target_name(
+                self.target_name,
+                path="ContainerBuildPolicyDecision.target_name",
+            ),
+        )
+        action = _build_action(
+            self.action,
+            path="ContainerBuildPolicyDecision.action",
+        )
+        status = _build_status(
+            self.expected_status,
+            path="ContainerBuildPolicyDecision.expected_status",
+        )
+        _validate_policy_decision_status(action=action, status=status)
+        if not isinstance(self.output_exists, bool):
+            raise ContainerOptionError(
+                "ContainerBuildPolicyDecision.output_exists must be a bool"
+            )
+        if self.source_stale is not None and not isinstance(self.source_stale, bool):
+            raise ContainerOptionError(
+                "ContainerBuildPolicyDecision.source_stale must be a bool or None"
+            )
+        object.__setattr__(self, "action", action)
+        object.__setattr__(self, "expected_status", status)
+        object.__setattr__(
+            self,
+            "reason",
+            _non_empty_string(
+                self.reason,
+                path="ContainerBuildPolicyDecision.reason",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "target_name": self.target_name,
+            "action": cast(ContainerBuildAction, self.action).value,
+            "expected_status": cast(ContainerBuildStatus, self.expected_status).value,
+            "reason": self.reason,
+            "output_exists": self.output_exists,
+            "source_stale": self.source_stale,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ContainerBuildPolicyDecision":
+        mapping = _mapping(data, path="ContainerBuildPolicyDecision")
+        _reject_unknown(
+            mapping,
+            _BUILD_POLICY_DECISION_FIELDS,
+            path="ContainerBuildPolicyDecision",
+        )
+        _require_fields(
+            mapping,
+            {
+                "target_name",
+                "action",
+                "expected_status",
+                "reason",
+                "output_exists",
+            },
+            path="ContainerBuildPolicyDecision",
+        )
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildPolicyDecision.schema_version",
+            ),
+            target_name=_string(
+                mapping["target_name"],
+                path="ContainerBuildPolicyDecision.target_name",
+            ),
+            action=_string(
+                mapping["action"],
+                path="ContainerBuildPolicyDecision.action",
+            ),
+            expected_status=_string(
+                mapping["expected_status"],
+                path="ContainerBuildPolicyDecision.expected_status",
+            ),
+            reason=_string(
+                mapping["reason"],
+                path="ContainerBuildPolicyDecision.reason",
+            ),
+            output_exists=_bool(
+                mapping["output_exists"],
+                path="ContainerBuildPolicyDecision.output_exists",
+            ),
+            source_stale=(
+                None
+                if mapping.get("source_stale") is None
+                else _bool(
+                    mapping["source_stale"],
+                    path="ContainerBuildPolicyDecision.source_stale",
+                )
             ),
         )
 
@@ -1650,16 +1792,293 @@ def build_container_build_key(
         if isinstance(target, ContainerBuildTarget)
         else ContainerBuildTarget.from_dict(target)
     )
-    fields = {
+    digest_fields = {
         "schema_version": CONTAINER_BUILD_SCHEMA_VERSION,
         "target": parsed.to_dict(),
     }
-    digest = hash_mapping(fields)
+    fields = {
+        "schema_version": CONTAINER_BUILD_SCHEMA_VERSION,
+        "target": parsed.to_redacted_metadata(),
+    }
+    digest = hash_mapping(digest_fields)
     return ContainerBuildKeySummary(
         target_name=parsed.name,
         digest=digest,
         fields=fields,
     )
+
+
+class ContainerBuilder(Protocol):
+    """Protocol implemented by local Docker, Apptainer, or fake builders."""
+
+    def build(self, request: ContainerBuildRequest) -> ContainerBuildResult:
+        """Build or reuse one target request."""
+        ...
+
+
+class LocalContainerBuildService:
+    """Foreground local build dispatcher over runtime-specific builders."""
+
+    def __init__(
+        self,
+        builders: Mapping[str | ContainerBuildRuntime, ContainerBuilder],
+    ) -> None:
+        normalized: dict[str, ContainerBuilder] = {}
+        for runtime, builder in builders.items():
+            runtime_value = _build_runtime(runtime, path="builders key").value
+            if not callable(getattr(builder, "build", None)):
+                raise ContainerOptionError(
+                    f"builder for runtime {runtime_value!r} must provide build()"
+                )
+            normalized[runtime_value] = builder
+        self.builders = MappingProxyType(normalized)
+
+    def build(self, request: ContainerBuildRequest | Mapping[str, object]) -> ContainerBuildResult:
+        parsed = (
+            request
+            if isinstance(request, ContainerBuildRequest)
+            else ContainerBuildRequest.from_dict(request)
+        )
+        target = cast(ContainerBuildTarget, parsed.target)
+        runtime = cast(ContainerBuildRuntime, target.runtime).value
+        builder = self.builders.get(runtime)
+        if builder is None:
+            return ContainerBuildResult(
+                target_name=target.name,
+                status=ContainerBuildStatus.FAILED,
+                build_key=parsed.build_key,
+                failure=ContainerBuildFailure(
+                    code="container_build.builder_unavailable",
+                    message=f"no local container builder is registered for {runtime}",
+                    details={"runtime": runtime},
+                ),
+            )
+        return builder.build(parsed)
+
+    def build_target(
+        self,
+        target: ContainerBuildTarget | Mapping[str, object],
+        *,
+        requested_by: str = "controller",
+    ) -> ContainerBuildResult:
+        return self.build(
+            ContainerBuildRequest(target=target, requested_by=requested_by)
+        )
+
+    def build_options(
+        self,
+        options: ContainerBuildOptions | Mapping[str, object] | None,
+        *,
+        requested_by: str = "controller",
+    ) -> tuple[ContainerBuildResult, ...]:
+        parsed = (
+            options
+            if isinstance(options, ContainerBuildOptions)
+            else ContainerBuildOptions.from_dict(options)
+        )
+        return tuple(
+            self.build_target(target, requested_by=requested_by)
+            for target in cast(Mapping[str, ContainerBuildTarget], parsed.targets).values()
+        )
+
+
+class FakeContainerBuilder:
+    """Deterministic fake builder for policy, service, and integration tests."""
+
+    def __init__(
+        self,
+        runtime: str | ContainerBuildRuntime,
+        *,
+        existing_outputs: Sequence[str] = (),
+        stale_outputs: Sequence[str] = (),
+        failed_targets: Mapping[str, str] | None = None,
+    ) -> None:
+        self.runtime = _build_runtime(runtime, path="FakeContainerBuilder.runtime")
+        self.existing_outputs = {
+            _non_empty_string(output, path="FakeContainerBuilder.existing_outputs[]")
+            for output in existing_outputs
+        }
+        self.stale_outputs = {
+            _non_empty_string(output, path="FakeContainerBuilder.stale_outputs[]")
+            for output in stale_outputs
+        }
+        self.failed_targets = MappingProxyType(
+            dict(
+                sorted(
+                    _str_mapping(
+                        failed_targets or {},
+                        path="FakeContainerBuilder.failed_targets",
+                    ).items()
+                )
+            )
+        )
+        self.calls: list[ContainerBuildRequest] = []
+
+    def build(self, request: ContainerBuildRequest) -> ContainerBuildResult:
+        if not isinstance(request, ContainerBuildRequest):
+            raise ContainerOptionError("FakeContainerBuilder.build requires request")
+        target = cast(ContainerBuildTarget, request.target)
+        runtime = cast(ContainerBuildRuntime, target.runtime)
+        if runtime is not self.runtime:
+            return ContainerBuildResult(
+                target_name=target.name,
+                status=ContainerBuildStatus.FAILED,
+                build_key=request.build_key,
+                failure=ContainerBuildFailure(
+                    code="container_build.runtime_mismatch",
+                    message=(
+                        "fake builder runtime does not match target runtime: "
+                        f"{self.runtime.value} != {runtime.value}"
+                    ),
+                    details={"builder_runtime": self.runtime.value, "runtime": runtime.value},
+                ),
+            )
+        self.calls.append(request)
+        output = cast(ContainerBuildOutputRef, target.output)
+        output_id = container_build_output_identity(output)
+        decision = evaluate_container_build_policy(
+            target,
+            output_exists=output_id in self.existing_outputs,
+            source_stale=output_id in self.stale_outputs,
+        )
+        evidence = ContainerBuildEvidence(
+            builder=f"fake-{runtime.value}",
+            metadata={
+                "decision": decision.to_dict(),
+                "output": output.to_redacted_metadata(),
+            },
+        )
+        if decision.action is ContainerBuildAction.REUSE:
+            return ContainerBuildResult(
+                target_name=target.name,
+                status=ContainerBuildStatus.REUSED,
+                output=output,
+                build_key=request.build_key,
+                evidence=evidence,
+            )
+        if decision.action is ContainerBuildAction.FAIL:
+            return _build_failure_result(
+                request=request,
+                code="container_build.policy_missing_output",
+                message=decision.reason,
+                details={"decision": decision.to_dict()},
+                evidence=evidence,
+            )
+        failure_message = self.failed_targets.get(target.name)
+        command = ContainerBuildCommandProjection(
+            argv=(f"fake-{runtime.value}-build", REDACTED_VALUE),
+            build_arg_names=tuple(target.build_args),
+            metadata={"target": target.name, "runtime": runtime.value},
+        )
+        if failure_message is not None:
+            return _build_failure_result(
+                request=request,
+                code="container_build.fake_failed",
+                message=failure_message,
+                details={"target": target.name, "runtime": runtime.value},
+                command=command,
+                evidence=evidence,
+            )
+        self.existing_outputs.add(output_id)
+        self.stale_outputs.discard(output_id)
+        return ContainerBuildResult(
+            target_name=target.name,
+            status=ContainerBuildStatus.BUILT,
+            output=output,
+            build_key=request.build_key,
+            command=command,
+            evidence=evidence,
+        )
+
+
+def evaluate_container_build_policy(
+    target: ContainerBuildTarget | Mapping[str, object],
+    *,
+    output_exists: bool,
+    source_stale: bool | None = None,
+) -> ContainerBuildPolicyDecision:
+    """Return the local build/reuse/fail action for one target."""
+
+    parsed = (
+        target
+        if isinstance(target, ContainerBuildTarget)
+        else ContainerBuildTarget.from_dict(target)
+    )
+    if not isinstance(output_exists, bool):
+        raise ContainerOptionError("output_exists must be a bool")
+    if source_stale is not None and not isinstance(source_stale, bool):
+        raise ContainerOptionError("source_stale must be a bool or None")
+    mode = cast(ContainerBuildPolicy, parsed.policy).mode
+    if mode is ContainerBuildPolicyMode.ALWAYS:
+        return ContainerBuildPolicyDecision(
+            target_name=parsed.name,
+            action=ContainerBuildAction.BUILD,
+            expected_status=ContainerBuildStatus.BUILT,
+            reason="policy always requires a local build",
+            output_exists=output_exists,
+            source_stale=source_stale,
+        )
+    if mode is ContainerBuildPolicyMode.NEVER:
+        if output_exists:
+            return ContainerBuildPolicyDecision(
+                target_name=parsed.name,
+                action=ContainerBuildAction.REUSE,
+                expected_status=ContainerBuildStatus.REUSED,
+                reason="policy never reuses the existing local output",
+                output_exists=output_exists,
+                source_stale=source_stale,
+            )
+        return ContainerBuildPolicyDecision(
+            target_name=parsed.name,
+            action=ContainerBuildAction.FAIL,
+            expected_status=ContainerBuildStatus.FAILED,
+            reason="policy never forbids building a missing local output",
+            output_exists=output_exists,
+            source_stale=source_stale,
+        )
+    if not output_exists:
+        return ContainerBuildPolicyDecision(
+            target_name=parsed.name,
+            action=ContainerBuildAction.BUILD,
+            expected_status=ContainerBuildStatus.BUILT,
+            reason="local output is missing",
+            output_exists=output_exists,
+            source_stale=source_stale,
+        )
+    if source_stale is True:
+        return ContainerBuildPolicyDecision(
+            target_name=parsed.name,
+            action=ContainerBuildAction.BUILD,
+            expected_status=ContainerBuildStatus.BUILT,
+            reason="local output is older than the local source",
+            output_exists=output_exists,
+            source_stale=source_stale,
+        )
+    return ContainerBuildPolicyDecision(
+        target_name=parsed.name,
+        action=ContainerBuildAction.REUSE,
+        expected_status=ContainerBuildStatus.REUSED,
+        reason="local output exists and no local staleness was detected",
+        output_exists=output_exists,
+        source_stale=source_stale,
+    )
+
+
+def container_build_output_identity(
+    output: ContainerBuildOutputRef | Mapping[str, object],
+) -> str:
+    """Return the local identity string used by policy probes."""
+
+    parsed = (
+        output
+        if isinstance(output, ContainerBuildOutputRef)
+        else ContainerBuildOutputRef.from_dict(output)
+    )
+    if parsed.reference is not None:
+        return parsed.reference
+    if parsed.path is not None:
+        return parsed.path
+    raise ContainerOptionError("ContainerBuildOutputRef has no identity")
 
 
 def validate_reserved_docker_options(data: object | None) -> Mapping[str, PlainData]:
@@ -2014,6 +2433,63 @@ def _build_status(
         raise ContainerOptionError(f"{path} must be one of: {valid}") from exc
 
 
+def _build_action(
+    value: ContainerBuildAction | str,
+    *,
+    path: str,
+) -> ContainerBuildAction:
+    if isinstance(value, ContainerBuildAction):
+        return value
+    if not isinstance(value, str):
+        raise ContainerOptionError(f"{path} must be a string")
+    try:
+        return ContainerBuildAction(value)
+    except ValueError as exc:
+        valid = ", ".join(action.value for action in ContainerBuildAction)
+        raise ContainerOptionError(f"{path} must be one of: {valid}") from exc
+
+
+def _validate_policy_decision_status(
+    *,
+    action: ContainerBuildAction,
+    status: ContainerBuildStatus,
+) -> None:
+    expected = {
+        ContainerBuildAction.BUILD: ContainerBuildStatus.BUILT,
+        ContainerBuildAction.REUSE: ContainerBuildStatus.REUSED,
+        ContainerBuildAction.FAIL: ContainerBuildStatus.FAILED,
+    }[action]
+    if status is not expected:
+        raise ContainerOptionError(
+            "ContainerBuildPolicyDecision.expected_status must be "
+            f"{expected.value!r} for action {action.value!r}"
+        )
+
+
+def _build_failure_result(
+    *,
+    request: ContainerBuildRequest,
+    code: str,
+    message: str,
+    details: Mapping[str, PlainData] | None = None,
+    command: ContainerBuildCommandProjection | None = None,
+    evidence: ContainerBuildEvidence | None = None,
+) -> ContainerBuildResult:
+    target = cast(ContainerBuildTarget, request.target)
+    return ContainerBuildResult(
+        target_name=target.name,
+        status=ContainerBuildStatus.FAILED,
+        build_key=request.build_key,
+        command=command,
+        evidence=evidence,
+        failure=ContainerBuildFailure(
+            code=code,
+            message=message,
+            details=details or {},
+        ),
+    )
+
+
 def _validate_build_source_shape(
     *,
     kind: ContainerBuildSourceKind,
@@ -2272,6 +2748,7 @@ def _reject_unknown(
 
 __all__ = [
     "CONTAINER_BUILD_SCHEMA_VERSION",
+    "ContainerBuildAction",
     "ContainerBuildCommandProjection",
     "ContainerBuildEvidence",
     "ContainerBuildFailure",
@@ -2280,6 +2757,7 @@ __all__ = [
     "ContainerBuildOutputKind",
     "ContainerBuildOutputRef",
     "ContainerBuildPolicy",
+    "ContainerBuildPolicyDecision",
     "ContainerBuildPolicyMode",
     "ContainerBuildRequest",
     "ContainerBuildResult",
@@ -2288,8 +2766,11 @@ __all__ = [
     "ContainerBuildSourceKind",
     "ContainerBuildStatus",
     "ContainerBuildTarget",
+    "ContainerBuilder",
     "ContainerEnvironment",
     "ContainerImageReference",
+    "FakeContainerBuilder",
+    "LocalContainerBuildService",
     "ContainerMount",
     "ContainerMountMode",
     "ContainerOptionError",
@@ -2298,6 +2779,8 @@ __all__ = [
     "ContainerResourceIntent",
     "REDACTED_VALUE",
     "build_container_build_key",
+    "container_build_output_identity",
+    "evaluate_container_build_policy",
     "parse_container_build_options",
     "parse_container_options",
     "summarize_path_parity",

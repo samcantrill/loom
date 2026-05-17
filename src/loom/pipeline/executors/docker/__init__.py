@@ -2,6 +2,11 @@
 
 from typing import TYPE_CHECKING
 
+from loom.pipeline.executors.docker.build import (
+    DockerBuildOptions,
+    DockerContainerBuilder,
+    build_docker_build_command,
+)
 from loom.pipeline.executors.docker.commands import (
     DOCKER_COMMAND_RESULT_SCHEMA_VERSION,
     MAX_DOCKER_COMMAND_OUTPUT_CHARS,
@@ -36,8 +41,10 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "DOCKER_COMMAND_RESULT_SCHEMA_VERSION",
     "MAX_DOCKER_COMMAND_OUTPUT_CHARS",
+    "DockerBuildOptions",
     "DockerCommandResult",
     "DockerCommandRunner",
+    "DockerContainerBuilder",
     "DockerExecutor",
     "DockerCommandUnavailableError",
     "DockerOptionError",
@@ -45,6 +52,7 @@ __all__ = [
     "DockerRunCommand",
     "FakeDockerCommandRunner",
     "SubprocessDockerCommandRunner",
+    "build_docker_build_command",
     "build_docker_image_digest_command",
     "build_docker_run_command",
     "build_docker_version_command",

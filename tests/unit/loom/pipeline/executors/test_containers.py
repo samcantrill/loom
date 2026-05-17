@@ -11,11 +11,13 @@ import pytest
 
 from loom.pipeline.executors.containers import (
     REDACTED_VALUE,
+    ContainerBuildAction,
     ContainerBuildCommandProjection,
     ContainerBuildFailure,
     ContainerBuildOptions,
     ContainerBuildOutputRef,
     ContainerBuildPolicy,
+    ContainerBuildPolicyDecision,
     ContainerBuildRequest,
     ContainerBuildResult,
     ContainerBuildSource,
@@ -27,7 +29,11 @@ from loom.pipeline.executors.containers import (
     ContainerOptionError,
     ContainerOptions,
     ContainerResourceIntent,
+    FakeContainerBuilder,
+    LocalContainerBuildService,
     build_container_build_key,
+    container_build_output_identity,
+    evaluate_container_build_policy,
     parse_container_build_options,
     parse_container_options,
     summarize_path_parity,
@@ -356,6 +362,64 @@ def test_container_build_request_and_result_records_are_plain_data() -> None:
     assert failure.to_dict()["failure"] is not None
     with pytest.raises(ContainerOptionError, match="failure is required"):
         ContainerBuildResult(target_name="analysis-env", status="failed")
+
+
+def test_container_build_policy_decisions_and_fake_service() -> None:
+    target = ContainerBuildTarget(
+        name="analysis-env",
+        runtime="apptainer",
+        source=ContainerBuildSource(kind="definition_file", path="containers/a.def"),
+        output=ContainerBuildOutputRef(
+            kind="apptainer_sif",
+            path=".loom/containers/a.sif",
+        ),
+        policy=ContainerBuildPolicy(mode="if_stale"),
+    )
+    decision = evaluate_container_build_policy(
+        target,
+        output_exists=True,
+        source_stale=True,
+    )
+
+    assert decision.action is ContainerBuildAction.BUILD
+    assert ContainerBuildPolicyDecision.from_dict(decision.to_dict()) == decision
+    assert container_build_output_identity(target.output) == ".loom/containers/a.sif"
+
+    builder = FakeContainerBuilder(
+        "apptainer",
+        existing_outputs=[".loom/containers/a.sif"],
+        stale_outputs=[".loom/containers/a.sif"],
+    )
+    service = LocalContainerBuildService({"apptainer": builder})
+    result = service.build_target(target, requested_by="unit-test")
+
+    assert result.status == "built"
+    assert len(builder.calls) == 1
+    assert "secret" not in repr(result.to_dict())
+
+
+def test_container_build_policy_never_fails_when_output_is_missing() -> None:
+    target = ContainerBuildTarget(
+        name="image",
+        runtime="docker",
+        source=ContainerBuildSource(
+            kind="docker_context",
+            context_path=".",
+            recipe_path="Dockerfile",
+        ),
+        output=ContainerBuildOutputRef(
+            kind="docker_image",
+            reference="example/image:latest",
+        ),
+        policy=ContainerBuildPolicy(mode="never"),
+    )
+    service = LocalContainerBuildService({"docker": FakeContainerBuilder("docker")})
+
+    result = service.build_target(target)
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert "policy never" in cast(ContainerBuildFailure, result.failure).message
 
 
 def test_container_build_records_reject_invalid_shapes() -> None:
