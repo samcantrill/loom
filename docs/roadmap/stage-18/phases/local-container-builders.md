@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; PR pending
+- Status: pr_open
 - Feature focus: HPC Container Execution
 - PR title: `HPC Container Execution - Phase 2: Local Container Builders`
 - Branch: `codex/local-container-builders`
@@ -13,7 +13,7 @@
 - Stack predecessor: none
 - Base branch: `origin/develop` at `b5d5967`
 - Target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/183
 - Merge eligibility: root phase; merge to `develop` after validation and automated review
 - Workflow path: expanded path
 - Successor dependency notes: Phase 3 depends on resolved output refs and build-service result shapes.
