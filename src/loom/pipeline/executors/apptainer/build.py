@@ -440,8 +440,21 @@ class ApptainerContainerBuilder:
                 evidence=evidence,
             )
         command = build_apptainer_build_command(parsed, options=self.options)
-        result = self.runner.run(command, timeout_seconds=self.timeout_seconds)
         projection = _projection(command)
+        try:
+            result = self.runner.run(command, timeout_seconds=self.timeout_seconds)
+        except Exception as exc:  # noqa: BLE001 - command availability becomes evidence.
+            return _failure_result(
+                request=parsed,
+                code="container_build.apptainer_launch_failed",
+                message="apptainer build command could not be launched",
+                details={"error": _exception_name(exc)},
+                command=projection,
+                evidence=_evidence(
+                    decision=decision.to_dict(),
+                    operation="build",
+                ),
+            )
         if not result.ok:
             return _failure_result(
                 request=parsed,
@@ -687,6 +700,10 @@ def _result_from_exception(
         timeout_seconds=timeout_seconds,
         error=exc.__class__.__name__,
     )
+
+
+def _exception_name(exc: BaseException) -> str:
+    return exc.__class__.__name__
 
 
 def _plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:

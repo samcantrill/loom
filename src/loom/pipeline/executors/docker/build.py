@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import re
 from types import MappingProxyType
 from typing import cast
 
@@ -42,6 +43,7 @@ from .commands import (
 _BUILD_OPTIONS_FIELDS = frozenset(
     {"command", "buildx", "builder", "pull", "no_cache", "platform", "progress"}
 )
+_ARG_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,11 +151,19 @@ class DockerContainerBuilder:
         target = _docker_target(cast(ContainerBuildTarget, parsed.target))
         output = cast(ContainerBuildOutputRef, target.output)
         output_id = container_build_output_identity(output)
-        exists_result = self.runner.image_digest(
-            output_id,
-            DockerOptions(command=self.options.command),
-            timeout_seconds=self.timeout_seconds,
-        )
+        try:
+            exists_result = self.runner.image_digest(
+                output_id,
+                DockerOptions(command=self.options.command),
+                timeout_seconds=self.timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001 - command availability becomes evidence.
+            return _failure_result(
+                request=parsed,
+                code="container_build.docker_inspect_failed",
+                message="docker image inspection failed before build",
+                details={"error": _exception_name(exc)},
+            )
         output_exists = exists_result.ok and bool(exists_result.stdout.strip())
         decision = evaluate_container_build_policy(
             target,
@@ -182,8 +192,21 @@ class DockerContainerBuilder:
                 evidence=evidence,
             )
         command = build_docker_build_command(parsed, docker_build_options=self.options)
-        result = self.runner.run(command, timeout_seconds=self.timeout_seconds)
         projection = _docker_projection(command)
+        try:
+            result = self.runner.run(command, timeout_seconds=self.timeout_seconds)
+        except Exception as exc:  # noqa: BLE001 - command availability becomes evidence.
+            return _failure_result(
+                request=parsed,
+                code="container_build.docker_launch_failed",
+                message="docker build command could not be launched",
+                details={"error": _exception_name(exc)},
+                command=projection,
+                evidence=_docker_evidence(
+                    decision=decision.to_dict(),
+                    operation="build",
+                ),
+            )
         if not result.ok:
             return _failure_result(
                 request=parsed,
@@ -361,7 +384,7 @@ def _append_option(
 
 def _arg_name(value: object) -> str:
     text = _text(value, path="build_args key")
-    if not text.replace("_", "").replace("-", "").isalnum():
+    if not _ARG_NAME_RE.match(text):
         raise ContainerOptionError(f"build arg name is not portable: {text!r}")
     return text
 
@@ -407,6 +430,10 @@ def _optional_positive_number(value: object, *, path: str) -> int | float | None
     if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0:
         raise ContainerOptionError(f"{path} must be a positive number")
     return value
+
+
+def _exception_name(exc: BaseException) -> str:
+    return exc.__class__.__name__
 
 
 def _reject_unknown(
