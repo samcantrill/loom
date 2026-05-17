@@ -5,7 +5,7 @@ Roadmap stage: `v18`
 Planning document: `docs/roadmap/stage-18/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 3 in progress
+Current phase: Phase 4 pending
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-17 after manager
@@ -358,7 +358,7 @@ of Docker, Apptainer, SLURM, registry clients, or cloud SDKs.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `container-build-contracts` | merged | `codex/container-build-contracts` | [#182](https://github.com/samcantrill/loom/pull/182) | Shared build records, config semantics, descriptor namespaces | Establish `container_build` contracts and whole-namespace replacement behavior | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Named build-target config and namespace override |
 | 2 | `local-container-builders` | merged | `codex/local-container-builders` | [#183](https://github.com/samcantrill/loom/pull/183) | Local build service, fake service, Docker/Apptainer build adapters | Build or reuse Docker image refs and Apptainer SIF refs through shared requests | Unit, contract, fake builder integration; `make validate-pr`; `make test-summary` | SIF build, build policy, output refs |
-| 3 | `apptainer-executor` | pr_open | `codex/apptainer-executor` | [#184](https://github.com/samcantrill/loom/pull/184) | Apptainer/Singularity options, command builders, direct executor | Run prepared stage attempts through `apptainer exec`/`singularity exec` | Command-builder, descriptor, fake-runner executor tests; `make validate-pr`; `make test-summary` | Direct Apptainer stage execution |
+| 3 | `apptainer-executor` | merged | `codex/apptainer-executor` | [#184](https://github.com/samcantrill/loom/pull/184) | Apptainer/Singularity options, command builders, direct executor | Run prepared stage attempts through `apptainer exec`/`singularity exec` | Command-builder, descriptor, fake-runner executor tests; `make validate-pr`; `make test-summary` | Direct Apptainer stage execution |
 | 4 | `slurm-apptainer-composition` | pending | `codex/slurm-apptainer-composition` | pending | SLURM argv wrapping, build-before-render/submission, live reuse | Compose existing SLURM dry-run/live paths with resolved Apptainer execution | Script rendering, manifest, fake `sbatch`/status/cancel integration; `make validate-pr`; `make test-summary` | SLURM plus Apptainer dry-run/live |
 | 5 | `container-preflight-docs` | pending | `codex/container-preflight-docs` | pending | Preflight, docs, examples, optional smoke hooks | Finish selected diagnostics, docs, examples, and opt-in runtime smoke | Stable check-ID tests, docs examples, fake e2e where practical; `make validate-pr`; `make test-summary` | Preflight, docs, optional smoke |
 
@@ -621,7 +621,7 @@ protocols and runtime-specific command semantics
 
 ## Phase 3: Direct Apptainer And Singularity Execution
 
-Status: pr_open
+Status: merged
 Slug: `apptainer-executor`
 Branch: `codex/apptainer-executor`
 Worktree: `/home/samcantrill/work/loom-worktrees/apptainer-executor`
@@ -701,14 +701,14 @@ runtime behavior
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
+- Phase execution plan: completed and merged with PR #184
 - Planning/refinement budget: expanded path; draft and refine expected
 - Implementation/refinement budget: no phase refiner pass used
 - PR review budget: manager automated review used; final target/check
-  verification remains before merge
+  verification passed before merge
 - Blocker-resolution budget: 1/3 used for required host environment projection
 - Pre-submit blocker gate: Phase 2 merged or valid stack predecessor recorded
-- Merge record: pending
+- Merge record: merged to `develop` on 2026-05-17 as squash commit `99df16c`
 
 ### Risks And Stop Conditions
 
@@ -734,8 +734,9 @@ runtime behavior
 - Review fix: manager review found and fixed Apptainer required host
   environment projection so selected host variables are passed as redacted
   `--env NAME=value` entries rather than Docker-style name-only entries.
-- PR: https://github.com/samcantrill/loom/pull/184 opened against `develop`
-- Merge: pending
+- GitHub CI: PR #184 `checks` passed on the updated head before merge.
+- PR: https://github.com/samcantrill/loom/pull/184 merged into `develop`
+- Merge: squash commit `99df16c`
 - Follow-up: SLURM wrapping, selected preflight, docs/examples, and optional
   real runtime smoke remain Phase 4 and Phase 5 work.
 

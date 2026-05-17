@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: HPC Container Execution
 - PR title: `HPC Container Execution - Phase 3: Apptainer Executor`
 - Branch: `codex/apptainer-executor`
@@ -14,7 +14,7 @@
 - Base branch: `origin/develop` at `d88389d`
 - Target branch: `develop`
 - PR: https://github.com/samcantrill/loom/pull/184
-- Merge eligibility: root phase; merge to `develop` after validation and automated review
+- Merge eligibility: merged to `develop` after validation and automated review
 - Workflow path: expanded path
 - Successor dependency notes: Phase 4 depends on the Apptainer command builder for SLURM wrapping.
 - Plan quality gate: passed in the implementation plan on 2026-05-17
@@ -167,7 +167,7 @@ make test-summary
 
 - Phase implementation refinement: unused
 - PR review: used by manager automated review; final target/check verification
-  remains before merge
+  passed before merge
 - Blocker resolution: 1/3 used for required host environment projection
 
 ## Completion Notes
@@ -217,5 +217,8 @@ make test-summary
   - Targeted Pyright passed for touched implementation and test files.
 - PR preparation: PR #184 opened against `develop` with body drafted in
   `docs/roadmap/stage-18/phases/apptainer-executor-pr-body.md`.
+- PR review and merge: manager automated review passed after the required host
+  environment projection fix; PR target verified as `develop`; GitHub CI
+  `checks` passed; PR #184 merged to `develop` as squash commit `99df16c`.
 - Stack maintenance: root phase from `develop`
 - Remaining blockers: none

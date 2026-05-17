@@ -37,7 +37,7 @@ New tests implemented:
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed |
 | `make test-summary` | Passed | Overall 2334 passed, 18 skipped, 1912 deselected |
 | Post-review focused validation | Passed | Apptainer unit suite: 28 passed; targeted Ruff/Pyright passed |
-| GitHub checks | Pending | To be recorded after PR creation |
+| GitHub checks | Passed | PR #184 `checks` passed before merge |
 
 ### Test Suite Summary
 
