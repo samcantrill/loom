@@ -1,11 +1,11 @@
 # Roadmap Stage 20 Implementation Plan: Runtime Events And Event Sinks
 
-Status: Phase 2 merged; Phase 3 in progress
+Status: Phase 3 PR open
 Roadmap stage: `v20`
 Planning document: `docs/roadmap/stage-20/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 3 `runtime-event-dispatch` in progress
+Current phase: Phase 3 `runtime-event-dispatch` PR open; GitHub CI pending
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-17 after
@@ -342,7 +342,7 @@ but must preserve the programmatic-before-plugin-loading sequence.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `event-grammar-compatibility` | merged | `codex/event-grammar-compatibility` | [#187](https://github.com/samcantrill/loom/pull/187) | `loom.pipeline.events`, store event readers | Evolve event grammar and preserve schema-v1 compatibility | Package/import, event unit, store contract/integration, `make validate-pr`, `make test-summary` | Ordered audit log, schema-v1 compatibility |
 | 2 | `event-sink-registry-observer-facts` | merged | `codex/event-sink-registry-observer-facts` | [#188](https://github.com/samcantrill/loom/pull/188) | `loom.pipeline.event_sinks`, store failure/link facets | Add sink registry, dispatch result, callback failure, and observer-link facts | Package/import, sink unit, store contract/integration, `make validate-pr`, `make test-summary` | Observe-only dispatch, callback failure, observer links |
-| 3 | `runtime-event-dispatch` | in_progress | `codex/runtime-event-dispatch` | pending | `loom.pipeline.execution`, lifecycle, eventing | Dispatch events from committed runtime and Stage 19 facts | Eventing/runner/lifecycle unit and integration tests, diagnostics tests, `make validate-pr`, `make test-summary` | Committed fact projection, non-durable opt-out dispatch |
+| 3 | `runtime-event-dispatch` | pr_open | `codex/runtime-event-dispatch` | [#189](https://github.com/samcantrill/loom/pull/189) | `loom.pipeline.execution`, lifecycle, eventing | Dispatch events from committed runtime and Stage 19 facts | Eventing/runner/lifecycle unit and integration tests, diagnostics tests, `make validate-pr`, `make test-summary` | Committed fact projection, non-durable opt-out dispatch |
 | 4 | `event-sink-plugins-diagnostics` | pending | `codex/event-sink-plugins-diagnostics` | pending | `loom.plugins`, diagnostics, CLI/read models, docs | Add explicit plugin loading, warnings, inspection, docs, and final evidence | Plugin unit/contract, diagnostics/CLI tests as changed, docs, `make validate-pr`, `make test-summary` | Explicit plugin loading, read-only inspection |
 
 ## Implementation Readiness Blockers
@@ -613,11 +613,11 @@ and durable observer facts
 
 ## Phase 3: Runtime Dispatch From Committed Facts
 
-Status: in_progress
+Status: pr_open
 Slug: `runtime-event-dispatch`
 Branch: `codex/runtime-event-dispatch`
 Worktree: `/home/samcantrill/work/loom-worktrees/runtime-event-dispatch`
-PR: pending
+PR: [#189](https://github.com/samcantrill/loom/pull/189)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase changes runtime ordering,
@@ -730,11 +730,22 @@ failure policy, and persistence defaults
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: runtime event dispatch helper, explicit sink registry
+  plumbing, non-durable dispatch identity, warning metadata, best-effort
+  callback failure persistence, and runtime dispatch tests implemented in
+  `codex/runtime-event-dispatch`.
+- Validation: targeted Phase 3 unit suite passed with 68 tests; targeted local
+  integration/store suite passed with 1 test and 3 optional-dependency modules
+  skipped in the plain dev environment; diagnostics suite passed with 100 tests
+  when run with `--extra config`; `make validate-pr` passed; `make
+  test-summary` passed with overall status passed.
+- PR: [#189](https://github.com/samcantrill/loom/pull/189) opened against
+  `develop`; verified base `develop`, head `codex/runtime-event-dispatch`,
+  state `OPEN`; GitHub CI `checks` was in progress at PR-open verification.
 - Merge: pending
-- Follow-up: pending
+- Follow-up: Stage 19-specific retry, timeout, transaction, and submission
+  event names remain deferred; Phase 3 preserves committed lifecycle fact
+  ordering and does not redefine reliability semantics.
 
 ## Phase 4: Plugins, Diagnostics, Inspection, And Docs
 
