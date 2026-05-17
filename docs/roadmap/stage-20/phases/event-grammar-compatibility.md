@@ -281,7 +281,12 @@ make test-summary
   - Branch confirmed: `codex/event-grammar-compatibility`.
   - Stack predecessor confirmed: none.
   - Target branch confirmed: `develop`.
-  - PR creation: pending push/open after PR body refine notes are committed.
+  - PR creation: completed. PR #187 opened at
+    `https://github.com/samcantrill/loom/pull/187`.
+  - PR verification: `gh pr view 187 --json
+    baseRefName,headRefName,state,url,mergedAt,reviewDecision,statusCheckRollup`
+    confirmed base `develop`, head `codex/event-grammar-compatibility`, state
+    `OPEN`, and CI `checks` in progress.
   - Scope confirmation: implementation matches Phase 1 event grammar and
     compatibility scope, and future Phase 2+ work was not implemented. No sink
     registry, runtime sink dispatch, plugin loading, callback failure records,
