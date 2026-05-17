@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: HPC Container Execution
 - PR title: `HPC Container Execution - Phase 1: Container Build Contracts`
 - Branch: `codex/container-build-contracts`
@@ -14,7 +14,7 @@
 - Base branch: `origin/develop` at `7367e39`
 - Target branch: `develop`
 - PR: https://github.com/samcantrill/loom/pull/182
-- Merge eligibility: root phase; merge to `develop` after validation and automated review
+- Merge eligibility: merged to `develop`
 - Workflow path: expanded path
 - Successor dependency notes: Phase 2 depends on this phase's shared build records and namespace contract.
 - Plan quality gate: passed in the implementation plan on 2026-05-17
@@ -22,6 +22,7 @@
 - Draft pass: completed by manager before implementation
 - Refine pass: completed in this planning pass because this phase creates public adapter contracts
 - Setup limitations: Stage 18 planning artifacts were copied from the dirty control checkout because Stage 18 is not yet on `develop`; implementation starts from current `origin/develop`.
+- Merge commit: `aa8cf48a015edfec0a67130876227ae69683f900`
 - Blockers: none
 
 ## Objective
@@ -281,4 +282,7 @@ make test-summary
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-18/phases/container-build-contracts-pr-body.md`
 - Stack maintenance: root phase from `develop`
+- Merge record: PR #182 merged to `develop` as
+  `aa8cf48a015edfec0a67130876227ae69683f900`; no successor branch depended on
+  `codex/container-build-contracts` at merge time.
 - Remaining blockers: none

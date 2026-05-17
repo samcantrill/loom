@@ -5,7 +5,7 @@ Roadmap stage: `v18`
 Planning document: `docs/roadmap/stage-18/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 1 PR open
+Current phase: Phase 2 pending
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-17 after manager
@@ -356,7 +356,7 @@ of Docker, Apptainer, SLURM, registry clients, or cloud SDKs.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `container-build-contracts` | pr_open | `codex/container-build-contracts` | [#182](https://github.com/samcantrill/loom/pull/182) | Shared build records, config semantics, descriptor namespaces | Establish `container_build` contracts and whole-namespace replacement behavior | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Named build-target config and namespace override |
+| 1 | `container-build-contracts` | merged | `codex/container-build-contracts` | [#182](https://github.com/samcantrill/loom/pull/182) | Shared build records, config semantics, descriptor namespaces | Establish `container_build` contracts and whole-namespace replacement behavior | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Named build-target config and namespace override |
 | 2 | `local-container-builders` | pending | `codex/local-container-builders` | pending | Local build service, fake service, Docker/Apptainer build adapters | Build or reuse Docker image refs and Apptainer SIF refs through shared requests | Unit, contract, fake builder integration; `make validate-pr`; `make test-summary` | SIF build, build policy, output refs |
 | 3 | `apptainer-executor` | pending | `codex/apptainer-executor` | pending | Apptainer/Singularity options, command builders, direct executor | Run prepared stage attempts through `apptainer exec`/`singularity exec` | Command-builder, descriptor, fake-runner executor tests; `make validate-pr`; `make test-summary` | Direct Apptainer stage execution |
 | 4 | `slurm-apptainer-composition` | pending | `codex/slurm-apptainer-composition` | pending | SLURM argv wrapping, build-before-render/submission, live reuse | Compose existing SLURM dry-run/live paths with resolved Apptainer execution | Script rendering, manifest, fake `sbatch`/status/cancel integration; `make validate-pr`; `make test-summary` | SLURM plus Apptainer dry-run/live |
@@ -371,7 +371,7 @@ of Docker, Apptainer, SLURM, registry clients, or cloud SDKs.
 
 ## Phase 1: Shared Build Contracts And Config Semantics
 
-Status: pr_open
+Status: merged
 Slug: `container-build-contracts`
 Branch: `codex/container-build-contracts`
 Worktree: `/home/samcantrill/work/loom-worktrees/container-build-contracts`
@@ -458,15 +458,16 @@ adapter contracts and must reconcile Stage 17 source
 
 ### Phase Workflow State
 
-- Phase execution plan: in progress
-- Planning/refinement budget: expanded path; draft and refine expected because
-  this phase creates public adapter contracts
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  validation fails, coverage is missing, or public contract risk remains
-- PR review budget: one automated review pass available
-- Blocker-resolution budget: unused
+- Phase execution plan: complete
+- Planning/refinement budget: expanded path; draft and refine completed because
+  this phase created public adapter contracts
+- Implementation/refinement budget: not needed; local and CI validation passed
+- PR review budget: completed by manager before merge
+- Blocker-resolution budget: 1/3 used for the post-review
+  serialization/redaction fix
 - Pre-submit blocker gate: passed; implementation-plan quality gate complete
-- Merge record: pending
+- Merge record: merged to `develop` in
+  `aa8cf48a015edfec0a67130876227ae69683f900`
 
 ### Risks And Stop Conditions
 
@@ -484,11 +485,19 @@ adapter contracts and must reconcile Stage 17 source
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: added schema-versioned shared `container_build` records,
+  Docker/Apptainer output refs, build policies, deterministic build-key
+  summaries, redacted command/evidence/failure records, descriptor namespace
+  claims, and focused unit/contract/profile/package coverage.
+- Validation: targeted Phase 1 suite passed with 172 passed, 1 skipped;
+  post-review focused suite passed with 16 passed; `make validate-pr` passed;
+  `make test-summary` passed with 2293 passed, 18 skipped, 1871 deselected;
+  GitHub CI `checks` passed on PR #182.
+- PR: https://github.com/samcantrill/loom/pull/182
+- Merge: merged to `develop` as
+  `aa8cf48a015edfec0a67130876227ae69683f900`
+- Follow-up: Phase 2 starts from updated `develop`; no successor branch was
+  active at merge time, so the Phase 1 branch/worktree can be cleaned.
 
 ## Phase 2: Local Build Service And Runtime Builders
 
