@@ -650,6 +650,262 @@ def test_selected_docker_resource_checks_fail_gpu_requests(
     assert gpu_diagnostics[0]["code"] == "docker_gpu_unsupported"
 
 
+def test_selected_apptainer_executor_runs_cheap_checks_and_redacts_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        preflight_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "apptainer" else None,
+    )
+    monkeypatch.setenv("HOST_TOKEN", "host-secret")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("pipeline: {}\n", encoding="utf-8")
+    image_path = tmp_path / "runtime.sif"
+    image_path.write_text("fake sif\n", encoding="utf-8")
+    bind_path = tmp_path / "mounted"
+    bind_path.mkdir()
+    run_uri = path_to_run_uri(tmp_path / "runs" / "apptainer-pass")
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            groups=("executor", "resources", "filesystem"),
+            run_uri=run_uri,
+            runtime_options={
+                "executor": "apptainer",
+                "adapter_options": {
+                    "container": {
+                        "image": {"reference": str(image_path)},
+                        "mounts": [
+                            {
+                                "source": str(bind_path),
+                                "target": str(bind_path),
+                                "mode": "rw",
+                            }
+                        ],
+                        "environment": {
+                            "variables": {"SECRET_TOKEN": "super-secret"},
+                            "required_host_variables": ["HOST_TOKEN"],
+                        },
+                    },
+                    "apptainer": {"command": "apptainer", "nv": True},
+                },
+                "stage_options": {
+                    "train": {
+                        "resources": {
+                            "entries": {"gpu": {"kind": "gpu", "amount": 1}}
+                        }
+                    }
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.PASS
+    for check_id in (
+        "executor.apptainer.command",
+        "executor.apptainer.container_options",
+        "executor.apptainer.image",
+        "executor.apptainer.environment",
+        "resources.apptainer.mapping",
+        "resources.apptainer.gpu",
+        "filesystem.apptainer.bind_sources",
+        "filesystem.apptainer.bind_targets",
+        "filesystem.apptainer.run_dir_writable",
+        "filesystem.apptainer.artifact_root_visible",
+    ):
+        assert by_id[check_id].status is PreflightCheckStatus.PASS
+    images = cast(
+        list[dict[str, Any]],
+        by_id["executor.apptainer.image"].details["images"],
+    )
+    assert images[0]["exists"] is True
+    payload = json.dumps(result.to_dict(), sort_keys=True)
+    assert "super-secret" not in payload
+    assert "host-secret" not in payload
+    assert "[redacted]" in payload
+    assert not (tmp_path / "runs" / "apptainer-pass").exists()
+
+
+def test_selected_apptainer_executor_fails_when_command_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options=_apptainer_runtime_options(),
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["executor.apptainer.command"].status is PreflightCheckStatus.FAIL
+    commands = cast(
+        list[dict[str, Any]],
+        by_id["executor.apptainer.command"].details["commands"],
+    )
+    assert commands[0]["available"] is False
+    assert commands[0]["required"] is True
+
+
+def test_selected_apptainer_environment_reports_missing_required_host_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.delenv("MISSING_APPTAINER_TOKEN", raising=False)
+    monkeypatch.setattr(
+        preflight_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "apptainer" else None,
+    )
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={
+                "executor": "apptainer",
+                "adapter_options": {
+                    "container": {
+                        "image": {"reference": "analysis.sif"},
+                        "environment": {
+                            "required_host_variables": ["MISSING_APPTAINER_TOKEN"]
+                        },
+                    }
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["executor.apptainer.environment"].status is PreflightCheckStatus.FAIL
+    missing = cast(
+        list[dict[str, Any]],
+        by_id["executor.apptainer.environment"].details[
+            "missing_required_host_variables"
+        ],
+    )
+    assert missing == [{"stage_id": "train", "name": "MISSING_APPTAINER_TOKEN"}]
+
+
+def test_slurm_container_preflight_resolves_build_target_and_warns_without_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor", "resources"),
+            runtime_options={
+                "executor": "slurm-afterok",
+                "dry_run": True,
+                "adapter_options": {
+                    "container": {"target": "analysis-env"},
+                    "container_build": {
+                        "targets": {
+                            "analysis-env": {
+                                "name": "analysis-env",
+                                "runtime": "apptainer",
+                                "source": {
+                                    "kind": "definition_file",
+                                    "path": "containers/analysis.def",
+                                },
+                                "output": {
+                                    "kind": "apptainer_sif",
+                                    "path": ".loom/containers/analysis.sif",
+                                },
+                            }
+                        }
+                    },
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.WARN
+    assert by_id["executor.container_build.targets"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.apptainer.container_options"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.apptainer.command"].status is PreflightCheckStatus.WARN
+    assert (
+        by_id["resources.slurm.container_compatibility"].status
+        is PreflightCheckStatus.PASS
+    )
+
+
+def test_container_build_filesystem_checks_sources_and_never_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    source_path = tmp_path / "containers" / "analysis.def"
+    output_path = tmp_path / ".loom" / "containers" / "analysis.sif"
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            cwd=tmp_path,
+            groups=("runtime", "filesystem"),
+            runtime_options={
+                "adapter_options": {
+                    "container_build": {
+                        "targets": {
+                            "analysis-env": {
+                                "name": "analysis-env",
+                                "runtime": "apptainer",
+                                "source": {
+                                    "kind": "definition_file",
+                                    "path": "containers/analysis.def",
+                                },
+                                "output": {
+                                    "kind": "apptainer_sif",
+                                    "path": ".loom/containers/analysis.sif",
+                                },
+                                "policy": {"mode": "never"},
+                                "build_args": {"TOKEN": "build-secret"},
+                            }
+                        }
+                    }
+                }
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["runtime.container_build.options"].status is PreflightCheckStatus.PASS
+    assert by_id["filesystem.container_build.sources"].status is PreflightCheckStatus.FAIL
+    assert by_id["filesystem.container_build.outputs"].status is PreflightCheckStatus.FAIL
+    assert str(source_path) in json.dumps(
+        by_id["filesystem.container_build.sources"].to_dict(),
+        sort_keys=True,
+    )
+    assert str(output_path) in json.dumps(
+        by_id["filesystem.container_build.outputs"].to_dict(),
+        sort_keys=True,
+    )
+    assert "build-secret" not in json.dumps(result.to_dict(), sort_keys=True)
+
+
 def test_slurm_dry_run_preflight_emits_stable_checks_and_warns_without_sbatch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -933,5 +1189,14 @@ def _docker_runtime_options() -> dict[str, object]:
         "executor": "docker",
         "adapter_options": {
             "container": {"image": {"reference": "python:3.11-slim"}}
+        },
+    }
+
+
+def _apptainer_runtime_options() -> dict[str, object]:
+    return {
+        "executor": "apptainer",
+        "adapter_options": {
+            "container": {"image": {"reference": "analysis.sif"}}
         },
     }
