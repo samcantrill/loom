@@ -227,7 +227,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -247,7 +247,22 @@ make test-summary
   - `uv run pytest tests/unit/loom/pipeline/test_offline_evidence.py tests/integration/authority/test_offline_import_api.py` passed, 5 tests.
   - Additional authority/offline confidence run: `uv run pytest tests/unit/loom/pipeline/test_offline_evidence.py tests/integration/authority/test_offline_import_api.py tests/unit/loom/authority/test_offline_import.py tests/integration/authority/test_repository_run_lifecycle.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py` passed, 26 tests.
   - `make validate-pr` passed: Ruff, Pyright, default harness, config-extra harness, and build.
-- Refinement summary: clarified public schema-version 2 field names, compatibility helper names and semantics, strict resource/reference validation, offline evidence/import behavior, local and authority persistence impacts, package/import-boundary obligations, immediate docs/docstring needs, and stop conditions
+- Refinement summary:
+  - Pass type: implementation refinement.
+  - Validation output reviewed: executor-reported targeted package/unit/contract/integration/offline runs and `make validate-pr` pass, then refinement reruns listed below.
+  - Blocking issues caused by this phase: `PipelineEventRecord` treated explicit falsy constructor inputs for `payload` and `event_id` as missing instead of malformed; private authority repositories opened against the legacy global-primary-key `audit_events` table could allocate duplicate sequence keys when Stage 20 per-run event sequences were appended for a second run.
+  - Issues confirmed out of scope: no sink registry, runtime dispatch, plugin loading, callback failure records, observer links, CLI presentation, or future Phase 2+ behavior was changed.
+  - Fixes made:
+    | Issue | Change | Evidence |
+    | --- | --- | --- |
+    | Falsy event-record constructor values bypassed strict validation | Distinguished `None` defaults from invalid falsy `payload` and `event_id` values and added unit regressions | `uv run pytest tests/unit/loom/pipeline/test_events.py tests/integration/authority/test_repository_run_lifecycle.py` passed, 37 tests |
+    | Legacy private authority `audit_events` primary key conflicted with per-run sequence allocation | Migrated the private repository table to the Stage 20 `(run_uri, sequence)` primary key while preserving legacy rows and added a file-backed regression | `uv run pytest tests/unit/loom/authority/test_repository_run_lifecycle.py tests/unit/loom/authority/test_offline_import.py tests/integration/authority/test_repository_run_lifecycle.py` passed, 15 tests |
+  - Tests or validation re-run:
+    - `uv run pytest tests/unit/loom/pipeline/test_events.py tests/integration/authority/test_repository_run_lifecycle.py` passed, 37 tests.
+    - `uv run pytest tests/unit/loom/authority/test_repository_run_lifecycle.py tests/unit/loom/authority/test_offline_import.py tests/integration/authority/test_repository_run_lifecycle.py` passed, 15 tests.
+    - `uv run ruff check src/loom/pipeline/events.py src/loom/authority/_repository.py tests/unit/loom/pipeline/test_events.py tests/integration/authority/test_repository_run_lifecycle.py` passed.
+    - `uv run pyright src/loom/pipeline/events.py src/loom/authority/_repository.py tests/unit/loom/pipeline/test_events.py tests/integration/authority/test_repository_run_lifecycle.py` passed.
+  - PR preparation handoff: completion notes updated, phase implementation refinement budget marked `used`, blocker-resolution budget unchanged at `0/3 used`, and final PR preparation should still run `make validate-pr` and `make test-summary`.
 - Blocker-resolution summary: pending
 - PR preparation: pending
 - Stack maintenance: pending

@@ -3278,12 +3278,52 @@ def _audit_event_from_row(
 
 
 def _ensure_audit_event_json_column(conn: sqlite3.Connection) -> None:
-    columns = {
-        cast(str, row["name"])
-        for row in conn.execute("PRAGMA table_info(audit_events)")
-    }
+    table_info = tuple(conn.execute("PRAGMA table_info(audit_events)"))
+    columns = {cast(str, row["name"]) for row in table_info}
     if "event_json" not in columns:
         conn.execute("ALTER TABLE audit_events ADD COLUMN event_json TEXT")
+        columns.add("event_json")
+    pk_columns = {cast(str, row["name"]) for row in table_info if row["pk"]}
+    if pk_columns != {"run_uri", "sequence"}:
+        _migrate_audit_events_to_per_run_primary_key(conn)
+
+
+def _migrate_audit_events_to_per_run_primary_key(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP INDEX IF EXISTS idx_audit_events_run")
+    conn.execute("ALTER TABLE audit_events RENAME TO audit_events_legacy_migration")
+    conn.execute(
+        """
+        CREATE TABLE audit_events (
+            sequence INTEGER NOT NULL,
+            run_uri TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            scope_json TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            event_json TEXT,
+            revision_sequence INTEGER NOT NULL,
+            PRIMARY KEY(run_uri, sequence)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO audit_events (
+            sequence, run_uri, timestamp, scope_json, event_type, payload_json,
+            event_json, revision_sequence
+        )
+        SELECT sequence, run_uri, timestamp, scope_json, event_type, payload_json,
+            event_json, revision_sequence
+        FROM audit_events_legacy_migration
+        """
+    )
+    conn.execute("DROP TABLE audit_events_legacy_migration")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_audit_events_run
+            ON audit_events(run_uri, sequence)
+        """
+    )
 
 
 def _next_audit_event_sequence(conn: sqlite3.Connection, *, run_uri: str) -> int:

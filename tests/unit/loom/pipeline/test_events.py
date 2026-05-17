@@ -260,6 +260,28 @@ def test_pipeline_event_record_accepts_causal_predecessor_reference() -> None:
     assert PipelineEventRecord.from_dict(record.to_dict()) == record
 
 
+def test_pipeline_event_record_rejects_invalid_constructor_values() -> None:
+    timestamp = utc_timestamp()
+
+    with pytest.raises(PipelineEventError, match="payload"):
+        PipelineEventRecord(
+            run_uri="run1",
+            sequence=1,
+            occurred_at=timestamp,
+            event_type="run.created",
+            payload=cast(Any, []),
+        )
+
+    with pytest.raises(PipelineEventError, match="event_id"):
+        PipelineEventRecord(
+            run_uri="run1",
+            sequence=1,
+            occurred_at=timestamp,
+            event_type="run.created",
+            event_id="",
+        )
+
+
 @pytest.mark.parametrize(
     "payload",
     [

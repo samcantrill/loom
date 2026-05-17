@@ -354,14 +354,17 @@ class PipelineEventRecord:
             self,
             "payload",
             freeze_plain_data(
-                _plain_mapping(payload or {}, field="payload"), path="payload"
+                _plain_mapping({} if payload is None else payload, field="payload"),
+                path="payload",
             ),
         )
         object.__setattr__(
             self,
             "event_id",
             _require_non_empty_string(
-                event_id or compatibility_event_id(run_uri_text, sequence_int),
+                compatibility_event_id(run_uri_text, sequence_int)
+                if event_id is None
+                else event_id,
                 field="event_id",
             ),
         )
