@@ -15,6 +15,8 @@ This component owns:
 
 ```text
 container executor configuration shape
+shared container build target configuration shape
+local foreground build/reuse records and redacted evidence
 container image identity recording
 command construction contract
 mount and working directory rules
@@ -29,7 +31,7 @@ preflight checks for container runtimes
 This component does not own:
 
 ```text
-building container images
+external or site-managed build services
 publishing images
 cloud container orchestration
 Kubernetes
@@ -316,6 +318,46 @@ Default Stage 17 preflight is cheaper than daemon health: it checks command
 availability through `PATH` and never pulls images, contacts registries, probes
 networks, or requires a live daemon.
 
+## Shared Build Targets
+
+Stage 18 adds an executor-owned `container_build` adapter namespace for reusable
+local build targets. A target describes a Docker image or Apptainer SIF output,
+its authored source, a local build/reuse policy, build arguments, and redacted
+metadata. The namespace is replaced as a whole when runtime/profile options are
+merged; Loom does not deep-merge individual targets in this stage.
+
+Example Apptainer SIF target:
+
+```yaml
+runtime:
+  adapter_options:
+    container_build:
+      targets:
+        analysis-env:
+          name: analysis-env
+          runtime: apptainer
+          source:
+            kind: definition_file
+            path: containers/analysis.def
+          output:
+            kind: apptainer_sif
+            path: .loom/containers/analysis-env.sif
+          policy:
+            mode: if_stale
+```
+
+Local builders run in the foreground and return `built`, `reused`, `failed`, or
+`skipped` results with redacted command/evidence summaries. Build output refs
+are facts, not authoritative stage outputs. The default implementation does not
+publish images, authenticate to registries, maintain a global cache, or run an
+external build service.
+
+For direct Docker or Apptainer execution, configure
+`adapter_options.container.image.reference` with the image ref or SIF path the
+executor should use. SLURM plus Apptainer can additionally resolve
+`adapter_options.container.target` from a configured Apptainer build target
+before script rendering or live submission.
+
 ## Apptainer Executor
 
 Apptainer executor responsibilities:
@@ -344,6 +386,43 @@ run directory bind is writable
 GPU flags are valid for the selected profile
 ```
 
+Implemented Stage 18 direct Apptainer/Singularity execution uses the same
+prepared-worker contract as subprocess and Docker: the controller prepares one
+stage attempt, injects required read-write binds for the local run directory and
+artifact root, and launches the worker through `apptainer exec` or
+`singularity exec`.
+
+Implemented config uses runtime or profile adapter options:
+
+```yaml
+runtime_profiles:
+  apptainer-default:
+    executor: apptainer
+    adapter_options:
+      container:
+        image:
+          reference: .loom/containers/analysis-env.sif
+        workdir: /workspace
+        mounts:
+          - source: /workspace
+            target: /workspace
+            mode: ro
+        environment:
+          variables:
+            LOOM_CONTAINER_EXAMPLE: apptainer-pipeline
+          required_host_variables:
+            - LOOM_INPUT_ROOT
+      apptainer:
+        cleanenv: true
+        nv: false
+        rocm: false
+```
+
+`cleanenv` defaults to true. Explicit variables and selected required host
+variables are projected with values redacted from persisted metadata. GPU
+exposure is explicit through `nv` or `rocm`; scheduler allocation remains owned
+by the outer scheduler when SLURM is selected.
+
 ## SLURM Integration
 
 SLURM and containers can be composed in two ways:
@@ -365,6 +444,41 @@ container executor records image and exit code
 
 Avoid creating a separate containerized SLURM path that bypasses normal executor
 state records.
+
+Stage 18 composes existing `slurm-single-job` and `slurm-afterok` modes with
+Apptainer by wrapping generated `loom prepared-run continue` or
+`loom stage-job run` commands in deterministic Apptainer exec argv. Build
+target resolution runs on the submit/controller side before dry-run artifacts
+are rendered or `sbatch` is called. Generated batch scripts contain Apptainer
+execution commands and never hide Docker or Apptainer build commands.
+
+Example SLURM plus Apptainer profile:
+
+```yaml
+runtime_profiles:
+  slurm-apptainer:
+    executor: slurm-afterok
+    dry_run: true
+    adapter_options:
+      container:
+        target: analysis-env
+      container_build:
+        targets:
+          analysis-env:
+            name: analysis-env
+            runtime: apptainer
+            source:
+              kind: definition_file
+              path: containers/analysis.def
+            output:
+              kind: apptainer_sif
+              path: .loom/containers/analysis-env.sif
+      apptainer:
+        cleanenv: true
+        no_home: true
+      slurm:
+        launcher_argv: ["loom"]
+```
 
 ## Artifacts
 
@@ -439,6 +553,12 @@ selected executor plugin availability
 ```
 
 Checks that require pulling images or contacting registries should be opt-in.
+Implemented Stage 18 preflight checks are cheap by default. They parse
+`container`, `container_build`, `docker`, `apptainer`, `singularity`, and
+`slurm` adapter namespaces, check runtime command availability through `PATH`,
+inspect local paths, summarize build target readiness, and report required host
+environment variable names. They do not run real containers, pull images,
+contact registries, submit jobs, or probe fakeroot.
 
 ## Error Handling
 
@@ -476,8 +596,8 @@ container exit code mapping
 SLURM wrapper composition shape
 ```
 
-Integration tests that require real Docker or Apptainer should be optional and
-skipped unless explicitly enabled.
+Integration tests that require real Docker, Apptainer/Singularity, SIF build,
+or SLURM should be optional and skipped unless explicitly enabled.
 
 Stage 17 example smoke tests use a fake `docker` command that executes the
 prepared worker command locally while exercising the public Docker executor and
@@ -500,7 +620,6 @@ import `loom` and the example project code at the same paths used by the host.
 Deferred container features:
 
 ```text
-image build commands
 image lock files
 registry authentication helpers
 Kubernetes executor

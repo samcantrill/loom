@@ -52,6 +52,26 @@ Empty future suite directories are reported as `not present` by suite-specific
 targets. Once a suite contains tests, target failures should be treated as phase
 blockers unless the phase plan or PR body explicitly justifies the limitation.
 
+## Opt-in runtime acceptance hooks
+
+Real container and cluster smoke tests are skipped by default. Use them only in
+an environment that intentionally provides the selected runtime:
+
+```sh
+LOOM_RUN_DOCKER_ACCEPTANCE=1 uv run pytest tests/container_acceptance
+LOOM_RUN_APPTAINER_ACCEPTANCE=1 uv run pytest tests/container_acceptance
+LOOM_RUN_APPTAINER_BUILD_ACCEPTANCE=1 \
+  LOOM_APPTAINER_BUILD_DEFINITION=/path/to/definition.def \
+  uv run pytest tests/container_acceptance
+LOOM_RUN_SLURM_ACCEPTANCE=1 \
+  LOOM_SLURM_ACCEPTANCE_ROOT=/shared/path \
+  uv run pytest tests/slurm_acceptance
+```
+
+These hooks are marked `slow` and/or `optional_dependency`. They are manual
+acceptance evidence and are not required by `make validate-pr` or
+`make test-summary`.
+
 ## Validation split for optional dependencies
 
 Phase 1 splits validation into two install surfaces:
