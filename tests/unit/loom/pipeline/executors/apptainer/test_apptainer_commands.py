@@ -37,6 +37,7 @@ def test_build_apptainer_exec_command_is_deterministic_and_redacted() -> None:
             no_home=True,
         ),
         worker_command=("python", "-c", "print('ok')"),
+        host_environment={"HOME": "/home/test"},
     )
 
     assert command.argv == (
@@ -57,7 +58,7 @@ def test_build_apptainer_exec_command_is_deterministic_and_redacted() -> None:
         "--env",
         "TOKEN=secret",
         "--env",
-        "HOME",
+        "HOME=/home/test",
         "analysis.sif",
         "python",
         "-c",
@@ -81,7 +82,7 @@ def test_build_apptainer_exec_command_is_deterministic_and_redacted() -> None:
         "--env",
         "TOKEN=[redacted]",
         "--env",
-        "HOME",
+        "HOME=[redacted]",
         "analysis.sif",
         "python",
         "-c",
@@ -110,6 +111,15 @@ def test_apptainer_exec_options_and_inputs_reject_invalid_shapes() -> None:
                 environment={"variables": {"BAD-NAME": "value"}},
             ),
             worker_command=("python", "-V"),
+        )
+    with pytest.raises(ApptainerOptionError, match="required host environment variable"):
+        build_apptainer_exec_command(
+            container_options=ContainerOptions(
+                image="analysis.sif",
+                environment={"required_host_variables": ["TOKEN"]},
+            ),
+            worker_command=("python", "-V"),
+            host_environment={},
         )
 
 

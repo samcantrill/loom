@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+import os
 import re
 import shutil
 from types import MappingProxyType
@@ -330,6 +331,7 @@ def build_apptainer_exec_command(
     container_options: ContainerOptions | Mapping[str, object],
     worker_command: Sequence[str],
     apptainer_options: ApptainerExecOptions | Mapping[str, object] | None = None,
+    host_environment: Mapping[str, str] | None = None,
 ) -> ApptainerExecCommand:
     """Return deterministic ``apptainer exec`` argv for one worker command."""
 
@@ -353,7 +355,10 @@ def build_apptainer_exec_command(
     for mount in _sorted_mounts(container):
         _append_option(argv, redacted, "--bind", _bind_argument(mount))
     _append_environment(
-        argv, redacted, cast(ContainerEnvironment, container.environment)
+        argv,
+        redacted,
+        cast(ContainerEnvironment, container.environment),
+        host_environment=host_environment,
     )
     image = cast(ContainerImageReference, container.image).reference
     _append(argv, redacted, image)
@@ -393,14 +398,24 @@ def _append_environment(
     argv: list[str],
     redacted: list[str],
     environment: ContainerEnvironment,
+    *,
+    host_environment: Mapping[str, str] | None,
 ) -> None:
     for name, value in environment.variables.items():
         key = _env_name(name)
         _append(argv, redacted, "--env")
         argv.append(f"{key}={_env_value(value, key=key)}")
         redacted.append(f"{key}={REDACTED_VALUE}")
+    host = os.environ if host_environment is None else host_environment
     for name in environment.required_host_variables:
-        _append_option(argv, redacted, "--env", _env_name(name))
+        key = _env_name(name)
+        if key not in host:
+            raise ApptainerOptionError(
+                f"required host environment variable {key!r} is not set"
+            )
+        _append(argv, redacted, "--env")
+        argv.append(f"{key}={_env_value(host[key], key=key)}")
+        redacted.append(f"{key}={REDACTED_VALUE}")
 
 
 def _bind_argument(mount: ContainerMount) -> str:

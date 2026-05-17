@@ -182,7 +182,6 @@ def _adapter_options(store: LocalRunStore, run_uri: str) -> dict[str, PlainData]
             "mounts": [],
             "environment": {
                 "variables": {"MODE": "test", "TOKEN": "secret"},
-                "required_host_variables": ["HOME"],
             },
         },
         "apptainer": {"cleanenv": True, "nv": True},
