@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; PR pending
+- Status: pr_open
 - Feature focus: HPC Container Execution
 - PR title: `HPC Container Execution - Phase 1: Container Build Contracts`
 - Branch: `codex/container-build-contracts`
@@ -13,6 +13,7 @@
 - Stack predecessor: none
 - Base branch: `origin/develop` at `7367e39`
 - Target branch: `develop`
+- PR: https://github.com/samcantrill/loom/pull/182
 - Merge eligibility: root phase; merge to `develop` after validation and automated review
 - Workflow path: expanded path
 - Successor dependency notes: Phase 2 depends on this phase's shared build records and namespace contract.
@@ -232,8 +233,8 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: not needed; targeted suite and full PR gate passed
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: completed by manager after PR #182 opened; findings resolved
+- Blocker resolution: 1/3 used for the post-review serialization/redaction fix
 
 ## Completion Notes
 
@@ -259,9 +260,24 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed outside the sandbox
     and wrote `build/test-summary.md`; overall summary: 2293 passed, 18
     skipped, 1871 deselected.
+- Automated review summary: manager review after PR #182 opened found and
+  fixed ordered command/log vector serialization and redacted metadata
+  projections so redacted records expose metadata keys, not values.
+- Post-review validation:
+  - Focused container unit/contract tests passed:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/test_containers.py tests/contracts/test_container_executor_contract.py`:
+    16 passed.
+  - Targeted Ruff and Pyright passed for the touched implementation and test
+    files.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed outside the sandbox
+    after the post-review fix.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed outside the sandbox
+    after the post-review fix; overall summary remained 2293 passed, 18
+    skipped, 1871 deselected.
 - Refinement summary: not needed; validation passed after manager
-  implementation.
-- Blocker-resolution summary: none used
+  implementation and post-review fix.
+- Blocker-resolution summary: 1/3 used for the post-review
+  serialization/redaction fix; no remaining blockers
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-18/phases/container-build-contracts-pr-body.md`
 - Stack maintenance: root phase from `develop`
