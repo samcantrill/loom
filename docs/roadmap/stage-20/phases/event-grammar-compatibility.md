@@ -269,14 +269,19 @@ make test-summary
     `.codex/prompts/pr-body-draft.md`.
   - PR body artifact:
     `docs/roadmap/stage-20/phases/event-grammar-compatibility-pr-body.md`.
-  - Refine pass: pending because this phase uses the expanded path.
+  - Refine pass: completed locally on 2026-05-17 after the delegated
+    `loom_pr_preparer` refine pass stalled without edits.
+  - Pre-submit blocker gate: passed. The phase plan, PR body, diff, targeted
+    validation, `make validate-pr`, `make test-summary`, scope boundary, and
+    future-phase exclusions were reviewed; no known implementation,
+    validation, scope, review, or PR-body blockers remained before PR
+    submission.
   - PR title confirmed:
     `Runtime Events - Phase 1: Event Grammar and Compatibility`.
   - Branch confirmed: `codex/event-grammar-compatibility`.
   - Stack predecessor confirmed: none.
   - Target branch confirmed: `develop`.
-  - PR creation: not performed in this draft pass by instruction; expanded-path
-    PR body refine owns opening or final preparation.
+  - PR creation: pending push/open after PR body refine notes are committed.
   - Scope confirmation: implementation matches Phase 1 event grammar and
     compatibility scope, and future Phase 2+ work was not implemented. No sink
     registry, runtime sink dispatch, plugin loading, callback failure records,

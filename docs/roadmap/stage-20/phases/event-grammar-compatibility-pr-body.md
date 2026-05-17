@@ -31,7 +31,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed after refinement. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; overall status passed. |
-| GitHub checks | Not run | PR is intentionally not opened in this draft pass; expanded-path PR body refine will open or prepare the PR. |
+| GitHub checks | Pending | Expected to run after PR creation. |
 
 ### Test Suite Summary
 
