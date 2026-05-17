@@ -242,5 +242,7 @@ make test-summary
   deselected.
 - PR preparation: PR body artifact prepared at
   `docs/roadmap/stage-20/phases/event-sink-plugins-diagnostics-pr-body.md`;
-  PR opening pending.
+  PR [#190](https://github.com/samcantrill/loom/pull/190) opened against
+  `develop`; verification confirmed base `develop`, head
+  `codex/event-sink-plugins-diagnostics`, and state `OPEN`.
 - Remaining blockers: none
