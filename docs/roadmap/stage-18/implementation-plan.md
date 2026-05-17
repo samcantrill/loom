@@ -5,7 +5,7 @@ Roadmap stage: `v18`
 Planning document: `docs/roadmap/stage-18/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 4 pr_open
+Current phase: Phase 5 pending
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-17 after manager
@@ -359,7 +359,7 @@ of Docker, Apptainer, SLURM, registry clients, or cloud SDKs.
 | 1 | `container-build-contracts` | merged | `codex/container-build-contracts` | [#182](https://github.com/samcantrill/loom/pull/182) | Shared build records, config semantics, descriptor namespaces | Establish `container_build` contracts and whole-namespace replacement behavior | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Named build-target config and namespace override |
 | 2 | `local-container-builders` | merged | `codex/local-container-builders` | [#183](https://github.com/samcantrill/loom/pull/183) | Local build service, fake service, Docker/Apptainer build adapters | Build or reuse Docker image refs and Apptainer SIF refs through shared requests | Unit, contract, fake builder integration; `make validate-pr`; `make test-summary` | SIF build, build policy, output refs |
 | 3 | `apptainer-executor` | merged | `codex/apptainer-executor` | [#184](https://github.com/samcantrill/loom/pull/184) | Apptainer/Singularity options, command builders, direct executor | Run prepared stage attempts through `apptainer exec`/`singularity exec` | Command-builder, descriptor, fake-runner executor tests; `make validate-pr`; `make test-summary` | Direct Apptainer stage execution |
-| 4 | `slurm-apptainer-composition` | pr_open | `codex/slurm-apptainer-composition` | [#185](https://github.com/samcantrill/loom/pull/185) | SLURM argv wrapping, build-before-render/submission, live reuse | Compose existing SLURM dry-run/live paths with resolved Apptainer execution | Script rendering, manifest, fake `sbatch`/status/cancel integration; `make validate-pr`; `make test-summary` | SLURM plus Apptainer dry-run/live |
+| 4 | `slurm-apptainer-composition` | merged | `codex/slurm-apptainer-composition` | [#185](https://github.com/samcantrill/loom/pull/185) | SLURM argv wrapping, build-before-render/submission, live reuse | Compose existing SLURM dry-run/live paths with resolved Apptainer execution | Script rendering, manifest, fake `sbatch`/status/cancel integration; `make validate-pr`; `make test-summary` | SLURM plus Apptainer dry-run/live |
 | 5 | `container-preflight-docs` | pending | `codex/container-preflight-docs` | pending | Preflight, docs, examples, optional smoke hooks | Finish selected diagnostics, docs, examples, and opt-in runtime smoke | Stable check-ID tests, docs examples, fake e2e where practical; `make validate-pr`; `make test-summary` | Preflight, docs, optional smoke |
 
 ## Implementation Readiness Blockers
@@ -742,11 +742,12 @@ runtime behavior
 
 ## Phase 4: SLURM Plus Apptainer Composition
 
-Status: pr_open
+Status: merged
 Slug: `slurm-apptainer-composition`
 Branch: `codex/slurm-apptainer-composition`
 Worktree: `/home/samcantrill/work/loom-worktrees/slurm-apptainer-composition`
 PR: https://github.com/samcantrill/loom/pull/185
+Merge commit: `4c7110a21af20070ea4fef305d55116ed9aaa376`
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase composes scheduler and
@@ -826,10 +827,12 @@ container behavior across dry-run and live submission paths
 - Planning/refinement budget: expanded path; draft and refine completed
 - Implementation/refinement budget: one `loom_phase_refiner` pass available if
   scheduler/container boundaries or validation fail
-- PR review budget: one automated review pass available
+- PR review budget: used by manager automated review; final target/check
+  verification passed before merge
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phase 3 merged or valid stack predecessor recorded
-- Merge record: pending
+- Merge record: PR #185 merged to `develop` as
+  `4c7110a21af20070ea4fef305d55116ed9aaa376`
 
 ### Risks And Stop Conditions
 
@@ -859,8 +862,9 @@ container behavior across dry-run and live submission paths
 - PR: https://github.com/samcantrill/loom/pull/185 opened against `develop`;
   body drafted in
   `docs/roadmap/stage-18/phases/slurm-apptainer-composition-pr-body.md`;
-  GitHub checks pending.
-- Merge: pending
+  GitHub `checks` passed before merge.
+- Merge: PR #185 merged into `develop` as squash commit
+  `4c7110a21af20070ea4fef305d55116ed9aaa376`.
 - Follow-up: selected-executor preflight, user docs/examples, and optional
   real runtime/cluster smoke remain Phase 5 work.
 

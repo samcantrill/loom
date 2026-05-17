@@ -38,7 +38,7 @@ New tests implemented:
 | Targeted contract/integration/e2e suite | Passed | 21 passed, 3 skipped |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed outside the sandbox |
 | `make test-summary` | Passed | Overall 2344 passed, 18 skipped, 1922 deselected |
-| GitHub checks | Pending | To be recorded after PR creation |
+| GitHub checks | Passed | PR #185 `checks` passed before merge |
 
 ### Test Suite Summary
 
