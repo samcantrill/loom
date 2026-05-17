@@ -169,8 +169,11 @@ make test-summary
 
 ## Budget Status
 
-- Phase implementation refinement: unused
-- PR review: unused
+- Phase implementation refinement: unused; manager-local validation fixes stayed
+  within the implementation pass and did not consume the optional refiner pass
+- PR review: used by manager local review on 2026-05-17; no blocking findings
+  found, scope confirmed limited to explicit event sink plugin loading,
+  plugin/preflight readiness, tests, docs, and phase artifacts
 - Blocker resolution: 0/3 used
 
 ## Design Impact
@@ -227,7 +230,17 @@ make test-summary
 
 - Draft plan: completed by manager on 2026-05-17
 - Final phase execution plan: completed by manager on 2026-05-17
-- Implementation summary: pending
-- Validation: pending
-- PR preparation: pending
+- Implementation summary: added `loom.plugins.event_sinks` with explicit
+  `load_event_sink_entry_points()` support for callable sinks, no-arg sink
+  classes, and no-arg factories; exported the loader lazily from `loom.plugins`;
+  moved `loom.event_sinks` readiness to registry-ready/loadable; scratch-loads
+  selected event sink plugins during plugin diagnostics/preflight; updated CLI
+  plugin expectations, feature docs, testing docs, and source-tree guidance.
+- Validation: targeted plugin and preflight suites passed; `make validate-pr`
+  passed Ruff, Pyright, default harness, config-extra harness, and build; `make
+  test-summary` passed with overall 2385 passed, 21 skipped, and 1961
+  deselected.
+- PR preparation: PR body artifact prepared at
+  `docs/roadmap/stage-20/phases/event-sink-plugins-diagnostics-pr-body.md`;
+  PR opening pending.
 - Remaining blockers: none
