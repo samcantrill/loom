@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: HPC Container Execution
 - PR title: `HPC Container Execution - Phase 5: Preflight Docs And Smoke Hooks`
 - Branch: `codex/container-preflight-docs`
@@ -13,8 +13,8 @@
 - Stack predecessor: none
 - Base branch: `origin/develop` at `bbf6ac1`
 - Target branch: `develop`
-- PR: pending
-- Merge eligibility: pending validation and automated review
+- PR: https://github.com/samcantrill/loom/pull/186
+- Merge eligibility: pending GitHub checks and automated review
 - Workflow path: expanded path
 - Successor dependency notes: final Stage 18 phase; no product successor branch depends on this branch.
 - Plan quality gate: passed in the implementation plan on 2026-05-17
@@ -163,18 +163,18 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
-- PR review: unused
+- Phase implementation refinement: not needed; targeted and full validation passed without a refinement pass
+- PR review: pending
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
 
 - Draft plan: completed by manager in this file before code changes.
 - Final phase execution plan: refined in this planning pass; ready for implementation.
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
-- Blocker-resolution summary: pending
-- PR preparation: pending
+- Implementation summary: added selected-executor preflight checks for container build targets, direct Apptainer/Singularity, and SLURM plus Apptainer composition; added stable IDs, redacted JSON-safe diagnostics, docs, and skipped-by-default real-runtime acceptance hooks.
+- Implementation validation: `uv run pytest tests/container_acceptance/test_real_container_runtimes.py -q` passed with 3 skipped; targeted diagnostics/package/e2e suite passed with 217 passed; `uv run ruff check .` passed; `uv run --extra config pyright` passed; `make validate-pr` passed; `make test-summary` passed with overall 2350 passed, 21 skipped, 1928 deselected.
+- Refinement summary: no implementation refinement pass needed.
+- Blocker-resolution summary: no blocker-resolution pass used.
+- PR preparation: PR #186 opened against `develop`; PR body recorded in `docs/roadmap/stage-18/phases/container-preflight-docs-pr-body.md`.
 - Stack maintenance: root phase from `develop`
 - Remaining blockers: none
