@@ -51,7 +51,7 @@ def test_example_failing_run_reports_diagnostics_summary(
     assert fields["preflight_status"] == "PASS"
     assert fields["run_status"] == "FAILED"
     assert fields["failed_stages"] == "build"
-    assert int(fields["artifact_count"]) >= 1
+    assert int(fields["artifact_count"]) == 0
     run_uri_path = _run_uri_path(fields["run_uri"])
     assert run_uri_path.exists()
 

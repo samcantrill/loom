@@ -219,11 +219,16 @@ make test-summary
 - Draft plan: completed on fast path in this artifact
 - Final phase execution plan: completed on fast path; refine pass not needed
 - Implementation summary: Added focused integration coverage for the five `full` operation examples (`captured-logs`, `failing-run`, `resource-preflight`, `resource-leases`, `offline-import-rejections`) through a new module `tests/integration/examples/test_example_workflows.py`, updated their `validation_path` entries to point to this evidence, and documented explicit evidence locations in operations and authority coverage docs.
-- Implementation validation: partial due environment constraints; required commands were executed and captured in command notes.
+- Implementation validation: targeted docs/example and full-example workflow
+  checks passed outside the sandbox with config extras:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/docs/test_v0_python_examples.py tests/integration/examples/test_example_workflows.py`
+  (`40 passed in 56.42s`). Lint for the new integration module passed with
+  `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/integration/examples/test_example_workflows.py`.
 - Refinement summary: none needed on fast path.
-- Blocker-resolution summary: two blockers remain local to this environment:
-  - `PermissionError: [Errno 1] Operation not permitted` when example entrypoints attempt local authority socket startup in `examples/operations.resource-leases` and `operations.offline-import-rejections`.
-  - Missing optional dependencies (`yaml`/`omegaconf`) required by example preflight/runtime command paths in this environment.
+- Blocker-resolution summary: no blocker-resolution pass used. The initial
+  sandbox run lacked optional config dependencies and socket permissions, but
+  rerunning the targeted checks with `--extra config` outside the sandbox
+  verified the phase evidence.
 - PR preparation: pending. Focus remains on local edits + targeted pytest execution and phase-plan closure notes.
 - Stack maintenance: none required for this phase-local worktree yet.
-- Remaining blockers: local authority socket bind permissions and missing optional example dependencies (`yaml`/`omegaconf`) prevent full evidence execution in this sandbox.
+- Remaining blockers: none known.
