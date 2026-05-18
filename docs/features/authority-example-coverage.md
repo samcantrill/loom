@@ -21,8 +21,6 @@ they do not count as primary catalog coverage.
 | `operations.failing-run` | `tests/integration/examples/test_example_workflows.py::test_example_failing_run_reports_diagnostics_summary` |
 | `operations.resource-leases` | `tests/integration/examples/test_example_workflows.py::test_example_resource_leases_coordinate_blocked_then_released_state` |
 | `operations.offline-import-rejections` | `tests/integration/examples/test_example_workflows.py::test_example_offline_import_rejections_report_rejection_codes_and_acceptance` |
-| `operations.captured-logs` | `tests/integration/examples/test_example_workflows.py::test_example_captured_logs_records_captured_output` |
-| `operations.resource-preflight` | `tests/integration/examples/test_example_workflows.py::test_example_resource_preflight_reports_resource_warnings_and_strict_exit` |
 
 ## Not Currently User-Facing
 
