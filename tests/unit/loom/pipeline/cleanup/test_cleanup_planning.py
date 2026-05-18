@@ -161,6 +161,46 @@ def test_record_cleanup_report_is_explicit_append_path() -> None:
     assert store.list_cleanup_reports(RUN_URI) == (fact,)
 
 
+def test_plan_cleanup_accepts_single_pass_managed_roots_iterable(
+    tmp_path: Path,
+) -> None:
+    targets = (tmp_path / "tmp" / "one.bin", tmp_path / "tmp" / "two.bin")
+    for target in targets:
+        target.parent.mkdir(exist_ok=True)
+        target.write_text("payload", encoding="utf-8")
+    store = DryRunStore(
+        tuple(
+            _candidate(
+                candidate_id=f"cleanup-{index}",
+                uri=path_to_run_uri(target),
+                detail={"ownership_key": "run-r1"},
+            )
+            for index, target in enumerate(targets, start=1)
+        )
+    )
+    roots = iter(
+        (
+            CleanupManagedRoot(
+                root_id="run-root",
+                uri=path_to_run_uri(tmp_path),
+                ownership_key="run-r1",
+            ),
+        )
+    )
+
+    report = plan_cleanup(
+        cast(PerRunAuthorityStore, store),
+        RUN_URI,
+        managed_roots=roots,
+        now=NOW,
+    )
+
+    assert [entry.status for entry in report.entries] == [
+        CleanupReportEntryStatus.SELECTED,
+        CleanupReportEntryStatus.SELECTED,
+    ]
+
+
 def _candidate(
     *,
     candidate_id: str = "cleanup-1",

@@ -44,12 +44,13 @@ def plan_cleanup(
     """Return a cleanup dry-run report without mutating authority state."""
 
     normalized_selector = _selector(selector)
+    normalized_roots = tuple(managed_roots)
     candidates = store.list_cleanup_candidates(run_uri)
     entries = tuple(
         _plan_entry(
             candidate,
             selector=normalized_selector,
-            managed_roots=tuple(managed_roots),
+            managed_roots=normalized_roots,
             now=now,
             require_ownership=require_ownership,
             metadata=metadata,
