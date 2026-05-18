@@ -225,7 +225,16 @@ make test-summary
   (`40 passed in 56.42s`). Lint for the new integration module passed with
   `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/integration/examples/test_example_workflows.py`.
   Broader integration validation passed with `make test-integration`
-  (`170 passed, 89 deselected`).
+  (`170 passed, 89 deselected`). Final PR-gate validation passed with
+  `make validate-pr`: Ruff passed, Pyright reported 0 errors, the default
+  harness passed (`1963 passed, 26 skipped, 21 deselected`), config-extra
+  passed (`456 passed, 3 skipped, 2001 deselected`), and `uv build`
+  succeeded. `make test-summary` passed and wrote `build/test-summary.md`
+  with overall suite evidence: package (`108 passed, 1 skipped`), unit
+  (`1394 passed, 7 skipped, 1 deselected`), contract (`274 passed,
+  2 skipped`), integration (`170 passed, 8 skipped, 18 deselected`), e2e
+  (`46 passed, 2 deselected`), and config-extra (`456 passed, 3 skipped,
+  2001 deselected`), for `2448 passed, 21 skipped, 2022 deselected` overall.
 - Refinement summary: none needed on fast path.
 - Blocker-resolution summary: no blocker-resolution pass used. The initial
   sandbox run lacked optional config dependencies and socket permissions, but
