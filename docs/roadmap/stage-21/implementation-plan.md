@@ -1,6 +1,6 @@
 # Roadmap Stage 21 Implementation Plan: Cleanup And Retention
 
-Status: phase 2 merged; phase 3 pending
+Status: phase 3 pr_open
 Roadmap stage: `v21`
 Planning document: `docs/roadmap/stage-21/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
@@ -252,7 +252,7 @@ The records/selectors/results design can grow deliberately:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `cleanup-records-contracts` | merged | `codex/cleanup-records-contracts` | https://github.com/samcantrill/loom/pull/191 | `loom.pipeline.cleanup`, `loom.artifacts`, tests | Cleanup records, retention, selectors, and safety contracts | package, unit, contract | dry-run records, selectors, safety, retention |
 | 2 | `cleanup-dry-run-authority` | merged | `codex/cleanup-dry-run-authority` | https://github.com/samcantrill/loom/pull/192 | authority/read models, dry-run planner, diagnostics inspection | Authority-backed dry-run reports, explicit recorded report facts, and compatible result-fact scaffolding | unit, contract, integration | per-run dry-run, retention inspection |
-| 3 | `cleanup-delete-events` | pending | `codex/cleanup-delete-events` | pending | cleanup execution, local target adapter, event projection | Explicit local deletion and cleanup audit events | unit, contract, integration | explicit deletion, path rejection, audit event |
+| 3 | `cleanup-delete-events` | pr_open | `codex/cleanup-delete-events` | https://github.com/samcantrill/loom/pull/193 | cleanup execution, local target adapter, event projection | Explicit local deletion and cleanup audit events | unit, contract, integration | explicit deletion, path rejection, audit event |
 | 4 | `cleanup-collection-preflight` | pending | `codex/cleanup-collection-preflight` | pending | collection GC, run discovery boundary, preflight/diagnostics | Candidate-level collection GC and preflight warnings | unit, contract, integration | collection GC, preflight warnings |
 | 5 | `cleanup-cli-docs` | pending | `codex/cleanup-cli-docs` | pending | CLI, formatting, docs, final validation | `loom clean`, `loom gc`, docs, and final evidence | package, unit, contract, integration, e2e, final gate | CLI clean/gc flows |
 
@@ -492,11 +492,11 @@ Workflow path: expanded path
 
 ## Phase 3: Explicit Local Deletion And Cleanup Event Projection
 
-Status: pending
+Status: pr_open
 Slug: `cleanup-delete-events`
 Branch: `codex/cleanup-delete-events`
 Worktree: `/home/samcantrill/work/loom-worktrees/cleanup-delete-events`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/193
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path
@@ -562,12 +562,12 @@ Workflow path: expanded path
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
+- Phase execution plan: complete
+- Planning/refinement budget: used
+- Implementation/refinement budget: used locally during validation
 - PR review budget: unused
 - Blocker-resolution budget: 0 of 3 used
-- Pre-submit blocker gate: Phase 2 must be merged or used as stack predecessor
+- Pre-submit blocker gate: Phase 2 merged; PR targets `develop`
 - Merge record: pending
 
 ### Risks And Stop Conditions
@@ -585,11 +585,22 @@ Workflow path: expanded path
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: Added `execute_cleanup`, local-only deletion with
+  execution-time safety rechecks, cleanup result fact recording, compact
+  cleanup report/result event projection, optional runtime event dispatcher
+  support, and public cleanup exports.
+- Validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 107
+  passed / 1 skipped, unit 1384 passed / 7 skipped / 1 deselected, contract
+  271 passed / 2 skipped, integration 167 passed / 8 skipped / 13 deselected,
+  e2e 44 passed / 2 deselected, and config-extra 449 passed / 3 skipped / 1982
+  deselected.
+- PR: https://github.com/samcantrill/loom/pull/193 targets `develop` from
+  `codex/cleanup-delete-events`; target verified with
+  `gh pr view 193 --json baseRefName,headRefName,state,url`.
+- Merge: pending automated review, CI, and final target/check verification.
+- Follow-up: Phase 4 may start stacked on this branch only if Phase 3 cannot be
+  merged promptly; otherwise branch Phase 4 from updated `develop`.
 
 ## Phase 4: Candidate-Level Run-Collection GC And Preflight Warnings
 
