@@ -11,6 +11,13 @@ from loom.authority.mutation_service import (
     AuthorityMutationOperation,
     AuthorityMutationService,
 )
+from loom.pipeline.cleanup import (
+    CleanupReport,
+    CleanupReportEntry,
+    CleanupReportEntryStatus,
+    CleanupTargetKind,
+    CleanupTargetRef,
+)
 from loom.pipeline.stores import (
     AuthorityProtocolMetadata,
     AuthorityProtocolOperationKind,
@@ -128,6 +135,64 @@ def test_mutation_service_dispatches_resource_coordination_operations(
     assert response.result.lease == response.result.resource_lease.lease
 
 
+def test_mutation_service_dispatches_cleanup_report_operations(tmp_path) -> None:
+    repository = initialize_authority_repository(
+        tmp_path,
+        service_generation="generation-1",
+    )
+    service = AuthorityMutationService(repository)
+    run_uri = "file:///runs/r1"
+    report = CleanupReport(
+        report_id="report-1",
+        run_uri=run_uri,
+        created_at="2020-01-01T00:00:00Z",
+        entries=(
+            CleanupReportEntry(
+                candidate_id="candidate-1",
+                target=CleanupTargetRef(
+                    kind=CleanupTargetKind.LOCAL_PATH,
+                    uri="file:///runs/r1/tmp/payload",
+                ),
+                status=CleanupReportEntryStatus.SELECTED,
+                reason_code="approved",
+            ),
+        ),
+    )
+
+    assert service.handle(
+        AuthorityMutationOperation.ADMIT_RUN,
+        _run_request(
+            "admit-run",
+            run_uri=run_uri,
+            operation_kind=AuthorityProtocolOperationKind.RUN_LIFECYCLE,
+        ),
+    ).accepted
+    appended = service.handle(
+        AuthorityMutationOperation.APPEND_CLEANUP_REPORT,
+        _run_request(
+            "append-cleanup-report",
+            run_uri=run_uri,
+            operation_kind=AuthorityProtocolOperationKind.CLEANUP_REPORTS,
+            body={"report": report.to_dict()},
+        ),
+    )
+    listed = service.handle(
+        AuthorityMutationOperation.LIST_CLEANUP_REPORTS,
+        _run_request(
+            "list-cleanup-report",
+            run_uri=run_uri,
+            operation_kind=AuthorityProtocolOperationKind.CLEANUP_REPORTS,
+        ),
+    )
+
+    assert appended.accepted is True
+    assert appended.result is not None
+    assert appended.result.cleanup_reports[0].report == report
+    assert listed.accepted is True
+    assert listed.result is not None
+    assert listed.result.cleanup_reports == appended.result.cleanup_reports
+
+
 def _request(
     request_id: str,
     body: Mapping[str, PlainData],
@@ -139,4 +204,22 @@ def _request(
             service_generation="generation-1",
         ),
         body=body,
+    ).to_dict()
+
+
+def _run_request(
+    request_id: str,
+    *,
+    run_uri: str,
+    operation_kind: AuthorityProtocolOperationKind,
+    body: Mapping[str, PlainData] | None = None,
+) -> Mapping[str, object]:
+    return AuthorityProtocolRequest(
+        metadata=AuthorityProtocolMetadata(
+            request_id=request_id,
+            operation_kind=operation_kind,
+            service_generation="generation-1",
+        ),
+        run_uri=run_uri,
+        body={} if body is None else body,
     ).to_dict()

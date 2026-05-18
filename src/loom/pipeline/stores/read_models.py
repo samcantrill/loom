@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.reliability import (
     RELIABILITY_POLICY_SCHEMA_VERSION,
     ReliabilityPolicy,
@@ -572,6 +573,86 @@ class CleanupCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class CleanupReportFact:
+    report: CleanupReport
+    recorded_at: str
+    revision: BackendRevision
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.report, CleanupReport):
+            raise AuthorityModelError("report must be a CleanupReport")
+        _timestamp(self.recorded_at, "recorded_at")
+        _revision(self.revision)
+
+    @property
+    def report_id(self) -> str:
+        return self.report.report_id
+
+    @property
+    def run_uri(self) -> str:
+        return self.report.run_uri
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "report": self.report.to_dict(),
+            "recorded_at": self.recorded_at,
+            "revision": self.revision.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "CleanupReportFact":
+        mapping = _mapping(data, "CleanupReportFact")
+        _reject_unknown(
+            mapping, {"report", "recorded_at", "revision"}, "CleanupReportFact"
+        )
+        return cls(
+            report=CleanupReport.from_dict(_required(mapping, "report")),
+            recorded_at=_timestamp(_required(mapping, "recorded_at"), "recorded_at"),
+            revision=BackendRevision.from_dict(_required(mapping, "revision")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CleanupResultFact:
+    result: CleanupResult
+    recorded_at: str
+    revision: BackendRevision
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.result, CleanupResult):
+            raise AuthorityModelError("result must be a CleanupResult")
+        _timestamp(self.recorded_at, "recorded_at")
+        _revision(self.revision)
+
+    @property
+    def result_id(self) -> str:
+        return self.result.result_id
+
+    @property
+    def run_uri(self) -> str:
+        return self.result.run_uri
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "result": self.result.to_dict(),
+            "recorded_at": self.recorded_at,
+            "revision": self.revision.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "CleanupResultFact":
+        mapping = _mapping(data, "CleanupResultFact")
+        _reject_unknown(
+            mapping, {"result", "recorded_at", "revision"}, "CleanupResultFact"
+        )
+        return cls(
+            result=CleanupResult.from_dict(_required(mapping, "result")),
+            recorded_at=_timestamp(_required(mapping, "recorded_at"), "recorded_at"),
+            revision=BackendRevision.from_dict(_required(mapping, "revision")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RecoveryRecord:
     recovery_id: str
     kind: RecoveryKind
@@ -1064,6 +1145,8 @@ class AuthoritativeRunSnapshot:
     stages: tuple[StageLifecycleSnapshot, ...] = ()
     submitted_operations: tuple[SubmittedOperationRecord, ...] = ()
     cleanup_candidates: tuple[CleanupCandidate, ...] = ()
+    cleanup_reports: tuple[CleanupReportFact, ...] = ()
+    cleanup_results: tuple[CleanupResultFact, ...] = ()
     materialized_refs: tuple[MaterializedRef, ...] = ()
     reliability_policy_facts: tuple[ReliabilityPolicyFact, ...] = ()
     warnings: tuple[ReadModelWarning, ...] = ()
@@ -1098,6 +1181,16 @@ class AuthoritativeRunSnapshot:
         )
         object.__setattr__(
             self,
+            "cleanup_reports",
+            _tuple_of(self.cleanup_reports, CleanupReportFact, "cleanup_reports"),
+        )
+        object.__setattr__(
+            self,
+            "cleanup_results",
+            _tuple_of(self.cleanup_results, CleanupResultFact, "cleanup_results"),
+        )
+        object.__setattr__(
+            self,
             "materialized_refs",
             _tuple_of(self.materialized_refs, MaterializedRef, "materialized_refs"),
         )
@@ -1128,6 +1221,8 @@ class AuthoritativeRunSnapshot:
             "cleanup_candidates": [
                 candidate.to_dict() for candidate in self.cleanup_candidates
             ],
+            "cleanup_reports": [fact.to_dict() for fact in self.cleanup_reports],
+            "cleanup_results": [fact.to_dict() for fact in self.cleanup_results],
             "materialized_refs": [ref.to_dict() for ref in self.materialized_refs],
             "reliability_policy_facts": [
                 fact.to_dict() for fact in self.reliability_policy_facts
@@ -1149,6 +1244,8 @@ class AuthoritativeRunSnapshot:
                 "stages",
                 "submitted_operations",
                 "cleanup_candidates",
+                "cleanup_reports",
+                "cleanup_results",
                 "materialized_refs",
                 "reliability_policy_facts",
                 "warnings",
@@ -1178,6 +1275,18 @@ class AuthoritativeRunSnapshot:
                 CleanupCandidate.from_dict(candidate)
                 for candidate in _sequence(
                     mapping.get("cleanup_candidates", ()), "cleanup_candidates"
+                )
+            ),
+            cleanup_reports=tuple(
+                CleanupReportFact.from_dict(fact)
+                for fact in _sequence(
+                    mapping.get("cleanup_reports", ()), "cleanup_reports"
+                )
+            ),
+            cleanup_results=tuple(
+                CleanupResultFact.from_dict(fact)
+                for fact in _sequence(
+                    mapping.get("cleanup_results", ()), "cleanup_results"
                 )
             ),
             materialized_refs=tuple(
@@ -1360,6 +1469,8 @@ __all__ = [
     "ArtifactFactRecord",
     "MaterializedRef",
     "CleanupCandidate",
+    "CleanupReportFact",
+    "CleanupResultFact",
     "RecoveryRecord",
     "StaticOutcomeRecord",
     "ReadModelWarning",

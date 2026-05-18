@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.offline_evidence import OfflineEvidenceManifest
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
@@ -21,6 +22,8 @@ from loom.pipeline.stores import (
     AuthoritativeRunSnapshot,
     BackendRevision,
     CleanupCandidate,
+    CleanupReportFact,
+    CleanupResultFact,
     LeaseRecord,
     LifecycleReason,
     OutputCommitRecord,
@@ -64,6 +67,10 @@ class AuthorityMutationOperation(StrEnum):
     WRITE_SUBMITTED_OPERATION = "write_submitted_operation"
     READ_SUBMITTED_OPERATION = "read_submitted_operation"
     LIST_SUBMITTED_OPERATIONS = "list_submitted_operations"
+    APPEND_CLEANUP_REPORT = "append_cleanup_report"
+    LIST_CLEANUP_REPORTS = "list_cleanup_reports"
+    APPEND_CLEANUP_RESULT = "append_cleanup_result"
+    LIST_CLEANUP_RESULTS = "list_cleanup_results"
     TRANSITION_STAGE = "transition_stage"
     ALLOCATE_STAGE_ATTEMPT = "allocate_stage_attempt"
     RENEW_STAGE_LEASE = "renew_stage_lease"
@@ -123,6 +130,18 @@ _OPERATION_KIND_BY_MUTATION: Mapping[
     ),
     AuthorityMutationOperation.LIST_SUBMITTED_OPERATIONS: (
         AuthorityProtocolOperationKind.SUBMITTED_OPERATION
+    ),
+    AuthorityMutationOperation.APPEND_CLEANUP_REPORT: (
+        AuthorityProtocolOperationKind.CLEANUP_REPORTS
+    ),
+    AuthorityMutationOperation.LIST_CLEANUP_REPORTS: (
+        AuthorityProtocolOperationKind.CLEANUP_REPORTS
+    ),
+    AuthorityMutationOperation.APPEND_CLEANUP_RESULT: (
+        AuthorityProtocolOperationKind.CLEANUP_RESULTS
+    ),
+    AuthorityMutationOperation.LIST_CLEANUP_RESULTS: (
+        AuthorityProtocolOperationKind.CLEANUP_RESULTS
     ),
     AuthorityMutationOperation.TRANSITION_STAGE: (
         AuthorityProtocolOperationKind.STAGE_LIFECYCLE
@@ -319,6 +338,14 @@ class AuthorityMutationService:
                 return self._read_submitted_operation(request)
             case AuthorityMutationOperation.LIST_SUBMITTED_OPERATIONS:
                 return self._list_submitted_operations(request)
+            case AuthorityMutationOperation.APPEND_CLEANUP_REPORT:
+                return self._append_cleanup_report(request)
+            case AuthorityMutationOperation.LIST_CLEANUP_REPORTS:
+                return self._list_cleanup_reports(request)
+            case AuthorityMutationOperation.APPEND_CLEANUP_RESULT:
+                return self._append_cleanup_result(request)
+            case AuthorityMutationOperation.LIST_CLEANUP_RESULTS:
+                return self._list_cleanup_results(request)
             case AuthorityMutationOperation.TRANSITION_STAGE:
                 return self._transition_stage(request)
             case AuthorityMutationOperation.ALLOCATE_STAGE_ATTEMPT:
@@ -632,6 +659,52 @@ class AuthorityMutationService:
             cleanup_candidates=commit.cleanup_candidates,
         )
 
+    def _append_cleanup_report(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        fact = self._repository.append_cleanup_report(
+            _required_run_uri(request),
+            CleanupReport.from_dict(_required_body_value(request, "report")),
+            expected_revision=request.expected_revision,
+        )
+        return _result(
+            revision=fact.revision,
+            service_generation=self._service_generation,
+            cleanup_reports=(fact,),
+        )
+
+    def _list_cleanup_reports(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        facts = self._repository.list_cleanup_reports(_required_run_uri(request))
+        return _result(
+            service_generation=self._service_generation,
+            cleanup_reports=facts,
+        )
+
+    def _append_cleanup_result(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        fact = self._repository.append_cleanup_result(
+            _required_run_uri(request),
+            CleanupResult.from_dict(_required_body_value(request, "result")),
+            expected_revision=request.expected_revision,
+        )
+        return _result(
+            revision=fact.revision,
+            service_generation=self._service_generation,
+            cleanup_results=(fact,),
+        )
+
+    def _list_cleanup_results(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        facts = self._repository.list_cleanup_results(_required_run_uri(request))
+        return _result(
+            service_generation=self._service_generation,
+            cleanup_results=facts,
+        )
+
     def _create_workspace(
         self, request: AuthorityProtocolRequest
     ) -> AuthorityProtocolResult:
@@ -897,6 +970,8 @@ def _result(
     submitted_operations: tuple[SubmittedOperationRecord, ...] = (),
     trials: tuple[TrialReference, ...] = (),
     cleanup_candidates: tuple[CleanupCandidate, ...] = (),
+    cleanup_reports: tuple[CleanupReportFact, ...] = (),
+    cleanup_results: tuple[CleanupResultFact, ...] = (),
     coordination_recovery_records: tuple[CoordinationRecoveryRecord, ...] = (),
     body: Mapping[str, PlainData] | None = None,
 ) -> AuthorityProtocolResult:
@@ -918,6 +993,8 @@ def _result(
         submitted_operations=submitted_operations,
         trials=trials,
         cleanup_candidates=cleanup_candidates,
+        cleanup_reports=cleanup_reports,
+        cleanup_results=cleanup_results,
         coordination_recovery_records=coordination_recovery_records,
         body={} if body is None else body,
     )

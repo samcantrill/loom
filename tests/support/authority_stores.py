@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.reliability import (
@@ -29,6 +30,8 @@ from loom.pipeline.stores import (
     BackendRevision,
     CapabilityScope,
     CleanupCandidate,
+    CleanupReportFact,
+    CleanupResultFact,
     ConcurrencyCounter,
     CoordinationRecoveryRecord,
     LeaseKind,
@@ -78,6 +81,8 @@ class _RunState:
     commits: dict[str, OutputCommitRecord] = field(default_factory=dict)
     facts: dict[str, list[ArtifactFactRecord]] = field(default_factory=dict)
     cleanup: list[CleanupCandidate] = field(default_factory=list)
+    cleanup_reports: dict[str, CleanupReportFact] = field(default_factory=dict)
+    cleanup_results: dict[str, CleanupResultFact] = field(default_factory=dict)
     events: list[PipelineEventRecord] = field(default_factory=list)
     event_sink_failures: list[EventSinkFailureRecord] = field(default_factory=list)
     event_observer_links: list[EventObserverLinkRecord] = field(default_factory=list)
@@ -640,6 +645,8 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             stages=stages,
             submitted_operations=tuple(state.submitted.values()),
             cleanup_candidates=tuple(state.cleanup),
+            cleanup_reports=tuple(state.cleanup_reports.values()),
+            cleanup_results=tuple(state.cleanup_results.values()),
             reliability_policy_facts=tuple(
                 fact
                 for fact in self.list_reliability_policy_facts(run_uri)
@@ -670,6 +677,56 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
 
     def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]:
         return tuple(self._require_run(run_uri).cleanup)
+
+    def append_cleanup_report(
+        self, run_uri: str, report: CleanupReport
+    ) -> CleanupReportFact:
+        if not isinstance(report, CleanupReport):
+            raise ValueError("report must be a CleanupReport")
+        if report.run_uri != run_uri:
+            raise ValueError("cleanup report run_uri does not match run")
+        state = self._require_run(run_uri)
+        existing = state.cleanup_reports.get(report.report_id)
+        if existing is not None:
+            if existing.report.to_dict() == report.to_dict():
+                return existing
+            raise ValueError("conflicting cleanup report already exists")
+        state.revision = self._next_revision()
+        fact = CleanupReportFact(
+            report=report,
+            recorded_at=self._now(),
+            revision=state.revision,
+        )
+        state.cleanup_reports[report.report_id] = fact
+        return fact
+
+    def list_cleanup_reports(self, run_uri: str) -> tuple[CleanupReportFact, ...]:
+        return tuple(self._require_run(run_uri).cleanup_reports.values())
+
+    def append_cleanup_result(
+        self, run_uri: str, result: CleanupResult
+    ) -> CleanupResultFact:
+        if not isinstance(result, CleanupResult):
+            raise ValueError("result must be a CleanupResult")
+        if result.run_uri != run_uri:
+            raise ValueError("cleanup result run_uri does not match run")
+        state = self._require_run(run_uri)
+        existing = state.cleanup_results.get(result.result_id)
+        if existing is not None:
+            if existing.result.to_dict() == result.to_dict():
+                return existing
+            raise ValueError("conflicting cleanup result already exists")
+        state.revision = self._next_revision()
+        fact = CleanupResultFact(
+            result=result,
+            recorded_at=self._now(),
+            revision=state.revision,
+        )
+        state.cleanup_results[result.result_id] = fact
+        return fact
+
+    def list_cleanup_results(self, run_uri: str) -> tuple[CleanupResultFact, ...]:
+        return tuple(self._require_run(run_uri).cleanup_results.values())
 
     def advance_time(self, seconds: int) -> None:
         if seconds <= 0:

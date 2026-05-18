@@ -1,5 +1,7 @@
 """Cleanup and retention planning contracts."""
 
+from typing import TYPE_CHECKING
+
 from loom.pipeline.cleanup.errors import (
     CleanupError,
     CleanupRecordError,
@@ -36,6 +38,9 @@ from loom.pipeline.cleanup.selectors import (
     match_cleanup_candidate,
 )
 
+if TYPE_CHECKING:
+    from loom.pipeline.cleanup.planning import plan_cleanup, record_cleanup_report
+
 __all__ = [
     "CLEANUP_RECORD_SCHEMA_VERSION",
     "CLEANUP_SAFETY_SCHEMA_VERSION",
@@ -64,4 +69,14 @@ __all__ = [
     "CleanupTargetRef",
     "assess_local_target_safety",
     "match_cleanup_candidate",
+    "plan_cleanup",
+    "record_cleanup_report",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name in {"plan_cleanup", "record_cleanup_report"}:
+        from loom.pipeline.cleanup import planning
+
+        return getattr(planning, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

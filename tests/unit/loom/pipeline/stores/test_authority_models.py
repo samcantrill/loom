@@ -3,6 +3,17 @@
 import pytest
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup import (
+    CleanupDeleteIntent,
+    CleanupReport,
+    CleanupReportEntry,
+    CleanupReportEntryStatus,
+    CleanupResult,
+    CleanupResultEntry,
+    CleanupResultOutcome,
+    CleanupTargetKind,
+    CleanupTargetRef,
+)
 from loom.pipeline.reliability import (
     ReliabilityPolicy,
     ReliabilityStatusDetail,
@@ -27,6 +38,8 @@ from loom.pipeline.stores import (
     CapabilitySupport,
     CleanupCandidate,
     CleanupCandidateKind,
+    CleanupReportFact,
+    CleanupResultFact,
     ConcurrencyCounter,
     CoordinationRecoveryRecord,
     CoordinationStoreError,
@@ -357,6 +370,77 @@ def test_authority_read_models_default_missing_reliability_fields() -> None:
     assert parsed.reliability_policy_facts == ()
     assert parsed.stages[0].reliability_status_details == ()
     assert parsed.stages[0].retry_decisions == ()
+
+
+def test_cleanup_report_and_result_facts_round_trip_with_snapshot() -> None:
+    revision = BackendRevision(
+        sequence=1,
+        token="rev-1",
+        created_at="2020-01-01T00:00:00Z",
+    )
+    target = CleanupTargetRef(
+        kind=CleanupTargetKind.LOCAL_PATH,
+        uri="file:///runs/r1/tmp/payload",
+    )
+    report = CleanupReport(
+        report_id="report-1",
+        run_uri="file:///runs/r1",
+        created_at="2020-01-01T00:00:01Z",
+        entries=(
+            CleanupReportEntry(
+                candidate_id="candidate-1",
+                target=target,
+                status=CleanupReportEntryStatus.SELECTED,
+                reason_code="approved",
+            ),
+        ),
+    )
+    result = CleanupResult(
+        result_id="result-1",
+        run_uri="file:///runs/r1",
+        created_at="2020-01-01T00:00:02Z",
+        intent=CleanupDeleteIntent(
+            intent_id="intent-1",
+            requested_by="operator",
+            requested_at="2020-01-01T00:00:02Z",
+            reason="cleanup test",
+        ),
+        entries=(
+            CleanupResultEntry(
+                candidate_id="candidate-1",
+                target=target,
+                outcome=CleanupResultOutcome.DELETED,
+                reason_code="deleted",
+                completed_at="2020-01-01T00:00:03Z",
+            ),
+        ),
+    )
+    report_fact = CleanupReportFact(
+        report=report,
+        recorded_at="2020-01-01T00:00:04Z",
+        revision=revision,
+    )
+    result_fact = CleanupResultFact(
+        result=result,
+        recorded_at="2020-01-01T00:00:05Z",
+        revision=revision,
+    )
+    snapshot = AuthoritativeRunSnapshot(
+        run_uri="file:///runs/r1",
+        status=RunStatus.SUCCEEDED,
+        schema_version=AUTHORITY_SCHEMA_VERSION,
+        revision=revision,
+        cleanup_reports=(report_fact,),
+        cleanup_results=(result_fact,),
+    )
+
+    assert report_fact.report_id == "report-1"
+    assert report_fact.run_uri == "file:///runs/r1"
+    assert result_fact.result_id == "result-1"
+    assert result_fact.run_uri == "file:///runs/r1"
+    assert CleanupReportFact.from_dict(report_fact.to_dict()) == report_fact
+    assert CleanupResultFact.from_dict(result_fact.to_dict()) == result_fact
+    assert AuthoritativeRunSnapshot.from_dict(snapshot.to_dict()) == snapshot
 
 
 def test_workspace_coordination_records_round_trip_with_cross_run_identity() -> None:

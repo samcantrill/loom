@@ -214,6 +214,8 @@ def test_store_error_exports() -> None:
         "ArtifactFactRecord",
         "MaterializedRef",
         "CleanupCandidate",
+        "CleanupReportFact",
+        "CleanupResultFact",
         "RecoveryRecord",
         "StaticOutcomeRecord",
         "ReliabilityPolicyFact",

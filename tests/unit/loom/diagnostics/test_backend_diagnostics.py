@@ -14,6 +14,17 @@ from loom.diagnostics.backend import (
     inspect_backend_capabilities,
     parse_projection_revision,
 )
+from loom.pipeline.cleanup import (
+    CleanupDeleteIntent,
+    CleanupReport,
+    CleanupReportEntry,
+    CleanupReportEntryStatus,
+    CleanupResult,
+    CleanupResultEntry,
+    CleanupResultOutcome,
+    CleanupTargetKind,
+    CleanupTargetRef,
+)
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.stores import BackendRevision, path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import (
@@ -63,11 +74,21 @@ class ReadOnlyTrapAuthority(SQLitePerRunAuthorityStore):
     def append_audit_event(self, *args: Any, **kwargs: Any) -> Any:
         raise AssertionError("diagnostics must not append audit events")
 
+    def append_cleanup_report(self, *args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("diagnostics must not append cleanup reports")
+
+    def append_cleanup_result(self, *args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("diagnostics must not append cleanup results")
+
 
 def test_inspect_backend_reports_authoritative_facts_without_mutation(
     tmp_path: Path,
 ) -> None:
     authority, run_uri = _authority_run(tmp_path)
+    report = _cleanup_report(run_uri)
+    result = _cleanup_result(run_uri)
+    authority.append_cleanup_report(run_uri, report)
+    authority.append_cleanup_result(run_uri, result)
     before = authority.snapshot(run_uri).revision
 
     result = inspect_backend(
@@ -82,7 +103,11 @@ def test_inspect_backend_reports_authoritative_facts_without_mutation(
     assert result.counts["stages"] == 2
     assert result.counts["commits"] == 2
     assert result.counts["artifact_facts"] == 2
+    assert result.counts["cleanup_reports"] == 1
+    assert result.counts["cleanup_results"] == 1
     assert result.counts["reliability_policy_facts"] == 2
+    assert result.cleanup_reports[0]["report"] == report.to_dict()
+    assert result.cleanup_results[0]["result"] == _cleanup_result(run_uri).to_dict()
     assert result.stages[0]["reliability_policy_count"] == 1
     assert [stage["stage_name"] for stage in result.stages] == ["build", "report"]
     assert authority.snapshot(run_uri).revision.sequence == before.sequence
@@ -160,3 +185,51 @@ def _authority_run(tmp_path: Path) -> tuple[SQLitePerRunAuthorityStore, str]:
         RunRequest(pipeline=_pipeline(), run_uri=run_uri)
     )
     return authority, run_uri
+
+
+def _cleanup_target(run_uri: str) -> CleanupTargetRef:
+    return CleanupTargetRef(
+        kind=CleanupTargetKind.LOCAL_PATH,
+        uri=f"{run_uri}/tmp/payload",
+        target_id="candidate-1",
+        ownership_key="run-r1",
+    )
+
+
+def _cleanup_report(run_uri: str) -> CleanupReport:
+    return CleanupReport(
+        report_id="report-1",
+        run_uri=run_uri,
+        created_at="2020-01-01T00:00:04Z",
+        entries=(
+            CleanupReportEntry(
+                candidate_id="candidate-1",
+                target=_cleanup_target(run_uri),
+                status=CleanupReportEntryStatus.SELECTED,
+                reason_code="approved",
+            ),
+        ),
+    )
+
+
+def _cleanup_result(run_uri: str) -> CleanupResult:
+    return CleanupResult(
+        result_id="result-1",
+        run_uri=run_uri,
+        created_at="2020-01-01T00:00:05Z",
+        intent=CleanupDeleteIntent(
+            intent_id="intent-1",
+            requested_by="operator",
+            requested_at="2020-01-01T00:00:05Z",
+            reason="diagnostics test",
+        ),
+        entries=(
+            CleanupResultEntry(
+                candidate_id="candidate-1",
+                target=_cleanup_target(run_uri),
+                outcome=CleanupResultOutcome.DELETED,
+                reason_code="deleted",
+                completed_at="2020-01-01T00:00:06Z",
+            ),
+        ),
+    )

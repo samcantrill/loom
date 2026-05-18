@@ -198,6 +198,8 @@ def test_pipeline_store_public_exports() -> None:
         "ArtifactFactRecord",
         "MaterializedRef",
         "CleanupCandidate",
+        "CleanupReportFact",
+        "CleanupResultFact",
         "RecoveryRecord",
         "StaticOutcomeRecord",
         "ReliabilityPolicyFact",

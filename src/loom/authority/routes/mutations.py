@@ -31,6 +31,12 @@ from loom.pipeline.stores import (
     AUTHORITY_MUTATION_STAGE_TRANSITION_PATH,
     AUTHORITY_PROTOCOL_VERSION,
 )
+from loom.pipeline.stores.authority_client import (
+    AUTHORITY_MUTATION_CLEANUP_REPORT_APPEND_PATH,
+    AUTHORITY_MUTATION_CLEANUP_REPORT_LIST_PATH,
+    AUTHORITY_MUTATION_CLEANUP_RESULT_APPEND_PATH,
+    AUTHORITY_MUTATION_CLEANUP_RESULT_LIST_PATH,
+)
 from loom.serialization import PlainData
 
 from ..dependencies import get_authority_services
@@ -197,6 +203,66 @@ def list_submitted_operations(
         payload,
         services,
     )
+
+
+@router.post(
+    AUTHORITY_MUTATION_CLEANUP_REPORT_APPEND_PATH.removeprefix(
+        AUTHORITY_MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def append_cleanup_report(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Append a cleanup report fact."""
+
+    return _handle(AuthorityMutationOperation.APPEND_CLEANUP_REPORT, payload, services)
+
+
+@router.post(
+    AUTHORITY_MUTATION_CLEANUP_REPORT_LIST_PATH.removeprefix(
+        AUTHORITY_MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def list_cleanup_reports(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """List cleanup report facts for a run."""
+
+    return _handle(AuthorityMutationOperation.LIST_CLEANUP_REPORTS, payload, services)
+
+
+@router.post(
+    AUTHORITY_MUTATION_CLEANUP_RESULT_APPEND_PATH.removeprefix(
+        AUTHORITY_MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def append_cleanup_result(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Append a cleanup result fact."""
+
+    return _handle(AuthorityMutationOperation.APPEND_CLEANUP_RESULT, payload, services)
+
+
+@router.post(
+    AUTHORITY_MUTATION_CLEANUP_RESULT_LIST_PATH.removeprefix(
+        AUTHORITY_MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def list_cleanup_results(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """List cleanup result facts for a run."""
+
+    return _handle(AuthorityMutationOperation.LIST_CLEANUP_RESULTS, payload, services)
 
 
 @router.post(

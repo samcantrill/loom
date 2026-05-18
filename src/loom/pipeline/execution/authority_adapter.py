@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
@@ -49,6 +50,8 @@ from loom.pipeline.stores.read_models import (
     AuthoritativeRunSnapshot,
     BackendRevision,
     CleanupCandidate,
+    CleanupReportFact,
+    CleanupResultFact,
     LeaseRecord,
     LifecycleReason,
     RecoveryRecord,
@@ -617,6 +620,68 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
 
     def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]:
         return self.open_run(run_uri).cleanup_candidates
+
+    def append_cleanup_report(
+        self, run_uri: str, report: CleanupReport
+    ) -> CleanupReportFact:
+        if report.run_uri != run_uri:
+            raise AuthorityStoreError("cleanup report run_uri does not match run")
+        result = self._result(
+            self._client.append_cleanup_report(
+                run_uri,
+                report,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="append cleanup report",
+        )
+        if not result.cleanup_reports:
+            raise AuthorityStoreError(
+                "authority append cleanup report response omitted report fact"
+            )
+        return result.cleanup_reports[0]
+
+    def list_cleanup_reports(self, run_uri: str) -> tuple[CleanupReportFact, ...]:
+        result = self._result(
+            self._client.list_cleanup_reports(
+                run_uri,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="list cleanup reports",
+        )
+        return result.cleanup_reports
+
+    def append_cleanup_result(
+        self, run_uri: str, result: CleanupResult
+    ) -> CleanupResultFact:
+        if result.run_uri != run_uri:
+            raise AuthorityStoreError("cleanup result run_uri does not match run")
+        response_result = self._result(
+            self._client.append_cleanup_result(
+                run_uri,
+                result,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="append cleanup result",
+        )
+        if not response_result.cleanup_results:
+            raise AuthorityStoreError(
+                "authority append cleanup result response omitted result fact"
+            )
+        return response_result.cleanup_results[0]
+
+    def list_cleanup_results(self, run_uri: str) -> tuple[CleanupResultFact, ...]:
+        result = self._result(
+            self._client.list_cleanup_results(
+                run_uri,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="list cleanup results",
+        )
+        return result.cleanup_results
 
     @property
     def _service_generation(self) -> str | None:
