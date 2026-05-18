@@ -1,15 +1,15 @@
 # Roadmap Stage 22 Implementation Plan: Examples And Validation Refinement
 
-Status: design review quality gate passed; phase execution plans pending
+Status: phase 1 merged; phase 2 pending
 Roadmap stage: `v22`
 Planning document: `docs/roadmap/stage-22/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: none; implementation has not started
+Current phase: Phase 2, `examples-integration-coverage`
 Blockers:
 
 - None for stage-level design or plan quality.
-- Phase execution plans are still required before implementation begins.
+- Phase execution plans are still required before each remaining phase begins.
 
 ## Summary
 
@@ -63,7 +63,7 @@ Blockers:
 - Phase shaping: reviewed.
 - Implementation readiness blockers:
   - None for stage-level design or plan quality.
-  - Phase execution plans are still required before implementation begins.
+  - Phase execution plans are still required before each remaining phase begins.
 
 ## Desired Outcome
 
@@ -236,7 +236,7 @@ permutations remain lower-level test work.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `examples-inventory-contracts` | pending | `codex/examples-inventory-contracts` | pending | examples metadata, docs validation tests | Define inventory/status metadata and consistency checks | unit, integration docs checks | catalog status/tier examples |
+| 1 | `examples-inventory-contracts` | merged | `codex/examples-inventory-contracts` | [#196](https://github.com/samcantrill/loom/pull/196) | examples metadata, docs validation tests | Define inventory/status metadata and consistency checks | unit, integration docs checks | catalog status/tier examples |
 | 2 | `examples-integration-coverage` | pending | `codex/examples-integration-coverage` | pending | `examples/`, integration tests, coverage docs | Harden runnable examples and integration behavior | docs/example integration, targeted integration paths | authoring/execution/operations |
 | 3 | `examples-e2e-workflows` | pending | `codex/examples-e2e-workflows` | pending | e2e tests, CLI/Python workflow docs | Cover representative end-to-end workflows | targeted e2e and CLI workflow checks | public journeys |
 | 4 | `examples-docs-refinement` | pending | `codex/examples-docs-refinement` | pending | docs audit, final evidence, plan metadata | Align docs with validated examples and record final evidence | `make validate-pr`, `make test-summary` | final catalog |
@@ -252,11 +252,11 @@ permutations remain lower-level test work.
 
 ## Phase 1: Example Inventory And Metadata Contracts
 
-Status: pending
+Status: merged
 Slug: `examples-inventory-contracts`
 Branch: `codex/examples-inventory-contracts`
 Worktree: `/home/samcantrill/work/loom-worktrees/examples-inventory-contracts`
-PR: pending
+PR: [#196](https://github.com/samcantrill/loom/pull/196)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: fast path unless design-safety review requires expansion
@@ -299,13 +299,33 @@ Workflow path: fast path unless design-safety review requires expansion
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
+- Phase execution plan: completed in `docs/roadmap/stage-22/phases/examples-inventory-contracts.md`
+- Planning/refinement budget: draft completed; refine pass not needed
+- Implementation/refinement budget: unused; targeted and full validation passed
+- PR review budget: used by managing-agent local review on 2026-05-18; no blockers found
 - Blocker-resolution budget: 0 of 3 used
-- Pre-submit blocker gate: do not start until plan quality gate passes
-- Merge record: pending
+- Pre-submit blocker gate: passed before PR submission
+- Merge record: merged into `develop` on 2026-05-18 via [#196](https://github.com/samcantrill/loom/pull/196), merge commit `b02304bad363ccd4a6103f3385d5b11188693230`
+
+### Completion And Merge Notes
+
+- Implementation summary: added docs-owned inventory metadata to all existing
+  example manifests, documented the manifest vocabulary in `examples/README.md`,
+  and tightened docs integration checks for owner docs, roadmap stages,
+  validation paths, README catalog membership, focused coverage references, and
+  manual rationale.
+- Validation: targeted docs integration passed
+  (`UV_CACHE_DIR=.uv-cache uv run --active pytest tests/integration/docs/test_v0_python_examples.py`,
+  `35 passed`). `make validate-pr` passed after rerunning outside sandbox
+  restrictions: Ruff, Pyright, default pytest, config-extra pytest, and
+  `uv build` all passed. `make test-summary` passed with overall `2443 passed`,
+  `21 skipped`, and `2017 deselected`.
+- GitHub review and CI: managing-agent local review found no blockers; PR #196
+  targeted `develop`, GitHub CI `checks` passed, and the PR was squash-merged
+  into `develop`.
+- Follow-up notes: Phases 2 and 3 own stronger integration/e2e evidence for
+  full/manual examples whose Phase 1 validation path is currently a docs-owned
+  coverage reference.
 
 ### Risks And Stop Conditions
 
