@@ -1,11 +1,11 @@
 # Roadmap Stage 22 Implementation Plan: Examples And Validation Refinement
 
-Status: phase 1 merged; phase 2 pending
+Status: phase 2 merged; phase 3 pending
 Roadmap stage: `v22`
 Planning document: `docs/roadmap/stage-22/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 2, `examples-integration-coverage`
+Current phase: Phase 3, `examples-e2e-workflows`
 Blockers:
 
 - None for stage-level design or plan quality.
@@ -237,7 +237,7 @@ permutations remain lower-level test work.
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `examples-inventory-contracts` | merged | `codex/examples-inventory-contracts` | [#196](https://github.com/samcantrill/loom/pull/196) | examples metadata, docs validation tests | Define inventory/status metadata and consistency checks | unit, integration docs checks | catalog status/tier examples |
-| 2 | `examples-integration-coverage` | pending | `codex/examples-integration-coverage` | pending | `examples/`, integration tests, coverage docs | Harden runnable examples and integration behavior | docs/example integration, targeted integration paths | authoring/execution/operations |
+| 2 | `examples-integration-coverage` | merged | `codex/examples-integration-coverage` | [#197](https://github.com/samcantrill/loom/pull/197) | `examples/`, integration tests, coverage docs | Harden runnable examples and integration behavior | docs/example integration, targeted integration paths | authoring/execution/operations |
 | 3 | `examples-e2e-workflows` | pending | `codex/examples-e2e-workflows` | pending | e2e tests, CLI/Python workflow docs | Cover representative end-to-end workflows | targeted e2e and CLI workflow checks | public journeys |
 | 4 | `examples-docs-refinement` | pending | `codex/examples-docs-refinement` | pending | docs audit, final evidence, plan metadata | Align docs with validated examples and record final evidence | `make validate-pr`, `make test-summary` | final catalog |
 
@@ -341,11 +341,11 @@ Workflow path: fast path unless design-safety review requires expansion
 
 ## Phase 2: Robust Examples And Integration Behavior
 
-Status: pending
+Status: merged
 Slug: `examples-integration-coverage`
 Branch: `codex/examples-integration-coverage`
 Worktree: `/home/samcantrill/work/loom-worktrees/examples-integration-coverage`
-PR: pending
+PR: [#197](https://github.com/samcantrill/loom/pull/197)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: fast path unless coverage gaps require expansion
@@ -394,13 +394,30 @@ Workflow path: fast path unless coverage gaps require expansion
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
+- Phase execution plan:
+  `docs/roadmap/stage-22/phases/examples-integration-coverage.md`
+- Planning/refinement budget: completed on fast path; refine pass not needed
+- Implementation/refinement budget: unused; no refiner pass needed
+- PR review budget: satisfied by manager review with no blocking findings
 - Blocker-resolution budget: 0 of 3 used
-- Pre-submit blocker gate: Phase 1 must be merged or used as stack predecessor
-- Merge record: pending
+- Pre-submit blocker gate: Phase 1 merged before this phase started
+- Merge record: merged into `develop` on 2026-05-18 via
+  [#197](https://github.com/samcantrill/loom/pull/197), merge commit
+  `91c1585e849f662417acdc11ae22dc2b1806c500`
+- Implementation summary: added focused integration coverage for five
+  `validation: full` operations examples, updated their manifest
+  `validation_path` values to named test paths, and documented evidence in
+  operations and authority example-coverage docs without changing runtime code.
+- Checks: `make validate-pr` passed locally with Ruff, Pyright 0 errors,
+  default harness `1963 passed, 26 skipped, 21 deselected`, config-extra
+  `456 passed, 3 skipped, 2001 deselected`, and `uv build` success.
+  `make test-summary` passed with `2448 passed, 21 skipped,
+  2022 deselected` overall. GitHub CI `checks` passed for PR #197 before
+  merge.
+- Stack maintenance: no successor branch depended on
+  `codex/examples-integration-coverage`; the PR was squash-merged into
+  `develop` with branch deletion requested. Phase 3 should branch from updated
+  `develop`.
 
 ### Risks And Stop Conditions
 
