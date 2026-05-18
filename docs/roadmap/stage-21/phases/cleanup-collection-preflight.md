@@ -197,7 +197,7 @@ make test-summary
 - Phase implementation refinement: used locally during validation to rename the
   cleanup collection unit test away from an existing pytest module basename and
   to update the diagnostics public export contract
-- PR review: unused
+- PR review: completed by manager review; no blocking findings
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -219,6 +219,9 @@ make test-summary
 - Refinement summary: fixed a pytest module-name collision by renaming the new
   cleanup collection unit test and updated `tests/package/test_import.py` to
   include `CleanupPreflightTarget` in the public diagnostics API list.
+- PR review summary: manager review covered per-run deletion authority,
+  structured intent preservation, preflight read-only behavior, stable public
+  check ids, import boundaries, and Phase 4 scope; no blocking findings remain.
 - Blocker-resolution summary: no post-review blocker-resolution passes used.
 - PR preparation: PR opened at https://github.com/samcantrill/loom/pull/194
   against `develop` from `codex/cleanup-collection-preflight`; target verified
