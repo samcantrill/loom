@@ -1,11 +1,11 @@
 # Roadmap Stage 21 Implementation Plan: Cleanup And Retention
 
-Status: phase 5 PR open
+Status: complete
 Roadmap stage: `v21`
 Planning document: `docs/roadmap/stage-21/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 5, `cleanup-cli-docs`
+Current phase: all phases merged
 Blockers:
 
 - None before phase execution planning.
@@ -254,7 +254,7 @@ The records/selectors/results design can grow deliberately:
 | 2 | `cleanup-dry-run-authority` | merged | `codex/cleanup-dry-run-authority` | https://github.com/samcantrill/loom/pull/192 | authority/read models, dry-run planner, diagnostics inspection | Authority-backed dry-run reports, explicit recorded report facts, and compatible result-fact scaffolding | unit, contract, integration | per-run dry-run, retention inspection |
 | 3 | `cleanup-delete-events` | merged | `codex/cleanup-delete-events` | https://github.com/samcantrill/loom/pull/193 | cleanup execution, local target adapter, event projection | Explicit local deletion and cleanup audit events | unit, contract, integration | explicit deletion, path rejection, audit event |
 | 4 | `cleanup-collection-preflight` | merged | `codex/cleanup-collection-preflight` | https://github.com/samcantrill/loom/pull/194 | collection GC, run discovery boundary, preflight/diagnostics | Candidate-level collection GC and preflight warnings | unit, contract, integration | collection GC, preflight warnings |
-| 5 | `cleanup-cli-docs` | pr_open | `codex/cleanup-cli-docs` | https://github.com/samcantrill/loom/pull/195 | CLI, formatting, docs, final validation | `loom clean`, `loom gc`, docs, and final evidence | package, unit, contract, integration, e2e, final gate | CLI clean/gc flows |
+| 5 | `cleanup-cli-docs` | merged | `codex/cleanup-cli-docs` | https://github.com/samcantrill/loom/pull/195 | CLI, formatting, docs, final validation | `loom clean`, `loom gc`, docs, and final evidence | package, unit, contract, integration, e2e, final gate | CLI clean/gc flows |
 
 ## Implementation Readiness Blockers
 
@@ -722,7 +722,7 @@ Workflow path: expanded path
 
 ## Phase 5: CLI Commands, Documentation, And Final Validation
 
-Status: pr_open
+Status: merged
 Slug: `cleanup-cli-docs`
 Branch: `codex/cleanup-cli-docs`
 Worktree: `/home/samcantrill/work/loom-worktrees/cleanup-cli-docs`
@@ -797,8 +797,9 @@ Workflow path: expanded path
 - PR review budget: completed by local manager review.
 - Blocker-resolution budget: 0 of 3 used
 - Pre-submit blocker gate: Phase 4 merged; PR targets `develop`.
-- Merge record: PR open against `develop`; target verified with
-  `gh pr view 195 --json baseRefName,headRefName,state,url`.
+- Merge record: merged into `develop` by squash merge after final target-branch
+  verification, GitHub CI success, and mergeable state `CLEAN`; merge commit
+  `af4ebec1a10cc8115aa7458e24465eb96430d410`.
 
 ### Risks And Stop Conditions
 
@@ -824,11 +825,17 @@ Workflow path: expanded path
   deselected`; contract `274 passed, 2 skipped`; integration `170 passed, 8
   skipped, 13 deselected`; e2e `46 passed, 2 deselected`; config-extra `449
   passed, 3 skipped, 2001 deselected`.
-- PR: https://github.com/samcantrill/loom/pull/195 targets `develop` from
-  `codex/cleanup-cli-docs`; target verified immediately after PR creation.
-- Merge: pending while PR #195 CI completes.
-- Follow-up: final Stage 21 phase; merge will complete stage metadata after
-  automated review and CI gates pass.
+- PR: https://github.com/samcantrill/loom/pull/195 opened against `develop`;
+  automated manager review found no blocking findings, target verification
+  confirmed base `develop` and head `codex/cleanup-cli-docs`, and GitHub CI
+  `checks` passed before merge.
+- Merge: squash-merged into `develop` at
+  `af4ebec1a10cc8115aa7458e24465eb96430d410` after final target-branch
+  verification confirmed base `develop`, head `codex/cleanup-cli-docs`,
+  mergeable state `CLEAN`, and GitHub CI `checks` success.
+- Follow-up: Stage 21 is complete; no successor branch depends on
+  `codex/cleanup-cli-docs`, and the phase worktree plus stale branch are
+  eligible for cleanup.
 
 ## Cross-Phase Validation
 
@@ -881,7 +888,7 @@ Gate result:
 
 ## Final Approval
 
-- Approval status: approved for phase execution planning
+- Approval status: implementation complete; all five phases merged
 - Approved scope: conservative cleanup, retention metadata, explicit local
   deletion, candidate-level GC, preflight warnings, cleanup event projection,
   and CLI wrappers as phased above
