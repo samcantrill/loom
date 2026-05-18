@@ -216,7 +216,7 @@ make test-summary
 - Draft plan: completed on fast path in this artifact
 - Final phase execution plan: completed on fast path; refine pass not needed
 - Implementation summary: added docs-owned inventory metadata to all 26 existing example manifests, documented field vocabulary in `examples/README.md`, added/expanded integration checks in `tests/integration/docs/test_v0_python_examples.py` for ownership, README/catalog consistency, feature-coverage references, validation evidence pointers, and manual rationale requirements. No runtime behavior changes or new examples were introduced.
-- Implementation validation: required command run with full suite produced socket-restricted child-process failures in this environment (`PermissionError: [Errno 1] Operation not permitted` from `_socket.socket.__init__`) during example execution; metadata/contract checks passed. Verified non-execution checks explicitly with `UV_CACHE_DIR=.uv-cache uv run --active pytest tests/integration/docs/test_v0_python_examples.py -k 'not smoke_example_scripts_execute'` (12 passed, 23 deselected).
+- Implementation validation: `UV_CACHE_DIR=.uv-cache uv run --active pytest tests/integration/docs/test_v0_python_examples.py` passed outside the sandbox after the initial sandbox run hit socket restrictions during subprocess example execution (`35 passed in 54.11s`). The non-execution metadata checks also passed in the sandbox with `UV_CACHE_DIR=.uv-cache uv run --active pytest tests/integration/docs/test_v0_python_examples.py -k 'not smoke_example_scripts_execute'` (`12 passed, 23 deselected`).
 - Refinement summary: not used
 - Blocker-resolution summary: none used
 - PR preparation: pending
