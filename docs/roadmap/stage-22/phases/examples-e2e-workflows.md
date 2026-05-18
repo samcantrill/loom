@@ -217,18 +217,35 @@ make test-summary
 
 - Draft plan: completed on fast path in this artifact
 - Final phase execution plan: completed on fast path; refine pass not needed
-- Implementation summary: Added representative public-journey e2e coverage in `tests/e2e/test_example_journeys.py` for local resume, authority lifecycle CLI, SLURM dry-runs, and Docker executor success+failure diagnostics; repointed manifests to those e2e paths and updated group/feature docs to call out representative evidence.
+- Implementation summary: Added representative public-journey e2e coverage in
+  `tests/e2e/test_example_journeys.py` for local resume, authority lifecycle
+  CLI, SLURM dry-runs, and Docker executor success plus failure diagnostics;
+  repointed manifests to those e2e paths and updated group/feature docs to
+  call out representative evidence. The local execution example was also
+  hardened to use the local SQLite authority store and the public
+  `StageContext.load_input` helper so the documented local resume example now
+  succeeds without a socket-backed authority service.
 - Validation evidence:
-  - `uv run pytest tests/e2e/test_example_journeys.py` (failed in sandbox: missing optional config deps and restricted sockets for authority service startup)
-  - `uv run pytest tests/integration/docs/test_v0_python_examples.py tests/integration/examples/test_example_workflows.py` (failed in sandbox: missing optional config deps for `yaml`/`omegaconf` and authority socket permissions)
-  - `make test-e2e` (failed in sandbox: permission-restricted multiprocessing/socket creation for local authority service, plus 15 e2e failures and 1 e2e error that are not phase-specific)
-- Blockers:
-  - The environment used for this phase blocks local `socket` creation (`socket.socket` and authority service startup), preventing authority-backed examples and e2e fixtures from running.
-  - The same environment lacks optional config extras (`yaml`, `omegaconf`), causing config-import and preflight failures.
-- Budget status: implementation refinement unused; blocker resolution 0/3 unused; PR review unused
-- Implementation validation: blocked by sandbox restrictions; evidence captured with command failures above
-- Refinement summary: not used
-- Blocker-resolution summary: none used
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/e2e/test_example_journeys.py -q`
+    passed outside the sandbox (`4 passed in 13.91s`).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/docs/test_v0_python_examples.py tests/integration/examples/test_example_workflows.py -q`
+    passed outside the sandbox (`40 passed in 54.04s`).
+  - `make test-e2e` passed outside the sandbox (`46 passed, 6 deselected`).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/e2e/test_example_journeys.py examples/execution/local/run_pipeline.py examples/execution/local/stages.py`
+    passed.
+- Blockers: none remaining. The initial sandboxed validation failed because the
+  sandbox lacked config extras and blocked local socket creation; the approved
+  outside-sandbox reruns verified the phase after targeted fixes.
+- Budget status: implementation refinement unused; blocker resolution 1/3 used
+  for manager-side targeted e2e/example fixes after validation exposed parser,
+  assertion, and local-example hardening issues; PR review unused
+- Implementation validation: targeted e2e, docs/example integration, default
+  e2e gate, and touched-file lint passed as recorded above
+- Refinement summary: no separate refiner pass used
+- Blocker-resolution summary: used one scoped manager pass to mark new e2e
+  tests as config-extra optional dependency coverage, fix the summary parser
+  and dry-run/Docker assertions, and harden the local execution example without
+  touching runtime code
 - PR preparation: pending
 - Stack maintenance: none required for this planning pass
-- Remaining blockers: environment limitations above
+- Remaining blockers: none known
