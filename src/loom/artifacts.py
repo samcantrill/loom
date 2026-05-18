@@ -181,6 +181,15 @@ class ArtifactLocationKind(str, Enum):
     MATERIALIZED = "materialized"
 
 
+class RetentionMode(str, Enum):
+    """Generic retention intent hints for artifact metadata."""
+
+    KEEP = "keep"
+    TEMPORARY = "temporary"
+    ARCHIVE = "archive"
+    EXTERNAL = "external"
+
+
 class _AuthorityKind(str, Enum):
     AUTHORITATIVE = "authoritative"
     DERIVED = "derived"
@@ -205,6 +214,94 @@ _DERIVED_LOCATION_KINDS = frozenset(
         ArtifactLocationKind.MATERIALIZED,
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionPolicy:
+    """Plain-data retention hint for artifact metadata."""
+
+    mode: RetentionMode
+    schema_version: int = 1
+    expires_at: str | None = None
+    reason: str | None = None
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "schema_version",
+            _require_record_schema_version(self.schema_version, "schema_version"),
+        )
+        object.__setattr__(self, "mode", _require_retention_mode(self.mode, "mode"))
+        object.__setattr__(
+            self,
+            "expires_at",
+            _ensure_str_or_none(self.expires_at, "expires_at", parse=True),
+        )
+        object.__setattr__(
+            self, "reason", _ensure_non_empty_optional_string(self.reason, "reason")
+        )
+        object.__setattr__(
+            self, "metadata", _freeze_plain_mapping(self.metadata, "metadata")
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "mode": self.mode.value,
+            "expires_at": self.expires_at,
+            "reason": self.reason,
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "RetentionPolicy":
+        if not isinstance(data, dict):
+            raise ArtifactValidationError("RetentionPolicy.from_dict expects mapping")
+        required = {"schema_version", "mode"}
+        optional = {"expires_at", "reason", "metadata"}
+        _validate_fields(
+            data, required=required, optional=optional, path="RetentionPolicy"
+        )
+        return cls(
+            schema_version=_require_record_schema_version(
+                data["schema_version"], "schema_version"
+            ),
+            mode=cast(Any, data.get("mode")),
+            expires_at=_ensure_str_or_none(
+                data.get("expires_at"), "expires_at", parse=True
+            ),
+            reason=_ensure_non_empty_optional_string(data.get("reason"), "reason"),
+            metadata=cast(Mapping[str, PlainData], data.get("metadata", {})),
+        )
+
+
+def normalize_retention_policy(value: object) -> RetentionPolicy | None:
+    """Normalize artifact retention metadata into a typed policy hint."""
+
+    if value is None:
+        return None
+    if isinstance(value, RetentionPolicy):
+        return value
+    if isinstance(value, str):
+        return RetentionPolicy(mode=cast(Any, value))
+    if isinstance(value, Mapping):
+        data = dict(value)
+        data.setdefault("schema_version", 1)
+        return RetentionPolicy.from_dict(data)
+    raise ArtifactValidationError(
+        "retention policy must be a RetentionPolicy, mapping, string, or None"
+    )
+
+
+def retention_policy_from_metadata(
+    metadata: Mapping[str, PlainData], *, field: str = "retention"
+) -> RetentionPolicy | None:
+    """Read a typed retention hint from a plain artifact metadata mapping."""
+
+    if not isinstance(metadata, Mapping):
+        raise ArtifactValidationError("metadata must be a mapping")
+    return normalize_retention_policy(metadata.get(field))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1159,6 +1256,25 @@ def _lookup_status_values() -> tuple[str, ...]:
     return tuple(kind.value for kind in _LookupStatus)
 
 
+def _require_retention_mode(value: Any, field: str) -> RetentionMode:
+    if isinstance(value, RetentionMode):
+        return value
+    if not isinstance(value, str):
+        raise ArtifactValidationError(
+            f"{field} must be one of: {', '.join(_retention_mode_values())}"
+        )
+    try:
+        return RetentionMode(value)
+    except ValueError as exc:
+        raise ArtifactValidationError(
+            f"{field} must be one of: {', '.join(_retention_mode_values())}"
+        ) from exc
+
+
+def _retention_mode_values() -> tuple[str, ...]:
+    return tuple(mode.value for mode in RetentionMode)
+
+
 def _optional_store_ref(value: Any, field: str) -> ArtifactStoreRef | None:
     if value is None:
         return None
@@ -1213,6 +1329,10 @@ __all__ = [
     "ArtifactRef",
     "ArtifactValidationError",
     "ArtifactLocationKind",
+    "RetentionMode",
+    "RetentionPolicy",
+    "normalize_retention_policy",
+    "retention_policy_from_metadata",
     "ArtifactStoreRef",
     "ArtifactLocationSummary",
     "ExternalArtifactDeclaration",
