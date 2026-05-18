@@ -1,6 +1,6 @@
 # Roadmap Stage 21 Implementation Plan: Cleanup And Retention
 
-Status: phase 4 merged; phase 5 pending
+Status: phase 5 PR open
 Roadmap stage: `v21`
 Planning document: `docs/roadmap/stage-21/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
@@ -254,7 +254,7 @@ The records/selectors/results design can grow deliberately:
 | 2 | `cleanup-dry-run-authority` | merged | `codex/cleanup-dry-run-authority` | https://github.com/samcantrill/loom/pull/192 | authority/read models, dry-run planner, diagnostics inspection | Authority-backed dry-run reports, explicit recorded report facts, and compatible result-fact scaffolding | unit, contract, integration | per-run dry-run, retention inspection |
 | 3 | `cleanup-delete-events` | merged | `codex/cleanup-delete-events` | https://github.com/samcantrill/loom/pull/193 | cleanup execution, local target adapter, event projection | Explicit local deletion and cleanup audit events | unit, contract, integration | explicit deletion, path rejection, audit event |
 | 4 | `cleanup-collection-preflight` | merged | `codex/cleanup-collection-preflight` | https://github.com/samcantrill/loom/pull/194 | collection GC, run discovery boundary, preflight/diagnostics | Candidate-level collection GC and preflight warnings | unit, contract, integration | collection GC, preflight warnings |
-| 5 | `cleanup-cli-docs` | pending | `codex/cleanup-cli-docs` | pending | CLI, formatting, docs, final validation | `loom clean`, `loom gc`, docs, and final evidence | package, unit, contract, integration, e2e, final gate | CLI clean/gc flows |
+| 5 | `cleanup-cli-docs` | pr_open | `codex/cleanup-cli-docs` | https://github.com/samcantrill/loom/pull/195 | CLI, formatting, docs, final validation | `loom clean`, `loom gc`, docs, and final evidence | package, unit, contract, integration, e2e, final gate | CLI clean/gc flows |
 
 ## Implementation Readiness Blockers
 
@@ -722,11 +722,11 @@ Workflow path: expanded path
 
 ## Phase 5: CLI Commands, Documentation, And Final Validation
 
-Status: pending
+Status: pr_open
 Slug: `cleanup-cli-docs`
 Branch: `codex/cleanup-cli-docs`
 Worktree: `/home/samcantrill/work/loom-worktrees/cleanup-cli-docs`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/195
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path
@@ -790,13 +790,15 @@ Workflow path: expanded path
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
+- Phase execution plan: `docs/roadmap/stage-21/phases/cleanup-cli-docs.md`
+- Planning/refinement budget: used locally for expanded-path phase planning.
+- Implementation/refinement budget: used locally to preserve import-light CLI
+  behavior and fix Pyright summary typing.
+- PR review budget: completed by local manager review.
 - Blocker-resolution budget: 0 of 3 used
-- Pre-submit blocker gate: Phase 4 must be merged or used as stack predecessor
-- Merge record: pending
+- Pre-submit blocker gate: Phase 4 merged; PR targets `develop`.
+- Merge record: PR open against `develop`; target verified with
+  `gh pr view 195 --json baseRefName,headRefName,state,url`.
 
 ### Risks And Stop Conditions
 
@@ -812,11 +814,21 @@ Workflow path: expanded path
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: added `loom clean` and `loom gc` CLI commands, bounded
+  selector parsing, confirmation gates, delete intent propagation, JSON/text
+  output, docs, and phase-scoped tests.
+- Validation: `make validate-pr` passed with default harness `1963 passed, 26
+  skipped, 21 deselected`, config-extra `449 passed, 3 skipped, 2001
+  deselected`, Ruff, Pyright, and build success. `make test-summary` passed
+  with package `108 passed, 1 skipped`; unit `1394 passed, 7 skipped, 1
+  deselected`; contract `274 passed, 2 skipped`; integration `170 passed, 8
+  skipped, 13 deselected`; e2e `46 passed, 2 deselected`; config-extra `449
+  passed, 3 skipped, 2001 deselected`.
+- PR: https://github.com/samcantrill/loom/pull/195 targets `develop` from
+  `codex/cleanup-cli-docs`; target verified immediately after PR creation.
+- Merge: pending while PR #195 CI completes.
+- Follow-up: final Stage 21 phase; merge will complete stage metadata after
+  automated review and CI gates pass.
 
 ## Cross-Phase Validation
 
