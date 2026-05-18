@@ -241,6 +241,7 @@ make test-summary
 - Blocker-resolution summary: none used
 - PR preparation: PR body prepared in
   `docs/roadmap/stage-22/phases/examples-docs-refinement-pr-body.md`; PR
-  opening pending
+  opened against `develop` as
+  [#199](https://github.com/samcantrill/loom/pull/199)
 - Stack maintenance: no predecessor or successor maintenance needed for the planning pass
 - Remaining blockers: none known
