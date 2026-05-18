@@ -224,6 +224,8 @@ make test-summary
   `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/docs/test_v0_python_examples.py tests/integration/examples/test_example_workflows.py`
   (`40 passed in 56.42s`). Lint for the new integration module passed with
   `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/integration/examples/test_example_workflows.py`.
+  Broader integration validation passed with `make test-integration`
+  (`170 passed, 89 deselected`).
 - Refinement summary: none needed on fast path.
 - Blocker-resolution summary: no blocker-resolution pass used. The initial
   sandbox run lacked optional config dependencies and socket permissions, but
