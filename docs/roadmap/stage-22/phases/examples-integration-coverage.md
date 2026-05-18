@@ -240,6 +240,13 @@ make test-summary
   sandbox run lacked optional config dependencies and socket permissions, but
   rerunning the targeted checks with `--extra config` outside the sandbox
   verified the phase evidence.
-- PR preparation: pending. Focus remains on local edits + targeted pytest execution and phase-plan closure notes.
+- PR preparation: artifact ready at
+  `docs/roadmap/stage-22/phases/examples-integration-coverage-pr-body.md`.
+  PR title remains `Examples And Validation - Phase 2: Integration Coverage`;
+  branch `codex/examples-integration-coverage` targets `develop` with no stack
+  predecessor. No additional validation was run during PR preparation per the
+  handoff constraint; this artifact uses the recorded `make validate-pr` and
+  `make test-summary` evidence above. PR remains unopened for the manager to
+  push/open after handoff.
 - Stack maintenance: none required for this phase-local worktree yet.
 - Remaining blockers: none known.
