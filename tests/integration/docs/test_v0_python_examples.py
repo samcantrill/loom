@@ -3,8 +3,9 @@
 import os
 import subprocess
 import sys
-from typing import cast
 from pathlib import Path
+import re
+from typing import cast
 
 import pytest
 
@@ -36,11 +37,19 @@ REQUIRED_MANIFEST_FIELDS = {
     "surface",
     "entrypoints",
     "tags",
+    "public_surfaces",
+    "owner_docs",
+    "owner_stages",
+    "validation_path",
 }
 VALID_STATUSES = {"runnable", "illustrative", "deferred"}
 VALID_VALIDATION_TIERS = {"smoke", "full", "manual"}
 VALID_LEVELS = {"introductory", "intermediate", "advanced"}
 VALID_SURFACES = {"cli", "python_api", "internal_demo"}
+RUNNABLE_SMOKE_VALIDATION_COMMAND = (
+    "uv run pytest tests/integration/docs/test_v0_python_examples.py::"
+    "test_smoke_example_scripts_execute"
+)
 INTERNAL_DEMO_EXAMPLES = {
     "operations.authority-backend-diagnostics",
     "operations.submitted-status",
@@ -138,6 +147,10 @@ def test_examples_catalog_manifests_are_valid() -> None:
         validation = _required_string(manifest, "validation", manifest_path)
         level = _required_string(manifest, "level", manifest_path)
         surface = _required_string(manifest, "surface", manifest_path)
+        public_surfaces = _required_string_list(manifest, "public_surfaces", manifest_path)
+        owner_docs = _required_string_list(manifest, "owner_docs", manifest_path)
+        owner_stages = _required_string_list(manifest, "owner_stages", manifest_path)
+        validation_path = _required_string(manifest, "validation_path", manifest_path)
 
         assert set(manifest) >= REQUIRED_MANIFEST_FIELDS
         assert example_id == expected_id
@@ -150,14 +163,31 @@ def test_examples_catalog_manifests_are_valid() -> None:
         assert validation in VALID_VALIDATION_TIERS
         assert level in VALID_LEVELS
         assert surface in VALID_SURFACES
+        assert public_surfaces
         assert surface == _expected_surface(example_id)
+        assert surface in public_surfaces
+        for stage in owner_stages:
+            if not stage.startswith("v") or not stage[1:].isdigit():
+                raise AssertionError(f"{manifest_path} owner_stages values must be like vN")
+        for owner_doc in owner_docs:
+            owner_doc_path = EXAMPLES_ROOT.parent / owner_doc
+            assert owner_doc_path.is_file(), f"{manifest_path} owner_doc {owner_doc} must exist"
         assert _required_string(manifest, "title", manifest_path)
         assert _required_string(manifest, "summary", manifest_path)
         assert _required_string(manifest, "introduced_in", manifest_path)
         assert _required_string_list(manifest, "tags", manifest_path)
+        _assert_validation_reference(validation_path, manifest_path)
         _validate_entrypoints(manifest, manifest_path)
         if status != "runnable" or validation == "manual":
-            assert _required_string(manifest, "reason", manifest_path)
+            assert _required_string_list(manifest, "prerequisites", manifest_path)
+            assert _required_string(manifest, "manual_rationale", manifest_path)
+            assert validation == "manual"
+        if validation == "smoke":
+            assert manifest["status"] == "runnable"
+            assert (
+                _required_string(manifest, "validation_command", manifest_path)
+                == RUNNABLE_SMOKE_VALIDATION_COMMAND
+            )
 
         seen_ids.add(example_id)
 
@@ -233,6 +263,46 @@ def test_v17_docker_examples_are_cataloged_and_documented() -> None:
     assert "security sandbox" in docker_readme
     assert "untrusted project code" in docker_readme
     assert "Docker daemon" in docker_readme
+
+
+def test_inventory_owner_docs_and_feature_coverage_references_are_true() -> None:
+    for manifest_path, manifest in _example_manifests():
+        example_id = _required_string(manifest, "id", manifest_path)
+        owner_docs = _required_string_list(manifest, "owner_docs", manifest_path)
+        validation_path = _required_string(manifest, "validation_path", manifest_path)
+        validation_doc = validation_path.split("::", 1)[0]
+
+        for owner_doc in owner_docs:
+            doc_path = EXAMPLES_ROOT.parent / owner_doc
+            doc_text = doc_path.read_text(encoding="utf-8")
+            if owner_doc.endswith("-example-coverage.md"):
+                assert example_id in doc_text
+                if validation_doc.endswith(".md"):
+                    assert validation_doc == owner_doc
+
+        if validation_doc.endswith(".md"):
+            assert (EXAMPLES_ROOT.parent / validation_doc).is_file()
+
+
+def test_example_readme_catalog_sections_match_manifests() -> None:
+    for manifest_path, manifest in _example_manifests():
+        example_id = _required_string(manifest, "id", manifest_path)
+        capability = _required_string(manifest, "capability", manifest_path)
+        surface = _required_string(manifest, "surface", manifest_path)
+        readme = (EXAMPLES_ROOT / capability / "README.md").read_text(encoding="utf-8")
+
+        if surface == "internal_demo":
+            assert example_id in _readme_example_ids(readme, "Internal Demos")
+            assert example_id not in _readme_example_ids(readme, "CLI Workflows")
+            assert example_id not in _readme_example_ids(readme, "Public Python API Workflows")
+            continue
+
+        if surface == "cli":
+            assert example_id in _readme_example_ids(readme, "CLI Workflows")
+        elif surface == "python_api":
+            assert example_id in _readme_example_ids(readme, "Public Python API Workflows")
+        else:
+            raise AssertionError(f"{manifest_path} has unknown surface {surface}")
 
 
 def test_internal_demos_are_excluded_from_primary_catalogs() -> None:
@@ -335,6 +405,17 @@ def _example_script_path(example_id: str) -> str:
     return str(relative_parent / _required_string(entrypoints[0], "path", manifest_path))
 
 
+def _readme_example_ids(text: str, heading: str) -> set[str]:
+    section = _readme_section(text, heading)
+    values: set[str] = set()
+    for line in section.splitlines():
+        match = re.match(r"^\|\s*`([^`]+)`\s*\|", line)
+        if not match:
+            continue
+        values.add(match.group(1))
+    return values
+
+
 def _readme_section(text: str, heading: str) -> str:
     marker = f"## {heading}\n"
     if marker not in text:
@@ -344,6 +425,17 @@ def _readme_section(text: str, heading: str) -> str:
     if next_heading == -1:
         return remainder
     return remainder[:next_heading]
+
+
+def _assert_validation_reference(ref: str, manifest_path: Path) -> None:
+    if ref.startswith("uv "):
+        assert ref == RUNNABLE_SMOKE_VALIDATION_COMMAND
+        return
+    root = EXAMPLES_ROOT.parent
+    path, _, _ = ref.partition("::")
+    assert (root / path).is_file(), (
+        f"{manifest_path} validation_path {ref!r} must reference an existing repo file"
+    )
 
 
 def _example_entrypoints(validation: str) -> list[tuple[str, Path]]:
