@@ -28,6 +28,10 @@ workflows.
 | `operations.captured-logs` | Captured local stdout/stderr inspected with `loom logs`. |
 | `operations.resource-leases` | Public authority-backed resource-limit and resource-lease coordination through the Python API. |
 
+## Representative End-to-End Evidence
+
+- `operations.authority-lifecycle` -> `tests/e2e/test_example_journeys.py::test_e2e_example_authority_lifecycle_cli`
+
 ## Run
 
 Run from the repository root:

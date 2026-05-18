@@ -14,7 +14,7 @@ owner_docs:
   - docs/features/container-example-coverage.md
 owner_stages:
   - v17
-validation_path: tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
+validation_path: tests/e2e/test_example_journeys.py::test_e2e_example_docker_executor_smoke_and_failure_diagnostics
 validation_command: uv run pytest tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
 entrypoints:
   - path: run_docker_pipeline.py

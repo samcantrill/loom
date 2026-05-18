@@ -33,10 +33,7 @@ class SummarizeNumbersStage:
         context: StageContext,
         inputs: Mapping[str, ArtifactRef],
     ) -> Mapping[str, ArtifactRef]:
-        if context.artifact_store is None:
-            raise RuntimeError("artifact store is required")
-
-        payload = context.artifact_store.load(inputs["numbers"], expected_type="json")
+        payload = context.load_input("numbers", expected_type="json")
         if not isinstance(payload, dict):
             raise ValueError("numbers artifact must decode to a mapping")
 
@@ -74,4 +71,3 @@ def _number_sequence(value: object) -> list[int | float]:
             raise ValueError("values must contain only numbers")
         numbers.append(item)
     return numbers
-
