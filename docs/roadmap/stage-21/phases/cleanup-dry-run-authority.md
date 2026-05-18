@@ -10,17 +10,17 @@
 - Phase execution plan path: `docs/roadmap/stage-21/phases/cleanup-dry-run-authority.md`
 - Full plan: `docs/roadmap/stage-21/implementation-plan.md`
 - Source phase: Phase 2, `cleanup-dry-run-authority`
-- Stack predecessor: `codex/cleanup-records-contracts` / PR https://github.com/samcantrill/loom/pull/191
-- Base branch: `codex/cleanup-records-contracts`
-- Target branch: `codex/cleanup-records-contracts`
-- Merge eligibility: stacked phase; eligible for review/CI against predecessor, then retarget/rebase to `develop` after predecessor merges
+- Stack predecessor: none; predecessor PR https://github.com/samcantrill/loom/pull/191 merged
+- Base branch: `develop`
+- Target branch: `develop`
+- Merge eligibility: root phase after Phase 1 merge; eligible for merge to `develop` after automated review, validation, CI, and PR target checks pass
 - Workflow path: expanded path
 - Successor dependency notes: Phase 3 may stack on this branch if this PR is open and validated before Phase 2 can merge.
 - Plan quality gate: passed in the implementation plan on 2026-05-18
 - Plan quality gate loop budget: consumed by recorded review/refinement/confirmation; no blockers remain
 - Draft pass: completed locally in this artifact
 - Refine pass: completed locally in this artifact because Phase 2 changes authority/read-model contracts
-- Setup limitations: Phase 1 PR is open with CI pending at plan creation time
+- Setup limitations: Phase 1 was open with CI pending at plan creation time; this branch was rebased onto `origin/develop` after Phase 1 merged
 - Blockers: none
 
 ## Objective
@@ -33,11 +33,11 @@ Phase 1 introduced cleanup records, selectors, retention helpers, and safety dec
 
 ## Stack Context
 
-- Root or stacked phase: stacked phase
-- Current predecessor branch or PR: `codex/cleanup-records-contracts`, PR #191
-- Why this base branch is correct: Phase 2 depends on Phase 1 cleanup records and safety helpers, and Phase 1 is not merged at plan creation time.
-- Retarget/rebase plan after predecessor merge: rebase this branch onto updated `develop` and retarget PR to `develop` when PR #191 lands.
-- Branch cleanup constraints: do not delete the Phase 1 branch until this successor is rebased or retargeted away from it.
+- Root or stacked phase: root phase after predecessor merge
+- Current predecessor branch or PR: none; Phase 1 PR #191 merged to `develop`
+- Why this base branch is correct: Phase 2 depends on Phase 1 cleanup records and safety helpers now present on `develop`.
+- Retarget/rebase plan after predecessor merge: completed; branch replayed onto `origin/develop`.
+- Branch cleanup constraints: Phase 1 branch is no longer a stack predecessor for this branch.
 
 ## Source Phase Summary
 
