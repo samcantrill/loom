@@ -18,7 +18,9 @@ from loom.pipeline.cleanup import (
     CleanupResultOutcome,
     CleanupTargetKind,
     CleanupTargetRef,
+    cleanup_result_event,
 )
+from loom.pipeline.stores import BackendRevision, CleanupResultFact
 
 
 pytestmark = pytest.mark.contract
@@ -135,6 +137,40 @@ def test_cleanup_result_contract_shape_requires_structured_intent() -> None:
             reason="not confirmed",
             confirmed=False,
         )
+
+
+def test_cleanup_result_event_contract_references_durable_fact() -> None:
+    intent = CleanupDeleteIntent(
+        intent_id="intent-1",
+        requested_by="tester",
+        requested_at="2020-01-01T00:00:00Z",
+        reason="test cleanup",
+    )
+    result = CleanupResult(
+        result_id="result-1",
+        run_uri="file:///runs/run-1",
+        created_at="2020-01-01T00:00:01Z",
+        intent=intent,
+        summary={"deleted": 1, "failed": 0},
+    )
+    fact = CleanupResultFact(
+        result=result,
+        recorded_at="2020-01-01T00:00:02Z",
+        revision=BackendRevision(sequence=3, token="rev-3"),
+    )
+
+    payload = cleanup_result_event(fact).to_dict()
+
+    assert payload["event_type"] == "cleanup.result.recorded"
+    assert payload["timestamp"] == "2020-01-01T00:00:02Z"
+    assert payload["payload"] == {
+        "fact_type": "cleanup_result",
+        "result_id": "result-1",
+        "run_uri": "file:///runs/run-1",
+        "intent_id": "intent-1",
+        "revision": {"sequence": 3, "token": "rev-3", "created_at": None},
+        "summary": {"deleted": 1, "failed": 0},
+    }
 
 
 def test_cleanup_records_reject_unknown_fields() -> None:

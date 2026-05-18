@@ -39,6 +39,13 @@ from loom.pipeline.cleanup.selectors import (
 )
 
 if TYPE_CHECKING:
+    from loom.pipeline.cleanup.events import (
+        cleanup_report_event,
+        cleanup_result_event,
+        emit_cleanup_report_event,
+        emit_cleanup_result_event,
+    )
+    from loom.pipeline.cleanup.execution import execute_cleanup
     from loom.pipeline.cleanup.planning import plan_cleanup, record_cleanup_report
 
 __all__ = [
@@ -68,6 +75,11 @@ __all__ = [
     "CleanupTargetKind",
     "CleanupTargetRef",
     "assess_local_target_safety",
+    "cleanup_report_event",
+    "cleanup_result_event",
+    "emit_cleanup_report_event",
+    "emit_cleanup_result_event",
+    "execute_cleanup",
     "match_cleanup_candidate",
     "plan_cleanup",
     "record_cleanup_report",
@@ -75,6 +87,19 @@ __all__ = [
 
 
 def __getattr__(name: str) -> object:
+    if name in {
+        "cleanup_report_event",
+        "cleanup_result_event",
+        "emit_cleanup_report_event",
+        "emit_cleanup_result_event",
+    }:
+        from loom.pipeline.cleanup import events
+
+        return getattr(events, name)
+    if name == "execute_cleanup":
+        from loom.pipeline.cleanup import execution
+
+        return getattr(execution, name)
     if name in {"plan_cleanup", "record_cleanup_report"}:
         from loom.pipeline.cleanup import planning
 
