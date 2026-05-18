@@ -15,6 +15,9 @@ from loom.artifacts import (
     ImmutableArtifactLookupRequest,
     ImmutableArtifactLookupResult,
     PublishedArtifactRecord,
+    RetentionMode,
+    RetentionPolicy,
+    normalize_retention_policy,
 )
 
 
@@ -185,6 +188,30 @@ def test_published_record_requires_plain_metadata_maps_and_lookup_projection() -
 
     with pytest.raises(ArtifactValidationError):
         PublishedArtifactRecord.from_dict({**payload, "validation_policy": []})
+
+
+def test_retention_policy_contract_shape_is_plain_metadata_compatible() -> None:
+    policy = RetentionPolicy(
+        schema_version=1,
+        mode=RetentionMode.TEMPORARY,
+        expires_at="2020-01-02T00:00:00Z",
+        reason="short-lived payload",
+        metadata={"class": "scratch"},
+    )
+    payload = policy.to_dict()
+
+    assert set(payload.keys()) == {
+        "schema_version",
+        "mode",
+        "expires_at",
+        "reason",
+        "metadata",
+    }
+    assert payload["mode"] == "temporary"
+    assert RetentionPolicy.from_dict(payload) == policy
+    assert normalize_retention_policy({"mode": "keep"}) == RetentionPolicy(
+        mode=RetentionMode.KEEP
+    )
 
 
 def test_lookup_request_result_contract_and_statuses() -> None:

@@ -16,6 +16,10 @@ from loom.artifacts import (
     ImmutableArtifactLookupRequest,
     ImmutableArtifactLookupResult,
     PublishedArtifactRecord,
+    RetentionMode,
+    RetentionPolicy,
+    normalize_retention_policy,
+    retention_policy_from_metadata,
 )
 from loom.fingerprints import hash_text
 from loom.serialization import PlainData
@@ -127,6 +131,44 @@ def test_artifact_ref_metadata_is_immutable_and_to_dict_mutations_are_local() ->
 
     assert ref.metadata["labels"] == ("raw", "processed")
     assert "extra" not in ref.metadata
+
+
+def test_retention_policy_normalizes_plain_metadata_hints() -> None:
+    policy = RetentionPolicy(
+        mode=RetentionMode.TEMPORARY,
+        expires_at="2020-01-02T00:00:00Z",
+        reason="scratch payload",
+        metadata={"tag": "scratch"},
+    )
+    payload = policy.to_dict()
+
+    assert payload == {
+        "schema_version": 1,
+        "mode": "temporary",
+        "expires_at": "2020-01-02T00:00:00Z",
+        "reason": "scratch payload",
+        "metadata": {"tag": "scratch"},
+    }
+    assert RetentionPolicy.from_dict(payload) == policy
+    assert normalize_retention_policy({"mode": "keep"}) == RetentionPolicy(
+        mode=RetentionMode.KEEP
+    )
+    assert normalize_retention_policy("archive") == RetentionPolicy(
+        mode=RetentionMode.ARCHIVE
+    )
+    assert retention_policy_from_metadata(
+        {"retention": {"mode": "external", "metadata": {"store": "remote"}}}
+    ) == RetentionPolicy(
+        mode=RetentionMode.EXTERNAL,
+        metadata={"store": "remote"},
+    )
+
+
+def test_retention_policy_rejects_unknown_or_non_plain_data() -> None:
+    with pytest.raises(ArtifactValidationError):
+        normalize_retention_policy({"mode": "delete-now"})
+    with pytest.raises(ArtifactValidationError):
+        RetentionPolicy(mode=RetentionMode.KEEP, metadata=cast(Any, {"bad": object()}))
 
 
 def test_artifact_address_round_trip() -> None:
