@@ -1,11 +1,11 @@
 # Roadmap Stage 22 Implementation Plan: Examples And Validation Refinement
 
-Status: phase 2 merged; phase 3 pending
+Status: phase 3 merged; phase 4 pending
 Roadmap stage: `v22`
 Planning document: `docs/roadmap/stage-22/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 3, `examples-e2e-workflows`
+Current phase: Phase 4, `examples-docs-refinement`
 Blockers:
 
 - None for stage-level design or plan quality.
@@ -238,7 +238,7 @@ permutations remain lower-level test work.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `examples-inventory-contracts` | merged | `codex/examples-inventory-contracts` | [#196](https://github.com/samcantrill/loom/pull/196) | examples metadata, docs validation tests | Define inventory/status metadata and consistency checks | unit, integration docs checks | catalog status/tier examples |
 | 2 | `examples-integration-coverage` | merged | `codex/examples-integration-coverage` | [#197](https://github.com/samcantrill/loom/pull/197) | `examples/`, integration tests, coverage docs | Harden runnable examples and integration behavior | docs/example integration, targeted integration paths | authoring/execution/operations |
-| 3 | `examples-e2e-workflows` | pending | `codex/examples-e2e-workflows` | pending | e2e tests, CLI/Python workflow docs | Cover representative end-to-end workflows | targeted e2e and CLI workflow checks | public journeys |
+| 3 | `examples-e2e-workflows` | merged | `codex/examples-e2e-workflows` | [#198](https://github.com/samcantrill/loom/pull/198) | e2e tests, CLI/Python workflow docs | Cover representative end-to-end workflows | targeted e2e and CLI workflow checks | public journeys |
 | 4 | `examples-docs-refinement` | pending | `codex/examples-docs-refinement` | pending | docs audit, final evidence, plan metadata | Align docs with validated examples and record final evidence | `make validate-pr`, `make test-summary` | final catalog |
 
 ## Implementation Readiness Blockers
@@ -434,11 +434,11 @@ Workflow path: fast path unless coverage gaps require expansion
 
 ## Phase 3: End-To-End Workflow Behavior
 
-Status: pending
+Status: merged
 Slug: `examples-e2e-workflows`
 Branch: `codex/examples-e2e-workflows`
 Worktree: `/home/samcantrill/work/loom-worktrees/examples-e2e-workflows`
-PR: pending
+PR: [#198](https://github.com/samcantrill/loom/pull/198)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: fast path unless e2e gaps expose broad docs drift
@@ -482,13 +482,32 @@ Workflow path: fast path unless e2e gaps expose broad docs drift
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
-- Blocker-resolution budget: 0 of 3 used
-- Pre-submit blocker gate: Phase 2 must be merged or used as stack predecessor
-- Merge record: pending
+- Phase execution plan:
+  `docs/roadmap/stage-22/phases/examples-e2e-workflows.md`
+- Planning/refinement budget: completed on fast path; refine pass not needed
+- Implementation/refinement budget: unused; no refiner pass needed
+- PR review budget: satisfied by manager review with no blocking findings
+- Blocker-resolution budget: 1 of 3 used for targeted e2e/example fixes
+- Pre-submit blocker gate: Phase 2 merged before this phase started
+- Merge record: merged into `develop` on 2026-05-18 via
+  [#198](https://github.com/samcantrill/loom/pull/198), merge commit
+  `eabae1cb99678ef31ceadb8620fe0a595ae16bdc`
+- Implementation summary: added representative e2e coverage for local
+  run/resume, authority lifecycle CLI, SLURM dry-run artifacts, and Docker
+  success/failure diagnostics; repointed selected manifests and docs to the
+  named e2e paths; and hardened the local execution example to use a local
+  SQLite authority store plus `StageContext.load_input`.
+- Checks: targeted Phase 3 e2e passed (`4 passed`), docs/example integration
+  passed (`40 passed`), `make test-e2e` passed (`46 passed, 6 deselected`),
+  and touched-file Ruff/Pyright checks passed. `make validate-pr` passed
+  locally with Ruff, Pyright 0 errors, default harness `1963 passed,
+  26 skipped, 30 deselected`, config-extra `460 passed, 3 skipped,
+  2001 deselected`, and `uv build` success. `make test-summary` passed with
+  `2452 passed, 21 skipped, 2026 deselected` overall. GitHub CI `checks`
+  passed for PR #198 before merge.
+- Stack maintenance: no successor branch depended on
+  `codex/examples-e2e-workflows`; the PR was squash-merged into `develop` with
+  branch deletion requested. Phase 4 should branch from updated `develop`.
 
 ### Risks And Stop Conditions
 
