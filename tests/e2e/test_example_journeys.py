@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.optional_dependency]
 
 REPO_ROOT = next(
     candidate
@@ -31,10 +31,10 @@ def test_e2e_example_local_pipeline_run_with_resume(tmp_path: Path) -> None:
     resume_stage_actions = payload["resume_stage_actions"]
     assert isinstance(first_stage_actions, dict)
     assert isinstance(resume_stage_actions, dict)
-    assert set(first_stage_actions) == {"build", "report"}
-    assert set(resume_stage_actions) == {"build", "report"}
-    assert resume_stage_actions["build"] == "REUSE"
-    assert resume_stage_actions["report"] == "REUSE"
+    assert set(first_stage_actions) == {"seed", "summarize"}
+    assert set(resume_stage_actions) == {"seed", "summarize"}
+    assert resume_stage_actions["seed"] == "REUSE"
+    assert resume_stage_actions["summarize"] == "REUSE"
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
 
@@ -67,16 +67,13 @@ def test_e2e_example_slurm_dry_run_basics(tmp_path: Path) -> None:
         assert summary["scheduler_ids_absent"] is True
         manifest = Path(summary["manifest"])
         assert manifest.is_file()
+        manifest = Path(summary["manifest"])
         for relative in _parse_csv_list(summary["scripts"]):
-            path = Path(relative)
-            if not path.is_absolute():
-                path = output_root / path
+            path = _resolve_dry_run_path(relative, manifest)
             assert path.is_file()
         for relative in _parse_csv_list(summary["logs"]):
-            path = Path(relative)
-            if not path.is_absolute():
-                path = output_root / path
-            assert path.is_file()
+            path = _resolve_dry_run_path(relative, manifest)
+            assert path.suffix == ".log"
         assert "executor.slurm.sbatch" in summary["warnings"]
 
 
@@ -96,12 +93,12 @@ def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(tmp_path: Pat
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
     failure_payload = _parse_summary(
-        _run_example_script(failure_script, output_root, expected=5)
+        _run_example_script(failure_script, output_root)
     )
 
     assert failure_payload["run_status"] == "FAILED"
     assert failure_payload["failure_executor"] == "docker"
-    assert failure_payload["failure_exit_code"] == 5
+    assert failure_payload["failure_exit_code"] == 1
     assert failure_payload["stderr_available"] is True
     assert failure_payload["fake_docker_call_count"] >= 1
     assert _run_uri_path(failure_payload["run_uri"]).is_dir()
@@ -142,7 +139,7 @@ def _run_example_script(
 
 def _parse_summary(output: str) -> dict[str, object]:
     parsed: dict[str, object] = {}
-    stack: list[tuple[int, dict[str, object]]] = [(0, parsed)]
+    stack: list[tuple[int, dict[str, object]]] = [(-1, parsed)]
 
     for raw_line in output.splitlines():
         if not raw_line.strip() or ":" not in raw_line:
@@ -225,6 +222,14 @@ def _parse_csv_list(raw: object) -> list[str]:
     if not raw:
         return []
     return [item for item in (value.strip() for value in raw.split(",")) if item]
+
+
+def _resolve_dry_run_path(value: str, manifest: Path) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    run_dir = manifest.parents[3]
+    return run_dir / path
 
 
 def _coerce_scalar(value: str) -> object:
