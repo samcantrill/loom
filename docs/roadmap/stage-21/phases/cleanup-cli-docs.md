@@ -200,18 +200,42 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
-- PR review: unused
+- Phase implementation refinement: used locally to preserve CLI import-light
+  behavior and fix focused Pyright summary typing before final validation
+- PR review: completed by manager review; no blocking findings
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
 
 - Draft plan: completed locally
 - Final phase execution plan: completed locally
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: added `loom clean` and `loom gc` command modules,
+  shared bounded selector/confirmation helpers, parser registration, text/JSON
+  output, explicit `CleanupDeleteIntent` construction, authority-backed
+  dry-run/delete orchestration, feature docs, and cleanup CLI coverage across
+  package, unit, contract, integration, and e2e suites.
+- Implementation validation: targeted cleanup validation passed outside the
+  sandbox after the sandbox blocked service-authority sockets:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/cli tests/contracts
+  -k cleanup tests/integration -k cleanup tests/e2e -k cleanup
+  tests/package/test_import_boundaries.py::test_cli_help_remains_import_light
+  tests/package/test_import_boundaries.py::test_import_cli_remains_import_safe`
+  reported 17 passed / 17 skipped / 590 deselected for cleanup-selected suites
+  after the initial sandbox-only service-authority `PermissionError`.
+- Final validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with
+  Ruff, Pyright, default harness, config-extra harness, and build.
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
+  `build/test-summary.md` with package 108 passed / 1 skipped, unit 1394
+  passed / 7 skipped / 1 deselected, contract 274 passed / 2 skipped,
+  integration 170 passed / 8 skipped / 13 deselected, e2e 46 passed /
+  2 deselected, and config-extra 449 passed / 3 skipped / 2001 deselected.
+- Refinement summary: kept cleanup API imports lazy so `loom --help` and direct
+  cleanup CLI imports do not load `loom.pipeline`; added an explicit
+  import-boundary test and fixed summary integer typing for Pyright.
+- Blocker-resolution summary: 0/3 used; no implementation, validation, or
+  mergeability blockers remain before PR opening.
+- PR preparation: PR body drafted in
+  `docs/roadmap/stage-21/phases/cleanup-cli-docs-pr-body.md`; PR creation
+  pending.
+- Stack maintenance: not needed; root phase from `develop` after Phase 4 merge.
+- Remaining blockers: none.
