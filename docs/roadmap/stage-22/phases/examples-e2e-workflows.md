@@ -263,6 +263,8 @@ make test-summary
   `docs/roadmap/stage-22/phases/examples-e2e-workflows-pr-body.md`.
   PR title remains `Examples And Validation - Phase 3: E2E Workflows`;
   branch `codex/examples-e2e-workflows` targets `develop` with no stack
-  predecessor. PR remains unopened for the manager to push/open.
+  predecessor. PR opened as https://github.com/samcantrill/loom/pull/198 and
+  was verified with `baseRefName: develop`,
+  `headRefName: codex/examples-e2e-workflows`, and `state: OPEN`.
 - Stack maintenance: none required for this planning pass
 - Remaining blockers: none known
