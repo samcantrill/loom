@@ -27,10 +27,15 @@ are thin wrappers over public `loom.runs` bundle APIs. They do not parse archive
 members in CLI code, load provider plugins, dispatch remote exporters, or claim
 live migrated resume support.
 
-Roadmap commands for sweeps, plugins, remote stores, containers, cleanup, and
-additional scheduler/container executors are intentionally deferred. The
-later-command sections in this document describe future shape, not current
-support.
+V21 adds conservative cleanup commands: `loom clean RUN_URI` for per-run
+candidate cleanup and `loom gc COLLECTION` for candidate-level collection GC.
+Both commands default to dry-run output, require `--delete` plus confirmation or
+`--yes` for mutation, and call public cleanup APIs instead of deleting paths in
+CLI code.
+
+Roadmap commands for remote stores, additional container executors, and other
+future operational surfaces remain intentionally deferred. The later-command
+sections in this document distinguish current support from future shape.
 
 The v2 CLI should answer:
 
@@ -1481,29 +1486,52 @@ Defer sweep commands until the sweep planning API exists.
 
 ---
 
-## 21. Deferred Operational Commands
+## 21. Operational Commands
 
-Several useful operational commands should stay out of the first CLI unless the
-underlying Python APIs already exist:
+### 21.1 Cleanup And GC
+
+Current cleanup commands:
+
+```bash
+loom clean RUN_URI
+loom clean RUN_URI --older-than 7d --delete --yes
+loom gc RUNS_DIR --older-than 30d
+loom gc RUNS_DIR --retention-mode temporary --delete --yes
+```
+
+`loom clean` and `loom gc` parse bounded selector flags into
+`CleanupSelector`, call `plan_cleanup` or `plan_collection_gc`, and format text
+or JSON output from public cleanup report/result records. Mutating commands
+build `CleanupDeleteIntent` records and delegate deletion to cleanup execution
+APIs so result facts and audit events remain the correctness evidence.
+
+The CLI must not:
+
+```text
+delete files directly
+treat collection paths as managed roots
+load provider SDKs or credentials for cleanup
+authorize deletion through event sinks
+offer whole-run deletion flags in the Stage 21 command surface
+parse arbitrary cleanup query expressions
+```
+
+### 21.2 Still Deferred
+
+Several useful operational commands should stay out of the CLI unless the
+underlying Python APIs exist:
 
 ```text
 loom graph CONFIG --format dot
-loom preflight CONFIG --run-uri RUN_URI
 loom diff RUN_A RUN_B
-loom clean RUN_URI --failed-temp
-loom gc RUNS_DIR --older-than 30d
 loom events RUN_URI
-loom export RUN_URI ARCHIVE
-loom inspect ARCHIVE
 ```
 
-`graph` should format pipeline graph APIs, `preflight` should call best-effort
-config/pipeline/store/executor checks, `diff` should format planning and
-provenance summaries, and cleanup/export commands should operate only through
-run-store and artifact-store APIs. A future `events` command should read
-runtime event records, callback failures, and observer links without mutating
-run state or loading event sink plugins. The CLI should not load domain
-artifact payloads or implement file deletion policy directly.
+`graph` should format pipeline graph APIs, `diff` should format planning and
+provenance summaries, and a future `events` command should read runtime event
+records, callback failures, and observer links without mutating run state or
+loading event sink plugins. The CLI should not load domain artifact payloads or
+implement file deletion policy directly.
 
 ---
 

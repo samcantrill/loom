@@ -248,13 +248,14 @@ timeout was not enforced.
 
 ## Temporary File Cleanup
 
-Temporary file cleanup removes known temporary directories left by failed or
-interrupted operations.
+Temporary file cleanup removes known cleanup candidates recorded by Loom, such
+as temporary files or directories left by failed or interrupted operations.
 
-Potential command:
+Implemented command:
 
 ```bash
-loom clean RUN_DIR --failed-temp
+loom clean RUN_URI
+loom clean RUN_URI --older-than 7d --delete --yes
 ```
 
 Cleanup should target only paths recorded by `loom`.
@@ -284,12 +285,21 @@ do not follow symlinks for deletion
 make deletion failures visible
 ```
 
-Recommended command options:
+Implemented command options include:
 
 ```text
---dry-run
---failed-temp
 --older-than DURATION
+--recorded-before TIMESTAMP
+--recorded-after TIMESTAMP
+--candidate-kind KIND
+--reason CODE
+--retention-mode MODE
+--stage STAGE
+--artifact-id ID
+--artifact-type TYPE
+--tag TAG
+--metadata KEY=VALUE
+--delete
 --yes
 ```
 
@@ -298,15 +308,16 @@ dry-run unless called with explicit delete intent.
 
 ## Garbage Collection
 
-Garbage collection handles larger cleanup across run collections.
+Garbage collection handles candidate-level cleanup across run collections.
 
-Potential command:
+Implemented command:
 
 ```bash
 loom gc runs/ --older-than 30d
+loom gc runs/ --retention-mode temporary --delete --yes
 ```
 
-Initial GC should be metadata-driven and conservative.
+Initial GC is metadata-driven and conservative.
 
 Candidates:
 
@@ -315,10 +326,11 @@ temporary files from completed runs
 failed attempt temp directories
 logs older than a policy threshold when explicitly selected
 artifacts marked temporary by retention policy
-entire run directories only with explicit flags
 ```
 
-Garbage collection is P3 and should not block core runtime work.
+Garbage collection does not delete whole run directories in Stage 21. A future
+whole-run deletion mode needs separate terminal-state, lease/submission,
+reference, marker, retention, dry-run, and tombstone/result-record gates.
 
 ## Artifact Retention Policy
 
@@ -346,8 +358,9 @@ artifacts:
       delete_after_success: true
 ```
 
-The first implementation should record retention metadata and expose inspection
-support. Actual deletion should be explicit.
+The first implementation records retention metadata and exposes inspection and
+selection support. Actual deletion is explicit through cleanup commands and
+cleanup APIs; retention hints do not trigger automatic deletion.
 
 ## Retention Modes
 
