@@ -10,6 +10,7 @@ import pytest
 from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup import (
     CleanupDeleteIntent,
+    CleanupManagedRoot,
     CleanupReport,
     CleanupReportEntry,
     CleanupReportEntryStatus,
@@ -18,6 +19,7 @@ from loom.pipeline.cleanup import (
     CleanupResultOutcome,
     CleanupTargetKind,
     CleanupTargetRef,
+    execute_cleanup,
 )
 from loom.pipeline.status import StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
@@ -237,6 +239,64 @@ def test_cleanup_report_and_result_facts_persist_across_sqlite_instances(
     assert snapshot.cleanup_reports == (report_fact,)
     assert snapshot.cleanup_results == (result_fact,)
     assert snapshot.revision.sequence == result_fact.revision.sequence
+
+
+def test_execute_cleanup_deletes_local_target_and_persists_result_fact(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "run"
+    target = run_root / "tmp" / "payload.txt"
+    target.parent.mkdir(parents=True)
+    target.write_text("payload", encoding="utf-8")
+    run_uri = path_to_run_uri(run_root)
+    store = SQLitePerRunAuthorityStore(
+        run_uri,
+        clock=FrozenClock("2020-01-01T00:00:06Z"),
+    )
+    store.create_run(run_uri)
+    report = CleanupReport(
+        report_id="report-1",
+        run_uri=run_uri,
+        created_at="2020-01-01T00:00:00Z",
+        entries=(
+            CleanupReportEntry(
+                candidate_id="candidate-1",
+                target=CleanupTargetRef(
+                    kind=CleanupTargetKind.LOCAL_PATH,
+                    uri=path_to_run_uri(target),
+                    ownership_key="run-r1",
+                ),
+                status=CleanupReportEntryStatus.SELECTED,
+                reason_code="approved",
+            ),
+        ),
+    )
+
+    fact = execute_cleanup(
+        store,
+        run_uri,
+        report,
+        CleanupDeleteIntent(
+            intent_id="intent-1",
+            requested_by="tester",
+            requested_at="2020-01-01T00:00:04Z",
+            reason="integration cleanup",
+        ),
+        managed_roots=(
+            CleanupManagedRoot(
+                root_id="run-root",
+                uri=run_uri,
+                ownership_key="run-r1",
+            ),
+        ),
+        result_id="result-1",
+        created_at="2020-01-01T00:00:05Z",
+    )
+
+    assert not target.exists()
+    assert fact.result.entries[0].outcome is CleanupResultOutcome.DELETED
+    second = SQLitePerRunAuthorityStore(run_uri)
+    assert second.list_cleanup_results(run_uri) == (fact,)
 
 
 def test_recovery_scan_reports_expired_leases_attempts_and_active_submissions(
