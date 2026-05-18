@@ -202,8 +202,8 @@ make test-summary
 - Draft plan: completed locally
 - Final phase execution plan: completed locally
 - Implementation summary: added side-effect-free cleanup planning, explicit cleanup report recording, cleanup report/result read-model facts, append/list authority contracts across in-memory, SQLite, service, repository, HTTP client, execution adapter, and diagnostics inspection.
-- Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 107 passed / 1 skipped, unit 1377 passed / 7 skipped / 1 deselected, contract 270 passed / 2 skipped, integration 166 passed / 8 skipped / 13 deselected, e2e 44 passed / 2 deselected, config-extra 449 passed / 3 skipped / 1973 deselected.
-- Refinement summary: fixed the cleanup planner test module name collision and updated the store export contract for `CleanupReportFact` and `CleanupResultFact`.
+- Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 107 passed / 1 skipped, unit 1378 passed / 7 skipped / 1 deselected, contract 270 passed / 2 skipped, integration 166 passed / 8 skipped / 13 deselected, e2e 44 passed / 2 deselected, config-extra 449 passed / 3 skipped / 1974 deselected.
+- Refinement summary: fixed the cleanup planner test module name collision, updated the store export contract for `CleanupReportFact` and `CleanupResultFact`, and stabilized `plan_cleanup` for single-pass managed-root iterables.
 - Blocker-resolution summary: no post-review blocker-resolution passes used.
 - PR preparation: PR opened at https://github.com/samcantrill/loom/pull/192 against `develop` from `codex/cleanup-dry-run-authority`; target verified with `gh pr view 192 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: Phase 1 merged; this branch was replayed onto `origin/develop` and now targets `develop` directly.

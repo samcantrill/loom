@@ -21,11 +21,11 @@ Suite evidence from `build/test-summary.md`:
 | Suite | Result |
 | --- | --- |
 | package | 107 passed, 1 skipped |
-| unit | 1377 passed, 7 skipped, 1 deselected |
+| unit | 1378 passed, 7 skipped, 1 deselected |
 | contract | 270 passed, 2 skipped |
 | integration | 166 passed, 8 skipped, 13 deselected |
 | e2e | 44 passed, 2 deselected |
-| config-extra | 449 passed, 3 skipped, 1973 deselected |
+| config-extra | 449 passed, 3 skipped, 1974 deselected |
 
 ## Assumptions And Risks
 
