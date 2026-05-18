@@ -8,6 +8,7 @@
 - Branch: `codex/cleanup-dry-run-authority`
 - Worktree: `/home/samcantrill/work/loom-worktrees/cleanup-dry-run-authority`
 - Phase execution plan path: `docs/roadmap/stage-21/phases/cleanup-dry-run-authority.md`
+- PR: https://github.com/samcantrill/loom/pull/192
 - Full plan: `docs/roadmap/stage-21/implementation-plan.md`
 - Source phase: Phase 2, `cleanup-dry-run-authority`
 - Stack predecessor: none; predecessor PR https://github.com/samcantrill/loom/pull/191 merged
@@ -204,6 +205,6 @@ make test-summary
 - Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 107 passed / 1 skipped, unit 1377 passed / 7 skipped / 1 deselected, contract 270 passed / 2 skipped, integration 166 passed / 8 skipped / 13 deselected, e2e 44 passed / 2 deselected, config-extra 449 passed / 3 skipped / 1973 deselected.
 - Refinement summary: fixed the cleanup planner test module name collision and updated the store export contract for `CleanupReportFact` and `CleanupResultFact`.
 - Blocker-resolution summary: no post-review blocker-resolution passes used.
-- PR preparation: PR body drafted in `docs/roadmap/stage-21/phases/cleanup-dry-run-authority-pr-body.md`; PR opening pending.
+- PR preparation: PR opened at https://github.com/samcantrill/loom/pull/192 against `develop` from `codex/cleanup-dry-run-authority`; target verified with `gh pr view 192 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: Phase 1 merged; this branch was replayed onto `origin/develop` and now targets `develop` directly.
 - Remaining blockers: none.
