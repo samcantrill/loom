@@ -210,7 +210,7 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: unused; reserved for later workflow stages only if targeted validation fails, suite coverage is missing, or a concrete implementation blocker appears
-- PR review: unused; reserved for the later automated PR review gate
+- PR review: satisfied by manager pre-submit review; no blocking findings
 - Blocker resolution: 1/3 used
 
 ## Completion Notes
@@ -249,7 +249,8 @@ make test-summary
   outside-sandbox reruns verified the phase after targeted fixes.
 - Budget status: implementation refinement unused; blocker resolution 1/3 used
   for manager-side targeted e2e/example fixes after validation exposed parser,
-  assertion, and local-example hardening issues; PR review unused
+  assertion, and local-example hardening issues; PR review satisfied by manager
+  review with no blocking findings
 - Implementation validation: targeted e2e, docs/example integration, default
   e2e gate, touched-file lint, final PR gate, and suite summary passed as
   recorded above
