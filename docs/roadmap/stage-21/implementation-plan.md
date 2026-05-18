@@ -1,11 +1,11 @@
 # Roadmap Stage 21 Implementation Plan: Cleanup And Retention
 
-Status: phase 1 merged; phase 2 pr_open
+Status: phase 2 merged; phase 3 pending
 Roadmap stage: `v21`
 Planning document: `docs/roadmap/stage-21/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 2, `cleanup-dry-run-authority`
+Current phase: Phase 3, `cleanup-delete-events`
 Blockers:
 
 - None before phase execution planning.
@@ -251,7 +251,7 @@ The records/selectors/results design can grow deliberately:
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `cleanup-records-contracts` | merged | `codex/cleanup-records-contracts` | https://github.com/samcantrill/loom/pull/191 | `loom.pipeline.cleanup`, `loom.artifacts`, tests | Cleanup records, retention, selectors, and safety contracts | package, unit, contract | dry-run records, selectors, safety, retention |
-| 2 | `cleanup-dry-run-authority` | pr_open | `codex/cleanup-dry-run-authority` | https://github.com/samcantrill/loom/pull/192 | authority/read models, dry-run planner, diagnostics inspection | Authority-backed dry-run reports, explicit recorded report facts, and compatible result-fact scaffolding | unit, contract, integration | per-run dry-run, retention inspection |
+| 2 | `cleanup-dry-run-authority` | merged | `codex/cleanup-dry-run-authority` | https://github.com/samcantrill/loom/pull/192 | authority/read models, dry-run planner, diagnostics inspection | Authority-backed dry-run reports, explicit recorded report facts, and compatible result-fact scaffolding | unit, contract, integration | per-run dry-run, retention inspection |
 | 3 | `cleanup-delete-events` | pending | `codex/cleanup-delete-events` | pending | cleanup execution, local target adapter, event projection | Explicit local deletion and cleanup audit events | unit, contract, integration | explicit deletion, path rejection, audit event |
 | 4 | `cleanup-collection-preflight` | pending | `codex/cleanup-collection-preflight` | pending | collection GC, run discovery boundary, preflight/diagnostics | Candidate-level collection GC and preflight warnings | unit, contract, integration | collection GC, preflight warnings |
 | 5 | `cleanup-cli-docs` | pending | `codex/cleanup-cli-docs` | pending | CLI, formatting, docs, final validation | `loom clean`, `loom gc`, docs, and final evidence | package, unit, contract, integration, e2e, final gate | CLI clean/gc flows |
@@ -371,7 +371,7 @@ Workflow path: expanded path
 
 ## Phase 2: Authority-Backed Dry-Run Planning And Inspection
 
-Status: pr_open
+Status: merged
 Slug: `cleanup-dry-run-authority`
 Branch: `codex/cleanup-dry-run-authority`
 Worktree: `/home/samcantrill/work/loom-worktrees/cleanup-dry-run-authority`
@@ -451,10 +451,10 @@ Workflow path: expanded path
 - Phase execution plan: complete
 - Planning/refinement budget: used
 - Implementation/refinement budget: used locally during validation
-- PR review budget: unused
+- PR review budget: completed by manager review
 - Blocker-resolution budget: 0 of 3 used
 - Pre-submit blocker gate: Phase 1 merged; PR targets `develop`
-- Merge record: pending
+- Merge record: merged into `develop` on 2026-05-18 via PR #192; remote branch deletion required manual cleanup because the first local `gh pr merge --delete-branch` attempt merged but failed local branch cleanup
 
 ### Risks And Stop Conditions
 
@@ -477,16 +477,18 @@ Workflow path: expanded path
   report/result diagnostics inspection.
 - Validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 107
-  passed / 1 skipped, unit 1377 passed / 7 skipped / 1 deselected, contract
+  passed / 1 skipped, unit 1378 passed / 7 skipped / 1 deselected, contract
   270 passed / 2 skipped, integration 166 passed / 8 skipped / 13 deselected,
-  e2e 44 passed / 2 deselected, and config-extra 449 passed / 3 skipped / 1973
-  deselected.
+  e2e 44 passed / 2 deselected, and config-extra 449 passed / 3 skipped / 1974
+  deselected. GitHub CI `checks` completed successfully.
 - PR: https://github.com/samcantrill/loom/pull/192 targets `develop` from
   `codex/cleanup-dry-run-authority`; target verified with
   `gh pr view 192 --json baseRefName,headRefName,state,url`.
-- Merge: pending automated review, CI, and final target/check verification.
-- Follow-up: Phase 3 may start stacked on this branch only if Phase 2 cannot be
-  merged promptly; otherwise branch Phase 3 from updated `develop`.
+- Merge: Squash-merged to `develop` on 2026-05-18 as
+  `c9dd0a46986f2b9bf5bd80d4a2bbe21dc545d86d` after target, CI, validation,
+  scope, and manager review gates passed.
+- Follow-up: Phase 3 should branch from updated `develop`; no successor branch
+  depends on `codex/cleanup-dry-run-authority`.
 
 ## Phase 3: Explicit Local Deletion And Cleanup Event Projection
 
