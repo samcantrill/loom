@@ -41,9 +41,10 @@ example outputs. Execution and operations examples also accept
 
 ## Validation Tiers
 
-- `smoke`: fast runnable examples covered by default integration tests.
-- `full`: runnable examples that are useful but too slow or broad for the
-  default test path; tests should mark these `slow`.
+- `smoke`: fast runnable examples covered by the docs/example smoke harness.
+- `full`: runnable examples that are useful but broader than the smoke path;
+  these use named integration or e2e evidence, often in the config-extra
+  optional-dependency test leg.
 - `manual`: illustrative examples that cannot run in the default environment and
   must document why in their manifest.
 
@@ -56,8 +57,9 @@ Each `example.yaml` manifest includes these docs-owned catalog fields:
   (group README and feature-coverage docs where applicable).
 - `owner_stages`: one or more owning roadmap stages (`v0`, `v1`, ...).
 - `validation_path`: required path-style evidence pointer for what proves the example.
-- `validation_command`: preferred pytest command for smoke coverage; optional for
-  non-smoke/full/manual examples.
+- `validation_command`: preferred pytest command for smoke coverage. Smoke
+  examples keep this command even when `validation_path` points at stronger
+  representative integration or e2e evidence.
 - `prerequisites` / `manual_rationale`: required for manual or illustrative
   examples to explain why default execution cannot run.
 

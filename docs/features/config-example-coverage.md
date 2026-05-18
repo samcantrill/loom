@@ -1,9 +1,9 @@
 # Configuration Example Coverage
 
-This document lists the configuration functionality that should be documented
-through examples and proposes example coverage. Examples should stay
-domain-neutral, use public Python APIs, and avoid promising CLI, remote,
-plugin, sweep, `_copy_`, or persistence behavior that is outside v1.
+This document tracks configuration functionality covered by current examples.
+Examples stay domain-neutral, use public Python APIs, and avoid promising CLI,
+remote, plugin, sweep, `_copy_`, or persistence behavior that is outside the
+configuration example surface.
 
 ## Behavior To Document
 
@@ -30,7 +30,7 @@ plugin, sweep, `_copy_`, or persistence behavior that is outside v1.
 | Error handling | Catch structured config errors and inspect context fields. |
 | Import boundaries | Demonstrate that target instantiation can be used separately from YAML composition. |
 
-## Proposed Examples
+## Current Examples
 
 | Example | Functionality covered | Implementation notes |
 | --- | --- | --- |
@@ -38,7 +38,7 @@ plugin, sweep, `_copy_`, or persistence behavior that is outside v1.
 | `authoring.config-composition.includes` | Explicit relative include, nested include, user include replacement, brand-new include addition. | Existing runnable smoke example with a small `configs/` tree and printed source artifact paths. |
 | `authoring.config-composition.replacement-overlays` | Multi-overlay order and `_replace_` marker semantics. | Runnable smoke example showing overlay 2 replacing overlay 1's mapping. |
 | `authoring.recipes` | Trusted recipe registration, recipe expansion, interpolation, recipe manifest, redaction. | Existing runnable example; keep as the canonical recipe example. |
-| `authoring.artifact-safety` | Provenance metadata, source artifacts, artifact-safe fingerprints, resolver facts, raw snapshot default/opt-in. | Runnable or full example that avoids printing secrets and compares two fingerprints. |
+| `authoring.artifact-safety` | Provenance metadata, source artifacts, artifact-safe fingerprints, resolver facts, raw snapshot default/opt-in. | Runnable smoke example that avoids printing secrets and compares two fingerprints. |
 | `authoring.target-instantiation` | Nested `_target_` graph, `_args_`, `_partial_`, `_inject_`, explicit instantiation after composition or direct config. | Existing runnable example; extend only if needed for composed handoff. |
 | `authoring.config-composition.errors` | Structured exceptions for missing include, invalid override, unsupported resolver, unsupported `_copy_`. | Existing runnable smoke example catches errors and prints context summaries. |
 
@@ -55,7 +55,7 @@ Each runnable example should have:
 
 ## Existing Examples
 
-| Existing example | Current coverage | Suggested follow-up |
+| Existing example | Current coverage | Notes |
 | --- | --- | --- |
 | `authoring.config-composition.basic` | Base YAML, overlays, ordinary update and add overrides, `resolved`/`unresolved`/`redacted`. | Keep as the canonical first composition example without recipes or includes. |
 | `authoring.config-composition.includes` | Explicit relative include, nested include relative to the including file, user include replacement, brand-new include addition, include source artifacts. | Keep as the canonical include composition example; broaden only if source snapshot examples need a shared tree. |

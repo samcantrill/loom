@@ -1,6 +1,6 @@
 # Roadmap Stage 22 Implementation Plan: Examples And Validation Refinement
 
-Status: phase 3 merged; phase 4 pending
+Status: phase 4 PR open
 Roadmap stage: `v22`
 Planning document: `docs/roadmap/stage-22/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
@@ -9,7 +9,8 @@ Current phase: Phase 4, `examples-docs-refinement`
 Blockers:
 
 - None for stage-level design or plan quality.
-- Phase execution plans are still required before each remaining phase begins.
+- Phase 4 PR is open against `develop`; CI, automated review, merge, and final
+  metadata update are pending.
 
 ## Summary
 
@@ -63,7 +64,8 @@ Blockers:
 - Phase shaping: reviewed.
 - Implementation readiness blockers:
   - None for stage-level design or plan quality.
-  - Phase execution plans are still required before each remaining phase begins.
+  - Phase 4 PR is open against `develop`; CI, automated review, merge, and
+    final metadata update are pending.
 
 ## Desired Outcome
 
@@ -239,7 +241,7 @@ permutations remain lower-level test work.
 | 1 | `examples-inventory-contracts` | merged | `codex/examples-inventory-contracts` | [#196](https://github.com/samcantrill/loom/pull/196) | examples metadata, docs validation tests | Define inventory/status metadata and consistency checks | unit, integration docs checks | catalog status/tier examples |
 | 2 | `examples-integration-coverage` | merged | `codex/examples-integration-coverage` | [#197](https://github.com/samcantrill/loom/pull/197) | `examples/`, integration tests, coverage docs | Harden runnable examples and integration behavior | docs/example integration, targeted integration paths | authoring/execution/operations |
 | 3 | `examples-e2e-workflows` | merged | `codex/examples-e2e-workflows` | [#198](https://github.com/samcantrill/loom/pull/198) | e2e tests, CLI/Python workflow docs | Cover representative end-to-end workflows | targeted e2e and CLI workflow checks | public journeys |
-| 4 | `examples-docs-refinement` | pending | `codex/examples-docs-refinement` | pending | docs audit, final evidence, plan metadata | Align docs with validated examples and record final evidence | `make validate-pr`, `make test-summary` | final catalog |
+| 4 | `examples-docs-refinement` | pr_open | `codex/examples-docs-refinement` | [#199](https://github.com/samcantrill/loom/pull/199) | docs audit, final evidence, plan metadata | Align docs with validated examples and record final evidence | `make validate-pr`, `make test-summary` | final catalog |
 
 ## Implementation Readiness Blockers
 
@@ -248,7 +250,7 @@ permutations remain lower-level test work.
 | Planning confirmation | `docs/roadmap/stage-22/planning.md` | User asked to run the design review quality gate on the refined scope on 2026-05-18. | passed |
 | Design-safety review | roadmap workflow | Reviewed docs/example/test scope for overpromise, domain neutrality, future-roadmap impact, public-contract safety, and external-dependency risk. | passed |
 | Implementation-plan quality gate | roadmap workflow | Reviewed maintainability, extensibility, future compatibility, tradeoffs, technical debt, test strategy, and reviewability. | passed |
-| Phase execution plans | phase workflow | Create a phase execution plan before each implementation phase. | pending |
+| Phase execution plans | phase workflow | Phase 4 execution plan completed in `docs/roadmap/stage-22/phases/examples-docs-refinement.md`. | passed |
 
 ## Phase 1: Example Inventory And Metadata Contracts
 
@@ -524,11 +526,11 @@ Workflow path: fast path unless e2e gaps expose broad docs drift
 
 ## Phase 4: Documentation Refinement And Final Validation
 
-Status: pending
+Status: pr_open
 Slug: `examples-docs-refinement`
 Branch: `codex/examples-docs-refinement`
 Worktree: `/home/samcantrill/work/loom-worktrees/examples-docs-refinement`
-PR: pending
+PR: [#199](https://github.com/samcantrill/loom/pull/199)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: fast path unless final audit finds broad stale-doc drift
@@ -572,13 +574,35 @@ Workflow path: fast path unless final audit finds broad stale-doc drift
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
+- Phase execution plan:
+  `docs/roadmap/stage-22/phases/examples-docs-refinement.md`
+- Planning/refinement budget: completed on fast path; refine pass not needed
+- Implementation/refinement budget: unused; docs-only implementation and
+  required validation passed without a refiner pass
 - PR review budget: unused
 - Blocker-resolution budget: 0 of 3 used
-- Pre-submit blocker gate: Phase 3 must be merged or used as stack predecessor
+- Pre-submit blocker gate: Phase 3 merged before this phase started
+- PR record: opened against `develop` on 2026-05-18 as
+  [#199](https://github.com/samcantrill/loom/pull/199)
 - Merge record: pending
+- Implementation summary: aligned the top-level README with the current
+  local-first implementation and run directory evidence, clarified example
+  validation tier semantics, tightened execution/operations catalog placement
+  wording, updated focused configuration and authority example coverage docs,
+  and recorded Phase 4 evidence in roadmap artifacts.
+- Checks: targeted docs/example, focused integration, and representative e2e
+  paths passed together with `44 passed`; `make test-e2e` passed with
+  `46 passed, 6 deselected`; `make validate-pr` passed with Ruff, Pyright
+  0 errors, default harness `1963 passed, 26 skipped, 30 deselected`,
+  config-extra harness `460 passed, 3 skipped, 2001 deselected`, and build
+  success; `make test-summary` passed with overall `2452 passed`,
+  `21 skipped`, and `2026 deselected`.
+- Manual and internal-demo status: live SLURM and live Docker workflows remain
+  manual or illustrative because they require real external systems; backend
+  diagnostics and synthetic submitted-state demos remain `internal_demo` support
+  coverage rather than primary user-facing examples.
+- Accepted follow-ups: no generated hosted docs, real cluster/daemon/provider
+  validation, or broad future-feature planning is included in Stage 22.
 
 ### Risks And Stop Conditions
 
@@ -644,8 +668,8 @@ Gate result:
 
 ## Final Approval
 
-- Approval status: approved for phase execution planning; implementation has not
-  started
+- Approval status: Phase 4 PR is open against `develop`; CI, automated review,
+  merge, and final metadata update are pending
 - Approved scope: robust examples, integration testing behavior, e2e testing
   behavior, documentation refinement, and manual/no-example classification for
   unsupported or external-system behavior

@@ -6,19 +6,24 @@ resuming small Python pipelines.
 For repository-local terminology and preferred naming, see
 [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
-The current v2 implementation is deliberately local-only:
+The current implementation is local-first and geared toward deterministic
+research workflow evidence:
 
-- functional `loom validate`, `loom plan`, and `loom run` commands
+- functional `loom validate`, `loom plan`, `loom run`, `loom status`, `loom logs`,
+  `loom artifacts`, `loom authority`, `loom runs`, `loom sweep`, and cleanup
+  commands
 - trusted config composition, recipe expansion, and `_target_` construction
-- local artifact + run stores on disk
+- local artifact + run stores on disk, with authority-backed coordination
 - deterministic planning with conservative same-run resume
-- local in-process execution
-- error messages with path-oriented context
-- import-safe boundaries between config, pipeline, execution, and CLI modules
+- local in-process, subprocess, fake-Docker, and SLURM dry-run execution paths
+- offline-first evidence import, run bundles/catalogs, resource diagnostics, and
+  structured failure records
+- import-safe boundaries between config, pipeline, execution, stores, authority,
+  plugins, and CLI modules
 
-Later roadmap work will add diagnostics, stage workers, remote stores,
-subprocess/SLURM/container executors, sweeps, catalogs, bundles, plugins, and
-cleanup/reliability commands.
+Default examples and validation are local, synthetic, and fake-backed. Live
+cluster, daemon, provider, and network-backed workflows stay manual unless a
+deterministic validation fixture exists.
 
 ## Quickstart (CLI)
 
@@ -60,7 +65,7 @@ timestamped run URI under its default root. `loom plan` is read-only and never
 allocates a default run URI. `loom run --dry-run` emits the same plan schema as
 `loom plan` because no run happened.
 
-V2 accepts only explicit local run URI forms:
+Local run commands accept explicit local run URI forms:
 
 ```text
 file:///absolute/run
@@ -81,6 +86,7 @@ from loom.config import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
 run_root = Path("tmp/runs")
 config_path = Path("tmp/demo_pipeline.yaml")
@@ -110,7 +116,10 @@ pipeline:
           codec_key: text.v1
 """
 )
-run_store = create_authority_backed_serial_run_store(run_root)
+run_store = create_authority_backed_serial_run_store(
+    run_root,
+    authority_store=SQLitePerRunAuthorityStore(),
+)
 runner = PipelineRunner(run_store=run_store)
 run_uri = path_to_run_uri(run_root / "run1")
 
@@ -137,7 +146,10 @@ not reused.
 
 ## Run Directory Layout
 
-Successful runs are materialized as:
+Successful local runs are materialized with durable state, plan, config, stage,
+artifact, and provenance records. The exact config files depend on whether the
+run was started from a composed config object or plain resolved config, but a
+typical run directory includes:
 
 ```text
 runs/RUN_NAME/
@@ -147,9 +159,7 @@ runs/RUN_NAME/
   artifacts.json
 
   config/
-    raw.yaml
-    resolved.yaml
-    resolved.redacted.yaml
+    composition_manifest.json
     recipe_manifest.json
   stages/
     STAGE_NAME/
@@ -182,13 +192,12 @@ requirements.
 ## Relevant docs
 
 - [docs/loom.md](docs/loom.md)
+- [examples/README.md](examples/README.md)
 - [docs/features/cli.md](docs/features/cli.md)
 - [docs/features/config.md](docs/features/config.md)
+- [docs/features/testing.md](docs/features/testing.md)
 - [docs/structure.md](docs/structure.md)
 - [docs/roadmap.md](docs/roadmap.md)
-- [docs/roadmap/stage-2/implementation-plan.md](docs/roadmap/stage-2/implementation-plan.md)
-- [docs/roadmap/stage-0/implementation-plan.md](docs/roadmap/stage-0/implementation-plan.md)
-- [v0 public API migration notes](docs/briefs/v0_public_api_migration_notes.md)
 
 ## Development
 

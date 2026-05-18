@@ -6,7 +6,7 @@ manual live SLURM templates, runtime profiles, normalized run options, explicit
 offline-first evidence import, artifact storage, provenance snapshots, and
 same-run resume behavior.
 
-Future executor examples should live here too. Docker examples should use
+Additional executor examples should live here too. Docker examples should use
 `examples/execution/containers/docker/`, and containerized SLURM plus Apptainer
 examples should use `examples/execution/containers/slurm-apptainer/`.
 

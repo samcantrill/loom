@@ -6,7 +6,7 @@ metadata-only artifact inspection, failure diagnostics, resource coordination,
 and manual SLURM job operations. Support-only backend inspection and synthetic
 submitted-state demos stay in the internal section below.
 
-Future operational examples should live here too, including run catalogs,
+Additional operational examples should live here too, including run catalogs,
 metadata comparison, bundles, cleanup, retention, and garbage-collection
 workflows.
 
