@@ -11,6 +11,7 @@ from typing import cast
 from urllib import error, request
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data
@@ -74,6 +75,18 @@ AUTHORITY_MUTATION_SUBMITTED_READ_PATH = (
 )
 AUTHORITY_MUTATION_SUBMITTED_LIST_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/submitted/list"
+)
+AUTHORITY_MUTATION_CLEANUP_REPORT_APPEND_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/cleanup/reports/append"
+)
+AUTHORITY_MUTATION_CLEANUP_REPORT_LIST_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/cleanup/reports/list"
+)
+AUTHORITY_MUTATION_CLEANUP_RESULT_APPEND_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/cleanup/results/append"
+)
+AUTHORITY_MUTATION_CLEANUP_RESULT_LIST_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/cleanup/results/list"
 )
 AUTHORITY_MUTATION_OFFLINE_IMPORT_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/import/offline-evidence"
@@ -707,6 +720,106 @@ class AuthorityClient:
             ),
         )
 
+    def append_cleanup_report(
+        self,
+        run_uri: str,
+        report: CleanupReport,
+        *,
+        expected_revision: BackendRevision | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Append a cleanup report fact through the service."""
+
+        return self.send(
+            AUTHORITY_MUTATION_CLEANUP_REPORT_APPEND_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.CLEANUP_REPORTS,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+                expected_revision=expected_revision,
+                body={"report": report.to_dict()},
+            ),
+        )
+
+    def list_cleanup_reports(
+        self,
+        run_uri: str,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """List cleanup report facts through the service."""
+
+        return self.send(
+            AUTHORITY_MUTATION_CLEANUP_REPORT_LIST_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.CLEANUP_REPORTS,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+            ),
+        )
+
+    def append_cleanup_result(
+        self,
+        run_uri: str,
+        result: CleanupResult,
+        *,
+        expected_revision: BackendRevision | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Append a cleanup result fact through the service."""
+
+        return self.send(
+            AUTHORITY_MUTATION_CLEANUP_RESULT_APPEND_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.CLEANUP_RESULTS,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+                expected_revision=expected_revision,
+                body={"result": result.to_dict()},
+            ),
+        )
+
+    def list_cleanup_results(
+        self,
+        run_uri: str,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """List cleanup result facts through the service."""
+
+        return self.send(
+            AUTHORITY_MUTATION_CLEANUP_RESULT_LIST_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.CLEANUP_RESULTS,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+            ),
+        )
+
     def create_workspace(
         self,
         identity: WorkspaceIdentity,
@@ -1209,6 +1322,10 @@ __all__ = [
     "AUTHORITY_MUTATION_SUBMITTED_WRITE_PATH",
     "AUTHORITY_MUTATION_SUBMITTED_READ_PATH",
     "AUTHORITY_MUTATION_SUBMITTED_LIST_PATH",
+    "AUTHORITY_MUTATION_CLEANUP_REPORT_APPEND_PATH",
+    "AUTHORITY_MUTATION_CLEANUP_REPORT_LIST_PATH",
+    "AUTHORITY_MUTATION_CLEANUP_RESULT_APPEND_PATH",
+    "AUTHORITY_MUTATION_CLEANUP_RESULT_LIST_PATH",
     "AUTHORITY_MUTATION_OFFLINE_IMPORT_PATH",
     "AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH",
     "AUTHORITY_COORDINATION_SWEEP_CREATE_PATH",

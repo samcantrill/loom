@@ -7,6 +7,17 @@ from pathlib import Path
 import pytest
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup import (
+    CleanupDeleteIntent,
+    CleanupReport,
+    CleanupReportEntry,
+    CleanupReportEntryStatus,
+    CleanupResult,
+    CleanupResultEntry,
+    CleanupResultOutcome,
+    CleanupTargetKind,
+    CleanupTargetRef,
+)
 from loom.pipeline.event_sinks import (
     EventObserverExternalRef,
     EventObserverLinkRecord,
@@ -100,6 +111,56 @@ def _event_observer_link(
             identifiers={"trace_id": "trace-1"},
         ),
         metadata={"source": "contract"},
+    )
+
+
+def _cleanup_target(run_uri: str) -> CleanupTargetRef:
+    return CleanupTargetRef(
+        kind=CleanupTargetKind.LOCAL_PATH,
+        uri=f"{run_uri}/tmp/payload",
+        target_id="candidate-1",
+        ownership_key="run-r1",
+    )
+
+
+def _cleanup_report(run_uri: str) -> CleanupReport:
+    target = _cleanup_target(run_uri)
+    return CleanupReport(
+        report_id="report-1",
+        run_uri=run_uri,
+        created_at="2020-01-01T00:00:04Z",
+        entries=(
+            CleanupReportEntry(
+                candidate_id="candidate-1",
+                target=target,
+                status=CleanupReportEntryStatus.SELECTED,
+                reason_code="approved",
+            ),
+        ),
+    )
+
+
+def _cleanup_result(run_uri: str) -> CleanupResult:
+    target = _cleanup_target(run_uri)
+    return CleanupResult(
+        result_id="result-1",
+        run_uri=run_uri,
+        created_at="2020-01-01T00:00:05Z",
+        intent=CleanupDeleteIntent(
+            intent_id="intent-1",
+            requested_by="operator",
+            requested_at="2020-01-01T00:00:05Z",
+            reason="cleanup contract",
+        ),
+        entries=(
+            CleanupResultEntry(
+                candidate_id="candidate-1",
+                target=target,
+                outcome=CleanupResultOutcome.DELETED,
+                reason_code="deleted",
+                completed_at="2020-01-01T00:00:06Z",
+            ),
+        ),
     )
 
 
@@ -201,6 +262,40 @@ def test_per_run_authority_contract_records_revisioned_lifecycle_facts(
     assert snapshot.stages[0].attempts[0].status is StageStatus.SUCCEEDED
     assert snapshot.stages[0].latest_commit == commit.commit
     assert snapshot.stages[0].artifact_facts == commit.artifact_facts
+
+
+def test_per_run_authority_contract_appends_cleanup_facts(
+    authority_case: AuthorityStoreCase,
+) -> None:
+    store = authority_case.store
+    run_uri = authority_case.run_uri
+    store.create_run(run_uri)
+    report = _cleanup_report(run_uri)
+    result = _cleanup_result(run_uri)
+
+    report_fact = store.append_cleanup_report(run_uri, report)
+    result_fact = store.append_cleanup_result(run_uri, result)
+
+    assert report_fact.report == report
+    assert result_fact.result == result
+    assert store.append_cleanup_report(run_uri, report) == report_fact
+    assert store.append_cleanup_result(run_uri, result) == result_fact
+    assert store.list_cleanup_reports(run_uri) == (report_fact,)
+    assert store.list_cleanup_results(run_uri) == (result_fact,)
+    snapshot = store.snapshot(run_uri)
+    assert snapshot.cleanup_reports == (report_fact,)
+    assert snapshot.cleanup_results == (result_fact,)
+
+    with pytest.raises(ValueError, match="conflicting cleanup report"):
+        store.append_cleanup_report(
+            run_uri,
+            CleanupReport(
+                report_id=report.report_id,
+                run_uri=run_uri,
+                created_at=report.created_at,
+                metadata={"changed": True},
+            ),
+        )
 
 
 def test_per_run_authority_rejects_stale_transitions_and_lease_misuse(

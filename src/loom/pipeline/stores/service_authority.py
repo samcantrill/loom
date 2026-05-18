@@ -14,6 +14,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.reliability import (
@@ -50,6 +51,8 @@ from .read_models import (
     AuthoritativeRunSnapshot,
     BackendRevision,
     CleanupCandidate,
+    CleanupReportFact,
+    CleanupResultFact,
     LeaseKind,
     LeaseRecord,
     LeaseState,
@@ -124,6 +127,10 @@ _EXPOSED = (
     "snapshot",
     "scan_recovery",
     "list_cleanup_candidates",
+    "append_cleanup_report",
+    "list_cleanup_reports",
+    "append_cleanup_result",
+    "list_cleanup_results",
 )
 
 
@@ -619,6 +626,36 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
             self._call("list_cleanup_candidates", run_uri),
         )
 
+    def append_cleanup_report(
+        self, run_uri: str, report: CleanupReport
+    ) -> CleanupReportFact:
+        return CleanupReportFact.from_dict(
+            self._call("append_cleanup_report", run_uri, report.to_dict())
+        )
+
+    def list_cleanup_reports(self, run_uri: str) -> tuple[CleanupReportFact, ...]:
+        return tuple(
+            CleanupReportFact.from_dict(record)
+            for record in cast(
+                tuple[object, ...], self._call("list_cleanup_reports", run_uri)
+            )
+        )
+
+    def append_cleanup_result(
+        self, run_uri: str, result: CleanupResult
+    ) -> CleanupResultFact:
+        return CleanupResultFact.from_dict(
+            self._call("append_cleanup_result", run_uri, result.to_dict())
+        )
+
+    def list_cleanup_results(self, run_uri: str) -> tuple[CleanupResultFact, ...]:
+        return tuple(
+            CleanupResultFact.from_dict(record)
+            for record in cast(
+                tuple[object, ...], self._call("list_cleanup_results", run_uri)
+            )
+        )
+
     def _call(self, method_name: str, *args: object, **kwargs: object) -> object:
         try:
             with self._call_lock:
@@ -714,6 +751,8 @@ class _RunState:
         self.commits: dict[str, OutputCommitRecord] = {}
         self.facts: dict[str, list[ArtifactFactRecord]] = {}
         self.cleanup: list[CleanupCandidate] = []
+        self.cleanup_reports: dict[str, CleanupReportFact] = {}
+        self.cleanup_results: dict[str, CleanupResultFact] = {}
         self.events: list[PipelineEventRecord] = []
         self.event_sink_failures: list[EventSinkFailureRecord] = []
         self.event_observer_links: list[EventObserverLinkRecord] = []
@@ -1410,6 +1449,8 @@ class _ServiceAuthorityCore:
                 stages=stages,
                 submitted_operations=tuple(state.submitted.values()),
                 cleanup_candidates=tuple(state.cleanup),
+                cleanup_reports=tuple(state.cleanup_reports.values()),
+                cleanup_results=tuple(state.cleanup_results.values()),
                 reliability_policy_facts=tuple(
                     fact
                     for fact in state.reliability_policy_facts.values()
@@ -1443,6 +1484,68 @@ class _ServiceAuthorityCore:
     def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]:
         with self._lock:
             return tuple(self._require_run(run_uri).cleanup)
+
+    def append_cleanup_report(
+        self, run_uri: str, report: Mapping[str, PlainData]
+    ) -> dict[str, PlainData]:
+        parsed = CleanupReport.from_dict(report)
+        if parsed.run_uri != run_uri:
+            raise ValueError("cleanup report run_uri does not match run")
+        with self._lock:
+            state = self._require_run(run_uri)
+            existing = state.cleanup_reports.get(parsed.report_id)
+            if existing is not None:
+                if existing.report.to_dict() == parsed.to_dict():
+                    return existing.to_dict()
+                raise ValueError("conflicting cleanup report already exists")
+            state.revision = self._next_revision()
+            fact = CleanupReportFact(
+                report=parsed,
+                recorded_at=self._now(),
+                revision=state.revision,
+            )
+            state.cleanup_reports[parsed.report_id] = fact
+            return fact.to_dict()
+
+    def list_cleanup_reports(
+        self, run_uri: str
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            return tuple(
+                fact.to_dict()
+                for fact in self._require_run(run_uri).cleanup_reports.values()
+            )
+
+    def append_cleanup_result(
+        self, run_uri: str, result: Mapping[str, PlainData]
+    ) -> dict[str, PlainData]:
+        parsed = CleanupResult.from_dict(result)
+        if parsed.run_uri != run_uri:
+            raise ValueError("cleanup result run_uri does not match run")
+        with self._lock:
+            state = self._require_run(run_uri)
+            existing = state.cleanup_results.get(parsed.result_id)
+            if existing is not None:
+                if existing.result.to_dict() == parsed.to_dict():
+                    return existing.to_dict()
+                raise ValueError("conflicting cleanup result already exists")
+            state.revision = self._next_revision()
+            fact = CleanupResultFact(
+                result=parsed,
+                recorded_at=self._now(),
+                revision=state.revision,
+            )
+            state.cleanup_results[parsed.result_id] = fact
+            return fact.to_dict()
+
+    def list_cleanup_results(
+        self, run_uri: str
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            return tuple(
+                fact.to_dict()
+                for fact in self._require_run(run_uri).cleanup_results.values()
+            )
 
     def advance_time(self, seconds: int) -> None:
         if seconds <= 0:

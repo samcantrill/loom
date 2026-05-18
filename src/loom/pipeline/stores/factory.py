@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
     RetryDecisionRecord,
@@ -38,6 +39,8 @@ from .read_models import (
     AuthoritativeRunSnapshot,
     BackendRevision,
     CleanupCandidate,
+    CleanupReportFact,
+    CleanupResultFact,
     LeaseRecord,
     LifecycleReason,
     RecoveryRecord,
@@ -320,6 +323,22 @@ class _PerRunAuthorityRunStore:
 
     def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]:
         return self._authority_store.list_cleanup_candidates(run_uri)
+
+    def append_cleanup_report(
+        self, run_uri: str, report: CleanupReport
+    ) -> CleanupReportFact:
+        return self._authority_store.append_cleanup_report(run_uri, report)
+
+    def list_cleanup_reports(self, run_uri: str) -> tuple[CleanupReportFact, ...]:
+        return self._authority_store.list_cleanup_reports(run_uri)
+
+    def append_cleanup_result(
+        self, run_uri: str, result: CleanupResult
+    ) -> CleanupResultFact:
+        return self._authority_store.append_cleanup_result(run_uri, result)
+
+    def list_cleanup_results(self, run_uri: str) -> tuple[CleanupResultFact, ...]:
+        return self._authority_store.list_cleanup_results(run_uri)
 
 
 class _PerRunAuthorityStageStore:

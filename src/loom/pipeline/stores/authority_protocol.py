@@ -30,6 +30,8 @@ from .read_models import (
     AuthoritativeRunSnapshot,
     BackendRevision,
     CleanupCandidate,
+    CleanupReportFact,
+    CleanupResultFact,
     LeaseRecord,
     OutputCommitRecord,
     RecoveryRecord,
@@ -64,6 +66,8 @@ class AuthorityProtocolOperationKind(StrEnum):
     WORKSPACE_COORDINATION = "workspace_coordination"
     RECOVERY_SCAN = "recovery_scan"
     CLEANUP_CANDIDATES = "cleanup_candidates"
+    CLEANUP_REPORTS = "cleanup_reports"
+    CLEANUP_RESULTS = "cleanup_results"
     OFFLINE_IMPORT = "offline_import"
 
 
@@ -530,6 +534,8 @@ class AuthorityProtocolResult:
     submitted_operations: tuple[SubmittedOperationRecord, ...] = ()
     trials: tuple[TrialReference, ...] = ()
     cleanup_candidates: tuple[CleanupCandidate, ...] = ()
+    cleanup_reports: tuple[CleanupReportFact, ...] = ()
+    cleanup_results: tuple[CleanupResultFact, ...] = ()
     recovery_records: tuple[RecoveryRecord, ...] = ()
     coordination_recovery_records: tuple[CoordinationRecoveryRecord, ...] = ()
     body: Mapping[str, PlainData] = field(default_factory=dict)
@@ -606,6 +612,16 @@ class AuthorityProtocolResult:
         )
         object.__setattr__(
             self,
+            "cleanup_reports",
+            _tuple_of(self.cleanup_reports, CleanupReportFact, "cleanup_reports"),
+        )
+        object.__setattr__(
+            self,
+            "cleanup_results",
+            _tuple_of(self.cleanup_results, CleanupResultFact, "cleanup_results"),
+        )
+        object.__setattr__(
+            self,
             "recovery_records",
             _tuple_of(self.recovery_records, RecoveryRecord, "recovery_records"),
         )
@@ -655,6 +671,8 @@ class AuthorityProtocolResult:
             "cleanup_candidates": [
                 candidate.to_dict() for candidate in self.cleanup_candidates
             ],
+            "cleanup_reports": [fact.to_dict() for fact in self.cleanup_reports],
+            "cleanup_results": [fact.to_dict() for fact in self.cleanup_results],
             "recovery_records": [
                 record.to_dict() for record in self.recovery_records
             ],
@@ -689,6 +707,8 @@ class AuthorityProtocolResult:
                 "submitted_operations",
                 "trials",
                 "cleanup_candidates",
+                "cleanup_reports",
+                "cleanup_results",
                 "recovery_records",
                 "coordination_recovery_records",
                 "body",
@@ -752,6 +772,18 @@ class AuthorityProtocolResult:
                 CleanupCandidate.from_dict(item)
                 for item in _sequence(
                     mapping.get("cleanup_candidates", ()), "cleanup_candidates"
+                )
+            ),
+            cleanup_reports=tuple(
+                CleanupReportFact.from_dict(item)
+                for item in _sequence(
+                    mapping.get("cleanup_reports", ()), "cleanup_reports"
+                )
+            ),
+            cleanup_results=tuple(
+                CleanupResultFact.from_dict(item)
+                for item in _sequence(
+                    mapping.get("cleanup_results", ()), "cleanup_results"
                 )
             ),
             recovery_records=tuple(

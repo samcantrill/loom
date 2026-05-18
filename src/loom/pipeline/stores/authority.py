@@ -8,6 +8,7 @@ from typing import Protocol, runtime_checkable
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
@@ -27,6 +28,8 @@ from .read_models import (
     AuthoritativeRunSnapshot,
     BackendRevision,
     CleanupCandidate,
+    CleanupReportFact,
+    CleanupResultFact,
     LeaseRecord,
     LifecycleReason,
     OutputCommitRecord,
@@ -373,6 +376,18 @@ class PerRunAuthorityStore(Protocol):
     def scan_recovery(self, run_uri: str) -> tuple[RecoveryRecord, ...]: ...
 
     def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]: ...
+
+    def append_cleanup_report(
+        self, run_uri: str, report: CleanupReport
+    ) -> CleanupReportFact: ...
+
+    def list_cleanup_reports(self, run_uri: str) -> tuple[CleanupReportFact, ...]: ...
+
+    def append_cleanup_result(
+        self, run_uri: str, result: CleanupResult
+    ) -> CleanupResultFact: ...
+
+    def list_cleanup_results(self, run_uri: str) -> tuple[CleanupResultFact, ...]: ...
 
 
 @runtime_checkable

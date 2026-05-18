@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.offline_evidence import OfflineEvidenceManifest, OfflineStageEvidence
 from loom.pipeline.status import RunStatus, StageStatus
@@ -37,6 +38,8 @@ from loom.pipeline.stores.read_models import (
     BackendRevision,
     CleanupCandidate,
     CleanupCandidateKind,
+    CleanupReportFact,
+    CleanupResultFact,
     LeaseKind,
     LeaseRecord,
     LeaseState,
@@ -99,6 +102,12 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "recorded_at",
             "revision_sequence",
         }
+    ),
+    "cleanup_reports": frozenset(
+        {"report_id", "run_uri", "record_json", "recorded_at", "revision_sequence"}
+    ),
+    "cleanup_results": frozenset(
+        {"result_id", "run_uri", "record_json", "recorded_at", "revision_sequence"}
     ),
     "recovery_records": frozenset(
         {
@@ -1508,6 +1517,134 @@ class AuthorityRepository:
             _require_run_row(conn, run_uri)
             return _cleanup_candidates(conn, run_uri)
 
+    def append_cleanup_report(
+        self,
+        run_uri: str,
+        report: CleanupReport,
+        *,
+        expected_revision: BackendRevision | None = None,
+    ) -> CleanupReportFact:
+        """Append a recorded cleanup report fact."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        if not isinstance(report, CleanupReport):
+            raise AuthorityRepositoryError("report must be a CleanupReport")
+        if report.run_uri != run_uri:
+            raise AuthorityRepositoryError("cleanup report run_uri does not match run")
+        with self.transaction() as conn:
+            current = _current_run_revision(conn, run_uri)
+            _require_expected_revision(current, expected_revision)
+            payload = report.to_dict()
+            existing = conn.execute(
+                """
+                SELECT record_json
+                FROM cleanup_reports
+                WHERE run_uri = ? AND report_id = ?
+                """,
+                (run_uri, report.report_id),
+            ).fetchone()
+            if existing is not None:
+                if _json_loads(cast(str, existing["record_json"])) == payload:
+                    return _cleanup_report_fact(conn, run_uri, report.report_id)
+                raise AuthorityRepositoryError(
+                    "conflicting cleanup report already exists"
+                )
+            revision = self._next_revision(conn)
+            recorded_at = self._now()
+            conn.execute(
+                """
+                INSERT INTO cleanup_reports (
+                    report_id, run_uri, record_json, recorded_at, revision_sequence
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    report.report_id,
+                    run_uri,
+                    _json_dumps(payload),
+                    recorded_at,
+                    revision.sequence,
+                ),
+            )
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            return CleanupReportFact(
+                report=report,
+                recorded_at=recorded_at,
+                revision=revision,
+            )
+
+    def list_cleanup_reports(self, run_uri: str) -> tuple[CleanupReportFact, ...]:
+        """List recorded cleanup report facts for one run."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        with self._read_connection() as conn:
+            _require_run_row(conn, run_uri)
+            return _cleanup_report_facts(conn, run_uri)
+
+    def append_cleanup_result(
+        self,
+        run_uri: str,
+        result: CleanupResult,
+        *,
+        expected_revision: BackendRevision | None = None,
+    ) -> CleanupResultFact:
+        """Append a cleanup result fact."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        if not isinstance(result, CleanupResult):
+            raise AuthorityRepositoryError("result must be a CleanupResult")
+        if result.run_uri != run_uri:
+            raise AuthorityRepositoryError("cleanup result run_uri does not match run")
+        with self.transaction() as conn:
+            current = _current_run_revision(conn, run_uri)
+            _require_expected_revision(current, expected_revision)
+            payload = result.to_dict()
+            existing = conn.execute(
+                """
+                SELECT record_json
+                FROM cleanup_results
+                WHERE run_uri = ? AND result_id = ?
+                """,
+                (run_uri, result.result_id),
+            ).fetchone()
+            if existing is not None:
+                if _json_loads(cast(str, existing["record_json"])) == payload:
+                    return _cleanup_result_fact(conn, run_uri, result.result_id)
+                raise AuthorityRepositoryError(
+                    "conflicting cleanup result already exists"
+                )
+            revision = self._next_revision(conn)
+            recorded_at = self._now()
+            conn.execute(
+                """
+                INSERT INTO cleanup_results (
+                    result_id, run_uri, record_json, recorded_at, revision_sequence
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    result.result_id,
+                    run_uri,
+                    _json_dumps(payload),
+                    recorded_at,
+                    revision.sequence,
+                ),
+            )
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            return CleanupResultFact(
+                result=result,
+                recorded_at=recorded_at,
+                revision=revision,
+            )
+
+    def list_cleanup_results(self, run_uri: str) -> tuple[CleanupResultFact, ...]:
+        """List cleanup result facts for one run."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        with self._read_connection() as conn:
+            _require_run_row(conn, run_uri)
+            return _cleanup_result_facts(conn, run_uri)
+
     def record_recovery(
         self,
         run_uri: str,
@@ -2133,6 +2270,26 @@ def _initialize_schema(
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS cleanup_reports (
+            report_id TEXT NOT NULL,
+            run_uri TEXT NOT NULL,
+            record_json TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            PRIMARY KEY (run_uri, report_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS cleanup_results (
+            result_id TEXT NOT NULL,
+            run_uri TEXT NOT NULL,
+            record_json TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            PRIMARY KEY (run_uri, result_id)
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS recovery_records (
             recovery_id TEXT PRIMARY KEY,
             run_uri TEXT NOT NULL,
@@ -2234,6 +2391,14 @@ def _initialize_schema(
         """
         CREATE INDEX IF NOT EXISTS idx_cleanup_candidates_run
             ON cleanup_candidates(run_uri, candidate_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_cleanup_reports_run
+            ON cleanup_reports(run_uri, report_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_cleanup_results_run
+            ON cleanup_results(run_uri, result_id)
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_recovery_records_run
@@ -2495,6 +2660,8 @@ def _run_snapshot(
         ),
         submitted_operations=_submitted_operations(conn, run_uri),
         cleanup_candidates=_cleanup_candidates(conn, run_uri),
+        cleanup_reports=_cleanup_report_facts(conn, run_uri),
+        cleanup_results=_cleanup_result_facts(conn, run_uri),
         metadata=_plain_mapping(_json_loads(cast(str, run_row["metadata_json"])), "metadata"),
     )
 
@@ -3228,6 +3395,94 @@ def _cleanup_candidates(
             """,
             (run_uri,),
         )
+    )
+
+
+def _cleanup_report_fact(
+    conn: sqlite3.Connection, run_uri: str, report_id: str
+) -> CleanupReportFact:
+    row = _require_row(
+        conn.execute(
+            """
+            SELECT *
+            FROM cleanup_reports
+            WHERE run_uri = ? AND report_id = ?
+            """,
+            (run_uri, report_id),
+        ).fetchone(),
+        "unknown cleanup report",
+    )
+    return _cleanup_report_fact_from_row(conn, row)
+
+
+def _cleanup_report_facts(
+    conn: sqlite3.Connection, run_uri: str
+) -> tuple[CleanupReportFact, ...]:
+    return tuple(
+        _cleanup_report_fact_from_row(conn, row)
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM cleanup_reports
+            WHERE run_uri = ?
+            ORDER BY recorded_at, report_id
+            """,
+            (run_uri,),
+        )
+    )
+
+
+def _cleanup_report_fact_from_row(
+    conn: sqlite3.Connection, row: sqlite3.Row
+) -> CleanupReportFact:
+    return CleanupReportFact(
+        report=CleanupReport.from_dict(_json_loads(cast(str, row["record_json"]))),
+        recorded_at=cast(str, row["recorded_at"]),
+        revision=_revision_for(conn, cast(int, row["revision_sequence"])),
+    )
+
+
+def _cleanup_result_fact(
+    conn: sqlite3.Connection, run_uri: str, result_id: str
+) -> CleanupResultFact:
+    row = _require_row(
+        conn.execute(
+            """
+            SELECT *
+            FROM cleanup_results
+            WHERE run_uri = ? AND result_id = ?
+            """,
+            (run_uri, result_id),
+        ).fetchone(),
+        "unknown cleanup result",
+    )
+    return _cleanup_result_fact_from_row(conn, row)
+
+
+def _cleanup_result_facts(
+    conn: sqlite3.Connection, run_uri: str
+) -> tuple[CleanupResultFact, ...]:
+    return tuple(
+        _cleanup_result_fact_from_row(conn, row)
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM cleanup_results
+            WHERE run_uri = ?
+            ORDER BY recorded_at, result_id
+            """,
+            (run_uri,),
+        )
+    )
+
+
+def _cleanup_result_fact_from_row(
+    conn: sqlite3.Connection, row: sqlite3.Row
+) -> CleanupResultFact:
+    return CleanupResultFact(
+        result=CleanupResult.from_dict(_json_loads(cast(str, row["record_json"]))),
+        recorded_at=cast(str, row["recorded_at"]),
+        revision=_revision_for(conn, cast(int, row["revision_sequence"])),
     )
 
 

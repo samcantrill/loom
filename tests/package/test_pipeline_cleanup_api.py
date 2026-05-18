@@ -43,6 +43,8 @@ def test_pipeline_cleanup_public_exports() -> None:
         "CleanupTargetRef",
         "assess_local_target_safety",
         "match_cleanup_candidate",
+        "plan_cleanup",
+        "record_cleanup_report",
     }
 
 

@@ -76,6 +76,8 @@ class BackendInspectionResult:
     stages: tuple[Mapping[str, PlainData], ...] = ()
     submitted_operations: tuple[Mapping[str, PlainData], ...] = ()
     cleanup_candidates: tuple[Mapping[str, PlainData], ...] = ()
+    cleanup_reports: tuple[Mapping[str, PlainData], ...] = ()
+    cleanup_results: tuple[Mapping[str, PlainData], ...] = ()
     recovery_records: tuple[Mapping[str, PlainData], ...] = ()
     materialized_refs: tuple[Mapping[str, PlainData], ...] = ()
     warnings: tuple[Mapping[str, PlainData], ...] = ()
@@ -96,6 +98,8 @@ class BackendInspectionResult:
             "cleanup_candidates": [
                 dict(candidate) for candidate in self.cleanup_candidates
             ],
+            "cleanup_reports": [dict(report) for report in self.cleanup_reports],
+            "cleanup_results": [dict(result) for result in self.cleanup_results],
             "recovery_records": [dict(record) for record in self.recovery_records],
             "materialized_refs": [dict(ref) for ref in self.materialized_refs],
             "warnings": [dict(warning) for warning in self.warnings],
@@ -191,6 +195,8 @@ def inspect_backend(
         )
     recovery_records = store.scan_recovery(resolved_run_uri)
     cleanup_candidates = store.list_cleanup_candidates(resolved_run_uri)
+    cleanup_reports = store.list_cleanup_reports(resolved_run_uri)
+    cleanup_results = store.list_cleanup_results(resolved_run_uri)
     active_leases = tuple(
         stage.active_lease
         for stage in snapshot.stages
@@ -238,6 +244,8 @@ def inspect_backend(
             "commits": len(commits),
             "artifact_facts": len(artifact_facts),
             "cleanup_candidates": len(cleanup_candidates),
+            "cleanup_reports": len(cleanup_reports),
+            "cleanup_results": len(cleanup_results),
             "recovery_records": len(recovery_records),
             "materialized_refs": len(snapshot.materialized_refs),
             "warnings": len(snapshot.warnings),
@@ -255,6 +263,8 @@ def inspect_backend(
         cleanup_candidates=tuple(
             candidate.to_dict() for candidate in cleanup_candidates
         ),
+        cleanup_reports=tuple(fact.to_dict() for fact in cleanup_reports),
+        cleanup_results=tuple(fact.to_dict() for fact in cleanup_results),
         recovery_records=tuple(record.to_dict() for record in recovery_records),
         materialized_refs=tuple(ref.to_dict() for ref in snapshot.materialized_refs),
         warnings=tuple(warning.to_dict() for warning in snapshot.warnings),

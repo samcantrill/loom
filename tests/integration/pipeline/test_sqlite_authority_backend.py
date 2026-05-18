@@ -8,6 +8,17 @@ from shutil import move
 import pytest
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.cleanup import (
+    CleanupDeleteIntent,
+    CleanupReport,
+    CleanupReportEntry,
+    CleanupReportEntryStatus,
+    CleanupResult,
+    CleanupResultEntry,
+    CleanupResultOutcome,
+    CleanupTargetKind,
+    CleanupTargetRef,
+)
 from loom.pipeline.status import StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.stores import RecoveryKind, path_to_run_uri
@@ -36,6 +47,54 @@ def _submitted_record(run_uri: str) -> SubmittedOperationRecord:
         state=SubmittedOperationState.SUBMITTED,
         manifest_relative_path="submitted/sub-1.json",
         summary_counts={"submitted": 1},
+    )
+
+
+def _cleanup_target(run_uri: str) -> CleanupTargetRef:
+    return CleanupTargetRef(
+        kind=CleanupTargetKind.LOCAL_PATH,
+        uri=f"{run_uri}/tmp/payload",
+        target_id="candidate-1",
+        ownership_key="run-r1",
+    )
+
+
+def _cleanup_report(run_uri: str) -> CleanupReport:
+    return CleanupReport(
+        report_id="report-1",
+        run_uri=run_uri,
+        created_at="2020-01-01T00:00:03Z",
+        entries=(
+            CleanupReportEntry(
+                candidate_id="candidate-1",
+                target=_cleanup_target(run_uri),
+                status=CleanupReportEntryStatus.SELECTED,
+                reason_code="approved",
+            ),
+        ),
+    )
+
+
+def _cleanup_result(run_uri: str) -> CleanupResult:
+    return CleanupResult(
+        result_id="result-1",
+        run_uri=run_uri,
+        created_at="2020-01-01T00:00:04Z",
+        intent=CleanupDeleteIntent(
+            intent_id="intent-1",
+            requested_by="operator",
+            requested_at="2020-01-01T00:00:04Z",
+            reason="sqlite authority integration",
+        ),
+        entries=(
+            CleanupResultEntry(
+                candidate_id="candidate-1",
+                target=_cleanup_target(run_uri),
+                outcome=CleanupResultOutcome.DELETED,
+                reason_code="deleted",
+                completed_at="2020-01-01T00:00:05Z",
+            ),
+        ),
     )
 
 
@@ -154,6 +213,30 @@ def test_run_root_movement_reconstructs_current_run_uri_fields(
     assert snapshot.stages[0].attempts[0].run_uri == moved_uri
     assert snapshot.stages[0].active_lease is not None
     assert snapshot.stages[0].active_lease.run_uri == moved_uri
+
+
+def test_cleanup_report_and_result_facts_persist_across_sqlite_instances(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    first = SQLitePerRunAuthorityStore(
+        run_uri,
+        clock=FrozenClock("2020-01-01T00:00:00Z"),
+    )
+    first.create_run(run_uri)
+    report = _cleanup_report(run_uri)
+    result = _cleanup_result(run_uri)
+
+    report_fact = first.append_cleanup_report(run_uri, report)
+    result_fact = first.append_cleanup_result(run_uri, result)
+
+    second = SQLitePerRunAuthorityStore(run_uri)
+    assert second.list_cleanup_reports(run_uri) == (report_fact,)
+    assert second.list_cleanup_results(run_uri) == (result_fact,)
+    snapshot = second.snapshot(run_uri)
+    assert snapshot.cleanup_reports == (report_fact,)
+    assert snapshot.cleanup_results == (result_fact,)
+    assert snapshot.revision.sequence == result_fact.revision.sequence
 
 
 def test_recovery_scan_reports_expired_leases_attempts_and_active_submissions(
