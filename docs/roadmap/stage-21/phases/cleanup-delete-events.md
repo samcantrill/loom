@@ -8,6 +8,7 @@
 - Branch: `codex/cleanup-delete-events`
 - Worktree: `/home/samcantrill/work/loom-worktrees/cleanup-delete-events`
 - Phase execution plan path: `docs/roadmap/stage-21/phases/cleanup-delete-events.md`
+- PR: https://github.com/samcantrill/loom/pull/193
 - Full plan: `docs/roadmap/stage-21/implementation-plan.md`
 - Source phase: Phase 3, `cleanup-delete-events`
 - Stack predecessor: none; predecessor PR https://github.com/samcantrill/loom/pull/192 merged
@@ -208,6 +209,6 @@ make test-summary
 - Refinement summary: fixed nested cleanup result details to remain plain-data round-trippable and aligned the unit event store double with production event payload thawing.
 - PR review summary:
 - Blocker-resolution summary: no post-review blocker-resolution passes used.
-- PR preparation: PR body drafted in `docs/roadmap/stage-21/phases/cleanup-delete-events-pr-body.md`; PR opening pending.
+- PR preparation: PR opened at https://github.com/samcantrill/loom/pull/193 against `develop` from `codex/cleanup-delete-events`; target verified with `gh pr view 193 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: Phase 2 merged; this branch targets `develop` directly.
 - Remaining blockers: none.
