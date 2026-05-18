@@ -7,6 +7,8 @@ from typing import Any, cast
 import pytest
 
 from loom.pipeline.cleanup import (
+    CollectionCleanupReport,
+    CollectionCleanupResult,
     CleanupDeleteIntent,
     CleanupManagedRoot,
     CleanupRecordError,
@@ -137,6 +139,74 @@ def test_cleanup_result_contract_shape_requires_structured_intent() -> None:
             reason="not confirmed",
             confirmed=False,
         )
+
+
+def test_collection_cleanup_contract_shapes_reuse_per_run_records() -> None:
+    entry = CleanupReportEntry(
+        candidate_id="candidate-1",
+        target=_target(),
+        status=CleanupReportEntryStatus.SELECTED,
+        reason_code="approved",
+    )
+    report = CleanupReport(
+        report_id="report-1",
+        run_uri="file:///runs/run-1",
+        created_at="2020-01-01T00:00:00Z",
+        entries=(entry,),
+        summary={"selected": 1},
+    )
+    collection_report = CollectionCleanupReport(
+        collection_id="collection-1",
+        created_at="2020-01-01T00:00:00Z",
+        reports=(report,),
+        selector={"candidate_kinds": ["staged_payload"]},
+        summary={"runs": 1, "selected": 1},
+    )
+    report_payload = cast(dict[str, Any], collection_report.to_dict())
+
+    assert report_payload["reports"][0]["report_id"] == "report-1"
+    assert report_payload["summary"] == {"runs": 1, "selected": 1}
+    assert CollectionCleanupReport.from_dict(report_payload) == collection_report
+
+    intent = CleanupDeleteIntent(
+        intent_id="intent-1",
+        requested_by="tester",
+        requested_at="2020-01-01T00:00:01Z",
+        reason="collection cleanup",
+    )
+    result = CleanupResult(
+        result_id="result-1",
+        run_uri="file:///runs/run-1",
+        created_at="2020-01-01T00:00:02Z",
+        intent=intent,
+        entries=(
+            CleanupResultEntry(
+                candidate_id="candidate-1",
+                target=_target(),
+                outcome=CleanupResultOutcome.DELETED,
+                reason_code="deleted",
+                completed_at="2020-01-01T00:00:02Z",
+            ),
+        ),
+    )
+    fact = CleanupResultFact(
+        result=result,
+        recorded_at="2020-01-01T00:00:03Z",
+        revision=BackendRevision(sequence=3, token="rev-3"),
+    )
+    collection_result = CollectionCleanupResult(
+        result_id="collection-result-1",
+        collection_id="collection-1",
+        created_at="2020-01-01T00:00:03Z",
+        intent=intent,
+        results=(fact,),
+        summary={"runs": 1, "deleted": 1},
+    )
+    result_payload = cast(dict[str, Any], collection_result.to_dict())
+
+    assert result_payload["results"][0]["result"]["result_id"] == "result-1"
+    assert result_payload["summary"] == {"runs": 1, "deleted": 1}
+    assert CollectionCleanupResult.from_dict(result_payload) == collection_result
 
 
 def test_cleanup_result_event_contract_references_durable_fact() -> None:

@@ -39,6 +39,13 @@ from loom.pipeline.cleanup.selectors import (
 )
 
 if TYPE_CHECKING:
+    from loom.pipeline.cleanup.collection import (
+        CollectionCleanupReport,
+        CollectionCleanupResult,
+        CollectionCleanupTarget,
+        execute_collection_gc,
+        plan_collection_gc,
+    )
     from loom.pipeline.cleanup.events import (
         cleanup_report_event,
         cleanup_result_event,
@@ -55,6 +62,9 @@ __all__ = [
     "CleanupDeleteIntent",
     "CleanupDeleteMode",
     "CleanupError",
+    "CollectionCleanupReport",
+    "CollectionCleanupResult",
+    "CollectionCleanupTarget",
     "CleanupManagedRoot",
     "CleanupRecordError",
     "CleanupReport",
@@ -80,13 +90,25 @@ __all__ = [
     "emit_cleanup_report_event",
     "emit_cleanup_result_event",
     "execute_cleanup",
+    "execute_collection_gc",
     "match_cleanup_candidate",
+    "plan_collection_gc",
     "plan_cleanup",
     "record_cleanup_report",
 ]
 
 
 def __getattr__(name: str) -> object:
+    if name in {
+        "CollectionCleanupReport",
+        "CollectionCleanupResult",
+        "CollectionCleanupTarget",
+        "execute_collection_gc",
+        "plan_collection_gc",
+    }:
+        from loom.pipeline.cleanup import collection
+
+        return getattr(collection, name)
     if name in {
         "cleanup_report_event",
         "cleanup_result_event",

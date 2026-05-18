@@ -48,6 +48,7 @@ class PreflightGroup(StrEnum):
     EXECUTOR = "executor"
     RESOURCES = "resources"
     FILESYSTEM = "filesystem"
+    CLEANUP = "cleanup"
     PLUGINS = "plugins"
 
 
@@ -65,6 +66,7 @@ DEFAULT_PREFLIGHT_GROUPS: tuple[PreflightGroup, ...] = (
 )
 
 OPTIONAL_PREFLIGHT_GROUPS: tuple[PreflightGroup, ...] = (
+    PreflightGroup.CLEANUP,
     PreflightGroup.PLUGINS,
 )
 
@@ -143,6 +145,11 @@ STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
         "filesystem.docker.run_dir_writable",
         "filesystem.docker.artifact_root_visible",
     ),
+    PreflightGroup.CLEANUP: (
+        "cleanup.candidates.safety",
+        "cleanup.targets.support",
+        "cleanup.retention.policy",
+    ),
     PreflightGroup.PLUGINS: ("plugins.metadata", "plugins.load"),
 }
 
@@ -192,9 +199,7 @@ class PreflightResult:
         groups = tuple(_coerce_group(group) for group in self.groups)
         for index, check in enumerate(checks):
             if not isinstance(check, PreflightCheckResult):
-                raise PreflightError(
-                    f"checks[{index}] must be a PreflightCheckResult"
-                )
+                raise PreflightError(f"checks[{index}] must be a PreflightCheckResult")
         object.__setattr__(self, "checks", checks)
         object.__setattr__(self, "groups", groups)
         object.__setattr__(self, "status", aggregate_status(checks))
@@ -251,6 +256,54 @@ class ArtifactBackendPreflightTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class CleanupPreflightTarget:
+    """Explicit read-only cleanup preflight target for one run."""
+
+    target_id: str
+    run_uri: str
+    store: object
+    managed_roots: tuple[object, ...] = ()
+    selector: Mapping[str, PlainData] | None = None
+    require_ownership: bool = True
+    details: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "target_id", _non_empty_str(self.target_id, field="target_id")
+        )
+        object.__setattr__(
+            self, "run_uri", _non_empty_str(self.run_uri, field="run_uri")
+        )
+        if self.store is None:
+            raise PreflightError("store must not be None")
+        object.__setattr__(
+            self,
+            "managed_roots",
+            _object_tuple(self.managed_roots, "managed_roots"),
+        )
+        if self.selector is not None:
+            object.__setattr__(
+                self, "selector", _plain_mapping(self.selector, field="selector")
+            )
+        if not isinstance(self.require_ownership, bool):
+            raise PreflightError("require_ownership must be a bool")
+        object.__setattr__(
+            self, "details", _plain_mapping(self.details, field="details")
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "target_id": self.target_id,
+            "run_uri": self.run_uri,
+            "store": _object_summary(self.store),
+            "managed_root_count": len(self.managed_roots),
+            "selector": None if self.selector is None else dict(self.selector),
+            "require_ownership": self.require_ownership,
+            "details": dict(self.details),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PreflightRequest:
     config_path: str | Path
     groups: Iterable[str | PreflightGroup] | None = None
@@ -268,18 +321,29 @@ class PreflightRequest:
     artifact_backend_targets: tuple[ArtifactBackendPreflightTarget, ...] = ()
     artifact_backend_registry: object | None = None
     artifact_backend_handlers: Mapping[str, object] = field(default_factory=dict)
+    cleanup_targets: tuple[CleanupPreflightTarget, ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "config_path", _path_like(self.config_path, "config_path"))
-        object.__setattr__(self, "cwd", None if self.cwd is None else _path_like(self.cwd, "cwd"))
+        object.__setattr__(
+            self, "config_path", _path_like(self.config_path, "config_path")
+        )
+        object.__setattr__(
+            self, "cwd", None if self.cwd is None else _path_like(self.cwd, "cwd")
+        )
         object.__setattr__(self, "overlays", _path_tuple(self.overlays, "overlays"))
         object.__setattr__(self, "overrides", _str_tuple(self.overrides, "overrides"))
         if self.run_uri is not None:
-            object.__setattr__(self, "run_uri", _non_empty_str(self.run_uri, field="run_uri"))
+            object.__setattr__(
+                self, "run_uri", _non_empty_str(self.run_uri, field="run_uri")
+            )
         if self.groups is not None:
             object.__setattr__(self, "groups", tuple(self.groups))
-        object.__setattr__(self, "plugin_groups", _str_tuple(self.plugin_groups, "plugin_groups"))
-        object.__setattr__(self, "plugin_names", _str_tuple(self.plugin_names, "plugin_names"))
+        object.__setattr__(
+            self, "plugin_groups", _str_tuple(self.plugin_groups, "plugin_groups")
+        )
+        object.__setattr__(
+            self, "plugin_names", _str_tuple(self.plugin_names, "plugin_names")
+        )
         object.__setattr__(
             self,
             "plugin_packages",
@@ -293,7 +357,14 @@ class PreflightRequest:
         object.__setattr__(
             self,
             "artifact_backend_handlers",
-            _object_mapping(self.artifact_backend_handlers, "artifact_backend_handlers"),
+            _object_mapping(
+                self.artifact_backend_handlers, "artifact_backend_handlers"
+            ),
+        )
+        object.__setattr__(
+            self,
+            "cleanup_targets",
+            _cleanup_preflight_targets(self.cleanup_targets),
         )
 
 
@@ -316,7 +387,9 @@ def normalize_groups(
     if unknown:
         names = ", ".join(sorted(unknown))
         allowed = ", ".join(group.value for group in ALL_PREFLIGHT_GROUPS)
-        raise PreflightError(f"unknown preflight group(s): {names}; expected one of: {allowed}")
+        raise PreflightError(
+            f"unknown preflight group(s): {names}; expected one of: {allowed}"
+        )
 
     return tuple(group for group in ALL_PREFLIGHT_GROUPS if group in normalized)
 
@@ -340,7 +413,9 @@ def _coerce_group(value: str | PreflightGroup) -> PreflightGroup:
             return PreflightGroup(value)
         except ValueError as exc:
             raise PreflightError(f"unknown preflight group: {value!r}") from exc
-    raise PreflightError(f"preflight group must be a string or PreflightGroup, got {type(value)!r}")
+    raise PreflightError(
+        f"preflight group must be a string or PreflightGroup, got {type(value)!r}"
+    )
 
 
 def _coerce_check_status(value: str | PreflightCheckStatus) -> PreflightCheckStatus:
@@ -383,6 +458,27 @@ def _artifact_backend_targets(
     return tuple(output)
 
 
+def _cleanup_preflight_targets(
+    values: Iterable[CleanupPreflightTarget],
+) -> tuple[CleanupPreflightTarget, ...]:
+    if isinstance(values, str) or not isinstance(values, Iterable):
+        raise PreflightError("cleanup_targets must be a sequence")
+    output: list[CleanupPreflightTarget] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, CleanupPreflightTarget):
+            raise PreflightError(
+                f"cleanup_targets[{index}] must be CleanupPreflightTarget"
+            )
+        output.append(value)
+    return tuple(output)
+
+
+def _object_tuple(value: object, field: str) -> tuple[object, ...]:
+    if isinstance(value, str) or not isinstance(value, Iterable):
+        raise PreflightError(f"{field} must be a sequence")
+    return tuple(value)
+
+
 def _object_mapping(value: object, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise PreflightError(f"{field} must be a mapping")
@@ -407,7 +503,9 @@ def _object_summary(value: object) -> PlainData:
         raise PreflightError(f"store summary must be plain data: {exc}") from exc
 
 
-def _plain_mapping(value: Mapping[str, PlainData], *, field: str) -> Mapping[str, PlainData]:
+def _plain_mapping(
+    value: Mapping[str, PlainData], *, field: str
+) -> Mapping[str, PlainData]:
     try:
         normalized = ensure_plain_data(dict(value), path=field)
     except PlainDataError as exc:
@@ -428,13 +526,18 @@ def _path_like(value: object, field: str) -> str | Path:
 def _path_tuple(values: tuple[str | Path, ...], field: str) -> tuple[str | Path, ...]:
     if values is None:
         raise PreflightError(f"{field} may not be None")
-    return tuple(_path_like(value, f"{field}[{index}]") for index, value in enumerate(values))
+    return tuple(
+        _path_like(value, f"{field}[{index}]") for index, value in enumerate(values)
+    )
 
 
 def _str_tuple(values: tuple[str, ...], field: str) -> tuple[str, ...]:
     if values is None:
         raise PreflightError(f"{field} may not be None")
-    return tuple(_non_empty_str(value, field=f"{field}[{index}]") for index, value in enumerate(values))
+    return tuple(
+        _non_empty_str(value, field=f"{field}[{index}]")
+        for index, value in enumerate(values)
+    )
 
 
 __all__ = [

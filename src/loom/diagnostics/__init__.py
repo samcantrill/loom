@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from .models import (
     ArtifactBackendPreflightTarget,
+    CleanupPreflightTarget,
     PreflightCheckResult,
     PreflightCheckStatus,
     PreflightError,
@@ -54,6 +55,7 @@ __all__ = [
     "PreflightSeverity",
     "PreflightGroup",
     "ArtifactBackendPreflightTarget",
+    "CleanupPreflightTarget",
     "PreflightCheckResult",
     "PreflightResult",
     "PreflightRequest",
