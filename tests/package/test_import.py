@@ -44,6 +44,7 @@ def test_import_loom_diagnostics_public_api() -> None:
         "PreflightSeverity",
         "PreflightGroup",
         "ArtifactBackendPreflightTarget",
+        "CleanupPreflightTarget",
         "PreflightCheckResult",
         "PreflightResult",
         "PreflightRequest",
