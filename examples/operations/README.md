@@ -45,6 +45,21 @@ uv run python examples/operations/offline-import-rejections/run_offline_import_r
 Set `LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to redirect generated
 run directories.
 
+## Full Example Integration Evidence
+
+The following `validation: full` examples are supported by focused integration tests:
+
+- `operations.captured-logs`:
+  `tests/integration/examples/test_example_workflows.py::test_example_captured_logs_records_captured_output`
+- `operations.failing-run`:
+  `tests/integration/examples/test_example_workflows.py::test_example_failing_run_reports_diagnostics_summary`
+- `operations.resource-preflight`:
+  `tests/integration/examples/test_example_workflows.py::test_example_resource_preflight_reports_resource_warnings_and_strict_exit`
+- `operations.resource-leases`:
+  `tests/integration/examples/test_example_workflows.py::test_example_resource_leases_coordinate_blocked_then_released_state`
+- `operations.offline-import-rejections`:
+  `tests/integration/examples/test_example_workflows.py::test_example_offline_import_rejections_report_rejection_codes_and_acceptance`
+
 ## Internal Demos
 
 These support/demo examples stay runnable for regression coverage but are not

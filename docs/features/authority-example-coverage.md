@@ -14,6 +14,14 @@ they do not count as primary catalog coverage.
 | Offline import rejection | Incomplete and conflicting imports fail with stable machine-readable rejection codes. | `operations.offline-import-rejections` |
 | Resource coordination | Authority-backed resource limits and resource leases are exercised through the supported public Python API. | `operations.resource-leases` |
 
+## Targeted Full Example Evidence
+
+| Example | Evidence |
+| --- | --- |
+| `operations.failing-run` | `tests/integration/examples/test_example_workflows.py::test_example_failing_run_reports_diagnostics_summary` |
+| `operations.resource-leases` | `tests/integration/examples/test_example_workflows.py::test_example_resource_leases_coordinate_blocked_then_released_state` |
+| `operations.offline-import-rejections` | `tests/integration/examples/test_example_workflows.py::test_example_offline_import_rejections_report_rejection_codes_and_acceptance` |
+
 ## Not Currently User-Facing
 
 - `operations.authority-backend-diagnostics` remains an `internal_demo` until

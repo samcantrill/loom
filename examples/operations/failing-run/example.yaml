@@ -15,7 +15,7 @@ owner_docs:
 owner_stages:
   - v3
   - v10
-validation_path: docs/features/authority-example-coverage.md
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_failing_run_reports_diagnostics_summary
 entrypoints:
   - path: run_failure_diagnostics.py
     kind: python
