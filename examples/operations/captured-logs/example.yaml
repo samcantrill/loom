@@ -7,6 +7,13 @@ introduced_in: v3
 status: runnable
 validation: full
 surface: python_api
+public_surfaces:
+  - python_api
+owner_docs:
+  - examples/operations/README.md
+owner_stages:
+  - v3
+validation_path: examples/operations/README.md
 entrypoints:
   - path: run_captured_logs.py
     kind: python

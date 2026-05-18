@@ -7,6 +7,14 @@ introduced_in: v10
 status: runnable
 validation: full
 surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/operations/README.md
+  - docs/features/authority-example-coverage.md
+owner_stages:
+  - v10
+validation_path: docs/features/authority-example-coverage.md
 entrypoints:
   - path: run_offline_import_rejections.py
     kind: python

@@ -7,7 +7,21 @@ introduced_in: v7
 status: illustrative
 validation: manual
 surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/operations/README.md
+  - docs/features/slurm-example-coverage.md
+owner_stages:
+  - v7
+validation_path: docs/features/slurm-example-coverage.md
 reason: Requires a real SLURM cluster, scheduler commands, and a shared run directory.
+prerequisites:
+  - Real SLURM cluster access with scheduler query and cancellation permissions.
+  - Shared filesystem for scheduler job directories and status outputs.
+manual_rationale: >
+  Live scheduler operations are external and site-specific; they require
+  networked batch-system services to be meaningful.
 entrypoints: []
 tags:
   - slurm
