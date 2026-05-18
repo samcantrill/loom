@@ -19,9 +19,23 @@ pytestmark = pytest.mark.contract
 
 
 def test_public_status_group_and_check_id_values_are_stable() -> None:
-    assert [status.value for status in PreflightCheckStatus] == ["PASS", "WARN", "FAIL", "SKIP"]
-    assert [status.value for status in PreflightStatus] == ["PASS", "WARN", "FAIL", "SKIP"]
-    assert [severity.value for severity in PreflightSeverity] == ["INFO", "WARNING", "ERROR"]
+    assert [status.value for status in PreflightCheckStatus] == [
+        "PASS",
+        "WARN",
+        "FAIL",
+        "SKIP",
+    ]
+    assert [status.value for status in PreflightStatus] == [
+        "PASS",
+        "WARN",
+        "FAIL",
+        "SKIP",
+    ]
+    assert [severity.value for severity in PreflightSeverity] == [
+        "INFO",
+        "WARNING",
+        "ERROR",
+    ]
     assert [group.value for group in DEFAULT_PREFLIGHT_GROUPS] == [
         "config",
         "pipeline",
@@ -34,6 +48,7 @@ def test_public_status_group_and_check_id_values_are_stable() -> None:
         "resources",
         "filesystem",
     ]
+    assert PreflightGroup.CLEANUP.value == "cleanup"
     assert PreflightGroup.PLUGINS.value == "plugins"
     assert STABLE_CHECK_IDS == {
         PreflightGroup.CONFIG: ("config.load",),
@@ -104,6 +119,11 @@ def test_public_status_group_and_check_id_values_are_stable() -> None:
             "filesystem.docker.mount_targets",
             "filesystem.docker.run_dir_writable",
             "filesystem.docker.artifact_root_visible",
+        ),
+        PreflightGroup.CLEANUP: (
+            "cleanup.candidates.safety",
+            "cleanup.targets.support",
+            "cleanup.retention.policy",
         ),
         PreflightGroup.PLUGINS: ("plugins.metadata", "plugins.load"),
     }

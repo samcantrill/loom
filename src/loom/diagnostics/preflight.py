@@ -24,6 +24,7 @@ from loom.serialization import PlainData, ensure_plain_data
 
 from .models import (
     ArtifactBackendPreflightTarget,
+    CleanupPreflightTarget,
     STABLE_CHECK_IDS,
     PreflightCheckResult,
     PreflightCheckStatus,
@@ -390,7 +391,9 @@ def _check_runtime_container_build_options(
                 )
             )
             continue
-        for name, target in cast(Mapping[str, object], cast(Any, parsed).targets).items():
+        for name, target in cast(
+            Mapping[str, object], cast(Any, parsed).targets
+        ).items():
             targets.append(
                 {
                     "owner_id": source.owner_id,
@@ -627,9 +630,7 @@ def _check_slurm_active_submission(
         )
     if run_uri is None:
         return (
-            _missing_run_uri(
-                "run_uri.slurm.active_submission", PreflightGroup.RUN
-            ),
+            _missing_run_uri("run_uri.slurm.active_submission", PreflightGroup.RUN),
         )
     try:
         from loom.pipeline.execution import create_authority_backed_serial_run_store
@@ -1055,9 +1056,7 @@ def _artifact_backend_registry_check(
     resolved: tuple[_ResolvedArtifactBackendTarget, ...],
 ) -> PreflightCheckResult:
     diagnostics = tuple(
-        diagnostic
-        for item in resolved
-        for diagnostic in item.registry_diagnostics
+        diagnostic for item in resolved for diagnostic in item.registry_diagnostics
     )
     status, severity = _artifact_backend_preflight_status(diagnostics)
     return _result(
@@ -1108,7 +1107,11 @@ def _artifact_backend_capability_check(
     diagnostics: list[object] = []
     operation_results: list[PlainData] = []
     for item in resolved:
-        source = item.handler if isinstance(item.handler, ArtifactStoreBackendHandler) else None
+        source = (
+            item.handler
+            if isinstance(item.handler, ArtifactStoreBackendHandler)
+            else None
+        )
         results = admit_artifact_store_operations(
             source,
             item.target.required_operations,
@@ -1335,6 +1338,262 @@ def _redacted_artifact_backend_store(
     if isinstance(summary, Mapping) and summary.get("display_uri") is not None:
         summary = {**summary, "uri": None}
     return cast(PlainData, ensure_plain_data(summary, path="artifact_backend_store"))
+
+
+@dataclass(frozen=True)
+class _CleanupPreflightPlan:
+    target: CleanupPreflightTarget
+    report: object
+
+
+def _check_cleanup(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    targets = context.request.cleanup_targets
+    if not targets:
+        details = {"reason": "no_cleanup_targets"}
+        return (
+            _skip(
+                "cleanup.candidates.safety",
+                PreflightGroup.CLEANUP,
+                "no cleanup preflight targets configured",
+                details,
+            ),
+            _skip(
+                "cleanup.targets.support",
+                PreflightGroup.CLEANUP,
+                "no cleanup preflight targets configured",
+                details,
+            ),
+            _skip(
+                "cleanup.retention.policy",
+                PreflightGroup.CLEANUP,
+                "no cleanup preflight targets configured",
+                details,
+            ),
+        )
+    try:
+        plans = _cleanup_preflight_plans(targets)
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "cleanup.candidates.safety",
+                PreflightGroup.CLEANUP,
+                "cleanup candidate preflight failed",
+                exc,
+            ),
+            _skip(
+                "cleanup.targets.support",
+                PreflightGroup.CLEANUP,
+                "cleanup target support check skipped after planning failure",
+                {"reason": "cleanup_plan_failed"},
+            ),
+            _skip(
+                "cleanup.retention.policy",
+                PreflightGroup.CLEANUP,
+                "cleanup retention check skipped after planning failure",
+                {"reason": "cleanup_plan_failed"},
+            ),
+        )
+    return (
+        _cleanup_candidate_safety_check(plans),
+        _cleanup_target_support_check(plans),
+        _cleanup_retention_policy_check(plans),
+    )
+
+
+def _cleanup_preflight_plans(
+    targets: tuple[CleanupPreflightTarget, ...],
+) -> tuple[_CleanupPreflightPlan, ...]:
+    from loom.pipeline.cleanup import CleanupManagedRoot, plan_cleanup
+
+    plans: list[_CleanupPreflightPlan] = []
+    for target in targets:
+        roots: list[CleanupManagedRoot] = []
+        for index, root in enumerate(target.managed_roots):
+            if not isinstance(root, CleanupManagedRoot):
+                raise TypeError(
+                    "cleanup preflight target "
+                    f"{target.target_id!r} managed_roots[{index}] "
+                    "must be CleanupManagedRoot"
+                )
+            roots.append(root)
+        report = plan_cleanup(
+            cast(Any, target.store),
+            target.run_uri,
+            selector=target.selector,
+            managed_roots=tuple(roots),
+            require_ownership=target.require_ownership,
+            metadata=target.details,
+        )
+        plans.append(_CleanupPreflightPlan(target=target, report=report))
+    return tuple(plans)
+
+
+def _cleanup_candidate_safety_check(
+    plans: tuple[_CleanupPreflightPlan, ...],
+) -> PreflightCheckResult:
+    unsafe = _unsafe_cleanup_entries(plans)
+    status = PreflightCheckStatus.WARN if unsafe else PreflightCheckStatus.PASS
+    return _result(
+        "cleanup.candidates.safety",
+        PreflightGroup.CLEANUP,
+        status,
+        _severity_for_status(status),
+        (
+            "cleanup candidates have safety warnings"
+            if unsafe
+            else "cleanup candidate safety checks passed"
+        ),
+        {
+            "target_count": len(plans),
+            "run_count": len({plan.target.run_uri for plan in plans}),
+            "unsafe_count": len(unsafe),
+            "unsafe": unsafe,
+            "expensive_probe": False,
+        },
+    )
+
+
+def _cleanup_target_support_check(
+    plans: tuple[_CleanupPreflightPlan, ...],
+) -> PreflightCheckResult:
+    unsupported = _unsupported_cleanup_targets(plans)
+    status = PreflightCheckStatus.WARN if unsupported else PreflightCheckStatus.PASS
+    return _result(
+        "cleanup.targets.support",
+        PreflightGroup.CLEANUP,
+        status,
+        _severity_for_status(status),
+        (
+            "cleanup targets include unsupported local-deletion references"
+            if unsupported
+            else "cleanup target support checks passed"
+        ),
+        {
+            "target_count": len(plans),
+            "unsupported_target_count": len(unsupported),
+            "unsupported_targets": unsupported,
+            "expensive_probe": False,
+        },
+    )
+
+
+def _cleanup_retention_policy_check(
+    plans: tuple[_CleanupPreflightPlan, ...],
+) -> PreflightCheckResult:
+    unsupported = _unsupported_retention_policies(plans)
+    status = PreflightCheckStatus.WARN if unsupported else PreflightCheckStatus.PASS
+    return _result(
+        "cleanup.retention.policy",
+        PreflightGroup.CLEANUP,
+        status,
+        _severity_for_status(status),
+        (
+            "cleanup candidates include unsupported retention policies"
+            if unsupported
+            else "cleanup retention policy checks passed"
+        ),
+        {
+            "target_count": len(plans),
+            "unsupported_policy_count": len(unsupported),
+            "unsupported_policies": unsupported,
+            "expensive_probe": False,
+        },
+    )
+
+
+def _unsafe_cleanup_entries(
+    plans: tuple[_CleanupPreflightPlan, ...],
+) -> list[PlainData]:
+    from loom.pipeline.cleanup import CleanupReportEntryStatus
+
+    unsafe: list[PlainData] = []
+    for plan in plans:
+        report = cast(Any, plan.report)
+        for entry in report.entries:
+            if entry.status is not CleanupReportEntryStatus.REJECTED:
+                continue
+            unsafe.append(_cleanup_entry_detail(plan, entry))
+    return unsafe
+
+
+def _unsupported_cleanup_targets(
+    plans: tuple[_CleanupPreflightPlan, ...],
+) -> list[PlainData]:
+    unsupported: list[PlainData] = []
+    for plan in plans:
+        report = cast(Any, plan.report)
+        for entry in report.entries:
+            if getattr(
+                entry.target.kind, "value", entry.target.kind
+            ) != "local_path" or entry.reason_code in {
+                "unsupported_target_kind",
+                "unsupported_uri_scheme",
+            }:
+                unsupported.append(_cleanup_entry_detail(plan, entry))
+    return unsupported
+
+
+def _unsupported_retention_policies(
+    plans: tuple[_CleanupPreflightPlan, ...],
+) -> list[PlainData]:
+    from loom.artifacts import normalize_retention_policy
+
+    unsupported: list[PlainData] = []
+    for plan in plans:
+        report = cast(Any, plan.report)
+        for entry in report.entries:
+            retention = _cleanup_entry_retention_value(entry)
+            if retention is None:
+                continue
+            try:
+                normalize_retention_policy(retention)
+            except Exception as exc:  # noqa: BLE001
+                detail = cast(dict[str, PlainData], _cleanup_entry_detail(plan, entry))
+                detail["retention"] = _retention_detail_value(retention)
+                detail["error_type"] = type(exc).__name__
+                detail["error"] = str(exc)
+                unsupported.append(detail)
+    return unsupported
+
+
+def _cleanup_entry_detail(plan: _CleanupPreflightPlan, entry: object) -> PlainData:
+    target = cast(Any, entry).target
+    safety = cast(Any, entry).safety_decision
+    detail: dict[str, PlainData] = {
+        "target_id": plan.target.target_id,
+        "run_uri": plan.target.run_uri,
+        "candidate_id": cast(str, cast(Any, entry).candidate_id),
+        "target_kind": str(getattr(target.kind, "value", target.kind)),
+        "target_uri": str(target.uri),
+        "status": str(
+            getattr(cast(Any, entry).status, "value", cast(Any, entry).status)
+        ),
+        "reason_code": str(cast(Any, entry).reason_code),
+    }
+    if isinstance(safety, Mapping):
+        managed_root_id = safety.get("managed_root_id")
+        message = safety.get("message")
+        if isinstance(managed_root_id, str):
+            detail["managed_root_id"] = managed_root_id
+        if isinstance(message, str):
+            detail["message"] = message
+    return detail
+
+
+def _cleanup_entry_retention_value(entry: object) -> PlainData:
+    metadata = getattr(getattr(entry, "target"), "metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    if "retention" in metadata:
+        return cast(PlainData, metadata["retention"])
+    mode = metadata.get("retention_mode")
+    if mode is None:
+        return None
+    return {"mode": mode}
+
+
+def _retention_detail_value(value: PlainData) -> PlainData:
+    return cast(PlainData, ensure_plain_data(value, path="retention"))
 
 
 def _authority_policy_details(context: _Context) -> dict[str, PlainData]:
@@ -1769,9 +2028,7 @@ def _check_apptainer_command(context: _Context) -> PreflightCheckResult:
 
     if diagnostics:
         status = (
-            PreflightCheckStatus.FAIL
-            if command_required
-            else PreflightCheckStatus.WARN
+            PreflightCheckStatus.FAIL if command_required else PreflightCheckStatus.WARN
         )
     else:
         status = PreflightCheckStatus.PASS
@@ -3793,7 +4050,9 @@ def _check_plugins(context: _Context) -> tuple[PreflightCheckResult, ...]:
             {
                 **metadata.to_summary(),
                 "missing": [missing.to_summary() for missing in checked.missing],
-                "duplicates": [duplicate.to_summary() for duplicate in checked.duplicates],
+                "duplicates": [
+                    duplicate.to_summary() for duplicate in checked.duplicates
+                ],
             },
         ),
     )
@@ -3950,7 +4209,10 @@ def _adapter_options_include_container(
                 if isinstance(value, Mapping)
                 else getattr(value, "adapter_options", None)
             )
-            if isinstance(raw_adapter_options, Mapping) and "container" in raw_adapter_options:
+            if (
+                isinstance(raw_adapter_options, Mapping)
+                and "container" in raw_adapter_options
+            ):
                 return True
     return False
 
@@ -3972,7 +4234,9 @@ def _container_build_option_sources(
         Mapping[str, Any],
         options.stage_options,
     ).items():
-        stage_adapter_options = cast(Mapping[str, object], stage_runtime.adapter_options)
+        stage_adapter_options = cast(
+            Mapping[str, object], stage_runtime.adapter_options
+        )
         if "container_build" in stage_adapter_options:
             sources.append(
                 _ContainerBuildPreflightOptions(
@@ -4014,7 +4278,9 @@ def _container_build_targets(
     return tuple(targets), tuple(diagnostics)
 
 
-def _container_build_options_from_adapter(adapter_options: Mapping[str, object]) -> object:
+def _container_build_options_from_adapter(
+    adapter_options: Mapping[str, object],
+) -> object:
     from loom.pipeline.executors.containers import parse_container_build_options
 
     return parse_container_build_options(adapter_options.get("container_build"))
@@ -4146,9 +4412,13 @@ def _docker_parsed_targets(
     return tuple(parsed), tuple(diagnostics)
 
 
-def _apptainer_raw_targets(context: _Context) -> tuple[_ApptainerPreflightRawTarget, ...]:
+def _apptainer_raw_targets(
+    context: _Context,
+) -> tuple[_ApptainerPreflightRawTarget, ...]:
     options = cast(Any, context.runtime_options())
-    if not (_is_apptainer_executor(options) or _request_selects_slurm_container(context)):
+    if not (
+        _is_apptainer_executor(options) or _request_selects_slurm_container(context)
+    ):
         return ()
     stage_ids = _apptainer_stage_ids(context, options)
     executor_name = _apptainer_executor_name_for_options(options)
@@ -4179,7 +4449,9 @@ def _apptainer_raw_targets(context: _Context) -> tuple[_ApptainerPreflightRawTar
             ),
             resources=cast(Any, resolved[stage_id]).resources,
             executor_name=_apptainer_executor_name_for_adapter(
-                cast(Mapping[str, object], cast(Any, resolved[stage_id]).adapter_options),
+                cast(
+                    Mapping[str, object], cast(Any, resolved[stage_id]).adapter_options
+                ),
                 fallback=executor_name,
             ),
             selected_executor=selected_executor,
@@ -4312,9 +4584,7 @@ def _apptainer_options_from_adapter(
     else:
         raw_options = adapter_options.get("apptainer")
     options = ApptainerExecOptions.from_dict(raw_options)
-    if executor_name == "singularity" and not _adapter_options_set_command(
-        raw_options
-    ):
+    if executor_name == "singularity" and not _adapter_options_set_command(raw_options):
         return replace(options, command="singularity")
     return options
 
@@ -4780,6 +5050,7 @@ _CHECKS = {
     PreflightGroup.EXECUTOR: _check_executor,
     PreflightGroup.RESOURCES: _check_resources,
     PreflightGroup.FILESYSTEM: _check_filesystem,
+    PreflightGroup.CLEANUP: _check_cleanup,
     PreflightGroup.PLUGINS: _check_plugins,
 }
 
