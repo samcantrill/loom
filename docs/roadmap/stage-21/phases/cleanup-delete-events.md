@@ -195,7 +195,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used locally during validation to normalize result details for plain-data round trips
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -203,11 +203,11 @@ make test-summary
 
 - Draft plan: completed locally
 - Final phase execution plan: completed locally
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
+- Implementation summary: added `execute_cleanup`, local-only deletion with execution-time safety rechecks, cleanup result fact recording, compact cleanup report/result event projection, optional runtime event dispatcher support, and public cleanup exports.
+- Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 107 passed / 1 skipped, unit 1384 passed / 7 skipped / 1 deselected, contract 271 passed / 2 skipped, integration 167 passed / 8 skipped / 13 deselected, e2e 44 passed / 2 deselected, config-extra 449 passed / 3 skipped / 1982 deselected.
+- Refinement summary: fixed nested cleanup result details to remain plain-data round-trippable and aligned the unit event store double with production event payload thawing.
 - PR review summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Blocker-resolution summary: no post-review blocker-resolution passes used.
+- PR preparation: PR body drafted in `docs/roadmap/stage-21/phases/cleanup-delete-events-pr-body.md`; PR opening pending.
+- Stack maintenance: Phase 2 merged; this branch targets `develop` directly.
+- Remaining blockers: none.
