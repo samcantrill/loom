@@ -22,6 +22,7 @@
 - Refine pass: completed locally in this artifact because Phase 1 introduces public records and safety contracts
 - Setup limitations: none
 - Blockers: none
+- PR: https://github.com/samcantrill/loom/pull/191
 
 ## Objective
 
@@ -216,6 +217,8 @@ make test-summary
 - Refinement summary: Not needed after targeted and full validation passed.
 - Blocker-resolution summary: 1/3 used to diagnose the sandbox-only socket
   failure and rerun the full gate outside the sandbox.
-- PR preparation: PR body drafted in `docs/roadmap/stage-21/phases/cleanup-records-contracts-pr-body.md`.
+- PR preparation: PR opened at https://github.com/samcantrill/loom/pull/191
+  targeting `develop` from `codex/cleanup-records-contracts`; verified with
+  `gh pr view 191 --json baseRefName,headRefName,state,url`.
 - Stack maintenance:
 - Remaining blockers:
