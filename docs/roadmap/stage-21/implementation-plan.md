@@ -1,6 +1,6 @@
 # Roadmap Stage 21 Implementation Plan: Cleanup And Retention
 
-Status: phase 3 merged; phase 4 pending
+Status: phase 4 PR open
 Roadmap stage: `v21`
 Planning document: `docs/roadmap/stage-21/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
@@ -253,7 +253,7 @@ The records/selectors/results design can grow deliberately:
 | 1 | `cleanup-records-contracts` | merged | `codex/cleanup-records-contracts` | https://github.com/samcantrill/loom/pull/191 | `loom.pipeline.cleanup`, `loom.artifacts`, tests | Cleanup records, retention, selectors, and safety contracts | package, unit, contract | dry-run records, selectors, safety, retention |
 | 2 | `cleanup-dry-run-authority` | merged | `codex/cleanup-dry-run-authority` | https://github.com/samcantrill/loom/pull/192 | authority/read models, dry-run planner, diagnostics inspection | Authority-backed dry-run reports, explicit recorded report facts, and compatible result-fact scaffolding | unit, contract, integration | per-run dry-run, retention inspection |
 | 3 | `cleanup-delete-events` | merged | `codex/cleanup-delete-events` | https://github.com/samcantrill/loom/pull/193 | cleanup execution, local target adapter, event projection | Explicit local deletion and cleanup audit events | unit, contract, integration | explicit deletion, path rejection, audit event |
-| 4 | `cleanup-collection-preflight` | pending | `codex/cleanup-collection-preflight` | pending | collection GC, run discovery boundary, preflight/diagnostics | Candidate-level collection GC and preflight warnings | unit, contract, integration | collection GC, preflight warnings |
+| 4 | `cleanup-collection-preflight` | pr_open | `codex/cleanup-collection-preflight` | https://github.com/samcantrill/loom/pull/194 | collection GC, run discovery boundary, preflight/diagnostics | Candidate-level collection GC and preflight warnings | unit, contract, integration | collection GC, preflight warnings |
 | 5 | `cleanup-cli-docs` | pending | `codex/cleanup-cli-docs` | pending | CLI, formatting, docs, final validation | `loom clean`, `loom gc`, docs, and final evidence | package, unit, contract, integration, e2e, final gate | CLI clean/gc flows |
 
 ## Implementation Readiness Blockers
@@ -606,11 +606,11 @@ Workflow path: expanded path
 
 ## Phase 4: Candidate-Level Run-Collection GC And Preflight Warnings
 
-Status: pending
+Status: pr_open
 Slug: `cleanup-collection-preflight`
 Branch: `codex/cleanup-collection-preflight`
 Worktree: `/home/samcantrill/work/loom-worktrees/cleanup-collection-preflight`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/194
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path
@@ -674,13 +674,16 @@ Workflow path: expanded path
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
+- Phase execution plan:
+  `docs/roadmap/stage-21/phases/cleanup-collection-preflight.md`
+- Planning/refinement budget: used locally for expanded-path phase planning
+- Implementation/refinement budget: used locally during validation to fix a
+  pytest module-name collision and diagnostics public export contract
 - PR review budget: unused
 - Blocker-resolution budget: 0 of 3 used
 - Pre-submit blocker gate: Phase 3 must be merged or used as stack predecessor
-- Merge record: pending
+- Merge record: PR open against `develop`; target verified with
+  `gh pr view 194 --json baseRefName,headRefName,state,url`
 
 ### Risks And Stop Conditions
 
@@ -698,11 +701,23 @@ Workflow path: expanded path
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
+- Implementation: added collection cleanup aggregate records and
+  `plan_collection_gc` / `execute_collection_gc` helpers over per-run cleanup
+  planning/execution, plus optional cleanup preflight targets and stable cleanup
+  warning ids.
+- Validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 107
+  passed / 1 skipped, unit 1389 passed / 7 skipped / 1 deselected, contract
+  272 passed / 2 skipped, integration 168 passed / 8 skipped / 13 deselected,
+  e2e 44 passed / 2 deselected, and config-extra 449 passed / 3 skipped /
+  1989 deselected.
+- PR: https://github.com/samcantrill/loom/pull/194 targets `develop` from
+  `codex/cleanup-collection-preflight`; target verified with
+  `gh pr view 194 --json baseRefName,headRefName,state,url`.
 - Merge:
-- Follow-up:
+- Follow-up: Phase 5 should branch from updated `develop` after Phase 4 merges,
+  or stack on `codex/cleanup-collection-preflight` only if a GitHub-side blocker
+  prevents prompt Phase 4 merge.
 
 ## Phase 5: CLI Commands, Documentation, And Final Validation
 
