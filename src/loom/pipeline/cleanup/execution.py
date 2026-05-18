@@ -174,7 +174,7 @@ def _delete_selected_entry(
             "unsupported_target_kind",
             completed_at,
             message="cleanup target is not a supported local path",
-            detail={"safety_decision": safety.to_dict()},
+            detail=_safety_detail(safety),
         )
     try:
         if path.is_symlink():
