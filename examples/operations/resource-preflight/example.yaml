@@ -7,6 +7,13 @@ introduced_in: v4
 status: runnable
 validation: full
 surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/operations/README.md
+owner_stages:
+  - v4
+validation_path: examples/operations/README.md
 entrypoints:
   - path: run_resource_preflight.py
     kind: python

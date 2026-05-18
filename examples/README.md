@@ -47,6 +47,20 @@ example outputs. Execution and operations examples also accept
 - `manual`: illustrative examples that cannot run in the default environment and
   must document why in their manifest.
 
+## Manifest Inventory Contract
+
+Each `example.yaml` manifest includes these docs-owned catalog fields:
+
+- `public_surfaces`: one or more public surfaces demonstrated by the example.
+- `owner_docs`: one or more repo-relative docs that own the example contract
+  (group README and feature-coverage docs where applicable).
+- `owner_stages`: one or more owning roadmap stages (`v0`, `v1`, ...).
+- `validation_path`: required path-style evidence pointer for what proves the example.
+- `validation_command`: preferred pytest command for smoke coverage; optional for
+  non-smoke/full/manual examples.
+- `prerequisites` / `manual_rationale`: required for manual or illustrative
+  examples to explain why default execution cannot run.
+
 V6/v7 SLURM and submitted-operation example coverage is tracked in
 [`docs/features/slurm-example-coverage.md`](../docs/features/slurm-example-coverage.md).
 V10 user-facing authority workflow coverage is tracked in

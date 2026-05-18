@@ -7,6 +7,15 @@ introduced_in: v3
 status: runnable
 validation: full
 surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/operations/README.md
+  - docs/features/authority-example-coverage.md
+owner_stages:
+  - v3
+  - v10
+validation_path: docs/features/authority-example-coverage.md
 entrypoints:
   - path: run_failure_diagnostics.py
     kind: python
