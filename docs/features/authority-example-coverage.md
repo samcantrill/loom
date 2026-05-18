@@ -14,7 +14,7 @@ they do not count as primary catalog coverage.
 | Offline import rejection | Incomplete and conflicting imports fail with stable machine-readable rejection codes. | `operations.offline-import-rejections` |
 | Resource coordination | Authority-backed resource limits and resource leases are exercised through the supported public Python API. | `operations.resource-leases` |
 
-## Targeted Full Example Evidence
+## Targeted Example Evidence
 
 | Example | Evidence |
 | --- | --- |

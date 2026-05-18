@@ -217,10 +217,30 @@ make test-summary
 
 - Draft plan: completed on fast path in this artifact
 - Final phase execution plan: completed on fast path; refine pass not needed
-- Implementation summary: pending
-- Implementation validation: pending
+- Implementation summary: completed final docs alignment for the top-level
+  README, example catalog tier guidance, execution/operations catalog placement
+  prose, focused configuration and authority example coverage docs, and Stage
+  22 implementation-plan metadata. No runtime, CLI, executor, store, authority,
+  plugin, dependency, or external-system behavior changed.
+- Implementation validation:
+  - Targeted docs/example, focused integration, and representative e2e paths:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/docs/test_v0_python_examples.py tests/integration/examples/test_example_workflows.py tests/e2e/test_example_journeys.py -q`
+    passed with `44 passed`.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-e2e` passed with `46 passed,
+    6 deselected`.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff passed,
+    Pyright reported 0 errors, default harness passed with `1963 passed,
+    26 skipped, 30 deselected`, config-extra harness passed with
+    `460 passed, 3 skipped, 2001 deselected`, and `uv build` succeeded.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
+    `build/test-summary.md` with package `108 passed, 1 skipped`; unit
+    `1394 passed, 7 skipped, 1 deselected`; contract `274 passed, 2 skipped`;
+    integration `170 passed, 8 skipped, 18 deselected`; e2e `46 passed,
+    6 deselected`; config-extra `460 passed, 3 skipped, 2001 deselected`.
 - Refinement summary: not used
 - Blocker-resolution summary: none used
-- PR preparation: pending
+- PR preparation: PR body prepared in
+  `docs/roadmap/stage-22/phases/examples-docs-refinement-pr-body.md`; PR
+  opening pending
 - Stack maintenance: no predecessor or successor maintenance needed for the planning pass
 - Remaining blockers: none known
