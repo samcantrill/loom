@@ -27,6 +27,8 @@ def test_build_parser_includes_v2_commands() -> None:
     assert "status" in help_text
     assert "logs" in help_text
     assert "artifacts" in help_text
+    assert "clean" in help_text
+    assert "gc" in help_text
     assert "runs" in help_text
     assert "queue" in help_text
     assert "sweep" in help_text

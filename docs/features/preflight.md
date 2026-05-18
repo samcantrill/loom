@@ -144,6 +144,9 @@ executor.subprocess.python
 executor.subprocess.worker
 resources.capabilities
 filesystem.input_exists
+cleanup.candidates.safety
+cleanup.targets.support
+cleanup.retention.policy
 ```
 
 Stable IDs make JSON output useful for external tooling and tests.
@@ -253,6 +256,23 @@ Preflight should not load large artifact payloads by default.
 
 Checksum validation of existing artifacts may be available behind an explicit
 option because it can be expensive.
+
+## Cleanup Checks
+
+Stage 21 adds optional cleanup preflight checks for callers that provide explicit
+cleanup targets. These checks are read-only. They call cleanup planning APIs to
+warn about unsafe candidates, unsupported remote/external targets, unsupported
+retention hints, and missing managed-root or ownership evidence.
+
+Cleanup preflight must not:
+
+```text
+append cleanup report or result facts
+delete files
+dispatch cleanup events
+load provider plugins
+treat run catalog paths as deletion authority
+```
 
 Stage 15 backend checks are explicit and metadata-only. They run only for
 configured `ArtifactBackendPreflightTarget` values supplied by the caller and

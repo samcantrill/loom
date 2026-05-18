@@ -23,6 +23,7 @@ comparing two runs from persisted metadata
 exporting a run into a portable bundle
 inspecting an exported bundle
 importing a bundle into a local run collection
+discovering run URIs for candidate-level cleanup orchestration
 ```
 
 This component does not own:
@@ -35,6 +36,8 @@ remote tracking services
 dashboards
 authorization
 distributed indexes
+deletion authority
+cleanup policy
 ```
 
 The run store remains authoritative for an individual run.
@@ -70,6 +73,11 @@ based on run-store marker files or metadata files.
 
 Invalid or partial directories should be reported as warnings, not fatal errors,
 unless strict mode is requested.
+
+Stage 21 `loom gc COLLECTION` may use catalog/listing output to discover run
+URIs, but the collection path and catalog rows are never deletion authority.
+Cleanup still comes from per-run authority cleanup candidates, managed roots
+derived per run, explicit delete intent, and cleanup execution result facts.
 
 ## Catalog Index
 

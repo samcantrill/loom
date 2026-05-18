@@ -1248,7 +1248,9 @@ This keeps `ArtifactRef` lightweight while preserving lineage elsewhere.
 
 ### 16.1 Retention Metadata
 
-Future artifact stores may support retention intent as metadata.
+Stage 21 supports generic retention intent as metadata. Retention is a hint for
+inspection, bundle/export behavior, cleanup selectors, and preflight warnings;
+it is not an automatic deletion policy.
 
 Examples:
 
@@ -1261,10 +1263,16 @@ temporary:
 
 archive:
   selected artifacts intended for export or long-term review
+
+external:
+  artifacts tracked by metadata but not owned by Loom for deletion
 ```
 
-Retention metadata should not delete files by itself. Cleanup commands should be
-explicit, conservative, and inspect the run store before removing artifacts.
+Retention metadata does not delete files by itself. Cleanup commands are
+explicit and conservative: `loom clean` and `loom gc` inspect authority-backed
+cleanup candidates, apply bounded selectors such as `--retention-mode
+temporary`, require deletion confirmation, and delegate mutation to cleanup APIs
+that enforce managed-root and ownership checks.
 
 ---
 
