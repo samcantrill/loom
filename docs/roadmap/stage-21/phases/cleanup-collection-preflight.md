@@ -193,7 +193,9 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used locally during validation to rename the
+  cleanup collection unit test away from an existing pytest module basename and
+  to update the diagnostics public export contract
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -201,10 +203,22 @@ make test-summary
 
 - Draft plan: completed locally
 - Final phase execution plan: completed locally
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: added collection cleanup aggregate records and
+  `plan_collection_gc` / `execute_collection_gc` helpers that compose per-run
+  cleanup planning/execution, plus an optional cleanup preflight group with
+  explicit cleanup targets and stable warning ids for safety, unsupported target
+  refs, and unsupported retention hints.
+- Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  passed with Ruff, Pyright, default test harness, config-extra harness, and
+  build. `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 107
+  passed / 1 skipped, unit 1389 passed / 7 skipped / 1 deselected, contract 272
+  passed / 2 skipped, integration 168 passed / 8 skipped / 13 deselected, e2e
+  44 passed / 2 deselected, and config-extra 449 passed / 3 skipped / 1989
+  deselected.
+- Refinement summary: fixed a pytest module-name collision by renaming the new
+  cleanup collection unit test and updated `tests/package/test_import.py` to
+  include `CleanupPreflightTarget` in the public diagnostics API list.
+- Blocker-resolution summary: no post-review blocker-resolution passes used.
+- PR preparation: pending
+- Stack maintenance: Phase 3 merged; this branch targets `develop` directly.
+- Remaining blockers: none.
