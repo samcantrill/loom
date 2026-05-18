@@ -62,19 +62,18 @@ def test_e2e_example_slurm_dry_run_basics(tmp_path: Path) -> None:
     assert modes == {"slurm-single-job", "slurm-afterok"}
     assert len(summaries) == 2
     for summary in summaries:
-        assert summary["jobs"] >= 1
-        assert summary["dependencies"] >= 0
+        assert _require_int(summary["jobs"]) >= 1
+        assert _require_int(summary["dependencies"]) >= 0
         assert summary["scheduler_ids_absent"] is True
-        manifest = Path(summary["manifest"])
+        manifest = Path(_require_str(summary["manifest"]))
         assert manifest.is_file()
-        manifest = Path(summary["manifest"])
         for relative in _parse_csv_list(summary["scripts"]):
             path = _resolve_dry_run_path(relative, manifest)
             assert path.is_file()
         for relative in _parse_csv_list(summary["logs"]):
             path = _resolve_dry_run_path(relative, manifest)
             assert path.suffix == ".log"
-        assert "executor.slurm.sbatch" in summary["warnings"]
+        assert "executor.slurm.sbatch" in _require_str(summary["warnings"])
 
 
 def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(tmp_path: Path) -> None:
@@ -88,8 +87,8 @@ def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(tmp_path: Pat
     assert payload["run_status"] == "SUCCEEDED"
     assert payload["seed_executor"] == "docker"
     assert payload["container_image"] == "python:3.12-slim"
-    assert payload["artifact_count"] >= 1
-    assert payload["fake_docker_call_count"] >= 1
+    assert _require_int(payload["artifact_count"]) >= 1
+    assert _require_int(payload["fake_docker_call_count"]) >= 1
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
     failure_payload = _parse_summary(
@@ -100,7 +99,7 @@ def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(tmp_path: Pat
     assert failure_payload["failure_executor"] == "docker"
     assert failure_payload["failure_exit_code"] == 1
     assert failure_payload["stderr_available"] is True
-    assert failure_payload["fake_docker_call_count"] >= 1
+    assert _require_int(failure_payload["fake_docker_call_count"]) >= 1
     assert _run_uri_path(failure_payload["run_uri"]).is_dir()
 
 
