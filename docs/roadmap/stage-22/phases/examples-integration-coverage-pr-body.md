@@ -41,7 +41,7 @@ New tests implemented:
 | `make test-summary` | Passed | Wrote `build/test-summary.md` with overall `2448 passed, 21 skipped, 2022 deselected`. |
 | Targeted docs/example checks | Passed | `40 passed in 56.42s` for `tests/integration/docs/test_v0_python_examples.py` and `tests/integration/examples/test_example_workflows.py` with config extras. |
 | Integration gate | Passed | `make test-integration`: `170 passed, 89 deselected`. |
-| GitHub checks | Not run in this prep pass | Branch was not pushed and PR was not opened by request. |
+| GitHub checks | Pending after PR open | PR #197 targets `develop`; final merge gate will use the GitHub check result for this branch. |
 
 ### Test Suite Summary
 

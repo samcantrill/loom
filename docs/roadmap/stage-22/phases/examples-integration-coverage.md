@@ -246,7 +246,9 @@ make test-summary
   branch `codex/examples-integration-coverage` targets `develop` with no stack
   predecessor. No additional validation was run during PR preparation per the
   handoff constraint; this artifact uses the recorded `make validate-pr` and
-  `make test-summary` evidence above. PR remains unopened for the manager to
-  push/open after handoff.
+  `make test-summary` evidence above. PR opened as
+  https://github.com/samcantrill/loom/pull/197 and was verified with
+  `baseRefName: develop`, `headRefName: codex/examples-integration-coverage`,
+  and `state: OPEN`.
 - Stack maintenance: none required for this phase-local worktree yet.
 - Remaining blockers: none known.
