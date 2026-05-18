@@ -57,6 +57,10 @@ splits oversized steps:
 - Container execution is split into Docker and Apptainer/SLURM composition.
 - Reliability is split into retry/timeout/transaction policy, runtime
   events/event sinks, and cleanup/retention/GC.
+- An examples and deferred-behavior documentation step is appended after
+  cleanup/retention so the implemented surface can be demonstrated through
+  runnable examples while explicit deferrals become a future-roadmap register
+  rather than scattered notes.
 
 The result is a longer roadmap, but each version has a more comparable scope
 and a clearer acceptance boundary.
@@ -143,6 +147,7 @@ written.
 | v19 | Reliability policies and transactions | Retry, timeout, failure-category, status-detail, transaction, and retry-safety records across executors. |
 | v20 | Runtime events and event sinks | Audit-ready runtime event grammar plus observe-only event sink contracts over committed runtime facts. |
 | v21 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
+| v22 | Examples and deferred behavior documentation | Curated example catalog, runnable validation, deferred-behavior register, and future-roadmap traceability over the implemented surface. |
 
 ## v0 - Local Runtime Kernel
 
@@ -1692,6 +1697,84 @@ Primary feature docs:
 - `cli.md`
 - `testing.md`
 
+## v22 - Examples And Deferred Behavior Documentation
+
+Goal:
+
+- Make the functionality that actually exists easy to discover, run, and cite,
+  while turning deferred behavior into explicit future-roadmap inputs instead
+  of vague promises in feature docs.
+
+Implement:
+
+- A consolidated example inventory over `examples/` with stable example IDs,
+  user-goal grouping, owning feature docs, owning roadmap stage, validation
+  tier, and runnable/manual status.
+- A manifest and README consistency pass for authoring, execution, operations,
+  container, SLURM, authority, cleanup, retention, event, reliability, bundle,
+  sweep, plugin, and artifact examples that exist by this point.
+- Runnable examples that demonstrate the implemented public Python APIs and CLI
+  commands without domain-specific stages, real clusters, cloud services,
+  network access, or optional provider SDKs in default validation.
+- Clearly labeled illustrative/manual examples for behavior that needs a real
+  scheduler, container daemon, remote service, external backend, or downstream
+  project code.
+- A deferred-behavior register that records unsupported or intentionally
+  omitted behavior, the doc or example where users may encounter it, the reason
+  it is deferred, the owning future-roadmap candidate when known, and the
+  trigger for revisiting it.
+- Example validation coverage that checks runnable example manifests, README
+  metadata, public API imports, command snippets where feasible, and no hidden
+  dependencies on generated local state.
+- Documentation updates that cross-link examples, feature docs, roadmap
+  stages, accepted technical debt, and deferred candidates.
+- A final docs audit that removes stale future-tense promises for behavior that
+  has landed and replaces unowned promises with explicit deferrals.
+
+Exit criteria:
+
+- Users can browse examples by goal and tell which examples are runnable by
+  default, opt-in, manual, illustrative, or marked as `internal_demo`.
+- Every runnable example has validation coverage and uses only generic,
+  domain-neutral data.
+- Every manual or illustrative example states why it is not part of default
+  validation and what external capability it needs.
+- Deferred behavior that appears in docs or examples has an owner, rationale,
+  and revisit trigger.
+- The roadmap has a reviewable list of future candidates derived from real
+  deferrals rather than ad hoc feature speculation.
+
+Defer:
+
+- New runtime features, new executor/store/plugin behavior, domain-specific
+  tutorial projects, hosted documentation publishing, website work, notebooks
+  that require external kernels or services, large real-data examples, and
+  broad generated-doc tooling beyond what is needed to validate the in-repo
+  examples.
+
+Primary feature docs:
+
+- `testing.md`
+- `cli.md`
+- `config.md`
+- `pipeline.md`
+- `execution.md`
+- `run-store.md`
+- `artifacts.md`
+- `reliability.md`
+- `preflight.md`
+- `plugins.md`
+- `remote-stores.md`
+- Existing `*-example-coverage.md` documents.
+
+Planning notes:
+
+- `docs/roadmap/stage-22/planning.md`
+
+Implementation plan:
+
+- `docs/roadmap/stage-22/implementation-plan.md`
+
 ## Deferred Integration Candidates
 
 The items below are intentionally deferred until their owning contracts exist
@@ -1792,6 +1875,7 @@ Before turning any roadmap version into a full implementation plan:
 | `plugins.md` | v14, v15, v16, v20 | Explicit discovery in v14; remote backend, exporter, and event sink integration later. |
 | `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations. |
 | `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
+| `examples/` and `*-example-coverage.md` | v22 | Cross-roadmap example inventory, runnable/manual status, validation tiers, and deferred-behavior traceability are consolidated after the runtime surface through v21 exists. |
 
 ## Functionality Not Encompassed By This Roadmap
 
