@@ -18,6 +18,7 @@ they do not count as primary catalog coverage.
 
 | Example | Evidence |
 | --- | --- |
+| `operations.authority-lifecycle` | `tests/e2e/test_example_journeys.py::test_e2e_example_authority_lifecycle_cli` |
 | `operations.failing-run` | `tests/integration/examples/test_example_workflows.py::test_example_failing_run_reports_diagnostics_summary` |
 | `operations.resource-leases` | `tests/integration/examples/test_example_workflows.py::test_example_resource_leases_coordinate_blocked_then_released_state` |
 | `operations.offline-import-rejections` | `tests/integration/examples/test_example_workflows.py::test_example_offline_import_rejections_report_rejection_codes_and_acceptance` |

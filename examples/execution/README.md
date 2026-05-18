@@ -29,6 +29,12 @@ examples should use `examples/execution/containers/slurm-apptainer/`.
 | `execution.local` | Composing a static pipeline config, running a two-stage local pipeline, writing artifacts through the local store, recording provenance/fingerprints, and reusing unchanged stages from the same run directory. |
 | `execution.python-run-options` | Public Python construction, merge, stage validation, and capability diagnostics for `RunOptions`. |
 
+## Representative End-to-End Evidence
+
+- `execution.local` -> `tests/e2e/test_example_journeys.py::test_e2e_example_local_pipeline_run_with_resume`
+- `execution.slurm.dry-run-basics` -> `tests/e2e/test_example_journeys.py::test_e2e_example_slurm_dry_run_basics`
+- `execution.containers.docker` -> `tests/e2e/test_example_journeys.py::test_e2e_example_docker_executor_smoke_and_failure_diagnostics`
+
 ## Run
 
 Run from the repository root:

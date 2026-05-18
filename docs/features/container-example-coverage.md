@@ -14,11 +14,15 @@ surfaces, and keep daemon-dependent behavior outside default validation.
 | Failure inspection | Docker failures are visible through existing `loom status` and `loom logs` surfaces. | `execution.containers.docker` |
 | Optional live Docker smoke | Real Docker smoke is documented as manual guidance and stays outside `make validate-pr`. | `execution.containers.docker` |
 
+Representative e2e evidence for this feature now includes:
+
+- `tests/e2e/test_example_journeys.py::test_e2e_example_docker_executor_smoke_and_failure_diagnostics`
+
 ## Example Coverage
 
 | Example | Version | Status | Validation | Functionality covered | Implementation notes |
 | --- | --- | --- | --- | --- | --- |
-| `execution.containers.docker` | v17 | runnable | smoke | Runs a two-stage synthetic pipeline through `loom run --executor docker`, inspects selected-Docker preflight pass/fail diagnostics, and inspects a persisted Docker failure. | Default validation installs a fake `docker` command on `PATH` so the public Docker executor path is exercised without a daemon. README guidance covers prepared-stage command shape and optional live Docker smoke. |
+| `execution.containers.docker` | v17 | runnable | e2e (`tests/e2e/test_example_journeys.py::test_e2e_example_docker_executor_smoke_and_failure_diagnostics`) | Runs a two-stage synthetic pipeline through `loom run --executor docker`, inspects selected-Docker preflight pass/fail diagnostics, and inspects a persisted Docker failure. | Default validation installs a fake `docker` command on `PATH` so the public Docker executor path is exercised without a daemon. README guidance covers prepared-stage command shape and optional live Docker smoke. |
 
 ## Example Coverage Checks
 

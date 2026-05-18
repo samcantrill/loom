@@ -40,11 +40,15 @@ SLURM examples should follow the same split:
 
 | Example | Version | Status | Validation | Functionality covered | Implementation notes |
 | --- | --- | --- | --- | --- | --- |
-| `execution.slurm.dry-run-basics` | v6 | runnable | smoke | Run a small two-stage pipeline through both SLURM dry-run modes. | Prints mode, planning ID, job count, manifest path, generated script paths, wrapper log paths, warning codes, and confirms scheduler job IDs are absent. |
+| `execution.slurm.dry-run-basics` | v6 | runnable | e2e (`tests/e2e/test_example_journeys.py::test_e2e_example_slurm_dry_run_basics`) | Run a small two-stage pipeline through both SLURM dry-run modes. | Prints mode, planning ID, job count, manifest path, generated script paths, wrapper log paths, warning codes, and confirms scheduler job IDs are absent. |
 | `execution.slurm.afterok-diamond` | v6 | runnable | smoke | Generate afterok artifacts for a diamond DAG with stage-level SLURM options and resources. | Inspects logical job keys, dependency edges, per-stage SBATCH directives, wrapper log paths, generated `stage-job` commands, and absence of persisted scheduler IDs or resolved secret values. |
 | `operations.submitted-status` | v7 | runnable | smoke | Show submitted lifecycle and submitted-operation registry without scheduler access. | Creates a synthetic local run with `SUBMITTED` run/stage status plus a submitted-operation record, runs `loom status RUN_URI --format json`, and prints submission metadata. |
 | `execution.slurm.live` | v7 | illustrative | manual | Submit a real two-stage SLURM run through `slurm-single-job` or `slurm-afterok`. | Documents preflight, dry-run preview, live submission, persisted status, scheduler-aware status, cancellation, manifest inspection, wrapper logs, site options, and active-job guards. |
 | `operations.slurm-live-jobs` | v7 | illustrative | manual | Inspect and cancel live submitted SLURM jobs. | Documents `loom status RUN_URI --jobs`, manifest status snapshots, `loom cancel RUN_URI --jobs`, partial cancellation behavior, uncertainty, and cleanup guidance. |
+
+Representative end-to-end evidence for runnable dry-run coverage:
+
+- `tests/e2e/test_example_journeys.py::test_e2e_example_slurm_dry_run_basics`
 
 ## Example Coverage Checks
 

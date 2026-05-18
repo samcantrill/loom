@@ -21,7 +21,7 @@
 - Draft pass: completed in this artifact
 - Refine pass: not needed on fast path; scope remains docs/examples/tests-only, no public contract is being designed, and no blockers are recorded
 - Setup limitations: worktree was created from local `origin/develop` at `341e9d5` (`docs: record stage 22 phase 2 merge`); the first sandboxed worktree creation could not write Git refs, and the approved escalated rerun succeeded
-- Blockers: none
+- Blockers: environment constraints blocked full execution of targeted suites in this sandbox
 
 ## Objective
 
@@ -217,10 +217,18 @@ make test-summary
 
 - Draft plan: completed on fast path in this artifact
 - Final phase execution plan: completed on fast path; refine pass not needed
-- Implementation summary: pending
-- Implementation validation: pending
+- Implementation summary: Added representative public-journey e2e coverage in `tests/e2e/test_example_journeys.py` for local resume, authority lifecycle CLI, SLURM dry-runs, and Docker executor success+failure diagnostics; repointed manifests to those e2e paths and updated group/feature docs to call out representative evidence.
+- Validation evidence:
+  - `uv run pytest tests/e2e/test_example_journeys.py` (failed in sandbox: missing optional config deps and restricted sockets for authority service startup)
+  - `uv run pytest tests/integration/docs/test_v0_python_examples.py tests/integration/examples/test_example_workflows.py` (failed in sandbox: missing optional config deps for `yaml`/`omegaconf` and authority socket permissions)
+  - `make test-e2e` (failed in sandbox: permission-restricted multiprocessing/socket creation for local authority service, plus 15 e2e failures and 1 e2e error that are not phase-specific)
+- Blockers:
+  - The environment used for this phase blocks local `socket` creation (`socket.socket` and authority service startup), preventing authority-backed examples and e2e fixtures from running.
+  - The same environment lacks optional config extras (`yaml`, `omegaconf`), causing config-import and preflight failures.
+- Budget status: implementation refinement unused; blocker resolution 0/3 unused; PR review unused
+- Implementation validation: blocked by sandbox restrictions; evidence captured with command failures above
 - Refinement summary: not used
 - Blocker-resolution summary: none used
 - PR preparation: pending
 - Stack maintenance: none required for this planning pass
-- Remaining blockers: none
+- Remaining blockers: environment limitations above
