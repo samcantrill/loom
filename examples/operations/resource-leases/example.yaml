@@ -14,7 +14,7 @@ owner_docs:
   - docs/features/authority-example-coverage.md
 owner_stages:
   - v10
-validation_path: docs/features/authority-example-coverage.md
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_resource_leases_coordinate_blocked_then_released_state
 entrypoints:
   - path: run_resource_leases.py
     kind: python

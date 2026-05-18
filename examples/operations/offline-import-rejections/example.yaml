@@ -14,7 +14,7 @@ owner_docs:
   - docs/features/authority-example-coverage.md
 owner_stages:
   - v10
-validation_path: docs/features/authority-example-coverage.md
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_offline_import_rejections_report_rejection_codes_and_acceptance
 entrypoints:
   - path: run_offline_import_rejections.py
     kind: python

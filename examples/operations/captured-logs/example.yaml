@@ -13,7 +13,7 @@ owner_docs:
   - examples/operations/README.md
 owner_stages:
   - v3
-validation_path: examples/operations/README.md
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_captured_logs_records_captured_output
 entrypoints:
   - path: run_captured_logs.py
     kind: python

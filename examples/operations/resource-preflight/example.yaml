@@ -13,7 +13,7 @@ owner_docs:
   - examples/operations/README.md
 owner_stages:
   - v4
-validation_path: examples/operations/README.md
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_resource_preflight_reports_resource_warnings_and_strict_exit
 entrypoints:
   - path: run_resource_preflight.py
     kind: python
