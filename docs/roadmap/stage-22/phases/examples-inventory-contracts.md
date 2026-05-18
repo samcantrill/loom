@@ -219,6 +219,7 @@ make test-summary
 - Implementation validation: `UV_CACHE_DIR=.uv-cache uv run --active pytest tests/integration/docs/test_v0_python_examples.py` passed outside the sandbox after the initial sandbox run hit socket restrictions during subprocess example execution (`35 passed in 54.11s`). The non-execution metadata checks also passed in the sandbox with `UV_CACHE_DIR=.uv-cache uv run --active pytest tests/integration/docs/test_v0_python_examples.py -k 'not smoke_example_scripts_execute'` (`12 passed, 23 deselected`).
 - Refinement summary: not used
 - Blocker-resolution summary: none used
-- PR preparation: pending
+- PR preparation: completed on 2026-05-18; PR body written to `docs/roadmap/stage-22/phases/examples-inventory-contracts-pr-body.md` using the recorded Stage 22 Phase 1 scope, final diff, and suite evidence from `build/test-summary.md`. Target branch confirmed as `develop`; stack predecessor remains none.
+- PR validation evidence: targeted docs integration passed with `UV_CACHE_DIR=.uv-cache uv run --active pytest tests/integration/docs/test_v0_python_examples.py` (`35 passed in 54.11s`). `make validate-pr` first hung during default pytest under sandbox execution restrictions and was terminated; the escalated rerun passed Ruff, Pyright (`0 errors`), default pytest (`1963 passed, 26 skipped, 21 deselected`), config-extra pytest (`451 passed, 3 skipped, 2001 deselected`), and `uv build`. `make test-summary` passed and wrote `build/test-summary.md` with overall `2443 passed, 21 skipped, 2017 deselected`.
 - Stack maintenance: root phase targeting `develop`; no predecessor maintenance needed
 - Remaining blockers: none
