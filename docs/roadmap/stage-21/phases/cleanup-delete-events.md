@@ -197,7 +197,7 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used locally during validation to normalize result details for plain-data round trips
-- PR review: unused
+- PR review: completed by manager review; fallback result detail was flattened before merge
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -207,7 +207,7 @@ make test-summary
 - Implementation summary: added `execute_cleanup`, local-only deletion with execution-time safety rechecks, cleanup result fact recording, compact cleanup report/result event projection, optional runtime event dispatcher support, and public cleanup exports.
 - Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 107 passed / 1 skipped, unit 1384 passed / 7 skipped / 1 deselected, contract 271 passed / 2 skipped, integration 167 passed / 8 skipped / 13 deselected, e2e 44 passed / 2 deselected, config-extra 449 passed / 3 skipped / 1982 deselected.
 - Refinement summary: fixed nested cleanup result details to remain plain-data round-trippable and aligned the unit event store double with production event payload thawing.
-- PR review summary:
+- PR review summary: manager review covered structured intent enforcement, execution-time safety rechecks, local-only deletion, result fact append-before-event ordering, event payload compactness, and sink-failure non-blocking behavior; no blocking findings remain after the fallback detail flattening fix.
 - Blocker-resolution summary: no post-review blocker-resolution passes used.
 - PR preparation: PR opened at https://github.com/samcantrill/loom/pull/193 against `develop` from `codex/cleanup-delete-events`; target verified with `gh pr view 193 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: Phase 2 merged; this branch targets `develop` directly.
