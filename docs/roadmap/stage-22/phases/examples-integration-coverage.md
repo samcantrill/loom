@@ -218,10 +218,12 @@ make test-summary
 
 - Draft plan: completed on fast path in this artifact
 - Final phase execution plan: completed on fast path; refine pass not needed
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers: none known
+- Implementation summary: Added focused integration coverage for the five `full` operation examples (`captured-logs`, `failing-run`, `resource-preflight`, `resource-leases`, `offline-import-rejections`) through a new module `tests/integration/examples/test_example_workflows.py`, updated their `validation_path` entries to point to this evidence, and documented explicit evidence locations in operations and authority coverage docs.
+- Implementation validation: partial due environment constraints; required commands were executed and captured in command notes.
+- Refinement summary: none needed on fast path.
+- Blocker-resolution summary: two blockers remain local to this environment:
+  - `PermissionError: [Errno 1] Operation not permitted` when example entrypoints attempt local authority socket startup in `examples/operations.resource-leases` and `operations.offline-import-rejections`.
+  - Missing optional dependencies (`yaml`/`omegaconf`) required by example preflight/runtime command paths in this environment.
+- PR preparation: pending. Focus remains on local edits + targeted pytest execution and phase-plan closure notes.
+- Stack maintenance: none required for this phase-local worktree yet.
+- Remaining blockers: local authority socket bind permissions and missing optional example dependencies (`yaml`/`omegaconf`) prevent full evidence execution in this sandbox.
