@@ -8,6 +8,7 @@
 - Branch: `codex/cleanup-collection-preflight`
 - Worktree: `/home/samcantrill/work/loom-worktrees/cleanup-collection-preflight`
 - Phase execution plan path: `docs/roadmap/stage-21/phases/cleanup-collection-preflight.md`
+- PR: https://github.com/samcantrill/loom/pull/194
 - Full plan: `docs/roadmap/stage-21/implementation-plan.md`
 - Source phase: Phase 4, `cleanup-collection-preflight`
 - Stack predecessor: none; predecessor PR https://github.com/samcantrill/loom/pull/193 merged
@@ -219,6 +220,8 @@ make test-summary
   cleanup collection unit test and updated `tests/package/test_import.py` to
   include `CleanupPreflightTarget` in the public diagnostics API list.
 - Blocker-resolution summary: no post-review blocker-resolution passes used.
-- PR preparation: pending
+- PR preparation: PR opened at https://github.com/samcantrill/loom/pull/194
+  against `develop` from `codex/cleanup-collection-preflight`; target verified
+  with `gh pr view 194 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: Phase 3 merged; this branch targets `develop` directly.
 - Remaining blockers: none.
