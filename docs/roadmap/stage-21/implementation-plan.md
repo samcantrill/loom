@@ -1,11 +1,11 @@
 # Roadmap Stage 21 Implementation Plan: Cleanup And Retention
 
-Status: quality gate passed; phase execution plans pending
+Status: phase 1 merged; phase 2 in progress
 Roadmap stage: `v21`
 Planning document: `docs/roadmap/stage-21/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: none; implementation has not started
+Current phase: Phase 2, `cleanup-dry-run-authority`
 Blockers:
 
 - None before phase execution planning.
@@ -250,7 +250,7 @@ The records/selectors/results design can grow deliberately:
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `cleanup-records-contracts` | pending | `codex/cleanup-records-contracts` | pending | `loom.pipeline.cleanup`, `loom.artifacts`, tests | Cleanup records, retention, selectors, and safety contracts | package, unit, contract | dry-run records, selectors, safety, retention |
+| 1 | `cleanup-records-contracts` | merged | `codex/cleanup-records-contracts` | https://github.com/samcantrill/loom/pull/191 | `loom.pipeline.cleanup`, `loom.artifacts`, tests | Cleanup records, retention, selectors, and safety contracts | package, unit, contract | dry-run records, selectors, safety, retention |
 | 2 | `cleanup-dry-run-authority` | pending | `codex/cleanup-dry-run-authority` | pending | authority/read models, dry-run planner, diagnostics inspection | Authority-backed dry-run reports, explicit recorded report facts, and compatible result-fact scaffolding | unit, contract, integration | per-run dry-run, retention inspection |
 | 3 | `cleanup-delete-events` | pending | `codex/cleanup-delete-events` | pending | cleanup execution, local target adapter, event projection | Explicit local deletion and cleanup audit events | unit, contract, integration | explicit deletion, path rejection, audit event |
 | 4 | `cleanup-collection-preflight` | pending | `codex/cleanup-collection-preflight` | pending | collection GC, run discovery boundary, preflight/diagnostics | Candidate-level collection GC and preflight warnings | unit, contract, integration | collection GC, preflight warnings |
@@ -264,11 +264,11 @@ The records/selectors/results design can grow deliberately:
 
 ## Phase 1: Cleanup Records, Retention, Selectors, And Safety Contracts
 
-Status: pending
+Status: merged
 Slug: `cleanup-records-contracts`
 Branch: `codex/cleanup-records-contracts`
 Worktree: `/home/samcantrill/work/loom-worktrees/cleanup-records-contracts`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/191
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path
@@ -331,13 +331,13 @@ Workflow path: expanded path
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
-- Blocker-resolution budget: 0 of 3 used
+- Phase execution plan: complete
+- Planning/refinement budget: used
+- Implementation/refinement budget: not needed after validation passed
+- PR review budget: completed by manager review
+- Blocker-resolution budget: 1 of 3 used for sandbox-only service socket validation rerun
 - Pre-submit blocker gate: do not start if plan quality gate is not passed
-- Merge record: pending
+- Merge record: merged into `develop` on 2026-05-18 via PR #191; branch kept temporarily until Phase 2 was rebased away from it
 
 ### Risks And Stop Conditions
 
@@ -354,11 +354,20 @@ Workflow path: expanded path
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: Added `loom.pipeline.cleanup` records, selectors, safety
+  decisions, errors, and public exports; added generic retention helpers in
+  `loom.artifacts`.
+- Validation: Targeted cleanup package/unit/contract tests passed; targeted
+  Ruff and Pyright passed; `make validate-pr` and `make test-summary` passed
+  outside the sandbox after sandboxed service-authority socket tests were
+  blocked by `PermissionError: [Errno 1] Operation not permitted`.
+- PR: https://github.com/samcantrill/loom/pull/191 targeted `develop` from
+  `codex/cleanup-records-contracts`; CI `checks` completed successfully.
+- Merge: Squash-merged to `develop` on 2026-05-18 after target, CI,
+  validation, scope, and manager review gates passed.
+- Follow-up: Phase 2 was initially stacked on this branch, then rebased onto
+  updated `develop`; Phase 1 branch/worktree can be cleaned once stack cleanup
+  is complete.
 
 ## Phase 2: Authority-Backed Dry-Run Planning And Inspection
 
