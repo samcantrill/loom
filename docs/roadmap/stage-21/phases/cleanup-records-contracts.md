@@ -204,9 +204,18 @@ make test-summary
 - Draft plan: completed locally
 - Final phase execution plan: completed locally
 - Implementation summary:
+- Implementation summary: Added `loom.pipeline.cleanup` records, selectors,
+  safety decisions, errors, and public exports; added generic retention helpers
+  in `loom.artifacts`; covered package, unit, and contract behavior.
 - Implementation validation:
+  - `uv run pytest tests/package/test_pipeline_cleanup_api.py tests/unit/loom/pipeline/cleanup tests/unit/loom/test_artifacts.py tests/contracts/test_cleanup_records_contract.py tests/contracts/test_external_artifact_records_contract.py` passed.
+  - Targeted Ruff and Pyright over changed paths passed.
+  - `make validate-pr` passed outside the sandbox after sandboxed service-authority socket tests failed with `PermissionError: [Errno 1] Operation not permitted`.
+  - `make test-summary` passed and wrote `build/test-summary.md`.
 - Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
+- Refinement summary: Not needed after targeted and full validation passed.
+- Blocker-resolution summary: 1/3 used to diagnose the sandbox-only socket
+  failure and rerun the full gate outside the sandbox.
+- PR preparation: PR body drafted in `docs/roadmap/stage-21/phases/cleanup-records-contracts-pr-body.md`.
 - Stack maintenance:
 - Remaining blockers:
