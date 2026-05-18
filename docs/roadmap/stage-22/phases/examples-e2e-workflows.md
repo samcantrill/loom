@@ -211,7 +211,7 @@ make test-summary
 
 - Phase implementation refinement: unused; reserved for later workflow stages only if targeted validation fails, suite coverage is missing, or a concrete implementation blocker appears
 - PR review: unused; reserved for the later automated PR review gate
-- Blocker resolution: 0/3 used
+- Blocker resolution: 1/3 used
 
 ## Completion Notes
 
@@ -233,6 +233,17 @@ make test-summary
   - `make test-e2e` passed outside the sandbox (`46 passed, 6 deselected`).
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/e2e/test_example_journeys.py examples/execution/local/run_pipeline.py examples/execution/local/stages.py`
     passed.
+  - `make validate-pr` passed outside the sandbox: Ruff passed, Pyright
+    reported 0 errors, default harness passed (`1963 passed, 26 skipped,
+    30 deselected`), config-extra passed (`460 passed, 3 skipped,
+    2001 deselected`), and `uv build` succeeded.
+  - `make test-summary` passed and wrote `build/test-summary.md` with overall
+    suite evidence: package (`108 passed, 1 skipped`), unit (`1394 passed,
+    7 skipped, 1 deselected`), contract (`274 passed, 2 skipped`),
+    integration (`170 passed, 8 skipped, 18 deselected`), e2e (`46 passed,
+    6 deselected`), and config-extra (`460 passed, 3 skipped,
+    2001 deselected`), for `2452 passed, 21 skipped, 2026 deselected`
+    overall.
 - Blockers: none remaining. The initial sandboxed validation failed because the
   sandbox lacked config extras and blocked local socket creation; the approved
   outside-sandbox reruns verified the phase after targeted fixes.
@@ -240,7 +251,8 @@ make test-summary
   for manager-side targeted e2e/example fixes after validation exposed parser,
   assertion, and local-example hardening issues; PR review unused
 - Implementation validation: targeted e2e, docs/example integration, default
-  e2e gate, and touched-file lint passed as recorded above
+  e2e gate, touched-file lint, final PR gate, and suite summary passed as
+  recorded above
 - Refinement summary: no separate refiner pass used
 - Blocker-resolution summary: used one scoped manager pass to mark new e2e
   tests as config-extra optional dependency coverage, fix the summary parser
