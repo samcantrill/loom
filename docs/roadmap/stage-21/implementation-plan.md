@@ -128,6 +128,89 @@ When all phases are complete:
   policies, unsupported remote/external deletion, and cleanup paths whose
   managed-root or ownership evidence cannot be proven.
 
+## Design Overview And Examples
+
+Stage 21 adds a conservative cleanup and retention layer. Cleanup behavior is
+evidence-driven: Loom plans from authority-backed cleanup candidates and related
+facts, not from directory scans or user-supplied paths. The default operation is
+a side-effect-free preview; destructive cleanup requires explicit intent, safety
+approval, and append-only result evidence.
+
+The core implementation shape is:
+
+```text
+src/loom/pipeline/cleanup/
+  records.py      # cleanup reports, results, targets, delete intent, errors
+  selectors.py    # bounded selector normalization, matching, explanations
+  safety.py       # managed-root, ownership, symlink, outside-root decisions
+  planning.py     # authority-backed dry-run planning
+  execution.py    # explicit local deletion and result creation
+  events.py       # cleanup facts projected into Stage 20 event records
+  errors.py       # cleanup-specific failures
+
+src/loom/artifacts.py
+  # retention mode and policy helpers over plain-data metadata
+
+src/loom/pipeline/stores/read_models.py
+src/loom/pipeline/stores/authority.py
+  # cleanup report/result fact protocols and concrete persistence hooks
+
+src/loom/diagnostics/backend.py
+src/loom/diagnostics/preflight.py
+  # read-only inspection and warnings
+
+src/loom/cli/clean.py
+src/loom/cli/gc.py
+  # thin command wrappers for parsing, confirmation, and formatting
+```
+
+Example dry-run behavior:
+
+```sh
+loom clean run-123 --older-than 7d
+```
+
+Loom reads authoritative cleanup candidates, materialized refs, retention hints,
+run status, leases, submitted operations, and trusted managed roots. It applies
+bounded selectors, resolves candidate targets, and runs safety checks. The
+result is a report with selected, skipped, and rejected candidates. This command
+does not delete files, append authority facts, or emit events by default.
+
+Example explicit deletion behavior:
+
+```sh
+loom clean run-123 --older-than 7d --yes
+```
+
+The CLI confirmation maps to structured delete intent. Cleanup execution removes
+only approved Loom-owned local targets under trusted managed roots, records
+deleted/skipped/rejected/failed outcomes as cleanup result facts, and only then
+projects compact cleanup audit events. Event sinks observe those events but
+cannot authorize, veto, or redefine deletion correctness.
+
+Example path-safety behavior:
+
+```text
+candidate: /runs/run-123/artifacts/link-to-home
+outcome: rejected
+reason: symlink_target_not_allowed
+```
+
+Unsafe candidates are visible outcomes rather than repaired paths. Outside-root
+paths, missing ownership evidence, symlink targets, symlink traversal, and
+unsupported remote/external refs are rejected with stable reason codes.
+
+Example collection GC behavior:
+
+```sh
+loom gc --older-than 7d --tag scratch
+```
+
+Collection GC discovers candidate run URIs, opens each run's authority, and
+reuses the same per-run cleanup planner and executor. The catalog or collection
+path never authorizes deletion, and Stage 21 does not delete whole run
+directories.
+
 ## Non-Goals
 
 - No automatic retention deletion, background TTL sweeps, cleanup daemon, or
