@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan; ready for refinement
+- Status: refined phase execution plan; ready for implementation
 - Feature focus: Config Extraction
 - PR title: `Config Extraction - Phase 5: Tests Examples And Validation`
 - Branch: `codex/config-tests-examples-validation`
@@ -18,9 +18,16 @@
 - Workflow path: expanded path
 - Expanded-path reason: this phase moves many test/example files, changes validation summaries, and defines the durable package-local evidence shape used by final docs.
 - Plan quality gate: passed on 2026-05-20 in the implementation plan, with no blocking findings after confirmation review.
-- Draft pass: completed in this artifact.
-- Refine pass: pending.
+- Draft pass: completed and committed.
+- Refine pass: completed in this artifact.
 - Blockers: none known. Stop if package-local tests or examples require Loom runtime imports, if root adapter coverage would be lost, or if summary reporting needs a broad harness rewrite.
+
+## Refinement Summary
+
+- Package-local relocation should prioritize tests that already exercise `weave` directly and can swap remaining Loom helper imports to `weave.plain` or `weave.digests`.
+- Root tests that call `loom.cli.main`, `loom.queue`, `loom.diagnostics`, `loom.pipeline`, stores, authority services, or runtime fingerprints stay root because they prove adapter/runtime behavior.
+- Package-local example validation should execute relocated authoring scripts from `packages/weave/examples` with the package source path on `PYTHONPATH`; it should not depend on root Loom runtime modules.
+- Summary reporting should add bounded `weave` suite rows rather than changing the existing root suite semantics.
 
 ## Objective
 
@@ -37,7 +44,7 @@ This phase must not rewrite broad feature docs; Phase 6 owns final documentation
 ### In Scope
 
 - Move config-owned unit tests from `tests/unit/loom/config/**` to package-local `packages/weave/tests/**`.
-- Move pure config composition/integration contracts from root suites into package-local `weave` test tiers where they do not require Loom CLI, pipeline, store, or runtime behavior.
+- Move pure config composition/integration contracts from root suites into package-local `weave` test tiers where they do not require Loom CLI, pipeline, store, runtime fingerprints, or authority behavior.
 - Keep root tests that exercise Loom CLI adapters, queue config adapters, pipeline handoff, runtime fingerprints, or import boundaries.
 - Move config authoring examples from root `examples/authoring/**` into `packages/weave/examples/**`.
 - Add package-local example validation, preferably through a `make test-weave-examples` target backed by package-local pytest tests.
@@ -55,7 +62,7 @@ This phase must not rewrite broad feature docs; Phase 6 owns final documentation
 
 ## Assumptions
 
-- Package-local tests may keep synthetic fixtures copied from root when those fixtures are config-owned or target-instantiation-only.
+- Package-local tests may keep synthetic fixtures copied from root when those fixtures are config-owned or target-instantiation-only; they should not import `tests.support` from the repository root.
 - Root `tests/support/config_samples.py` remains available for Loom adapter tests, while a package-local support copy can serve standalone `weave` tests.
 - Root CLI config tests remain under root because they prove Loom adapters call `weave`.
 - Root pipeline fingerprint and runtime-profile tests remain under root when they prove Loom runtime compatibility with resolved config data.
@@ -152,12 +159,12 @@ rg "loom\\.config" src tests packages examples pyproject.toml
 
 ## Refinement And Review Budget Status
 
-- Planning/refinement budget: draft used; refine pass pending.
+- Planning/refinement budget: used; expanded-path draft and refine completed.
 - Phase implementation refinement: unused.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
 
 ## Completion Notes
 
-- Draft plan: completed in this artifact.
-- Refine plan: pending.
+- Draft plan: completed in commit `38c0520`.
+- Refine plan: completed in this artifact.
