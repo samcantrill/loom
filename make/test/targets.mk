@@ -1,5 +1,5 @@
 .PHONY: test-help test test-no-extra test-config-extra test-package test-unit
-.PHONY: test-contract test-integration test-e2e test-all test-weave
+.PHONY: test-contract test-integration test-e2e test-all test-weave test-weave-examples
 .PHONY: test-package-summary test-unit-summary test-contract-summary
 .PHONY: test-integration-summary test-e2e-summary test-config-extra-summary
 .PHONY: test-summary
@@ -25,6 +25,7 @@ test-help:
 	@printf '  make test-e2e             Run end-to-end tests\n'
 	@printf '  make test-all             Run all local non-network, non-SLURM tests\n'
 	@printf '  make test-weave           Run package-local weave tests\n'
+	@printf '  make test-weave-examples  Run package-local weave examples\n'
 	@printf '\n'
 	@printf 'Summary reports:\n'
 	@printf '  make test-summary                 Write all suite summaries to build/test-summary.md\n'
@@ -63,7 +64,10 @@ test-all:
 	$(TEST_UV_RUN) $(TEST_HARNESS) run all
 
 test-weave:
-	cd $(WEAVE_TEST_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) PYTHONPATH=src uv run --group dev python -m pytest
+	cd $(WEAVE_TEST_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) PYTHONPATH=src uv run --group dev python -m pytest tests --ignore=tests/test_examples.py
+
+test-weave-examples:
+	cd $(WEAVE_TEST_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) PYTHONPATH=src uv run --group dev python -m pytest tests/test_examples.py
 
 test-package-summary:
 	$(TEST_UV_LOCKED_DEV) $(TEST_HARNESS) summary package --output build/test-package-summary.md

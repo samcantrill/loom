@@ -1,0 +1,26 @@
+id: config-composition.replacement-overlays
+title: Replacement Overlays
+summary: Compose multiple overlays and replace an existing mapping with `_replace_`.
+capability: authoring
+level: introductory
+introduced_in: v0
+status: runnable
+validation: smoke
+surface: python_api
+public_surfaces:
+  - python_api
+owner_docs:
+  - packages/weave/examples/README.md
+  - docs/features/config-example-coverage.md
+owner_stages:
+  - v0
+validation_path: packages/weave/tests/test_examples.py::test_weave_example_script_runs
+validation_command: make test-weave-examples
+entrypoints:
+  - path: replacement_overlays.py
+    kind: python
+    description: Compose the example config and print resolved replacement and source order output.
+tags:
+  - compose-config
+  - overlays
+  - replacement

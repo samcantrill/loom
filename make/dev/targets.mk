@@ -1,5 +1,5 @@
 .PHONY: dev-help lint typecheck format check validate-pr build
-.PHONY: lint-weave typecheck-weave test-weave build-weave validate-weave
+.PHONY: lint-weave typecheck-weave test-weave test-weave-examples build-weave validate-weave
 
 dev-help:
 	@printf 'Loom development targets\n'
@@ -16,7 +16,7 @@ dev-help:
 	@printf '  make validate-pr   Run the local PR validation gate\n'
 	@printf '  make build         Build source and wheel distributions\n'
 	@printf '  make build-weave    Build the weave package\n'
-	@printf '  make validate-weave  Run weave lint/typecheck/tests/build checks\n'
+	@printf '  make validate-weave  Run weave lint/typecheck/tests/examples/build checks\n'
 
 lint:
 	uv run ruff check .
@@ -43,4 +43,4 @@ build:
 build-weave:
 	cd packages/weave && UV_CACHE_DIR=$(UV_CACHE_DIR) uv build
 
-validate-weave: lint-weave typecheck-weave test-weave build-weave
+validate-weave: lint-weave typecheck-weave test-weave test-weave-examples build-weave

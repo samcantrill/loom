@@ -23,6 +23,7 @@ LOCAL_ALL_MARKER_EXPR = "not slurm and not network and not optional_dependency"
 SUMMARY_OUTPUT = Path("build/test-summary.md")
 SUMMARY_ARTIFACT_DIR = Path("build/test-summary")
 SOURCE_COVERAGE_ROOT = "src/loom"
+WEAVE_COVERAGE_ROOT = "src/weave"
 UV_CACHE_DIR = "/tmp/uv-cache"
 
 
@@ -31,6 +32,8 @@ class Suite:
     name: str
     path: Path
     marker_expr: str = DEFAULT_MARKER_EXPR
+    cwd: Path = Path(".")
+    coverage_source: str | None = SOURCE_COVERAGE_ROOT
 
 
 @dataclass(frozen=True)
@@ -112,6 +115,20 @@ SUITES: dict[str, Suite] = {
     "integration": Suite("integration", Path("tests/integration"), DEFAULT_MARKER_EXPR),
     "e2e": Suite("e2e", Path("tests/e2e"), DEFAULT_MARKER_EXPR),
     "config-extra": Suite("config-extra", Path("tests"), CONFIG_EXTRA_MARKER_EXPR),
+    "weave": Suite(
+        "weave",
+        Path("tests"),
+        "",
+        cwd=Path("packages/weave"),
+        coverage_source=WEAVE_COVERAGE_ROOT,
+    ),
+    "weave-examples": Suite(
+        "weave-examples",
+        Path("tests/test_examples.py"),
+        "",
+        cwd=Path("packages/weave"),
+        coverage_source=None,
+    ),
 }
 
 GROUP_RULES: dict[str, tuple[GroupRule, ...]] = {
@@ -124,7 +141,7 @@ GROUP_RULES: dict[str, tuple[GroupRule, ...]] = {
         GroupRule(
             "config-api",
             ("tests.package.test_config_api",),
-            ("src/loom/config/", "packages/weave/src/weave/"),
+            ("src/loom/config/", f"{WEAVE_COVERAGE_ROOT}/"),
         ),
         GroupRule(
             "pipeline-apis", ("tests.package.test_pipeline",), ("src/loom/pipeline/",)
@@ -134,7 +151,7 @@ GROUP_RULES: dict[str, tuple[GroupRule, ...]] = {
         GroupRule(
             "config",
             ("tests.unit.loom.config", "tests.unit.weave"),
-            ("src/loom/config/", "packages/weave/src/weave/"),
+            ("src/loom/config/", f"{WEAVE_COVERAGE_ROOT}/"),
         ),
         GroupRule("io", ("tests.unit.loom.io",), ("src/loom/io/",)),
         GroupRule(
@@ -266,6 +283,32 @@ GROUP_RULES: dict[str, tuple[GroupRule, ...]] = {
         ),
         GroupRule("e2e", ("tests.e2e",), ("src/loom/",)),
     ),
+    "weave": (
+        GroupRule(
+            "contracts",
+            ("tests.contracts",),
+            (f"{WEAVE_COVERAGE_ROOT}/",),
+        ),
+        GroupRule("examples", ("tests.test_examples",)),
+        GroupRule(
+            "integration-config",
+            ("tests.integration.config",),
+            (f"{WEAVE_COVERAGE_ROOT}/",),
+        ),
+        GroupRule(
+            "package",
+            ("tests.test_",),
+            (f"{WEAVE_COVERAGE_ROOT}/",),
+        ),
+        GroupRule(
+            "unit-config",
+            ("tests.unit.config",),
+            (f"{WEAVE_COVERAGE_ROOT}/",),
+        ),
+    ),
+    "weave-examples": (
+        GroupRule("examples", ("tests.test_examples",)),
+    ),
 }
 
 
@@ -322,11 +365,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def run_summary_suite(name: str) -> SuiteSummary:
     suite = SUITES[name]
-    if name != "config-extra" and not has_tests(suite.path):
+    if name != "config-extra" and not has_tests(suite.cwd / suite.path):
         counts = Counts()
         return SuiteSummary(
             suite=suite.name,
-            command=f'uv run pytest {suite.path} -m "{suite.marker_expr}"',
+            command=display_pytest_command(suite),
             status="not present",
             duration=0.0,
             returncode=0,
@@ -336,7 +379,7 @@ def run_summary_suite(name: str) -> SuiteSummary:
             coverage={},
         )
 
-    artifact_dir = SUMMARY_ARTIFACT_DIR / name
+    artifact_dir = (SUMMARY_ARTIFACT_DIR / name).resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
     junit_path = artifact_dir / "junit.xml"
     coverage_data_path = artifact_dir / ".coverage"
@@ -345,32 +388,47 @@ def run_summary_suite(name: str) -> SuiteSummary:
 
     pytest_args = pytest_args_for_suite(suite)
     command = uv_command_for_suite(name)
-    command.extend(
-        [
-            "python",
-            "-m",
-            "coverage",
-            "run",
-            "--data-file",
-            str(coverage_data_path),
-            "--source",
-            SOURCE_COVERAGE_ROOT,
-            "-m",
-            "pytest",
-            *pytest_args,
-            "--junitxml",
-            str(junit_path),
-        ]
-    )
+    if suite.coverage_source is None:
+        command.extend(
+            [
+                "python",
+                "-m",
+                "pytest",
+                *pytest_args,
+                "--junitxml",
+                str(junit_path),
+            ]
+        )
+    else:
+        command.extend(
+            [
+                "python",
+                "-m",
+                "coverage",
+                "run",
+                "--data-file",
+                str(coverage_data_path),
+                "--source",
+                suite.coverage_source,
+                "-m",
+                "pytest",
+                *pytest_args,
+                "--junitxml",
+                str(junit_path),
+            ]
+        )
 
-    env = os.environ.copy()
+    env = env_for_suite(suite)
     env.setdefault("UV_CACHE_DIR", UV_CACHE_DIR)
     display_command = f"UV_CACHE_DIR={env['UV_CACHE_DIR']} {format_command(command)}"
+    if suite.cwd != Path("."):
+        display_command = f"cd {shlex.quote(str(suite.cwd))} && {display_command}"
 
     start = time.monotonic()
     completed = subprocess.run(
         command,
         check=False,
+        cwd=suite.cwd,
         env=env,
         text=True,
         stdout=subprocess.PIPE,
@@ -379,9 +437,11 @@ def run_summary_suite(name: str) -> SuiteSummary:
     duration = time.monotonic() - start
     output = completed.stdout
 
-    coverage_output = write_coverage_json(
-        name, coverage_data_path, coverage_json_path, env
-    )
+    coverage_output = ""
+    if suite.coverage_source is not None:
+        coverage_output = write_coverage_json(
+            name, coverage_data_path, coverage_json_path, env, suite.cwd
+        )
     if coverage_output:
         output = (
             output
@@ -429,6 +489,7 @@ def write_coverage_json(
     coverage_data_path: Path,
     coverage_json_path: Path,
     env: Mapping[str, str],
+    cwd: Path,
 ) -> str:
     if not coverage_data_path.exists():
         return ""
@@ -449,6 +510,7 @@ def write_coverage_json(
     completed = subprocess.run(
         command,
         check=False,
+        cwd=cwd,
         env=env,
         text=True,
         stdout=subprocess.PIPE,
@@ -460,7 +522,15 @@ def write_coverage_json(
 
 
 def pytest_args_for_suite(suite: Suite) -> list[str]:
+    if suite.name == "weave":
+        return [str(suite.path), "--ignore=tests/test_examples.py"]
+    if not suite.marker_expr:
+        return [str(suite.path)]
     return [str(suite.path), "-m", suite.marker_expr]
+
+
+def display_pytest_command(suite: Suite) -> str:
+    return "uv run pytest " + " ".join(pytest_args_for_suite(suite))
 
 
 def unlink_existing(*paths: Path) -> None:
@@ -487,14 +557,14 @@ def run_suite(name: str) -> Result:
         return run_pytest(
             suite.name,
             pytest_args_for_suite(suite),
-            f'uv run pytest {suite.path} -m "{suite.marker_expr}"',
+            display_pytest_command(suite),
         )
 
     suite = SUITES[name]
-    if not has_tests(suite.path):
+    if not has_tests(suite.cwd / suite.path):
         return Result(
             suite=suite.name,
-            command=f'uv run pytest {suite.path} -m "{suite.marker_expr}"',
+            command=display_pytest_command(suite),
             status="not present",
             duration=0.0,
             returncode=0,
@@ -503,21 +573,45 @@ def run_suite(name: str) -> Result:
     return run_pytest(
         suite.name,
         pytest_args_for_suite(suite),
-        f'uv run pytest {suite.path} -m "{suite.marker_expr}"',
+        display_pytest_command(suite),
+        cwd=suite.cwd,
+        env=env_for_suite(suite),
     )
 
 
 def has_tests(path: Path) -> bool:
     if not path.exists():
         return False
+    if path.is_file():
+        return path.name.startswith("test") and path.suffix == ".py"
     return any(candidate.is_file() for candidate in path.rglob("test*.py"))
 
 
-def run_pytest(suite: str, args: Sequence[str], command: str) -> Result:
+def env_for_suite(suite: Suite) -> dict[str, str]:
+    env = os.environ.copy()
+    if suite.cwd != Path("."):
+        source_path = str((suite.cwd / "src").resolve())
+        pythonpath = [source_path]
+        if env.get("PYTHONPATH"):
+            pythonpath.append(env["PYTHONPATH"])
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath)
+    return env
+
+
+def run_pytest(
+    suite: str,
+    args: Sequence[str],
+    command: str,
+    *,
+    cwd: Path = Path("."),
+    env: Mapping[str, str] | None = None,
+) -> Result:
     start = time.monotonic()
     completed = subprocess.run(
         [sys.executable, "-m", "pytest", *args],
         check=False,
+        cwd=cwd,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -652,9 +746,10 @@ def aggregate_coverage(
 
 def normalize_coverage_path(path: str) -> str:
     normalized = Path(path).as_posix()
-    marker = f"/{SOURCE_COVERAGE_ROOT}/"
-    if marker in normalized:
-        return f"{SOURCE_COVERAGE_ROOT}/{normalized.split(marker, maxsplit=1)[1]}"
+    for root in (SOURCE_COVERAGE_ROOT, WEAVE_COVERAGE_ROOT):
+        marker = f"/{root}/"
+        if marker in normalized:
+            return f"{root}/{normalized.split(marker, maxsplit=1)[1]}"
     return normalized
 
 
