@@ -1,4 +1,4 @@
-"""Instantiation-specific config errors (re-exported from ``loom.config.errors``)."""
+"""Instantiation-specific config errors."""
 
 from ..errors import RuntimeInjectionError, TargetImportError, TargetInstantiationError
 

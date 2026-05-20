@@ -1,4 +1,4 @@
-"""Recipe-specific config errors (re-exported from ``loom.config.errors``)."""
+"""Recipe-specific config errors."""
 
 from ..errors import (
     DuplicateRecipeError,
