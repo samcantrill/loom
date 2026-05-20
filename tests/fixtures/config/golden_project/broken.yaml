@@ -1,0 +1,4 @@
+name: golden-phase23-broken
+pipeline:
+  model:
+    _include_: missing-model.yaml

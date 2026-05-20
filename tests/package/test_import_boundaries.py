@@ -98,6 +98,41 @@ def test_import_config_does_not_import_pipeline_or_execution() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_config_current_state_boundary_inventory_is_present_and_forward_compatible() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.config
+
+        if not hasattr(loom.config, "compose_config"):
+            raise SystemExit("compose_config missing from loom.config public API")
+        if not hasattr(loom.config, "inspect_config_composition"):
+            raise SystemExit("inspect_config_composition missing from loom.config public API")
+        if not hasattr(loom.config, "RecipeCatalog"):
+            raise SystemExit("RecipeCatalog missing from loom.config public API")
+        if "loom.weave" in sys.modules:
+            raise SystemExit("loom.weave imported before Phase 4 boundary shift")
+        for forbidden in (
+            "loom.pipeline",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "loom.pipeline.stores",
+            "loom.cli",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through current-state loom.config boundary")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_config_symbol_access_without_optional_dependencies_mentions_config_extra() -> (
     None
 ):

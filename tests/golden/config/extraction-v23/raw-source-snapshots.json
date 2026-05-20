@@ -1,0 +1,79 @@
+{
+  "enabled": true,
+  "metadata": {
+    "enabled": true,
+    "payload_count": 3,
+    "reference_count": 4,
+    "request": true,
+    "source_count": 4
+  },
+  "payloads": [
+    {
+      "content": "name: golden-phase23-base\npipeline:\n  model:\n    _include_: include.yaml\n  settings:\n    token: base-secret-token\n    mode: baseline\n  recipe_node:\n    _recipe_: annotate\n    value: base\n    tag: original\n",
+      "content_digest": "sha256:5fcb5555ea9f32b31d46639dabe248cbabaf5a552ce165d2b8a553a6506082f9",
+      "encoding": "utf-8",
+      "metadata": {},
+      "payload_id": "sha256:5fcb5555ea9f32b31d46639dabe248cbabaf5a552ce165d2b8a553a6506082f9:205",
+      "size_bytes": 205
+    },
+    {
+      "content": "pipeline:\n  settings:\n    mode: overlay\n    batch_size: 16\n",
+      "content_digest": "sha256:11fd1cdcec7c2d01d04e63fef278052e0d1ac0596b8f7bc66bfa2cd95ebba64b",
+      "encoding": "utf-8",
+      "metadata": {},
+      "payload_id": "sha256:11fd1cdcec7c2d01d04e63fef278052e0d1ac0596b8f7bc66bfa2cd95ebba64b:59",
+      "size_bytes": 59
+    },
+    {
+      "content": "kind: from-include\nautoreload: true\n",
+      "content_digest": "sha256:70cc25ae3cd243b8f150fbf53cadf555264911b36f484f74e48a6102c5bc6213",
+      "encoding": "utf-8",
+      "metadata": {},
+      "payload_id": "sha256:70cc25ae3cd243b8f150fbf53cadf555264911b36f484f74e48a6102c5bc6213:36",
+      "size_bytes": 36
+    }
+  ],
+  "references": [
+    {
+      "availability": "available",
+      "content_digest": "sha256:5fcb5555ea9f32b31d46639dabe248cbabaf5a552ce165d2b8a553a6506082f9",
+      "kind": "base",
+      "order": 0,
+      "path": "<golden_project>/base.yaml",
+      "payload_id": "sha256:5fcb5555ea9f32b31d46639dabe248cbabaf5a552ce165d2b8a553a6506082f9:205",
+      "reason": "requested",
+      "size_bytes": 205
+    },
+    {
+      "availability": "available",
+      "content_digest": "sha256:11fd1cdcec7c2d01d04e63fef278052e0d1ac0596b8f7bc66bfa2cd95ebba64b",
+      "kind": "overlay",
+      "order": 1,
+      "path": "<golden_project>/overlay.yaml",
+      "payload_id": "sha256:11fd1cdcec7c2d01d04e63fef278052e0d1ac0596b8f7bc66bfa2cd95ebba64b:59",
+      "reason": "requested",
+      "size_bytes": 59
+    },
+    {
+      "availability": "available",
+      "content_digest": "sha256:70cc25ae3cd243b8f150fbf53cadf555264911b36f484f74e48a6102c5bc6213",
+      "kind": "include",
+      "order": 2,
+      "path": "<golden_project>/include.yaml",
+      "payload_id": "sha256:70cc25ae3cd243b8f150fbf53cadf555264911b36f484f74e48a6102c5bc6213:36",
+      "reason": "requested",
+      "size_bytes": 36
+    },
+    {
+      "availability": "unavailable",
+      "content_digest": "sha256:bb67faaf5786dc13b8e17ec4cebd8a956c121ed427f9b3fc2d045eda62489145",
+      "kind": "recipe",
+      "order": 3,
+      "path": "pipeline.recipe_node",
+      "payload_id": null,
+      "reason": "unsupported_source_kind",
+      "size_bytes": 71
+    }
+  ],
+  "schema_version": 1
+}

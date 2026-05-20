@@ -1,0 +1,14 @@
+[
+  {
+    "arguments": {
+      "tag": "original",
+      "value": "base"
+    },
+    "expanded_hash": "sha256:bb67faaf5786dc13b8e17ec4cebd8a956c121ed427f9b3fc2d045eda62489145",
+    "expanded_path": "pipeline.recipe_node",
+    "loom_version": "0.1.0",
+    "name": "annotate",
+    "path": "pipeline.recipe_node",
+    "target": "test_config_extraction_golden_artifacts_contract:_build_expected_artifacts.<locals>.annotate"
+  }
+]
