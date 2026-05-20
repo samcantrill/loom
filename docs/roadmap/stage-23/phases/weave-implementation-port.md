@@ -315,5 +315,5 @@ make test-summary
   - `make test-summary` → PASS (package 112 passed/1 skipped; unit 1394 passed/7 skipped/1 deselected; contract 274 passed/3 skipped; integration 170 passed/8 skipped/18 deselected; e2e 46 passed/6 deselected; config-extra 461 passed/3 skipped/2005 deselected).
 - Refinement summary: No `loom_phase_refiner` pass used. The manager stopped a stalled implementation agent, completed narrow package-boundary fixes (`weave.__init__` public exports, error/helper circular import cleanup, subpackage relative imports, and package `uv` validation target wiring), and recorded this as one scoped blocker-resolution pass.
 - Blocker-resolution summary: 1/3 used; no remaining blockers.
-- PR preparation: pending.
+- PR preparation: prepared locally in `docs/roadmap/stage-23/phases/weave-implementation-port-pr-body.md`; PR intentionally not opened during this preparation pass. PR facts: title `Config Extraction - Phase 3: Implementation Port Into Weave`, base `develop`, head `codex/weave-implementation-port`, stack predecessor none, root phase PR target `develop`. Validation evidence recorded above from `make validate-pr` and `make test-summary`; GitHub checks pending PR creation.
 - Stack maintenance: branch created from local `develop` at `d5f7e39`; no predecessor.
