@@ -242,6 +242,6 @@ make test-summary
 - Refinement summary: No phase-plan scope changes required; all changes remained in the scaffold and boundary scope.
 - Manager pre-submit correction: Direct `MappingProxyType` inputs were accepted by `ensure_plain_data` and `to_plain_data` despite the scope contract requiring mapping-proxy rejection. Patched `weave.plain` to reject direct mapping-proxy values and added package-local tests; reran `make test-weave` and `make validate-weave`, both passing with 22 package tests.
 - Blocker-resolution summary: Used one scoped manager-side blocker-resolution pass for the mapping-proxy rejection contract. Non-blocking tool-environment limitations were recorded around `uv run` for pyright with workspace-level package resolution.
-- PR preparation: PR body prepared at `docs/roadmap/stage-23/phases/weave-package-scaffold-pr-body.md`; PR intentionally not opened in this pass.
+- PR preparation: PR body prepared at `docs/roadmap/stage-23/phases/weave-package-scaffold-pr-body.md`; PR opened as https://github.com/samcantrill/loom/pull/201 targeting `develop`.
 - Stack maintenance: branch created from local `develop` at `ab4855c`; no predecessor.
 - Remaining blockers: none.
