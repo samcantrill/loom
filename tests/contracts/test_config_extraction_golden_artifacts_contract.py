@@ -13,9 +13,8 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
 from loom.config import RecipeCatalog, inspect_config_composition
-from loom.config.errors import ConfigErrorContext
+from loom.config.errors import ConfigErrorContext, ConfigIncludeResolutionError
 from loom.config.fingerprints import ARTIFACT_SAFE_FINGERPRINT_LABEL
-from loom.errors import ConfigError
 
 pytestmark = [pytest.mark.contract, pytest.mark.optional_dependency]
 
@@ -74,7 +73,7 @@ def _build_expected_artifacts() -> dict[str, Any]:
 
     try:
         inspect_config_composition(broken)
-    except ConfigError as exc:
+    except ConfigIncludeResolutionError as exc:
         structured_error = cast(dict[str, Any], exc.to_dict())
         error_context = cast(dict[str, object], structured_error["context"])
         # Ensure the public error payload round-trips through public context parsing.
