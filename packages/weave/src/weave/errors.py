@@ -1,4 +1,4 @@
-"""Config-owned error primitives and structured error payload helpers."""
+"""Config-domain errors for trusted config composition and instantiation."""
 
 from __future__ import annotations
 
@@ -8,29 +8,49 @@ from typing import Any
 PlainData = None | bool | int | float | str | list["PlainData"] | dict[str, "PlainData"]
 
 
-class SerializationError(Exception):
+class ConfigError(Exception):
+    """Base exception for package-owned config failures."""
+
+
+class PlainDataError(ConfigError):
+    """Error for invalid plain-data values."""
+
+
+class SerializationError(ConfigError):
     """Error raised when structured config payloads cannot be serialized or decoded."""
 
 
-class DeserializationError(SerializationError):
-    """Error raised for config payload input parse failures."""
-
-
-class PlainDataError(SerializationError):
-    """Error raised when a value is not plain structured data."""
-
-
-class ConfigError(Exception):
-    """Base config-domain error."""
+class DeserializationError(ConfigError):
+    """Error while decoding structured inputs."""
 
 
 class DeserializationContextError(ConfigError):
     """Error for deserialization failures that include structured context."""
 
 
+class FingerprintError(ConfigError):
+    """Error while parsing or comparing fingerprint values."""
+
+
+class FingerprintInputError(FingerprintError):
+    """Error for invalid fingerprint input."""
+
+
+class InvalidDigestError(FingerprintError):
+    """Error for malformed digest strings."""
+
+
+class UnsupportedHashAlgorithmError(FingerprintError):
+    """Error for unsupported hash algorithms."""
+
+
+class FingerprintComparisonError(FingerprintError):
+    """Error while comparing digests."""
+
+
 @dataclass(frozen=True, slots=True)
 class ConfigErrorContext:
-    """Machine-readable context for config errors."""
+    """Machine-readable context for structured config errors."""
 
     code: str
     source_kind: str
@@ -44,21 +64,25 @@ class ConfigErrorContext:
     details: dict[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
+        """Normalize plain-data fields when callers construct contexts directly."""
+
         from .plain import ensure_plain_data
 
         if self.expected is not None:
             object.__setattr__(self, "expected", ensure_plain_data(self.expected))
         if self.actual is not None:
             object.__setattr__(self, "actual", ensure_plain_data(self.actual))
-        if self.config_path is not None and not isinstance(self.config_path, str):
-            raise ValueError(f"config_path must be a string: {self.config_path!r}")
-        if self.details is not None:
-            normalized = ensure_plain_data(self.details)
-            if not isinstance(normalized, dict):
-                raise ValueError("Config error details must be a mapping")
-            object.__setattr__(self, "details", normalized)
+        if self.details is None:
+            return
 
-    def to_dict(self) -> dict[str, PlainData | None]:
+        details = ensure_plain_data(self.details)
+        if not isinstance(details, dict):
+            raise TypeError("Config error context details must be a mapping")
+        object.__setattr__(self, "details", details)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        """Serialize the context as plain data."""
+
         from .plain import to_plain_data
 
         return {
@@ -66,51 +90,51 @@ class ConfigErrorContext:
             "source_kind": self.source_kind,
             "source_order": self.source_order,
             "source_path": self.source_path,
-            "config_path": self.config_path,
-            "expected": to_plain_data(self.expected) if self.expected is not None else None,
-            "actual": to_plain_data(self.actual) if self.actual is not None else None,
+            "config_path": self.config_path if self.config_path is not None else None,
+            "expected": self.expected,
+            "actual": self.actual,
             "directive": self.directive,
             "remediation": self.remediation,
-            "details": to_plain_data(self.details or {}),
+            "details": to_plain_data(self.details if self.details is not None else {}),
         }
 
     @classmethod
     def from_dict(cls, value: object) -> "ConfigErrorContext":
-        if not isinstance(value, dict):
+        """Rebuild a context from plain serialized payload."""
+
+        from .plain import ensure_plain_data
+
+        payload = ensure_plain_data(value)
+        if not isinstance(payload, dict):
             raise ValueError("ConfigErrorContext payload must be a mapping")
 
-        for field in ("code", "source_kind", "source_order", "source_path"):
-            if field not in value:
-                raise ValueError(f"Missing required context field: {field}")
+        code = payload.get("code")
+        source_kind = payload.get("source_kind")
+        source_order = payload.get("source_order")
+        source_path = payload.get("source_path")
+        config_path = payload.get("config_path")
+        expected = payload.get("expected")
+        actual = payload.get("actual")
+        directive = payload.get("directive")
+        remediation = payload.get("remediation")
+        details = payload.get("details")
 
-        code = value["code"]
-        source_kind = value["source_kind"]
-        source_order = value["source_order"]
-        source_path = value["source_path"]
         if not isinstance(code, str):
             raise ValueError(f"Invalid context code: {code!r}")
         if not isinstance(source_kind, str):
             raise ValueError(f"Invalid context source kind: {source_kind!r}")
         if not isinstance(source_order, int):
-            raise ValueError(f"Invalid source order: {source_order!r}")
+            raise ValueError(f"Invalid context source order: {source_order!r}")
         if not isinstance(source_path, str):
-            raise ValueError(f"Invalid source path: {source_path!r}")
-
-        config_path = value.get("config_path")
+            raise ValueError(f"Invalid context source path: {source_path!r}")
         if config_path is not None and not isinstance(config_path, str):
-            raise ValueError(f"Invalid config_path: {config_path!r}")
-
-        directive = value.get("directive")
+            raise ValueError(f"Invalid context config path: {config_path!r}")
         if directive is not None and not isinstance(directive, str):
-            raise ValueError(f"Invalid directive: {directive!r}")
-
-        remediation = value.get("remediation")
+            raise ValueError(f"Invalid context directive: {directive!r}")
         if remediation is not None and not isinstance(remediation, str):
-            raise ValueError(f"Invalid remediation: {remediation!r}")
-
-        details = value.get("details")
-        if details is not None and not isinstance(details, dict):
-            raise ValueError(f"Invalid details: {details!r}")
+            raise ValueError(f"Invalid context remediation: {remediation!r}")
+        if not (details is None or isinstance(details, dict)):
+            raise ValueError(f"Invalid context details: {details!r}")
 
         return cls(
             code=code,
@@ -118,8 +142,8 @@ class ConfigErrorContext:
             source_order=source_order,
             source_path=source_path,
             config_path=config_path,
-            expected=value.get("expected"),
-            actual=value.get("actual"),
+            expected=expected,
+            actual=actual,
             directive=directive,
             remediation=remediation,
             details=details,
@@ -141,7 +165,7 @@ class _ConfigError(ConfigError):
 
 
 class ConfigLoadError(_ConfigError):
-    """Error while loading config payloads or user-authored files."""
+    """Error while loading YAML config sources."""
 
 
 class ConfigMergeError(_ConfigError):
@@ -156,60 +180,71 @@ class OverrideApplyError(_ConfigError):
     """Error while applying overrides to a config mapping."""
 
 
+class ConfigInterpolationError(_ConfigError):
+    """Error while resolving config-node interpolation."""
+
+
+class ConfigUnsupportedResolverError(_ConfigError, NotImplementedError):
+    """Error for unsupported OmegaConf resolver execution."""
+
+
 class ConfigValidationError(_ConfigError):
     """Error while validating config ownership and required fields."""
-
-
-class ConfigProvenanceError(_ConfigError):
-    """Error while deriving provenance metadata."""
 
 
 class ConfigRedactionError(_ConfigError):
     """Error while redacting resolved config values."""
 
 
+class ConfigProvenanceError(_ConfigError):
+    """Error while constructing config provenance metadata."""
+
+    def __init__(self, message: str, *, context: ConfigErrorContext | None = None) -> None:
+        if context is None:
+            context = ConfigErrorContext(
+                code="config_provenance_error",
+                source_kind="provenance",
+                source_order=0,
+                source_path="<config-provenance>",
+                details={"stage": "config_provenance"},
+            )
+        super().__init__(message, context=context)
+
+
+class ConfigIncludeResolutionError(_ConfigError):
+    """Error while resolving include targets to concrete local files."""
+
+
+class ConfigIncludeExpansionError(_ConfigError):
+    """Error while expanding file-authored include directives."""
+
+
 class UnsupportedRecipeError(_ConfigError):
-    """Error for recipe behavior not yet supported by this package baseline."""
+    """Error for recipe-related behavior that is not supported by this phase."""
 
 
 class RecipeRegistrationError(_ConfigError):
     """Error registering a recipe implementation."""
 
 
-class DuplicateRecipeError(UnsupportedRecipeError):
+class DuplicateRecipeError(RecipeRegistrationError):
     """Error when a recipe name is already registered."""
 
 
 class UnknownRecipeError(_ConfigError):
-    """Error when a recipe name is not known."""
-
-
-class ConfigInterpolationError(_ConfigError):
-    """Error resolving interpolation expressions."""
-
-
-class ConfigUnsupportedResolverError(_ConfigError, NotImplementedError):
-    """Error for unsupported config interpolators."""
-
-
-class ConfigIncludeResolutionError(ConfigValidationError):
-    """Error while resolving include files."""
-
-
-class ConfigIncludeExpansionError(_ConfigError):
-    """Error while expanding include directives."""
+    """Error when a recipe name is not registered."""
 
 
 class RecipeExpansionError(_ConfigError):
-    """Error while expanding recipe directives."""
+    """Error while expanding a configured recipe block."""
 
 
 class InvalidRecipeOutputError(RecipeExpansionError):
-    """Error when recipe output is not valid plain data."""
+    """Error when a recipe expansion output is invalid for config composition."""
 
 
 class ReservedConfigKeyError(ConfigValidationError):
-    """Error when config uses reserved keys."""
+    """Error for invalid use of reserved config directive keys."""
 
 
 class TargetImportError(_ConfigError):
@@ -217,64 +252,49 @@ class TargetImportError(_ConfigError):
 
 
 class TargetInstantiationError(_ConfigError):
-    """Error while instantiating target-backed config nodes."""
+    """Error while constructing objects from `_target_` config nodes."""
 
 
 class RuntimeInjectionError(TargetInstantiationError):
-    """Error resolving `_inject_` references."""
+    """Error resolving runtime injection references for `_inject_`."""
 
 
 class MissingConfigDependencyError(_ConfigError):
-    """Error when optional config dependencies are not installed."""
+    """Error raised when optional config dependencies are missing."""
 
 
 class UnsupportedConfigDirectiveError(ConfigLoadError):
-    """Error for supported-but-disabled config directives."""
-
-
-@dataclass(frozen=True, slots=True)
-class ParsedDigest:
-    """Parsed digest metadata for hash checks."""
-
-    algorithm: str
-    hexdigest: str
-
-
-class UnsupportedHashAlgorithmError(ConfigError):
-    """Error for unsupported digest hash algorithms."""
-
-
-class InvalidDigestError(ConfigError):
-    """Error for malformed digest strings."""
-
-
-class FingerprintInputError(ConfigError):
-    """Error for invalid inputs to hashing helpers."""
+    """Error for a supported-but-disabled config directive."""
 
 
 __all__ = [
+    "ConfigError",
+    "PlainDataError",
     "SerializationError",
     "DeserializationError",
-    "PlainDataError",
-    "ConfigError",
     "DeserializationContextError",
-    "ConfigErrorContext",
-    "_ConfigError",
+    "FingerprintError",
+    "FingerprintInputError",
+    "InvalidDigestError",
+    "UnsupportedHashAlgorithmError",
+    "FingerprintComparisonError",
     "ConfigLoadError",
     "ConfigMergeError",
     "OverrideParseError",
     "OverrideApplyError",
+    "ConfigInterpolationError",
     "ConfigValidationError",
-    "ConfigProvenanceError",
     "ConfigRedactionError",
+    "ConfigProvenanceError",
     "UnsupportedRecipeError",
+    "UnsupportedConfigDirectiveError",
+    "ConfigErrorContext",
+    "ConfigIncludeResolutionError",
+    "ConfigIncludeExpansionError",
+    "ConfigUnsupportedResolverError",
     "RecipeRegistrationError",
     "DuplicateRecipeError",
     "UnknownRecipeError",
-    "ConfigInterpolationError",
-    "ConfigUnsupportedResolverError",
-    "ConfigIncludeResolutionError",
-    "ConfigIncludeExpansionError",
     "RecipeExpansionError",
     "InvalidRecipeOutputError",
     "ReservedConfigKeyError",
@@ -282,9 +302,4 @@ __all__ = [
     "TargetInstantiationError",
     "RuntimeInjectionError",
     "MissingConfigDependencyError",
-    "UnsupportedConfigDirectiveError",
-    "ParsedDigest",
-    "UnsupportedHashAlgorithmError",
-    "InvalidDigestError",
-    "FingerprintInputError",
 ]

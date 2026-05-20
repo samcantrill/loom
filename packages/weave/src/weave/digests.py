@@ -5,10 +5,28 @@ from __future__ import annotations
 import hashlib
 import hmac
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from .json import stable_json_bytes
-from .errors import FingerprintInputError, InvalidDigestError, UnsupportedHashAlgorithmError
-from .errors import ParsedDigest
+from .errors import (
+    FingerprintError,
+    FingerprintInputError,
+    InvalidDigestError,
+    UnsupportedHashAlgorithmError,
+)
+
+
+Fingerprint = str
+Digest = str
+HashAlgorithm = str
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedDigest:
+    """Parsed digest metadata parsed from `<algorithm>:<hexdigest>`."""
+
+    algorithm: str
+    hexdigest: str
 
 
 def parse_digest(value: str) -> ParsedDigest:
@@ -108,6 +126,13 @@ def _validate_hex(algorithm: str, hexdigest: str) -> None:
 
 
 __all__ = [
+    "Digest",
+    "Fingerprint",
+    "HashAlgorithm",
+    "FingerprintError",
+    "FingerprintInputError",
+    "InvalidDigestError",
+    "UnsupportedHashAlgorithmError",
     "ParsedDigest",
     "parse_digest",
     "validate_digest",
