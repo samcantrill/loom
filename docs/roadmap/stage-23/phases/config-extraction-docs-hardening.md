@@ -2,9 +2,11 @@
 
 ## Metadata
 
-- Status: implementation complete; ready for PR preparation
+- Status: PR open; automated review pending
 - Feature focus: Config Extraction
 - PR title: `Config Extraction - Phase 6: Documentation And Final Hardening`
+- PR: [#205](https://github.com/samcantrill/loom/pull/205), target
+  `develop`, head `codex/config-extraction-docs-hardening`
 - Branch: `codex/config-extraction-docs-hardening`
 - Worktree: `/home/samcantrill/work/loom-worktrees/config-extraction-docs-hardening`
 - Phase execution plan path: `docs/roadmap/stage-23/phases/config-extraction-docs-hardening.md`
@@ -230,3 +232,5 @@ make test-summary
   the runtime using explicit config adapter paths.
 - Validation: `make validate-weave`, targeted docs/example tests,
   import-reference sweeps, `make validate-pr`, and `make test-summary` passed.
+- PR: [#205](https://github.com/samcantrill/loom/pull/205), target
+  `develop`, head `codex/config-extraction-docs-hardening`.
