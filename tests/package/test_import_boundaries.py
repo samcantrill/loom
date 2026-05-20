@@ -105,14 +105,16 @@ def test_import_config_current_state_boundary_inventory_is_present_and_forward_c
 
         import loom.config
 
-        if not hasattr(loom.config, "compose_config"):
+        public_symbols = set(dir(loom.config))
+
+        if "compose_config" not in public_symbols:
             raise SystemExit("compose_config missing from loom.config public API")
-        if not hasattr(loom.config, "inspect_config_composition"):
+        if "inspect_config_composition" not in public_symbols:
             raise SystemExit("inspect_config_composition missing from loom.config public API")
-        if not hasattr(loom.config, "RecipeCatalog"):
+        if "RecipeCatalog" not in public_symbols:
             raise SystemExit("RecipeCatalog missing from loom.config public API")
-        if "loom.weave" in sys.modules:
-            raise SystemExit("loom.weave imported before Phase 4 boundary shift")
+        if "weave" in sys.modules:
+            raise SystemExit("weave imported before Phase 4 boundary shift")
         for forbidden in (
             "loom.pipeline",
             "loom.pipeline.execution",
