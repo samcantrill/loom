@@ -97,9 +97,10 @@ Stage 17 path parity: the host path and container path must match.
 ## Optional Live Docker Smoke
 
 Default validation intentionally stays daemon-free. For a manual live smoke,
-use an image that already contains `loom`, its optional config dependencies, and
-the example stage module, or mount the repository at the same absolute path in
-the container. Then run the canonical command above in an environment where
+use an image that already contains `loom`, `weave`, their config authoring
+dependencies, and the example stage module, or mount the repository at the same
+absolute path in the container. Then run the canonical command above in an
+environment where
 `docker run` can access the selected run directory and artifact root through
 path-parity mounts.
 

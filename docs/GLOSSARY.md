@@ -52,7 +52,7 @@ users can also use it as a quick map to stable repository terms.
 | Term | Preferred meaning in this repository | Distinguish from / avoid |
 | --- | --- | --- |
 | authored config | Trusted project configuration as written by users, examples, or fixtures. | Distinguish from resolved/composed config and from untrusted input. `loom` treats authored config as trusted project code. |
-| `ComposedConfig` / composed config | The resolved result returned by `loom.config.compose_config(...)`. | Do not call this a plan, manifest, or pipeline run. It is configuration output. |
+| `ComposedConfig` / composed config | The resolved result returned by `weave.compose_config(...)`. | Do not call this a plan, manifest, or pipeline run. It is configuration output. |
 | `ConfigCompositionInspection` / config composition inspection | A richer composition result that retains unresolved, resolved, and redacted views plus provenance, recipe manifest, source artifacts, fingerprint records, and raw source snapshot metadata. | Prefer this when docs or tests discuss composition analysis rather than only the final composed config. |
 | `_target_` block | The low-level importlib construction shape used to instantiate configured Python objects. | Do not call `_target_` blocks recipes. Recipes expand into `_target_` graphs. |
 | recipe | A named config expansion mechanism that rewrites authored config into explicit object graphs. | Use for configuration reuse and authoring convenience. It is not a stage, executor, plugin, or runtime backend. |

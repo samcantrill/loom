@@ -1,7 +1,7 @@
 # Configuration Behavior Test Matrix
 
 This matrix records the behavior attributes that should remain covered for
-`loom.config`. It focuses on observable public behavior and accepted v1
+`weave`. It focuses on observable public behavior and accepted v1
 constraints. Internal helper tests are useful when they pin narrow edge cases,
 but at least one public API path should exist for each major capability.
 
@@ -91,7 +91,6 @@ but at least one public API path should exist for each major capability.
 
 | Behavior | Important edge cases | Existing or expected coverage |
 | --- | --- | --- |
-| Top-level imports are lightweight. | `import loom`, `import loom.config`, `from loom.config.instantiate import instantiate`. | Package import-boundary tests. |
-| Optional composition dependencies are lazy. | Missing optional deps mention `loom[config]`; instantiate-only import does not import YAML/OmegaConf/Pydantic. | Package tests plus follow-up instantiate-only boundary test. |
-| Runtime layers stay separated. | Config does not import pipeline/execution/stores/CLI; pipeline can consume plain target data without importing config. | Package import-boundary tests. |
-
+| Top-level imports are lightweight. | `import loom`, `import weave`, `from weave.instantiate import instantiate`. | Package import-boundary tests. |
+| Package-owned dependencies stay inside `weave`. | `weave` owns YAML/OmegaConf/Pydantic dependencies for config authoring; Loom runtime internals do not import composition modules except through approved adapters. | Package import-boundary tests. |
+| Runtime layers stay separated. | `weave` does not import pipeline/execution/stores/CLI; pipeline can consume plain target data without importing config composition internals. | Package import-boundary tests. |

@@ -70,7 +70,7 @@ It may use:
 importlib.metadata
 typing
 loom.serialization
-loom.config recipe catalog APIs
+weave recipe catalog APIs
 loom.io codec/source registry APIs
 loom.pipeline executor registry APIs, when implemented
 loom reliability event models, when implemented
@@ -111,7 +111,7 @@ optionally register loaded objects into subsystem registries
 optionally register loaded event sinks with an event sink registry
 ```
 
-### 3.2 `loom.config.recipes`
+### 3.2 `weave.recipes`
 
 Owns recipe behavior and recipe catalog registration.
 
@@ -369,7 +369,7 @@ Do not discover plugins during:
 
 ```text
 import loom
-import loom.config
+import weave
 import loom.io
 import loom.pipeline
 ```
@@ -1051,7 +1051,7 @@ factory function:
   call with no arguments, register returned callable
 ```
 
-Anything requiring configuration should be built through `loom.config`
+Anything requiring configuration should be built through `weave`
 `_target_` or project setup code, then registered programmatically.
 
 ### 14.3 Event Semantics Boundary
@@ -1269,7 +1269,7 @@ Do not load plugins during:
 loom --help
 import loom
 import loom.io
-import loom.config
+import weave
 import loom.pipeline
 ```
 
@@ -1556,7 +1556,7 @@ Test:
 ```text
 import loom does not discover plugins
 import loom.io does not discover plugins
-import loom.config does not discover plugins
+import weave does not discover plugins
 import loom.pipeline does not discover plugins
 loom --help does not load plugin modules
 explicit load call imports plugin target
@@ -1714,7 +1714,7 @@ Recommended answer:
 yes only for no-argument classes/factories at simple extension points.
 ```
 
-Anything requiring configuration should be built through `loom.config`
+Anything requiring configuration should be built through `weave`
 `_target_`.
 
 ### 23.4 Should Plugins Be Version-Constrained?

@@ -1164,8 +1164,11 @@ make test-contract
 make test-integration
 make test-e2e
 make test-all
+make test-weave
+make test-weave-examples
 make test-summary
 make validate-pr
+make validate-weave
 ```
 
 `make test` runs the default local suite and excludes opt-in heavy tests.
@@ -1176,19 +1179,26 @@ in a suite, failures must fail the target.
 `make test-all` runs all non-external local tests, including tests marked
 `slow`, but still excludes `slurm`, `network`, and `optional_dependency`.
 
+`make test-weave` and `make test-weave-examples` run package-local config
+package tests from `packages/weave`. `make validate-weave` runs the package
+lint, typecheck, tests, examples, and build gate.
+
 `make validate-pr` runs the local PR gate:
 
 ```text
 ruff
 pyright
 default pytest suite
+config-extra pytest suite
+weave validation
 build
 ```
 
 `make test-summary` writes a Markdown test-suite summary under `build/` for PR
 inclusion. The summary should list each suite, command, status, duration, and a
-short output tail. If any executed suite fails, the command should still write
-the summary and then exit non-zero.
+short output tail. It includes root Loom suites plus package-local `weave` and
+`weave-examples` rows. If any executed suite fails, the command should still
+write the summary and then exit non-zero.
 
 ---
 
@@ -1212,7 +1222,7 @@ Possible matrix dimensions:
 ```text
 Python versions
 minimal dependencies
-config extras
+config-extra opt-in suite
 dev extras
 OS, if Windows support becomes required
 ```
