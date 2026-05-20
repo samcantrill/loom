@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan; refinement pending
+- Status: refined phase execution plan; ready for implementation
 - Feature focus: Config Extraction
 - PR title: `Config Extraction - Phase 3: Implementation Port Into Weave`
 - Branch: `codex/weave-implementation-port`
@@ -20,7 +20,7 @@
 - Plan quality gate: passed on 2026-05-20 in the implementation plan, with no blocking findings after confirmation review.
 - Plan quality gate loop budget: consumed and passed before this phase plan; do not rerun unless the manager explicitly reopens the stage plan.
 - Draft pass: completed in this artifact.
-- Refine pass: pending; expanded-path planning budget remains open for one refinement commit.
+- Refine pass: completed in this artifact; expanded-path planning budget is consumed for this phase unless the manager explicitly reopens planning.
 - Setup limitations: branch was created from local `develop` at `d5f7e39`; no network fetch was performed. Initial worktree creation needed sandbox escalation because git refs in the control checkout metadata were read-only to the sandbox.
 - Blockers: none; implementation must stop if `weave` cannot preserve golden config artifacts without importing Loom, if recipe loading requires importing `loom.plugins`, or if package-owned helper behavior must become a shared runtime utility surface.
 
@@ -94,6 +94,45 @@ Public behavior in scope is the confirmed config surface under the `weave` impor
 
 Golden artifact behavior is a hard compatibility contract. The executor may update expected golden files only if a deliberate break is approved and recorded with rationale and migration notes; otherwise any mismatch is a stop condition.
 
+### Refined Public API Contract
+
+- `weave.__init__` should expose real config-owned public symbols only after they exist in package modules. Lazy resolution is acceptable to keep bare `import weave` light, but resolving composition, recipe, instantiation, target-check, artifact, and fingerprint symbols must still avoid importing Loom.
+- Expected public symbols include `ConfigError`, structured config error classes, `ComposedConfig`, `ConfigCompositionInspection`, `ConfigCompositionStageRecord`, `compose_config`, `compose_config_with_catalog`, `inspect_config_composition`, `register_recipe`, `Recipe`, `RecipeCatalog`, `instantiate`, `check_config_targets`, `TargetCheckResult`, `compare_config_artifact_fingerprints`, `ConfigFingerprintComparison`, `RawSourceSnapshotBundle`, `RawSourceSnapshotPayload`, `RawSourceSnapshotReference`, `ARTIFACT_SAFE_FINGERPRINT_LABEL`, `ARTIFACT_SAFE_FINGERPRINT_POLICY`, and `ARTIFACT_SAFE_RUNTIME_REPLAY`.
+- Package submodules should remain direct import surfaces where current tests reasonably expect submodule access: `weave.errors`, `weave.artifacts`, `weave.fingerprints`, `weave.provenance`, `weave.recipes`, `weave.recipes.expansion`, `weave.instantiate`, `weave.target_checks`, and the composition helper modules needed by package-local tests.
+- `weave` errors must inherit from package-owned `weave.errors.ConfigError`, not `loom.errors.ConfigError`. Loom adapter translation remains Phase 4 work.
+- If current golden or manifest payloads contain the key `loom_version`, preserve the key unless an accepted break is recorded. The value must come from package-owned version metadata, not from `loom.__version__`, and should remain aligned with the shared repository version for this stage.
+- Missing dependency diagnostics should refer to the package-owned install surface rather than `loom[config]` when emitted from `weave`.
+
+### Refined Module Port Boundaries
+
+- Port config implementation groups in coherent slices: public API records; loading and source maps; merge and overrides; includes and interpolation; redaction and provenance; artifact records and raw source snapshots; artifact-safe fingerprints; recipes and recipe manifest records; target instantiation; target checks.
+- Do not mechanically copy `__pycache__` files, root-only test helpers, root CLI adapters, queue config adapters, plugin diagnostics, pipeline sweep code, or package metadata from `src/loom`.
+- Prefer package-owned names that match current config submodules. Rename only where a package-local helper already exists or where a Loom-specific name would imply runtime ownership.
+- Keep `src/loom/config` behavior stable. If a package-local test reveals a bug in the old implementation, stop and record whether the bug blocks the extraction instead of fixing the old path inside this phase.
+
+### Helper Replacement Rules
+
+- Replace `loom.serialization.PlainData`, `ensure_plain_data`, `to_plain_data`, `freeze_plain_data`, and `thaw_plain_data` with package-owned `weave.plain` equivalents or narrowly extended package-owned helpers.
+- Replace `loom.serialization.stable_json_*` behavior with `weave.json` equivalents where config artifacts need stable JSON.
+- Replace `loom.fingerprints.hash_bytes`, `hash_text`, `hash_mapping`, digest parsing, digest comparison, and config fingerprint helpers with `weave.digests` and package-owned fingerprint record behavior.
+- Replace imports from `loom.errors`, `loom.serialization.errors`, and `loom.config.errors` with package-owned error classes in `weave.errors`.
+- Replace `loom.__version__` reads with `weave.__version__` or a package-local version module. Do not add any dependency from `weave` back to Loom version metadata.
+- Do not move Loom runtime helper modules into `weave`, and do not make Loom runtime modules import `weave` helpers in this phase.
+
+### Recipe Loader Ownership
+
+- Keep the recipe entry-point group string `loom.recipes` for Stage 23 compatibility.
+- Add a recipe-only package loader under `weave` or `weave.recipes` that can register entry-point values into `RecipeCatalog` without importing `loom.plugins`.
+- The loader may duplicate the minimal metadata, duplicate-detection, strict-failure, and importlib loading behavior it needs, but it must not copy Loom's full generic plugin API into the config package.
+- Tests should cover explicit fake entry-point records or an equivalent provider-injection path so the loader contract is deterministic and does not require installed third-party plugins.
+
+### Golden Parity Contract
+
+- Package-local golden parity should render `weave.inspect_config_composition(...)` through the same public artifact families as Phase 1: resolved config, redacted config, composition manifest, recipe manifest, source artifact records, raw source snapshots, config fingerprint record, and structured config errors.
+- Reuse the Phase 1 path-normalization rules when comparing path-bearing output. Normalize only host-specific fixture-root prefixes, not digest fields, source orders, schema versions, labels, algorithms, or semantic path strings.
+- Structured error parity should compare serialized user-facing payloads and round-trippable `ConfigErrorContext` data, not traceback text or Python module identity.
+- Fingerprint digests must match the baseline after package-owned helper replacement. If they drift because package version or module names leak into public payloads, stop unless the manager accepts an artifact break.
+
 ## Acceptance Criteria
 
 - `weave` public config APIs are real implementations, not stubs, and are exported from package-local modules without importing Loom.
@@ -105,6 +144,7 @@ Golden artifact behavior is a hard compatibility contract. The executor may upda
 - Import-boundary tests prove `weave` imports no `loom` after accessing public composition and recipe APIs, not only after bare `import weave`.
 - `make validate-weave`, targeted package-local tests, Phase 1 golden contract, root import-boundary tests, and `make validate-pr` pass or blocked commands are recorded with exact reasons.
 - No future-phase adapter rewiring, `src/loom/config` removal, docs hardening, or full test/example relocation is included.
+- The phase execution PR can be reviewed without inspecting unrelated root docs or control-checkout metadata; product code changes stay inside the package port and narrowly related tests/tooling.
 
 ## Design Impact
 
@@ -152,43 +192,53 @@ Golden artifact behavior is a hard compatibility contract. The executor may upda
 5. Add package-local golden parity coverage against Phase 1 fixtures and expected artifacts.
 6. Run targeted package and root validation, stopping on golden drift, Loom imports from `weave`, broad helper expansion, or future-phase adapter requirements.
 
+### Suggested Implementation Slices
+
+- Slice 1: public API shell plus records that do not need OmegaConf execution, including artifact, provenance, fingerprint comparison, errors, and target data types.
+- Slice 2: composition engine dependencies, including load, merge, overrides, includes, interpolation, source maps, redaction, and package-owned optional dependency checks.
+- Slice 3: recipe package ownership, including recipe base/catalog/expansion/manifest behavior and recipe entry-point loading.
+- Slice 4: target instantiation and target checks.
+- Slice 5: package-local parity and behavior tests, then root baseline/import-boundary validation.
+
+Each slice should leave `weave` importable without Loom. If a slice needs a temporary failing package-local test during local development, do not commit that failure.
+
 ## Test Plan
 
 ### Package Suite
 
 - Status: required
 - Expected paths: `packages/weave/tests/` and root `tests/package/test_import_boundaries.py` if import-boundary assertions need strengthening.
-- Required assertions or deferral reason: verify `weave` import behavior, public API exports, no Loom imports after resolving public config symbols, package metadata, typing marker, and package-local public config API coverage.
+- Required assertions or deferral reason: verify `weave` import behavior, public API exports, no Loom imports after resolving public config symbols and composing a minimal fixture, package metadata, typing marker, package-local public config API coverage, and no premature root Loom dependency on `weave`.
 
 ### Unit Suite
 
 - Status: required
 - Expected paths: package-local tests under `packages/weave/tests/` for helpers, loading, merge, overrides, includes, interpolation, redaction, provenance, artifacts, fingerprints, recipes, instantiation, and target checks.
-- Required assertions or deferral reason: cover the ported config-owned behavior needed before Loom adapter cutover. Root config unit tests remain in place until Phase 5.
+- Required assertions or deferral reason: cover the ported config-owned behavior needed before Loom adapter cutover, including package-owned helper compatibility and structured error behavior. Root config unit tests remain in place until Phase 5.
 
 ### Contract Suite
 
 - Status: required
 - Expected paths: package-local contract-style tests under `packages/weave/tests/`, Phase 1 root golden contract at `tests/contracts/test_config_extraction_golden_artifacts_contract.py`, root recipe/config contracts as needed for baseline stability, and import-boundary contracts.
-- Required assertions or deferral reason: compare package output with Phase 1 golden artifacts, verify structured error payload stability, verify recipe plugin loading through `weave`, and keep the old root contract green while the duplicate implementation exists.
+- Required assertions or deferral reason: compare package output with Phase 1 golden artifacts, verify structured error payload stability, verify recipe plugin loading through `weave`, assert recipe manifest version behavior remains artifact-compatible without importing Loom, and keep the old root contract green while the duplicate implementation exists.
 
 ### Integration Suite
 
 - Status: required for package config behavior; deferred for Loom adapter rewiring
 - Expected paths: package-local integration-style tests under `packages/weave/tests/` adapted from `tests/integration/config/**`; existing root `tests/integration/config/**` remains baseline coverage for `loom.config`.
-- Required assertions or deferral reason: package tests must exercise composition flows through `weave`; root Loom adapter integration changes are deferred to Phase 4.
+- Required assertions or deferral reason: package tests must exercise composition flows through `weave`, including includes, overlays, replacement, overrides, resolvers, recipes, redaction, provenance, target handoff, source snapshots, and fingerprints. Root Loom adapter integration changes are deferred to Phase 4.
 
 ### E2E Suite
 
 - Status: deferred for new Loom workflows
 - Expected paths: existing root `tests/e2e/**` remains unchanged; package-local API smoke may be added under `packages/weave/tests/` if needed.
-- Required assertions or deferral reason: no CLI hard switch or end-to-end Loom workflow behavior changes are in scope; e2e coverage remains indirect through final `make validate-pr`.
+- Required assertions or deferral reason: no CLI hard switch or end-to-end Loom workflow behavior changes are in scope; e2e coverage remains indirect through final `make validate-pr`. Add only package-local API smoke if it proves a config package path that unit/contract/integration tests do not already cover.
 
 ### Opt-In Suites
 
 - Status: required
 - Markers affected: package-local config dependency coverage, root `optional_dependency`, root `contract`, root `package`, and existing `config-extra` coverage.
-- Required assertions or deferral reason: package tests require OmegaConf, Pydantic, and PyYAML as normal `weave` dependencies; root optional config suites remain the temporary Loom baseline until Phase 4 and Phase 5.
+- Required assertions or deferral reason: package tests require OmegaConf, Pydantic, and PyYAML as normal `weave` dependencies; root optional config suites remain the temporary Loom baseline until Phase 4 and Phase 5. No network, external plugin registry, SLURM, Docker, or remote-store opt-in evidence is required for this phase.
 
 ## Risks
 
@@ -215,8 +265,8 @@ Targeted development commands:
 ```sh
 make validate-weave
 uv run pytest packages/weave/tests
-uv run pytest tests/contracts/test_config_extraction_golden_artifacts_contract.py
 uv run pytest tests/package/test_import_boundaries.py
+uv run pytest tests/contracts/test_config_extraction_golden_artifacts_contract.py
 ```
 
 Additional targeted commands when touched areas require them:
@@ -243,14 +293,15 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
+- Planning/refinement budget: used; expanded-path draft and refine completed
 - Phase implementation refinement: unused
 - PR review: unused
 - Blocker resolution: unused, 0/3 used
 
 ## Completion Notes
 
-- Draft plan: completed in this artifact.
-- Refine plan: pending.
-- Final phase execution plan: pending refinement.
+- Draft plan: completed in commit `aeb4b1c`.
+- Refine plan: completed in this artifact.
+- Final phase execution plan: ready for implementation after this refinement.
 - Implementation summary: pending.
 - Implementation validation: pending.
