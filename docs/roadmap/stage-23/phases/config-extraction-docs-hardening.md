@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan; refine pending
+- Status: refined phase execution plan; ready for implementation
 - Feature focus: Config Extraction
 - PR title: `Config Extraction - Phase 6: Documentation And Final Hardening`
 - Branch: `codex/config-extraction-docs-hardening`
@@ -23,11 +23,24 @@
   split.
 - Plan quality gate: passed on 2026-05-20 in the implementation plan, with no
   blocking findings after confirmation review.
-- Draft pass: completed in this artifact.
-- Refine pass: pending.
+- Draft pass: completed and committed.
+- Refine pass: completed in this artifact.
 - Blockers: none known. Stop if docs changes would reopen config semantics,
   require new package publication work, or contradict the confirmed no-shim
   package split.
+
+## Refinement Summary
+
+- Treat current user-facing docs as the primary target; leave historical roadmap
+  references intact only when they clearly describe pre-extraction state.
+- Keep `examples/authoring/README.md` as a root handoff page, but make
+  `packages/weave/examples/README.md` and package-local validation the canonical
+  config authoring example surface.
+- Prefer reference sweeps plus existing docs/example tests over adding broad new
+  docs tooling; add or adjust tests only when they protect final import paths or
+  example ownership.
+- Final validation evidence should include both package-local `weave` health and
+  root Loom adapter/runtime health.
 
 ## Objective
 
@@ -189,11 +202,12 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Planning/refinement budget: draft used; refine pending.
+- Planning/refinement budget: used; expanded-path draft and refine completed.
 - Phase implementation refinement: unused.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
 
 ## Completion Notes
 
-- Draft plan: completed in this artifact.
+- Draft plan: completed in commit `10461fb`.
+- Refine plan: completed in this artifact.
