@@ -15,5 +15,5 @@ This example teaches `weave.instantiate`.
 Run from the repository root:
 
 ```sh
-uv run python examples/authoring/target-instantiation/instantiate_targets.py
+uv run python packages/weave/examples/target-instantiation/instantiate_targets.py
 ```

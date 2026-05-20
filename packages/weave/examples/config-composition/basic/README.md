@@ -14,5 +14,5 @@ This example teaches `weave.compose_config`.
 Run from the repository root:
 
 ```sh
-uv run python examples/authoring/config-composition/basic/compose_basic.py
+uv run python packages/weave/examples/config-composition/basic/compose_basic.py
 ```

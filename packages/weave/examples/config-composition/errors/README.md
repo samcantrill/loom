@@ -19,5 +19,5 @@ than relying on full error message text.
 Run from the repository root:
 
 ```sh
-uv run python examples/authoring/config-composition/errors/show_errors.py
+uv run python packages/weave/examples/config-composition/errors/show_errors.py
 ```

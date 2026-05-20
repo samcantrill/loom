@@ -16,7 +16,7 @@ This example teaches `weave.compose_config`.
 Run from the repository root:
 
 ```sh
-uv run python examples/authoring/config-composition/includes/compose_includes.py
+uv run python packages/weave/examples/config-composition/includes/compose_includes.py
 ```
 
 The example uses only trusted local files and public composition overrides. It

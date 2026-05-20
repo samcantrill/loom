@@ -1,4 +1,4 @@
-id: authoring.config-composition.errors
+id: config-composition.errors
 title: Config Error Handling
 summary: Catch structured config errors and print stable context summaries.
 capability: authoring
@@ -10,12 +10,12 @@ surface: python_api
 public_surfaces:
   - python_api
 owner_docs:
-  - examples/authoring/README.md
+  - packages/weave/examples/README.md
   - docs/features/config-example-coverage.md
 owner_stages:
   - v0
-validation_path: tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
-validation_command: uv run pytest tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
+validation_path: packages/weave/tests/test_examples.py::test_weave_example_script_runs
+validation_command: make test-weave-examples
 entrypoints:
   - path: show_errors.py
     kind: python

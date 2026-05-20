@@ -1,4 +1,4 @@
-id: authoring.artifact-safety
+id: artifact-safety
 title: Artifact-Safe Config Artifacts
 summary: Inspect provenance, source artifacts, redaction, resolver facts, and raw snapshot opt-in.
 capability: authoring
@@ -10,12 +10,12 @@ surface: python_api
 public_surfaces:
   - python_api
 owner_docs:
-  - examples/authoring/README.md
+  - packages/weave/examples/README.md
   - docs/features/config-example-coverage.md
 owner_stages:
   - v1
-validation_path: tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
-validation_command: uv run pytest tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
+validation_path: packages/weave/tests/test_examples.py::test_weave_example_script_runs
+validation_command: make test-weave-examples
 entrypoints:
   - path: artifact_safety.py
     kind: python

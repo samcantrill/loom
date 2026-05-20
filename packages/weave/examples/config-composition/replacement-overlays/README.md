@@ -17,5 +17,5 @@ This example teaches `weave.compose_config`.
 Run from the repository root:
 
 ```sh
-uv run python examples/authoring/config-composition/replacement-overlays/replacement_overlays.py
+uv run python packages/weave/examples/config-composition/replacement-overlays/replacement_overlays.py
 ```

@@ -21,5 +21,5 @@ This example teaches `weave.compose_config` and
 Run from the repository root:
 
 ```sh
-uv run python examples/authoring/artifact-safety/artifact_safety.py
+uv run python packages/weave/examples/artifact-safety/artifact_safety.py
 ```

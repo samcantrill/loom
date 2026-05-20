@@ -16,5 +16,5 @@ registration.
 Run from the repository root:
 
 ```sh
-uv run python examples/authoring/recipes/compose_config.py
+uv run python packages/weave/examples/recipes/compose_config.py
 ```

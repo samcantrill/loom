@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 
 from weave import instantiate
 
-from services import Prefixer
+from services import Formatter, Prefixer
 
 
 def main() -> None:
@@ -36,20 +37,26 @@ def main() -> None:
         },
     }
 
-    objects = instantiate(
-        config,
-        runtime={"shared_prefixer": Prefixer("runtime:")},
+    objects = cast(
+        dict[str, object],
+        instantiate(
+            config,
+            runtime={"shared_prefixer": Prefixer("runtime:")},
+        ),
     )
     joiner = objects["joiner"]
     if not isinstance(joiner, Callable):
         raise TypeError("joiner should be a callable partial")
+    formatter = cast(Formatter, objects["formatter"])
+    joined = cast(str, objects["joined"])
+    typed_joiner = cast(Callable[[list[str]], str], joiner)
+    runtime_formatter = cast(Formatter, objects["runtime_formatter"])
 
-    print(objects["formatter"].render("42"))
-    print(objects["joined"])
-    print(joiner(["one", "two"]))
-    print(objects["runtime_formatter"].render("ready"))
+    print(formatter.render("42"))
+    print(joined)
+    print(typed_joiner(["one", "two"]))
+    print(runtime_formatter.render("ready"))
 
 
 if __name__ == "__main__":
     main()
-

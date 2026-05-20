@@ -7,7 +7,7 @@ from pprint import pprint
 from typing import cast
 
 from weave import ComposedConfig, compose_config
-from loom.serialization import PlainData
+from weave.plain import PlainData
 
 
 HERE = Path(__file__).resolve().parent
