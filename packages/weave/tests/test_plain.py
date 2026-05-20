@@ -48,6 +48,10 @@ def test_to_plain_data_rejects_invalid_types() -> None:
         ensure_plain_data({"a": b"bad"})
     with pytest.raises(PlainDataError):
         to_plain_data({"a": {1, 2}})
+    with pytest.raises(PlainDataError):
+        ensure_plain_data(MappingProxyType({"a": 1}))
+    with pytest.raises(PlainDataError):
+        to_plain_data(MappingProxyType({"a": 1}))
 
 
 def test_to_plain_data_rejects_non_finite_float() -> None:

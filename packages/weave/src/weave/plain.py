@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import is_dataclass
-from types import MappingProxyType
 from datetime import datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable
 
 from .errors import PlainDataError
@@ -33,6 +33,8 @@ def is_plain_data(value: Any) -> bool:
 def ensure_plain_data(value: Any, *, path: str = "$") -> PlainData:
     """Ensure a value is valid plain data and return a normalized copy."""
 
+    if isinstance(value, MappingProxyType):
+        raise PlainDataError(f"Invalid plain data at {path}: mappingproxy is not supported")
     if isinstance(value, Mapping):
         return _convert_mapping(value, path)
     if isinstance(value, (list, tuple)):
@@ -48,6 +50,8 @@ def to_plain_data(value: Any, *, path: str = "$") -> PlainData:
     if is_plain_data(value):
         return _to_plain(value, path)
 
+    if isinstance(value, MappingProxyType):
+        raise PlainDataError(f"Invalid plain data at {path}: mappingproxy is not supported")
     if isinstance(value, Mapping):
         return _convert_mapping(value, path)
     if isinstance(value, (list, tuple)):

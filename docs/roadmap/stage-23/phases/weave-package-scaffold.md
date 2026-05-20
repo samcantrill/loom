@@ -222,7 +222,7 @@ make test-summary
 
 - Phase implementation refinement: unused
 - PR review: unused
-- Blocker resolution: 0/3 used
+- Blocker resolution: 1/3 used for manager-side pre-submit helper contract correction.
 
 ## Completion Notes
 
@@ -236,8 +236,12 @@ make test-summary
   - `make validate-weave` → PASS (ruff, pyright, tests).
   - `uv run pytest tests/package/test_import_boundaries.py` → PASS (60 passed).
   - `uv run pyright packages/weave` → BLOCKED by offline lock/cache/environment (DNS/build env conflict); reran package-local equivalent as `cd packages/weave && PYTHONPATH=src pyright .` → PASS.
+  - Manager rerun after correction: `uv run pytest tests/package/test_import_boundaries.py` → PASS (60 passed).
+  - Manager final gate: `make validate-pr` → PASS (ruff, pyright, default suite with 1966 passed/27 skipped/30 deselected, config-extra with 461 passed/3 skipped/2004 deselected, root build).
+  - Manager PR evidence: `make test-summary` → PASS (package 111 passed/1 skipped; unit 1394 passed/7 skipped/1 deselected; contract 274 passed/3 skipped; integration 170 passed/8 skipped/18 deselected; e2e 46 passed/6 deselected; config-extra 461 passed/3 skipped/2004 deselected).
 - Refinement summary: No phase-plan scope changes required; all changes remained in the scaffold and boundary scope.
-- Blocker-resolution summary: No blocking scope issues for code movement; non-blocking tool-environment limitations were recorded around `uv run` for pyright with workspace-level package resolution.
+- Manager pre-submit correction: Direct `MappingProxyType` inputs were accepted by `ensure_plain_data` and `to_plain_data` despite the scope contract requiring mapping-proxy rejection. Patched `weave.plain` to reject direct mapping-proxy values and added package-local tests; reran `make test-weave` and `make validate-weave`, both passing with 22 package tests.
+- Blocker-resolution summary: Used one scoped manager-side blocker-resolution pass for the mapping-proxy rejection contract. Non-blocking tool-environment limitations were recorded around `uv run` for pyright with workspace-level package resolution.
 - PR preparation: Not created for this phase pass.
 - Stack maintenance: branch created from local `develop` at `ab4855c`; no predecessor.
 - Remaining blockers: none.
