@@ -296,12 +296,24 @@ make test-summary
 - Planning/refinement budget: used; expanded-path draft and refine completed
 - Phase implementation refinement: unused
 - PR review: unused
-- Blocker resolution: unused, 0/3 used
+- Blocker resolution: 1/3 used for manager takeover from a stalled implementation agent and completion of package-boundary fixes.
 
 ## Completion Notes
 
 - Draft plan: completed in commit `aeb4b1c`.
 - Refine plan: completed in this artifact.
 - Final phase execution plan: ready for implementation after this refinement.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: Ported the current config implementation into `packages/weave/src/weave`, including public API records, composition, loading, merging, overrides, includes, interpolation, redaction, provenance, source maps, artifacts, artifact-safe fingerprints, recipes, recipe entry-point loading, target instantiation, and target checks. Added package-owned version metadata, package-local lock metadata for the `uv` package environment, package-local golden parity and behavior tests, and a root import-boundary assertion for public `weave` config symbol resolution. Kept `src/loom/config` and Loom adapter imports unchanged for Phase 4.
+- Implementation validation:
+  - `make test-weave` → PASS (27 passed).
+  - `make validate-weave` → PASS after allowing `uv` to install package dependencies (Ruff, Pyright, 27 package tests, and `weave-0.1.0` source/wheel build).
+  - `PYTHONPATH=packages/weave/src uv run --extra config pytest packages/weave/tests` → PASS (27 passed).
+  - `uv run pytest tests/package/test_import_boundaries.py` → PASS (61 passed).
+  - `uv run --extra config pytest tests/contracts/test_config_extraction_golden_artifacts_contract.py` → PASS (1 passed).
+  - `uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_error_contract.py tests/contracts/test_config_composition_inspection_contract.py tests/contracts/test_recipe_contract.py` → PASS (32 passed).
+  - `make validate-pr` → PASS (ruff, pyright, default suite with 1967 passed/27 skipped/30 deselected, config-extra with 461 passed/3 skipped/2005 deselected, root build).
+  - `make test-summary` → PASS (package 112 passed/1 skipped; unit 1394 passed/7 skipped/1 deselected; contract 274 passed/3 skipped; integration 170 passed/8 skipped/18 deselected; e2e 46 passed/6 deselected; config-extra 461 passed/3 skipped/2005 deselected).
+- Refinement summary: No `loom_phase_refiner` pass used. The manager stopped a stalled implementation agent, completed narrow package-boundary fixes (`weave.__init__` public exports, error/helper circular import cleanup, subpackage relative imports, and package `uv` validation target wiring), and recorded this as one scoped blocker-resolution pass.
+- Blocker-resolution summary: 1/3 used; no remaining blockers.
+- PR preparation: pending.
+- Stack maintenance: branch created from local `develop` at `d5f7e39`; no predecessor.
