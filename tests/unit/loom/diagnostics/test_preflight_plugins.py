@@ -76,6 +76,7 @@ def test_plugin_preflight_loads_selected_recipe_in_scratch_registry(
     )
     imported: list[str] = []
     real_import_module = importlib.import_module
+    import weave.recipes.load as recipe_load
 
     def import_module(name: str, package: str | None = None) -> ModuleType:
         if not name.startswith("loom.plugins._"):
@@ -85,7 +86,7 @@ def test_plugin_preflight_loads_selected_recipe_in_scratch_registry(
         module.recipe = lambda value: {"value": value}
         return module
 
-    monkeypatch.setattr(importlib, "import_module", import_module)
+    monkeypatch.setattr(recipe_load, "import_module", import_module)
 
     result = run_preflight(
         PreflightRequest(
