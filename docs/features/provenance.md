@@ -26,7 +26,7 @@ The central boundary is:
 loom.provenance:
   generic facts about code, environment, command, run, stages, and artifacts
 
-loom.config:
+weave:
   config composition provenance, recipe expansion provenance, redaction policy
 
 loom.pipeline:
@@ -86,7 +86,7 @@ It should not depend on:
 loom.pipeline.runner
 loom.pipeline.executors
 loom.pipeline.stores
-loom.config.compose
+weave.compose
 loom.io.sources
 project packages
 ML frameworks
@@ -119,7 +119,7 @@ plain-data conversion
 provenance validation
 ```
 
-### 3.2 `loom.config.provenance`
+### 3.2 `weave.provenance`
 
 Owns config-specific provenance.
 
@@ -139,7 +139,7 @@ redacted config view metadata
 Top-level `loom.provenance` may aggregate config provenance summaries, but it
 should not implement config composition or recipe expansion.
 
-V1 `loom.config` returns config provenance, manifest, source artifact, raw
+V1 `weave` returns config provenance, manifest, source artifact, raw
 snapshot availability, and fingerprint records to the caller. It does not write
 run provenance, choose run-store paths, persist full resolved configs, or own
 CLI display.
@@ -1551,10 +1551,10 @@ data. It does not persist `config/resolved.yaml`,
 `config/resolved.redacted.yaml`, resolver outputs, or raw source bytes by
 default.
 
-V1 `loom.config` returns artifact-safe records to the caller and does not write
+V1 `weave` returns artifact-safe records to the caller and does not write
 the files above.
 
-`loom.config` owns detailed contents.
+`weave` owns detailed contents.
 
 ---
 
@@ -1575,7 +1575,7 @@ project metadata
 
 ### 21.2 Redaction Ownership
 
-`loom.config.redaction` owns key/path redaction policy for config values.
+`weave.redaction` owns key/path redaction policy for config values.
 
 `loom.provenance` should provide simple helpers for provenance-specific strings:
 
@@ -1675,7 +1675,7 @@ resolver-expression metadata
 target import paths
 ```
 
-`loom.config` owns detailed capture because it knows composition order. In v1,
+`weave` owns detailed capture because it knows composition order. In v1,
 that capture is returned as plain artifact data; persistence and run-level
 aggregation belong to callers such as future run stores.
 
@@ -2013,7 +2013,7 @@ Test:
 
 ```text
 import loom.provenance does not import loom.pipeline
-import loom.provenance does not import loom.config
+import loom.provenance does not import weave
 import loom.provenance does not import heavy optional packages
 import loom.refs does not import provenance
 ```

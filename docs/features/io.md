@@ -1861,7 +1861,7 @@ io:
     - _target_: project.codecs.VideoCodec
 ```
 
-`loom.config` instantiates objects. `loom.io` registers them.
+`weave` instantiates objects. `loom.io` registers them.
 
 ### 24.3 Recipe-Driven Registration
 

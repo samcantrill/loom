@@ -80,7 +80,7 @@ loom.errors
 It should not depend on:
 
 ```text
-loom.config
+weave
 loom.pipeline.runner
 loom.pipeline.executors
 loom.pipeline.stores.local_runs

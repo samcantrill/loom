@@ -64,7 +64,7 @@ cli.sweep
 `pipeline.sweep` may use:
 
 ```text
-loom.config.compose_config
+weave.compose_config
 loom.pipeline.PipelineSpec
 loom.pipeline.planning
 loom.pipeline.execution.PipelineRunner
@@ -111,7 +111,7 @@ summarize trial status
 collect artifact references or simple result metadata
 ```
 
-### 3.2 `loom.config`
+### 3.2 `weave`
 
 Owns config loading, overlays, CLI overrides, recipe expansion, interpolation,
 validation, and object construction.
@@ -462,7 +462,7 @@ copying the entire experiment config into every trial
 ### 6.4 Use Config Overrides, Not Custom Merge Logic
 
 Trial expansion should create the same kind of dot-path overrides accepted by
-`loom.config`.
+`weave`.
 
 The sweep layer should not implement a separate merge language.
 

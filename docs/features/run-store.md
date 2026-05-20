@@ -319,7 +319,7 @@ verify checksums when supported
 The run store may record artifact refs and artifact indexes, but it should not
 own object-to-bytes conversion.
 
-### 3.5 `loom.config`
+### 3.5 `weave`
 
 Owns config composition and resolved config export.
 
@@ -336,7 +336,7 @@ secret redaction
 ```
 
 The run store provides paths and persistence helpers for these files, but config
-semantics remain in `loom.config`.
+semantics remain in `weave`.
 
 ### 3.6 `loom.cli`, Post-v0
 

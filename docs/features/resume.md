@@ -149,7 +149,7 @@ resolve local paths
 report unsupported URI schemes
 ```
 
-### 3.6 `loom.config`
+### 3.6 `weave`
 
 Owns config composition and artifact-safe comparison records.
 
@@ -164,7 +164,7 @@ redact secrets from public views
 
 V1 config composition does not persist snapshots or write run-store state.
 Resume policy should use pipeline-owned fingerprints and, where useful, the
-artifact-safe config comparison records returned by `loom.config`. Those records
+artifact-safe config comparison records returned by `weave`. Those records
 compare authored composition equivalence; they do not prove exact runtime
 resolver-value replay.
 
@@ -829,7 +829,7 @@ fingerprint policy
 
 The config input may be a pipeline-owned selected resolved view or a v1
 artifact-safe config fingerprint/manifest comparison. Resume remains
-pipeline-owned and must not require `loom.config` artifacts to exist.
+pipeline-owned and must not require `weave` artifacts to exist.
 
 ### 12.2 High-Level Flow
 

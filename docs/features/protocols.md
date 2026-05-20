@@ -79,7 +79,7 @@ typing_extensions
 It should not import:
 
 ```text
-loom.config
+weave
 loom.pipeline
 loom.io
 loom.artifacts
@@ -116,7 +116,7 @@ Examples:
 loom.pipeline.stage.Stage
 loom.io.codecs.base.Codec
 loom.io.sources.base.DataSource
-loom.config.recipes.base.ConfigRecipe
+weave.recipes.base.ConfigRecipe
 loom.pipeline.stores.artifact_store.ArtifactStore
 loom.pipeline.stores.run_store.RunStore
 loom.pipeline.executors.base.Executor
@@ -559,7 +559,7 @@ indexes, and status transitions.
 
 ### 12.5 Recipes
 
-`ConfigRecipe` belongs in `loom.config.recipes`.
+`ConfigRecipe` belongs in `weave.recipes`.
 
 Reason:
 
@@ -618,7 +618,7 @@ runtime_checkable behavior, only if enabled
 Test:
 
 ```text
-import loom.protocols does not import loom.config
+import loom.protocols does not import weave
 import loom.protocols does not import loom.pipeline
 import loom.protocols does not import loom.io
 import loom.protocols does not import optional dependencies

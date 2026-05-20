@@ -86,7 +86,7 @@ It should not depend on:
 loom.pipeline.runner
 loom.pipeline.executors
 loom.pipeline.stores
-loom.config
+weave
 loom.io.sources
 project packages
 large optional dependencies
@@ -1716,11 +1716,11 @@ overlays, override strings, interpolation, and recipes all affect the actual sta
 invocation
 ```
 
-This is pipeline planning guidance, not a v1 `loom.config` persistence rule.
+This is pipeline planning guidance, not a v1 `weave` persistence rule.
 V1 config fingerprints are artifact-safe authored-composition fingerprints:
 they preserve resolver expressions and source hashes and intentionally do not
 persist resolved resolver outputs by default. The in-memory resolved config is
-available to Python callers, but `loom.config` does not persist it, and config
+available to Python callers, but `weave` does not persist it, and config
 artifact fingerprints are not exact runtime replay digests.
 
 ### 21.2 Selected Config Subtrees
@@ -2037,7 +2037,7 @@ Test:
 
 ```text
 import loom.fingerprints does not import loom.pipeline
-import loom.fingerprints does not import loom.config
+import loom.fingerprints does not import weave
 import loom.fingerprints does not import loom.io
 import loom.refs does not import pipeline through fingerprints
 ```

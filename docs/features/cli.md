@@ -89,7 +89,7 @@ cli
 The CLI may import public APIs from:
 
 ```text
-loom.config
+weave
 loom.pipeline
 loom.pipeline.execution
 loom.pipeline.planning
@@ -141,7 +141,7 @@ top-level exception handling
 terminal color policy, if any
 ```
 
-### 3.2 `loom.config`
+### 3.2 `weave`
 
 Owns config composition and instantiation.
 
@@ -495,7 +495,7 @@ CONFIG
 --print-resolved, optional
 ```
 
-`--set` should pass raw dot-path override strings to `loom.config`. The CLI
+`--set` should pass raw dot-path override strings to `weave`. The CLI
 should not reimplement override parsing beyond collecting strings.
 
 ### 7.2 Run Selection Options

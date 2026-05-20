@@ -151,7 +151,7 @@ written.
 | v20 | Runtime events and event sinks | Audit-ready runtime event grammar plus observe-only event sink contracts over committed runtime facts. |
 | v21 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
 | v22 | Examples and validation refinement | Robust example coverage, integration/e2e validation behavior, example harness hardening, and documentation refinement over the implemented surface. |
-| v23 | Standalone config package extraction | Hard-switch `loom.config` into a standalone `weave` library, move config tests/examples beside that package, and make `loom` depend on it only through explicit config-adapter paths. |
+| v23 | Standalone config package extraction | Extract trusted config authoring into the standalone `weave` library, move config tests/examples beside that package, and make `loom` depend on it only through explicit config-adapter paths. |
 
 ## v0 - Local Runtime Kernel
 

@@ -93,8 +93,8 @@ Recommended long-term policy:
 loom primitives:
   standard library only
 
-loom.config:
-  may depend on OmegaConf and/or Pydantic if installed with config extras
+weave:
+  owns config authoring dependencies such as OmegaConf, Pydantic, and PyYAML
 
 loom.pipeline:
   standard library first
@@ -121,12 +121,11 @@ dev = [
 
 Avoid hard dependencies on large task-specific libraries. User projects can depend on those libraries as needed.
 
-The v0 implementation plan intentionally uses a narrower packaging path: the
-package has no runtime dependencies until config composition lands, then
-OmegaConf, Pydantic v2, and YAML support become hard runtime dependencies. This
-keeps the initial validation matrix small while the public runtime API settles.
-Revisit optional config extras after v0 if downstream users need a
-primitives-only install.
+Loom now depends on `weave` for supported config adapter workflows. `weave`
+owns OmegaConf, Pydantic, and YAML dependencies for trusted config authoring;
+Loom runtime internals should still avoid importing config composition modules
+outside explicit adapter paths. Revisit a primitives-only install shape only if
+downstream users need one.
 
 ---
 
@@ -274,7 +273,7 @@ state persistence.
 
 ## 7. Configuration
 
-`loom.config` composes YAML, expands recipes, applies overrides, resolves interpolation, validates structure, and constructs Python objects from `_target_` blocks.
+`weave` composes YAML, expands recipes, applies overrides, resolves interpolation, validates structure, and constructs Python objects from `_target_` blocks.
 
 Example:
 
@@ -378,7 +377,7 @@ runs/RUN_ID/
 ```
 
 For composed configs, config provenance is recorded in run metadata as
-artifact-safe plain data. `loom.config` returns in-memory resolved config to
+artifact-safe plain data. `weave` returns in-memory resolved config to
 Python callers, while the run-store defaults avoid resolver outputs, raw source
 bytes, and full `config/resolved.yaml` / `config/resolved.redacted.yaml`
 snapshots. Plain mapping configs may still use legacy snapshot names as
@@ -465,7 +464,7 @@ from loom.records import Record, InMemoryManifest, ManifestView
 from loom.artifacts import ArtifactAddress, ArtifactRef
 from loom.fingerprints import hash_mapping
 
-from loom.config import (
+from weave import (
     RecipeCatalog,
     compose_config,
     compose_config_with_catalog,
