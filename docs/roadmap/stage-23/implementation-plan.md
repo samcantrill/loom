@@ -1,11 +1,11 @@
 # Roadmap Stage 23 Implementation Plan: Standalone Config Package Extraction
 
-Status: Phase 3 merged; ready for Phase 4 execution planning
+Status: Phase 4 merged; ready for Phase 5 execution planning
 Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: ready for Phase 4 execution planning
+Current phase: ready for Phase 5 execution planning
 Blockers:
 
 - None for roadmap-stage planning readiness.
@@ -16,6 +16,8 @@ Blockers:
 - Phase 2 execution plan drafted, refined, executed, reviewed, opened,
   validated, and merged.
 - Phase 3 execution plan drafted, refined, executed, reviewed, opened,
+  validated, and merged.
+- Phase 4 execution plan drafted, refined, executed, reviewed, opened,
   validated, and merged.
 
 ## Summary
@@ -727,11 +729,13 @@ Workflow path: expanded path
 
 ## Phase 4: Hard Switch Loom Adapters And Import Boundaries
 
-Status: pending
+Status: merged
 Slug: `weave-hard-switch-adapters`
 Branch: `codex/weave-hard-switch-adapters`
 Worktree: `/home/samcantrill/work/loom-worktrees/weave-hard-switch-adapters`
-PR: pending
+Worktree cleanup: removed after merge
+PR: [#203](https://github.com/samcantrill/loom/pull/203), target
+  `develop`, head `codex/weave-hard-switch-adapters`.
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path
@@ -830,13 +834,17 @@ Workflow path: expanded path
 
 ### Phase Workflow State
 
-- Phase execution plan: not drafted
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
-- Blocker-resolution budget: unused
-- Pre-submit blocker gate: pending
-- Merge record: pending
+- Phase execution plan: drafted and refined in
+  `docs/roadmap/stage-23/phases/weave-hard-switch-adapters.md`
+- Planning/refinement budget: used; expanded-path draft and refine completed
+- Implementation/refinement budget: not used; manager completed the phase after
+  the assigned executor was unavailable
+- PR review budget: used; manager automated review found no blocking issues
+- Blocker-resolution budget: 1/3 used for manager takeover and focused
+  validation fixes after the executor stopped before implementation
+- Pre-submit blocker gate: passed
+- Merge record: squash-merged on 2026-05-20 with merge commit
+  `44d85faef8a6b40aec2ed08f998a57b9ad489cd8`
 
 ### Risks And Stop Conditions
 
@@ -850,11 +858,26 @@ Workflow path: expanded path
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: hard-switched Loom CLI, diagnostics, queue, sweep, and plugin
+  diagnostics adapter paths to `weave`; removed `src/loom/config` with no shim;
+  replaced runtime sweep override validation with Loom-owned path validation;
+  updated root package metadata and lock data to resolve the local
+  `packages/weave` project; updated focused tests, examples, and import
+  boundaries.
+- Validation: `make validate-weave`, installed wheel smoke, targeted adapter
+  checks, `make test-package`, `make test-contract`, `make test-integration`,
+  `make test-e2e`, `make test-config-extra`, `make validate-pr`, and
+  `make test-summary` passed. GitHub CI `checks` completed successfully on
+  2026-05-20 before merge.
+- PR: [#203](https://github.com/samcantrill/loom/pull/203), target
+  `develop`, head `codex/weave-hard-switch-adapters`.
+- Merge: squash-merged on 2026-05-20 with merge commit
+  `44d85faef8a6b40aec2ed08f998a57b9ad489cd8`.
+- Cleanup: remote branch, stale tracking ref, local branch, and worktree were
+  removed after merge.
+- Follow-up: Phase 5 should branch from updated `develop` and relocate
+  config-owned tests, examples, and validation evidence into `packages/weave`
+  without reintroducing `loom.config`.
 
 ## Phase 5: Test, Example, And Validation Relocation
 
