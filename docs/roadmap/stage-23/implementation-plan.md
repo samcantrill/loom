@@ -1,11 +1,11 @@
 # Roadmap Stage 23 Implementation Plan: Standalone Config Package Extraction
 
-Status: Phase 4 merged; ready for Phase 5 execution planning
+Status: Phase 5 merged; ready for Phase 6 execution planning
 Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: ready for Phase 5 execution planning
+Current phase: ready for Phase 6 execution planning
 Blockers:
 
 - None for roadmap-stage planning readiness.
@@ -18,6 +18,8 @@ Blockers:
 - Phase 3 execution plan drafted, refined, executed, reviewed, opened,
   validated, and merged.
 - Phase 4 execution plan drafted, refined, executed, reviewed, opened,
+  validated, and merged.
+- Phase 5 execution plan drafted, refined, executed, reviewed, opened,
   validated, and merged.
 
 ## Summary
@@ -361,8 +363,8 @@ group or support dual groups if standalone package users need that migration.
 | 1 | `config-boundary-golden-fixtures` | merged | `codex/config-boundary-golden-fixtures` | [#200](https://github.com/samcantrill/loom/pull/200) | artifact baselines, import inventory | Pin config artifacts and boundary evidence before movement | targeted golden contract, package/import-boundary tests | none moved |
 | 2 | `weave-package-scaffold` | merged | `codex/weave-package-scaffold` | [#201](https://github.com/samcantrill/loom/pull/201) | package metadata, config-owned helpers | Add installable package shell and duplicated config helper foundations | package import/build/helper tests, initial package validation target | package-local skeleton only |
 | 3 | `weave-implementation-port` | merged | `codex/weave-implementation-port` | [#202](https://github.com/samcantrill/loom/pull/202) | `weave` implementation | Port config implementation into `weave` with package-owned dependencies | package-local config suites, golden parity | config examples may be smoke-copied only when needed |
-| 4 | `weave-hard-switch-adapters` | pending | `codex/weave-hard-switch-adapters` | pending | Loom adapter rewiring, import cleanup | Hard-switch Loom to `weave` and remove `src/loom/config` | root package/contract/integration/e2e, import-boundary tests | runtime examples still in place |
-| 5 | `config-tests-examples-validation` | pending | `codex/config-tests-examples-validation` | pending | test/example relocation, validation targets | Move config tests/examples beside the package and finalize validation commands | `make validate-weave`, targeted root adapter suites | package-local config examples |
+| 4 | `weave-hard-switch-adapters` | merged | `codex/weave-hard-switch-adapters` | [#203](https://github.com/samcantrill/loom/pull/203) | Loom adapter rewiring, import cleanup | Hard-switch Loom to `weave` and remove `src/loom/config` | root package/contract/integration/e2e, import-boundary tests | runtime examples still in place |
+| 5 | `config-tests-examples-validation` | merged | `codex/config-tests-examples-validation` | [#204](https://github.com/samcantrill/loom/pull/204) | test/example relocation, validation targets | Move config tests/examples beside the package and finalize validation commands | `make validate-weave`, targeted root adapter suites | package-local config examples |
 | 6 | `config-extraction-docs-hardening` | pending | `codex/config-extraction-docs-hardening` | pending | docs, final validation, metadata | Align docs, structure, roadmap metadata, and final combined validation | `make validate-pr`, `make test-summary` | docs and example references verified |
 
 ## Implementation Readiness Blockers
@@ -881,11 +883,13 @@ Workflow path: expanded path
 
 ## Phase 5: Test, Example, And Validation Relocation
 
-Status: pending
+Status: merged
 Slug: `config-tests-examples-validation`
 Branch: `codex/config-tests-examples-validation`
 Worktree: `/home/samcantrill/work/loom-worktrees/config-tests-examples-validation`
-PR: pending
+Worktree cleanup: removed after merge
+PR: [#204](https://github.com/samcantrill/loom/pull/204), target
+  `develop`, head `codex/config-tests-examples-validation`.
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path
@@ -963,13 +967,16 @@ Workflow path: expanded path
 
 ### Phase Workflow State
 
-- Phase execution plan: not drafted
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
-- Blocker-resolution budget: unused
-- Pre-submit blocker gate: pending
-- Merge record: pending
+- Phase execution plan: drafted and refined in
+  `docs/roadmap/stage-23/phases/config-tests-examples-validation.md`
+- Planning/refinement budget: used; expanded-path draft and refine completed
+- Implementation/refinement budget: not used; targeted validation passed after
+  manager implementation
+- PR review budget: used; manager automated review found no blocking issues
+- Blocker-resolution budget: 0/3 used
+- Pre-submit blocker gate: passed
+- Merge record: squash-merged on 2026-05-20 with merge commit
+  `b165938d889e0bb46169afed711704c5fc30e96d`
 
 ### Risks And Stop Conditions
 
@@ -982,11 +989,27 @@ Workflow path: expanded path
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: moved config-owned unit, contract, and pure composition
+  integration tests into `packages/weave/tests`; moved config authoring examples
+  into `packages/weave/examples`; added package-local support fixtures, example
+  execution and manifest validation, pytest configuration, `test-weave-examples`,
+  expanded `validate-weave`, and `weave` / `weave-examples` test-summary rows.
+- Validation: `make test-weave` passed with 375 tests; `make
+  test-weave-examples` passed with 8 checks; `make validate-weave` passed;
+  focused root config adapter tests passed outside the sandbox with 26 tests;
+  `make validate-pr` passed outside the sandbox; `make test-summary` passed with
+  package, unit, contract, integration, e2e, config-extra, weave, and
+  weave-examples rows. GitHub CI `checks` completed successfully on 2026-05-20
+  before merge.
+- PR: [#204](https://github.com/samcantrill/loom/pull/204), target
+  `develop`, head `codex/config-tests-examples-validation`.
+- Merge: squash-merged on 2026-05-20 with merge commit
+  `b165938d889e0bb46169afed711704c5fc30e96d`.
+- Cleanup: remote branch, stale tracking ref, local branch, and worktree were
+  removed after merge.
+- Follow-up: Phase 6 should update user-facing docs and historical example
+  coverage references to describe `weave` as the config authoring package and
+  verify final combined validation.
 
 ## Phase 6: Documentation And Final Hardening
 
