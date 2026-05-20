@@ -1,17 +1,18 @@
 # Roadmap Stage 23 Implementation Plan: Standalone Config Package Extraction
 
-Status: ready for Phase 1 execution planning; plan quality gate passed
+Status: Phase 1 merged; ready for Phase 2 execution planning
 Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: ready for Phase 1 execution planning
+Current phase: ready for Phase 2 execution planning
 Blockers:
 
 - None for roadmap-stage planning readiness.
 - None for implementation-plan quality; `loom_plan_reviewer` confirmation
   review passed on 2026-05-20.
-- Phase execution plans have not been drafted.
+- Phase 1 execution plan drafted, refined, executed, reviewed, opened,
+  validated, and merged.
 
 ## Summary
 
@@ -351,7 +352,7 @@ group or support dual groups if standalone package users need that migration.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `config-boundary-golden-fixtures` | pending | `codex/config-boundary-golden-fixtures` | pending | artifact baselines, import inventory | Pin config artifacts and boundary evidence before movement | targeted golden contract, package/import-boundary tests | none moved |
+| 1 | `config-boundary-golden-fixtures` | merged | `codex/config-boundary-golden-fixtures` | [#200](https://github.com/samcantrill/loom/pull/200) | artifact baselines, import inventory | Pin config artifacts and boundary evidence before movement | targeted golden contract, package/import-boundary tests | none moved |
 | 2 | `weave-package-scaffold` | pending | `codex/weave-package-scaffold` | pending | package metadata, config-owned helpers | Add installable package shell and duplicated config helper foundations | package import/build/helper tests, initial package validation target | package-local skeleton only |
 | 3 | `weave-implementation-port` | pending | `codex/weave-implementation-port` | pending | `weave` implementation | Port config implementation into `weave` with package-owned dependencies | package-local config suites, golden parity | config examples may be smoke-copied only when needed |
 | 4 | `weave-hard-switch-adapters` | pending | `codex/weave-hard-switch-adapters` | pending | Loom adapter rewiring, import cleanup | Hard-switch Loom to `weave` and remove `src/loom/config` | root package/contract/integration/e2e, import-boundary tests | runtime examples still in place |
@@ -366,11 +367,11 @@ group or support dual groups if standalone package users need that migration.
 
 ## Phase 1: Boundary And Golden Fixture Preparation
 
-Status: pending
+Status: merged
 Slug: `config-boundary-golden-fixtures`
 Branch: `codex/config-boundary-golden-fixtures`
 Worktree: `/home/samcantrill/work/loom-worktrees/config-boundary-golden-fixtures`
-PR: pending
+PR: [#200](https://github.com/samcantrill/loom/pull/200)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path
@@ -434,13 +435,13 @@ Workflow path: expanded path
 
 ### Phase Workflow State
 
-- Phase execution plan: not drafted
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
-- Blocker-resolution budget: unused
-- Pre-submit blocker gate: pending
-- Merge record: pending
+- Phase execution plan: drafted and refined
+- Planning/refinement budget: used; expanded-path draft and refine completed
+- Implementation/refinement budget: used for manager-local validation fixes
+- PR review budget: consumed by manager pre-submit review; no blocking findings
+- Blocker-resolution budget: 1/3 used for CI-only path portability fix
+- Pre-submit blocker gate: passed
+- Merge record: merged into `develop` via PR #200
 
 ### Risks And Stop Conditions
 
@@ -452,11 +453,21 @@ Workflow path: expanded path
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: added root golden config fixtures, eight checked-in
+  extraction baseline JSON files, a public-API golden contract, and
+  current-state config import-boundary assertions without moving runtime code.
+- Validation: targeted golden contract passed; package import-boundary tests
+  passed; `make test-contract`, `make validate-pr`, `make test-config-extra`,
+  and `make test-summary` passed locally. GitHub CI `checks` passed on
+  2026-05-20 after fixing the structured-error message path portability issue.
+- PR: [#200](https://github.com/samcantrill/loom/pull/200), target
+  `develop`, head `codex/config-boundary-golden-fixtures`.
+- Merge: squash-merged on 2026-05-20 with merge commit
+  `c185731c316f7394ea7873a44c6395e2becf18a0`; remote phase branch deleted by
+  merge command, local branch/worktree cleanup pending after metadata update.
+- Follow-up: Phase 5 should move or mirror the root-owned golden fixtures under
+  package-local `weave` tests; Phase 4 should flip the current-state import
+  inventory to final `weave` boundary enforcement.
 
 ## Phase 2: Package Scaffold And Config Helper Foundations
 
