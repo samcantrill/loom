@@ -1891,3 +1891,51 @@ def test_import_operations_is_import_light_and_no_forbidden_layers() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_import_weave_does_not_import_loom() -> None:
+    script = dedent(
+        """
+        import pathlib
+        import sys
+
+        sys.path.insert(0, str(pathlib.Path.cwd() / "packages" / "weave" / "src"))
+        import weave
+
+        if "loom" in sys.modules:
+            raise SystemExit("loom was imported when loading weave")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_core_runtime_imports_do_not_depend_on_weave() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom
+        import loom.config
+        import loom.pipeline
+        import loom.serialization
+        import loom.plugins
+        import loom.queue
+        import loom.runs
+
+        if "weave" in sys.modules:
+            raise SystemExit("weave was imported before phase 4 cutover")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"

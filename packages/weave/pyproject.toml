@@ -1,0 +1,49 @@
+[project]
+name = "weave"
+description = "Config composition helpers for Loom authored-config workflows"
+version = "0.1.0"
+readme = "README.md"
+authors = [
+    { name = "Sam Cantrill", email = "sam.cantrill@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "omegaconf>=2.3",
+    "pydantic>=2",
+    "pyyaml>=6",
+]
+
+[build-system]
+requires = [
+    "uv_build>=0.11.8,<0.12.0"
+]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "coverage",
+    "pytest",
+    "ruff",
+    "pyright",
+]
+
+[tool.ruff]
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.pyright]
+exclude = [
+    ".venv",
+    ".ruff_cache",
+    ".pytest_cache",
+    "build",
+    "dist",
+    "tests",
+]
+include = [
+    "src",
+]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
