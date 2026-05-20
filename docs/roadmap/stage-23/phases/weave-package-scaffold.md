@@ -229,10 +229,15 @@ make test-summary
 - Draft plan: completed in commit `ee1710c`.
 - Refine plan: completed in this artifact.
 - Final phase execution plan: ready for implementation after this refinement.
-- Implementation summary:
+- Implementation summary: Added `packages/weave` scaffold with `pyproject.toml`, `src/weave` package, `py.typed`, version metadata, and helper modules (`plain`, `json`, `digests`, `errors`) without importing `loom`; added package-local tests for imports, plain-data behavior, stable JSON, digests, and structured config errors; added make targets for `test-weave`, `build-weave`, and `validate-weave`; extended import-boundary tests to assert weave boundary behavior.
 - Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
+  - `make test-weave` → PASS (22 passed).
+  - `make build-weave` → PASS (`weave-0.1.0` source/wheel artifacts produced).
+  - `make validate-weave` → PASS (ruff, pyright, tests).
+  - `uv run pytest tests/package/test_import_boundaries.py` → PASS (60 passed).
+  - `uv run pyright packages/weave` → BLOCKED by offline lock/cache/environment (DNS/build env conflict); reran package-local equivalent as `cd packages/weave && PYTHONPATH=src pyright .` → PASS.
+- Refinement summary: No phase-plan scope changes required; all changes remained in the scaffold and boundary scope.
+- Blocker-resolution summary: No blocking scope issues for code movement; non-blocking tool-environment limitations were recorded around `uv run` for pyright with workspace-level package resolution.
+- PR preparation: Not created for this phase pass.
 - Stack maintenance: branch created from local `develop` at `ab4855c`; no predecessor.
 - Remaining blockers: none.
