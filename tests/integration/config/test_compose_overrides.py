@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from loom.config import compose_config
-from loom.config.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError, OverrideApplyError
+from weave import compose_config
+from weave.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError, OverrideApplyError
 from loom.serialization import PlainData
 
 

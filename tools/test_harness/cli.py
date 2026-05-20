@@ -122,14 +122,20 @@ GROUP_RULES: dict[str, tuple[GroupRule, ...]] = {
         ),
         GroupRule("public-api", ("tests.package.test_public_api",)),
         GroupRule(
-            "config-api", ("tests.package.test_config_api",), ("src/loom/config/",)
+            "config-api",
+            ("tests.package.test_config_api",),
+            ("src/loom/config/", "packages/weave/src/weave/"),
         ),
         GroupRule(
             "pipeline-apis", ("tests.package.test_pipeline",), ("src/loom/pipeline/",)
         ),
     ),
     "unit": (
-        GroupRule("config", ("tests.unit.loom.config",), ("src/loom/config/",)),
+        GroupRule(
+            "config",
+            ("tests.unit.loom.config", "tests.unit.weave"),
+            ("src/loom/config/", "packages/weave/src/weave/"),
+        ),
         GroupRule("io", ("tests.unit.loom.io",), ("src/loom/io/",)),
         GroupRule(
             "pipeline-execution",

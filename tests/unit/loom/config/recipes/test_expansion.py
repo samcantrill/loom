@@ -4,7 +4,7 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config.errors import (
+from weave.errors import (
     ConfigErrorContext,
     ConfigInterpolationError,
     InvalidRecipeOutputError,
@@ -12,10 +12,10 @@ from loom.config.errors import (
     ReservedConfigKeyError,
     UnknownRecipeError,
 )
-from loom.config.recipes import RecipeCatalog
-from loom.config.recipes.expansion import expand_recipes, resolve_recipe_argument_interpolation
-from loom.config.interpolation import resolve_interpolation
-from loom.config.redaction import REDACTION_MARKER
+from weave.recipes import RecipeCatalog
+from weave.recipes.expansion import expand_recipes, resolve_recipe_argument_interpolation
+from weave.interpolation import resolve_interpolation
+from weave.redaction import REDACTION_MARKER
 from loom.serialization import PlainData
 from tests.support.config_samples import ArgumentRecipe, DownstreamRecipe, nested_argument_recipe, composed_output_recipe
 

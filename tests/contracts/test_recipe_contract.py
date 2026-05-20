@@ -10,9 +10,9 @@ pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
-from loom.config.recipes import Recipe, RecipeCatalog
-from loom.config.errors import InvalidRecipeOutputError
-from loom.config.recipes.expansion import expand_recipes
+from weave.recipes import Recipe, RecipeCatalog
+from weave.errors import InvalidRecipeOutputError
+from weave.recipes.expansion import expand_recipes
 from loom.plugins import (
     LOOM_RECIPES_GROUP,
     PluginDuplicateError,

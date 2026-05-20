@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from loom.config import compose_config
-from loom.config.errors import ConfigLoadError
+from weave import compose_config
+from weave.errors import ConfigLoadError
 
 pytestmark = pytest.mark.optional_dependency
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from loom.config import Recipe
+from weave import Recipe
 
 
 class RetentionPolicy(Recipe):

@@ -20,7 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from examples.support import run_cli_json
 from examples.support import started_authority_session
-from loom.config import compose_config
+from weave import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.executors import LocalExecutor

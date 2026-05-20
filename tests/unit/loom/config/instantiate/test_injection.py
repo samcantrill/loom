@@ -2,9 +2,9 @@
 
 import pytest
 
-from loom.config.errors import RuntimeInjectionError
-from loom.config.instantiate import injection
-from loom.config.instantiate import instantiate
+from weave.errors import RuntimeInjectionError
+from weave.instantiate import injection
+from weave.instantiate import instantiate
 from tests.support.config_samples import EchoService
 
 

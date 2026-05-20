@@ -13,7 +13,7 @@ from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
 from loom.pipeline.stores.service_authority import LocalAuthorityService
-from loom.config import compose_config
+from weave import compose_config
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]

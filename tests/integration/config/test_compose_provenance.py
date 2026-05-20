@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from loom.config import RecipeCatalog, compose_config, inspect_config_composition
-from loom.config.redaction import REDACTION_MARKER
-from loom.config.fingerprints import ARTIFACT_SAFE_FINGERPRINT_LABEL, ARTIFACT_SAFE_FINGERPRINT_POLICY
+from weave import RecipeCatalog, compose_config, inspect_config_composition
+from weave.redaction import REDACTION_MARKER
+from weave.fingerprints import ARTIFACT_SAFE_FINGERPRINT_LABEL, ARTIFACT_SAFE_FINGERPRINT_POLICY
 from tests.support.config_samples import argument_recipe
 
 

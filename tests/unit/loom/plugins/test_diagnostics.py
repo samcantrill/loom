@@ -132,6 +132,7 @@ def test_check_plugin_records_loads_selected_recipe_only(monkeypatch: pytest.Mon
     )
     imported: list[str] = []
     real_import_module = importlib.import_module
+    import weave.recipes.load as recipe_load
 
     def import_module(name: str, package: str | None = None) -> ModuleType:
         if not name.startswith("loom.plugins._"):
@@ -141,7 +142,7 @@ def test_check_plugin_records_loads_selected_recipe_only(monkeypatch: pytest.Mon
         module.recipe = lambda value: {"value": value}  # type: ignore[attr-defined]
         return module
 
-    monkeypatch.setattr(importlib, "import_module", import_module)
+    monkeypatch.setattr(recipe_load, "import_module", import_module)
 
     result = check_plugin_records(
         (selected, skipped),

@@ -12,13 +12,13 @@ import pytest
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
-from loom.config import (
+from weave import (
     RecipeCatalog,
     compare_config_artifact_fingerprints,
     compose_config,
     inspect_config_composition,
 )
-from loom.config.redaction import REDACTION_MARKER
+from weave.redaction import REDACTION_MARKER
 from loom.serialization import PlainData
 
 pytestmark = pytest.mark.e2e

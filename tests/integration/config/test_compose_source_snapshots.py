@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
-from loom.config import RecipeCatalog, compose_config
+from weave import RecipeCatalog, compose_config
 from tests.support.config_samples import argument_recipe
 
 

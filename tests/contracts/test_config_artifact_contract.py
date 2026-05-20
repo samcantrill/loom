@@ -4,7 +4,7 @@ from typing import cast
 
 import pytest
 
-from loom.config.artifacts import (
+from weave.artifacts import (
     CompositionManifest,
     ConfigFingerprintRecord,
     RawSourceSnapshotBundle,
@@ -12,9 +12,9 @@ from loom.config.artifacts import (
     RawSourceSnapshotReference,
     SourceArtifactRecord,
 )
-from loom.config.errors import ConfigProvenanceError
-from loom.config.provenance import ConfigProvenance, ConfigSource, ParsedOverride, SCHEMA_VERSION
-from loom.config.fingerprints import (
+from weave.errors import ConfigProvenanceError
+from weave.provenance import ConfigProvenance, ConfigSource, ParsedOverride, SCHEMA_VERSION
+from weave.fingerprints import (
     ARTIFACT_SAFE_FINGERPRINT_LABEL,
     ARTIFACT_SAFE_FINGERPRINT_POLICY,
     ARTIFACT_SAFE_FINGERPRINT_PAYLOAD_VERSION,

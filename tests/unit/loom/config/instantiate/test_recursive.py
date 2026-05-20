@@ -4,8 +4,8 @@ from functools import partial
 
 import pytest
 
-from loom.config.errors import ReservedConfigKeyError, TargetInstantiationError
-from loom.config.instantiate import instantiate
+from weave.errors import ReservedConfigKeyError, TargetInstantiationError
+from weave.instantiate import instantiate
 from tests.support.config_samples import (
     AddService,
     EchoService,

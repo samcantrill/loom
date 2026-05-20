@@ -231,13 +231,12 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "uvicorn" },
+    { name = "weave" },
 ]
 
 [package.optional-dependencies]
 config = [
-    { name = "omegaconf" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
+    { name = "weave" },
 ]
 
 [package.dev-dependencies]
@@ -252,10 +251,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "omegaconf", marker = "extra == 'config'", specifier = ">=2.3" },
-    { name = "pydantic", marker = "extra == 'config'", specifier = ">=2" },
-    { name = "pyyaml", marker = "extra == 'config'", specifier = ">=6" },
     { name = "uvicorn", specifier = ">=0.30,<1" },
+    { name = "weave", directory = "packages/weave" },
+    { name = "weave", marker = "extra == 'config'", directory = "packages/weave" },
 ]
 provides-extras = ["config"]
 
@@ -552,4 +550,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1f/93/041fca8274050e40e6791f267d82e0e2e27dd165627bd640d3e0e378d877/uvicorn-0.46.0.tar.gz", hash = "sha256:fb9da0926999cc6cb22dc7cd71a94a632f078e6ae47ff683c5c420750fb7413d", size = 88758, upload-time = "2026-04-23T07:16:00.151Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/31/a3/5b1562db76a5a488274b2332a97199b32d0442aca0ed193697fd47786316/uvicorn-0.46.0-py3-none-any.whl", hash = "sha256:bbebbcbed972d162afca128605223022bedd345b7bc7855ce66deb31487a9048", size = 70926, upload-time = "2026-04-23T07:15:58.355Z" },
+]
+
+[[package]]
+name = "weave"
+version = "0.1.0"
+source = { directory = "packages/weave" }
+dependencies = [
+    { name = "omegaconf" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "omegaconf", specifier = ">=2.3" },
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "coverage" },
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "ruff" },
 ]

@@ -2,10 +2,10 @@ from typing import Literal, Mapping, cast
 
 import pytest
 
-from loom.config.errors import ConfigMergeError
-from loom.config.merge import merge_configs
-from loom.config.provenance import ConfigSource
-from loom.config.source_maps import (
+from weave.errors import ConfigMergeError
+from weave.merge import merge_configs
+from weave.provenance import ConfigSource
+from weave.source_maps import (
     ConfigPath,
     build_base_source_map,
     compose_config_with_sources,

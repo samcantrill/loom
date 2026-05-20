@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
-from loom.config import compose_config
+from weave import compose_config
 
 
 def test_compose_raw_snapshots_track_replaced_and_added_includes(tmp_path: Path) -> None:

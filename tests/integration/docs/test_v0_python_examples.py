@@ -14,7 +14,7 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 import yaml
 
-from loom.config import compose_config
+from weave import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.planning import PlanAction

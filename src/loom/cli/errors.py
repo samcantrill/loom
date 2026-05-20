@@ -80,7 +80,7 @@ def exit_code_for(error: BaseException) -> ExitCode:
         return ExitCode.INTERRUPTED
     if isinstance(error, CliError):
         return error.exit_code
-    if isinstance(error, ConfigError):
+    if _is_config_error(error):
         return ExitCode.CONFIG
     if isinstance(error, PipelineError):
         return ExitCode.PIPELINE
@@ -125,7 +125,7 @@ def _structured_payload(error: BaseException) -> dict[str, PlainCliData]:
 def _default_error_code(error: BaseException) -> str:
     if isinstance(error, CliError):
         return error.code
-    if isinstance(error, ConfigError):
+    if _is_config_error(error):
         return "config.error"
     if isinstance(error, PipelineError):
         return "pipeline.error"
@@ -165,9 +165,16 @@ def format_text_error(error: BaseException, *, traceback_enabled: bool) -> str:
     if traceback_enabled:
         return "".join(traceback.format_exception(type(error), error, error.__traceback__))
 
-    if isinstance(error, LoomError):
+    if isinstance(error, LoomError) or _is_config_error(error):
         return f"error: {error}\n"
     return f"internal error: {error}. Re-run with --traceback for details.\n"
+
+
+def _is_config_error(error: BaseException) -> bool:
+    if isinstance(error, ConfigError):
+        return True
+    module = error.__class__.__module__
+    return module == "weave.errors" or module.startswith("weave.")
 
 
 def format_json_error(

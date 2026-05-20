@@ -12,7 +12,7 @@ This example demonstrates the main v0 runtime loop:
 ## Public Python Surface
 
 This example teaches `loom.pipeline.PipelineRunner`, `loom.pipeline.RunRequest`,
-and `loom.config.compose_config`.
+and `weave.compose_config`.
 
 Run from the repository root:
 

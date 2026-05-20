@@ -54,7 +54,7 @@ def test_pipeline_reliability_imports_are_import_light() -> None:
             "loom.pipeline.executors",
             "loom.pipeline.stores",
             "loom.cli",
-            "loom.config",
+            "weave",
             "loom.diagnostics",
             "fastapi",
             "starlette",

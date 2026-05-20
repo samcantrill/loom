@@ -2,7 +2,7 @@
 
 import pytest
 
-from loom.config.errors import (
+from weave.errors import (
     ConfigErrorContext,
     ConfigValidationError,
     ConfigUnsupportedResolverError,
@@ -14,7 +14,7 @@ from loom.config.errors import (
     RecipeExpansionError,
     TargetImportError,
 )
-from loom.serialization import PlainDataError
+from weave.errors import PlainDataError
 
 
 def test_config_error_context_round_trip() -> None:

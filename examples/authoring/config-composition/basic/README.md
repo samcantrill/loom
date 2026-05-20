@@ -9,7 +9,7 @@ includes, target instantiation, or pipeline execution:
 
 ## Public Python Surface
 
-This example teaches `loom.config.compose_config`.
+This example teaches `weave.compose_config`.
 
 Run from the repository root:
 

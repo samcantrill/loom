@@ -348,7 +348,7 @@ def test_pipeline_store_public_exports() -> None:
 @pytest.mark.parametrize(
     "forbidden",
     [
-        "loom.config",
+        "weave",
         "loom.runs",
         "loom.cli",
         "sqlite3",

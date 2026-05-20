@@ -6,8 +6,8 @@ from typing import Mapping, cast
 import pytest
 
 from loom.serialization import PlainData
-from loom.config.errors import OverrideApplyError, OverrideParseError
-from loom.config.overrides import apply_overrides, parse_overrides, split_include_and_ordinary_overrides
+from weave.errors import OverrideApplyError, OverrideParseError
+from weave.overrides import apply_overrides, parse_overrides, split_include_and_ordinary_overrides
 
 
 def plain_config(value: Mapping[str, PlainData]) -> dict[str, PlainData]:

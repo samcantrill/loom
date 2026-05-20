@@ -1167,16 +1167,16 @@ class _FakePipelineValidation:
 def _patch_runtime_preflight_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     import loom.pipeline
 
-    config_package = ModuleType("loom.config")
-    config_api = ModuleType("loom.config.api")
+    config_package = ModuleType("weave")
+    config_api = ModuleType("weave.api")
     setattr(
         config_api,
         "compose_config",
         lambda *_args, **_kwargs: _FakeComposedConfig(resolved={"pipeline": {}}),
     )
     setattr(config_package, "api", config_api)
-    monkeypatch.setitem(sys.modules, "loom.config", config_package)
-    monkeypatch.setitem(sys.modules, "loom.config.api", config_api)
+    monkeypatch.setitem(sys.modules, "weave", config_package)
+    monkeypatch.setitem(sys.modules, "weave.api", config_api)
     monkeypatch.setattr(
         loom.pipeline,
         "validate_pipeline_config",

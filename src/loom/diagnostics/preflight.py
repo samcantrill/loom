@@ -119,7 +119,7 @@ class _Context:
         if self._config_error is not None:
             raise self._config_error
         try:
-            from loom.config.api import compose_config
+            from weave.api import compose_config
 
             self._config = compose_config(
                 _resolve_path(self.request.config_path, cwd=self.request.cwd),

@@ -5,8 +5,8 @@ from typing import cast
 
 import pytest
 
-from loom.config.errors import TargetImportError
-from loom.config.instantiate import import_target
+from weave.errors import TargetImportError
+from weave.instantiate import import_target
 
 
 def test_import_target_dotted_path() -> None:

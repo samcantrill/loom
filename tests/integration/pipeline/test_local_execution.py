@@ -42,7 +42,7 @@ pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
-from loom.config import compose_config
+from weave import compose_config
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 

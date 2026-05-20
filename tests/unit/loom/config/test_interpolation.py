@@ -6,8 +6,8 @@ import pytest
 from omegaconf import OmegaConf
 from omegaconf.resolvers import oc as omegaconf_oc
 
-from loom.config.errors import ConfigInterpolationError, ConfigUnsupportedResolverError
-from loom.config.interpolation import (
+from weave.errors import ConfigInterpolationError, ConfigUnsupportedResolverError
+from weave.interpolation import (
     ResolverExpressionRecord,
     resolve_interpolation,
     scan_resolver_expressions,

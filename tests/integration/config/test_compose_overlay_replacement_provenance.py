@@ -13,7 +13,7 @@ pytest.importorskip("yaml")
 pytest.importorskip("omegaconf")
 pytest.importorskip("pydantic")
 
-from loom.config import compose_config  # noqa: E402
+from weave import compose_config  # noqa: E402
 from loom.serialization import PlainData  # noqa: E402
 
 

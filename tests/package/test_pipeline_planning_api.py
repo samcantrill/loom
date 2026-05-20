@@ -56,7 +56,7 @@ def test_pipeline_planning_public_exports_are_phase_scoped() -> None:
 @pytest.mark.parametrize(
     "forbidden",
     [
-        "loom.config",
+        "weave",
         "loom.cli",
         "loom.pipeline.execution",
         "loom.pipeline.executors",

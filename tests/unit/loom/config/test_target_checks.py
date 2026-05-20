@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from loom.config import check_config_targets
+from weave import check_config_targets
 
 
 pytestmark = pytest.mark.unit

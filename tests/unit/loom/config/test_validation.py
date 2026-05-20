@@ -5,8 +5,8 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config.errors import ConfigValidationError, UnsupportedRecipeError
-from loom.config.validation import validate_no_recipe_keys, validate_top_level_fields
+from weave.errors import ConfigValidationError, UnsupportedRecipeError
+from weave.validation import validate_no_recipe_keys, validate_top_level_fields
 from loom.serialization import PlainData
 
 

@@ -6,8 +6,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from loom.config.errors import OverrideParseError
-from loom.config.overrides import parse_overrides
 from loom.serialization import PlainData, PlainDataError, ensure_plain_data, stable_json_dumps
 
 from .errors import SweepProtocolError
@@ -125,12 +123,11 @@ def _manual_trials(value: object) -> tuple["ManualTrialSpec", ...]:
 
 
 def _validate_override_paths(overrides: Mapping[str, PlainData]) -> None:
-    for path, value in overrides.items():
+    for path in overrides:
         _non_empty_text(path, "override path")
-        try:
-            parse_overrides((_override_expression(path, value),))
-        except OverrideParseError as exc:
-            raise SweepProtocolError(f"invalid override path {path!r}") from exc
+        normalized_path = path[1:] if path.startswith("+") else path
+        if not normalized_path or any(not segment for segment in normalized_path.split(".")):
+            raise SweepProtocolError(f"invalid override path {path!r}")
 
 
 def _override_expression(path: str, value: PlainData) -> str:

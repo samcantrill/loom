@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from loom.config.redaction import redact_secrets
+from weave.redaction import redact_secrets
 from loom.serialization import PlainData
 
 

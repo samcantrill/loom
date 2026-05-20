@@ -6,8 +6,8 @@ pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
-import loom.config
-import loom.config.api as config_api
+import weave
+import weave.api as config_api
 
 from tests.support.config_samples import function_recipe
 
@@ -16,9 +16,9 @@ pytestmark = pytest.mark.optional_dependency
 
 
 def test_phase5_config_apis_are_live(monkeypatch) -> None:
-    monkeypatch.setattr(config_api, "__default_recipe_catalog", loom.config.RecipeCatalog())
+    monkeypatch.setattr(config_api, "__default_recipe_catalog", weave.RecipeCatalog())
 
-    assert loom.config.instantiate({"value": ("a", "b")}) == {"value": ["a", "b"]}
+    assert weave.instantiate({"value": ("a", "b")}) == {"value": ["a", "b"]}
 
-    loom.config.register_recipe("unit-live", function_recipe)
+    weave.register_recipe("unit-live", function_recipe)
     assert config_api._get_default_recipe_catalog().get("unit-live") is function_recipe

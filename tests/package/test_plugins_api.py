@@ -88,7 +88,7 @@ def test_import_loom_plugins_is_import_light() -> None:
 
         import loom.plugins
 
-        for forbidden in ("loom.config", "loom.io", "loom.cli", "omegaconf", "yaml"):
+        for forbidden in ("weave", "loom.io", "loom.cli", "omegaconf", "yaml"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.plugins")
         print("ok")

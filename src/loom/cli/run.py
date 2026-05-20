@@ -38,7 +38,7 @@ from loom.cli.results import (
 
 if TYPE_CHECKING:
     from loom.diagnostics import PreflightRequest, PreflightResult
-    from loom.config.api import ComposedConfig
+    from weave.api import ComposedConfig
     from loom.pipeline.execution import RunRequest, RunResult
     from loom.pipeline.executors.slurm import (
         SlurmCommandRunner,
@@ -557,7 +557,7 @@ def _compose_config(
     overlays: Sequence[str | Path],
     overrides: Sequence[str],
 ) -> "ComposedConfig":
-    from loom.config import compose_config
+    from weave import compose_config
 
     return compose_config(
         config_path, overlays=tuple(overlays), overrides=tuple(overrides)

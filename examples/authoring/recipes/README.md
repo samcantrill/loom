@@ -10,7 +10,7 @@ This example demonstrates v0 config composition without running a pipeline:
 
 ## Public Python Surface
 
-This example teaches `loom.config.compose_config` with trusted recipe
+This example teaches `weave.compose_config` with trusted recipe
 registration.
 
 Run from the repository root:

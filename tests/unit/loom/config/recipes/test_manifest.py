@@ -1,6 +1,6 @@
 """Unit tests for recipe manifest records."""
 
-from loom.config.recipes import RecipeManifestRecord
+from weave.recipes import RecipeManifestRecord
 from tests.support.config_samples import function_recipe
 from loom.fingerprints import hash_mapping
 

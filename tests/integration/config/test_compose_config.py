@@ -5,9 +5,9 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import RecipeCatalog, compose_config, inspect_config_composition, instantiate
-from loom.config.errors import ConfigLoadError, OverrideApplyError
-from loom.config.fingerprints import compare_config_artifact_fingerprints
+from weave import RecipeCatalog, compose_config, inspect_config_composition, instantiate
+from weave.errors import ConfigLoadError, OverrideApplyError
+from weave.fingerprints import compare_config_artifact_fingerprints
 from tests.support.config_samples import DownstreamRecipe, argument_recipe
 
 

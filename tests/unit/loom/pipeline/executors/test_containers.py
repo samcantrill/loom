@@ -220,7 +220,7 @@ def test_container_records_import_without_docker_or_presentation_layers() -> Non
         assert ContainerOptions
         for forbidden in (
             "loom.cli",
-            "loom.config",
+            "weave",
             "loom.diagnostics",
             "loom.pipeline.execution",
             "loom.pipeline.executors.docker",

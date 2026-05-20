@@ -5,8 +5,8 @@ from typing import cast
 
 import pytest
 
-from loom.config import compose_config
-from loom.config.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError, ConfigLoadError
+from weave import compose_config
+from weave.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError, ConfigLoadError
 from loom.serialization import PlainData
 
 

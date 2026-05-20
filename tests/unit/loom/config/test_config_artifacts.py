@@ -4,7 +4,7 @@ import pytest
 from typing import cast
 from loom.serialization import PlainData
 
-from loom.config.artifacts import (
+from weave.artifacts import (
     SCHEMA_VERSION,
     RawSourceSnapshotBundle,
     RawSourceSnapshotPayload,
@@ -13,7 +13,7 @@ from loom.config.artifacts import (
     ConfigFingerprintRecord,
     SourceArtifactRecord,
 )
-from loom.config.errors import ConfigErrorContext, ConfigProvenanceError
+from weave.errors import ConfigErrorContext, ConfigProvenanceError
 
 
 def test_source_artifact_round_trip() -> None:
