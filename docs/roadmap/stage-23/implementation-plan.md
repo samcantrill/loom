@@ -1,17 +1,19 @@
 # Roadmap Stage 23 Implementation Plan: Standalone Config Package Extraction
 
-Status: Phase 1 merged; ready for Phase 2 execution planning
+Status: Phase 2 merged; ready for Phase 3 execution planning
 Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: ready for Phase 2 execution planning
+Current phase: ready for Phase 3 execution planning
 Blockers:
 
 - None for roadmap-stage planning readiness.
 - None for implementation-plan quality; `loom_plan_reviewer` confirmation
   review passed on 2026-05-20.
 - Phase 1 execution plan drafted, refined, executed, reviewed, opened,
+  validated, and merged.
+- Phase 2 execution plan drafted, refined, executed, reviewed, opened,
   validated, and merged.
 
 ## Summary
@@ -353,7 +355,7 @@ group or support dual groups if standalone package users need that migration.
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `config-boundary-golden-fixtures` | merged | `codex/config-boundary-golden-fixtures` | [#200](https://github.com/samcantrill/loom/pull/200) | artifact baselines, import inventory | Pin config artifacts and boundary evidence before movement | targeted golden contract, package/import-boundary tests | none moved |
-| 2 | `weave-package-scaffold` | pending | `codex/weave-package-scaffold` | pending | package metadata, config-owned helpers | Add installable package shell and duplicated config helper foundations | package import/build/helper tests, initial package validation target | package-local skeleton only |
+| 2 | `weave-package-scaffold` | merged | `codex/weave-package-scaffold` | [#201](https://github.com/samcantrill/loom/pull/201) | package metadata, config-owned helpers | Add installable package shell and duplicated config helper foundations | package import/build/helper tests, initial package validation target | package-local skeleton only |
 | 3 | `weave-implementation-port` | pending | `codex/weave-implementation-port` | pending | `weave` implementation | Port config implementation into `weave` with package-owned dependencies | package-local config suites, golden parity | config examples may be smoke-copied only when needed |
 | 4 | `weave-hard-switch-adapters` | pending | `codex/weave-hard-switch-adapters` | pending | Loom adapter rewiring, import cleanup | Hard-switch Loom to `weave` and remove `src/loom/config` | root package/contract/integration/e2e, import-boundary tests | runtime examples still in place |
 | 5 | `config-tests-examples-validation` | pending | `codex/config-tests-examples-validation` | pending | test/example relocation, validation targets | Move config tests/examples beside the package and finalize validation commands | `make validate-weave`, targeted root adapter suites | package-local config examples |
@@ -471,11 +473,11 @@ Workflow path: expanded path
 
 ## Phase 2: Package Scaffold And Config Helper Foundations
 
-Status: pending
+Status: merged
 Slug: `weave-package-scaffold`
 Branch: `codex/weave-package-scaffold`
 Worktree: `/home/samcantrill/work/loom-worktrees/weave-package-scaffold`
-PR: pending
+PR: [#201](https://github.com/samcantrill/loom/pull/201)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path
@@ -547,13 +549,15 @@ Workflow path: expanded path
 
 ### Phase Workflow State
 
-- Phase execution plan: not drafted
-- Planning/refinement budget: unused
+- Phase execution plan: drafted and refined
+- Planning/refinement budget: used; expanded-path draft and refine completed
 - Implementation/refinement budget: unused
-- PR review budget: unused
-- Blocker-resolution budget: unused
-- Pre-submit blocker gate: pending
-- Merge record: pending
+- PR review budget: consumed by `loom_phase_reviewer`; one package dependency
+  metadata blocker resolved before merge
+- Blocker-resolution budget: 2/3 used for mapping-proxy helper contract and
+  config runtime dependency metadata fixes
+- Pre-submit blocker gate: passed
+- Merge record: merged into `develop` via PR #201
 
 ### Risks And Stop Conditions
 
@@ -565,11 +569,31 @@ Workflow path: expanded path
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: added `packages/weave` with package metadata, normal config
+  runtime dependencies, `py.typed`, version metadata, package-local README,
+  config-owned helpers for plain data, stable JSON, digests, and structured
+  config errors, package-local helper tests, initial `test-weave`,
+  `build-weave`, and `validate-weave` targets, and root import-boundary tests
+  proving `weave` does not import Loom and Loom core imports do not import
+  `weave`.
+- Validation: `make test-weave`, `make build-weave`, `make validate-weave`,
+  `uv run pytest tests/package/test_import_boundaries.py`,
+  `make validate-pr`, and `make test-summary` passed locally. GitHub CI
+  `checks` passed on 2026-05-20 for the current PR head after a no-op branch
+  update was pushed to attach CI to the final validated tree.
+- Review: `loom_phase_reviewer` found one blocking dependency metadata issue;
+  it was resolved by moving OmegaConf, Pydantic, and PyYAML into normal
+  `weave` runtime dependencies and adding package-local metadata regression
+  coverage.
+- PR: [#201](https://github.com/samcantrill/loom/pull/201), target
+  `develop`, head `codex/weave-package-scaffold`.
+- Merge: squash-merged on 2026-05-20 with merge commit
+  `a2e7baafcb9dfe994587b79425ef80e4d9134eab`; remote phase branch cleanup
+  pending after metadata update because the local branch was checked out in its
+  worktree during merge.
+- Follow-up: Phase 3 should branch from updated `develop` and port the config
+  implementation into `weave` without adding a `loom.config` shim or changing
+  adapter paths early.
 
 ## Phase 3: Config Implementation Port To `weave`
 
