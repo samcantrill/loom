@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan; ready for implementation
+- Status: implemented; PR preparation in progress
 - Feature focus: Config Extraction
 - PR title: `Config Extraction - Phase 4: Hard Switch Loom Adapters`
 - Branch: `codex/weave-hard-switch-adapters`
@@ -288,12 +288,41 @@ If a validation command cannot run because dependency downloads or isolated inst
 ## Refinement And Review Budget Status
 
 - Planning/refinement budget: used; expanded-path draft and refine completed.
-- Phase implementation refinement: unused until a later workflow stage consumes it; expanded path permits one `loom_phase_refiner` pass after implementation if targeted validation fails, coverage is missing, or manager requests it.
-- PR review: unused until a later workflow stage consumes it.
-- Blocker resolution: 0/3 used.
+- Phase implementation refinement: not used; manager handled the bounded validation fix under blocker-resolution budget after the assigned executor was unavailable.
+- PR review: unused until PR review consumes it.
+- Blocker resolution: 1/3 used. The `loom_phase_executor` attempt stopped before implementation because the Spark usage limit was reached; the manager completed the phase locally and used the first blocker-resolution pass for the post-validation recipe-loader/test-summary fixes.
+
+## Implementation Summary
+
+- Hard-switched Loom config-facing adapters from `loom.config` to lazy `weave` imports in CLI validate/plan/run/sweep paths, diagnostics preflight, queue config loading, and recipe-loading plugin diagnostics.
+- Deleted `src/loom/config` with no shim and updated import-boundary tests so `import loom.config` fails while core runtime imports remain free of `weave`.
+- Replaced runtime sweep override path validation with Loom-owned validation so sweep records do not import config or `weave`.
+- Delegated recipe plugin loading to `weave.recipes.load` while keeping metadata-only plugin listing Loom-owned and import-light.
+- Updated package metadata and `uv.lock` so root Loom depends on the local `packages/weave` project and the `config` extra resolves through `weave`.
+- Updated focused root tests and the test-summary grouping needed for the hard switch; broad test/example relocation remains Phase 5 scope.
+
+## Validation Evidence
+
+- `make validate-weave`: passed.
+- `uv lock --check`: passed.
+- `uv run ruff check .`: passed.
+- `uv run --extra config pyright`: passed with 0 errors.
+- `uv build`: passed for root Loom; `make validate-weave` also built the `weave` artifacts.
+- Installed wheel smoke using built `weave` and `loom` wheels: passed; verified `loom.config` is absent and `loom validate` composes a minimal config through the installed packages.
+- `rg "loom\\.config" src tests packages pyproject.toml`: only intentional absence assertions remained in `tests/package/test_import_boundaries.py`.
+- `uv run pytest tests/package/test_import_boundaries.py`: 61 passed.
+- Targeted adapter, queue, plugin, sweep, CLI, package, and config contract suites: passed.
+- `make test-package`: 112 passed, 4 deselected.
+- `make test-contract`: 274 passed, 11 deselected. The sandboxed attempt failed because local service tests cannot open sockets inside the sandbox; rerun with approved local process/socket access passed.
+- `make test-integration`: 170 passed, 89 deselected; run with approved local process/socket access.
+- `make test-e2e`: 46 passed, 6 deselected. The sandboxed attempt failed on local authority-service socket restrictions; rerun with approved local process/socket access passed.
+- `make test-config-extra`: 461 passed, 3 skipped, 2005 deselected. The sandboxed isolated run hit local-service restrictions and was stopped; rerun with approved local process/socket access passed.
+- `make validate-pr`: passed; included Ruff, Pyright, default suite (`2002 passed, 118 deselected`), config-extra (`461 passed, 3 skipped, 2005 deselected`), and root build.
+- `make test-summary`: passed and wrote `build/test-summary.md`; overall 2463 passed, 3 skipped, 2117 deselected, 0 failures/errors.
 
 ## Completion Notes
 
 - Draft plan: completed in commit `0494c97`.
-- Refine plan: completed in this artifact.
-- Final phase execution plan: ready for implementation after this refinement commit.
+- Refine plan: completed in commit `a33e450`.
+- Implementation: completed in commits `fc8d247` and `551f81f`.
+- PR preparation status: ready to prepare/open PR after this validation-note update is committed.
