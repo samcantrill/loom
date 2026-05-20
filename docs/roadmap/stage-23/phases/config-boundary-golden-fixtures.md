@@ -250,9 +250,9 @@ make test-summary
 - Draft plan: completed in this commit.
 - Refine plan: completed by expanded-path refinement in this commit.
 - Final phase execution plan: ready for implementation after this refinement.
-- Implementation summary: not started.
-- Implementation validation: not run.
-- Refinement summary: unused.
+- Implementation summary: added `tests/fixtures/config/golden_project/{base,overlay,include,broken}.yaml`, generated and normalized `tests/golden/config/extraction-v23/{resolved-config.json, redacted-config.json, composition-manifest.json, recipe-manifest.json, source-artifact-records.json, raw-source-snapshots.json, config-fingerprint-record.json, structured-config-errors.json}`, added `tests/contracts/test_config_extraction_golden_artifacts_contract.py` using public `loom.config` APIs and error serialization, and added current-state boundary assertions to `tests/package/test_import_boundaries.py`.
+- Implementation validation: contract test `UV_CACHE_DIR=/tmp/uv-cache uv run --active pytest tests/contracts/test_config_extraction_golden_artifacts_contract.py` passed; package boundary test `UV_CACHE_DIR=/tmp/uv-cache uv run --active pytest tests/package/test_import_boundaries.py` passed; `UV_CACHE_DIR=/tmp/uv-cache uv run make test-contract` passed when executed with approved network access. `make test-summary` was not completed in this environment due long-running/no-output execution behavior.
+- Refinement summary: target-module normalization was adjusted by setting helper recipe `annotate.__module__` to `test_config_extraction_golden_artifacts_contract` for deterministic artifact fingerprints across test invocation contexts.
 - Blocker-resolution summary: unused.
 - PR preparation: not started.
 - Stack maintenance: branch created from `origin/develop`; no predecessor.
