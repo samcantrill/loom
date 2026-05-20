@@ -1,0 +1,19 @@
+{
+  "name": "golden-phase23-base",
+  "pipeline": {
+    "extra": "from-overrides",
+    "model": {
+      "autoreload": true,
+      "kind": "from-include"
+    },
+    "recipe_node": {
+      "annotation": "original:base",
+      "value": "base"
+    },
+    "settings": {
+      "batch_size": 16,
+      "mode": "override",
+      "token": "base-secret-token"
+    }
+  }
+}

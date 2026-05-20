@@ -1,0 +1,21 @@
+{
+  "context": {
+    "actual": "missing target",
+    "code": "target_not_found",
+    "config_path": "$.pipeline.model._include_",
+    "details": {
+      "active_include_stack": [],
+      "authored_target": "missing-model.yaml",
+      "candidate_path": "<golden_project>/missing-model.yaml",
+      "explicit_escape": true,
+      "target_kind": "explicit_relative"
+    },
+    "directive": null,
+    "expected": "existing regular file",
+    "remediation": "Check the include target path relative to the authoring file, or use an explicit relative target.",
+    "source_kind": "base",
+    "source_order": 0,
+    "source_path": "<golden_project>/broken.yaml"
+  },
+  "message": "Include target does not resolve to an existing file: <golden_project>/missing-model.yaml"
+}

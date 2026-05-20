@@ -1,0 +1,97 @@
+[
+  {
+    "content_digest": "sha256:5fcb5555ea9f32b31d46639dabe248cbabaf5a552ce165d2b8a553a6506082f9",
+    "kind": "base",
+    "metadata": {
+      "raw_snapshot": {
+        "availability_without_opt_in": "disabled",
+        "content_in_source_artifact": false,
+        "manifest_embeds_content": false,
+        "reason_without_opt_in": "not_requested",
+        "rebuild_limitation": "metadata_hash_only_without_raw_snapshot_bundle"
+      },
+      "role": "base_or_overlay"
+    },
+    "order": 0,
+    "path": "<golden_project>/base.yaml",
+    "schema_version": 1,
+    "size_bytes": 205
+  },
+  {
+    "content_digest": "sha256:11fd1cdcec7c2d01d04e63fef278052e0d1ac0596b8f7bc66bfa2cd95ebba64b",
+    "kind": "overlay",
+    "metadata": {
+      "raw_snapshot": {
+        "availability_without_opt_in": "disabled",
+        "content_in_source_artifact": false,
+        "manifest_embeds_content": false,
+        "reason_without_opt_in": "not_requested",
+        "rebuild_limitation": "metadata_hash_only_without_raw_snapshot_bundle"
+      },
+      "role": "base_or_overlay"
+    },
+    "order": 1,
+    "path": "<golden_project>/overlay.yaml",
+    "schema_version": 1,
+    "size_bytes": 59
+  },
+  {
+    "content_digest": "sha256:70cc25ae3cd243b8f150fbf53cadf555264911b36f484f74e48a6102c5bc6213",
+    "kind": "include",
+    "metadata": {
+      "authored_target": "include.yaml",
+      "explicit_escape": true,
+      "has_replace_marker": false,
+      "include_site_path": [
+        "pipeline",
+        "model",
+        "_include_"
+      ],
+      "raw_snapshot": {
+        "availability_without_opt_in": "disabled",
+        "content_in_source_artifact": false,
+        "manifest_embeds_content": false,
+        "reason_without_opt_in": "not_requested",
+        "rebuild_limitation": "metadata_hash_only_without_raw_snapshot_bundle"
+      },
+      "resolved_path": "<golden_project>/include.yaml",
+      "source_content_digest": "sha256:5fcb5555ea9f32b31d46639dabe248cbabaf5a552ce165d2b8a553a6506082f9",
+      "source_include_site_path": [
+        "pipeline",
+        "model",
+        "_include_"
+      ],
+      "source_kind": "base",
+      "source_order": 0,
+      "source_path": "<golden_project>/base.yaml",
+      "source_size_bytes": 205,
+      "target_kind": "explicit_relative"
+    },
+    "order": 2,
+    "path": "<golden_project>/include.yaml",
+    "schema_version": 1,
+    "size_bytes": 36
+  },
+  {
+    "content_digest": "sha256:bb67faaf5786dc13b8e17ec4cebd8a956c121ed427f9b3fc2d045eda62489145",
+    "kind": "recipe",
+    "metadata": {
+      "expanded_hash": "sha256:bb67faaf5786dc13b8e17ec4cebd8a956c121ed427f9b3fc2d045eda62489145",
+      "loom_version": "0.1.0",
+      "name": "annotate",
+      "path": "pipeline.recipe_node",
+      "raw_snapshot": {
+        "availability_without_opt_in": "unavailable",
+        "content_in_source_artifact": false,
+        "manifest_embeds_content": false,
+        "reason_without_opt_in": "unsupported_source_kind",
+        "rebuild_limitation": "metadata_hash_only_without_raw_snapshot_bundle"
+      },
+      "target": "test_config_extraction_golden_artifacts_contract:_build_expected_artifacts.<locals>.annotate"
+    },
+    "order": 3,
+    "path": "pipeline.recipe_node",
+    "schema_version": 1,
+    "size_bytes": 71
+  }
+]

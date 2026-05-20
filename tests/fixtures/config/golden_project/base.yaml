@@ -1,0 +1,11 @@
+name: golden-phase23-base
+pipeline:
+  model:
+    _include_: include.yaml
+  settings:
+    token: base-secret-token
+    mode: baseline
+  recipe_node:
+    _recipe_: annotate
+    value: base
+    tag: original
