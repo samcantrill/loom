@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan; refinement pending
+- Status: refined phase execution plan; ready for implementation
 - Feature focus: Config Extraction
 - PR title: `Config Extraction - Phase 4: Hard Switch Loom Adapters`
 - Branch: `codex/weave-hard-switch-adapters`
@@ -20,10 +20,17 @@
 - Successor dependency notes: Phase 5 should branch from updated `develop` after this phase merges. If a GitHub-side blocker leaves this PR open after validation and PR preparation, Phase 5 may stack on `codex/weave-hard-switch-adapters` only after this phase is recorded as `pr_open`.
 - Plan quality gate: passed on 2026-05-20 in the implementation plan, with no blocking findings after confirmation review; verified before this phase plan was drafted.
 - Plan quality gate loop budget: consumed and passed before this phase plan; do not rerun unless the manager explicitly reopens the stage plan.
-- Draft pass: completed in this artifact.
-- Refine pass: pending; expanded-path planning requires one refinement commit before implementation begins.
+- Draft pass: completed in this artifact and committed.
+- Refine pass: completed in this artifact; expanded-path planning budget is consumed for this phase unless the manager explicitly reopens planning.
 - Setup limitations: branch and worktree were created from local `develop` at `e39c974`; no network fetch was performed. Initial worktree creation needed sandbox escalation because git refs in the control checkout metadata were read-only to the sandbox.
 - Blockers: none known. Implementation must stop if `src/loom/config` cannot be removed without a shim, if root Loom needs broad runtime imports from `weave`, if config errors cannot preserve CLI/config exit behavior through adapter translation, or if root package metadata cannot depend on the local `weave` package coherently.
+
+## Refinement Summary
+
+- Tightened the adapter handoff around error translation: config-owned `weave` errors should be caught or normalized in approved adapter paths, without eager `weave` imports from CLI roots or runtime internals.
+- Made package metadata validation explicit: root Loom must resolve the local `packages/weave` package and must not accidentally depend on an unrelated external `weave` distribution.
+- Clarified the reference sweep: remaining `loom.config` references after implementation must be historical documentation or deliberate absence assertions, not executable imports.
+- Kept Phase 5 ownership intact: broad test and example relocation remains out of scope, while Phase 4 updates enough root tests to prove the hard switch and no-shim boundary.
 
 ## Objective
 
@@ -117,6 +124,7 @@ Root packaging must prove that a user installing Loom can still run supported au
 - `src/loom/config` is deleted and no `loom.config` shim, alias, or module proxy remains.
 - Runtime sweep spec validation no longer imports `loom.config` or `weave`, while preserving accepted override path/value behavior.
 - Root package metadata depends on local `weave` for supported config adapter workflows; lock or workspace metadata is current.
+- Root package/build evidence proves the dependency resolves the local `packages/weave` project rather than an unrelated package with the same name.
 - `import loom`, `import loom.pipeline`, `import loom.serialization`, `import loom.plugins`, `import loom.queue`, and other core runtime imports do not import `weave`.
 - `weave` imports no `loom` after bare import, public config symbol resolution, recipe loading, and representative composition calls.
 - Root tests that intentionally asserted `loom.config` behavior are updated to the `weave` surface or to Loom adapter boundaries, without broad Phase 5 relocation.
@@ -171,7 +179,8 @@ Root packaging must prove that a user installing Loom can still run supported au
 4. Update root package metadata and lock/workspace files so Loom resolves `weave` for config adapter workflows.
 5. Delete `src/loom/config/**` and remove stale internal references to `loom.config`.
 6. Update focused root tests and import-boundary tests for the final no-shim `weave` boundary.
-7. Run targeted package, root, packaging, and smoke validation; stop on import-boundary regressions, diagnostics drift, metadata incoherence, or inability to delete the old source path.
+7. Run a reference sweep for `loom.config`; any remaining source or test reference must be an intentional absence assertion or a documented historical note.
+8. Run targeted package, root, packaging, and smoke validation; stop on import-boundary regressions, diagnostics drift, metadata incoherence, or inability to delete the old source path.
 
 ## Test Plan
 
@@ -179,7 +188,7 @@ Root packaging must prove that a user installing Loom can still run supported au
 
 - Status: required
 - Expected paths: `packages/weave/tests/`, `tests/package/test_import_boundaries.py`, and root package/API tests that are updated from `loom.config` to `weave` or root adapters.
-- Required assertions or deferral reason: prove `weave` remains importable and Loom-free; prove root package metadata resolves `weave`; prove `loom.config` is absent; prove core runtime imports do not import `weave`; prove allowed adapter modules can call `weave`.
+- Required assertions or deferral reason: prove `weave` remains importable and Loom-free; prove root package metadata resolves the local `packages/weave` project; prove `loom.config` is absent; prove core runtime imports do not import `weave`; prove allowed adapter modules can call `weave`.
 
 ### Unit Suite
 
@@ -220,6 +229,7 @@ make validate-weave
 uv lock --check
 uv build
 uv run pytest tests/package/test_import_boundaries.py
+rg "loom\\.config" src tests packages pyproject.toml
 uv run pytest tests/unit/loom/cli/test_validate.py tests/unit/loom/cli/test_plan.py tests/unit/loom/cli/test_run.py tests/unit/loom/cli/test_sweep.py
 uv run pytest tests/unit/loom/diagnostics/test_diagnostics_preflight.py tests/unit/loom/queue tests/unit/loom/plugins/test_diagnostics.py tests/unit/loom/pipeline/sweep
 uv run pytest tests/contracts/test_config_extraction_golden_artifacts_contract.py tests/contracts/test_recipe_contract.py tests/contracts/test_cli_plugins_contract.py
@@ -231,7 +241,7 @@ Packaging and smoke checks:
 
 ```sh
 uv build
-isolated installed-package import and minimal config-facing CLI smoke
+isolated installed-package import and minimal config-facing CLI smoke using built root artifacts
 ```
 
 Final PR-preparation commands:
@@ -241,6 +251,7 @@ make test-package
 make test-contract
 make test-integration
 make test-e2e
+make test-config-extra
 make validate-pr
 make test-summary
 ```
@@ -276,13 +287,13 @@ If a validation command cannot run because dependency downloads or isolated inst
 
 ## Refinement And Review Budget Status
 
-- Planning/refinement budget: draft completed; refine pass pending for expanded path.
-- Phase implementation refinement: unused; expanded path permits one `loom_phase_refiner` pass after implementation if targeted validation fails, coverage is missing, or manager requests it.
-- PR review: unused.
+- Planning/refinement budget: used; expanded-path draft and refine completed.
+- Phase implementation refinement: unused until a later workflow stage consumes it; expanded path permits one `loom_phase_refiner` pass after implementation if targeted validation fails, coverage is missing, or manager requests it.
+- PR review: unused until a later workflow stage consumes it.
 - Blocker resolution: 0/3 used.
 
 ## Completion Notes
 
-- Draft plan: completed in this artifact.
-- Refine plan: pending.
-- Final phase execution plan: not ready for implementation until the refinement commit records the expanded-path refine pass.
+- Draft plan: completed in commit `0494c97`.
+- Refine plan: completed in this artifact.
+- Final phase execution plan: ready for implementation after this refinement commit.
