@@ -211,7 +211,7 @@ class ConfigProvenanceError(_ConfigError):
         super().__init__(message, context=context)
 
 
-class ConfigIncludeResolutionError(ConfigValidationError):
+class ConfigIncludeResolutionError(_ConfigError):
     """Error while resolving include targets to concrete local files."""
 
 
@@ -227,7 +227,7 @@ class RecipeRegistrationError(_ConfigError):
     """Error registering a recipe implementation."""
 
 
-class DuplicateRecipeError(UnsupportedRecipeError):
+class DuplicateRecipeError(RecipeRegistrationError):
     """Error when a recipe name is already registered."""
 
 

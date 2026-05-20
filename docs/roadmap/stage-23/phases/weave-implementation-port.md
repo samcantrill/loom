@@ -295,8 +295,11 @@ make test-summary
 
 - Planning/refinement budget: used; expanded-path draft and refine completed
 - Phase implementation refinement: unused
-- PR review: unused
-- Blocker resolution: 1/3 used for manager takeover from a stalled implementation agent and completion of package-boundary fixes.
+- PR review: used by `loom_phase_reviewer`; one blocking error hierarchy
+  parity finding was resolved.
+- Blocker resolution: 2/3 used. First pass covered manager takeover from a
+  stalled implementation agent and package-boundary fixes. Second pass fixed
+  package error inheritance parity after PR review.
 
 ## Completion Notes
 
@@ -312,8 +315,12 @@ make test-summary
   - `uv run --extra config pytest tests/contracts/test_config_extraction_golden_artifacts_contract.py` → PASS (1 passed).
   - `uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_error_contract.py tests/contracts/test_config_composition_inspection_contract.py tests/contracts/test_recipe_contract.py` → PASS (32 passed).
   - `make validate-pr` → PASS (ruff, pyright, default suite with 1967 passed/27 skipped/30 deselected, config-extra with 461 passed/3 skipped/2005 deselected, root build).
-  - `make test-summary` → PASS (package 112 passed/1 skipped; unit 1394 passed/7 skipped/1 deselected; contract 274 passed/3 skipped; integration 170 passed/8 skipped/18 deselected; e2e 46 passed/6 deselected; config-extra 461 passed/3 skipped/2005 deselected).
+  - `make test-summary` → PASS after PR-review fix (package 112 passed/1 skipped; unit 1394 passed/7 skipped/1 deselected; contract 274 passed/3 skipped; integration 170 passed/8 skipped/18 deselected; e2e 46 passed/6 deselected; config-extra 461 passed/3 skipped/2005 deselected).
+- PR review summary: `loom_phase_reviewer` found one blocking structured-error
+  hierarchy drift from the trusted `loom.config` baseline. The manager fixed
+  `ConfigIncludeResolutionError` and `DuplicateRecipeError` inheritance to
+  match the baseline and updated package error regression coverage.
 - Refinement summary: No `loom_phase_refiner` pass used. The manager stopped a stalled implementation agent, completed narrow package-boundary fixes (`weave.__init__` public exports, error/helper circular import cleanup, subpackage relative imports, and package `uv` validation target wiring), and recorded this as one scoped blocker-resolution pass.
-- Blocker-resolution summary: 1/3 used; no remaining blockers.
-- PR preparation: prepared locally in `docs/roadmap/stage-23/phases/weave-implementation-port-pr-body.md`; PR intentionally not opened during this preparation pass. PR facts: title `Config Extraction - Phase 3: Implementation Port Into Weave`, base `develop`, head `codex/weave-implementation-port`, stack predecessor none, root phase PR target `develop`. Validation evidence recorded above from `make validate-pr` and `make test-summary`; GitHub checks pending PR creation.
+- Blocker-resolution summary: 2/3 used; no remaining blockers.
+- PR preparation: opened as PR #202. PR facts: title `Config Extraction - Phase 3: Implementation Port Into Weave`, base `develop`, head `codex/weave-implementation-port`, stack predecessor none, root phase PR target `develop`. Validation evidence recorded above from `make validate-pr` and `make test-summary`; GitHub checks pending after the latest review-fix push.
 - Stack maintenance: branch created from local `develop` at `d5f7e39`; no predecessor.

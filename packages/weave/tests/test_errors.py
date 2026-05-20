@@ -4,12 +4,12 @@ import pytest
 
 from weave.errors import (
     ConfigErrorContext,
+    ConfigIncludeResolutionError,
     ConfigLoadError,
     ConfigValidationError,
-    UnsupportedRecipeError,
     DuplicateRecipeError,
-    ConfigIncludeResolutionError,
     PlainDataError,
+    RecipeRegistrationError,
 )
 
 
@@ -63,6 +63,7 @@ def test_config_errors_have_payloads() -> None:
 
 def test_error_inheritance_surface() -> None:
     assert issubclass(ConfigLoadError, Exception)
-    assert issubclass(DuplicateRecipeError, UnsupportedRecipeError)
+    assert issubclass(DuplicateRecipeError, RecipeRegistrationError)
     assert issubclass(ConfigValidationError, Exception)
-    assert issubclass(ConfigIncludeResolutionError, ConfigValidationError)
+    assert issubclass(ConfigIncludeResolutionError, Exception)
+    assert not issubclass(ConfigIncludeResolutionError, ConfigValidationError)

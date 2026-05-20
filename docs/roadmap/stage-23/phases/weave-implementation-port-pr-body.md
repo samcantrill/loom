@@ -19,6 +19,7 @@ This phase keeps the hard switch out of scope: there is no Loom adapter rewiring
 - Replaced Loom-owned helper usage with package-owned `weave` helpers for plain data, stable JSON, digests, version metadata, and config errors.
 - Kept the Stage 23 `loom.recipes` entry-point group while moving recipe loading ownership into `weave`, avoiding imports from `loom.plugins`.
 - Added narrow Make/test target wiring needed to validate the package-local port.
+- Resolved PR-review error hierarchy drift by matching the trusted `loom.config` baseline for include-resolution and duplicate-recipe errors.
 
 New tests implemented:
 
@@ -37,19 +38,19 @@ New tests implemented:
 | `uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_error_contract.py tests/contracts/test_config_composition_inspection_contract.py tests/contracts/test_recipe_contract.py` | Passed | 32 passed |
 | `make validate-pr` | Passed | Ruff, Pyright, default suite, config-extra suite, and root build passed |
 | `make test-summary` | Passed | `build/test-summary.md` generated with overall status `passed` |
-| GitHub checks | Not run | PR creation was intentionally skipped for this preparation pass |
+| GitHub checks | Pending | Will be verified by the merge gate after the latest review-fix push |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration | Coverage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 112 | 0 | 0 | 1 | 0 | 113 | 16.40s | 18% |
-| unit | passed | 1394 | 0 | 0 | 7 | 1 | 1401 | 69.52s | 77% |
-| contract | passed | 274 | 0 | 0 | 3 | 0 | 277 | 13.18s | 56% |
-| integration | passed | 170 | 0 | 0 | 8 | 18 | 178 | 62.01s | 62% |
-| e2e | passed | 46 | 0 | 0 | 0 | 6 | 46 | 42.01s | 59% |
-| config-extra | passed | 461 | 0 | 0 | 3 | 2005 | 464 | 119.26s | 60% |
-| Overall | passed | 2457 | 0 | 0 | 22 | 2030 | 2479 | 322.38s | - |
+| package | passed | 112 | 0 | 0 | 1 | 0 | 113 | 16.43s | 18% |
+| unit | passed | 1394 | 0 | 0 | 7 | 1 | 1401 | 69.53s | 77% |
+| contract | passed | 274 | 0 | 0 | 3 | 0 | 277 | 13.12s | 56% |
+| integration | passed | 170 | 0 | 0 | 8 | 18 | 178 | 62.84s | 62% |
+| e2e | passed | 46 | 0 | 0 | 0 | 6 | 46 | 41.69s | 59% |
+| config-extra | passed | 461 | 0 | 0 | 3 | 2005 | 464 | 117.73s | 60% |
+| Overall | passed | 2457 | 0 | 0 | 22 | 2030 | 2479 | 321.34s | - |
 
 ## Assumptions
 
@@ -61,4 +62,4 @@ New tests implemented:
 
 - The duplicate config implementation can drift if Phase 4 is delayed.
 - Package-local and root config coverage intentionally overlap until Phase 5 relocates and de-duplicates ownership.
-- GitHub checks still need to run after the managing agent opens the PR.
+- GitHub checks still need to finish for the latest review-fix push before merge.
