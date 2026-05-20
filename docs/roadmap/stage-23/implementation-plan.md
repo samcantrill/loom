@@ -1,11 +1,11 @@
 # Roadmap Stage 23 Implementation Plan: Standalone Config Package Extraction
 
-Status: Phase 3 PR open; automated review and CI in progress
+Status: Phase 3 merged; ready for Phase 4 execution planning
 Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 3 PR #202 open against `develop`
+Current phase: ready for Phase 4 execution planning
 Blockers:
 
 - None for roadmap-stage planning readiness.
@@ -15,8 +15,8 @@ Blockers:
   validated, and merged.
 - Phase 2 execution plan drafted, refined, executed, reviewed, opened,
   validated, and merged.
-- Phase 3 execution plan drafted, refined, executed, validated, and opened as
-  PR #202 against `develop`.
+- Phase 3 execution plan drafted, refined, executed, reviewed, opened,
+  validated, and merged.
 
 ## Summary
 
@@ -358,7 +358,7 @@ group or support dual groups if standalone package users need that migration.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `config-boundary-golden-fixtures` | merged | `codex/config-boundary-golden-fixtures` | [#200](https://github.com/samcantrill/loom/pull/200) | artifact baselines, import inventory | Pin config artifacts and boundary evidence before movement | targeted golden contract, package/import-boundary tests | none moved |
 | 2 | `weave-package-scaffold` | merged | `codex/weave-package-scaffold` | [#201](https://github.com/samcantrill/loom/pull/201) | package metadata, config-owned helpers | Add installable package shell and duplicated config helper foundations | package import/build/helper tests, initial package validation target | package-local skeleton only |
-| 3 | `weave-implementation-port` | pr_open | `codex/weave-implementation-port` | [#202](https://github.com/samcantrill/loom/pull/202) | `weave` implementation | Port config implementation into `weave` with package-owned dependencies | package-local config suites, golden parity | config examples may be smoke-copied only when needed |
+| 3 | `weave-implementation-port` | merged | `codex/weave-implementation-port` | [#202](https://github.com/samcantrill/loom/pull/202) | `weave` implementation | Port config implementation into `weave` with package-owned dependencies | package-local config suites, golden parity | config examples may be smoke-copied only when needed |
 | 4 | `weave-hard-switch-adapters` | pending | `codex/weave-hard-switch-adapters` | pending | Loom adapter rewiring, import cleanup | Hard-switch Loom to `weave` and remove `src/loom/config` | root package/contract/integration/e2e, import-boundary tests | runtime examples still in place |
 | 5 | `config-tests-examples-validation` | pending | `codex/config-tests-examples-validation` | pending | test/example relocation, validation targets | Move config tests/examples beside the package and finalize validation commands | `make validate-weave`, targeted root adapter suites | package-local config examples |
 | 6 | `config-extraction-docs-hardening` | pending | `codex/config-extraction-docs-hardening` | pending | docs, final validation, metadata | Align docs, structure, roadmap metadata, and final combined validation | `make validate-pr`, `make test-summary` | docs and example references verified |
@@ -599,7 +599,7 @@ Workflow path: expanded path
 
 ## Phase 3: Config Implementation Port To `weave`
 
-Status: pr_open
+Status: merged
 Slug: `weave-implementation-port`
 Branch: `codex/weave-implementation-port`
 Worktree: `/home/samcantrill/work/loom-worktrees/weave-implementation-port`
@@ -683,11 +683,12 @@ Workflow path: expanded path
 - Implementation/refinement budget: no `loom_phase_refiner` pass used; manager
   performed one scoped takeover/refinement after the implementation agent
   stalled.
-- PR review budget: unused
-- Blocker-resolution budget: 1/3 used for manager takeover and package-boundary
-  fixes; no remaining implementation blockers.
-- Pre-submit blocker gate: passed locally.
-- Merge record: pending
+- PR review budget: used by `loom_phase_reviewer`; one blocking hierarchy
+  parity finding was resolved before merge.
+- Blocker-resolution budget: 2/3 used for manager takeover/package-boundary
+  fixes and the PR-review error hierarchy parity fix; no remaining blockers.
+- Pre-submit blocker gate: passed locally and in GitHub CI.
+- Merge record: merged into `develop` via PR #202.
 
 ### Risks And Stop Conditions
 
@@ -710,10 +711,19 @@ Workflow path: expanded path
   `PYTHONPATH=packages/weave/src uv run --extra config pytest packages/weave/tests`,
   import-boundary tests, golden config extraction contract tests, focused
   config contracts, `make validate-pr`, and `make test-summary` passed locally.
+  GitHub CI `checks` passed on 2026-05-20 for head
+  `8de4a7c13908f7b60072a50493684156f2c70571`.
+- Review: `loom_phase_reviewer` found one blocking structured-error hierarchy
+  drift; it was fixed by restoring `ConfigIncludeResolutionError` and
+  `DuplicateRecipeError` inheritance parity with the trusted `loom.config`
+  baseline and adding package regression coverage.
 - PR: [#202](https://github.com/samcantrill/loom/pull/202), target
   `develop`, head `codex/weave-implementation-port`.
-- Merge:
-- Follow-up:
+- Merge: squash-merged on 2026-05-20 with merge commit
+  `51adb08f9761bf35cf5b73df576c2c1b496d0120`.
+- Follow-up: Phase 4 should branch from updated `develop` and hard-switch Loom
+  adapter paths to `weave`, remove `src/loom/config`, and enforce the final
+  import boundaries.
 
 ## Phase 4: Hard Switch Loom Adapters And Import Boundaries
 
