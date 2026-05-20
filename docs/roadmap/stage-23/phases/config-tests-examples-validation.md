@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan; ready for implementation
+- Status: implementation complete; PR preparation pending
 - Feature focus: Config Extraction
 - PR title: `Config Extraction - Phase 5: Tests Examples And Validation`
 - Branch: `codex/config-tests-examples-validation`
@@ -167,4 +167,30 @@ rg "loom\\.config" src tests packages examples pyproject.toml
 ## Completion Notes
 
 - Draft plan: completed in commit `38c0520`.
-- Refine plan: completed in this artifact.
+- Refine plan: completed in commit `5761bff`.
+- Implementation: moved config-owned unit, contract, and pure composition
+  integration tests into `packages/weave/tests`; left Loom CLI/runtime adapter
+  tests in root suites. Added package-local support fixtures, package pytest
+  config, and harness coverage/grouping for `weave` and `weave-examples`.
+- Examples: moved config authoring examples into `packages/weave/examples`,
+  added a root authoring handoff README, updated example manifests to point at
+  `make test-weave-examples`, and added package-local example/manifest
+  validation.
+- Validation:
+  - `make test-weave` passed: 375 passed.
+  - `make test-weave-examples` passed: 8 passed.
+  - `make validate-weave` passed: Ruff, Pyright, 375 package tests, 8 example
+    checks, and package build.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/config -m optional_dependency`
+    passed outside the sandbox: 26 passed.
+  - `make validate-pr` passed outside the sandbox: Ruff, Pyright, default
+    suite 1982 passed / 108 deselected, config-extra 128 passed / 3 skipped /
+    1985 deselected, and root build.
+  - `make test-summary` passed outside the sandbox with suite rows: package
+    112 passed, unit 1402 passed, contract 252 passed, integration 170 passed,
+    e2e 46 passed, config-extra 128 passed / 3 skipped, weave 375 passed, and
+    weave-examples 8 passed.
+- Reference sweeps: `rg "loom\\.config" src tests packages examples pyproject.toml`
+  found only intentional absence assertions; package-local `from loom` /
+  `import loom` / `loom.` sweep found only the no-Loom-import assertion and the
+  preserved `loom.recipes` entry-point group string.
