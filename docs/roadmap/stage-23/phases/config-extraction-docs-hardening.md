@@ -2,13 +2,14 @@
 
 ## Metadata
 
-- Status: PR open; automated review pending
+- Status: merged
 - Feature focus: Config Extraction
 - PR title: `Config Extraction - Phase 6: Documentation And Final Hardening`
 - PR: [#205](https://github.com/samcantrill/loom/pull/205), target
   `develop`, head `codex/config-extraction-docs-hardening`
 - Branch: `codex/config-extraction-docs-hardening`
 - Worktree: `/home/samcantrill/work/loom-worktrees/config-extraction-docs-hardening`
+- Worktree cleanup: removed after merge
 - Phase execution plan path: `docs/roadmap/stage-23/phases/config-extraction-docs-hardening.md`
 - Full plan: `docs/roadmap/stage-23/implementation-plan.md`
 - Planning artifact: `docs/roadmap/stage-23/planning.md`
@@ -16,9 +17,8 @@
 - Stack predecessor: none; Phases 1 through 5 are merged
 - Base branch: `develop`
 - Target branch: `develop`
-- Merge eligibility: root phase PR is merge-eligible only after automated
-  review, required validation, and CI pass while targeting `develop`; phase
-  agents must not merge.
+- Merge record: squash-merged into `develop` via PR #205 with merge commit
+  `d218eecb95e94e9846fd98beba9991fb9ab2342e`.
 - Workflow path: expanded path
 - Expanded-path reason: this phase changes broad user-facing docs, final
   roadmap metadata, and durable validation evidence for the completed package
@@ -218,7 +218,7 @@ make test-summary
 - Planning/refinement budget: used; expanded-path draft and refine completed.
 - Phase implementation refinement: not needed; targeted and full validation
   passed after manager implementation.
-- PR review: unused.
+- PR review: used; manager automated review found no blocking issues.
 - Blocker resolution: 0/3 used.
 
 ## Completion Notes
@@ -234,3 +234,10 @@ make test-summary
   import-reference sweeps, `make validate-pr`, and `make test-summary` passed.
 - PR: [#205](https://github.com/samcantrill/loom/pull/205), target
   `develop`, head `codex/config-extraction-docs-hardening`.
+- Review: manager automated review verified PR target, scope, whitespace,
+  current-doc import sweeps, and GitHub CI. No blocking findings remained.
+- Merge: squash-merged on 2026-05-20 with merge commit
+  `d218eecb95e94e9846fd98beba9991fb9ab2342e`; GitHub CI `checks`
+  completed successfully on 2026-05-20 before merge.
+- Cleanup: remote branch, stale tracking ref, local branch, and worktree were
+  removed after merge.
