@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan; ready for implementation
+- Status: implementation complete; ready for PR preparation
 - Feature focus: Config Extraction
 - PR title: `Config Extraction - Phase 6: Documentation And Final Hardening`
 - Branch: `codex/config-extraction-docs-hardening`
@@ -25,9 +25,8 @@
   blocking findings after confirmation review.
 - Draft pass: completed and committed.
 - Refine pass: completed in this artifact.
-- Blockers: none known. Stop if docs changes would reopen config semantics,
-  require new package publication work, or contradict the confirmed no-shim
-  package split.
+- Blockers: none known. Docs changes did not reopen config semantics, require
+  package publication work, or contradict the confirmed no-shim package split.
 
 ## Refinement Summary
 
@@ -190,6 +189,18 @@ make validate-pr
 make test-summary
 ```
 
+## Validation Evidence
+
+| Command/check | Result |
+| --- | --- |
+| `make validate-weave` | Passed: package Ruff, Pyright, 375 package tests, 8 package examples, and package build. |
+| `uv run --extra config pytest tests/integration/docs/test_v0_python_examples.py tests/integration/examples/test_example_workflows.py` | Passed outside sandbox with 33 tests. |
+| Active public import sweep | Passed: no current docs/examples/source references to `loom.config` except intentional absence assertions in `tests/package/test_import_boundaries.py`. |
+| Authoring example sweep | Passed: no `examples/authoring` or `authoring.` references remain in active docs/examples/tests. |
+| Full historical sweep | Reviewed: remaining `loom.config` references are historical roadmap/planning notes or intentional absence assertions. |
+| `make validate-pr` | Passed outside sandbox: Ruff, Pyright, default suite, config-extra suite, `validate-weave`, root build. |
+| `make test-summary` | Passed; wrote `build/test-summary.md` with package, unit, contract, integration, e2e, config-extra, weave, and weave-examples rows. |
+
 ## Risks And Stop Conditions
 
 - Stop if final docs contradict confirmed design decisions from the planning
@@ -203,11 +214,19 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Planning/refinement budget: used; expanded-path draft and refine completed.
-- Phase implementation refinement: unused.
+- Phase implementation refinement: not needed; targeted and full validation
+  passed after manager implementation.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
 
 ## Completion Notes
 
 - Draft plan: completed in commit `10461fb`.
-- Refine plan: completed in this artifact.
+- Refine plan: completed in commit `d4e9a52`.
+- Implementation: updated current user-facing docs, README examples, structure
+  docs, feature docs, package docs, example catalog references, testing docs,
+  roadmap metadata, and a narrow docs/example test expectation so repository
+  instructions now present `weave` as the config authoring package and Loom as
+  the runtime using explicit config adapter paths.
+- Validation: `make validate-weave`, targeted docs/example tests,
+  import-reference sweeps, `make validate-pr`, and `make test-summary` passed.
