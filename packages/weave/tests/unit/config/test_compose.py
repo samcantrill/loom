@@ -24,7 +24,7 @@ from weave.fingerprints import (
 from weave.api import ComposedConfig
 import weave.api as config_api
 import weave.compose as config_compose
-from loom.serialization import PlainData
+from weave.plain import PlainData
 from tests.support.config_samples import argument_recipe
 
 

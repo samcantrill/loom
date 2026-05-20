@@ -5,7 +5,7 @@ from typing import Mapping, cast
 
 import pytest
 
-from loom.serialization import PlainData
+from weave.plain import PlainData
 from weave.errors import OverrideApplyError, OverrideParseError
 from weave.overrides import apply_overrides, parse_overrides, split_include_and_ordinary_overrides
 

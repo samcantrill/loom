@@ -2,7 +2,7 @@
 
 import pytest
 from typing import cast
-from loom.serialization import PlainData
+from weave.plain import PlainData
 
 from weave.artifacts import (
     SCHEMA_VERSION,

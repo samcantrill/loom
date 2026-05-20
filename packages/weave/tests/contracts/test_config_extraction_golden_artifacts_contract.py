@@ -18,7 +18,7 @@ from weave.fingerprints import ARTIFACT_SAFE_FINGERPRINT_LABEL
 
 pytestmark = [pytest.mark.contract, pytest.mark.optional_dependency]
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 GOLDEN_PROJECT_ROOT = REPO_ROOT / "tests/fixtures/config/golden_project"
 GOLDEN_PATH = REPO_ROOT / "tests/golden/config/extraction-v23"
 PROJECT_PLACEHOLDER = "<golden_project>"

@@ -11,7 +11,7 @@ from weave.source_maps import (
     compose_config_with_sources,
     format_config_path,
 )
-from loom.serialization import PlainData
+from weave.plain import PlainData
 
 
 def plain_config(value: Mapping[str, PlainData]) -> dict[str, PlainData]:

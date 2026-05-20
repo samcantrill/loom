@@ -2,7 +2,7 @@
 
 from weave.recipes import RecipeManifestRecord
 from tests.support.config_samples import function_recipe
-from loom.fingerprints import hash_mapping
+from weave.digests import hash_mapping
 
 
 def test_manifest_record_shape_and_hash() -> None:

@@ -2,7 +2,7 @@ from typing import Mapping, cast
 
 import pytest
 
-from loom.serialization import PlainData
+from weave.plain import PlainData
 from weave.merge import merge_configs
 from weave.errors import ConfigMergeError
 

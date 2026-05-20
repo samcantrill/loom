@@ -14,7 +14,7 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("pydantic")
 
 from weave import compose_config  # noqa: E402
-from loom.serialization import PlainData  # noqa: E402
+from weave.plain import PlainData  # noqa: E402
 
 
 def _assert_no_replace_markers(value: PlainData) -> None:

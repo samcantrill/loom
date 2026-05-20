@@ -47,3 +47,15 @@ pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+markers = [
+    "package: package-local public API and import tests",
+    "unit: unit tests",
+    "contract: reusable config behavior contracts",
+    "integration: integration-style config composition tests",
+    "optional_dependency: tests that require config runtime dependencies",
+]

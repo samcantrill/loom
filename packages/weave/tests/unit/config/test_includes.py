@@ -15,7 +15,7 @@ from weave.source_maps import (
 )
 from weave.provenance import ConfigSource
 from weave.load import load_config
-from loom.serialization import PlainData
+from weave.plain import PlainData
 
 
 def _config_source(

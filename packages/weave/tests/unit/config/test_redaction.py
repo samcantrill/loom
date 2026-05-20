@@ -3,7 +3,7 @@
 from copy import deepcopy
 
 from weave.redaction import redact_secrets
-from loom.serialization import PlainData
+from weave.plain import PlainData
 
 
 def test_redact_secret_like_keys_recursively() -> None:

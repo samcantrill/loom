@@ -7,7 +7,7 @@ import pytest
 
 from weave.errors import ConfigValidationError, UnsupportedRecipeError
 from weave.validation import validate_no_recipe_keys, validate_top_level_fields
-from loom.serialization import PlainData
+from weave.plain import PlainData
 
 
 def test_validate_top_level_accepts_generic_payloads() -> None:

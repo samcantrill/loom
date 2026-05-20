@@ -7,7 +7,7 @@ import pytest
 
 from weave import compose_config
 from weave.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError, ConfigLoadError
-from loom.serialization import PlainData
+from weave.plain import PlainData
 
 
 def _model_mapping(config: dict[str, PlainData]) -> dict[str, PlainData]:

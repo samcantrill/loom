@@ -6,7 +6,7 @@ from typing import Literal
 import pytest
 import yaml
 
-from loom.fingerprints import hash_bytes
+from weave.digests import hash_bytes
 from weave.errors import ConfigLoadError
 from weave.load import load_config
 
