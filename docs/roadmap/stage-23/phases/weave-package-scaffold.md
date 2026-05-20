@@ -221,8 +221,8 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: unused
-- PR review: unused
-- Blocker resolution: 1/3 used for manager-side pre-submit helper contract correction.
+- PR review: used by `loom_phase_reviewer`; one blocking package dependency metadata finding was resolved.
+- Blocker resolution: 2/3 used for manager-side pre-submit helper contract correction and package dependency metadata correction after PR review.
 
 ## Completion Notes
 
@@ -239,9 +239,12 @@ make test-summary
   - Manager rerun after correction: `uv run pytest tests/package/test_import_boundaries.py` → PASS (60 passed).
   - Manager final gate: `make validate-pr` → PASS (ruff, pyright, default suite with 1966 passed/27 skipped/30 deselected, config-extra with 461 passed/3 skipped/2004 deselected, root build).
   - Manager PR evidence: `make test-summary` → PASS (package 111 passed/1 skipped; unit 1394 passed/7 skipped/1 deselected; contract 274 passed/3 skipped; integration 170 passed/8 skipped/18 deselected; e2e 46 passed/6 deselected; config-extra 461 passed/3 skipped/2004 deselected).
+  - Post-review blocker fix: `make test-weave` → PASS (23 passed); `make validate-weave` → PASS (ruff, pyright, 23 package tests, `weave-0.1.0` source/wheel artifacts); `make validate-pr` → PASS (ruff, pyright, default suite with 1966 passed/27 skipped/30 deselected, config-extra with 461 passed/3 skipped/2004 deselected, root build); `make test-summary` → PASS (package 111 passed/1 skipped; unit 1394 passed/7 skipped/1 deselected; contract 274 passed/3 skipped; integration 170 passed/8 skipped/18 deselected; e2e 46 passed/6 deselected; config-extra 461 passed/3 skipped/2004 deselected).
 - Refinement summary: No phase-plan scope changes required; all changes remained in the scaffold and boundary scope.
 - Manager pre-submit correction: Direct `MappingProxyType` inputs were accepted by `ensure_plain_data` and `to_plain_data` despite the scope contract requiring mapping-proxy rejection. Patched `weave.plain` to reject direct mapping-proxy values and added package-local tests; reran `make test-weave` and `make validate-weave`, both passing with 22 package tests.
-- Blocker-resolution summary: Used one scoped manager-side blocker-resolution pass for the mapping-proxy rejection contract. Non-blocking tool-environment limitations were recorded around `uv run` for pyright with workspace-level package resolution.
+- PR review summary: `loom_phase_reviewer` found one blocking issue: `packages/weave/pyproject.toml` declared OmegaConf, Pydantic, and PyYAML under an optional extra instead of normal runtime dependencies required by the implementation plan.
+- Post-review blocker-resolution summary: Moved OmegaConf, Pydantic, and PyYAML into normal `weave` project dependencies and added package-local metadata regression coverage. The reviewer finding is resolved by manager verification and refreshed validation.
+- Blocker-resolution summary: Used two scoped manager-side blocker-resolution passes: one for the mapping-proxy rejection contract and one for the package dependency metadata contract. Non-blocking tool-environment limitations were recorded around `uv run` for pyright with workspace-level package resolution.
 - PR preparation: PR body prepared at `docs/roadmap/stage-23/phases/weave-package-scaffold-pr-body.md`; PR opened as https://github.com/samcantrill/loom/pull/201 targeting `develop`.
 - Stack maintenance: branch created from local `develop` at `ab4855c`; no predecessor.
 - Remaining blockers: none.

@@ -1,6 +1,6 @@
 ## Summary
 
-Adds the initial standalone `weave` package scaffold for Stage 23 Phase 2. The package now has local metadata, a `src/weave` import package, `py.typed`, version metadata, package-local README, and config-owned helper foundations for plain data, stable JSON, digests, and structured config errors.
+Adds the initial standalone `weave` package scaffold for Stage 23 Phase 2. The package now has local metadata with config runtime dependencies, a `src/weave` import package, `py.typed`, version metadata, package-local README, and config-owned helper foundations for plain data, stable JSON, digests, and structured config errors.
 
 This keeps Loom runtime behavior unchanged: `src/loom/config` is not ported or removed, Loom adapters are not rewired to `weave`, and boundary tests assert that `weave` does not import `loom` while core Loom imports still avoid `weave`.
 
@@ -14,14 +14,14 @@ This keeps Loom runtime behavior unchanged: `src/loom/config` is not ported or r
 
 ## Implementation Notes
 
-- Added `packages/weave/pyproject.toml` using the local package layout and lightweight build tooling already used in the repository.
+- Added `packages/weave/pyproject.toml` using the local package layout, normal config runtime dependencies, and lightweight build tooling already used in the repository.
 - Added `weave.plain`, `weave.json`, `weave.digests`, and `weave.errors` as package-owned foundations for later config implementation porting.
 - Kept helper behavior intentionally package-local rather than shared with Loom runtime modules, preserving the Stage 23 ownership split.
 - Added isolated import-boundary assertions so package checks do not rely on prior in-process imports hiding eager dependencies.
 
 New tests implemented:
 
-- Package-local tests for `weave` import behavior, package metadata, plain-data validation and normalization, stable JSON output, digest helpers, and structured error context.
+- Package-local tests for `weave` import behavior, package metadata including runtime dependencies, plain-data validation and normalization, stable JSON output, digest helpers, and structured error context.
 - Root package boundary tests proving `weave` imports no `loom` and selected Loom imports do not import `weave`.
 
 ## Tests And Validation
@@ -30,9 +30,9 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff, Pyright, default Pytest, config-extra Pytest, and root build passed; recorded in the phase plan. |
 | `make test-summary` | Passed | `build/test-summary.md` generated with overall status `passed`; 2456 passed, 22 skipped, 2029 deselected, 0 failed/errors. |
-| `make test-weave` | Passed | 22 package-local tests passed. |
+| `make test-weave` | Passed | 23 package-local tests passed. |
 | `make build-weave` | Passed | Built `weave-0.1.0` source and wheel artifacts. |
-| `make validate-weave` | Passed | Package-local Ruff, Pyright, and tests passed. |
+| `make validate-weave` | Passed | Package-local Ruff, Pyright, 23 tests, and package build passed. |
 | `uv run pytest tests/package/test_import_boundaries.py` | Passed | 60 boundary tests passed during implementation; final summary reports 67 import-boundary tests passed in the package suite. |
 | GitHub checks | Pending | To run after PR creation. |
 

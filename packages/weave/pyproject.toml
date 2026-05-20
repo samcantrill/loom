@@ -7,10 +7,7 @@ authors = [
     { name = "Sam Cantrill", email = "sam.cantrill@gmail.com" },
 ]
 requires-python = ">=3.12"
-dependencies = []
-
-[project.optional-dependencies]
-config = [
+dependencies = [
     "omegaconf>=2.3",
     "pydantic>=2",
     "pyyaml>=6",
