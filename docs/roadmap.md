@@ -61,6 +61,9 @@ splits oversized steps:
   cleanup/retention so the implemented surface can be demonstrated through
   robust runnable examples, integration tests, end-to-end tests, and updated
   documentation.
+- A config package extraction step is appended after examples and validation so
+  trusted config authoring can become a standalone `weave` library with
+  its own tests and examples before it eventually moves to a separate project.
 
 The result is a longer roadmap, but each version has a more comparable scope
 and a clearer acceptance boundary.
@@ -148,6 +151,7 @@ written.
 | v20 | Runtime events and event sinks | Audit-ready runtime event grammar plus observe-only event sink contracts over committed runtime facts. |
 | v21 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
 | v22 | Examples and validation refinement | Robust example coverage, integration/e2e validation behavior, example harness hardening, and documentation refinement over the implemented surface. |
+| v23 | Standalone config package extraction | Hard-switch `loom.config` into a standalone `weave` library, move config tests/examples beside that package, and make `loom` depend on it only through explicit config-adapter paths. |
 
 ## v0 - Local Runtime Kernel
 
@@ -1782,6 +1786,93 @@ Implementation plan:
 
 - `docs/roadmap/stage-22/implementation-plan.md`
 
+## v23 - Standalone Config Package Extraction
+
+Goal:
+
+- Hard-switch trusted config authoring out of `loom` into a standalone
+  `weave` library while keeping `loom` as the workflow/runtime package
+  that depends on `weave` at explicit adapter edges.
+
+Implement:
+
+- Create a package boundary for `weave` that owns config composition,
+  overlays, includes, replacement semantics, override parsing/application,
+  recipe expansion, `_target_` instantiation, redaction, provenance,
+  composition manifests, and config fingerprints.
+- Move config-specific plain-data, stable JSON, digest, fingerprint, and config
+  error helpers into `weave` so config artifacts are self-contained,
+  while keeping Loom-owned serialization, fingerprinting, and error
+  functionality that the Loom runtime itself requires. Where both packages need
+  equivalent helper behavior, each package should carry its own implementation
+  rather than making Loom depend on `weave` as a generic utility layer.
+- Remove `src/loom/config` as a runtime implementation path in the hard switch;
+  update Loom imports to use `weave` directly.
+- Keep `loom` responsible for pipeline specs, DAG planning, execution, stores,
+  authority, queueing, run catalogs, artifacts, runtime events, cleanup, and
+  CLI orchestration.
+- Allow Loom config adapter paths to depend on `weave`, but keep imports
+  to composition and config artifact handling at CLI/API adapter edges. Runtime
+  pipeline modules should consume composed plain data and explicit config
+  records, not config composition internals or config-package helper modules for
+  functionality Loom itself owns.
+- Restructure tests so the config library has its own package-local test tree,
+  separate from Loom workflow/runtime tests, ready to move with the config
+  package into a future standalone repository.
+- Restructure examples so the config library has its own package-local examples
+  directory for authoring, composition, recipes, target instantiation,
+  provenance, artifact-safety, and error examples.
+- Update packaging metadata, import-boundary checks, documentation links, and
+  examples so `weave` can be installed and validated independently while
+  `loom` installs it as a dependency.
+- Preserve config artifact compatibility with golden tests over resolved
+  config, redacted config, recipe manifests, composition manifests, source
+  artifact records, and fingerprint records.
+
+Exit criteria:
+
+- `weave` can be imported, tested, and example-validated without importing
+  `loom`.
+- `loom` depends on `weave` and can still compose authored config for CLI
+  and Python workflows through explicit adapter paths.
+- No `weave` module imports from `loom`.
+- Runtime workflow modules do not depend on config composition internals.
+- Loom retains responsibility for serialization, fingerprinting, errors, and
+  other helpers required by Loom runtime behavior; `weave` owns only its
+  config-specific equivalents, including duplicated implementations where clean
+  ownership is more important than shared helper reuse.
+- Config tests live with the config package and can be run independently of the
+  Loom workflow/runtime test suite.
+- Config examples live with the config package and can be validated or moved
+  with that package without requiring Loom runtime examples.
+- Golden artifact tests prove the hard switch does not change config
+  fingerprints, composition manifests, recipe manifests, or source records
+  unless a compatibility break is explicitly accepted.
+
+Defer:
+
+- Publishing `weave` to a separate repository.
+- Supporting a compatibility shim for `from loom.config import ...`; this is a
+  pre-release hard switch unless a later implementation plan chooses otherwise.
+- Splitting Loom workflow/runtime into additional installable packages.
+- Reworking config semantics, recipe behavior, include resolution, or
+  provenance schema beyond what is required for package extraction.
+
+Primary feature docs:
+
+- `config.md`
+- `serialization.md`
+- `fingerprints.md`
+- `errors.md`
+- `plugins.md`
+- `testing.md`
+- `cli.md`
+- `examples/`
+
+Planning notes:
+
+- `docs/roadmap/stage-23/planning.md`
+
 ## Deferred Integration Candidates
 
 The items below are intentionally deferred until their owning contracts exist
@@ -1858,12 +1949,12 @@ Before turning any roadmap version into a full implementation plan:
 | `core-model.md` | v0 | Foundational vocabulary for refs, records, manifests, filters, identifiers, timestamps, and hashing terminology. |
 | `timestamps.md` | v0 | UTC helpers are needed by status, stores, provenance, logs, and generated IDs. |
 | `protocols.md` | v0 | Tiny shared protocols and import-boundary rules come before subsystem contracts. |
-| `errors.md` | v0, v1, v2, v3 | Shared roots land in v0; composition directive errors mature in v1; CLI formatting and local diagnostics mature in v2 and v3. |
-| `serialization.md` | v0, v1 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and composition manifests. |
-| `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots. |
+| `errors.md` | v0, v1, v2, v3, v23 | Shared roots land in v0; composition directive errors mature in v1; CLI formatting and local diagnostics mature in v2 and v3; config-owned errors move with `weave` in v23. |
+| `serialization.md` | v0, v1, v23 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and composition manifests; config-owned plain-data helpers move with `weave` in v23. |
+| `fingerprints.md` | v0, v1, v23 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots; config fingerprint helpers move with `weave` in v23. |
 | `io.md` | v0, v1, v14, v15, v16 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v14; remote hooks and operations in v15/v16. |
 | `artifacts.md` | v0, v3, v9, v9-post, v10, v12, v15, v16, v21 | Local artifact refs/stores in v0; inspection in v3; commit/concurrency semantics in v9; authority-backed commit use is mandatory after v9; v10 adds durable service/offline import evidence; bundles/exporters in v12; external/remote interface, multi-location refs, and immutable reuse semantics in v15; payload materialization operations in v16; retention in v21. |
-| `config.md` | v0, v1, v2, v13, v14 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v13; recipe plugins in v14. |
+| `config.md` | v0, v1, v2, v13, v14, v23 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v13; recipe plugins in v14; standalone package extraction in v23. |
 | `pipeline.md` | v0, v2, v9, v13 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later. |
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
 | `runtime-resources.md` | v4, v6, v7, v11, v17, v18 | Shared runtime/resource objects arrive before executor-specific mapping; v11 adds queue pool reconciliation over authority resource leases. |
@@ -1879,10 +1970,10 @@ Before turning any roadmap version into a full implementation plan:
 | `container-executors.md` | v17, v18 | Docker first; Apptainer and SLURM-container composition second. |
 | `remote-stores.md` | v9, v9-post, v10, v15, v16 | V9 shapes backend capability expectations; v9-post plans service/database authority for multi-host state; v10 delivers durable service supervision; external/remote interface contract, fake handlers, multi-location refs, and bundle ref semantics first; payload operations and optional real backends second. |
 | `reliability.md` | v5, v9, v9-post, v10, v11, v19, v20, v21 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; v9-post makes those foundations mandatory across entrypoints; v10 adds service durability and offline import rejection/acceptance evidence; v11 requires accurate queue cancellation/status reporting; retry and timeout land in v19, runtime events and event sinks in v20, and cleanup in v21. |
-| `plugins.md` | v14, v15, v16, v20 | Explicit discovery in v14; remote backend, exporter, and event sink integration later. |
-| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations. |
-| `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
-| `examples/` and `*-example-coverage.md` | v22 | Cross-roadmap example inventory, runnable/manual status, validation tiers, integration/e2e behavior, and documentation refinement are consolidated after the runtime surface through v21 exists. |
+| `plugins.md` | v14, v15, v16, v20, v23 | Explicit discovery in v14; remote backend, exporter, and event sink integration later; config recipe/plugin hooks move with `weave` in v23 where they are config-owned. |
+| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21, v23 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations; v23 rewires CLI config entrypoints to `weave`. |
+| `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version; v23 separates config tests into the config package-local test tree. |
+| `examples/` and `*-example-coverage.md` | v22, v23 | Cross-roadmap example inventory, runnable/manual status, validation tiers, integration/e2e behavior, and documentation refinement are consolidated after the runtime surface through v21 exists; v23 moves config examples beside `weave` for future repository extraction. |
 
 ## Functionality Not Encompassed By This Roadmap
 
@@ -1949,3 +2040,6 @@ Revisit this roadmap when any of the following become true:
 - External integration pressure repeats around the same adapter category, such
   as MLflow sinks/exporters, Prefect orchestration, DVC-backed artifacts, or
   Hydra config bridges.
+- Standalone config usage needs independent release cadence, package-local
+  examples, package-local tests, or eventual repository extraction before v23
+  is reached.
