@@ -30,6 +30,8 @@ def _normalize_path(value: str, *, root: Path) -> str:
         return PROJECT_PLACEHOLDER
     if value.startswith(root_path + "/") or value.startswith(root_path + "\\"):
         return PROJECT_PLACEHOLDER + value[len(root_path) :]
+    if root_path in value:
+        return value.replace(root_path, PROJECT_PLACEHOLDER)
     return value
 
 

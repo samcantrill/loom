@@ -17,5 +17,5 @@
     "source_order": 0,
     "source_path": "<golden_project>/broken.yaml"
   },
-  "message": "Include target does not resolve to an existing file: /home/samcantrill/work/loom-worktrees/config-boundary-golden-fixtures/tests/fixtures/config/golden_project/missing-model.yaml"
+  "message": "Include target does not resolve to an existing file: <golden_project>/missing-model.yaml"
 }

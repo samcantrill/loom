@@ -253,7 +253,11 @@ make test-summary
 - Implementation summary: added `tests/fixtures/config/golden_project/{base,overlay,include,broken}.yaml`, generated and normalized `tests/golden/config/extraction-v23/{resolved-config.json, redacted-config.json, composition-manifest.json, recipe-manifest.json, source-artifact-records.json, raw-source-snapshots.json, config-fingerprint-record.json, structured-config-errors.json}`, added `tests/contracts/test_config_extraction_golden_artifacts_contract.py` using public `loom.config` APIs and error serialization, and added current-state boundary assertions to `tests/package/test_import_boundaries.py`.
 - Implementation validation: contract test `UV_CACHE_DIR=/tmp/uv-cache uv run --active pytest tests/contracts/test_config_extraction_golden_artifacts_contract.py` passed; package boundary test `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import_boundaries.py` passed with 58 tests; `UV_CACHE_DIR=/tmp/uv-cache uv run make test-contract` passed during executor implementation; manager rerun of `make validate-pr` passed after approved network access installed the locked config dependency and after the sandboxed default-suite run was stopped for long no-output behavior; manager rerun of `make test-summary` outside the sandbox passed and wrote `build/test-summary.md`.
 - Refinement summary: target-module normalization was adjusted by setting helper recipe `annotate.__module__` to `test_config_extraction_golden_artifacts_contract` for deterministic artifact fingerprints across test invocation contexts. Manager-local validation fixes kept the import-boundary inventory lazy in no-extra environments and narrowed the structured-error catch to `ConfigIncludeResolutionError` for Pyright.
-- Blocker-resolution summary: unused.
+- Blocker-resolution summary: 1/3 used for the CI-only portability blocker where
+  the structured-error golden message retained a local absolute path; fixed by
+  normalizing fixture-root paths embedded inside strings and updating the golden
+  error payload to use `<golden_project>`. Targeted golden contract and
+  `make test-config-extra` passed after the fix.
 - PR preparation: draft completed in
   `docs/roadmap/stage-23/phases/config-boundary-golden-fixtures-pr-body.md`;
   PR intentionally not opened during this preparation pass. Public body records
