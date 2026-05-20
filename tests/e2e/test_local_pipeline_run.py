@@ -27,7 +27,7 @@ pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
-from loom.config import (
+from weave import (
     RecipeCatalog,
     compose_config,
     compose_config_with_catalog,

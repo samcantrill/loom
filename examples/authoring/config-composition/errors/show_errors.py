@@ -6,8 +6,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from loom.config import compose_config
-from loom.config.errors import (
+from weave import compose_config
+from weave.errors import (
     ConfigErrorContext,
     ConfigIncludeExpansionError,
     ConfigIncludeResolutionError,

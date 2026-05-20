@@ -2,8 +2,8 @@
 
 import pytest
 
-from loom.config.errors import ConfigErrorContext, ConfigProvenanceError
-from loom.config.provenance import (
+from weave.errors import ConfigErrorContext, ConfigProvenanceError
+from weave.provenance import (
     SCHEMA_VERSION,
     ConfigProvenance,
     ConfigSource,

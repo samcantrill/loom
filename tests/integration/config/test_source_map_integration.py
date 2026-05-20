@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from loom.config.load import load_config
-from loom.config.source_maps import compose_config_with_sources
+from weave.load import load_config
+from weave.source_maps import compose_config_with_sources
 
 
 def test_internal_source_aware_helper_preserves_overlay_order_across_loaded_configs(tmp_path: Path) -> None:

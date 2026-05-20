@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from loom.config import instantiate
+from weave import instantiate
 
 from services import Prefixer
 

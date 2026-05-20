@@ -166,7 +166,7 @@ def test_container_records_do_not_import_docker_or_runtime_presentation_layers()
         assert containers.ContainerBuildOptions
         for forbidden in (
             "loom.cli",
-            "loom.config",
+            "weave",
             "loom.diagnostics",
             "loom.pipeline.execution",
             "loom.pipeline.executors.docker",

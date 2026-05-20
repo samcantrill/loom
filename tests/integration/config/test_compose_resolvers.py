@@ -6,9 +6,9 @@ import pytest
 from omegaconf import OmegaConf
 from omegaconf.resolvers import oc as omegaconf_oc
 
-from loom.config import compose_config
-from loom.config.errors import ConfigIncludeResolutionError, ConfigUnsupportedResolverError
-from loom.config.redaction import REDACTION_MARKER
+from weave import compose_config
+from weave.errors import ConfigIncludeResolutionError, ConfigUnsupportedResolverError
+from weave.redaction import REDACTION_MARKER
 
 
 def test_public_compose_resolves_oc_env_in_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

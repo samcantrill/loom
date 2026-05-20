@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
-from loom.config import ComposedConfig, compare_config_artifact_fingerprints, compose_config
+from weave import ComposedConfig, compare_config_artifact_fingerprints, compose_config
 
 
 HERE = Path(__file__).resolve().parent

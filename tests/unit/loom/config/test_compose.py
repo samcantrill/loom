@@ -5,7 +5,7 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import (
+from weave import (
     ConfigCompositionInspection,
     RecipeCatalog,
     compose_config,
@@ -13,17 +13,17 @@ from loom.config import (
     inspect_config_composition,
     register_recipe,
 )
-from loom.config.errors import ConfigLoadError
-from loom.config.errors import ConfigValidationError, UnknownRecipeError
-from loom.config.artifacts import SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION
-from loom.config.fingerprints import (
+from weave.errors import ConfigLoadError
+from weave.errors import ConfigValidationError, UnknownRecipeError
+from weave.artifacts import SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION
+from weave.fingerprints import (
     ARTIFACT_SAFE_FINGERPRINT_LABEL,
     ARTIFACT_SAFE_FINGERPRINT_POLICY,
     compare_config_artifact_fingerprints,
 )
-from loom.config.api import ComposedConfig
-import loom.config.api as config_api
-import loom.config.compose as config_compose
+from weave.api import ComposedConfig
+import weave.api as config_api
+import weave.compose as config_compose
 from loom.serialization import PlainData
 from tests.support.config_samples import argument_recipe
 

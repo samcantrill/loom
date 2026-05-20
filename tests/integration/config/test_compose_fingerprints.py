@@ -6,8 +6,8 @@ from typing import Any, cast
 import pytest
 
 from loom.artifacts import ArtifactRef
-from loom.config import compose_config
-from loom.config.fingerprints import (
+from weave import compose_config
+from weave.fingerprints import (
     ARTIFACT_SAFE_FINGERPRINT_LABEL,
     compare_config_artifact_fingerprints,
 )

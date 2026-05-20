@@ -15,7 +15,7 @@ It demonstrates:
 
 ## Public Python Surface
 
-This example teaches `loom.config.compose_config` and
+This example teaches `weave.compose_config` and
 `compare_config_artifact_fingerprints`.
 
 Run from the repository root:

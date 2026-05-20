@@ -2,8 +2,8 @@
 
 import pytest
 
-from loom.config.errors import TargetImportError
-from loom.config.instantiate import instantiate
+from weave.errors import TargetImportError
+from weave.instantiate import instantiate
 from tests.support.config_samples import EchoService, RuntimePlaceholder
 
 

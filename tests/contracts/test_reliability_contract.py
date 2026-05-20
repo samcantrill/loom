@@ -124,7 +124,7 @@ def test_importing_reliability_contracts_remains_import_light() -> None:
             "loom.pipeline.executors",
             "loom.pipeline.stores",
             "loom.cli",
-            "loom.config",
+            "weave",
             "loom.authority",
             "fastapi",
             "starlette",

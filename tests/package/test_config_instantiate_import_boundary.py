@@ -17,10 +17,10 @@ def test_import_config_instantiate_does_not_import_composition_or_runtime_layers
         """
         import sys
 
-        from loom.config.instantiate import instantiate
+        from weave.instantiate import instantiate
 
         if not callable(instantiate):
-            raise SystemExit("loom.config.instantiate.instantiate is not callable")
+            raise SystemExit("weave.instantiate.instantiate is not callable")
 
         for forbidden in (
             "yaml",
@@ -33,7 +33,7 @@ def test_import_config_instantiate_does_not_import_composition_or_runtime_layers
             "loom.stores",
         ):
             if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported through loom.config.instantiate")
+                raise SystemExit(f"{forbidden} was imported through weave.instantiate")
         print("ok")
         """
     )

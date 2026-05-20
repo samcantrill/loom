@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from pprint import pprint
 
-from loom.config import RecipeCatalog, compose_config
+from weave import RecipeCatalog, compose_config
 
 from recipes import RetentionPolicy
 

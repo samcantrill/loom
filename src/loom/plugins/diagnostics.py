@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from loom.serialization import PlainData
 
@@ -24,6 +25,9 @@ from .entrypoints import (
     PluginRecord,
     find_plugin_duplicates,
 )
+
+if TYPE_CHECKING:
+    from weave.recipes.load import RecipePluginRecord
 
 LOADABLE_PLUGIN_GROUPS: tuple[str, ...] = (
     LOOM_RECIPES_GROUP,
@@ -316,19 +320,36 @@ def _load_registry_ready_plugins(
 
     recipe_records = tuple(record for record in selected if record.group == LOOM_RECIPES_GROUP)
     if recipe_records:
-        from loom.config.recipes import RecipeCatalog
-
-        from .recipes import load_recipe_entry_points
+        from weave.recipes import RecipeCatalog
+        from weave.recipes.load import load_recipe_entry_points
 
         result = load_recipe_entry_points(
-            records=all_records,
+            records=tuple(_recipe_plugin_record(record) for record in all_records),
             catalog=RecipeCatalog(),
-            selected=recipe_records,
+            selected=tuple(_recipe_plugin_record(record) for record in recipe_records),
             strict=False,
         )
-        loaded.extend(result.loaded)
-        duplicates.extend(result.duplicates)
-        failures.extend(result.failures)
+        loaded.extend(
+            LoadedPlugin(record=_plugin_record(record), value=None)
+            for record in result.loaded
+        )
+        duplicates.extend(
+            PluginDuplicate(
+                group=duplicate.group,
+                name=duplicate.name,
+                records=tuple(_plugin_record(record) for record in duplicate.records),
+            )
+            for duplicate in result.duplicates
+        )
+        failures.extend(
+            PluginFailure(
+                record=_plugin_record(failure.record),
+                operation=failure.operation,
+                error_type=failure.error_type,
+                message=failure.message,
+            )
+            for failure in result.failures
+        )
 
     codec_records = tuple(record for record in selected if record.group == LOOM_CODECS_GROUP)
     if codec_records:
@@ -369,6 +390,32 @@ def _load_registry_ready_plugins(
         duplicates=tuple(duplicates),
         failures=tuple(failures),
     )
+
+
+def _recipe_plugin_record(record: PluginRecord) -> "RecipePluginRecord":
+    from weave.recipes.load import RecipePluginRecord
+
+    return RecipePluginRecord(
+        group=record.group,
+        name=record.name,
+        value=record.value,
+        package=record.package,
+        package_version=record.package_version,
+    )
+
+
+def _plugin_record(record: object) -> PluginRecord:
+    return PluginRecord(
+        group=str(getattr(record, "group")),
+        name=str(getattr(record, "name")),
+        value=str(getattr(record, "value")),
+        package=_optional_string(getattr(record, "package", None)),
+        package_version=_optional_string(getattr(record, "package_version", None)),
+    )
+
+
+def _optional_string(value: object) -> str | None:
+    return None if value is None else str(value)
 
 
 def _matches_selection(record: PluginRecord, selection: PluginSelection) -> bool:

@@ -6,9 +6,9 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
-import loom.config.api as config_api
-from loom.config.errors import InvalidRecipeOutputError, UnknownRecipeError
+from weave import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
+import weave.api as config_api
+from weave.errors import InvalidRecipeOutputError, UnknownRecipeError
 from tests.support.config_samples import DownstreamRecipe, nested_argument_recipe, composed_output_recipe, argument_recipe
 
 

@@ -10,7 +10,7 @@ blocks after config composition:
 
 ## Public Python Surface
 
-This example teaches `loom.config.instantiate`.
+This example teaches `weave.instantiate`.
 
 Run from the repository root:
 

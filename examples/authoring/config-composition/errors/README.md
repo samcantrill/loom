@@ -10,7 +10,7 @@ This example demonstrates structured config errors from the public
 
 ## Public Python Surface
 
-This example teaches `loom.config.compose_config` and the structured config
+This example teaches `weave.compose_config` and the structured config
 errors it raises.
 
 The entrypoint catches each exception and prints selected context fields rather

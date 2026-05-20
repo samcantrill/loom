@@ -224,7 +224,7 @@ def test_runtime_profile_merge_does_not_import_outer_runtime_layers() -> None:
 
         for forbidden in (
             "loom.cli",
-            "loom.config",
+            "weave",
             "loom.diagnostics",
             "loom.pipeline.execution",
             "loom.pipeline.executors",

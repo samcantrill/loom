@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from loom.config import compose_config
-from loom.config.errors import ConfigIncludeExpansionError
+from weave import compose_config
+from weave.errors import ConfigIncludeExpansionError
 
 
 def test_public_compose_reports_include_cycle_with_structured_context(

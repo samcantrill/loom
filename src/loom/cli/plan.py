@@ -21,7 +21,7 @@ from loom.cli.options import (
 from loom.cli.results import PlanCliResult
 
 if TYPE_CHECKING:
-    from loom.config.api import ComposedConfig
+    from weave.api import ComposedConfig
     from loom.pipeline.planning import ExecutionPlan, PlanSelectors, StageExplanation
     from loom.pipeline.runtime import RunOptions
     from loom.pipeline.specs import PipelineSpec
@@ -234,7 +234,7 @@ def _compose_config(
     overlays: Sequence[str | Path],
     overrides: Sequence[str],
 ) -> "ComposedConfig":
-    from loom.config import compose_config
+    from weave import compose_config
 
     return compose_config(config_path, overlays=tuple(overlays), overrides=tuple(overrides))
 

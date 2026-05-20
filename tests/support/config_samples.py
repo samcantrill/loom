@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from loom.config.recipes import Recipe
+from weave.recipes import Recipe
 
 
 class RuntimePlaceholder:

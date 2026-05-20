@@ -7,8 +7,8 @@ import pytest
 import yaml
 
 from loom.fingerprints import hash_bytes
-from loom.config.errors import ConfigLoadError
-from loom.config.load import load_config
+from weave.errors import ConfigLoadError
+from weave.load import load_config
 
 
 def test_load_reads_mapping_with_metadata(tmp_path: Path) -> None:

@@ -13,8 +13,8 @@ from loom.cli.options import ConfigCliOptions, OutputFormat, ValidateCliOptions,
 from loom.cli.results import CliWarning, ValidationCliResult
 
 if TYPE_CHECKING:
-    from loom.config.api import ComposedConfig
-    from loom.config.target_checks import TargetCheckResult
+    from weave.api import ComposedConfig
+    from weave.target_checks import TargetCheckResult
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.validation import PipelineTargetCheckResult, PipelineValidationResult
 
@@ -131,7 +131,7 @@ def _compose_config(
     overlays: Sequence[str | Path],
     overrides: Sequence[str],
 ) -> "ComposedConfig":
-    from loom.config import compose_config
+    from weave import compose_config
 
     return compose_config(config_path, overlays=tuple(overlays), overrides=tuple(overrides))
 
@@ -159,7 +159,7 @@ def _check_pipeline_stage_targets(spec: "PipelineSpec") -> "PipelineTargetCheckR
 
 
 def _check_config_targets(config: Mapping[str, object], *, skip_paths: Sequence[str]) -> "TargetCheckResult":
-    from loom.config import check_config_targets
+    from weave import check_config_targets
 
     return check_config_targets(config, skip_paths=tuple(skip_paths))
 

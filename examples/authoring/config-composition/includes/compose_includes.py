@@ -6,7 +6,7 @@ from pathlib import Path
 from pprint import pprint
 from typing import cast
 
-from loom.config import ComposedConfig, compose_config
+from weave import ComposedConfig, compose_config
 from loom.serialization import PlainData
 
 

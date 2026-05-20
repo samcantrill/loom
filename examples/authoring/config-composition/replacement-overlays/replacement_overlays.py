@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from pprint import pprint
 
-from loom.config import compose_config
+from weave import compose_config
 
 
 HERE = Path(__file__).resolve().parent

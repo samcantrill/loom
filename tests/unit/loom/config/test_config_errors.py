@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from loom.errors import ConfigError
-from loom.config.errors import (
+from weave.errors import (
+    ConfigError,
     ConfigErrorContext,
     ConfigInterpolationError,
     ConfigIncludeResolutionError,
@@ -25,10 +25,10 @@ from loom.config.errors import (
     TargetInstantiationError,
     OverrideApplyError,
     OverrideParseError,
+    PlainDataError,
     UnsupportedRecipeError,
     UnknownRecipeError,
 )
-from loom.serialization import PlainDataError
 
 
 def test_config_error_shapes() -> None:

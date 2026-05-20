@@ -8,8 +8,8 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import RecipeCatalog, compose_config
-from loom.config.redaction import REDACTION_MARKER
+from weave import RecipeCatalog, compose_config
+from weave.redaction import REDACTION_MARKER
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 

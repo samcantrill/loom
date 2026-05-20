@@ -21,7 +21,7 @@ from .models import (
 )
 
 QUEUE_CONFIG_SCHEMA_VERSION = 1
-_CONFIG_EXTRA_HINT = "Install with `loom[config]` before loading queue YAML configs."
+_CONFIG_DEPENDENCY_HINT = "Install `loom` with its `weave` dependency before loading queue YAML configs."
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,16 +159,16 @@ def load_queue_spec(path: str | Path) -> QueueServiceSpec:
     """Load a trusted YAML queue config from an explicit path."""
 
     try:
-        from loom.config.load import load_config
+        from weave.load import load_config
     except ModuleNotFoundError as exc:
         if exc.name == "yaml":
-            raise QueueConfigError(_CONFIG_EXTRA_HINT) from exc
+            raise QueueConfigError(_CONFIG_DEPENDENCY_HINT) from exc
         raise
 
     try:
         mapping, _source = load_config(path, kind="base", order=0)
     except Exception as exc:  # noqa: BLE001
-        if exc.__class__.__module__.startswith("loom.config."):
+        if exc.__class__.__module__.startswith("weave."):
             raise QueueConfigError(str(exc)) from exc
         raise
     return normalize_queue_spec(mapping)
@@ -181,12 +181,12 @@ def compose_queue_spec(
     *,
     include_raw_source_snapshots: bool = False,
 ) -> QueueServiceSpec:
-    """Compose a project config with `loom[config]` and normalize its queue section."""
+    """Compose a project config with `weave` and normalize its queue section."""
 
     try:
-        from loom.config import compose_config
+        from weave import compose_config
     except Exception as exc:  # noqa: BLE001
-        if exc.__class__.__module__.startswith("loom.config."):
+        if exc.__class__.__module__.startswith("weave."):
             raise QueueConfigError(str(exc)) from exc
         raise
     composed = compose_config(

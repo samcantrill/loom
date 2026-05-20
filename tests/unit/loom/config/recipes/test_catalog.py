@@ -2,8 +2,8 @@
 
 import pytest
 
-from loom.config.errors import DuplicateRecipeError, RecipeRegistrationError, UnknownRecipeError
-from loom.config.recipes import RecipeCatalog
+from weave.errors import DuplicateRecipeError, RecipeRegistrationError, UnknownRecipeError
+from weave.recipes import RecipeCatalog
 from tests.support.config_samples import ArgumentRecipe, DownstreamRecipe, function_recipe
 
 

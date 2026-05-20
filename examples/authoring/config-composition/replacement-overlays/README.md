@@ -1,6 +1,6 @@
 # Replacement Overlays
 
-This example uses the public `loom.config.compose_config` API to compose a
+This example uses the public `weave.compose_config` API to compose a
 base YAML file with two overlays.
 
 It demonstrates:
@@ -12,7 +12,7 @@ It demonstrates:
 
 ## Public Python Surface
 
-This example teaches `loom.config.compose_config`.
+This example teaches `weave.compose_config`.
 
 Run from the repository root:
 

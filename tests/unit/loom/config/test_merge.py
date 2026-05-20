@@ -3,8 +3,8 @@ from typing import Mapping, cast
 import pytest
 
 from loom.serialization import PlainData
-from loom.config.merge import merge_configs
-from loom.config.errors import ConfigMergeError
+from weave.merge import merge_configs
+from weave.errors import ConfigMergeError
 
 
 def plain_config(value: Mapping[str, PlainData]) -> dict[str, PlainData]:

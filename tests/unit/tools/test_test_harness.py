@@ -21,7 +21,7 @@ def test_parse_junit_groups_testcase_counts_by_suite_section(tmp_path: Path) -> 
         """<?xml version="1.0" encoding="utf-8"?>
 <testsuites>
   <testsuite name="pytest" tests="4" failures="1" errors="1" skipped="1">
-    <testcase classname="tests.unit.loom.config.test_load" name="test_passes" time="0.10" />
+    <testcase classname="tests.unit.weave.test_load" name="test_passes" time="0.10" />
     <testcase classname="tests.unit.loom.pipeline.execution.test_runner" name="test_fails" time="0.20">
       <failure message="failed" />
     </testcase>

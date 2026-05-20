@@ -407,7 +407,7 @@ def _build_run_request(
 
     path = Path(config_path)
     if not overlays and path.suffix.lower() == ".json":
-        from loom.config.overrides import apply_overrides, parse_overrides
+        from weave.overrides import apply_overrides, parse_overrides
         from loom.serialization import json_loads
 
         payload = json_loads(path.read_text(encoding="utf-8"), path=str(path))
@@ -424,7 +424,7 @@ def _build_run_request(
         )
         return RunRequest(config=config)
 
-    from loom.config import compose_config
+    from weave import compose_config
 
     return RunRequest(
         config=compose_config(

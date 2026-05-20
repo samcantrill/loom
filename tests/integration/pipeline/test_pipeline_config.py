@@ -9,9 +9,9 @@ pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
-import loom.config.api as config_api
-from loom.config import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
-from loom.config.errors import UnknownRecipeError
+import weave.api as config_api
+from weave import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
+from weave.errors import UnknownRecipeError
 from loom.pipeline import PipelineSpec, parse_pipeline_config
 from loom.pipeline.graph import build_stage_graph, topological_sort
 

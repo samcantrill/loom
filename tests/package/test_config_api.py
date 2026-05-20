@@ -16,15 +16,15 @@ pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
-from loom.config import ComposedConfig
-from loom.config.errors import ConfigValidationError
+from weave import ComposedConfig
+from weave.errors import ConfigValidationError
 
 
 pytestmark = [pytest.mark.package, pytest.mark.optional_dependency]
 
 
 def test_config_exports_and_signature() -> None:
-    from loom.config import (
+    from weave import (
         ConfigError,
         ConfigCompositionInspection,
         ConfigCompositionStageRecord,
@@ -135,45 +135,45 @@ def test_config_exports_and_signature() -> None:
 
 
 def test_config_instantiate_callable_survives_submodule_import_order() -> None:
-    import loom.config
+    import weave
 
-    package_instantiate = loom.config.instantiate
-    assert package_instantiate.__module__ == "loom.config.instantiate.recursive"
+    package_instantiate = weave.instantiate
+    assert package_instantiate.__module__ == "weave.instantiate.recursive"
 
-    instantiate_submodule = importlib.import_module("loom.config.instantiate")
+    instantiate_submodule = importlib.import_module("weave.instantiate")
     assert inspect.ismodule(instantiate_submodule)
     assert callable(instantiate_submodule.instantiate)
     assert callable(instantiate_submodule.import_target)
-    assert loom.config.instantiate is package_instantiate
+    assert weave.instantiate is package_instantiate
 
     importlib.reload(instantiate_submodule)
-    assert loom.config.instantiate is package_instantiate
-    assert loom.config.instantiate({"value": ("a", "b")}) == {"value": ["a", "b"]}
+    assert weave.instantiate is package_instantiate
+    assert weave.instantiate({"value": ("a", "b")}) == {"value": ["a", "b"]}
 
 
 def test_import_config_module_only() -> None:
     script = dedent(
         """
-        import loom.config
+        import weave
 
-        assert hasattr(loom.config, 'ComposedConfig')
-        assert hasattr(loom.config, 'Recipe')
-        assert hasattr(loom.config, 'RecipeCatalog')
-        assert hasattr(loom.config, 'compose_config')
-        assert hasattr(loom.config, 'compose_config_with_catalog')
-        assert hasattr(loom.config, 'check_config_targets')
-        assert hasattr(loom.config, 'inspect_config_composition')
-        assert hasattr(loom.config, 'ConfigCompositionInspection')
-        assert hasattr(loom.config, 'ConfigCompositionStageRecord')
-        assert hasattr(loom.config, 'compare_config_artifact_fingerprints')
-        assert hasattr(loom.config, 'ConfigFingerprintComparison')
-        assert hasattr(loom.config, 'ARTIFACT_SAFE_FINGERPRINT_LABEL')
-        assert hasattr(loom.config, 'ARTIFACT_SAFE_FINGERPRINT_POLICY')
-        assert hasattr(loom.config, 'ARTIFACT_SAFE_RUNTIME_REPLAY')
-        assert hasattr(loom.config, 'instantiate')
-        assert hasattr(loom.config, 'TargetCheckResult')
-        assert hasattr(loom.config, 'register_recipe')
-        assert hasattr(loom.config, 'ConfigError')
+        assert hasattr(weave, 'ComposedConfig')
+        assert hasattr(weave, 'Recipe')
+        assert hasattr(weave, 'RecipeCatalog')
+        assert hasattr(weave, 'compose_config')
+        assert hasattr(weave, 'compose_config_with_catalog')
+        assert hasattr(weave, 'check_config_targets')
+        assert hasattr(weave, 'inspect_config_composition')
+        assert hasattr(weave, 'ConfigCompositionInspection')
+        assert hasattr(weave, 'ConfigCompositionStageRecord')
+        assert hasattr(weave, 'compare_config_artifact_fingerprints')
+        assert hasattr(weave, 'ConfigFingerprintComparison')
+        assert hasattr(weave, 'ARTIFACT_SAFE_FINGERPRINT_LABEL')
+        assert hasattr(weave, 'ARTIFACT_SAFE_FINGERPRINT_POLICY')
+        assert hasattr(weave, 'ARTIFACT_SAFE_RUNTIME_REPLAY')
+        assert hasattr(weave, 'instantiate')
+        assert hasattr(weave, 'TargetCheckResult')
+        assert hasattr(weave, 'register_recipe')
+        assert hasattr(weave, 'ConfigError')
         print('ok')
         """
     )
@@ -184,7 +184,7 @@ def test_import_config_module_only() -> None:
 
 
 def test_compose_signatures_reject_non_bool_raw_snapshot_flags(tmp_path: Path) -> None:
-    from loom.config import RecipeCatalog, compose_config, compose_config_with_catalog, inspect_config_composition
+    from weave import RecipeCatalog, compose_config, compose_config_with_catalog, inspect_config_composition
 
     base = tmp_path / "base.yaml"
     base.write_text("name: base\npipeline: {}\n", encoding="utf-8")

@@ -19,7 +19,7 @@ def test_import_does_not_import_deferred_modules() -> None:
 
         import loom
 
-        for forbidden in ("loom.config", "loom.pipeline", "loom.cli"):
+        for forbidden in ("weave", "loom.pipeline", "loom.cli"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported eagerly")
         for forbidden in ("omegaconf", "yaml", "pydantic", "fastapi", "starlette"):
@@ -63,7 +63,7 @@ def test_import_io_does_not_import_config_or_pipeline() -> None:
 
         import loom.io
 
-        for forbidden in ("loom.config", "loom.pipeline", "loom.cli"):
+        for forbidden in ("weave", "loom.pipeline", "loom.cli"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.io")
         print("ok")
@@ -77,45 +77,15 @@ def test_import_io_does_not_import_config_or_pipeline() -> None:
     assert result.stdout.strip() == "ok"
 
 
-def test_import_config_does_not_import_pipeline_or_execution() -> None:
+def test_import_weave_does_not_import_loom_or_pipeline() -> None:
     script = dedent(
         """
         import sys
 
-        import loom.config
+        import weave
 
-        for forbidden in ("loom.pipeline", "loom.pipeline.execution", "loom.pipeline.executors", "loom.pipeline.stores", "loom.cli"):
-            if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported through loom.config")
-        print("ok")
-        """
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "ok"
-
-
-def test_import_config_current_state_boundary_inventory_is_present_and_forward_compatible() -> None:
-    script = dedent(
-        """
-        import sys
-
-        import loom.config
-
-        public_symbols = set(dir(loom.config))
-
-        if "compose_config" not in public_symbols:
-            raise SystemExit("compose_config missing from loom.config public API")
-        if "inspect_config_composition" not in public_symbols:
-            raise SystemExit("inspect_config_composition missing from loom.config public API")
-        if "RecipeCatalog" not in public_symbols:
-            raise SystemExit("RecipeCatalog missing from loom.config public API")
-        if "weave" in sys.modules:
-            raise SystemExit("weave imported before Phase 4 boundary shift")
         for forbidden in (
+            "loom",
             "loom.pipeline",
             "loom.pipeline.execution",
             "loom.pipeline.executors",
@@ -123,7 +93,7 @@ def test_import_config_current_state_boundary_inventory_is_present_and_forward_c
             "loom.cli",
         ):
             if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported through current-state loom.config boundary")
+                raise SystemExit(f"{forbidden} was imported through weave")
         print("ok")
         """
     )
@@ -135,39 +105,59 @@ def test_import_config_current_state_boundary_inventory_is_present_and_forward_c
     assert result.stdout.strip() == "ok"
 
 
-def test_config_symbol_access_without_optional_dependencies_mentions_config_extra() -> (
-    None
-):
+def test_weave_public_config_symbols_from_package_path_do_not_import_loom() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import weave
+
+        public_symbols = set(dir(weave))
+
+        if "compose_config" not in public_symbols:
+            raise SystemExit("compose_config missing from weave public API")
+        if "inspect_config_composition" not in public_symbols:
+            raise SystemExit("inspect_config_composition missing from weave public API")
+        if "RecipeCatalog" not in public_symbols:
+            raise SystemExit("RecipeCatalog missing from weave public API")
+
+        _ = weave.compose_config
+        _ = weave.inspect_config_composition
+        _ = weave.RecipeCatalog
+
+        for forbidden in (
+            "loom",
+            "loom.pipeline",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "loom.pipeline.stores",
+            "loom.cli",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through weave public symbols")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_loom_config_import_path_is_removed() -> None:
     script = dedent(
         """
         import importlib
-        import loom.config
 
-        original_import_module = importlib.import_module
-
-        def fake_import_module(name, package=None):
-            if name in {"yaml", "omegaconf", "pydantic"}:
-                raise ModuleNotFoundError(f\"No module named {name!r}\")
-            return original_import_module(name, package=package)
-
-        importlib.import_module = fake_import_module
         try:
-            try:
-                _ = loom.config.compose_config
-            except Exception as exc:
-                message = str(exc)
-            else:
-                raise SystemExit(\"compose_config unexpectedly imported without optional deps\")
-            try:
-                _ = loom.config.compose_config_with_catalog
-            except Exception as exc:
-                message = str(exc)
-            else:
-                raise SystemExit(\"compose_config_with_catalog unexpectedly imported without optional deps\")
-            if \"loom[config]\" not in message:
-                raise SystemExit(f\"Expected loom[config] in error message: {message!r}\")
-        finally:
-            importlib.import_module = original_import_module
+            importlib.import_module("loom.config")
+        except ModuleNotFoundError as exc:
+            if exc.name != "loom.config":
+                raise
+        else:
+            raise SystemExit("loom.config import path unexpectedly exists")
 
         print(\"ok\")
         """
@@ -187,7 +177,7 @@ def test_import_pipeline_does_not_import_forbidden_runtime_layers() -> None:
 
         import loom.pipeline
 
-        for forbidden in ("loom.config", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors", "fastapi", "starlette"):
+        for forbidden in ("weave", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors", "fastapi", "starlette"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.pipeline")
         print("ok")
@@ -213,7 +203,7 @@ def test_import_docker_command_contracts_do_not_import_runtime_layers() -> None:
             "docker",
             "subprocess",
             "loom.cli",
-            "loom.config",
+            "weave",
             "loom.diagnostics",
             "loom.pipeline.execution",
             "yaml",
@@ -246,7 +236,7 @@ def test_import_apptainer_command_contracts_do_not_import_runtime_layers() -> No
         for forbidden in (
             "subprocess",
             "loom.cli",
-            "loom.config",
+            "weave",
             "loom.diagnostics",
             "loom.pipeline.execution",
             "yaml",
@@ -313,7 +303,7 @@ def test_import_queue_root_is_lightweight() -> None:
 
         for forbidden in (
             "sqlite3",
-            "loom.config",
+            "weave",
             "loom.cli",
             "loom.authority",
             "loom.authority._repository",
@@ -346,7 +336,7 @@ def test_import_queue_control_modules_do_not_import_authority_or_config() -> Non
         import loom.queue.service
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.authority",
             "loom.authority._repository",
             "loom.pipeline.execution",
@@ -384,7 +374,7 @@ def test_import_artifacts_does_not_import_store_plugins_or_services() -> None:
             "loom.diagnostics",
             "loom.runs",
             "loom.cli",
-            "loom.config",
+            "weave",
             "fastapi",
             "starlette",
             "pydantic",
@@ -518,12 +508,12 @@ def test_default_executor_preflight_does_not_import_docker_modules() -> None:
             resolved = {"pipeline": {}}
             source_artifacts = ()
 
-        config_package = ModuleType("loom.config")
-        config_api = ModuleType("loom.config.api")
+        config_package = ModuleType("weave")
+        config_api = ModuleType("weave.api")
         config_api.compose_config = lambda *_args, **_kwargs: FakeComposedConfig()
         config_package.api = config_api
-        sys.modules["loom.config"] = config_package
-        sys.modules["loom.config.api"] = config_api
+        sys.modules["weave"] = config_package
+        sys.modules["weave.api"] = config_api
 
         result = run_preflight(
             PreflightRequest(
@@ -786,7 +776,7 @@ def test_import_runtime_facade_does_not_import_forbidden_runtime_layers() -> Non
         import loom.pipeline.runtime
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.cli",
             "loom.pipeline.execution",
             "loom.pipeline.executors",
@@ -816,7 +806,7 @@ def test_import_event_sinks_does_not_import_forbidden_runtime_layers() -> None:
         import loom.pipeline.event_sinks
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.cli",
             "loom.pipeline.execution",
             "loom.pipeline.executors",
@@ -851,7 +841,7 @@ def test_import_stores_does_not_import_config_or_cli_layers() -> None:
 
         import loom.pipeline.stores
 
-        for forbidden in ("loom.config", "loom.pipeline.execution", "loom.pipeline.executors", "loom.runs", "loom.cli", "project"):
+        for forbidden in ("weave", "loom.pipeline.execution", "loom.pipeline.executors", "loom.runs", "loom.cli", "project"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.pipeline.stores")
         print("ok")
@@ -983,7 +973,7 @@ def test_import_diagnostics_root_is_lightweight() -> None:
 
         for forbidden in (
             "loom.cli",
-            "loom.config",
+            "weave",
             "loom.pipeline.stores",
             "loom.pipeline.executors",
             "project",
@@ -1012,7 +1002,7 @@ def test_import_backend_cli_is_presentation_only() -> None:
         import loom.cli.backend
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.pipeline.execution",
             "loom.pipeline.executors",
             "loom.pipeline.stores.sqlite_authority",
@@ -1067,7 +1057,7 @@ def test_lower_layers_do_not_import_diagnostics() -> None:
         """
         import sys
 
-        import loom.config
+        import weave
         import loom.pipeline
         import loom.pipeline.stores
         import loom.pipeline.executors
@@ -1113,7 +1103,7 @@ def test_import_execution_does_not_import_config_stores_cli() -> None:
 
         import loom.pipeline.execution
 
-        for forbidden in ("loom.config", "loom.cli", "subprocess"):
+        for forbidden in ("weave", "loom.cli", "subprocess"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.pipeline.execution")
         print("ok")
@@ -1134,7 +1124,7 @@ def test_import_stage_factory_does_not_import_forbidden_modules() -> None:
 
         import loom.pipeline.stage_factory
 
-        for forbidden in ("loom.config", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors", "project"):
+        for forbidden in ("weave", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors", "project"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.pipeline.stage_factory")
         print("ok")
@@ -1157,7 +1147,7 @@ def test_import_runtime_resource_modules_do_not_import_forbidden_layers() -> Non
         import loom.pipeline.events
         import loom.pipeline.locks
 
-        for forbidden in ("loom.config", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors", "project"):
+        for forbidden in ("weave", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors", "project"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through runtime/resource/event/lock modules")
         print("ok")
@@ -1249,7 +1239,7 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
 
         for forbidden in (
             "loom.cli",
-            "loom.config",
+            "weave",
             "loom.diagnostics",
             "loom.pipeline.execution",
             "loom.pipeline.executors",
@@ -1278,7 +1268,7 @@ def test_import_executors_does_not_import_project_layers() -> None:
 
         import loom.pipeline.executors
 
-        for forbidden in ("loom.config", "loom.pipeline.planning", "loom.cli", "project"):
+        for forbidden in ("weave", "loom.pipeline.planning", "loom.cli", "project"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.pipeline.executors")
         print("ok")
@@ -1301,7 +1291,7 @@ def test_import_container_records_does_not_import_execution_or_docker_layers() -
 
         for forbidden in (
             "loom.cli",
-            "loom.config",
+            "weave",
             "loom.diagnostics",
             "loom.pipeline.execution",
             "loom.pipeline.executors.docker",
@@ -1333,7 +1323,7 @@ def test_import_slurm_models_does_not_import_scheduler_cli_or_config_layers() ->
 
         for forbidden in (
             "loom.cli",
-            "loom.config",
+            "weave",
             "project",
             "slurm",
             "pyslurm",
@@ -1366,7 +1356,7 @@ def test_import_slurm_dry_run_modules_does_not_import_forbidden_layers() -> None
 
         for forbidden in (
             "loom.cli",
-            "loom.config",
+            "weave",
             "project",
             "slurm",
             "pyslurm",
@@ -1395,7 +1385,7 @@ def test_import_cli_remains_import_safe() -> None:
 
         import loom.cli
 
-        for forbidden in ("loom.pipeline", "loom.pipeline.stores", "loom.pipeline.executors", "loom.config", "yaml", "omegaconf", "pydantic"):
+        for forbidden in ("loom.pipeline", "loom.pipeline.stores", "loom.pipeline.executors", "weave", "yaml", "omegaconf", "pydantic"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.cli")
         print("ok")
@@ -1421,7 +1411,7 @@ def test_cli_help_remains_import_light() -> None:
             raise SystemExit(f"help returned {exit_code}")
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.pipeline",
             "loom.pipeline.stores",
             "loom.pipeline.executors",
@@ -1450,7 +1440,7 @@ def test_import_cli_validate_remains_import_light() -> None:
         import loom.cli.validate
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.pipeline",
             "loom.pipeline.stores",
             "loom.pipeline.executors",
@@ -1480,7 +1470,7 @@ def test_import_cli_preflight_remains_import_light() -> None:
         import loom.cli.preflight
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.pipeline",
             "loom.pipeline.stores",
             "loom.pipeline.executors",
@@ -1511,7 +1501,7 @@ def test_import_cli_plan_remains_import_light() -> None:
         import loom.cli.plan
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.pipeline",
             "loom.pipeline.stores",
             "loom.pipeline.executors",
@@ -1541,7 +1531,7 @@ def test_import_cli_run_remains_import_light() -> None:
         import loom.cli.run
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.pipeline",
             "loom.pipeline.stores",
             "loom.pipeline.executors",
@@ -1571,7 +1561,7 @@ def test_import_cli_sweep_remains_import_light() -> None:
         import loom.cli.sweep
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.pipeline.execution",
             "loom.pipeline.executors",
             "loom.pipeline.stores",
@@ -1607,7 +1597,7 @@ def test_import_cli_diagnostics_commands_remain_import_light() -> None:
         import loom.cli.runs
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.runs",
             "loom.pipeline",
             "loom.pipeline.stores",
@@ -1641,7 +1631,7 @@ def test_import_cleanup_cli_commands_remain_import_light() -> None:
         import loom.cli.gc
 
         for forbidden in (
-            "loom.config",
+            "weave",
             "loom.runs",
             "loom.pipeline",
             "loom.pipeline.stores",
@@ -1670,7 +1660,7 @@ def test_import_config_artifacts_does_not_import_forbidden_layers() -> None:
         """
         import sys
 
-        import loom.config.artifacts
+        import weave.artifacts
 
         for forbidden in (
             "loom.pipeline",
@@ -1683,7 +1673,7 @@ def test_import_config_artifacts_does_not_import_forbidden_layers() -> None:
             "pydantic",
         ):
             if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported through loom.config.artifacts")
+                raise SystemExit(f"{forbidden} was imported through weave.artifacts")
         print("ok")
         """
     )
@@ -1702,8 +1692,8 @@ def test_pipeline_constructs_from_plain_data_without_config_import() -> None:
 
         from loom.pipeline import parse_pipeline_config
 
-        if "loom.config" in sys.modules:
-            raise SystemExit("loom.config was imported before pipeline construction")
+        if "weave" in sys.modules:
+            raise SystemExit("weave was imported before pipeline construction")
         if "yaml" in sys.modules or "omegaconf" in sys.modules or "pydantic" in sys.modules:
             raise SystemExit("pipeline construction should not import config-only dependencies")
 
@@ -1743,7 +1733,7 @@ def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
 
         def assert_forbidden_absent(phase):
             for forbidden in (
-                "loom.config",
+                "weave",
                 "loom.cli",
                 "project",
                 "yaml",
@@ -1807,10 +1797,10 @@ def test_import_config_does_not_import_plugins() -> None:
         """
         import sys
 
-        import loom.config
+        import weave
 
         if "loom.plugins" in sys.modules:
-            raise SystemExit("loom.plugins was imported through loom.config")
+            raise SystemExit("loom.plugins was imported through weave")
         print("ok")
         """
     )
@@ -1960,7 +1950,6 @@ def test_core_runtime_imports_do_not_depend_on_weave() -> None:
         import sys
 
         import loom
-        import loom.config
         import loom.pipeline
         import loom.serialization
         import loom.plugins
@@ -1968,7 +1957,7 @@ def test_core_runtime_imports_do_not_depend_on_weave() -> None:
         import loom.runs
 
         if "weave" in sys.modules:
-            raise SystemExit("weave was imported before phase 4 cutover")
+            raise SystemExit("weave was imported by core runtime imports")
         print("ok")
         """
     )

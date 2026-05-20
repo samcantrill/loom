@@ -7,19 +7,14 @@ from typing import Literal, cast
 
 import pytest
 
-from loom.config.includes import (
-    ConfigIncludeExpansionError,
-    ConfigIncludeResolutionError,
-    IncludeResolutionResult,
-    expand_config_includes,
-    resolve_include_target,
-)
-from loom.config.source_maps import (
+from weave.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError
+from weave.includes import IncludeResolutionResult, expand_config_includes, resolve_include_target
+from weave.source_maps import (
     ConfigPath,
     compose_config_with_sources,
 )
-from loom.config.provenance import ConfigSource
-from loom.config.load import load_config
+from weave.provenance import ConfigSource
+from weave.load import load_config
 from loom.serialization import PlainData
 
 

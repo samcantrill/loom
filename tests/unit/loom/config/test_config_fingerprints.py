@@ -3,8 +3,8 @@
 from pathlib import Path
 from typing import Any, cast
 
-from loom.config.artifacts import ConfigFingerprintRecord, SourceArtifactRecord, SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION
-from loom.config.fingerprints import (
+from weave.artifacts import ConfigFingerprintRecord, SourceArtifactRecord, SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION
+from weave.fingerprints import (
     ARTIFACT_SAFE_FINGERPRINT_LABEL,
     ARTIFACT_SAFE_FINGERPRINT_PAYLOAD_VERSION,
     ARTIFACT_SAFE_FINGERPRINT_POLICY,
@@ -13,9 +13,9 @@ from loom.config.fingerprints import (
     build_artifact_safe_config_fingerprint_record,
     compare_config_artifact_fingerprints,
 )
-from loom.config.includes import IncludeSiteRecord
-from loom.config.interpolation import ResolverExpressionRecord
-from loom.config.provenance import ParsedOverride
+from weave.includes import IncludeSiteRecord
+from weave.interpolation import ResolverExpressionRecord
+from weave.provenance import ParsedOverride
 
 
 def _source_artifacts(base_path: str) -> tuple[SourceArtifactRecord, SourceArtifactRecord]:

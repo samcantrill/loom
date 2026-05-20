@@ -9,7 +9,7 @@ from types import ModuleType
 import importlib
 import pytest
 
-from loom.config.recipes import RecipeCatalog
+from weave.recipes import RecipeCatalog
 from loom.io.codecs import CodecRegistry
 from loom.pipeline.event_sinks import (
     EventObserverLinkRecord,

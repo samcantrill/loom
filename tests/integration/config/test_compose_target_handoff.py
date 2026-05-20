@@ -5,7 +5,7 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import RecipeCatalog, compose_config, instantiate
+from weave import RecipeCatalog, compose_config, instantiate
 from tests.support.config_samples import (
     ConstructionProbeTarget,
     construction_event_log,
