@@ -8,6 +8,7 @@ from tools.test_harness.cli import (
     CoverageMetric,
     SuiteSummary,
     format_coverage,
+    has_tests,
     parse_coverage_json,
     parse_deselected,
     parse_junit,
@@ -74,6 +75,43 @@ def test_parse_junit_classifies_collection_skips_by_test_name(tmp_path: Path) ->
     _, groups = parse_junit(junit_path, "unit")
 
     assert groups["core"].skipped == 1
+
+
+def test_parse_junit_groups_package_local_weave_suite(tmp_path: Path) -> None:
+    junit_path = tmp_path / "junit.xml"
+    junit_path.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="pytest" tests="5">
+    <testcase classname="tests.contracts.test_config_error_contract" name="test_contract" time="0.10" />
+    <testcase classname="tests.integration.config.test_compose" name="test_integration" time="0.20" />
+    <testcase classname="tests.test_plain" name="test_package" time="0.30" />
+    <testcase classname="tests.test_examples" name="test_example" time="0.40" />
+    <testcase classname="tests.unit.config.test_load" name="test_unit" time="0.50" />
+  </testsuite>
+</testsuites>
+""",
+        encoding="utf-8",
+    )
+
+    counts, groups = parse_junit(junit_path, "weave")
+
+    assert counts.passed == 5
+    assert groups["contracts"].passed == 1
+    assert groups["integration-config"].passed == 1
+    assert groups["package"].passed == 1
+    assert groups["examples"].passed == 1
+    assert groups["unit-config"].passed == 1
+
+
+def test_has_tests_accepts_single_test_file(tmp_path: Path) -> None:
+    test_file = tmp_path / "test_examples.py"
+    helper_file = tmp_path / "examples.py"
+    test_file.write_text("def test_example():\n    pass\n", encoding="utf-8")
+    helper_file.write_text("", encoding="utf-8")
+
+    assert has_tests(test_file)
+    assert not has_tests(helper_file)
 
 
 def test_parse_coverage_json_reports_suite_and_group_percentages(
