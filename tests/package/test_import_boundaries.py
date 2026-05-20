@@ -1915,6 +1915,45 @@ def test_import_weave_does_not_import_loom() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_weave_public_config_symbols_do_not_import_loom() -> None:
+    script = dedent(
+        """
+        import pathlib
+        import sys
+
+        repo = pathlib.Path.cwd()
+        sys.path.insert(0, str(repo / "packages" / "weave" / "src"))
+
+        from weave import (
+            RecipeCatalog,
+            check_config_targets,
+            compose_config,
+            inspect_config_composition,
+            instantiate,
+        )
+
+        catalog = RecipeCatalog()
+        assert catalog.names() == ()
+        assert callable(compose_config)
+        assert callable(inspect_config_composition)
+
+        value = {"item": {"_target_": "builtins:dict", "value": 1}}
+        assert instantiate(value) == {"item": {"value": 1}}
+        assert check_config_targets(value).checked_paths == ("$.item",)
+
+        for forbidden in [name for name in sys.modules if name == "loom" or name.startswith("loom.")]:
+            raise SystemExit(f"weave public config symbols imported {forbidden}")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_core_runtime_imports_do_not_depend_on_weave() -> None:
     script = dedent(
         """

@@ -63,7 +63,7 @@ test-all:
 	$(TEST_UV_RUN) $(TEST_HARNESS) run all
 
 test-weave:
-	cd $(WEAVE_TEST_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) PYTHONPATH=src python -m pytest
+	cd $(WEAVE_TEST_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) PYTHONPATH=src uv run --group dev python -m pytest
 
 test-package-summary:
 	$(TEST_UV_LOCKED_DEV) $(TEST_HARNESS) summary package --output build/test-package-summary.md

@@ -25,10 +25,10 @@ typecheck:
 	uv run --extra config pyright
 
 lint-weave:
-	cd packages/weave && UV_CACHE_DIR=$(UV_CACHE_DIR) ruff check .
+	cd packages/weave && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --group dev ruff check .
 
 typecheck-weave:
-	cd packages/weave && UV_CACHE_DIR=$(UV_CACHE_DIR) pyright .
+	cd packages/weave && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --group dev pyright .
 
 format:
 	uv run ruff format .
