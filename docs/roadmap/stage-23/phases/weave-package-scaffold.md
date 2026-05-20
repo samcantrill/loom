@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan; pending expanded-path refinement
+- Status: refined phase execution plan; ready for implementation
 - Feature focus: Config Extraction
 - PR title: `Config Extraction - Phase 2: Weave Package Scaffold`
 - Branch: `codex/weave-package-scaffold`
@@ -20,9 +20,9 @@
 - Plan quality gate: passed on 2026-05-20 in the implementation plan, with no blocking findings after confirmation review.
 - Plan quality gate loop budget: consumed and passed before this phase plan; do not rerun unless the manager explicitly reopens the stage plan.
 - Draft pass: completed in this artifact.
-- Refine pass: pending; this expanded-path phase should get one bounded refinement pass before executor handoff.
+- Refine pass: completed in this artifact; expanded-path planning budget is consumed for this phase unless the manager explicitly reopens planning.
 - Setup limitations: branch was created from local `develop` at `ab4855c`; no network fetch was performed. Initial worktree creation needed sandbox escalation because git refs in the control checkout were read-only to the sandbox.
-- Blockers: none.
+- Blockers: none; implementation must stop if the package cannot build or typecheck without heavyweight tooling, if `weave` must import `loom` to provide the helper foundations, or if root validation requires changing config semantics.
 
 ## Objective
 
@@ -49,19 +49,19 @@ Phase 1 has merged the golden artifact baseline and current-state import-boundar
 
 ## Current Source And Harness Findings
 
-- Existing files or modules that constrain this phase: root `pyproject.toml` defines only the `loom` distribution, `src/loom`, the `loom[config]` optional dependency group, root Ruff/Pyright/Pytest coverage configuration, and root build metadata. `Makefile` includes `make/dev/*.mk` and `make/test/*.mk`; current validation targets are root-oriented.
+- Existing files or modules that constrain this phase: root `pyproject.toml` defines only the `loom` distribution, `src/loom`, the `loom[config]` optional dependency group, root Ruff/Pyright/Pytest coverage configuration, and root build metadata. `Makefile` includes `make/dev/*.mk` and `make/test/*.mk`; current validation targets are root-oriented and do not yet know about `packages/weave`.
 - Existing helper behavior: Loom-owned helpers live in `src/loom/serialization/plain.py`, `src/loom/serialization/json.py`, `src/loom/fingerprints.py`, `src/loom/errors.py`, and config-specific structured errors in `src/loom/config/errors.py`. The `weave` helpers should be equivalent only where config artifacts need them, not a generic utility package for Loom.
 - Existing tests or harness behavior: package/import-boundary tests live in `tests/package/test_import_boundaries.py`; config API tests currently assert `loom.config` exports under optional dependency markers; the test harness suite map currently names root suites only and writes root suite summaries.
 - Import-boundary or dependency constraints: `weave` must import no `loom`; `import loom`, `import loom.pipeline`, `import loom.serialization`, `import loom.plugins`, and other core runtime imports must not import `weave`; Phase 2 may add package-local tests that run against the new package but must not force Loom adapters to consume it yet.
 
 ## In-Scope Work
 
-- Create `packages/weave/pyproject.toml` with distribution name `weave`, Python support aligned with Loom, package-local dependencies for config-owned helpers and later config implementation needs, and build metadata consistent with existing repository tooling.
-- Create `packages/weave/src/weave/__init__.py`, `packages/weave/src/weave/py.typed`, and package-local version metadata initially aligned with the repository version.
+- Create `packages/weave/pyproject.toml` with distribution name `weave`, Python support aligned with Loom, package-local dependencies for config-owned helpers and later config implementation needs, and build metadata consistent with existing repository tooling. If root workspace or lock metadata must change for the new targets to run, keep that change limited to discovering/building the local package; do not make root `loom` depend on `weave` until Phase 4.
+- Create `packages/weave/src/weave/__init__.py`, `packages/weave/src/weave/py.typed`, and package-local version metadata initially aligned with the repository version while not reading `loom.__version__`.
 - Add package-owned helper modules such as `weave.plain`, `weave.json`, `weave.digests`, and `weave.errors`, or equivalent names that keep config ownership clear.
-- Add focused package-local tests under `packages/weave/tests/` for import behavior, version/typing marker, plain-data validation and normalization, stable JSON bytes/text, digest formatting/hash behavior, and structured config error payloads.
+- Add focused package-local tests under `packages/weave/tests/` for import behavior, version/typing marker, plain-data validation and normalization, stable JSON bytes/text, digest formatting/hash behavior, and structured config error payloads. These tests should execute against the package-local source or installed package, not by relying on root `tests` path tricks that would hide packaging problems.
 - Add initial repository tooling so `make test-weave`, `make build-weave`, and `make validate-weave` run package-local checks without moving the root config suite.
-- Extend root import-boundary coverage only as needed to prove `weave` imports no `loom` and core Loom imports do not import `weave`.
+- Extend root import-boundary coverage only as needed to prove `weave` imports no `loom` and core Loom imports do not import `weave`; use subprocess isolation where useful so module state from a prior root import cannot hide an eager import.
 - Keep root Loom behavior and existing `loom.config` tests unchanged except for non-behavioral tooling needed to coexist with the new package tree.
 
 ## Out-of-Scope Work
@@ -72,6 +72,7 @@ Phase 1 has merged the golden artifact baseline and current-state import-boundar
 - Adding a `loom.config` compatibility shim or changing the confirmed hard-switch policy.
 - Moving root config tests or authoring examples into `packages/weave`.
 - Changing config semantics, golden artifact shapes, recipe plugin entry-point ownership, or CLI diagnostics.
+- Adding placeholder public composition APIs such as `compose_config`, `RecipeCatalog`, or `instantiate` before Phase 3 implements them for real.
 - Creating a PR body, opening a PR, or updating implementation-plan phase status.
 
 ## Assumptions
@@ -85,9 +86,17 @@ Phase 1 has merged the golden artifact baseline and current-state import-boundar
 
 This phase introduces a new package boundary, not new config semantics. Public behavior in scope is limited to an importable `weave` package, package metadata, a typing marker, package-local version metadata, and config-owned helper APIs that later config records can use. The helper APIs may mirror Loom behavior where artifact compatibility requires it, but Loom runtime code must not import these helpers for runtime-owned serialization, fingerprinting, or error behavior.
 
+`weave.__init__` should expose only real Phase 2 surfaces. Do not add stubs for future config composition APIs such as `compose_config`, `compose_config_with_catalog`, `RecipeCatalog`, `inspect_config_composition`, `instantiate`, or `check_config_targets`; those APIs become real in Phase 3.
+
+`weave.plain` or its equivalent should define package-owned `PlainData` typing and validation/normalization helpers with the config artifact semantics needed by current records: string mapping keys, finite floats, tuple-to-list normalization, `to_dict()` object conversion when supported, and explicit rejection of set-like, bytes-like, path, datetime, mapping-proxy, callable, and otherwise non-plain values. It must raise package-owned errors rather than Loom errors.
+
+`weave.json` or its equivalent should provide stable JSON behavior compatible with config artifact hashing: sorted keys, compact separators for stable bytes, UTF-8 bytes output, no NaN/Infinity, and pretty JSON with deterministic sort behavior where implemented.
+
+`weave.digests` or its equivalent should provide package-owned digest aliases and helpers for canonical `sha256:<hex>` formatting, validation, constant-time comparison, byte/text/plain-data hashing, and mapping hashing. It must not import `loom.ids`, `loom.fingerprints`, or `loom.serialization`.
+
 `weave.errors` should define config-owned error roots and structured context behavior without inheriting from or importing Loom error roots. Exact class names may follow the current config error names where they are clearly config-owned, but the executor must avoid moving the full config error hierarchy if doing so pulls in composition-specific behavior from Phase 3.
 
-Package tooling changes must preserve the current root validation contract. New Make targets can be initial and package-scoped, but final repository-wide summary integration belongs to Phase 5 unless a small harness addition is needed for `test-weave`.
+Package tooling changes must preserve the current root validation contract. New Make targets can be initial and package-scoped, but final repository-wide summary integration belongs to Phase 5 unless a small harness addition is needed for `test-weave`. Prefer package-specific commands such as building or testing the `packages/weave` project directly over making package tests pass only because the repository root is on `PYTHONPATH`.
 
 ## Design Impact
 
@@ -181,6 +190,7 @@ Package tooling changes must preserve the current root validation contract. New 
 - Import-boundary tests could accidentally force the future hard switch early.
 - Build/typecheck wiring can become too broad if it tries to solve Phase 5 summary and example validation ahead of time.
 - Introducing `weave` can mask accidental imports if tests run in-process after `loom` has already been imported.
+- Publishing-oriented package-name availability for `weave` is intentionally unverified in this phase; isolated local build/import evidence is enough unless the local build resolves an external package unexpectedly.
 
 ## Validation Commands
 
@@ -191,6 +201,7 @@ make test-weave
 make build-weave
 make validate-weave
 uv run pytest tests/package/test_import_boundaries.py
+uv run pyright packages/weave
 ```
 
 Final PR-preparation commands:
@@ -204,7 +215,7 @@ make test-summary
 
 - Safe implementation slices: package skeleton and metadata; helper modules; package-local helper tests; Make/tooling targets; root import-boundary checks.
 - Tests to run with each slice: package import/helper tests after skeleton and helper changes, `make test-weave` after package-local tests, `make build-weave` after metadata changes, import-boundary tests after root boundary edits, and `make validate-weave` before final PR preparation.
-- Decisions the executor must not revisit: hard switch with no `loom.config` shim, no adapter rewiring in Phase 2, no config implementation port in Phase 2, no shared core package, no Loom runtime imports from `weave`, and no broad validation harness redesign.
+- Decisions the executor must not revisit: hard switch with no `loom.config` shim, no adapter rewiring in Phase 2, no config implementation port in Phase 2, no placeholder public composition APIs, no shared core package, no Loom runtime imports from `weave`, and no broad validation harness redesign.
 - Conditions that require stopping for the manager: package build requires heavyweight tooling, `weave` cannot be imported or built without importing Loom, helper behavior must become broader than config-owned foundations, package metadata cannot coexist with root `uv`/build tooling, or root validation requires changing config semantics.
 
 ## Refinement And Review Budget Status
@@ -215,9 +226,9 @@ make test-summary
 
 ## Completion Notes
 
-- Draft plan: completed in this artifact.
-- Refine plan: pending.
-- Final phase execution plan:
+- Draft plan: completed in commit `ee1710c`.
+- Refine plan: completed in this artifact.
+- Final phase execution plan: ready for implementation after this refinement.
 - Implementation summary:
 - Implementation validation:
 - Refinement summary:
