@@ -29,7 +29,7 @@ How should a run store atomically write status files?
 How should authored configs be composed or interpolated?
 ```
 
-Those belong to `loom.io`, `loom.pipeline.stores`, and `loom.config`.
+Those belong to `loom.io`, `loom.pipeline.stores`, and `weave`.
 
 ### 1.1 Alignment With `loom.md`
 
@@ -165,7 +165,7 @@ recover interrupted writes
 Run stores can use serialization helpers to encode documents, but atomic file
 behavior stays in the stores package.
 
-### 3.6 `loom.config`
+### 3.6 `weave`
 
 Owns authored config composition and object construction.
 
@@ -478,12 +478,12 @@ yaml unsafe loaders
 Deserialization should construct only known `loom` types through explicit code
 paths.
 
-### 6.7 Keep Optional Dependencies Optional
+### 6.7 Keep Config Dependencies In `weave`
 
 JSON support uses the standard library.
 
-YAML support may use an optional dependency through config extras. Importing
-plain-data or JSON helpers should not require YAML dependencies.
+YAML support belongs to `weave`. Importing Loom plain-data or JSON helpers
+should not require config composition internals.
 
 ---
 
@@ -1218,7 +1218,7 @@ target instantiation
 secret redaction policy
 ```
 
-`loom.config` owns those.
+`weave` owns those.
 
 ### 12.5 YAML Output Policy
 
@@ -1734,7 +1734,7 @@ Serialization should not execute those targets or recipes.
 
 ### 18.2 Resolved Config Export
 
-`loom.config` may use serialization to produce plain serializable documents for
+`weave` may use serialization to produce plain serializable documents for
 the runner/run store to persist:
 
 ```text
@@ -1745,7 +1745,7 @@ cli_overrides.yaml
 overlays.yaml
 ```
 
-`loom.config` owns:
+`weave` owns:
 
 ```text
 what gets redacted
@@ -1782,7 +1782,7 @@ api_key
 credential
 ```
 
-Those patterns belong to `loom.config.redaction`.
+Those patterns belong to `weave.redaction`.
 
 ---
 
@@ -2124,7 +2124,7 @@ typing
 Serialization should avoid importing:
 
 ```text
-loom.config
+weave
 loom.pipeline
 loom.io
 loom.pipeline.stores
@@ -2176,7 +2176,7 @@ core serialization should stay dependency-light
 project objects can expose to_dict if needed
 ```
 
-If Pydantic becomes common in `loom.config`, add optional helpers in a separate
+If Pydantic becomes common in `weave`, add optional helpers in a separate
 module that is imported only when installed.
 
 ### 23.5 NumPy and Arrays
@@ -2288,7 +2288,7 @@ Test import boundaries:
 
 ```text
 import loom.serialization does not import loom.pipeline
-import loom.serialization does not import loom.config
+import loom.serialization does not import weave
 import loom.serialization.plain does not require YAML dependencies
 ```
 

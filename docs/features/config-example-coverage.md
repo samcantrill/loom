@@ -34,20 +34,20 @@ configuration example surface.
 
 | Example | Functionality covered | Implementation notes |
 | --- | --- | --- |
-| `authoring.config-composition.basic` | Base YAML, overlays, ordinary overrides, `resolved`/`unresolved`/`redacted`. | Existing runnable smoke example using `compose_config`; no recipes or includes. |
-| `authoring.config-composition.includes` | Explicit relative include, nested include, user include replacement, brand-new include addition. | Existing runnable smoke example with a small `configs/` tree and printed source artifact paths. |
-| `authoring.config-composition.replacement-overlays` | Multi-overlay order and `_replace_` marker semantics. | Runnable smoke example showing overlay 2 replacing overlay 1's mapping. |
-| `authoring.recipes` | Trusted recipe registration, recipe expansion, interpolation, recipe manifest, redaction. | Existing runnable example; keep as the canonical recipe example. |
-| `authoring.artifact-safety` | Provenance metadata, source artifacts, artifact-safe fingerprints, resolver facts, raw snapshot default/opt-in. | Runnable smoke example that avoids printing secrets and compares two fingerprints. |
-| `authoring.target-instantiation` | Nested `_target_` graph, `_args_`, `_partial_`, `_inject_`, explicit instantiation after composition or direct config. | Existing runnable example; extend only if needed for composed handoff. |
-| `authoring.config-composition.errors` | Structured exceptions for missing include, invalid override, unsupported resolver, unsupported `_copy_`. | Existing runnable smoke example catches errors and prints context summaries. |
+| `config-composition.basic` | Base YAML, overlays, ordinary overrides, `resolved`/`unresolved`/`redacted`. | Existing runnable smoke example using `compose_config`; no recipes or includes. |
+| `config-composition.includes` | Explicit relative include, nested include, user include replacement, brand-new include addition. | Existing runnable smoke example with a small `configs/` tree and printed source artifact paths. |
+| `config-composition.replacement-overlays` | Multi-overlay order and `_replace_` marker semantics. | Runnable smoke example showing overlay 2 replacing overlay 1's mapping. |
+| `recipes` | Trusted recipe registration, recipe expansion, interpolation, recipe manifest, redaction. | Existing runnable example; keep as the canonical recipe example. |
+| `artifact-safety` | Provenance metadata, source artifacts, artifact-safe fingerprints, resolver facts, raw snapshot default/opt-in. | Runnable smoke example that avoids printing secrets and compares two fingerprints. |
+| `target-instantiation` | Nested `_target_` graph, `_args_`, `_partial_`, `_inject_`, explicit instantiation after composition or direct config. | Existing runnable example; extend only if needed for composed handoff. |
+| `config-composition.errors` | Structured exceptions for missing include, invalid override, unsupported resolver, unsupported `_copy_`. | Existing runnable smoke example catches errors and prints context summaries. |
 
 ## Example Coverage Checks
 
 Each runnable example should have:
 
 - an `example.yaml` manifest with `status: runnable`;
-- one Python entrypoint validated by `tests/integration/docs/test_v0_python_examples.py`;
+- one Python entrypoint validated by `packages/weave/tests/test_examples.py`;
 - a README that says which public API is used;
 - no CLI commands except repository-local `uv run python ...` execution;
 - no remote includes, plugin discovery, global search, sweeps, `_copy_`, or
@@ -57,11 +57,11 @@ Each runnable example should have:
 
 | Existing example | Current coverage | Notes |
 | --- | --- | --- |
-| `authoring.config-composition.basic` | Base YAML, overlays, ordinary update and add overrides, `resolved`/`unresolved`/`redacted`. | Keep as the canonical first composition example without recipes or includes. |
-| `authoring.config-composition.includes` | Explicit relative include, nested include relative to the including file, user include replacement, brand-new include addition, include source artifacts. | Keep as the canonical include composition example; broaden only if source snapshot examples need a shared tree. |
-| `authoring.config-composition.replacement-overlays` | Multi-overlay order and `_replace_` mapping replacement through public `compose_config`. | Keep as the canonical replacement overlay smoke example. |
-| `authoring.recipes` | Recipes, overlays, ordinary overrides, interpolation, redaction, recipe manifest, fingerprint. | Keep; optionally add one source artifact print once docs want artifact reviewability in examples. |
-| `authoring.artifact-safety` | Provenance metadata, source artifacts, artifact-safe fingerprint comparison, `oc.env` resolver facts, redaction, metadata-only snapshot defaults, and raw snapshot opt-in. | Keep output concise and avoid printing raw snapshot content or resolved secret values. |
-| `authoring.target-instantiation` | Direct nested target instantiation with `_args_`, `_partial_`, and `_inject_`. | Keep; add a composed-target handoff example only if a separate example would not be clearer. |
-| `authoring.config-composition.errors` | Missing include, invalid include override, unsupported resolver, unsupported `_copy_`, and structured context summaries. | Keep as the canonical config error-handling smoke example. |
+| `config-composition.basic` | Base YAML, overlays, ordinary update and add overrides, `resolved`/`unresolved`/`redacted`. | Keep as the canonical first composition example without recipes or includes. |
+| `config-composition.includes` | Explicit relative include, nested include relative to the including file, user include replacement, brand-new include addition, include source artifacts. | Keep as the canonical include composition example; broaden only if source snapshot examples need a shared tree. |
+| `config-composition.replacement-overlays` | Multi-overlay order and `_replace_` mapping replacement through public `compose_config`. | Keep as the canonical replacement overlay smoke example. |
+| `recipes` | Recipes, overlays, ordinary overrides, interpolation, redaction, recipe manifest, fingerprint. | Keep; optionally add one source artifact print once docs want artifact reviewability in examples. |
+| `artifact-safety` | Provenance metadata, source artifacts, artifact-safe fingerprint comparison, `oc.env` resolver facts, redaction, metadata-only snapshot defaults, and raw snapshot opt-in. | Keep output concise and avoid printing raw snapshot content or resolved secret values. |
+| `target-instantiation` | Direct nested target instantiation with `_args_`, `_partial_`, and `_inject_`. | Keep; add a composed-target handoff example only if a separate example would not be clearer. |
+| `config-composition.errors` | Missing include, invalid include override, unsupported resolver, unsupported `_copy_`, and structured context summaries. | Keep as the canonical config error-handling smoke example. |
 | `execution.local` | Pipeline execution using composed plain config. | Keep under execution examples; do not use it as config artifact evidence. |

@@ -82,7 +82,7 @@ queries, fragments, and non-local schemes are rejected.
 ```python
 from pathlib import Path
 
-from loom.config import compose_config
+from weave import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.stores import path_to_run_uri

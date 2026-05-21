@@ -69,7 +69,7 @@ typing
 It should not import:
 
 ```text
-loom.config
+weave
 loom.pipeline
 loom.io
 loom.serialization
@@ -105,7 +105,7 @@ Own concrete errors raised by that subsystem.
 Examples:
 
 ```text
-loom.config.errors.TargetInstantiationError
+weave.errors.TargetInstantiationError
 loom.serialization.errors.PlainDataError
 loom.io.codecs.errors.UnknownCodecError
 loom.pipeline.errors.StageContractError
@@ -404,24 +404,20 @@ class PluginError(LoomError): ...
 ```
 
 The exact list can be introduced incrementally. The key requirement is that
-subsystem roots share `LoomError`.
+Loom-owned subsystem roots share `LoomError`.
 
 ### 7.3 Import Stability
 
-Subsystem modules may define their root locally and re-export it:
+Loom-owned subsystem modules may define their root locally and re-export it:
 
 ```python
 from loom.errors import ConfigError
 ```
 
-Then:
-
-```python
-from loom.config import ConfigError
-from loom.errors import ConfigError
-```
-
-can both remain stable.
+`weave` is a separate config authoring package. Its `ConfigError` hierarchy is
+package-owned and does not inherit from `LoomError`; Loom adapter paths translate
+or map `weave` errors into Loom CLI diagnostics and Loom-owned wrapper errors
+where needed.
 
 ---
 
@@ -660,8 +656,10 @@ recipe expands to invalid structure
 
 ### 11.3 `ConfigError`
 
-Use for config loading, composition, recipe, override, interpolation, validation,
-and target instantiation failures.
+Use for Loom-owned config adapter failures and translated config authoring
+failures. Direct config composition, recipe, override, interpolation,
+validation, and target instantiation failures are raised by the package-owned
+`weave.errors.ConfigError` hierarchy.
 
 ### 11.4 `SerializationError`
 
@@ -714,7 +712,7 @@ objects, and registration failures.
 Local module:
 
 ```text
-loom.config.errors
+weave.errors
 ```
 
 Examples:
@@ -729,7 +727,9 @@ RecipeExpansionError
 TargetInstantiationError
 ```
 
-All should inherit from `ConfigError`.
+All should inherit from `weave.errors.ConfigError`. Loom adapters may catch and
+translate these errors for CLI exit-code mapping, but `weave` does not inherit
+from `loom.errors.LoomError`.
 
 ### 12.2 Serialization
 
@@ -1252,12 +1252,14 @@ context merging does not mutate original
 Test:
 
 ```text
-ConfigError is LoomError
+loom.errors.ConfigError is LoomError
+weave.errors.ConfigError is package-owned and does not inherit LoomError
 PipelineError is LoomError
 LoomIOError is LoomError
 ArtifactError is LoomError
 PluginError is LoomError
-subsystem concrete errors inherit expected root
+Loom-owned subsystem concrete errors inherit expected Loom root
+weave concrete errors inherit the expected weave root
 ```
 
 ### 20.4 Wrapping Tests
@@ -1276,7 +1278,7 @@ from None is not used accidentally in common wrappers
 Test:
 
 ```text
-ConfigError maps to config exit code
+weave ConfigError or translated Loom ConfigError maps to config exit code
 PipelineValidationError maps to planning exit code
 ExecutionError maps to execution exit code
 KeyboardInterrupt maps to 130
@@ -1337,10 +1339,11 @@ Keep constructors inherited from `LoomError`.
 
 ### 21.3 Phase 3: Subsystem Alignment
 
-Update subsystem error modules to inherit from shared roots:
+Update Loom-owned subsystem error modules to inherit from shared roots. `weave`
+keeps its independent package-owned hierarchy:
 
 ```text
-loom.config.errors
+weave.errors
 loom.serialization.errors
 loom.io.errors
 loom.pipeline.errors

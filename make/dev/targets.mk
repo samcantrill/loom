@@ -13,7 +13,7 @@ dev-help:
 	@printf '  make check         Run lint, typecheck, and default tests\n'
 	@printf '\n'
 	@printf 'Validation and packaging:\n'
-	@printf '  make validate-pr   Run the local PR validation gate\n'
+	@printf '  make validate-pr   Run the local PR validation gate, including weave\n'
 	@printf '  make build         Build source and wheel distributions\n'
 	@printf '  make build-weave    Build the weave package\n'
 	@printf '  make validate-weave  Run weave lint/typecheck/tests/examples/build checks\n'
@@ -35,7 +35,7 @@ format:
 
 check: lint typecheck test
 
-validate-pr: lint typecheck test-no-extra test-config-extra build
+validate-pr: lint typecheck test-no-extra test-config-extra validate-weave build
 
 build:
 	uv build

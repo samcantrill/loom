@@ -1,11 +1,11 @@
 # Roadmap Stage 23 Implementation Plan: Standalone Config Package Extraction
 
-Status: Phase 5 merged; ready for Phase 6 execution planning
+Status: complete; all phases merged
 Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: ready for Phase 6 execution planning
+Current phase: complete
 Blockers:
 
 - None for roadmap-stage planning readiness.
@@ -21,6 +21,8 @@ Blockers:
   validated, and merged.
 - Phase 5 execution plan drafted, refined, executed, reviewed, opened,
   validated, and merged.
+- Phase 6 execution plan drafted, refined, implemented, reviewed, opened,
+  validated, merged, and cleaned up.
 
 ## Summary
 
@@ -365,7 +367,7 @@ group or support dual groups if standalone package users need that migration.
 | 3 | `weave-implementation-port` | merged | `codex/weave-implementation-port` | [#202](https://github.com/samcantrill/loom/pull/202) | `weave` implementation | Port config implementation into `weave` with package-owned dependencies | package-local config suites, golden parity | config examples may be smoke-copied only when needed |
 | 4 | `weave-hard-switch-adapters` | merged | `codex/weave-hard-switch-adapters` | [#203](https://github.com/samcantrill/loom/pull/203) | Loom adapter rewiring, import cleanup | Hard-switch Loom to `weave` and remove `src/loom/config` | root package/contract/integration/e2e, import-boundary tests | runtime examples still in place |
 | 5 | `config-tests-examples-validation` | merged | `codex/config-tests-examples-validation` | [#204](https://github.com/samcantrill/loom/pull/204) | test/example relocation, validation targets | Move config tests/examples beside the package and finalize validation commands | `make validate-weave`, targeted root adapter suites | package-local config examples |
-| 6 | `config-extraction-docs-hardening` | pending | `codex/config-extraction-docs-hardening` | pending | docs, final validation, metadata | Align docs, structure, roadmap metadata, and final combined validation | `make validate-pr`, `make test-summary` | docs and example references verified |
+| 6 | `config-extraction-docs-hardening` | merged | `codex/config-extraction-docs-hardening` | [#205](https://github.com/samcantrill/loom/pull/205) | docs, final validation, metadata | Align docs, structure, roadmap metadata, and final combined validation | `make validate-pr`, `make test-summary` | docs and example references verified |
 
 ## Implementation Readiness Blockers
 
@@ -1013,11 +1015,13 @@ Workflow path: expanded path
 
 ## Phase 6: Documentation And Final Hardening
 
-Status: pending
+Status: merged
 Slug: `config-extraction-docs-hardening`
 Branch: `codex/config-extraction-docs-hardening`
 Worktree: `/home/samcantrill/work/loom-worktrees/config-extraction-docs-hardening`
-PR: pending
+Worktree cleanup: removed after merge
+PR: [#205](https://github.com/samcantrill/loom/pull/205), target
+  `develop`, head `codex/config-extraction-docs-hardening`.
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path
@@ -1100,13 +1104,16 @@ Workflow path: expanded path
 
 ### Phase Workflow State
 
-- Phase execution plan: not drafted
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
+- Phase execution plan: drafted and refined in
+  `docs/roadmap/stage-23/phases/config-extraction-docs-hardening.md`
+- Planning/refinement budget: used; expanded-path draft and refine completed
+- Implementation/refinement budget: not needed; targeted and full validation
+  passed after manager implementation
+- PR review budget: used; manager automated review found no blocking issues
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: pending
-- Merge record: pending
+- Pre-submit blocker gate: passed locally
+- Merge record: squash-merged into `develop` via PR #205 with merge commit
+  `d218eecb95e94e9846fd98beba9991fb9ab2342e`
 
 ### Risks And Stop Conditions
 
@@ -1119,11 +1126,29 @@ Workflow path: expanded path
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: updated current user-facing docs, README examples,
+  source-tree structure docs, config/serialization/fingerprint/error/plugin/CLI
+  feature docs, package docs, example coverage references, testing docs,
+  roadmap metadata, and a narrow docs/example test expectation so repository
+  instructions now present `weave` as the config authoring package and Loom as
+  the runtime consuming authored config through explicit adapter paths.
+- Validation: `make validate-weave` passed; targeted docs/example tests passed
+  outside the sandbox with 33 tests; active import-reference sweeps found no
+  current `loom.config` instructions beyond intentional absence assertions;
+  `make validate-pr` passed outside the sandbox; `make test-summary` passed
+  with package, unit, contract, integration, e2e, config-extra, weave, and
+  weave-examples rows.
+- PR: [#205](https://github.com/samcantrill/loom/pull/205), target
+  `develop`, head `codex/config-extraction-docs-hardening`.
+- Review: manager automated review verified PR target, scope, whitespace,
+  current-doc import sweeps, and GitHub CI. No blocking findings remained.
+- Merge: squash-merged on 2026-05-20 with merge commit
+  `d218eecb95e94e9846fd98beba9991fb9ab2342e`; GitHub CI `checks`
+  completed successfully on 2026-05-20 before merge.
+- Cleanup: remote branch, stale tracking ref, local branch, and worktree were
+  removed after merge.
+- Follow-up: future standalone `weave` publication should revisit the
+  `loom.recipes` entry-point group name and registry naming availability.
 
 ## Cross-Phase Validation
 

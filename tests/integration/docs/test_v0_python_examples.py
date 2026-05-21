@@ -381,8 +381,6 @@ def _load_manifest(path: Path) -> dict[str, object]:
 
 
 def _expected_surface(example_id: str) -> str:
-    if example_id.startswith("authoring."):
-        return "python_api"
     if example_id in PYTHON_API_EXAMPLES:
         return "python_api"
     if example_id in INTERNAL_DEMO_EXAMPLES:

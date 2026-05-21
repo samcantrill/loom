@@ -96,7 +96,7 @@ shared exceptions
 serialization helpers
 ```
 
-### 3.2 `loom.config`
+### 3.2 `weave`
 
 Owns configuration composition and object construction.
 
@@ -113,7 +113,7 @@ instantiate `_target_` objects
 produce resolved config and config provenance data for the runner/run store
 ```
 
-`loom.config` may produce a resolved pipeline config or instantiate a
+`weave` may produce a resolved pipeline config or instantiate a
 `PipelineSpec`, but it should not execute stages.
 
 ### 3.3 `loom.pipeline`
@@ -545,7 +545,7 @@ pipeline:
           codec_key: json.v1
 ```
 
-The authored config may be compact. After `loom.config` resolves it, the pipeline
+The authored config may be compact. After `weave` resolves it, the pipeline
 layer should receive an explicit structure.
 
 ### 7.2 Branching Pipeline
@@ -1671,7 +1671,7 @@ runs/RUN_ID/
 ```
 
 Current v1 composed-config runs add artifact-safe config persistence without
-making `loom.pipeline` import `loom.config` classes:
+making `loom.pipeline` import `weave` classes:
 
 ```text
 runs/RUN_ID/

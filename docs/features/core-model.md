@@ -65,7 +65,7 @@ io / config / pipeline / stores / provenance
 The core model should not import:
 
 ```text
-loom.config
+weave
 loom.pipeline
 loom.io.sources
 loom.io.codecs
@@ -529,7 +529,7 @@ records.
 Importing core modules should not:
 
 ```text
-import optional config libraries
+import config authoring libraries
 import ML frameworks
 touch the filesystem
 read environment state
@@ -1635,7 +1635,7 @@ Path-aware messages make config and manifest debugging much easier.
 
 ### 18.1 Config
 
-`loom.config` may construct core objects from authored or resolved config.
+`weave` may construct core objects from authored or resolved config.
 
 The config layer owns:
 
@@ -1770,7 +1770,7 @@ Core model imports should require only the standard library.
 Optional dependencies can be used by:
 
 ```text
-config extras
+`weave`
 I/O codecs
 remote stores
 testing tools

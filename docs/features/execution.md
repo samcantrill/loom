@@ -194,7 +194,7 @@ update artifact metadata
 Execution should validate that declared stage outputs become `ArtifactRef`s, but
 the artifact store owns artifact persistence details.
 
-### 3.7 `loom.config`
+### 3.7 `weave`
 
 Owns configuration composition and object construction.
 
@@ -211,7 +211,7 @@ produce resolved config/provenance data for the runner/run store to persist
 
 For v0, pipeline stage mappings are orchestration specs. Execution delegates stage
 construction to pipeline-owned helpers, then invokes
-`stage.run(context, inputs)`. `loom.config` should not be imported for stage
+`stage.run(context, inputs)`. `weave` should not be imported for stage
 construction, and it should not treat stage mappings as generic `_target_` object
 graphs or implement config loading rules there.
 

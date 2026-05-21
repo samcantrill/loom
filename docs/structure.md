@@ -399,11 +399,12 @@ Public serialization helpers such as `to_dict()` must expose thawed `dict` and
 Migrations remain document-family-owned through explicit migration tables passed
 to the schema helper entrypoints. There is no global migration registry.
 
-Config-only dependencies are published under `loom[config]`; core imports should
-work without them. Validation is split into:
+Config authoring dependencies are owned by `weave`; Loom core imports should not
+import composition modules at import time. Validation is split into:
 
-- `test-no-extra` (default suites without config extras)
-- `test-config-extra` (optional dependency-marked tests with `--extra config`)
+- `test-no-extra` (default suites without opt-in markers)
+- `test-config-extra` (config adapter workflows that use the compatibility
+  `--extra config` selection and optional-dependency marker)
 
 ---
 
@@ -444,22 +445,22 @@ io            = bytes, files, URIs, source backends, codecs
 stores        = run/artifact directory policy, atomic writes, indexes
 pipeline      = DAG validation, planning, stage orchestration, resume
 diagnostics   = reusable local readiness and inspection result models
-config        = compose_config convenience API + explicit catalog composition
+weave         = compose_config convenience API + explicit catalog composition
 cli           = presentation over Python APIs
 ```
 
 Avoid these import directions:
 
 ```text
-loom.__init__ -> config, pipeline runners, plugin discovery, optional backends
+loom.__init__ -> weave, pipeline runners, plugin discovery, optional backends
 refs / records / artifacts -> io
 serialization -> io
 io -> pipeline.runner
-config -> pipeline execution internals
+weave -> pipeline execution internals
 pipeline -> config composition or recursive target-instantiation internals
 executors -> config composition internals
 stores -> concrete project code
-config / pipeline / stores / executors -> diagnostics
+weave / pipeline / stores / executors -> diagnostics
 loom -> downstream project packages
 ```
 
@@ -477,7 +478,7 @@ from loom.refs import ResourceRef
 from loom.records import Record, InMemoryManifest, ManifestView
 from loom.artifacts import ArtifactAddress, ArtifactRef
 from loom.fingerprints import hash_mapping
-from loom.config import (
+from weave import (
     RecipeCatalog,
     compose_config,
     compose_config_with_catalog,
@@ -596,7 +597,7 @@ need.
 
 Detailed specification: [config.md](features/config.md)
 
-`loom.config` composes trusted project configuration and supports config-only
+`weave` composes trusted project configuration and supports config-only
 object construction. It loads YAML, applies overlays and CLI overrides, resolves
 interpolation, expands named recipes, validates stable boundaries, instantiates
 `_target_` object graphs, records config provenance, and redacts secrets for
@@ -619,7 +620,7 @@ instantiate/           importlib target resolution and recursive construction
 errors.py              config-specific errors
 ```
 
-`loom.config` is not the workflow engine. It may produce or instantiate pipeline
+`weave` is not the workflow engine. It may produce or instantiate pipeline
 configs, but construction and execution belong to `loom.pipeline`.
 
 ### 6.5 Pipeline Model and Planning
@@ -831,9 +832,9 @@ _sqlite.py     private derived SQLite sidecar storage
 Public catalog models use `run_uri` as the canonical identity. Display names and
 local paths are presentation fields only. `loom.runs` may depend on public
 foundation models, serialization helpers, and run-store inspection APIs. It must
-not import CLI modules, execution runners, concrete executors, optional config
-dependencies, project packages, or artifact payload codecs for list/compare
-behavior.
+not import CLI modules, execution runners, concrete executors, config
+composition dependencies, project packages, or artifact payload codecs for
+list/compare behavior.
 
 Private catalog storage and extraction modules may read authoritative run-store
 metadata and build derived catalog state. They must not make SQLite rows

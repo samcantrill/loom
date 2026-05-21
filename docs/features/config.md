@@ -1,8 +1,8 @@
-# `loom.config` Specification
+# `weave` Specification
 
 ## 1. Purpose
 
-`loom.config` is the configuration composition and object construction layer for `loom`.
+`weave` is the configuration composition and object construction layer for `loom`.
 
 It exists to keep experiment and workflow configuration readable while preserving full access to ordinary Python code. It should compose YAML, validate stable boundaries, construct object graphs, record provenance, and return the resolved result to the Python caller. Recipe expansion is introduced after the initial composition API is in place.
 
@@ -13,7 +13,7 @@ The initial design should be intentionally narrow. The full v0 implementation sh
 
 It should avoid intermediate mechanisms at first, especially registry aliases, arbitrary include graphs, complex list merge operators, and large global component registries. Those can be added later if concrete use makes them necessary.
 
-After v0, `loom.config` should add explicit recursive composition through
+After v0, `weave` should add explicit recursive composition through
 `_include_` and whole-section replacement through `_replace_`. V1 deliberately
 defers `_copy_` and defaults to metadata/hash source records rather than raw
 source snapshots. This is not intended to mimic Hydra or depend on Hydra. The
@@ -27,12 +27,10 @@ provenance, fingerprints, and path-aware errors.
 This document refines the configuration responsibilities listed in
 [loom.md](../loom.md): configuration composition, recursive importlib construction,
 named recipe expansion, validation, provenance capture, and redaction. Recipe
-expansion arrives after base composition: Phase 4 rejects `_recipe_` blocks with
-a clear unsupported-recipe error, and Phase 5 enables deterministic expansion
-and recipe manifests. It keeps
-the same non-goal boundary: authored configs are trusted project code in v0, but
-`loom.config` must not execute stages, define domain recipes, or become a Hydra
-replacement.
+expansion is deterministic, records recipe manifests, and stays inside the
+config authoring package. It keeps the same non-goal boundary: authored configs
+are trusted project code in v0, but `weave` must not execute stages, define
+domain recipes, or become a Hydra replacement.
 
 ---
 
@@ -53,17 +51,17 @@ Validation:
   typed schemas at experiment, recipe, and stable-component boundaries
 
 Execution:
-  handled by loom.pipeline, not by loom.config
+  handled by loom.pipeline, not by weave
 ```
 
-This means `loom.config` is not a workflow engine. It does not run stages or interpret application-specific data. It composes configs, validates structure, constructs Python objects, records provenance, and provides the resulting config/object graph to the caller. After Phase 5 it also expands recipes.
+This means `weave` is not a workflow engine. It does not run stages or interpret application-specific data. It composes configs, expands recipes, validates structure, constructs Python objects, records provenance, and provides the resulting config/object graph to the caller.
 
 Typed configuration models should be used as internal correctness contracts at
 stable `loom` boundaries. They should not become a new YAML authoring language.
 Project-specific YAML remains ordinary trusted project config unless it crosses
 a `loom` contract such as a pipeline spec, stage spec, artifact reference, or
 recipe input. Authored config files, recipes, and `_target_` import paths are
-trusted project code. `loom.config` does not provide an untrusted-config
+trusted project code. `weave` does not provide an untrusted-config
 sandbox, import allow-list mode, or safe execution boundary for configs supplied
 by an untrusted party.
 
@@ -86,7 +84,7 @@ serialization helpers
 small utility types
 ```
 
-### 3.2 `loom.config`
+### 3.2 `weave`
 
 Owns configuration and object construction.
 
@@ -127,9 +125,9 @@ run directory management
 sweeps
 ```
 
-`loom.pipeline` must remain usable without `loom.config` or composition
+`loom.pipeline` must remain usable without `weave` or composition
 manifests. Config composition is an optional Python API path that can produce
-plain data for callers; `loom.config` must not call pipeline, stores, CLI
+plain data for callers; `weave` must not call pipeline, stores, CLI
 modules, plugin discovery, or project code during composition.
 
 ---
@@ -390,30 +388,29 @@ should be visible in the resolved config and traceable in provenance.
 
 ### 5.12 Dependency and Validation Boundary
 
-Configuration composition remains feature-complete in `loom.config`, but its
-external dependencies are optional:
+Configuration composition remains feature-complete in `weave`, but its
+external dependencies are package-owned:
 
 - `omegaconf`
 - `pydantic`
 - `pyyaml`
 
-These remain published under `[project.optional-dependencies].config` so core
-runtime imports and import-boundary tests can run without optional installation.
-Runtime entry paths that require configuration loading, interpolation, or recipe
-resolution require `loom[config]`.
+These dependencies live in `weave`, not in Loom runtime internals. Runtime entry
+paths that require configuration loading, interpolation, or recipe resolution
+use `weave` through explicit Loom adapter modules.
 
 The import boundary contract is:
 
-- `import loom` and core primitive/records/artifacts/pipeline imports succeed
-  without config extras.
-- `import loom.config` stays import-safe.
-- Config-only APIs that need optional dependencies fail with a clear
-  `loom[config]` guidance error when the extra is missing.
+- `import loom` and core primitive/records/artifacts/pipeline imports do not
+  import config composition modules at import time.
+- `import weave` stays import-safe.
+- Config authoring APIs keep their dependency usage inside `weave`.
 
 Suite evidence is split between:
 
 - no-extra validation targets for default behavior
-- `test-config-extra` targets for config composition/interpolation/recipe behavior.
+- `test-config-extra` targets for root Loom adapter workflows that exercise
+  config composition/interpolation/recipe behavior through `weave`.
 
 ---
 
@@ -442,7 +439,7 @@ If a user regularly edits deeper than this, introduce a recipe.
 
 The in-memory resolved config should be complete enough for the Python caller to
 run the workflow without guessing which recipe, overlay, or override string was
-used. `loom.config` returns that resolved view to the caller, but it remains
+used. `weave` returns that resolved view to the caller, but it remains
 persistence-free and does not choose run-store paths.
 
 For a v1 composed config passed through `PipelineRunner`, the current default
@@ -592,10 +589,10 @@ Historical v0 flow after recipes are implemented:
 Recipe argument pre-resolution should resolve currently resolvable interpolation
 from the composed base/overlay/override config so recipe arguments can reference
 those values. Expanded blocks then participate in final interpolation after
-expansion. Phase 5 tests should cover both recipe args referencing composed
-values and expanded blocks referencing values resolved by the final pass.
+expansion. Tests should cover both recipe args referencing composed values and
+expanded blocks referencing values resolved by the final pass.
 
-Phase 4 bridge behavior:
+Current composition behavior:
 
 ```text
 load base config
@@ -603,16 +600,14 @@ load overlays
 recursive merge
 apply dot-path overrides
 resolve interpolation
-detect `_recipe_` keys and fail with unsupported-recipe ConfigError
+expand `_recipe_` blocks and record recipe manifests
 validate
 redact
-produce empty recipe_manifest
 compute config provenance and fingerprint
 ```
 
-Phase 4 composition writes nothing by itself. Persistence belongs to the runner
-and run store. Phase 5 replaces the unsupported-recipe bridge with deterministic
-recipe expansion and manifest records.
+Composition writes nothing by itself. Persistence belongs to the caller, runner,
+or run store.
 
 V1 composition with includes and replacement preserves the core merge rules
 while treating base files, overlays, and Python API override strings as
@@ -753,9 +748,8 @@ recipe outputs when literal-dot keys are required.
 ## 10. Interpolation
 
 Use OmegaConf-style interpolation. OmegaConf, Pydantic v2, and YAML support are
-available through the `loom[config]` optional extra so core primitives, stores,
-serialization, and inspection paths remain importable without config-only
-dependencies.
+owned by `weave` so core Loom primitives, stores, serialization, and inspection
+paths remain separate from config composition internals.
 
 Examples:
 
@@ -824,7 +818,7 @@ targets above are project-provided examples, not built-in `loom` APIs.
 Recipes should be registered by name.
 
 ```python
-from loom.config import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
+from weave import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
 
 # Reproducible composition path
 catalog = RecipeCatalog()
@@ -936,7 +930,7 @@ stage:
 Python API:
 
 ```python
-from loom.config import instantiate
+from weave import instantiate
 
 stage = instantiate(cfg["stage"], runtime={"logger": logger})
 ```
@@ -1004,7 +998,7 @@ Config files may include `schema_version` at stable document boundaries. V0 only
 needs to accept the supported version and fail clearly on unsupported versions;
 migrations can wait until there are real historical formats to preserve.
 Persisted document version parsing belongs to `loom.serialization`, while
-`loom.config` decides which config document versions it supports.
+`weave` decides which config document versions it supports.
 
 Validation should be source-aware. A validation error should be able to report:
 
@@ -1069,7 +1063,7 @@ follow-up.
 Recommended API:
 
 ```python
-from loom.config import (
+from weave import (
     RecipeCatalog,
     compose_config,
     compose_config_with_catalog,
@@ -1107,12 +1101,12 @@ is not a pipeline construction API and callers should not build
 `PipelineSpec`/`StageSpec` objects from inspection internals. Use
 `compose_config` for normal composition, `instantiate` for trusted object
 graphs, and direct `PipelineSpec` inputs when running a pipeline without
-`loom.config`.
+`weave`.
 
 `compose_config_with_catalog`:
 
 ```python
-from loom.config import RecipeCatalog, compose_config_with_catalog
+from weave import RecipeCatalog, compose_config_with_catalog
 
 catalog = RecipeCatalog()
 catalog.register("local_jsonl_manifest", LocalJsonlManifestRecipe)
@@ -1236,7 +1230,7 @@ loom run experiment.yaml --set run.seed=123
 
 When functional CLI behavior is added, `run` should compose config, create a run
 directory, and hand execution to `PipelineRunner`. The runner/run store, not
-`loom.config`, owns persistence.
+`weave`, owns persistence.
 
 ---
 
@@ -1379,7 +1373,7 @@ Each step should include tests before the next step depends on it.
 
 ## 20. Summary
 
-`loom.config` should be the narrow configuration layer inside `loom`.
+`weave` should be the narrow configuration authoring layer used by `loom`.
 
 It should support:
 
