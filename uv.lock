@@ -2,6 +2,12 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 
+[manifest]
+members = [
+    "loom",
+    "weave",
+]
+
 [[package]]
 name = "annotated-doc"
 version = "0.0.4"
@@ -252,8 +258,8 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "uvicorn", specifier = ">=0.30,<1" },
-    { name = "weave", directory = "packages/weave" },
-    { name = "weave", marker = "extra == 'config'", directory = "packages/weave" },
+    { name = "weave", editable = "packages/weave" },
+    { name = "weave", marker = "extra == 'config'", editable = "packages/weave" },
 ]
 provides-extras = ["config"]
 
@@ -555,11 +561,19 @@ wheels = [
 [[package]]
 name = "weave"
 version = "0.1.0"
-source = { directory = "packages/weave" }
+source = { editable = "packages/weave" }
 dependencies = [
     { name = "omegaconf" },
     { name = "pydantic" },
     { name = "pyyaml" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "coverage" },
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "ruff" },
 ]
 
 [package.metadata]

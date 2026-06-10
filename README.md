@@ -192,6 +192,7 @@ requirements.
 ## Relevant docs
 
 - [docs/loom.md](docs/loom.md)
+- [docs/downstream-installation.md](docs/downstream-installation.md)
 - [examples/README.md](examples/README.md)
 - [docs/features/cli.md](docs/features/cli.md)
 - [docs/features/config.md](docs/features/config.md)

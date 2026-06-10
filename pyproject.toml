@@ -22,7 +22,12 @@ config = [
 ]
 
 [tool.uv.sources]
-weave = { path = "packages/weave" }
+weave = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "packages/weave",
+]
 
 [build-system]
 requires = [
