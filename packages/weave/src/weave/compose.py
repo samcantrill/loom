@@ -1796,7 +1796,6 @@ def _build_provenance_metadata(
             "include_sites": [record.to_dict() for record in include_records],
             "include_recomposition_contexts": [context.to_dict() for context in recomposition_contexts],
             "local_customizations": [record.to_dict() for record in local_customizations],
-            "argv_scoped_overlays": [application.metadata for application in scoped_overlay_applications],
             "final_value_authorship": [
                 value_authorship[path].to_dict() for path in sorted(value_authorship, key=format_config_path)
             ],
@@ -1805,8 +1804,6 @@ def _build_provenance_metadata(
         "ordinary_overrides": redacted_ordinary_overrides,
         "user_composition_override_count": len(include_overrides),
         "ordinary_override_count": len(ordinary_overrides),
-        "argv_scoped_overlay_count": len(scoped_overlay_applications),
-        "argv_scoped_overlays": [application.metadata for application in scoped_overlay_applications],
         "recipe_manifest": [_ensure_mappingproxy_plain(record) for record in recipe_manifest],
         "resolver_records": [
             {
@@ -1841,6 +1838,13 @@ def _build_provenance_metadata(
         },
         "schema_version": ARTIFACT_SCHEMA_VERSION,
     }
+    if scoped_overlay_applications:
+        source_fact_records = cast(dict[str, object], metadata["source_fact_records"])
+        scoped_overlay_metadata = [application.metadata for application in scoped_overlay_applications]
+        source_fact_records["argv_scoped_overlays"] = scoped_overlay_metadata
+        metadata["argv_scoped_overlay_count"] = len(scoped_overlay_applications)
+        metadata["argv_scoped_overlays"] = scoped_overlay_metadata
+
     return cast(dict[str, PlainData], to_plain_data(metadata, path="provenance_metadata"))
 
 

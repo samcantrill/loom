@@ -227,7 +227,7 @@ make test-summary
 
 - Phase implementation refinement: used; expanded-path implementation/test refinement pass completed
 - PR review: unused
-- Blocker resolution: 0/3 used
+- Blocker resolution: 1/3 used; validation blocker fix for non-argv golden metadata
 
 ## Completion Notes
 
@@ -237,7 +237,7 @@ make test-summary
 - Implementation validation: `uv run pytest packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py` passed (6 tests); `uv run pytest packages/weave/tests/unit/config/test_config_provenance.py packages/weave/tests/unit/config/test_config_fingerprints.py packages/weave/tests/unit/config/test_config_artifacts.py` passed (29 tests); `uv run pytest packages/weave/tests/contracts/test_config_artifact_contract.py packages/weave/tests/contracts/test_config_composition_inspection_contract.py` passed (17 tests); `PYTHONPATH=packages/weave uv run pytest packages/weave/tests/integration/config/test_compose_recipes.py packages/weave/tests/integration/config/test_compose_overrides.py` passed (20 tests) after using the package support import path; `uv run pytest packages/weave/tests/unit/config/test_argv.py packages/weave/tests/unit/config/test_overrides.py` passed (46 tests); focused Ruff and Pyright passed.
 - Refinement validation: Manager reran `uv run pytest packages/weave/tests/contracts/test_config_composition_inspection_contract.py packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py` after the refinement pass; 10 tests passed. Focused `uv run ruff check packages/weave/src/weave/compose.py packages/weave/tests/contracts/test_config_composition_inspection_contract.py packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py` passed. Focused `uv run pyright packages/weave/src/weave/compose.py` reported 0 errors.
 - Refinement summary: Used the one expanded-path implementation/test refinement pass. The private argv inspection helper now emits the internal `argv_scoped_overlays` stage for argv-path inspection even when no scoped overlays are present, while public non-argv inspection remains unchanged. Added focused contract coverage for the zero-overlay private argv path.
-- Blocker-resolution summary: not used in this pass
+- Blocker-resolution summary: Used blocker-resolution pass 1/3 after `make validate-pr` exposed non-argv golden artifact regressions from empty scoped-overlay metadata keys. Adjusted provenance metadata so `argv_scoped_overlay_count`, `argv_scoped_overlays`, and source fact scoped-overlay records are emitted only when scoped overlays actually apply. Targeted rerun `PYTHONPATH=packages/weave uv run pytest packages/weave/tests/contracts/test_config_extraction_golden_artifacts_contract.py packages/weave/tests/test_config_port.py` passed (5 tests), focused Ruff passed, and focused Pyright reported 0 errors.
 - PR preparation: pending
 - Stack maintenance: pending
 - Remaining blockers: none recorded for PR preparation.
