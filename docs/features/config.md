@@ -734,6 +734,105 @@ JSON arrays/objects -> parsed values
 everything else -> string
 ```
 
+
+### 9.1 Project CLI Argv Shorthand
+
+Stage 24 adds Python helpers for project-specific CLIs that want Hydra-like
+config shorthand without making `weave` own a command-line executable:
+
+```python
+from weave import compose_config_from_argv
+
+result = compose_config_from_argv(
+    [
+        "run",
+        "configs/experiment.yaml",
+        "data/=data_A",
+        "model/=model_B",
+        "+runtime/=local",
+        "run.seed=123",
+        "--dry-run",
+    ],
+    command_choices={"run", "inspect"},
+    allow_unparsed=True,
+)
+```
+
+The argv shape is:
+
+```text
+<command> <base-config> <config-shorthand-or-command-arg>...
+```
+
+No-slash left-hand sides lower to ordinary override strings and keep the same
+strict update/add rules as the Python API:
+
+```text
+run.seed=123
++vars.learning_rate=0.0003
+output_dir=results/model_B.yaml
+```
+
+A trailing slash on the left-hand side means scoped overlay. Scoped overlays
+load a YAML mapping and merge it at the requested non-root scope after base,
+explicit overlays, and authored includes, but before recipe expansion. Ordinary
+value overrides still apply after recipe expansion and win over scoped overlay
+content.
+
+```text
+data/=data_A
+model/=model_B
+model/pipeline/=pipeline_A
++runtime/=local
+```
+
+Scoped overlay RHS resolution is deterministic:
+
+1. Absolute paths are used exactly as authored.
+2. Relative stems first probe the scope directory under the base config
+   directory.
+3. If not found there, they probe the base config directory.
+4. Extensionless relative stems try `.yaml` before `.yml`.
+5. `~` is not expanded to the user's home directory.
+
+For `configs/experiment.yaml` and `data/=data_A`, `weave` checks
+`configs/data/data_A.yaml`, `configs/data/data_A.yml`,
+`configs/data_A.yaml`, then `configs/data_A.yml`.
+
+`scope/=` updates an existing target and fails if the target is missing.
+`+scope/=` creates a missing scoped target and fails if the target already
+exists. `scope/=` may replace an existing leaf with a mapping; recursive merge
+semantics and `_replace_: true` inside the scoped overlay are otherwise the same
+as regular overlays.
+
+Tokens beginning with `-` are returned as command-specific unparsed args when
+`allow_unparsed=True`; otherwise they fail with structured config errors. The
+helpers validate `command_choices` but do not hard-code command names, print,
+exit, or parse command-specific flags.
+
+`compose_config_from_argv(...)` returns a `ConfigArgvCompositionResult` with the
+selected command, base config path, parsed argv records, unparsed args,
+helper-local warnings, and the `ComposedConfig`. `inspect_config_from_argv(...)`
+is available from `weave.api` and returns a `ConfigArgvInspectionResult` whose
+inspection includes an argv-only `argv_scoped_overlays` stage immediately after
+`file_include_expansion`.
+
+Warnings are advisory result data only. `possible_missing_scoped_overlay_slash`
+warns when a no-slash value override targets an existing mapping and the RHS
+resolves like a nearby scoped overlay source. Warnings are not persisted into
+`ComposedConfig`, manifests, provenance, source artifacts, raw source snapshots,
+fingerprints, or run artifacts.
+
+Scoped overlay sources are auditable as overlay-family source artifacts with
+explicit metadata. They participate in final value authorship, manifest and
+provenance metadata when overlays apply, raw source snapshot references when
+requested, and artifact-safe fingerprint facts.
+
+This shorthand deliberately does not add a first-party `weave` executable,
+Loom CLI adapter, Hydra defaults lists, global config groups, RHS overlay
+inference, escaped dot-path grammar, advanced list patching, or persisted argv
+warnings.
+
 Overrides should be recorded exactly as provided and after parsing.
 The add marker belongs to override syntax and should not appear in the resolved
 config path.
@@ -1066,6 +1165,7 @@ Recommended API:
 from weave import (
     RecipeCatalog,
     compose_config,
+    compose_config_from_argv,
     compose_config_with_catalog,
     inspect_config_composition,
     instantiate,
@@ -1074,6 +1174,10 @@ from weave import (
     ConfigError,
 )
 ```
+
+Detailed argv result, warning, inspection, and parsed-record types are available
+from `weave.api`. The top-level package intentionally exposes only
+`compose_config_from_argv` for argv shorthand.
 
 `compose_config`:
 
@@ -1099,9 +1203,9 @@ inspection = inspect_config_composition(
 tests. It exposes stable plain-data stage records for composition decisions; it
 is not a pipeline construction API and callers should not build
 `PipelineSpec`/`StageSpec` objects from inspection internals. Use
-`compose_config` for normal composition, `instantiate` for trusted object
-graphs, and direct `PipelineSpec` inputs when running a pipeline without
-`weave`.
+`compose_config` for normal composition, `compose_config_from_argv` for
+project-CLI argv shorthand, `instantiate` for trusted object graphs, and direct
+`PipelineSpec` inputs when running a pipeline without `weave`.
 
 `compose_config_with_catalog`:
 
@@ -1119,7 +1223,11 @@ cfg = compose_config_with_catalog(
 )
 ```
 
-`compose_config` returns a `ComposedConfig` with:
+`compose_config` returns a `ComposedConfig`. `compose_config_from_argv` returns
+a `ConfigArgvCompositionResult` whose `composed_config` field is a
+`ComposedConfig` and whose argv metadata fields are helper-local.
+
+`ComposedConfig` has:
 
 ```text
 resolved
@@ -1211,26 +1319,18 @@ Reason:
 
 ---
 
-## 17. Future CLI Integration
+## 17. CLI Integration Boundary
 
-V1 ships Python API composition only. Future CLI commands should wrap the same
-public API without adding separate config semantics.
+Stage 24 ships Python helper APIs for project-specific CLIs, not a first-party
+`weave` executable and not Loom CLI behavior. Project CLIs may pass their argv
+fragments to `compose_config_from_argv(...)` or `inspect_config_from_argv(...)`,
+format returned warnings and structured errors however they prefer, and keep
+command-specific flags in `unparsed_args`.
 
-Future CLI commands may call the Python API:
-
-```text
-loom validate experiment.yaml
-loom plan experiment.yaml
-loom run experiment.yaml --set run.seed=123
-```
-
-`validate` should compose, expand, resolve, and validate without instantiating or running stages unless explicitly requested.
-
-`plan` should show the resolved pipeline graph and recipe expansions.
-
-When functional CLI behavior is added, `run` should compose config, create a run
-directory, and hand execution to `PipelineRunner`. The runner/run store, not
-`weave`, owns persistence.
+Future Loom CLI commands should wrap the same public APIs without adding
+separate config semantics. For example, a future `loom run` adapter may compose
+config, create a run directory, and hand execution to `PipelineRunner`. The
+runner/run store, not `weave`, owns persistence.
 
 ---
 
