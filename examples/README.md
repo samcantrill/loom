@@ -1,16 +1,14 @@
 # Loom Examples
 
 These examples show supported `loom` behavior through small, domain-neutral
-projects. Project code owns concrete stages and recipes; `weave` owns trusted
-config authoring; `loom` owns artifact records, local execution, provenance
-snapshots, and same-run resume decisions.
+projects. Project code owns concrete stages and recipes; `loom` owns artifact
+records, local execution, provenance snapshots, and same-run resume decisions.
 
 Examples are organized by user goal. Root Loom groups focus on runtime
-workflows; package-local `weave` examples teach how to describe work with
-trusted config. Each group has its own README with the runnable examples and
-what each one demonstrates. Later roadmap items can add `experiments/`,
-`storage/`, and `extensions/` groups without making individual backends top
-level concepts.
+workflows that consume authored config through the external `weave` dependency.
+Each group has its own README with the runnable examples and what each one
+demonstrates. Later roadmap items can add `experiments/`, `storage/`, and
+`extensions/` groups without making individual backends top level concepts.
 
 ## CLI Workflows
 
@@ -23,7 +21,6 @@ level concepts.
 
 | Group | Primary public Python surfaces |
 | --- | --- |
-| [Config Authoring](../packages/weave/examples/README.md) | `compose_config`, `compose_config_from_argv`, artifact-safe config inspection, recipe expansion, and trusted target instantiation. |
 | [Execution](execution/README.md) | `PipelineRunner` run/resume flows and `RunOptions` construction and validation. |
 | [Operations](operations/README.md) | Captured-log execution setup and authority-backed resource coordination APIs. |
 

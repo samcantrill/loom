@@ -23,7 +23,6 @@ LOCAL_ALL_MARKER_EXPR = "not slurm and not network and not optional_dependency"
 SUMMARY_OUTPUT = Path("build/test-summary.md")
 SUMMARY_ARTIFACT_DIR = Path("build/test-summary")
 SOURCE_COVERAGE_ROOT = "src/loom"
-WEAVE_COVERAGE_ROOT = "src/weave"
 UV_CACHE_DIR = "/tmp/uv-cache"
 
 
@@ -115,20 +114,6 @@ SUITES: dict[str, Suite] = {
     "integration": Suite("integration", Path("tests/integration"), DEFAULT_MARKER_EXPR),
     "e2e": Suite("e2e", Path("tests/e2e"), DEFAULT_MARKER_EXPR),
     "config-extra": Suite("config-extra", Path("tests"), CONFIG_EXTRA_MARKER_EXPR),
-    "weave": Suite(
-        "weave",
-        Path("tests"),
-        "",
-        cwd=Path("packages/weave"),
-        coverage_source=WEAVE_COVERAGE_ROOT,
-    ),
-    "weave-examples": Suite(
-        "weave-examples",
-        Path("tests/test_examples.py"),
-        "",
-        cwd=Path("packages/weave"),
-        coverage_source=None,
-    ),
 }
 
 GROUP_RULES: dict[str, tuple[GroupRule, ...]] = {
@@ -141,7 +126,7 @@ GROUP_RULES: dict[str, tuple[GroupRule, ...]] = {
         GroupRule(
             "config-api",
             ("tests.package.test_config_api",),
-            ("src/loom/config/", f"{WEAVE_COVERAGE_ROOT}/"),
+            ("src/loom/config/",),
         ),
         GroupRule(
             "pipeline-apis", ("tests.package.test_pipeline",), ("src/loom/pipeline/",)
@@ -150,8 +135,8 @@ GROUP_RULES: dict[str, tuple[GroupRule, ...]] = {
     "unit": (
         GroupRule(
             "config",
-            ("tests.unit.loom.config", "tests.unit.weave"),
-            ("src/loom/config/", f"{WEAVE_COVERAGE_ROOT}/"),
+            ("tests.unit.loom.config",),
+            ("src/loom/config/",),
         ),
         GroupRule("io", ("tests.unit.loom.io",), ("src/loom/io/",)),
         GroupRule(
@@ -282,32 +267,6 @@ GROUP_RULES: dict[str, tuple[GroupRule, ...]] = {
             ("src/loom/pipeline/",),
         ),
         GroupRule("e2e", ("tests.e2e",), ("src/loom/",)),
-    ),
-    "weave": (
-        GroupRule(
-            "contracts",
-            ("tests.contracts",),
-            (f"{WEAVE_COVERAGE_ROOT}/",),
-        ),
-        GroupRule("examples", ("tests.test_examples",)),
-        GroupRule(
-            "integration-config",
-            ("tests.integration.config",),
-            (f"{WEAVE_COVERAGE_ROOT}/",),
-        ),
-        GroupRule(
-            "package",
-            ("tests.test_",),
-            (f"{WEAVE_COVERAGE_ROOT}/",),
-        ),
-        GroupRule(
-            "unit-config",
-            ("tests.unit.config",),
-            (f"{WEAVE_COVERAGE_ROOT}/",),
-        ),
-    ),
-    "weave-examples": (
-        GroupRule("examples", ("tests.test_examples",)),
     ),
 }
 
@@ -522,8 +481,6 @@ def write_coverage_json(
 
 
 def pytest_args_for_suite(suite: Suite) -> list[str]:
-    if suite.name == "weave":
-        return [str(suite.path), "--ignore=tests/test_examples.py"]
     if not suite.marker_expr:
         return [str(suite.path)]
     return [str(suite.path), "-m", suite.marker_expr]
@@ -746,7 +703,7 @@ def aggregate_coverage(
 
 def normalize_coverage_path(path: str) -> str:
     normalized = Path(path).as_posix()
-    for root in (SOURCE_COVERAGE_ROOT, WEAVE_COVERAGE_ROOT):
+    for root in (SOURCE_COVERAGE_ROOT,):
         marker = f"/{root}/"
         if marker in normalized:
             return f"{root}/{normalized.split(marker, maxsplit=1)[1]}"

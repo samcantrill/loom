@@ -1,4 +1,0 @@
-name: invalid-override
-pipeline:
-  component:
-    value: baseline

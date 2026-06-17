@@ -1,4 +1,0 @@
-name: unsupported-copy
-pipeline:
-  _copy_: true
-  value: baseline

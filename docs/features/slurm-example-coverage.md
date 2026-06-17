@@ -11,7 +11,6 @@ Examples are organized by user goal:
 
 | Group | Current role |
 | --- | --- |
-| `packages/weave/examples/` | Describing trusted configuration, recipes, source artifacts, and target instantiation. |
 | `examples/execution/` | Running work through local, subprocess, runtime-profile, run-options, SLURM dry-run, and manual live-SLURM flows. |
 | `examples/operations/` | Inspecting, debugging, and managing run state through preflight, status, submitted operations, logs, artifacts, diagnostics, and manual SLURM job operations. |
 

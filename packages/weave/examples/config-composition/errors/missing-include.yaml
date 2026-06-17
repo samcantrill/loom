@@ -1,4 +1,0 @@
-name: missing-include
-pipeline:
-  component:
-    _include_: ./fragments/missing.yaml

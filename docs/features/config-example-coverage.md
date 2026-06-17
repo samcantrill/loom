@@ -49,7 +49,7 @@ configuration example surface.
 Each runnable example should have:
 
 - an `example.yaml` manifest with `status: runnable`;
-- one Python entrypoint validated by `packages/weave/tests/test_examples.py`;
+- one Python entrypoint validated by the external config package example harness;
 - a README that says which public API is used;
 - no CLI commands except repository-local `uv run python ...` execution;
 - no remote includes, plugin discovery, global search, sweeps, `_copy_`, or

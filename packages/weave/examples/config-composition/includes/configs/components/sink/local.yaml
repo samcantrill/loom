@@ -1,3 +1,0 @@
-kind: local-log
-format: json
-retention_days: 7

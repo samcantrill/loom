@@ -22,12 +22,7 @@ config = [
 ]
 
 [tool.uv.sources]
-weave = { workspace = true }
-
-[tool.uv.workspace]
-members = [
-    "packages/weave",
-]
+weave = { git = "https://github.com/samcantrill/weave.git" }
 
 [build-system]
 requires = [
