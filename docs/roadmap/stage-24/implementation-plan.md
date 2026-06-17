@@ -5,12 +5,11 @@ Roadmap stage: `v24`
 Planning document: `docs/roadmap/stage-24/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 3 pending
+Current phase: Phase 3 pr_open
 Blockers:
 
-- Phase 3 execution plan does not exist yet.
-- Phase 3 implementation may not begin until it has a scope-complete phase
-  execution plan.
+- Phase 3 PR #208 is open against `develop`; GitHub CI and automated review are
+  the remaining merge gates.
 
 ## Summary
 
@@ -248,7 +247,7 @@ with a schema-versioned compatibility decision.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `weave-argv-parser-records` | merged | `codex/weave-argv-parser-records` | [#206](https://github.com/samcantrill/loom/pull/206) | `packages/weave` argv parsing and records | Define argv classification, RHS lookup, record shapes, and parser diagnostics. | Unit/API tests for parser and records. | Value tokens, scoped overlay tokens, candidate paths, unparsed args, root overlay rejection. |
 | 2 | `weave-scoped-overlay-composition` | merged | `codex/weave-scoped-overlay-composition` | [#207](https://github.com/samcantrill/loom/pull/207) | `packages/weave` composition/provenance/fingerprints | Apply scoped overlays at the confirmed composition point with audit records. | Integration/contract tests for merge order, source artifacts, authorship, fingerprints. | `data/=data_A`, `model/=model_B`, `model/pipeline/=pipeline_A`, `_replace_`. |
-| 3 | `weave-argv-api-inspection` | pending | `codex/weave-argv-api-inspection` | pending | Public API, inspection, warnings, docs | Expose public helpers and finish diagnostics, docs, and end-to-end validation. | Contract/API/docs tests plus `make validate-pr` and `make test-summary`. | End-to-end argv helper examples and warning/error cases. |
+| 3 | `weave-argv-api-inspection` | pr_open | `codex/weave-argv-api-inspection` | [#208](https://github.com/samcantrill/loom/pull/208) | Public API, inspection, warnings, docs | Expose public helpers and finish diagnostics, docs, and end-to-end validation. | Contract/API/docs tests plus `make validate-pr` and `make test-summary`. | End-to-end argv helper examples and warning/error cases. |
 
 ## Implementation Readiness Blockers
 
@@ -530,14 +529,13 @@ Workflow path: expanded path
 
 ## Phase 3: Public Argv API, Inspection, Diagnostics, And Docs
 
-Status: pending
+Status: pr_open
 Slug: `weave-argv-api-inspection`
 Branch: `codex/weave-argv-api-inspection`
-Worktree: `/home/samcantrill/work/loom-worktrees/weave-argv-api-inspection`
-PR: pending
-Base branch: `develop` after Phase 2 merges; otherwise stack on
-`codex/weave-scoped-overlay-composition`
-Target branch: `develop` for root PR, or predecessor branch while stacked
+Worktree: `/nas/home/can134/work/loom-worktrees/weave-argv-api-inspection`
+PR: [#208](https://github.com/samcantrill/loom/pull/208)
+Base branch: `develop`
+Target branch: `develop`
 Workflow path: expanded path
 
 ### Scope
@@ -619,13 +617,16 @@ Workflow path: expanded path
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
+- Phase execution plan: completed
+- Planning/refinement budget: used
+- Implementation/refinement budget: used
 - PR review budget: unused
-- Blocker-resolution budget: unused
-- Pre-submit blocker gate: not run
-- Merge record: pending
+- Blocker-resolution budget: 0/3 used
+- Pre-submit blocker gate: passed
+- PR open record: PR #208 opened from `codex/weave-argv-api-inspection` to
+  `develop` and verified with `gh pr view`.
+- Merge record: pending; GitHub CI was in progress when PR-open metadata was
+  recorded.
 
 ### Risks And Stop Conditions
 
@@ -639,11 +640,16 @@ Workflow path: expanded path
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: added public `compose_config_from_argv(...)`, `weave.api`
+  argv inspection/result/warning records, helper-local warnings, structured
+  error coverage, public helper integration/e2e tests, and feature docs for the
+  shipped project-CLI helper behavior.
+- Validation: `make validate-pr` passed; `make test-summary` passed with `2534
+  passed, 0 failed, 0 errors, 3 skipped, 2088 deselected`.
+- PR: [#208](https://github.com/samcantrill/loom/pull/208), targeting
+  `develop` from `codex/weave-argv-api-inspection`.
 - Merge: pending
-- Follow-up: pending
+- Follow-up: automated phase review and GitHub CI must pass before merge.
 
 ## Cross-Phase Validation
 
