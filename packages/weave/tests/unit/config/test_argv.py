@@ -185,6 +185,7 @@ def test_parse_config_argv_rejects_disallowed_unparsed_args(tmp_path: Path) -> N
     assert_error_code(exc, "disallowed_unparsed_args")
     assert exc.value.context is not None
     assert exc.value.context.details == {
+        "command": "train",
         "unparsed_args": ["--dry-run"],
         "unparsed_arg_orders": [2],
     }
@@ -219,6 +220,7 @@ def test_parse_config_argv_wraps_invalid_value_override_with_token_context() -> 
     context = exc.value.context
     assert context is not None
     assert context.details is not None
+    assert context.details["command"] == "train"
     assert context.details["token"] == "a..b=1"
     assert "Invalid override path" in str(context.details["error"])
 
@@ -233,6 +235,7 @@ def test_parse_config_argv_missing_overlay_reports_candidates(tmp_path: Path) ->
     context = exc.value.context
     assert context is not None
     assert context.details is not None
+    assert context.details["command"] == "train"
     assert context.details["scope_path"] == ["model"]
     assert context.details["rhs"] == "model_B"
     assert context.details["candidate_paths"] == [

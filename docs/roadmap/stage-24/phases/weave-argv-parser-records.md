@@ -229,7 +229,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -239,8 +239,12 @@ make test-summary
 - Final phase execution plan: completed by `loom_phase_planner`; refined artifact is scope-complete for implementation.
 - Implementation summary: fallback implementation pass completed after `loom_phase_executor` could not start because the Spark model usage limit was exhausted. Added private `weave._argv` parser records and `parse_config_argv(...)` for command/base parsing, value override lowering, scoped overlay request parsing, RHS candidate resolution, unparsed arg handling, and structured argv diagnostics. No public API exports, composition changes, YAML loading, base-file validation, warnings, provenance, fingerprints, or docs/features behavior were added.
 - Implementation validation: `uv run pytest packages/weave/tests/unit/config/test_argv.py` (20 passed), `uv run pytest packages/weave/tests/unit/config/test_overrides.py` (26 passed), `uv run pytest packages/weave/tests/test_import.py` (2 passed), `uv run ruff check packages/weave/src/weave/_argv.py packages/weave/tests/unit/config/test_argv.py` (passed), and `uv run pyright packages/weave/src/weave/_argv.py` (0 errors).
-- Refinement summary: pending expanded-path implementation refinement pass.
+- Refinement metadata: completed on 2026-06-17 by the implementation refinement pass for Phase 1 on branch `codex/weave-argv-parser-records` in `/nas/home/can134/work/loom-worktrees/weave-argv-parser-records`; phase implementation refinement budget is used and blocker-resolution budget is unchanged at 0/3 used.
+- Refinement scope: reviewed the phase execution plan, selected implementation plan, current diff, recent commits, and prior validation output. Blocking issue caused by this phase: token-level parser diagnostics did not include command context consistently. Issues confirmed out of scope: no public exports, composition changes, YAML loading, base-file validation, warnings, provenance, fingerprints, docs/features changes, first-party CLI work, or Loom imports were needed.
+- Fixes made: added `command` to malformed-token, invalid value override, disallowed unparsed-arg, and scoped-overlay parser error details, and extended unit assertions for the strengthened diagnostic context.
+- Tests or validation re-run: `uv run pytest packages/weave/tests/unit/config/test_argv.py` (20 passed); `uv run pytest packages/weave/tests/unit/config/test_overrides.py packages/weave/tests/test_import.py` (28 passed); `uv run ruff check packages/weave/src/weave/_argv.py packages/weave/tests/unit/config/test_argv.py` (passed); `uv run pyright packages/weave/src/weave/_argv.py` (0 errors).
 - Blocker-resolution summary: none used; blocker resolution remains 0/3.
+- PR preparation handoff: completion notes and budget status are updated; final PR preparation should still run `make validate-pr` and `make test-summary` for suite-level evidence.
 - PR preparation: pending
 - Stack maintenance: pending
-- Remaining blockers: none for implementation handoff; expanded-path implementation refinement is still required before PR preparation.
+- Remaining blockers: none.

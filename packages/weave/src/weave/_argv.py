@@ -242,7 +242,7 @@ def parse_config_argv(
                 f"Invalid argv config token at order {order}: {token!r}",
                 code="malformed_argv_token",
                 order=order,
-                details={"token": token},
+                details={"command": command, "token": token},
             )
 
         lhs, rhs = token.split("=", 1)
@@ -255,6 +255,7 @@ def parse_config_argv(
                     rhs=rhs,
                     order=order,
                     base_config_path=base_config_path,
+                    command=command,
                 )
             )
             continue
@@ -266,7 +267,7 @@ def parse_config_argv(
                 f"Invalid value override token at order {order}: {token!r}",
                 code="invalid_value_override",
                 order=order,
-                details={"token": token, "error": str(exc)},
+                details={"command": command, "token": token, "error": str(exc)},
             ) from exc
         value_overrides.append(ArgvValueOverride.from_parsed_override(parsed_override, order=order))
 
@@ -276,6 +277,7 @@ def parse_config_argv(
             code="disallowed_unparsed_args",
             order=unparsed_args[0].order,
             details={
+                "command": command,
                 "unparsed_args": [arg.raw for arg in unparsed_args],
                 "unparsed_arg_orders": [arg.order for arg in unparsed_args],
             },
@@ -343,20 +345,21 @@ def _parse_scoped_overlay_token(
     rhs: str,
     order: int,
     base_config_path: str,
+    command: str,
 ) -> ArgvScopedOverlay:
     if not lhs.endswith("/"):
         raise _argv_error(
             f"Scoped overlay token must end its left-hand side with '/': {raw!r}",
             code="invalid_scoped_overlay_marker",
             order=order,
-            details={"token": raw, "lhs": lhs},
+            details={"command": command, "token": raw, "lhs": lhs},
         )
     if not rhs:
         raise _argv_error(
             f"Scoped overlay token has empty RHS: {raw!r}",
             code="missing_scoped_overlay_rhs",
             order=order,
-            details={"token": raw, "lhs": lhs},
+            details={"command": command, "token": raw, "lhs": lhs},
         )
 
     operation: ScopedOverlayOperation = "update"
@@ -370,7 +373,7 @@ def _parse_scoped_overlay_token(
             "Root scoped overlays are not supported",
             code="unsupported_root_overlay",
             order=order,
-            details={"token": raw, "lhs": lhs, "rhs": rhs},
+            details={"command": command, "token": raw, "lhs": lhs, "rhs": rhs},
         )
 
     scope_path = tuple(scope_expression.split("/"))
@@ -387,7 +390,12 @@ def _parse_scoped_overlay_token(
             f"Invalid scoped overlay path in token: {raw!r}",
             code="invalid_scoped_overlay_scope",
             order=order,
-            details={"token": raw, "scope_path": list(scope_path), "invalid_segment": invalid_segment},
+            details={
+                "command": command,
+                "token": raw,
+                "scope_path": list(scope_path),
+                "invalid_segment": invalid_segment,
+            },
         )
 
     candidates = _resolve_scoped_overlay_candidates(
@@ -402,6 +410,7 @@ def _parse_scoped_overlay_token(
             code="missing_scoped_overlay_source",
             order=order,
             details={
+                "command": command,
                 "token": raw,
                 "scope_path": list(scope_path),
                 "rhs": rhs,
