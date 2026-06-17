@@ -330,3 +330,44 @@ def test_config_fingerprint_record_rejects_non_mapping_metadata() -> None:
     assert context["source_kind"] == "artifact"
     assert context["config_path"] == "ConfigFingerprintRecord.metadata"
     assert details["stage"] == "artifact_from_dict"
+
+
+
+def test_scoped_overlay_source_artifact_uses_overlay_kind_metadata() -> None:
+    record = SourceArtifactRecord(
+        schema_version=1,
+        kind="overlay",
+        path="/tmp/configs/data/data_A.yaml",
+        order=2,
+        content_digest="sha256:data",
+        size_bytes=42,
+        metadata={
+            "role": "argv_scoped_overlay",
+            "argv_scoped_overlay": {
+                "raw": "data/=data_A",
+                "argv_order": 2,
+                "scope_path": ["data"],
+                "operation": "update",
+                "rhs": "data_A",
+                "resolved_path": "/tmp/configs/data/data_A.yaml",
+                "candidate_paths": ["/tmp/configs/data/data_A.yaml"],
+                "candidates": [
+                    {
+                        "path": "/tmp/configs/data/data_A.yaml",
+                        "origin": "scope_directory",
+                        "exists": True,
+                    }
+                ],
+                "insertion_stage": "argv_scoped_overlays",
+            },
+        },
+    )
+
+    payload = record.to_dict()
+
+    assert payload["kind"] == "overlay"
+    metadata = cast(dict[str, object], payload["metadata"])
+    assert metadata["role"] == "argv_scoped_overlay"
+    scoped = cast(dict[str, object], metadata["argv_scoped_overlay"])
+    assert scoped["scope_path"] == ["data"]
+    assert SourceArtifactRecord.from_dict(payload) == record

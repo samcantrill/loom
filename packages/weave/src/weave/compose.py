@@ -11,6 +11,8 @@ from typing import cast
 
 from .plain import PlainData, to_plain_data
 
+from ._argv import ArgvScopedOverlay
+
 from .api import ComposedConfig, ConfigCompositionInspection, ConfigCompositionStageRecord
 from .errors import ConfigErrorContext, ConfigIncludeExpansionError, ConfigLoadError, ConfigValidationError
 from .includes import (
@@ -39,7 +41,9 @@ from .fingerprints import (
 )
 from .source_maps import (
     ConfigPath,
+    ComposedConfigWithSources,
     ValueAuthorship,
+    apply_scoped_overlay_with_sources,
     build_base_source_map,
     compose_config_with_sources,
     format_config_path,
@@ -78,6 +82,13 @@ class _UserCompositionResult:
     include_records: tuple[IncludeSiteRecord, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _ScopedOverlayApplication:
+    overlay: ArgvScopedOverlay
+    source: ConfigSource
+    metadata: dict[str, PlainData]
+
+
 def inspect_config_composition(
     config_path: str | Path,
     *,
@@ -85,6 +96,46 @@ def inspect_config_composition(
     overlays: Sequence[str | Path] = (),
     overrides: Sequence[str] = (),
     include_raw_source_snapshots: bool = False,
+) -> ConfigCompositionInspection:
+    return _inspect_config_composition(
+        config_path=config_path,
+        recipe_catalog=recipe_catalog,
+        overlays=overlays,
+        overrides=overrides,
+        include_raw_source_snapshots=include_raw_source_snapshots,
+        argv_scoped_overlays=(),
+    )
+
+
+def _inspect_config_composition_with_argv_scoped_overlays(
+    config_path: str | Path,
+    *,
+    recipe_catalog: RecipeCatalog,
+    argv_scoped_overlays: Sequence[ArgvScopedOverlay],
+    overlays: Sequence[str | Path] = (),
+    overrides: Sequence[str] = (),
+    include_raw_source_snapshots: bool = False,
+) -> ConfigCompositionInspection:
+    """Private argv-path composition helper used until the public Phase 3 API exists."""
+
+    return _inspect_config_composition(
+        config_path=config_path,
+        recipe_catalog=recipe_catalog,
+        overlays=overlays,
+        overrides=overrides,
+        include_raw_source_snapshots=include_raw_source_snapshots,
+        argv_scoped_overlays=tuple(argv_scoped_overlays),
+    )
+
+
+def _inspect_config_composition(
+    config_path: str | Path,
+    *,
+    recipe_catalog: RecipeCatalog,
+    overlays: Sequence[str | Path] = (),
+    overrides: Sequence[str] = (),
+    include_raw_source_snapshots: bool = False,
+    argv_scoped_overlays: Sequence[ArgvScopedOverlay] = (),
 ) -> ConfigCompositionInspection:
     if not isinstance(recipe_catalog, RecipeCatalog):
         raise ConfigValidationError("recipe_catalog must be a RecipeCatalog")
@@ -95,6 +146,12 @@ def inspect_config_composition(
         raise ConfigValidationError("overrides may not be None")
     if not isinstance(include_raw_source_snapshots, bool):
         raise ConfigValidationError("include_raw_source_snapshots must be a bool")
+    if argv_scoped_overlays is None:
+        raise ConfigValidationError("argv_scoped_overlays may not be None")
+    argv_scoped_overlays = tuple(argv_scoped_overlays)
+    for index, overlay in enumerate(argv_scoped_overlays):
+        if not isinstance(overlay, ArgvScopedOverlay):
+            raise ConfigValidationError(f"argv_scoped_overlays[{index}] must be ArgvScopedOverlay")
 
     stages: list[ConfigCompositionStageRecord] = []
     raw_source_texts: dict[str, str] | None = {} if include_raw_source_snapshots else None
@@ -166,6 +223,28 @@ def inspect_config_composition(
     )
 
     merged = expanded_with_includes.config
+    scoped_overlay_applications: tuple[_ScopedOverlayApplication, ...] = ()
+    if argv_scoped_overlays:
+        scoped_result, scoped_overlay_applications = _apply_argv_scoped_overlays(
+            config=merged,
+            source_map=merged_with_sources.source_map,
+            replacement_sites=merged_with_sources.replacement_sites,
+            mapping_sites=merged_with_sources.mapping_sites,
+            overlays=argv_scoped_overlays,
+            next_source_order=len(sources),
+            raw_source_texts=raw_source_texts,
+        )
+        merged_with_sources = scoped_result
+        merged = scoped_result.config
+        sources.extend(application.source for application in scoped_overlay_applications)
+        _append_stage(
+            stages,
+            "argv_scoped_overlays",
+            {
+                "scoped_overlay_count": len(scoped_overlay_applications),
+                "scoped_overlays": [application.metadata for application in scoped_overlay_applications],
+            },
+        )
 
     parsed_overrides = parse_overrides(overrides)
     include_overrides, ordinary_overrides = split_include_and_ordinary_overrides(parsed_overrides)
@@ -239,6 +318,7 @@ def inspect_config_composition(
         local_customizations=expanded_with_includes.local_customizations,
         ordinary_overrides=ordinary_overrides,
         recipe_manifest=recipe_manifest_payload,
+        scoped_overlay_applications=scoped_overlay_applications,
     )
 
     _append_stage(stages, "resolver_scan", {"resolver_expression_count": 0})
@@ -269,6 +349,7 @@ def inspect_config_composition(
         sources=sources,
         include_sites=effective_include_sites,
         recipe_manifest=recipe_manifest_payload,
+        scoped_overlay_applications=scoped_overlay_applications,
     )
     raw_source_snapshot_bundle = _build_raw_source_snapshot_bundle(
         sources=source_artifacts,
@@ -305,6 +386,7 @@ def inspect_config_composition(
         ],
         artifact_fingerprint=fingerprint,
         fingerprint_records=fingerprint_records,
+        scoped_overlay_applications=scoped_overlay_applications,
     )
     manifest_metadata = dict(provenance_metadata)
     manifest_metadata["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
@@ -430,6 +512,166 @@ def inspect_config_composition(
         raw_source_snapshots=raw_source_snapshot_bundle,
     )
 
+
+
+def _apply_argv_scoped_overlays(
+    *,
+    config: dict[str, PlainData],
+    source_map: dict[ConfigPath, ConfigSource],
+    replacement_sites: tuple[ConfigPath, ...],
+    mapping_sites: tuple[ConfigPath, ...],
+    overlays: Sequence[ArgvScopedOverlay],
+    next_source_order: int,
+    raw_source_texts: dict[str, str] | None,
+) -> tuple[ComposedConfigWithSources, tuple[_ScopedOverlayApplication, ...]]:
+    composed = ComposedConfigWithSources(
+        config=config,
+        source_map=dict(source_map),
+        replacement_sites=tuple(replacement_sites),
+        mapping_sites=tuple(mapping_sites),
+    )
+    applications: list[_ScopedOverlayApplication] = []
+
+    for offset, overlay in enumerate(overlays):
+        overlay_config, overlay_source = _load_argv_scoped_overlay(
+            overlay,
+            source_order=next_source_order + offset,
+            raw_source_texts=raw_source_texts,
+        )
+        metadata = _scoped_overlay_metadata(
+            overlay=overlay,
+            source=overlay_source,
+            insertion_stage="argv_scoped_overlays",
+        )
+        composed = apply_scoped_overlay_with_sources(
+            composed,
+            overlay=overlay_config,
+            source=overlay_source,
+            scope_path=overlay.scope_path,
+            operation=overlay.operation,
+            details=metadata,
+        )
+        applications.append(_ScopedOverlayApplication(overlay=overlay, source=overlay_source, metadata=metadata))
+
+    return composed, tuple(applications)
+
+
+def _load_argv_scoped_overlay(
+    overlay: ArgvScopedOverlay,
+    *,
+    source_order: int,
+    raw_source_texts: dict[str, str] | None,
+) -> tuple[dict[str, PlainData], ConfigSource]:
+    if overlay.resolved_path is None:
+        raise ConfigValidationError(
+            "Scoped overlay record must include a resolved path before composition.",
+            context=ConfigErrorContext(
+                code="missing_scoped_overlay_resolved_path",
+                source_kind="argv_scoped_overlay",
+                source_order=overlay.order,
+                source_path="<argv>",
+                config_path=format_config_path(overlay.scope_path),
+                directive="argv_scoped_overlay",
+                details=_scoped_overlay_record_details(overlay),
+            ),
+        )
+
+    try:
+        if raw_source_texts is None:
+            overlay_config, overlay_source = load_config(overlay.resolved_path, kind="overlay", order=source_order)
+        else:
+            overlay_config, overlay_source, source_text = load_config_with_source_text(
+                overlay.resolved_path,
+                kind="overlay",
+                order=source_order,
+            )
+            raw_source_texts[overlay_source.path] = source_text
+    except ConfigLoadError as exc:
+        raise _argv_scoped_overlay_load_error(exc, overlay=overlay) from exc
+    return overlay_config, overlay_source
+
+
+def _argv_scoped_overlay_load_error(exc: ConfigLoadError, *, overlay: ArgvScopedOverlay) -> ConfigLoadError:
+    source_path = overlay.resolved_path or "<unresolved>"
+    details: dict[str, PlainData] = _scoped_overlay_record_details(overlay)
+    if exc.context is not None:
+        details.update(
+            {
+                "load_error_code": exc.context.code,
+                "load_source_kind": exc.context.source_kind,
+                "load_source_order": exc.context.source_order,
+                "load_source_path": exc.context.source_path,
+            }
+        )
+        if exc.context.details:
+            details["load_error_details"] = exc.context.details
+    code = "scoped_overlay_load_error"
+    expected = None
+    actual = None
+    config_path = format_config_path(overlay.scope_path)
+    if exc.context is not None:
+        if exc.context.code == "non_mapping_root":
+            code = "scoped_overlay_root_not_mapping"
+        expected = exc.context.expected
+        actual = exc.context.actual
+        config_path = exc.context.config_path or config_path
+    return ConfigLoadError(
+        "Failed to load argv scoped overlay source.",
+        context=ConfigErrorContext(
+            code=code,
+            source_kind="argv_scoped_overlay",
+            source_order=overlay.order,
+            source_path=str(source_path),
+            config_path=config_path,
+            expected=expected,
+            actual=actual,
+            directive="argv_scoped_overlay",
+            remediation="Provide a scoped overlay YAML file whose root is a mapping.",
+            details=details,
+        ),
+    )
+
+
+def _scoped_overlay_metadata(
+    *,
+    overlay: ArgvScopedOverlay,
+    source: ConfigSource,
+    insertion_stage: str,
+) -> dict[str, PlainData]:
+    return cast(
+        dict[str, PlainData],
+        to_plain_data(
+            {
+                **_scoped_overlay_record_details(overlay),
+                "source_path": source.path,
+                "source_order": source.order,
+                "source_kind": source.kind,
+                "source_content_digest": source.content_digest,
+                "source_size_bytes": source.size_bytes,
+                "insertion_stage": insertion_stage,
+            },
+            path="argv_scoped_overlay_metadata",
+        ),
+    )
+
+
+def _scoped_overlay_record_details(overlay: ArgvScopedOverlay) -> dict[str, PlainData]:
+    return cast(
+        dict[str, PlainData],
+        to_plain_data(
+            {
+                "raw": overlay.raw,
+                "argv_order": overlay.order,
+                "scope_path": list(overlay.scope_path),
+                "operation": overlay.operation,
+                "rhs": overlay.rhs,
+                "resolved_path": overlay.resolved_path,
+                "candidates": [candidate.to_dict() for candidate in overlay.candidates],
+                "candidate_paths": [candidate.path for candidate in overlay.candidates],
+            },
+            path="argv_scoped_overlay_record",
+        ),
+    )
 
 def compose_config(
     config_path: str | Path,
@@ -1121,9 +1363,27 @@ def _build_source_artifacts(
     sources: Sequence[ConfigSource],
     include_sites: Sequence[IncludeSiteRecord],
     recipe_manifest: Sequence[Mapping[str, PlainData]],
+    scoped_overlay_applications: Sequence[_ScopedOverlayApplication] = (),
 ) -> tuple[SourceArtifactRecord, ...]:
     artifacts: list[SourceArtifactRecord] = []
+    scoped_metadata_by_source = {
+        (application.source.path, application.source.order): application.metadata
+        for application in scoped_overlay_applications
+    }
     for source in sources:
+        scoped_metadata = scoped_metadata_by_source.get((source.path, source.order))
+        metadata: dict[str, PlainData]
+        if scoped_metadata is None:
+            metadata = {
+                "role": "base_or_overlay",
+                "raw_snapshot": _metadata_only_raw_snapshot_limits(source_kind=source.kind),
+            }
+        else:
+            metadata = {
+                "role": "argv_scoped_overlay",
+                "argv_scoped_overlay": scoped_metadata,
+                "raw_snapshot": _metadata_only_raw_snapshot_limits(source_kind=source.kind),
+            }
         artifacts.append(
             SourceArtifactRecord(
                 schema_version=ARTIFACT_SCHEMA_VERSION,
@@ -1132,10 +1392,7 @@ def _build_source_artifacts(
                 order=source.order,
                 content_digest=source.content_digest,
                 size_bytes=source.size_bytes,
-                metadata={
-                    "role": "base_or_overlay",
-                    "raw_snapshot": _metadata_only_raw_snapshot_limits(source_kind=source.kind),
-                },
+                metadata=metadata,
             )
         )
     start_order = len(sources)
@@ -1153,6 +1410,7 @@ def _build_final_value_authorship(
     local_customizations: Sequence[IncludeLocalCustomization],
     ordinary_overrides: Sequence[ParsedOverride],
     recipe_manifest: Sequence[Mapping[str, PlainData]],
+    scoped_overlay_applications: Sequence[_ScopedOverlayApplication] = (),
 ) -> dict[ConfigPath, ValueAuthorship]:
     records: dict[ConfigPath, ValueAuthorship] = {}
     for path in _iter_value_paths(config):
@@ -1166,6 +1424,13 @@ def _build_final_value_authorship(
         )
         if customization_authorship is not None:
             authorship = customization_authorship
+        scoped_overlay_authorship = _authorship_from_scoped_overlays(
+            path=path,
+            source_map=merged_source_map,
+            scoped_overlay_applications=scoped_overlay_applications,
+        )
+        if scoped_overlay_authorship is not None:
+            authorship = scoped_overlay_authorship
         recipe_authorship = _authorship_from_recipe_manifest(path=path, recipe_manifest=recipe_manifest)
         if recipe_authorship is not None:
             authorship = recipe_authorship
@@ -1284,6 +1549,44 @@ def _authorship_from_local_customizations(
         },
     )
 
+
+
+def _authorship_from_scoped_overlays(
+    *,
+    path: ConfigPath,
+    source_map: Mapping[ConfigPath, ConfigSource],
+    scoped_overlay_applications: Sequence[_ScopedOverlayApplication],
+) -> ValueAuthorship | None:
+    if not scoped_overlay_applications:
+        return None
+    source = _nearest_source(path=path, source_map=source_map)
+    if source is None:
+        return None
+
+    best: _ScopedOverlayApplication | None = None
+    best_scope: ConfigPath = ()
+    for application in scoped_overlay_applications:
+        scope_path = application.overlay.scope_path
+        if path[: len(scope_path)] != scope_path:
+            continue
+        if source.path != application.source.path or source.order != application.source.order:
+            continue
+        if best is None or (len(scope_path), application.overlay.order) >= (len(best_scope), best.overlay.order):
+            best = application
+            best_scope = scope_path
+
+    if best is None:
+        return None
+    return ValueAuthorship(
+        path=path,
+        source_kind="argv_scoped_overlay",
+        source_path=best.source.path,
+        source_order=best.source.order,
+        source_content_digest=best.source.content_digest,
+        source_size_bytes=best.source.size_bytes,
+        composition_stage="argv_scoped_overlays",
+        details=best.metadata,
+    )
 
 def _authorship_from_recipe_manifest(
     *,
@@ -1474,6 +1777,7 @@ def _build_provenance_metadata(
     raw_source_snapshot_references: Sequence[dict[str, PlainData]],
     artifact_fingerprint: str,
     fingerprint_records: Sequence[ConfigFingerprintRecord],
+    scoped_overlay_applications: Sequence[_ScopedOverlayApplication] = (),
 ) -> dict[str, PlainData]:
     redacted_include_overrides = [
         _override_to_dict(override, record_values=True) for override in include_overrides
@@ -1489,6 +1793,7 @@ def _build_provenance_metadata(
             "include_sites": [record.to_dict() for record in include_records],
             "include_recomposition_contexts": [context.to_dict() for context in recomposition_contexts],
             "local_customizations": [record.to_dict() for record in local_customizations],
+            "argv_scoped_overlays": [application.metadata for application in scoped_overlay_applications],
             "final_value_authorship": [
                 value_authorship[path].to_dict() for path in sorted(value_authorship, key=format_config_path)
             ],
@@ -1497,6 +1802,8 @@ def _build_provenance_metadata(
         "ordinary_overrides": redacted_ordinary_overrides,
         "user_composition_override_count": len(include_overrides),
         "ordinary_override_count": len(ordinary_overrides),
+        "argv_scoped_overlay_count": len(scoped_overlay_applications),
+        "argv_scoped_overlays": [application.metadata for application in scoped_overlay_applications],
         "recipe_manifest": [_ensure_mappingproxy_plain(record) for record in recipe_manifest],
         "resolver_records": [
             {
