@@ -2,7 +2,6 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 
-
 [[package]]
 name = "annotated-doc"
 version = "0.0.4"
@@ -556,32 +555,9 @@ wheels = [
 [[package]]
 name = "weave"
 version = "0.1.0"
-source = { git = "https://github.com/samcantrill/weave.git#d9ac2672374076999093b7c6a9a3a8a83fa3e8f2" }
+source = { git = "https://github.com/samcantrill/weave.git#31c06ba21e56c25dd8c7c8d06eb3ef1a87827867" }
 dependencies = [
     { name = "omegaconf" },
     { name = "pydantic" },
     { name = "pyyaml" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "coverage" },
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "omegaconf", specifier = ">=2.3" },
-    { name = "pydantic", specifier = ">=2" },
-    { name = "pyyaml", specifier = ">=6" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "coverage" },
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "ruff" },
 ]

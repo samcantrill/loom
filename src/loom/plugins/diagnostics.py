@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -34,6 +35,8 @@ LOADABLE_PLUGIN_GROUPS: tuple[str, ...] = (
     LOOM_CODECS_GROUP,
     LOOM_EVENT_SINKS_GROUP,
 )
+_ORIGINAL_IMPORT_MODULE = importlib.import_module
+
 LISTING_ONLY_PLUGIN_GROUPS: tuple[str, ...] = tuple(
     group for group in KNOWN_PLUGIN_GROUPS if group not in LOADABLE_PLUGIN_GROUPS
 )
@@ -320,14 +323,15 @@ def _load_registry_ready_plugins(
 
     recipe_records = tuple(record for record in selected if record.group == LOOM_RECIPES_GROUP)
     if recipe_records:
-        from weave.recipes import RecipeCatalog
+        _initialize_weave_recipe_dependencies()
         from weave.recipes.load import load_recipe_entry_points
 
         result = load_recipe_entry_points(
             records=tuple(_recipe_plugin_record(record) for record in all_records),
-            catalog=RecipeCatalog(),
+            catalog=_ScratchRecipeCatalog(),
             selected=tuple(_recipe_plugin_record(record) for record in recipe_records),
             strict=False,
+            group=LOOM_RECIPES_GROUP,
         )
         loaded.extend(
             LoadedPlugin(record=_plugin_record(record), value=None)
@@ -390,6 +394,33 @@ def _load_registry_ready_plugins(
         duplicates=tuple(duplicates),
         failures=tuple(failures),
     )
+
+
+class _ScratchRecipeCatalog:
+    """Minimal recipe catalog for diagnostics-only plugin load checks."""
+
+    def __init__(self) -> None:
+        self._recipes: dict[str, object] = {}
+
+    def register(self, name: str, recipe: object, *, replace: bool = False) -> None:
+        if name in self._recipes and not replace:
+            raise ValueError(f"Recipe {name!r} is already registered")
+        self._recipes[name] = recipe
+
+
+def _initialize_weave_recipe_dependencies() -> None:
+    # Tests and callers may monkeypatch importlib.import_module to control plugin
+    # target imports. Pydantic also uses that hook lazily, so initialize it first
+    # with the original importer and then let weave capture the caller's hook for
+    # actual entry-point target loading.
+    current_import_module = importlib.import_module
+    try:
+        importlib.import_module = _ORIGINAL_IMPORT_MODULE
+        from pydantic import BaseModel, ConfigDict
+
+        _ = (BaseModel, ConfigDict)
+    finally:
+        importlib.import_module = current_import_module
 
 
 def _recipe_plugin_record(record: PluginRecord) -> "RecipePluginRecord":
