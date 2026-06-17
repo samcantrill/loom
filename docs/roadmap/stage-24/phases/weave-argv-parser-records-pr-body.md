@@ -28,7 +28,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright passed; default harness `1982 passed, 108 deselected`; config-extra `128 passed, 3 skipped, 1985 deselected`; weave package `395 passed`; weave examples `8 passed`; loom and weave builds succeeded. |
 | `make test-summary` | Passed | Generated `build/test-summary.md`; overall `2513 passed, 0 failed, 0 errors, 3 skipped, 2087 deselected`. |
-| GitHub checks | Not run | PR not opened in this expanded-path draft pass; refine/open pass will create the PR and CI evidence. |
+| GitHub checks | Pending | PR opened in the expanded-path refine/open pass; CI evidence is pending after PR creation. |
 
 ### Test Suite Summary
 
