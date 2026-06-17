@@ -108,3 +108,22 @@ def test_private_argv_scoped_overlay_inspection_stage_is_argv_only(tmp_path: Pat
     assert "argv_scoped_overlays" in argv_stage_names
     assert argv_stage_names.index("argv_scoped_overlays") == argv_stage_names.index("file_include_expansion") + 1
     assert argv_stage_names.index("argv_scoped_overlays") < argv_stage_names.index("recipe_argument_interpolation")
+
+
+def test_private_argv_scoped_overlay_stage_records_empty_argv_path(tmp_path: Path) -> None:
+    base = tmp_path / "configs" / "base.yaml"
+    base.parent.mkdir(parents=True)
+    base.write_text("data:\n  value: base\n", encoding="utf-8")
+
+    inspection = _inspect_config_composition_with_argv_scoped_overlays(
+        base,
+        recipe_catalog=RecipeCatalog(),
+        argv_scoped_overlays=(),
+    )
+
+    stage_names = tuple(stage.name for stage in inspection.stages)
+    stage = inspection.stage("argv_scoped_overlays")
+    assert stage is not None
+    assert stage_names.index("argv_scoped_overlays") == stage_names.index("file_include_expansion") + 1
+    assert stage.payload["scoped_overlay_count"] == 0
+    assert stage.payload["scoped_overlays"] == []

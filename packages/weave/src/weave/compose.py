@@ -125,6 +125,7 @@ def _inspect_config_composition_with_argv_scoped_overlays(
         overrides=overrides,
         include_raw_source_snapshots=include_raw_source_snapshots,
         argv_scoped_overlays=tuple(argv_scoped_overlays),
+        emit_argv_scoped_overlay_stage=True,
     )
 
 
@@ -136,6 +137,7 @@ def _inspect_config_composition(
     overrides: Sequence[str] = (),
     include_raw_source_snapshots: bool = False,
     argv_scoped_overlays: Sequence[ArgvScopedOverlay] = (),
+    emit_argv_scoped_overlay_stage: bool = False,
 ) -> ConfigCompositionInspection:
     if not isinstance(recipe_catalog, RecipeCatalog):
         raise ConfigValidationError("recipe_catalog must be a RecipeCatalog")
@@ -237,6 +239,7 @@ def _inspect_config_composition(
         merged_with_sources = scoped_result
         merged = scoped_result.config
         sources.extend(application.source for application in scoped_overlay_applications)
+    if emit_argv_scoped_overlay_stage:
         _append_stage(
             stages,
             "argv_scoped_overlays",
