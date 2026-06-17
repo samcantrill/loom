@@ -233,8 +233,8 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner`; committed with `plan: add phase execution plan`.
 - Final phase execution plan: completed by `loom_phase_planner` in the single expanded-path refine pass.
-- Implementation summary: pending
-- Implementation validation: pending
+- Implementation summary: Private scoped-overlay composition plumbing is implemented without public API exports. The argv path loads resolved scoped overlay YAML as overlay sources, applies update/add scoped merges after file include expansion and before recipe expansion, records the internal `argv_scoped_overlays` inspection stage, and carries scoped overlay metadata through source artifacts, final value authorship, provenance/manifest metadata, raw source snapshots, and artifact-safe fingerprint facts.
+- Implementation validation: `uv run pytest packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py` passed (6 tests); `uv run pytest packages/weave/tests/unit/config/test_config_provenance.py packages/weave/tests/unit/config/test_config_fingerprints.py packages/weave/tests/unit/config/test_config_artifacts.py` passed (29 tests); `uv run pytest packages/weave/tests/contracts/test_config_artifact_contract.py packages/weave/tests/contracts/test_config_composition_inspection_contract.py` passed (17 tests); `PYTHONPATH=packages/weave uv run pytest packages/weave/tests/integration/config/test_compose_recipes.py packages/weave/tests/integration/config/test_compose_overrides.py` passed (20 tests) after using the package support import path; `uv run pytest packages/weave/tests/unit/config/test_argv.py packages/weave/tests/unit/config/test_overrides.py` passed (46 tests); focused Ruff and Pyright passed.
 - Refinement summary: pending
 - Blocker-resolution summary: pending
 - PR preparation: pending
