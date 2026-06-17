@@ -1,0 +1,27 @@
+id: project-cli-argv
+title: Project CLI Argv Shorthand
+summary: Compose config from project CLI argv shorthand without a first-party `weave` executable.
+capability: authoring
+level: intermediate
+introduced_in: v24
+status: runnable
+validation: smoke
+surface: python_api
+public_surfaces:
+  - python_api
+owner_docs:
+  - packages/weave/examples/README.md
+  - docs/features/config-example-coverage.md
+owner_stages:
+  - v24
+validation_path: packages/weave/tests/test_examples.py::test_weave_example_script_runs
+validation_command: make test-weave-examples
+entrypoints:
+  - path: project_cli_argv.py
+    kind: python
+    description: Compose config from a project CLI argv vector and print parsed argv metadata.
+tags:
+  - compose-config-from-argv
+  - scoped-overlays
+  - cli-adapter
+  - warnings

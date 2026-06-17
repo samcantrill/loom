@@ -7,7 +7,7 @@ This example demonstrates v5 subprocess execution with local synthetic stages:
 3. Run a subprocess stage that fails, then inspect persisted status and stderr
    logs.
 4. Prepare one stage attempt with Python APIs and invoke it through
-   `loom stage run`.
+   `loom stage run --run-uri RUN_URI --stage STAGE_NAME`.
 
 ## Workflow
 
@@ -15,7 +15,7 @@ This workflow uses:
 
 - `loom run CONFIG --run-uri RUN_URI`
 - `loom run CONFIG --run-uri RUN_URI --executor subprocess`
-- `loom stage run RUN_URI STAGE_NAME`
+- `loom stage run --run-uri RUN_URI --stage STAGE_NAME`
 
 ## Variants
 

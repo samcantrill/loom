@@ -27,6 +27,7 @@ EXAMPLE_SCRIPTS = (
     EXAMPLES_ROOT / "recipes" / "compose_config.py",
     EXAMPLES_ROOT / "artifact-safety" / "artifact_safety.py",
     EXAMPLES_ROOT / "target-instantiation" / "instantiate_targets.py",
+    EXAMPLES_ROOT / "project-cli-argv" / "project_cli_argv.py",
 )
 PACKAGE_VALIDATION_PATH = (
     "packages/weave/tests/test_examples.py::test_weave_example_script_runs"

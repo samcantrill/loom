@@ -1,0 +1,10 @@
+experiment:
+  name: argv-shorthand-example
+data:
+  source: baseline
+  batch_size: 16
+model:
+  family: baseline
+  hidden_size: 64
+trainer:
+  epochs: 3

@@ -23,7 +23,7 @@ level concepts.
 
 | Group | Primary public Python surfaces |
 | --- | --- |
-| [Config Authoring](../packages/weave/examples/README.md) | `compose_config`, artifact-safe config inspection, recipe expansion, and trusted target instantiation. |
+| [Config Authoring](../packages/weave/examples/README.md) | `compose_config`, `compose_config_from_argv`, artifact-safe config inspection, recipe expansion, and trusted target instantiation. |
 | [Execution](execution/README.md) | `PipelineRunner` run/resume flows and `RunOptions` construction and validation. |
 | [Operations](operations/README.md) | Captured-log execution setup and authority-backed resource coordination APIs. |
 
