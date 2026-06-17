@@ -245,6 +245,12 @@ make test-summary
 - Tests or validation re-run: `uv run pytest packages/weave/tests/unit/config/test_argv.py` (20 passed); `uv run pytest packages/weave/tests/unit/config/test_overrides.py packages/weave/tests/test_import.py` (28 passed); `uv run ruff check packages/weave/src/weave/_argv.py packages/weave/tests/unit/config/test_argv.py` (passed); `uv run pyright packages/weave/src/weave/_argv.py` (0 errors).
 - Blocker-resolution summary: none used; blocker resolution remains 0/3.
 - PR preparation handoff: completion notes and budget status are updated; final PR preparation should still run `make validate-pr` and `make test-summary` for suite-level evidence.
-- PR preparation: pending
+- PR body draft: completed on 2026-06-17 using `.codex/prompts/pr-body-draft.md` and `.codex/templates/phase-pr-body.md`; artifact written to `docs/roadmap/stage-24/phases/weave-argv-parser-records-pr-body.md`. Public PR body kept concise and evidence-backed; workflow internals remain in this phase plan.
+- PR facts confirmed: branch `codex/weave-argv-parser-records`; worktree `/nas/home/can134/work/loom-worktrees/weave-argv-parser-records`; feature focus `Weave Argv Config Shorthand`; PR title `Weave Argv Config Shorthand - Phase 1: Argv Parser And Records`; target branch `develop`; stack predecessor none; root PR; merge eligible after PR targets `develop`, automated review/pre-submit gate passes, and validation/CI pass.
+- PR body scope confirmation: diff against `develop` is limited to this phase plan, private `packages/weave/src/weave/_argv.py`, and `packages/weave/tests/unit/config/test_argv.py`. Confirmed Phase 1 only: no public exports, composition changes, YAML loading, base-file validation, warnings, provenance, fingerprints, docs/features changes, first-party CLI, or Loom imports.
+- Final PR-preparation validation: `make validate-pr` passed. Evidence: Ruff passed; Pyright passed; default harness `1982 passed, 108 deselected`; config-extra `128 passed, 3 skipped, 1985 deselected`; weave package `395 passed`; weave examples `8 passed`; weave and loom builds succeeded.
+- Final suite evidence: `make test-summary` passed and wrote `build/test-summary.md`. Overall summary: `2513 passed, 0 failed, 0 errors, 3 skipped, 2087 deselected` across package, unit, contract, integration, e2e, config-extra, weave, and weave-examples suites.
+- Expanded-path PR status: PR body draft pass complete; PR body refine/open pass pending for `.codex/prompts/pr-body-refine.md`; GitHub PR intentionally not opened in this draft pass.
+- PR preparation: draft complete; refine/open pending
 - Stack maintenance: pending
 - Remaining blockers: none.
