@@ -250,7 +250,10 @@ make test-summary
 - PR body scope confirmation: diff against `develop` is limited to this phase plan, private `packages/weave/src/weave/_argv.py`, and `packages/weave/tests/unit/config/test_argv.py`. Confirmed Phase 1 only: no public exports, composition changes, YAML loading, base-file validation, warnings, provenance, fingerprints, docs/features changes, first-party CLI, or Loom imports.
 - Final PR-preparation validation: `make validate-pr` passed. Evidence: Ruff passed; Pyright passed; default harness `1982 passed, 108 deselected`; config-extra `128 passed, 3 skipped, 1985 deselected`; weave package `395 passed`; weave examples `8 passed`; weave and loom builds succeeded.
 - Final suite evidence: `make test-summary` passed and wrote `build/test-summary.md`. Overall summary: `2513 passed, 0 failed, 0 errors, 3 skipped, 2087 deselected` across package, unit, contract, integration, e2e, config-extra, weave, and weave-examples suites.
-- Expanded-path PR status: PR body draft pass complete; PR body refine/open pass pending for `.codex/prompts/pr-body-refine.md`; GitHub PR intentionally not opened in this draft pass.
-- PR preparation: draft complete; refine/open pending
+- Expanded-path PR status: PR body draft pass complete; PR body refine/open pass completed on 2026-06-17 using `.codex/prompts/pr-body-refine.md`. PR body was verified against the final diff, phase plan, scope boundaries, assumptions, risks, and validation evidence. A one-line PR body refinement marked GitHub checks as pending after PR creation.
+- GitHub PR: opened https://github.com/samcantrill/loom/pull/206 with explicit `--base develop --head codex/weave-argv-parser-records --title "Weave Argv Config Shorthand - Phase 1: Argv Parser And Records" --body-file docs/roadmap/stage-24/phases/weave-argv-parser-records-pr-body.md`.
+- PR verification: `gh pr view 206 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/weave-argv-parser-records`, state `OPEN`, URL `https://github.com/samcantrill/loom/pull/206`. Base matches the recorded target branch.
+- Merge eligibility: root PR targets `develop`; merge eligible after automated review/pre-submit gate passes and validation/CI pass. No stack predecessor; no retargeting needed before review.
+- PR preparation: refine/open complete; PR open
 - Stack maintenance: pending
 - Remaining blockers: none.
