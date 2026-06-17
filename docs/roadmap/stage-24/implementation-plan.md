@@ -5,11 +5,12 @@ Roadmap stage: `v24`
 Planning document: `docs/roadmap/stage-24/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 2 pr_open
+Current phase: Phase 3 pending
 Blockers:
 
-- Phase 2 PR #207 is open against `develop`; GitHub CI and automated review are
-  the remaining merge gates.
+- Phase 3 execution plan does not exist yet.
+- Phase 3 implementation may not begin until it has a scope-complete phase
+  execution plan.
 
 ## Summary
 
@@ -246,7 +247,7 @@ with a schema-versioned compatibility decision.
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `weave-argv-parser-records` | merged | `codex/weave-argv-parser-records` | [#206](https://github.com/samcantrill/loom/pull/206) | `packages/weave` argv parsing and records | Define argv classification, RHS lookup, record shapes, and parser diagnostics. | Unit/API tests for parser and records. | Value tokens, scoped overlay tokens, candidate paths, unparsed args, root overlay rejection. |
-| 2 | `weave-scoped-overlay-composition` | pr_open | `codex/weave-scoped-overlay-composition` | [#207](https://github.com/samcantrill/loom/pull/207) | `packages/weave` composition/provenance/fingerprints | Apply scoped overlays at the confirmed composition point with audit records. | Integration/contract tests for merge order, source artifacts, authorship, fingerprints. | `data/=data_A`, `model/=model_B`, `model/pipeline/=pipeline_A`, `_replace_`. |
+| 2 | `weave-scoped-overlay-composition` | merged | `codex/weave-scoped-overlay-composition` | [#207](https://github.com/samcantrill/loom/pull/207) | `packages/weave` composition/provenance/fingerprints | Apply scoped overlays at the confirmed composition point with audit records. | Integration/contract tests for merge order, source artifacts, authorship, fingerprints. | `data/=data_A`, `model/=model_B`, `model/pipeline/=pipeline_A`, `_replace_`. |
 | 3 | `weave-argv-api-inspection` | pending | `codex/weave-argv-api-inspection` | pending | Public API, inspection, warnings, docs | Expose public helpers and finish diagnostics, docs, and end-to-end validation. | Contract/API/docs tests plus `make validate-pr` and `make test-summary`. | End-to-end argv helper examples and warning/error cases. |
 
 ## Implementation Readiness Blockers
@@ -254,7 +255,7 @@ with a schema-versioned compatibility decision.
 | Blocker | Source | Required resolution | Status |
 | --- | --- | --- | --- |
 | Implementation-plan quality gate initially blocked on unnamed scoped-overlay inspection contract. | Repository phase workflow | Ran `loom_plan_reviewer`, applied one refinement pass, and completed confirmation review. | passed; non-blocking note addressed |
-| Remaining phase execution plans do not exist. | Phase workflow | Create a scope-complete phase execution plan before each remaining phase begins. | pending for Phase 2 and Phase 3 |
+| Remaining phase execution plans do not exist. | Phase workflow | Create a scope-complete phase execution plan before each remaining phase begins. | pending for Phase 3 |
 
 ## Phase 1: Argv Parser And Records
 
@@ -379,7 +380,7 @@ Workflow path: expanded path
 
 ## Phase 2: Scoped Overlay Composition
 
-Status: pr_open
+Status: merged
 Slug: `weave-scoped-overlay-composition`
 Branch: `codex/weave-scoped-overlay-composition`
 Worktree: `/nas/home/can134/work/loom-worktrees/weave-scoped-overlay-composition`
@@ -488,13 +489,17 @@ Workflow path: expanded path
 - Phase execution plan: completed
 - Planning/refinement budget: used
 - Implementation/refinement budget: used
-- PR review budget: unused
+- PR review budget: used
 - Blocker-resolution budget: 1/3 used
 - Pre-submit blocker gate: passed
 - PR open record: PR #207 opened from `codex/weave-scoped-overlay-composition`
   to `develop` and verified with `gh pr view`.
-- Merge record: pending; GitHub CI was in progress when PR-open metadata was
-  recorded.
+- Automated PR review: passed with no findings; reviewer verified scope, tests,
+  PR target, and CI.
+- Merge record: PR #207 merged into `develop` on 2026-06-17 with squash merge
+  commit `24d887f0deb52d2dcbcf1b683795551fb0e381fa`. Final pre-merge
+  verification confirmed base `develop`, head `codex/weave-scoped-overlay-composition`,
+  mergeable `MERGEABLE`, merge state `CLEAN`, and CI `checks` success.
 
 ### Risks And Stop Conditions
 
@@ -518,10 +523,10 @@ Workflow path: expanded path
   2087 deselected`.
 - PR: [#207](https://github.com/samcantrill/loom/pull/207), targeting
   `develop` from `codex/weave-scoped-overlay-composition`.
-- Merge: pending
-- Follow-up: automated phase review and GitHub CI must pass before merge; Phase
-  3 should branch from updated `develop` after Phase 2 merges unless a GitHub
-  blocker requires stacked continuation.
+- Merge: merged into `develop` on 2026-06-17 with squash merge commit
+  `24d887f0deb52d2dcbcf1b683795551fb0e381fa`.
+- Follow-up: Phase 3 should create a scope-complete execution plan from updated
+  `develop` before implementation.
 
 ## Phase 3: Public Argv API, Inspection, Diagnostics, And Docs
 
