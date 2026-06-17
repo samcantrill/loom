@@ -80,6 +80,20 @@ def test_compose_config_from_argv_returns_result_records_and_composes_scoped_ove
     assert cast(dict[str, Any], payload["composed_config"])["resolved"] == result.composed_config.resolved
 
 
+def test_compose_config_from_argv_defaults_to_sys_argv_tail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = _write(tmp_path / "configs" / "base.yaml", "data:\n  value: base\n")
+    monkeypatch.setattr("sys.argv", ["project-cli", "run", str(base), "data.value=from-sys-argv"])
+
+    result = compose_config_from_argv(command_choices={"run"})
+
+    assert result.command == "run"
+    assert result.base_config_path == str(base)
+    assert result.composed_config.resolved["data"] == {"value": "from-sys-argv"}
+
+
 def test_inspect_config_from_argv_exposes_argv_stage_even_without_overlays(tmp_path: Path) -> None:
     base = _write(tmp_path / "configs" / "base.yaml", "data:\n  value: base\n")
 

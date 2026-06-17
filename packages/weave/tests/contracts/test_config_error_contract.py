@@ -261,3 +261,17 @@ def test_public_argv_helper_errors_preserve_structured_context(tmp_path: Path) -
     assert context.details["rhs"] == "missing"
     assert "candidate_paths" in context.details
     assert ConfigErrorContext.from_dict(context.to_dict()) == context
+
+
+def test_public_argv_helper_rejects_single_string_argv_with_structured_context() -> None:
+    from weave import compose_config_from_argv
+
+    with pytest.raises(ConfigValidationError) as exc:
+        compose_config_from_argv("run config.yaml")  # type: ignore[arg-type]
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_argv"
+    assert context.source_kind == "argv"
+    assert context.source_order == -1
+    assert context.details == {"actual_type": "str"}

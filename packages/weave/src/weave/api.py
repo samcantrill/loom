@@ -383,10 +383,10 @@ def inspect_config_from_argv(
     )
 
 
-def _normalize_public_argv(argv: Sequence[str] | None) -> tuple[str, ...]:
+def _normalize_public_argv(argv: Sequence[str] | None) -> Sequence[str]:
     if argv is None:
         return tuple(sys.argv[1:])
-    return tuple(argv)
+    return argv
 
 
 def _argv_warnings(*, parsed: ParsedConfigArgv, recipe_catalog: RecipeCatalog) -> tuple[ConfigArgvWarning, ...]:

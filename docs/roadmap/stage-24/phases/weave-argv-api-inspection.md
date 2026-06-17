@@ -289,7 +289,7 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase planning refinement: draft completed; expanded-path plan refine used
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -299,8 +299,9 @@ make test-summary
 - Final phase execution plan: completed by expanded-path refine pass.
 - Implementation summary: Public argv helpers are implemented. `compose_config_from_argv(...)` is the only new top-level export; `inspect_config_from_argv(...)`, `ConfigArgvCompositionResult`, `ConfigArgvInspectionResult`, `ConfigArgvWarning`, and selected parsed argv record types are exposed through `weave.api`. Helpers wrap the private parser and scoped-overlay composition path, support `argv=None`, command choices, `allow_unparsed`, recipe catalogs, raw snapshot opt-in, helper-local warnings, and structured error propagation. `docs/features/config.md` documents the shipped helper behavior and deferrals.
 - Implementation validation: `uv run pytest packages/weave/tests/test_import.py packages/weave/tests/contracts/test_config_error_contract.py` passed (13 tests); `uv run pytest packages/weave/tests/unit/config/test_argv.py` passed (21 tests); `uv run pytest packages/weave/tests/integration/config/test_compose_argv_from_cli.py` passed (6 tests); `uv run pytest packages/weave/tests/contracts/test_config_composition_inspection_contract.py packages/weave/tests/contracts/test_config_artifact_contract.py` passed (18 tests); `PYTHONPATH=packages/weave uv run pytest packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py packages/weave/tests/integration/config/test_compose_overrides.py packages/weave/tests/integration/config/test_compose_recipes.py` passed (26 tests); `uv run pytest tests/e2e/test_config_composition_public_api.py` passed (2 tests); focused Ruff passed; focused Pyright reported 0 errors.
-- Refinement summary: tightened public API/export boundaries, public result and warning record expectations, helper-local warning behavior, structured error expectations, docs scope, test obligations, validation gates, and stop conditions. Implementation refinement remains unused pending the expanded-path refinement pass.
+- Implementation refinement summary: preserved parser-owned structured validation for single-string `argv` inputs in the public wrapper and added coverage for `argv=None` normalization through `sys.argv[1:]`. No public API breadth, warning persistence, CLI behavior, source artifact schema, or Loom CLI scope changed.
+- Implementation refinement validation: `uv run pytest packages/weave/tests/contracts/test_config_error_contract.py packages/weave/tests/integration/config/test_compose_argv_from_cli.py` passed (18 tests); `uv run pytest packages/weave/tests/test_import.py packages/weave/tests/unit/config/test_argv.py` passed (24 tests); `uv run pytest tests/e2e/test_config_composition_public_api.py` passed (2 tests); `uv run ruff check packages/weave/src/weave/api.py packages/weave/tests/contracts/test_config_error_contract.py packages/weave/tests/integration/config/test_compose_argv_from_cli.py` passed; `uv run pyright packages/weave/src/weave/api.py packages/weave/tests/contracts/test_config_error_contract.py packages/weave/tests/integration/config/test_compose_argv_from_cli.py` reported 0 errors.
 - Blocker-resolution summary: not used
 - PR preparation: pending
 - Stack maintenance: fallback worktree path recorded; no predecessor retarget/rebase needed
-- Remaining blockers: none recorded before implementation refinement
+- Remaining blockers: none recorded after implementation refinement
