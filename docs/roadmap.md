@@ -64,6 +64,9 @@ splits oversized steps:
 - A config package extraction step is appended after examples and validation so
   trusted config authoring can become a standalone `weave` library with
   its own tests and examples before it eventually moves to a separate project.
+- Standalone config ergonomics grow in `weave` after extraction, including a
+  reusable argv shorthand helper for project CLIs that need config value
+  overrides and scoped overlays without moving command behavior into Loom.
 
 The result is a longer roadmap, but each version has a more comparable scope
 and a clearer acceptance boundary.
@@ -152,7 +155,8 @@ written.
 | v21 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
 | v22 | Examples and validation refinement | Robust example coverage, integration/e2e validation behavior, example harness hardening, and documentation refinement over the implemented surface. |
 | v23 | Standalone config package extraction | Hard-switch `loom.config` into a standalone `weave` library, move config tests/examples beside that package, and make `loom` depend on it only through explicit config-adapter paths. |
-| v24 | Downstream operations design | Post-v23 design and documentation for stage-author guidance, resource validation and usage observation, generic scheduling, notifications, resume policy, queues, and environment acceptance profiles. |
+| v24 | Weave argv config shorthand | Implement `weave` helpers that parse project CLI argv into config value overrides and trailing-slash scoped overlays while preserving `compose_config(...)` semantics. |
+| v25 | Downstream operations design | Post-v23 design and documentation for stage-author guidance, resource validation and usage observation, generic scheduling, notifications, resume policy, queues, and environment acceptance profiles. |
 
 ## v0 - Local Runtime Kernel
 
@@ -1874,7 +1878,83 @@ Planning notes:
 
 - `docs/roadmap/stage-23/planning.md`
 
-## v24 - Downstream Operations Design
+## v24 - Weave Argv Config Shorthand
+
+Goal:
+
+- Implement reusable `weave` argv helpers for project-specific CLIs that want
+  config shorthand parsing without making Loom CLI own config composition
+  semantics.
+
+Implement:
+
+- Add `compose_config_from_argv(...)` and `inspect_config_from_argv(...)` for
+  the full argv shape documented in `docs/features/config.md`:
+  `<command> <base-config> model/=model_B data.keyC=newValue`.
+- Parse command and base config path, validate command names only against
+  caller-provided choices, and return command, base path, composed config or
+  inspection, unparsed args, value override records, scoped overlay records, and
+  warnings.
+- Preserve existing dot-path value override behavior for no-slash tokens,
+  including root-key overrides and `+` add semantics. No-slash tokens remain
+  value overrides even when the right-hand side looks like a YAML path.
+- Require trailing slash for scoped overlays. Use slash-separated overlay scopes
+  such as `model/=model_B`, `model/pipeline/=pipeline_A`, and
+  `+runtime/=local`.
+- Implement scoped overlay source lookup from the base config directory: scope
+  directory first, then base directory; `.yaml` before `.yml` when no suffix is
+  supplied; exact absolute file paths; no `~` expansion; relative escapes are
+  allowed and recorded with normalized resolved paths.
+- Apply argv scoped overlays after base, explicit overlays, and file-authored
+  includes, before recipe expansion. Apply argv value overrides after recipe
+  expansion so leaf overrides win and can target concrete recipe output paths.
+- Keep scoped overlay merge behavior aligned with existing config merge rules:
+  recursive mappings, whole-list replacement, scalar override, and honored
+  `_replace_: true` for explicit replacement.
+- Add structured config-owned errors for malformed argv, unsupported root
+  overlays, missing overlay files, non-mapping overlay files, invalid overlay
+  target shape, and unparsed args when `allow_unparsed=False`.
+- Return non-fatal argv-helper warning records for no-slash value overrides that
+  replace mappings or otherwise look like likely overlay mistakes.
+- Export `compose_config_from_argv` from top-level `weave`; keep detailed result
+  and record types importable from `weave.api` unless implementation planning
+  finds a stronger public-export need.
+
+Exit criteria:
+
+- Project CLIs can call `weave.compose_config_from_argv(...)` without
+  reimplementing config merge, include, recipe, interpolation, provenance, or
+  override behavior.
+- Existing `compose_config(...)`, explicit overlay paths, and override-string
+  behavior remain unchanged.
+- Package-local `weave` tests cover parsing, classification, overlay lookup,
+  merge/replacement, warnings, structured errors, inspection, provenance/source
+  records, and import boundaries.
+- No standalone `weave` console script or new `loom.cli` command is added by
+  this stage.
+
+Defer:
+
+- A first-party `weave` CLI executable or console script.
+- Broad Loom CLI parser rewrites beyond adapter use of the helper in a later
+  Loom-owned phase.
+- Hydra compatibility, defaults lists, global config groups, escaped dot-path
+  grammar, advanced list patching, or untrusted-config sandboxing.
+- Changing existing `compose_config(...)` behavior for callers that already pass
+  explicit overlays and override strings.
+
+Primary feature docs:
+
+- `config.md`
+- `cli.md`
+- `testing.md`
+
+Planning notes:
+
+- `docs/roadmap/stage-24/planning.md`
+- `docs/roadmap/stage-24/implementation-plan.md`
+
+## v25 - Downstream Operations Design
 
 Goal:
 
@@ -2073,7 +2153,7 @@ Before turning any roadmap version into a full implementation plan:
 | `fingerprints.md` | v0, v1, v23 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots; config fingerprint helpers move with `weave` in v23. |
 | `io.md` | v0, v1, v14, v15, v16 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v14; remote hooks and operations in v15/v16. |
 | `artifacts.md` | v0, v3, v9, v9-post, v10, v12, v15, v16, v21 | Local artifact refs/stores in v0; inspection in v3; commit/concurrency semantics in v9; authority-backed commit use is mandatory after v9; v10 adds durable service/offline import evidence; bundles/exporters in v12; external/remote interface, multi-location refs, and immutable reuse semantics in v15; payload materialization operations in v16; retention in v21. |
-| `config.md` | v0, v1, v2, v13, v14, v23 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v13; recipe plugins in v14; standalone package extraction in v23. |
+| `config.md` | v0, v1, v2, v13, v14, v23, v24 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v13; recipe plugins in v14; standalone package extraction in v23; argv config shorthand helpers in v24. |
 | `pipeline.md` | v0, v2, v9, v13 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later. |
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
 | `runtime-resources.md` | v4, v6, v7, v11, v17, v18 | Shared runtime/resource objects arrive before executor-specific mapping; v11 adds queue pool reconciliation over authority resource leases. |
@@ -2090,7 +2170,7 @@ Before turning any roadmap version into a full implementation plan:
 | `remote-stores.md` | v9, v9-post, v10, v15, v16 | V9 shapes backend capability expectations; v9-post plans service/database authority for multi-host state; v10 delivers durable service supervision; external/remote interface contract, fake handlers, multi-location refs, and bundle ref semantics first; payload operations and optional real backends second. |
 | `reliability.md` | v5, v9, v9-post, v10, v11, v19, v20, v21 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; v9-post makes those foundations mandatory across entrypoints; v10 adds service durability and offline import rejection/acceptance evidence; v11 requires accurate queue cancellation/status reporting; retry and timeout land in v19, runtime events and event sinks in v20, and cleanup in v21. |
 | `plugins.md` | v14, v15, v16, v20, v23 | Explicit discovery in v14; remote backend, exporter, and event sink integration later; config recipe/plugin hooks move with `weave` in v23 where they are config-owned. |
-| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21, v23 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations; v23 rewires CLI config entrypoints to `weave`. |
+| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21, v23, v24 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations; v23 rewires CLI config entrypoints to `weave`; v24 adds a `weave` argv helper for project CLIs without adding a new Loom command. |
 | `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version; v23 separates config tests into the config package-local test tree. |
 | `examples/` and `*-example-coverage.md` | v22, v23 | Cross-roadmap example inventory, runnable/manual status, validation tiers, integration/e2e behavior, and documentation refinement are consolidated after the runtime surface through v21 exists; v23 moves config examples beside `weave` for future repository extraction. |
 
