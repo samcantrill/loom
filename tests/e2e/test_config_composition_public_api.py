@@ -16,8 +16,10 @@ from weave import (
     RecipeCatalog,
     compare_config_artifact_fingerprints,
     compose_config,
+    compose_config_from_argv,
     inspect_config_composition,
 )
+from weave.api import inspect_config_from_argv
 from weave.redaction import REDACTION_MARKER
 from loom.serialization import PlainData
 
@@ -234,3 +236,37 @@ def test_public_python_config_composition_e2e(
         payload.content.startswith("name: composition-e2e\n")
         for payload in with_snapshots.raw_source_snapshots.payloads
     )
+
+
+
+def test_public_python_argv_config_helpers_e2e(tmp_path: Path) -> None:
+    config_root = tmp_path / "configs"
+    base = config_root / "experiment.yaml"
+    dataset = config_root / "workflow" / "dataset" / "local.yaml"
+    base.parent.mkdir(parents=True)
+    dataset.parent.mkdir(parents=True)
+    base.write_text(
+        "workflow:\n"
+        "  dataset:\n"
+        "    name: base\n"
+        "    split: train\n"
+        "  output_dir: results/default\n",
+        encoding="utf-8",
+    )
+    dataset.write_text("name: local\nrows: 10\n", encoding="utf-8")
+
+    result = compose_config_from_argv(
+        ["run", str(base), "workflow/dataset/=local", "workflow.output_dir=results/final", "--dry-run"],
+        command_choices={"run"},
+        allow_unparsed=True,
+    )
+
+    workflow = cast(dict[str, Any], result.composed_config.resolved["workflow"])
+    assert workflow["dataset"] == {"name": "local", "split": "train", "rows": 10}
+    assert workflow["output_dir"] == "results/final"
+    assert result.unparsed_args[0].raw == "--dry-run"
+    assert result.warnings == ()
+
+    inspection_result = inspect_config_from_argv(["inspect", str(base)], command_choices={"inspect"})
+    assert inspection_result.inspection.stage("argv_scoped_overlays") is not None
+    assert inspection_result.to_composed_config().resolved == inspection_result.inspection.resolved

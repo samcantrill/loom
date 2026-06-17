@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         RawSourceSnapshotReference,
         compare_config_artifact_fingerprints,
         compose_config,
+        compose_config_from_argv,
         compose_config_with_catalog,
         inspect_config_composition,
         instantiate,
@@ -43,6 +44,7 @@ _OPTIONAL_SYMBOLS: Final = frozenset(
         "ConfigCompositionStageRecord",
         "inspect_config_composition",
         "compose_config",
+        "compose_config_from_argv",
         "compose_config_with_catalog",
         "compare_config_artifact_fingerprints",
         "ConfigFingerprintComparison",
@@ -77,6 +79,7 @@ def _resolve_optional_symbol(name: str) -> object:
             | "ConfigCompositionInspection"
             | "ConfigCompositionStageRecord"
             | "compose_config"
+            | "compose_config_from_argv"
             | "compose_config_with_catalog"
             | "inspect_config_composition"
             | "register_recipe"
@@ -148,6 +151,7 @@ __all__ = [
     "Recipe",
     "RecipeCatalog",
     "compose_config",
+    "compose_config_from_argv",
     "instantiate",
     "check_config_targets",
     "TargetCheckResult",

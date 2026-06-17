@@ -1,5 +1,7 @@
 """Contract tests for config structured error context payloads."""
 
+from pathlib import Path
+
 import pytest
 
 from weave.errors import (
@@ -232,3 +234,44 @@ def test_existing_config_error_names_accept_structured_context() -> None:
         assert payload["message"] == "structured failure"
         assert payload["context"]["code"] == "structured_context"
         assert ConfigErrorContext.from_dict(payload["context"]) == context
+
+
+
+def test_public_argv_helper_errors_preserve_structured_context(tmp_path: Path) -> None:
+    from weave import compose_config_from_argv
+
+    base = tmp_path / "configs" / "base.yaml"
+    base.parent.mkdir(parents=True)
+    base.write_text("data:\n  value: base\n", encoding="utf-8")
+
+    with pytest.raises(ConfigValidationError) as exc:
+        compose_config_from_argv(["run", str(base), "data/=missing"])
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "missing_scoped_overlay_source"
+    assert context.source_kind == "argv"
+    assert context.source_path == "<argv>"
+    assert context.directive == "argv_config_shorthand"
+    assert context.remediation is not None
+    assert context.details is not None
+    assert context.details["command"] == "run"
+    assert context.details["token"] == "data/=missing"
+    assert context.details["scope_path"] == ["data"]
+    assert context.details["rhs"] == "missing"
+    assert "candidate_paths" in context.details
+    assert ConfigErrorContext.from_dict(context.to_dict()) == context
+
+
+def test_public_argv_helper_rejects_single_string_argv_with_structured_context() -> None:
+    from weave import compose_config_from_argv
+
+    with pytest.raises(ConfigValidationError) as exc:
+        compose_config_from_argv("run config.yaml")  # type: ignore[arg-type]
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_argv"
+    assert context.source_kind == "argv"
+    assert context.source_order == -1
+    assert context.details == {"actual_type": "str"}

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from weave._argv import parse_config_argv
+from weave.api import ConfigArgvWarning
 from weave.errors import ConfigValidationError
 
 
@@ -253,3 +254,32 @@ def test_parse_config_argv_does_not_validate_base_config_file_existence(tmp_path
 
     assert result.base_config_path == str(base)
     assert result.value_overrides[0].path == "key"
+
+
+
+def test_config_argv_warning_validates_plain_data() -> None:
+    warning = ConfigArgvWarning(
+        code="possible_missing_scoped_overlay_slash",
+        message="Use scoped overlay syntax.",
+        source_order=2,
+        token="model=model_B",
+        path="model",
+        remediation="Use model/=model_B.",
+        details={"candidate_paths": ["/tmp/model/model_B.yaml"]},
+    )
+
+    payload = warning.to_dict()
+    assert payload["code"] == "possible_missing_scoped_overlay_slash"
+    assert payload["source_order"] == 2
+    assert payload["details"] == {"candidate_paths": ["/tmp/model/model_B.yaml"]}
+
+    with pytest.raises(ConfigValidationError):
+        ConfigArgvWarning(
+            code="bad",
+            message="bad",
+            source_order=0,
+            token="x=y",
+            path="x",
+            remediation=None,
+            details={"bad": {"not-plain"}},  # type: ignore[dict-item]
+        )
