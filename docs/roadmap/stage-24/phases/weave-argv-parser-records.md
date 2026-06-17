@@ -237,10 +237,10 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner`; committed as the phase draft artifact.
 - Final phase execution plan: completed by `loom_phase_planner`; refined artifact is scope-complete for implementation.
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
-- Blocker-resolution summary: pending
+- Implementation summary: fallback implementation pass completed after `loom_phase_executor` could not start because the Spark model usage limit was exhausted. Added private `weave._argv` parser records and `parse_config_argv(...)` for command/base parsing, value override lowering, scoped overlay request parsing, RHS candidate resolution, unparsed arg handling, and structured argv diagnostics. No public API exports, composition changes, YAML loading, base-file validation, warnings, provenance, fingerprints, or docs/features behavior were added.
+- Implementation validation: `uv run pytest packages/weave/tests/unit/config/test_argv.py` (20 passed), `uv run pytest packages/weave/tests/unit/config/test_overrides.py` (26 passed), `uv run pytest packages/weave/tests/test_import.py` (2 passed), `uv run ruff check packages/weave/src/weave/_argv.py packages/weave/tests/unit/config/test_argv.py` (passed), and `uv run pyright packages/weave/src/weave/_argv.py` (0 errors).
+- Refinement summary: pending expanded-path implementation refinement pass.
+- Blocker-resolution summary: none used; blocker resolution remains 0/3.
 - PR preparation: pending
 - Stack maintenance: pending
-- Remaining blockers: none
+- Remaining blockers: none for implementation handoff; expanded-path implementation refinement is still required before PR preparation.
