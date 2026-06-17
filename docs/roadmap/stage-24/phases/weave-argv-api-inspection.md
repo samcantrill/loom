@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan; implementation-ready
 - Feature focus: Weave Argv Config Shorthand
 - PR title: `Weave Argv Config Shorthand - Phase 3: Public Argv API and Inspection`
 - Branch: `codex/weave-argv-api-inspection`
@@ -19,9 +19,9 @@
 - Plan quality gate: implementation-plan quality gate passed and is recorded in the full plan
 - Plan quality gate loop budget: consumed upstream; review, refinement, and confirmation completed with no blocking findings remaining
 - Draft pass: completed by `loom_phase_planner`
-- Refine pass: pending because this phase changes public API, diagnostics, docs, and end-to-end behavior
+- Refine pass: completed because this phase changes public API, diagnostics, docs, and end-to-end behavior
 - Setup limitations: configured root `/home/samcantrill/work/loom-worktrees` was unavailable in this session, so the fallback root `/nas/home/can134/work/loom-worktrees` was used
-- Blockers: expanded-path refine pass must complete before implementation handoff
+- Blockers: none; implementation may begin after this refined plan commit
 
 ## Objective
 
@@ -51,15 +51,17 @@ This phase must not add a first-party `weave` executable, Loom CLI adapter work,
 ## Current Source And Harness Findings
 
 - Existing files or modules that constrain this phase:
-  - `packages/weave/src/weave/_argv.py` defines private parser records and `parse_config_argv(...)`.
-  - `packages/weave/src/weave/compose.py` defines private `_inspect_config_composition_with_argv_scoped_overlays(...)` and keeps public non-argv inspection unchanged.
-  - `packages/weave/src/weave/api.py` owns public config dataclasses and wrapper validation.
-  - `packages/weave/src/weave/__init__.py` uses lazy top-level exports; this phase should add only `compose_config_from_argv` there.
-  - `docs/features/config.md` still frames CLI behavior as future-facing and must be updated in the phase worktree, not in the dirty control checkout.
+  - `packages/weave/src/weave/_argv.py` defines private parser records and `parse_config_argv(...)`. The current record `to_dict()` shapes are `ArgvValueOverride(raw, path, operation, value, order)`, `ScopedOverlayCandidate(path, origin, exists)`, `ArgvScopedOverlay(raw, scope_path, operation, rhs, candidates, resolved_path, order)`, `ArgvUnparsedArg(raw, order)`, and `ParsedConfigArgv(command, base_config_path, value_overrides, scoped_overlays, unparsed_args)`.
+  - `packages/weave/src/weave/compose.py` defines private `_inspect_config_composition_with_argv_scoped_overlays(...)`, emits the argv-only `argv_scoped_overlays` stage when requested, and keeps public non-argv inspection unchanged.
+  - `packages/weave/src/weave/api.py` owns public config dataclasses, wrapper validation, and `__all__`; this phase should add public result/warning dataclasses and helper wrappers there.
+  - `packages/weave/src/weave/__init__.py` uses lazy top-level exports; this phase should add only `compose_config_from_argv` to the lazy public package surface.
+  - `weave.errors.ConfigErrorContext` is the structured error contract. Public helper errors should preserve context codes, source kind/order/path, directive, remediation, and plain-data details from parser and composition failures.
+  - `docs/features/config.md` still frames CLI behavior as future-facing and must be updated in the phase worktree during implementation, not in the dirty control checkout.
 - Existing tests or harness behavior:
   - `packages/weave/tests/unit/config/test_argv.py` covers parser records, lookup rules, unparsed args, root overlay rejection, and parser diagnostics.
   - `packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py` covers private scoped-overlay composition, order, provenance, artifact metadata, raw snapshots, and structured target/load errors.
-  - `packages/weave/tests/contracts/test_config_composition_inspection_contract.py` anchors public non-argv inspection stages.
+  - `packages/weave/tests/contracts/test_config_composition_inspection_contract.py` anchors public non-argv inspection stages and private argv-only stage position, including the empty-overlay argv path.
+  - `packages/weave/tests/contracts/test_config_error_contract.py` anchors `ConfigErrorContext` serialization and round-tripping.
   - `tests/e2e/test_config_composition_public_api.py` is the public Python API e2e anchor for composition behavior.
 - Import-boundary or dependency constraints:
   - `weave` must not import `loom`.
@@ -69,15 +71,18 @@ This phase must not add a first-party `weave` executable, Loom CLI adapter work,
 
 ## In-Scope Work
 
-- Add `compose_config_from_argv(...)` as the only new top-level `weave` export for this phase.
-- Add `inspect_config_from_argv(...)` through `weave.api`; do not add it to top-level `weave.__all__` unless a separate plan review accepts broader public surface.
-- Add public result and warning dataclasses through `weave.api` with plain-data-safe `to_dict()` behavior and validation aligned with existing API records.
-- Re-export detailed argv records through `weave.api` as needed for callers to inspect parsed value overrides, scoped overlays, scoped overlay candidates, and unparsed command args.
+- Add `compose_config_from_argv(...)` as the only new top-level `weave` export for this phase. It must also be available from `weave.api`.
+- Add `inspect_config_from_argv(...)` through `weave.api` only; do not add it to top-level `weave.__all__`, lazy `_OPTIONAL_SYMBOLS`, or `TYPE_CHECKING` imports.
+- Add public result and warning dataclasses through `weave.api` with validation aligned with existing API records:
+  - `ConfigArgvCompositionResult` for composed-config results.
+  - `ConfigArgvInspectionResult` for inspection results.
+  - `ConfigArgvWarning` for helper-local warnings.
+- Re-export the detailed argv record types through `weave.api`: `ArgvValueOverride`, `ArgvScopedOverlay`, `ScopedOverlayCandidate`, `ArgvUnparsedArg`, and `ParsedConfigArgv`. Keep `parse_config_argv(...)` private unless a separate public API decision is recorded.
 - Compose helper behavior: parse `argv` defaulting to `sys.argv[1:]`, validate caller-supplied command choices, pass value override strings and scoped overlay records to existing composition machinery, and return command/base path/records/unparsed args/warnings plus the composed config.
-- Inspection helper behavior: use the same parse and composition path, return the same argv metadata/warnings plus `ConfigCompositionInspection`, and expose the `argv_scoped_overlays` stage even when there are no scoped overlays if the private argv inspection path already does so.
-- Generate conservative non-fatal warnings for likely overlay mistakes after enough target-shape context is available, especially no-slash mapping replacement where the RHS looks like an overlay selector. Warnings must never change the composed config or persisted artifacts.
+- Inspection helper behavior: use the same parse and composition path, return the same argv metadata/warnings plus `ConfigCompositionInspection`, and expose the `argv_scoped_overlays` stage even when there are no scoped overlays because the private argv inspection path already records that stage.
+- Generate conservative non-fatal warnings for likely overlay mistakes after enough composed target-shape context is available. Warnings must never change the composed config or persisted artifacts.
 - Preserve all existing direct `compose_config(...)`, `compose_config_with_catalog(...)`, and `inspect_config_composition(...)` public behavior for non-argv callers.
-- Update `docs/features/config.md` to document the implemented argv helper, trailing-slash overlay syntax, lookup rules, ordering, warnings, structured errors, inspection, audit behavior, and explicit deferrals.
+- Update only the Stage 24-relevant portions of `docs/features/config.md` during implementation to document the implemented argv helper, trailing-slash overlay syntax, lookup rules, ordering, warnings, structured errors, inspection, audit behavior, and explicit deferrals.
 - Add package-local and public Python API tests required by the suite plan.
 
 ## Out-of-Scope Work
@@ -88,25 +93,57 @@ This phase must not add a first-party `weave` executable, Loom CLI adapter work,
 - Persisting argv warnings into `ComposedConfig`, manifests, provenance, source artifacts, raw source snapshots, fingerprints, or run artifacts.
 - New `SourceArtifactRecord.kind`, artifact schema version, manifest schema change, or source artifact migration.
 - Hydra/defaults/config-group behavior, RHS overlay inference, escaped dot-path grammar, advanced list patching, or untrusted-config sandboxing.
+- Exporting `inspect_config_from_argv(...)`, detailed argv records, or warning/result records from top-level `weave`.
+- Making `parse_config_argv(...)` a public `weave.api` function without a separate recorded API decision.
 - Broad docs rewrites outside the Stage 24 config feature section and directly related examples.
 
 ## Assumptions
 
-- The public result names may be finalized during the refine pass, but they should be narrow and config-owned; a reasonable default is `ConfigArgvCompositionResult`, `ConfigArgvInspectionResult`, and `ConfigArgvWarning`.
-- Existing internal `ArgvValueOverride`, `ArgvScopedOverlay`, `ScopedOverlayCandidate`, `ArgvUnparsedArg`, and `ParsedConfigArgv` records are suitable to expose through `weave.api` unless refinement finds a stronger naming or stability reason to wrap them.
-- `command_choices` remains caller-provided and command-name agnostic; `weave` does not hard-code commands.
-- Warning heuristics should prefer false negatives over noisy or surprising warnings.
-- Docs updates in the phase worktree may edit `docs/features/config.md`; unrelated local modifications in the control checkout must remain untouched.
+- Public result and warning names are fixed for implementation as `ConfigArgvCompositionResult`, `ConfigArgvInspectionResult`, and `ConfigArgvWarning`.
+- Existing internal `ArgvValueOverride`, `ArgvScopedOverlay`, `ScopedOverlayCandidate`, `ArgvUnparsedArg`, and `ParsedConfigArgv` records are stable enough to re-export through `weave.api`; wrapping or renaming them is out of scope unless implementation finds a concrete validation or typing blocker.
+- `command_choices` remains caller-provided and command-name agnostic; `weave` does not hard-code commands or own process exit behavior.
+- Warning heuristics should prefer false negatives over noisy or surprising warnings. A missing warning is acceptable when the mistaken-intent signal is weak; a warning that changes behavior or artifacts is not acceptable.
+- Docs updates in the phase worktree may edit `docs/features/config.md` during implementation; unrelated local modifications in the control checkout must remain untouched.
 
 ## Scope Contract
 
-Public helper shape is phase-owned. `compose_config_from_argv(...)` should be discoverable as `weave.compose_config_from_argv` and available from `weave.api`. It should accept an argv-like sequence or `None` for `sys.argv[1:]`, caller command choices, `allow_unparsed`, optional `RecipeCatalog`, and the existing raw-source-snapshot option. It should return a result record, not a bare `ComposedConfig`, so callers receive the composed config alongside command, base config path, parsed value overrides, scoped overlays, unparsed args, and warnings.
+### Public API And Export Boundary
 
-`inspect_config_from_argv(...)` should be available from `weave.api` and return the inspection counterpart result with the same argv metadata and warnings plus `ConfigCompositionInspection`. It must use the argv-specific inspection path so the `argv_scoped_overlays` stage appears after `file_include_expansion` and before recipe interpolation/expansion. Existing `inspect_config_composition(...)` must retain its current stage tuple and output for non-argv callers.
+`compose_config_from_argv(...)` should be discoverable as `weave.compose_config_from_argv` and available from `weave.api`. The top-level lazy package surface should add exactly that one new name and no argv record, warning, inspection, or parser names. Import tests must assert that `weave.inspect_config_from_argv`, `weave.ConfigArgvCompositionResult`, `weave.ConfigArgvInspectionResult`, `weave.ConfigArgvWarning`, `weave.ArgvScopedOverlay`, `weave.ArgvValueOverride`, `weave.ScopedOverlayCandidate`, `weave.ArgvUnparsedArg`, `weave.ParsedConfigArgv`, and `weave.parse_config_argv` are not top-level attributes.
 
-Public records must be plain-data-safe and stable enough for project-specific CLI authors. Warning records should include a stable code, message, source order or token context, and plain-data details/remediation where useful. Detailed parser/composition records exposed through `weave.api` should remain data records, not CLI framework objects. Top-level exports must stay limited to the main compose helper plus existing names.
+`weave.api` should expose `compose_config_from_argv`, `inspect_config_from_argv`, the three public result/warning types, and the five selected detailed argv record types. `parse_config_argv(...)` should remain an internal function in `weave._argv`; project CLI callers should use the public compose/inspect helpers and inspect returned records rather than depending on the parser entrypoint.
 
-Error behavior must stay config-owned and structured. Malformed argv, unknown commands, missing command/base path, invalid value overrides, unsupported root overlays, missing overlay files, non-mapping overlay sources, invalid scoped targets, and disallowed unparsed args should raise existing config error types with machine-readable `ConfigErrorContext` details. This phase may improve public helper context, but it must not replace structured errors with printing, exiting, or argparse exceptions.
+Both public helpers should accept an argv-like sequence or `None` for `sys.argv[1:]`, caller command choices, `allow_unparsed`, optional `RecipeCatalog`, and `include_raw_source_snapshots`. They should not accept display, exit-code, argparse, Loom CLI, store, scheduler, or runtime execution parameters.
+
+### Result Record Shape
+
+`ConfigArgvCompositionResult` should be a frozen plain-data-validating API record with these public fields: `command`, `base_config_path`, `parsed_argv`, `value_overrides`, `scoped_overlays`, `unparsed_args`, `warnings`, and `composed_config`. The `value_overrides`, `scoped_overlays`, and `unparsed_args` fields should mirror the corresponding tuples on `parsed_argv` for ergonomic access; tests should ensure they stay consistent.
+
+`ConfigArgvInspectionResult` should mirror the composition result fields but replace `composed_config` with `inspection`. It may expose a `to_composed_config()` convenience only if it delegates to `inspection.to_composed_config()` without changing metadata.
+
+Result `to_dict()` methods should be plain-data-safe and include argv metadata, warnings, selected record `to_dict()` payloads, and a serialized config or inspection payload using existing `to_dict()` methods on nested config artifact/provenance/fingerprint records where available. If a complete serialized `ComposedConfig` would require a broad new serialization contract, stop and narrow `to_dict()` to argv metadata plus documented `resolved`/`redacted` payloads rather than inventing new artifact serialization semantics.
+
+### Warning Record Shape And Behavior
+
+`ConfigArgvWarning` should include `code`, `message`, `source_order`, `token`, `path`, `remediation`, and `details`. `details` must be plain data. `source_order` should use the argv token order when a warning maps to a token and `-1` only for whole-result warnings.
+
+Required warning behavior is conservative and helper-local:
+
+- Warn when a no-slash value override targets an existing mapping and the RHS is a scalar string that looks like a likely scoped-overlay selector, such as a relative stem that resolves near the target scope or base config directory.
+- Do not warn for ordinary scalar overrides, numeric/boolean/null/object/array override values, explicit path-like value strings that do not resolve as overlay candidates, or tokens already using trailing-slash scoped overlay syntax.
+- Warning codes should be stable and contract-tested; a reasonable initial code is `possible_missing_scoped_overlay_slash`.
+- Warnings must live only on `ConfigArgvCompositionResult` and `ConfigArgvInspectionResult`. They must not be written into `ComposedConfig`, `ConfigCompositionInspection`, manifests, provenance, source artifacts, raw source snapshots, fingerprint records, artifact-safe fingerprint facts, or run artifacts.
+- Warnings must not downgrade, catch, or replace structured errors for malformed argv, missing overlay files, non-mapping overlays, or invalid scoped targets.
+
+### Structured Error Expectations
+
+Error behavior must stay config-owned and structured. Malformed argv, invalid argv value types, invalid `command_choices`, unknown commands, missing command/base path, invalid value overrides, unsupported root overlays, missing overlay sources, non-mapping overlay sources, invalid scoped targets, and disallowed unparsed args should raise existing config error types with machine-readable `ConfigErrorContext` details. This phase may improve public helper context, but it must not replace structured errors with printing, exiting, `argparse` exceptions, or unstructured `ValueError`/`RuntimeError` failures.
+
+Public-helper contract tests should assert context fields that matter for callers: `code`, `source_kind`, `source_order`, `source_path`, `directive`, `remediation`, and plain-data `details` such as command, token, scope path, RHS, candidate paths, unparsed args, resolved path, and config path when available. Error wrapping must preserve the original context code unless the wrapper adds strictly more specific argv-helper context without losing the underlying cause.
+
+### Inspection Contract
+
+`inspect_config_from_argv(...)` must use the argv-specific inspection path so the `argv_scoped_overlays` stage appears after `file_include_expansion` and before `recipe_argument_interpolation`/`recipe_expansion`. The stage should appear even when no scoped overlays are supplied through the argv helper. Existing `inspect_config_composition(...)` must retain its current stage tuple and output for non-argv callers.
 
 ## Design Impact
 
@@ -149,12 +186,19 @@ Error behavior must stay config-owned and structured. Malformed argv, unknown co
 
 ## Implementation Steps
 
-1. Define the public result/warning API in `weave.api`, re-export the selected detailed argv records through `weave.api`, and add import-surface tests before broad behavior changes.
-2. Add `compose_config_from_argv(...)` and `inspect_config_from_argv(...)` wrappers over `parse_config_argv(...)` and the existing public/private composition paths, including `argv=None`, command choices, `allow_unparsed`, recipe catalog, and raw snapshot handling.
-3. Add helper-local warning generation with conservative target-shape/context checks, ensuring warnings live only on result records and are omitted from all composition artifacts.
+1. Define `ConfigArgvCompositionResult`, `ConfigArgvInspectionResult`, and `ConfigArgvWarning` in `weave.api`; re-export the selected detailed argv records through `weave.api`; add import-surface tests before broad behavior changes.
+2. Add `compose_config_from_argv(...)` and `inspect_config_from_argv(...)` wrappers over `parse_config_argv(...)` and the existing public/private composition paths, including `argv=None`, command choices, `allow_unparsed`, recipe catalog, raw snapshot handling, and default-catalog behavior matching existing public compose helpers.
+3. Add helper-local warning generation after composition or inspection has enough target-shape and candidate-path context; keep warning creation side-effect-free and artifact-free.
 4. Add public-helper integration and e2e coverage for documented value overrides, scoped overlays, ordering, unparsed args, inspection stage exposure, structured errors, raw snapshots, and no-change guarantees for direct non-argv callers.
-5. Update `docs/features/config.md` to document the implemented helper API, examples, warnings/errors, inspection/audit behavior, and explicit deferrals.
-6. Run targeted suite validation and leave final `make validate-pr` and `make test-summary` evidence for PR preparation.
+5. Update only `docs/features/config.md` to document the implemented helper API, examples, warnings/errors, inspection/audit behavior, and explicit deferrals.
+6. Run targeted suite validation during implementation and leave final `make validate-pr` and `make test-summary` evidence for PR preparation.
+
+## Documentation Scope
+
+- Phase implementation may edit only `docs/features/config.md` among user-facing docs, plus tests/examples that directly validate the documented helper behavior. This planning pass intentionally edits only this phase execution plan.
+- Replace future-facing CLI text where it conflicts with Stage 24 by documenting Python helper usage for project-specific CLIs, not a first-party command.
+- Required docs content: `compose_config_from_argv(...)`, `inspect_config_from_argv(...)`, command/base argv shape, no-slash value override syntax, trailing-slash scoped overlay syntax, `+scope/=` add semantics, scope-directory then base-directory lookup, `.yaml` before `.yml`, exact absolute paths, no `~` expansion, ordering relative to recipes and value overrides, helper-local warnings, structured errors, inspection stage, source/audit behavior, and explicit deferrals.
+- Docs must not promise `loom validate`, `loom plan`, `loom run`, a `weave` executable, Hydra config groups/defaults lists, RHS overlay inference, persisted warnings, or execution/store behavior.
 
 ## Test Plan
 
@@ -194,14 +238,25 @@ Error behavior must stay config-owned and structured. Malformed argv, unknown co
 - Markers affected: raw source snapshot opt-in, existing optional dependency/config-extra coverage, docs/example checks if docs examples are executable.
 - Required assertions or deferral reason: public argv helpers must preserve raw source snapshot opt-in behavior for scoped overlays; final `make validate-pr` must cover existing optional dependency/config-extra gates. No new live, scheduler, network, or external-service opt-in suite applies.
 
-## Risks
+## Risks And Stop Conditions
+
+Risks:
 
 - Public result or warning fields could expose too much long-lived surface.
 - Warning heuristics could become noisy and undermine the intentionally explicit trailing-slash grammar.
 - Top-level lazy export changes could accidentally broaden public API or import `loom`.
 - Public inspection wrapper could accidentally change non-argv inspection stage contracts.
 - Docs could imply a first-party CLI or Loom CLI support that this phase does not ship.
-- Stop if implementation needs a new source artifact kind, persisted warning artifact, Loom CLI import, first-party executable, changed non-argv compose/inspection behavior, or broader public API than recorded here.
+
+Stop conditions for implementation:
+
+- A needed public API shape is broader than `compose_config_from_argv` top-level plus `weave.api` inspection/result/record exports recorded here.
+- Warning generation requires mutation of `ComposedConfig`, `ConfigCompositionInspection`, manifests, provenance, source artifacts, raw snapshots, fingerprints, or persisted run artifacts.
+- Correct implementation requires a new source artifact kind, artifact schema version, manifest schema change, or migration.
+- Correct implementation requires `weave` to import `loom`, add a first-party executable/argparse parser, or change Loom CLI behavior.
+- Existing direct `compose_config(...)`, `compose_config_with_catalog(...)`, or `inspect_config_composition(...)` behavior or non-argv inspection stage order would need to change.
+- Docs cannot accurately describe the shipped helper without promising future-phase features.
+- Result serialization needs a broad new `ComposedConfig` or `ConfigCompositionInspection` serialization contract not already implied by existing nested `to_dict()` methods.
 
 ## Validation Commands
 
@@ -229,11 +284,11 @@ make test-summary
 - Tests to run with each slice: run `packages/weave/tests/test_import.py` after export changes; run unit warning tests after warning logic; run the new public helper integration test after wrappers; run inspection/artifact contracts after inspection exposure; run the e2e and docs/example checks after docs updates.
 - Decisions the executor must not revisit: top-level export is only `compose_config_from_argv`; `inspect_config_from_argv` and detailed records stay in `weave.api`; warnings stay helper-local; no first-party CLI, Loom CLI adapter, source artifact kind, schema change, or persisted warnings.
 - Conditions that require stopping for the manager: public API shape needs more top-level exports; warning generation requires artifact mutation; non-argv composition/inspection behavior must change; implementation needs Loom imports or executable CLI work; docs cannot describe behavior without promising future-phase features.
-- Expanded-path refinement notes: refine pass is pending and should confirm public record names, warning schema, docs scope, and suite obligations before implementation starts.
+- Expanded-path refinement notes: refine pass used; public record names, warning schema, docs scope, suite obligations, and stop conditions are confirmed for implementation.
 
 ## Refinement And Review Budget Status
 
-- Phase planning refinement: draft completed; expanded-path refine pass pending
+- Phase planning refinement: draft completed; expanded-path plan refine used
 - Phase implementation refinement: unused
 - PR review: unused
 - Blocker resolution: 0/3 used
@@ -241,11 +296,11 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner`; committed with `plan: add phase 3 execution plan`.
-- Final phase execution plan: pending expanded-path refine pass.
+- Final phase execution plan: completed by expanded-path refine pass.
 - Implementation summary: pending
 - Implementation validation: pending
-- Refinement summary: pending
+- Refinement summary: tightened public API/export boundaries, public result and warning record expectations, helper-local warning behavior, structured error expectations, docs scope, test obligations, validation gates, and stop conditions.
 - Blocker-resolution summary: pending
 - PR preparation: pending
 - Stack maintenance: fallback worktree path recorded; no predecessor retarget/rebase needed
-- Remaining blockers: expanded-path refine pass must complete before implementation handoff
+- Remaining blockers: none; implementation is unblocked after the refined plan commit
