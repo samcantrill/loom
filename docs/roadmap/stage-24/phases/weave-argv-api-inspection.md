@@ -297,10 +297,10 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner`; committed with `plan: add phase 3 execution plan`.
 - Final phase execution plan: completed by expanded-path refine pass.
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: tightened public API/export boundaries, public result and warning record expectations, helper-local warning behavior, structured error expectations, docs scope, test obligations, validation gates, and stop conditions.
-- Blocker-resolution summary: pending
+- Implementation summary: Public argv helpers are implemented. `compose_config_from_argv(...)` is the only new top-level export; `inspect_config_from_argv(...)`, `ConfigArgvCompositionResult`, `ConfigArgvInspectionResult`, `ConfigArgvWarning`, and selected parsed argv record types are exposed through `weave.api`. Helpers wrap the private parser and scoped-overlay composition path, support `argv=None`, command choices, `allow_unparsed`, recipe catalogs, raw snapshot opt-in, helper-local warnings, and structured error propagation. `docs/features/config.md` documents the shipped helper behavior and deferrals.
+- Implementation validation: `uv run pytest packages/weave/tests/test_import.py packages/weave/tests/contracts/test_config_error_contract.py` passed (13 tests); `uv run pytest packages/weave/tests/unit/config/test_argv.py` passed (21 tests); `uv run pytest packages/weave/tests/integration/config/test_compose_argv_from_cli.py` passed (6 tests); `uv run pytest packages/weave/tests/contracts/test_config_composition_inspection_contract.py packages/weave/tests/contracts/test_config_artifact_contract.py` passed (18 tests); `PYTHONPATH=packages/weave uv run pytest packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py packages/weave/tests/integration/config/test_compose_overrides.py packages/weave/tests/integration/config/test_compose_recipes.py` passed (26 tests); `uv run pytest tests/e2e/test_config_composition_public_api.py` passed (2 tests); focused Ruff passed; focused Pyright reported 0 errors.
+- Refinement summary: tightened public API/export boundaries, public result and warning record expectations, helper-local warning behavior, structured error expectations, docs scope, test obligations, validation gates, and stop conditions. Implementation refinement remains unused pending the expanded-path refinement pass.
+- Blocker-resolution summary: not used
 - PR preparation: pending
 - Stack maintenance: fallback worktree path recorded; no predecessor retarget/rebase needed
-- Remaining blockers: none; implementation is unblocked after the refined plan commit
+- Remaining blockers: none recorded before implementation refinement
