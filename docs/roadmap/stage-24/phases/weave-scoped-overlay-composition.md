@@ -238,6 +238,16 @@ make test-summary
 - Refinement validation: Manager reran `uv run pytest packages/weave/tests/contracts/test_config_composition_inspection_contract.py packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py` after the refinement pass; 10 tests passed. Focused `uv run ruff check packages/weave/src/weave/compose.py packages/weave/tests/contracts/test_config_composition_inspection_contract.py packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py` passed. Focused `uv run pyright packages/weave/src/weave/compose.py` reported 0 errors.
 - Refinement summary: Used the one expanded-path implementation/test refinement pass. The private argv inspection helper now emits the internal `argv_scoped_overlays` stage for argv-path inspection even when no scoped overlays are present, while public non-argv inspection remains unchanged. Added focused contract coverage for the zero-overlay private argv path.
 - Blocker-resolution summary: Used blocker-resolution pass 1/3 after `make validate-pr` exposed non-argv golden artifact regressions from empty scoped-overlay metadata keys. Adjusted provenance metadata so `argv_scoped_overlay_count`, `argv_scoped_overlays`, and source fact scoped-overlay records are emitted only when scoped overlays actually apply. Targeted rerun `PYTHONPATH=packages/weave uv run pytest packages/weave/tests/contracts/test_config_extraction_golden_artifacts_contract.py packages/weave/tests/test_config_port.py` passed (5 tests), focused Ruff passed, and focused Pyright reported 0 errors.
-- PR preparation: pending
-- Stack maintenance: pending
+- PR preparation: in progress; PR body drafted at
+  `docs/roadmap/stage-24/phases/weave-scoped-overlay-composition-pr-body.md`.
+- PR preparation validation evidence: `make validate-pr` passed after the
+  blocker-resolution fix, including Ruff, Pyright, builds, default pytest
+  (`1982 passed, 108 deselected`), config-extra (`128 passed, 3 skipped, 1985
+  deselected`), weave (`404 passed`), and weave examples (`8 passed`);
+  `make test-summary` passed and wrote `build/test-summary.md` with overall
+  `2522 passed, 0 failed, 0 errors, 3 skipped, 2087 deselected, 2525 total` in
+  `313.90s`.
+- PR open metadata: pending push and GitHub PR creation.
+- Stack maintenance: root PR targeting `develop`; no predecessor retargeting or
+  rebase is needed before opening.
 - Remaining blockers: none recorded for PR preparation.
