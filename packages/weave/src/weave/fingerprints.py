@@ -341,7 +341,26 @@ def _source_artifact_fingerprint_facts(record: SourceArtifactRecord) -> dict[str
         "size_bytes": record.size_bytes,
     }
 
-    if record.kind == "include":
+    if record.kind == "overlay" and record.metadata.get("role") == "argv_scoped_overlay":
+        metadata = cast(dict[str, Any], record.metadata)
+        scoped = cast(Mapping[str, Any], metadata.get("argv_scoped_overlay", {}))
+        facts["role"] = "argv_scoped_overlay"
+        facts["argv_scoped_overlay"] = cast(
+            dict[str, PlainData],
+            to_plain_data(
+                {
+                    "scope_path": scoped.get("scope_path", ()),
+                    "operation": scoped.get("operation", ""),
+                    "rhs": scoped.get("rhs", ""),
+                    "argv_order": scoped.get("argv_order", -1),
+                    "raw": scoped.get("raw", ""),
+                    "candidate_count": len(cast(Sequence[Any], scoped.get("candidates", ()))),
+                    "insertion_stage": scoped.get("insertion_stage", ""),
+                },
+                path="source_artifact_scoped_overlay_facts",
+            ),
+        )
+    elif record.kind == "include":
         metadata = cast(dict[str, Any], record.metadata)
         facts["role"] = "include"
         facts["include"] = cast(

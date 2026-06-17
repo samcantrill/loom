@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 from .plain import PlainData, ensure_plain_data
 
@@ -106,6 +106,240 @@ def compose_config_with_sources(
         mapping_sites=tuple(mapping_sites),
     )
 
+
+
+def apply_scoped_overlay_with_sources(
+    composed: ComposedConfigWithSources,
+    *,
+    overlay: Mapping[str, PlainData],
+    source: ConfigSource,
+    scope_path: ConfigPath,
+    operation: Literal["update", "add"],
+    details: Mapping[str, PlainData] | None = None,
+) -> ComposedConfigWithSources:
+    """Apply one scoped overlay while preserving source-map authorship."""
+
+    if not scope_path:
+        raise _scoped_overlay_error(
+            "Scoped overlays must target a non-root path.",
+            code="invalid_scoped_overlay_root",
+            path=scope_path,
+            source=source,
+            details=details,
+        )
+    if operation not in {"update", "add"}:
+        raise _scoped_overlay_error(
+            "Scoped overlay operation must be update or add.",
+            code="invalid_scoped_overlay_operation",
+            path=scope_path,
+            source=source,
+            expected="update or add",
+            actual=operation,
+            details=details,
+        )
+    if not isinstance(overlay, Mapping):
+        raise _scoped_overlay_error(
+            "Scoped overlay source root must be a mapping.",
+            code="scoped_overlay_root_not_mapping",
+            path=scope_path,
+            source=source,
+            expected="mapping",
+            actual=type(overlay).__name__,
+            details=details,
+        )
+
+    staged = {
+        key: _normalize_mapping_value(value, path=_format_config_path((key,)))
+        for key, value in composed.config.items()
+    }
+    source_map = dict(composed.source_map)
+    replacement_sites = list(composed.replacement_sites)
+    mapping_sites = list(composed.mapping_sites)
+    overlay_mapping = {
+        key: _normalize_mapping_value(value, path=f"{_format_config_path(scope_path)}[{key!r}]")
+        for key, value in overlay.items()
+    }
+
+    parent, key, created_parent_paths = _ensure_scoped_overlay_parent(
+        config=staged,
+        path=scope_path,
+        source=source,
+        operation=operation,
+        details=details,
+    )
+    for created_path in created_parent_paths:
+        source_map[created_path] = source
+        if created_path not in mapping_sites:
+            mapping_sites.append(created_path)
+
+    target_exists = key in parent
+    if operation == "update" and not target_exists:
+        raise _scoped_overlay_error(
+            "Cannot update a missing scoped overlay target.",
+            code="missing_scoped_overlay_target",
+            path=scope_path,
+            source=source,
+            expected="existing target",
+            actual="missing",
+            details=details,
+        )
+    if operation == "add" and target_exists:
+        raise _scoped_overlay_error(
+            "Cannot add a scoped overlay at an existing target.",
+            code="existing_scoped_overlay_target",
+            path=scope_path,
+            source=source,
+            expected="missing target",
+            actual="existing",
+            details=details,
+        )
+
+    base_value = parent.get(key)
+    if target_exists and isinstance(base_value, Mapping):
+        if scope_path not in mapping_sites:
+            mapping_sites.append(scope_path)
+        source_map[scope_path] = source
+        merged_value = _merge_with_sources(
+            base=cast(Mapping[str, PlainData], base_value),
+            overlay=overlay_mapping,
+            path=scope_path,
+            source=source,
+            source_map=source_map,
+            replacement_sites=replacement_sites,
+            mapping_sites=mapping_sites,
+        )
+    else:
+        if "_replace_" in overlay_mapping:
+            merged_value = _merge_replace_mapping_with_sources(
+                base_value=base_value,
+                overlay_value=overlay_mapping,
+                path=scope_path,
+                source=source,
+                source_map=source_map,
+                replacement_sites=replacement_sites,
+                mapping_sites=mapping_sites,
+            )
+        else:
+            merged_value = dict(overlay_mapping)
+            _set_value_source(source_map, path=scope_path, value=merged_value, source=source)
+            if scope_path not in mapping_sites:
+                mapping_sites.append(scope_path)
+
+    parent[key] = cast(PlainData, merged_value)
+    return ComposedConfigWithSources(
+        config=staged,
+        source_map=source_map,
+        replacement_sites=tuple(replacement_sites),
+        mapping_sites=tuple(mapping_sites),
+    )
+
+
+def _ensure_scoped_overlay_parent(
+    *,
+    config: dict[str, PlainData],
+    path: ConfigPath,
+    source: ConfigSource,
+    operation: Literal["update", "add"],
+    details: Mapping[str, PlainData] | None,
+) -> tuple[dict[str, PlainData], str, tuple[ConfigPath, ...]]:
+    parent = config
+    created_paths: list[ConfigPath] = []
+    for index, segment in enumerate(path[:-1]):
+        current_path = path[: index + 1]
+        if not isinstance(segment, str):
+            raise _scoped_overlay_error(
+                "Scoped overlay path segments must be strings.",
+                code="invalid_scoped_overlay_path_segment",
+                path=current_path,
+                source=source,
+                expected="string path segment",
+                actual=type(segment).__name__,
+                details=details,
+            )
+        child = parent.get(segment)
+        if child is None:
+            if operation != "add":
+                raise _scoped_overlay_error(
+                    "Cannot update a scoped overlay through a missing parent.",
+                    code="missing_scoped_overlay_parent",
+                    path=current_path,
+                    source=source,
+                    expected="existing mapping parent",
+                    actual="missing",
+                    details=details,
+                )
+            new_child: dict[str, PlainData] = {}
+            parent[segment] = new_child
+            parent = new_child
+            created_paths.append(current_path)
+            continue
+        if not isinstance(child, dict):
+            raise _scoped_overlay_error(
+                "Cannot apply a scoped overlay through a non-mapping parent.",
+                code="non_mapping_scoped_overlay_parent",
+                path=current_path,
+                source=source,
+                expected="mapping parent",
+                actual=type(child).__name__,
+                details=details,
+            )
+        parent = child
+
+    final_key = path[-1]
+    if not isinstance(final_key, str):
+        raise _scoped_overlay_error(
+            "Scoped overlay final path segment must be a string.",
+            code="invalid_scoped_overlay_path_segment",
+            path=path,
+            source=source,
+            expected="string path segment",
+            actual=type(final_key).__name__,
+            details=details,
+        )
+    return parent, final_key, tuple(created_paths)
+
+
+def _scoped_overlay_error(
+    message: str,
+    *,
+    code: str,
+    path: ConfigPath,
+    source: ConfigSource,
+    expected: object | None = None,
+    actual: object | None = None,
+    details: Mapping[str, PlainData] | None = None,
+) -> ConfigMergeError:
+    payload: dict[str, PlainData] = {
+        "scope_path": [segment for segment in path],
+        **dict(details or {}),
+    }
+    return ConfigMergeError(
+        message,
+        context=ConfigErrorContext(
+            code=code,
+            source_kind="argv_scoped_overlay",
+            source_order=source.order,
+            source_path=source.path,
+            config_path=format_config_path(path),
+            expected=ensure_plain_data(expected) if expected is not None else None,
+            actual=ensure_plain_data(actual) if actual is not None else None,
+            directive="argv_scoped_overlay",
+            remediation=_scoped_overlay_remediation(code),
+            details=cast(dict[str, PlainData], ensure_plain_data(payload)),
+        ),
+    )
+
+
+def _scoped_overlay_remediation(code: str) -> str | None:
+    if code == "missing_scoped_overlay_target":
+        return "Use +scope/=... for new scoped overlay targets, or target an existing path."
+    if code == "existing_scoped_overlay_target":
+        return "Use update scoped overlay syntax for existing targets."
+    if code in {"missing_scoped_overlay_parent", "non_mapping_scoped_overlay_parent"}:
+        return "Choose a mapping parent path for the scoped overlay target."
+    if code == "invalid_scoped_overlay_root":
+        return "Use the base config path for root config selection; scoped overlays must target a non-root scope."
+    return None
 
 def build_base_source_map(
     mapping: Mapping[str, PlainData],
