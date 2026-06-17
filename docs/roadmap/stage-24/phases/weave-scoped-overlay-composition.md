@@ -238,8 +238,9 @@ make test-summary
 - Refinement validation: Manager reran `uv run pytest packages/weave/tests/contracts/test_config_composition_inspection_contract.py packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py` after the refinement pass; 10 tests passed. Focused `uv run ruff check packages/weave/src/weave/compose.py packages/weave/tests/contracts/test_config_composition_inspection_contract.py packages/weave/tests/integration/config/test_compose_argv_scoped_overlays.py` passed. Focused `uv run pyright packages/weave/src/weave/compose.py` reported 0 errors.
 - Refinement summary: Used the one expanded-path implementation/test refinement pass. The private argv inspection helper now emits the internal `argv_scoped_overlays` stage for argv-path inspection even when no scoped overlays are present, while public non-argv inspection remains unchanged. Added focused contract coverage for the zero-overlay private argv path.
 - Blocker-resolution summary: Used blocker-resolution pass 1/3 after `make validate-pr` exposed non-argv golden artifact regressions from empty scoped-overlay metadata keys. Adjusted provenance metadata so `argv_scoped_overlay_count`, `argv_scoped_overlays`, and source fact scoped-overlay records are emitted only when scoped overlays actually apply. Targeted rerun `PYTHONPATH=packages/weave uv run pytest packages/weave/tests/contracts/test_config_extraction_golden_artifacts_contract.py packages/weave/tests/test_config_port.py` passed (5 tests), focused Ruff passed, and focused Pyright reported 0 errors.
-- PR preparation: in progress; PR body drafted at
-  `docs/roadmap/stage-24/phases/weave-scoped-overlay-composition-pr-body.md`.
+- PR preparation: completed; PR body drafted at
+  `docs/roadmap/stage-24/phases/weave-scoped-overlay-composition-pr-body.md` and
+  used to open PR [#207](https://github.com/samcantrill/loom/pull/207).
 - PR preparation validation evidence: `make validate-pr` passed after the
   blocker-resolution fix, including Ruff, Pyright, builds, default pytest
   (`1982 passed, 108 deselected`), config-extra (`128 passed, 3 skipped, 1985
@@ -247,7 +248,10 @@ make test-summary
   `make test-summary` passed and wrote `build/test-summary.md` with overall
   `2522 passed, 0 failed, 0 errors, 3 skipped, 2087 deselected, 2525 total` in
   `313.90s`.
-- PR open metadata: pending push and GitHub PR creation.
+- PR open metadata: PR [#207](https://github.com/samcantrill/loom/pull/207) is
+  `OPEN`; verified with `gh pr view 207 --json baseRefName,headRefName,state,url`
+  returning base `develop`, head `codex/weave-scoped-overlay-composition`, and
+  URL `https://github.com/samcantrill/loom/pull/207`.
 - Stack maintenance: root PR targeting `develop`; no predecessor retargeting or
   rebase is needed before opening.
 - Remaining blockers: none recorded for PR preparation.
