@@ -25,9 +25,18 @@ jobs:
 
       - name: Configure weave dependency access
         env:
-          WEAVE_READ_TOKEN: ${{ secrets.WEAVE_READ_TOKEN || github.token }}
+          WEAVE_DEPLOY_KEY: ${{ secrets.WEAVE_DEPLOY_KEY }}
         run: |
-          git config --global url."https://x-access-token:${WEAVE_READ_TOKEN}@github.com/samcantrill/weave.git".insteadOf "https://github.com/samcantrill/weave.git"
+          if [ -z "${WEAVE_DEPLOY_KEY}" ]; then
+            echo "::error title=Missing WEAVE_DEPLOY_KEY::Add a read-only deploy key secret that can access samcantrill/weave."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "${WEAVE_DEPLOY_KEY}" > ~/.ssh/weave_deploy_key
+          chmod 600 ~/.ssh/weave_deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          git config --global core.sshCommand "ssh -i ~/.ssh/weave_deploy_key -o IdentitiesOnly=yes"
+          git config --global url."git@github.com:samcantrill/weave.git".insteadOf "https://github.com/samcantrill/weave.git"
 
       - name: Install dependencies
         run: uv sync --all-groups
