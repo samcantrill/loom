@@ -23,6 +23,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Configure weave dependency access
+        env:
+          WEAVE_READ_TOKEN: ${{ secrets.WEAVE_READ_TOKEN || github.token }}
+        run: |
+          git config --global url."https://x-access-token:${WEAVE_READ_TOKEN}@github.com/samcantrill/weave.git".insteadOf "https://github.com/samcantrill/weave.git"
+
       - name: Install dependencies
         run: uv sync --all-groups
 
