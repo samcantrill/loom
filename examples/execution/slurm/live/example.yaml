@@ -1,0 +1,31 @@
+id: execution.slurm.live
+title: SLURM Live Operations
+summary: Submit a small two-stage pipeline to SLURM, inspect scheduler-aware status, and cancel active jobs explicitly.
+capability: execution
+level: advanced
+introduced_in: v7
+status: illustrative
+validation: manual
+surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/execution/README.md
+  - docs/features/slurm-example-coverage.md
+owner_stages:
+  - v7
+validation_path: docs/features/slurm-example-coverage.md
+reason: Requires a real SLURM cluster and a shared filesystem visible to submit and compute nodes.
+prerequisites:
+  - Real SLURM cluster access with scheduler submission privileges.
+  - Shared filesystem access between `submit` and worker nodes for stage working directories.
+manual_rationale: >
+  Live SLURM job submission depends on external scheduler infrastructure and
+  site policy; it cannot be executed deterministically in default CI.
+entrypoints: []
+tags:
+  - slurm
+  - scheduler
+  - dry-run
+  - status
+  - cancellation

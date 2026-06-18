@@ -1,0 +1,98 @@
+"""Unit tests for SLURM dry-run script rendering."""
+
+from __future__ import annotations
+
+from typing import cast
+
+from loom.pipeline.executors.slurm import (
+    SlurmMode,
+    SlurmOptions,
+    SlurmPlannedJob,
+    SlurmSbatchDirective,
+    build_stage_job_command_argv,
+)
+from loom.pipeline.executors.slurm.planning import build_single_job_planned_submission
+from loom.pipeline.executors.slurm.rendering import (
+    render_command_argv,
+    render_dependency_value,
+    render_slurm_script,
+)
+from loom.pipeline.resources import ResourceEntry
+
+
+def test_command_renderer_shell_quotes_structured_argv() -> None:
+    command = build_stage_job_command_argv(
+        "file:///runs/run 1",
+        "stage-a",
+        launcher_argv=("uv", "run", "loom tool"),
+    )
+
+    assert render_command_argv(command) == (
+        "uv run 'loom tool' stage-job run --run-uri 'file:///runs/run 1' "
+        "--stage stage-a --executor local"
+    )
+
+
+def test_single_job_script_renders_directives_prelude_and_command() -> None:
+    options = SlurmOptions(
+        partition="debug",
+        prelude=("module load python", "export OMP_NUM_THREADS=1"),
+        extra_sbatch={"requeue": True},
+    )
+    submission = build_single_job_planned_submission(
+        run_uri="file:///runs/run-1",
+        planning_id="planning-1",
+        created_at="2026-05-08T00:00:00Z",
+        options=options,
+        resources={
+            "cpu": ResourceEntry(kind="cpu", amount=4, unit="count"),
+            "memory": ResourceEntry(kind="memory", amount=16, unit="GiB"),
+        },
+    )
+
+    job = cast(tuple[SlurmPlannedJob, ...], submission.jobs)[0]
+    script = render_slurm_script(job, options=options)
+
+    assert script == "\n".join(
+        (
+            "#!/usr/bin/env bash",
+            "#SBATCH --job-name=loom-planning-1-pipeline",
+            "#SBATCH --output=slurm/submissions/planning-1/logs/pipeline.stdout.log",
+            "#SBATCH --error=slurm/submissions/planning-1/logs/pipeline.stderr.log",
+            "#SBATCH --partition=debug",
+            "#SBATCH --cpus-per-task=4",
+            "#SBATCH --mem=16G",
+            "#SBATCH --requeue",
+            "",
+            "set -euo pipefail",
+            "",
+            "module load python",
+            "export OMP_NUM_THREADS=1",
+            "",
+            "loom prepared-run continue --run-uri file:///runs/run-1 --executor local",
+            "",
+        )
+    )
+
+
+def test_afterok_script_renders_logical_dependency_and_stage_job_command() -> None:
+    command = build_stage_job_command_argv("file:///runs/run-1", "report")
+    job = SlurmPlannedJob(
+        logical_key="stage:report",
+        mode=SlurmMode.AFTEROK,
+        command=command,
+        dependency_job_keys=("stage:extract", "stage:train"),
+        sbatch_directives=(
+            SlurmSbatchDirective(
+                name="dependency",
+                value=render_dependency_value(("stage:extract", "stage:train")),
+                source="generated",
+            ),
+        ),
+    )
+
+    script = render_slurm_script(job, options=SlurmOptions())
+
+    assert "#SBATCH --dependency=afterok:stage:extract:stage:train" in script
+    assert "loom stage-job run --run-uri file:///runs/run-1 --stage report --executor local" in script
+    assert "loom stage run" not in script

@@ -1,0 +1,213 @@
+"""Integration tests for local diagnostics preflight checks."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("yaml")
+pytest.importorskip("omegaconf")
+pytest.importorskip("pydantic")
+
+from loom.diagnostics import PreflightCheckStatus, PreflightRequest, PreflightStatus, run_preflight
+from loom.pipeline.stores import path_to_run_uri
+
+
+pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
+
+
+def test_full_local_preflight_passes_and_writes_no_run_documents(tmp_path: Path) -> None:
+    config_path = _write_valid_config(tmp_path)
+    run_dir = tmp_path / "runs" / "demo-run"
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            run_uri=path_to_run_uri(run_dir),
+        )
+    )
+
+    assert result.status is PreflightStatus.PASS
+    assert [check.check_id for check in result.checks] == [
+        "config.load",
+        "pipeline.graph",
+        "selectors.validate",
+        "runtime.options",
+        "runtime.profile",
+        "runtime.stage_options",
+        "run_uri.resolve",
+        "artifact_store.available",
+        "artifact_backends.registry",
+        "artifact_backends.handlers",
+        "artifact_backends.capabilities",
+        "artifact_backends.materialization",
+        "codec_registry.available",
+        "executor.local",
+        "executor.resolve",
+        "executor.capabilities",
+        "resources.capabilities",
+        "filesystem.input_exists",
+    ]
+    by_id = {check.check_id: check for check in result.checks}
+    assert all(
+        check.status is PreflightCheckStatus.PASS
+        for check in result.checks
+        if not check.check_id.startswith("artifact_backends.")
+    )
+    assert by_id["artifact_backends.registry"].status is PreflightCheckStatus.SKIP
+    assert by_id["artifact_backends.registry"].details["reason"] == (
+        "no_artifact_backend_targets"
+    )
+    assert not run_dir.exists()
+
+
+def test_selected_groups_run_only_selected_checks(tmp_path: Path) -> None:
+    config_path = _write_valid_config(tmp_path)
+
+    result = run_preflight(
+        PreflightRequest(config_path=config_path, groups=("pipeline", "selectors"))
+    )
+
+    assert result.status is PreflightStatus.PASS
+    assert [group.value for group in result.groups] == ["pipeline", "selectors"]
+    assert [check.check_id for check in result.checks] == [
+        "pipeline.graph",
+        "selectors.validate",
+    ]
+
+
+def test_selected_subprocess_preflight_reports_availability_without_run_documents(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_valid_config(tmp_path)
+    run_dir = tmp_path / "runs" / "subprocess-preflight"
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            run_uri=path_to_run_uri(run_dir),
+            runtime_options={"executor": "subprocess"},
+            groups=("executor",),
+        )
+    )
+
+    assert result.status is PreflightStatus.PASS
+    assert [check.check_id for check in result.checks] == [
+        "executor.local",
+        "executor.resolve",
+        "executor.capabilities",
+        "executor.subprocess.python",
+        "executor.subprocess.worker",
+    ]
+    assert all(check.status is PreflightCheckStatus.PASS for check in result.checks)
+    assert not run_dir.exists()
+
+
+def test_selected_docker_preflight_reports_readiness_without_run_documents(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    monkeypatch.setattr(
+        preflight_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "docker" else None,
+    )
+    config_path = _write_valid_config(tmp_path)
+    mount_path = tmp_path / "input"
+    mount_path.mkdir()
+    run_dir = tmp_path / "runs" / "docker-preflight"
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            run_uri=path_to_run_uri(run_dir),
+            runtime_options={
+                "executor": "docker",
+                "adapter_options": {
+                    "container": {
+                        "image": {"reference": "python:3.11-slim"},
+                        "mounts": [
+                            {
+                                "source": str(mount_path),
+                                "target": str(mount_path),
+                                "mode": "ro",
+                            }
+                        ],
+                    }
+                },
+            },
+            groups=("executor", "filesystem"),
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.PASS
+    assert by_id["executor.docker.command"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.docker.container_options"].status is PreflightCheckStatus.PASS
+    assert by_id["filesystem.docker.mount_sources"].status is PreflightCheckStatus.PASS
+    assert by_id["filesystem.docker.artifact_root_visible"].status is PreflightCheckStatus.PASS
+    assert not run_dir.exists()
+
+
+def test_omitted_run_uri_skips_only_run_path_dependent_checks(tmp_path: Path) -> None:
+    config_path = _write_valid_config(tmp_path)
+
+    result = run_preflight(PreflightRequest(config_path=config_path))
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.PASS
+    assert by_id["run_uri.resolve"].status is PreflightCheckStatus.SKIP
+    assert by_id["artifact_store.available"].status is PreflightCheckStatus.SKIP
+    assert by_id["filesystem.input_exists"].status is PreflightCheckStatus.PASS
+    assert by_id["config.load"].status is PreflightCheckStatus.PASS
+
+
+def test_selector_validation_reports_unknown_stage(tmp_path: Path) -> None:
+    config_path = _write_valid_config(tmp_path)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            groups=("selectors",),
+            selectors={"only_stages": ["missing"]},
+        )
+    )
+
+    assert result.status is PreflightStatus.FAIL
+    check = result.checks[0]
+    assert check.check_id == "selectors.validate"
+    assert check.details["error_type"] == "SelectorValidationError"
+
+
+def _write_valid_config(tmp_path: Path) -> Path:
+    config_path = tmp_path / "pipeline.yaml"
+    config_path.write_text(
+        """
+pipeline:
+  name: demo
+  stages:
+    - name: build
+      factory:
+        _target_: tests.support.pipeline_execution_stages.JsonProducerStage
+      config:
+        value: 1
+      outputs:
+        data:
+          artifact_type: json
+          codec_key: json.v1
+    - name: report
+      factory:
+        _target_: tests.support.pipeline_execution_stages.TextConsumerStage
+      inputs:
+        data: build.data
+      outputs:
+        text:
+          artifact_type: text
+          codec_key: text.v1
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return config_path

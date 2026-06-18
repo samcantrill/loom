@@ -1,0 +1,23 @@
+name: diagnostics-failing-run
+schema_version: 1
+pipeline:
+  name: diagnostics-failing-run
+  stages:
+    - name: build
+      factory:
+        _target_: stages:FailingStage
+      outputs:
+        data:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: report
+      factory:
+        _target_: stages:NeverRunsStage
+      depends_on: [build]
+      inputs:
+        data: build.data
+      outputs:
+        text:
+          artifact_type: text
+          codec_key: text.v1

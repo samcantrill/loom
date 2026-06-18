@@ -1,0 +1,4 @@
+pipeline:
+  settings:
+    mode: overlay
+    batch_size: 16

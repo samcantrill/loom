@@ -1,0 +1,27 @@
+id: operations.submitted-status
+title: Submitted Status
+summary: Create synthetic submitted run state and inspect it without scheduler queries.
+capability: operations
+level: intermediate
+introduced_in: v7
+status: runnable
+validation: smoke
+surface: internal_demo
+public_surfaces:
+  - internal_demo
+owner_docs:
+  - examples/operations/README.md
+  - docs/features/slurm-example-coverage.md
+owner_stages:
+  - v7
+validation_path: tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
+validation_command: uv run pytest tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
+entrypoints:
+  - path: run_submitted_status.py
+    kind: python
+    description: Write submitted run/store records and print ordinary status output summaries.
+tags:
+  - submitted
+  - status
+  - operations
+  - scheduler-free

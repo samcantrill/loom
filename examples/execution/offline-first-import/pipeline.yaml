@@ -1,0 +1,28 @@
+name: offline-first-import-example
+schema_version: 1
+pipeline:
+  name: offline-first-import-example
+  description: A small pipeline used to demonstrate offline evidence import.
+  stages:
+    - name: seed
+      factory:
+        _target_: stages:SeedNumbersStage
+      config:
+        values: [5, 10, 15]
+      outputs:
+        numbers:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: summarize
+      factory:
+        _target_: stages:SummarizeNumbersStage
+      inputs:
+        numbers: seed.numbers
+      outputs:
+        summary:
+          artifact_type: json
+          codec_key: json.v1
+        note:
+          artifact_type: text
+          codec_key: text.v1

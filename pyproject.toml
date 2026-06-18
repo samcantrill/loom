@@ -1,0 +1,89 @@
+[project]
+name = "loom"
+version = "0.1.0"
+description = "Loom is a lightweight runtime for composing, running, and tracing reproducible research pipelines."
+readme = "README.md"
+authors = [
+    { name = "Sam Cantrill", email = "sam.cantrill@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "weave",
+]
+
+[project.scripts]
+loom = "loom.cli.main:main"
+
+[project.optional-dependencies]
+config = [
+    "weave",
+]
+
+[tool.uv.sources]
+weave = { git = "https://github.com/samcantrill/weave.git" }
+
+[build-system]
+requires = [
+    "uv_build>=0.11.8,<0.12.0"
+]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "coverage",
+    "pytest",
+    "ruff",
+    "pyright",
+    "httpx>=0.28,<1",
+]
+
+[tool.coverage.run]
+source = [
+    "src/loom",
+]
+
+[tool.coverage.report]
+skip_empty = true
+
+[tool.pytest.ini_options]
+pythonpath = [
+    ".",
+]
+testpaths = [
+    "tests",
+]
+addopts = [
+    "--strict-markers",
+]
+markers = [
+    "unit: source-mirrored tests for code under src/loom",
+    "package: package import, metadata, and distribution smoke tests",
+    "integration: tests that combine multiple loom components without exercising a full user workflow",
+    "e2e: full end-to-end behavior tests through public APIs or CLI",
+    "contract: reusable behavior tests for extension-point implementations",
+    "slow: tests that are too slow for frequent targeted development runs",
+    "slurm: tests that require or simulate SLURM-specific execution behavior",
+    "network: tests that require network access",
+    "optional_dependency: tests that require optional dependencies outside the default dev environment",
+]
+
+[tool.pyright]
+include = [
+    "src",
+    "tests",
+    "tools",
+]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff]
+src = [
+    "src",
+    "tests",
+    "tools",
+]
+target-version = "py312"

@@ -1,0 +1,55 @@
+"""Contract coverage for queue repository operations."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from loom.queue import (
+    LaunchContract,
+    QueueClaimResult,
+    QueueItem,
+    QueueItemStatus,
+    QueueRepository,
+    RunIntent,
+    SQLiteQueueRepository,
+)
+
+
+def test_sqlite_queue_repository_satisfies_repository_protocol(tmp_path: Path) -> None:
+    repository = SQLiteQueueRepository(tmp_path / "queue.sqlite")
+
+    assert isinstance(repository, QueueRepository)
+
+
+def test_queue_repository_claim_contract_returns_claimed_item(tmp_path: Path) -> None:
+    repository = SQLiteQueueRepository(
+        tmp_path / "queue.sqlite",
+        clock=lambda: "2020-01-01T00:00:01Z",
+    )
+    repository.enqueue(_item("item-1", "2020-01-01T00:00:00Z"))
+
+    result = repository.claim_next(
+        "gpu-pool",
+        owner_id="controller-1",
+        claim_id="claim-1",
+    )
+
+    assert isinstance(result, QueueClaimResult)
+    assert result.item.status is QueueItemStatus.CLAIMED
+    assert result.item.claim is not None
+    assert result.item.claim.claim_id == "claim-1"
+    assert result.item.dispatch_attempt == 1
+
+
+def _item(item_id: str, enqueued_at: str) -> QueueItem:
+    run_uri = f"file:///runs/{item_id}"
+    return QueueItem(
+        queue_item_id=item_id,
+        queue_name="gpu",
+        pool_name="gpu-pool",
+        run_uri=run_uri,
+        run_intent=RunIntent(run_uri=run_uri),
+        launch_contract=LaunchContract(adapter="local", entrypoint="entry"),
+        enqueued_at=enqueued_at,
+        updated_at=enqueued_at,
+    )

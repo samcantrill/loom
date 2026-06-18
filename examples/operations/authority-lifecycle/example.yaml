@@ -1,0 +1,27 @@
+id: operations.authority-lifecycle
+title: Authority Lifecycle
+summary: Start, inspect, restart, and stop a local authority supervisor through the public CLI.
+capability: operations
+level: introductory
+introduced_in: v10
+status: runnable
+validation: smoke
+surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/operations/README.md
+  - docs/features/authority-example-coverage.md
+owner_stages:
+  - v10
+validation_path: tests/e2e/test_example_journeys.py::test_e2e_example_authority_lifecycle_cli
+validation_command: uv run pytest tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
+entrypoints:
+  - path: run_authority_lifecycle.py
+    kind: python
+    description: Start an authority supervisor, inspect status/doctor, restart it, and stop it.
+tags:
+  - authority
+  - lifecycle
+  - registry
+  - operations

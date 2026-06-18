@@ -1,0 +1,26 @@
+id: operations.resource-leases
+title: Resource Lease Coordination
+summary: Use the public authority client to set resource limits and acquire or release resource leases.
+capability: operations
+level: advanced
+introduced_in: v10
+status: runnable
+validation: full
+surface: python_api
+public_surfaces:
+  - python_api
+owner_docs:
+  - examples/operations/README.md
+  - docs/features/authority-example-coverage.md
+owner_stages:
+  - v10
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_resource_leases_coordinate_blocked_then_released_state
+entrypoints:
+  - path: run_resource_leases.py
+    kind: python
+    description: Start an authority supervisor, set a resource limit, and show lease conflict and release behavior.
+tags:
+  - authority
+  - resources
+  - leases
+  - coordination

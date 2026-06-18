@@ -1,0 +1,68 @@
+name: slurm-afterok-diamond
+schema_version: 1
+metadata:
+  secret_reference: ${oc.env:LOOM_EXAMPLE_SLURM_SECRET}
+runtime:
+  adapter_options:
+    slurm:
+      schema_version: 1
+      partition: shared
+      time: "00:10:00"
+      launcher_argv: [loom]
+  stage_options:
+    train:
+      resources:
+        entries:
+          cpu:
+            kind: cpu
+            amount: 2
+      adapter_options:
+        slurm:
+          schema_version: 1
+          partition: train
+    report:
+      adapter_options:
+        slurm:
+          schema_version: 1
+          partition: report
+          launcher_argv: [uv, run, loom]
+pipeline:
+  name: slurm-afterok-diamond
+  description: Diamond DAG for SLURM dependency planning.
+  stages:
+    - name: extract
+      factory:
+        _target_: stages:JsonStage
+      config:
+        value: ${oc.env:LOOM_EXAMPLE_SLURM_SECRET}
+      outputs:
+        data:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: features
+      depends_on: [extract]
+      factory:
+        _target_: stages:JsonStage
+      outputs:
+        data:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: train
+      depends_on: [extract]
+      factory:
+        _target_: stages:JsonStage
+      outputs:
+        data:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: report
+      depends_on: [features, train]
+      factory:
+        _target_: stages:JsonStage
+      outputs:
+        data:
+          artifact_type: json
+          codec_key: json.v1

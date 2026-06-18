@@ -1,0 +1,26 @@
+id: operations.offline-import-rejections
+title: Offline Import Rejections
+summary: Show stable rejection behavior for incomplete and conflicting offline evidence imports.
+capability: operations
+level: advanced
+introduced_in: v10
+status: runnable
+validation: full
+surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/operations/README.md
+  - docs/features/authority-example-coverage.md
+owner_stages:
+  - v10
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_offline_import_rejections_report_rejection_codes_and_acceptance
+entrypoints:
+  - path: run_offline_import_rejections.py
+    kind: python
+    description: Generate offline evidence, trigger import rejections, and print machine-readable error codes.
+tags:
+  - authority
+  - offline-import
+  - rejection
+  - diagnostics

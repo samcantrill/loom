@@ -1,0 +1,24 @@
+name: authority-backend-diagnostics
+schema_version: 1
+pipeline:
+  name: authority-backend-diagnostics
+  stages:
+    - name: seed
+      factory:
+        _target_: stages:SeedNumbersStage
+      config:
+        values: [1, 4, 9]
+      outputs:
+        numbers:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: summarize
+      factory:
+        _target_: stages:SummarizeNumbersStage
+      inputs:
+        numbers: seed.numbers
+      outputs:
+        summary:
+          artifact_type: json
+          codec_key: json.v1

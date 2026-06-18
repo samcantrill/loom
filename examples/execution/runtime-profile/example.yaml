@@ -1,0 +1,27 @@
+id: execution.runtime-profile
+title: Runtime Profile Run
+summary: Run a local pipeline with runtime profiles, resource requests, tags, notes, and safe runtime metadata.
+capability: execution
+level: intermediate
+introduced_in: v4
+status: runnable
+validation: smoke
+surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/execution/README.md
+  - docs/features/authority-example-coverage.md
+owner_stages:
+  - v4
+  - v10
+validation_path: tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
+validation_command: uv run pytest tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute
+entrypoints:
+  - path: run_runtime_profile.py
+    kind: python
+    description: Execute a runtime-profile run and print preflight/runtime metadata summaries.
+tags:
+  - runtime-profiles
+  - resources
+  - runtime-metadata

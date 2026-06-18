@@ -1,0 +1,14 @@
+name: offline-import-rejections
+schema_version: 1
+pipeline:
+  name: offline-import-rejections
+  stages:
+    - name: seed
+      factory:
+        _target_: stages:SeedNumbersStage
+      config:
+        values: [2, 3, 5]
+      outputs:
+        numbers:
+          artifact_type: json
+          codec_key: json.v1

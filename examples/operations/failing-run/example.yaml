@@ -1,0 +1,26 @@
+id: operations.failing-run
+title: Failing Run Diagnostics
+summary: Run a pipeline that fails and inspect the persisted failure diagnostics.
+capability: operations
+level: intermediate
+introduced_in: v3
+status: runnable
+validation: full
+surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/operations/README.md
+  - docs/features/authority-example-coverage.md
+owner_stages:
+  - v3
+  - v10
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_failing_run_reports_diagnostics_summary
+entrypoints:
+  - path: run_failure_diagnostics.py
+    kind: python
+    description: Execute an expected-failure run and print diagnostic summaries.
+tags:
+  - failure
+  - status
+  - artifacts

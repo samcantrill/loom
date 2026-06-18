@@ -1,0 +1,24 @@
+id: operations.resource-preflight
+title: Resource Preflight
+summary: Show local executor resource warnings and strict preflight escalation.
+capability: operations
+level: intermediate
+introduced_in: v4
+status: runnable
+validation: full
+surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/operations/README.md
+owner_stages:
+  - v4
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_resource_preflight_reports_resource_warnings_and_strict_exit
+entrypoints:
+  - path: run_resource_preflight.py
+    kind: python
+    description: Run resource preflight with and without strict warning escalation.
+tags:
+  - resources
+  - preflight
+  - strict

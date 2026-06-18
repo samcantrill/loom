@@ -1,0 +1,191 @@
+"""Unit tests for status models and serialization helpers."""
+
+from datetime import datetime, timezone
+
+import pytest
+
+from loom.pipeline.errors import StatusSerializationError
+from loom.pipeline.status import (
+    RunStatus,
+    RunStatusRecord,
+    StageStatus,
+    StageStatusRecord,
+    parse_run_status,
+    parse_stage_status,
+)
+from loom.timestamps import utc_timestamp
+
+
+def _ts(value: str) -> str:
+    return utc_timestamp(datetime.fromisoformat(value).replace(tzinfo=timezone.utc))
+
+
+def _common_ts() -> tuple[str, str]:
+    return _ts("2026-01-01T00:00:00"), _ts("2026-01-01T00:01:00")
+
+
+def test_run_status_parse() -> None:
+    assert parse_run_status("SUCCEEDED") is RunStatus.SUCCEEDED
+    assert parse_run_status("SUBMITTED") is RunStatus.SUBMITTED
+    assert parse_stage_status("FAILED") is StageStatus.FAILED
+    assert parse_stage_status("BLOCKED") is StageStatus.BLOCKED
+    assert parse_stage_status("SUBMITTED") is StageStatus.SUBMITTED
+
+
+def test_run_status_round_trip() -> None:
+    created, updated = _common_ts()
+    record = RunStatusRecord(
+        run_uri="run-1",
+        status=RunStatus.RUNNING,
+        created_at=created,
+        updated_at=updated,
+        message="running",
+        metadata={"x": 1},
+    )
+    payload = record.to_dict()
+    assert payload["status"] == "RUNNING"
+    assert RunStatusRecord.from_dict(payload) == record
+
+
+def test_stage_status_round_trip_and_owner_metadata() -> None:
+    _, updated = _common_ts()
+    record = StageStatusRecord(
+        run_uri="run-1",
+        stage_name="build",
+        status=StageStatus.SUCCEEDED,
+        updated_at=updated,
+        message=None,
+        attempt=3,
+        owner={"owner": "agent"},
+        metadata={"m": "n"},
+    )
+    payload = record.to_dict()
+    assert payload["status"] == "SUCCEEDED"
+    assert payload["stage_name"] == "build"
+    assert payload["attempt"] == 3
+    assert "stage_id" not in payload
+    assert "attempts" not in payload
+    assert StageStatusRecord.from_dict(payload) == record
+
+
+def test_blocked_stage_status_round_trip_is_distinct() -> None:
+    _, updated = _common_ts()
+    record = StageStatusRecord(
+        run_uri="run-1",
+        stage_name="downstream",
+        status=StageStatus.BLOCKED,
+        updated_at=updated,
+        attempt=1,
+        message="upstream failed",
+        metadata={"blocked_by": ["upstream"], "reason_code": "upstream_failed"},
+    )
+
+    assert record.status is StageStatus.BLOCKED
+    assert record.status not in {
+        StageStatus.FAILED,
+        StageStatus.SKIPPED,
+        StageStatus.STALE,
+        StageStatus.PENDING,
+    }
+    assert record.started_at is None
+    assert record.finished_at is None
+    assert record.owner == {}
+    assert StageStatusRecord.from_dict(record.to_dict()) == record
+
+
+def test_submitted_status_round_trips_without_execution_timestamps() -> None:
+    created, updated = _common_ts()
+    run = RunStatusRecord(
+        run_uri="run-1",
+        status=RunStatus.SUBMITTED,
+        created_at=created,
+        updated_at=updated,
+        metadata={"backend": "test-backend"},
+    )
+    stage = StageStatusRecord(
+        run_uri="run-1",
+        stage_name="build",
+        status=StageStatus.SUBMITTED,
+        updated_at=updated,
+        attempt=1,
+        metadata={"submitted": True},
+    )
+
+    assert RunStatusRecord.from_dict(run.to_dict()) == run
+    assert StageStatusRecord.from_dict(stage.to_dict()) == stage
+    assert run.started_at is None
+    assert run.finished_at is None
+    assert stage.started_at is None
+    assert stage.finished_at is None
+
+
+def test_status_record_rejects_invalid_schema_version() -> None:
+    created, updated = _common_ts()
+    payload = {
+        "run_uri": "run-1",
+        "status": "RUNNING",
+        "created_at": created,
+        "updated_at": updated,
+        "schema_version": 999,
+    }
+    with pytest.raises(StatusSerializationError, match="unsupported schema version"):
+        RunStatusRecord.from_dict(payload)
+
+
+def test_stage_status_record_rejects_invalid_schema_version() -> None:
+    _, updated = _common_ts()
+    with pytest.raises(StatusSerializationError, match="unsupported schema version"):
+        StageStatusRecord.from_dict(
+            {
+                "run_uri": "run-1",
+                "stage_name": "build",
+                "status": "SUCCEEDED",
+                "attempt": 1,
+                "updated_at": updated,
+                "schema_version": 999,
+            },
+        )
+
+
+def test_status_record_rejects_unknown_fields() -> None:
+    created, updated = _common_ts()
+    with pytest.raises(StatusSerializationError, match="unknown field"):
+        RunStatusRecord.from_dict(
+            {
+                "run_uri": "run-1",
+                "status": "RUNNING",
+                "created_at": created,
+                "updated_at": updated,
+                "schema_version": 1,
+                "unexpected": "field",
+            },
+        )
+
+
+def test_status_record_rejects_non_timestamp() -> None:
+    with pytest.raises(StatusSerializationError, match="timestamp"):
+        StageStatusRecord.from_dict(
+            {
+                "run_uri": "run-1",
+                "stage_name": "build",
+                "status": "SUCCEEDED",
+                "updated_at": "not-a-timestamp",
+                "schema_version": 1,
+                "attempt": 1,
+            },
+        )
+
+
+def test_status_record_rejects_bad_attempts() -> None:
+    _, updated = _common_ts()
+    with pytest.raises(StatusSerializationError, match="positive integer"):
+        StageStatusRecord.from_dict(
+            {
+                "run_uri": "run-1",
+                "stage_name": "build",
+                "status": "SUCCEEDED",
+                "updated_at": updated,
+                "schema_version": 1,
+                "attempt": 0,
+            },
+        )

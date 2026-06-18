@@ -1,0 +1,375 @@
+"""End-to-end local pipeline run through public Python APIs."""
+
+import json
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+
+from loom.pipeline import PipelineRunner, RunRequest
+from loom.pipeline.execution import (
+    create_authority_backed_serial_run_store,
+    create_offline_evidence_run_store,
+)
+from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
+from loom.pipeline.offline_evidence import read_offline_evidence_manifest
+from loom.pipeline.locks import RunLockRecord
+from loom.pipeline.planning import PlanAction
+from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.serialization import PlainData
+from tests.support.pipeline_execution_configs import local_execution_config
+
+
+pytest.importorskip("pydantic")
+pytest.importorskip("omegaconf")
+pytest.importorskip("yaml")
+
+from weave import (
+    RecipeCatalog,
+    compose_config,
+    compose_config_with_catalog,
+    register_recipe,
+)
+
+pytestmark = pytest.mark.e2e
+
+
+def _failure_config(target: str) -> dict[str, PlainData]:
+    return cast(
+        dict[str, PlainData],
+        {
+            "pipeline": {
+                "name": "failure-demo",
+                "stages": [
+                    {
+                        "name": "build",
+                        "factory": {"_target_": target},
+                        "outputs": {
+                            "data": {
+                                "artifact_type": "json",
+                                "codec_key": "json.v1",
+                            }
+                        },
+                    },
+                    {
+                        "name": "report",
+                        "factory": {
+                            "_target_": "tests.support.pipeline_execution_stages.TextConsumerStage"
+                        },
+                        "inputs": {"data": "build.data"},
+                        "outputs": {
+                            "text": {
+                                "artifact_type": "text",
+                                "codec_key": "text.v1",
+                            }
+                        },
+                    },
+                ],
+            }
+        },
+    )
+
+
+def _legacy_catalog_recipe(**_: Any) -> dict[str, Any]:
+    return {
+        "name": "legacy-pipeline",
+        "stages": [
+            {
+                "name": "legacy",
+                "factory": {
+                    "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                },
+                "config": {"value": 100},
+                "outputs": {
+                    "data": {"artifact_type": "json", "codec_key": "json.v1"},
+                },
+            }
+        ],
+    }
+
+
+def _explicit_catalog_recipe(**_: Any) -> dict[str, Any]:
+    return {
+        "name": "explicit-pipeline",
+        "stages": [
+            {
+                "name": "build",
+                "factory": {
+                    "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                },
+                "config": {"value": 1},
+                "outputs": {
+                    "data": {"artifact_type": "json", "codec_key": "json.v1"},
+                },
+            },
+            {
+                "name": "report",
+                "factory": {
+                    "_target_": "tests.support.pipeline_execution_stages.TextConsumerStage"
+                },
+                "inputs": {"data": "build.data"},
+                "outputs": {
+                    "text": {"artifact_type": "text", "codec_key": "text.v1"},
+                },
+            },
+        ],
+    }
+
+
+class _TrackingAuthorityBackedRunStore(AuthorityBackedSerialRunStore):
+    def __init__(self, run_root: Path) -> None:
+        super().__init__(
+            local_store=LocalRunStore(run_root),
+            authority_store=SQLitePerRunAuthorityStore(
+                clock=lambda: "2020-01-01T00:00:00Z"
+            ),
+        )
+        self.lock_events: list[str] = []
+
+    def acquire_run_lock(
+        self,
+        run_uri: str,
+        *,
+        owner: Mapping[str, Any] | None = None,
+    ) -> RunLockRecord:
+        self.lock_events.append("acquire")
+        return super().acquire_run_lock(run_uri, owner=owner)
+
+    def release_run_lock(self, run_uri: str, token: str) -> None:
+        self.lock_events.append("release")
+        super().release_run_lock(run_uri, token)
+
+
+def _run_uri(tmp_path: Path, name: str = "run1") -> str:
+    return path_to_run_uri(tmp_path / "runs" / name)
+
+
+def _run_store(tmp_path: Path):
+    return create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(
+            clock=lambda: "2020-01-01T00:00:00Z"
+        ),
+    )
+
+
+def test_local_pipeline_run_and_resume_from_config(tmp_path: Path) -> None:
+    counter_path = tmp_path / "counter.txt"
+    run_store = _run_store(tmp_path)
+    runner = PipelineRunner(run_store=run_store)
+    run_uri = _run_uri(tmp_path)
+
+    result = runner.run(
+        RunRequest(
+            config=local_execution_config(counter_path=counter_path), run_uri=run_uri
+        )
+    )
+    resumed = runner.run(
+        RunRequest(
+            config=local_execution_config(counter_path=counter_path),
+            run_uri=run_uri,
+            open_existing=True,
+        )
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert resumed.status == RunStatus.SUCCEEDED
+    assert resumed.stage_results["build"].action == PlanAction.REUSE
+    assert resumed.stage_results["report"].action == PlanAction.REUSE
+    assert counter_path.read_text(encoding="utf-8") == "1"
+    run_dir = tmp_path / "runs" / "run1"
+    for relative in [
+        "config/resolved.yaml",
+        "plan.json",
+        "status.json",
+        "artifacts.json",
+        "stages/build/inputs.json",
+        "stages/build/outputs.json",
+        "stages/build/fingerprint.json",
+        "stages/build/provenance.json",
+        "stages/report/inputs.json",
+        "stages/report/outputs.json",
+        "stages/report/fingerprint.json",
+        "stages/report/provenance.json",
+    ]:
+        assert (run_dir / relative).is_file(), relative
+
+
+def test_offline_first_pipeline_run_writes_evidence_manifest(tmp_path: Path) -> None:
+    run_store = create_offline_evidence_run_store(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(config=local_execution_config(), run_uri=run_uri)
+    )
+
+    manifest_path = run_store.offline_evidence_manifest_path(run_uri)
+    manifest = read_offline_evidence_manifest(manifest_path)
+    assert result.status == RunStatus.SUCCEEDED
+    assert manifest.complete
+    assert manifest.state_source["label"] == "offline_evidence"
+    assert manifest.state_source["authoritative"] is False
+    assert [stage.stage_name for stage in manifest.stages] == ["build", "report"]
+
+
+def test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_snapshots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "name: composed-e2e\n"
+        "metadata:\n"
+        "  runtime_root: ${oc.env:LOOM_E2E_RUNNER_ROOT}\n"
+        "pipeline:\n"
+        "  name: demo\n"
+        "  stages:\n"
+        "    - name: build\n"
+        "      factory:\n"
+        "        _target_: tests.support.pipeline_execution_stages.JsonProducerStage\n"
+        "      outputs:\n"
+        "        data:\n"
+        "          artifact_type: json\n"
+        "          codec_key: json.v1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOOM_E2E_RUNNER_ROOT", "/runtime/from-env")
+    composed = compose_config(config_path)
+    run_store = _run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(config=composed, run_uri=run_uri)
+    )
+
+    run_dir = tmp_path / "runs" / "run1"
+    composition_manifest_path = run_dir / "config" / "composition_manifest.json"
+    recipe_manifest_path = run_dir / "config" / "recipe_manifest.json"
+    persisted_wrapper = json.loads(
+        composition_manifest_path.read_text(encoding="utf-8")
+    )
+    serialized_wrapper = json.dumps(persisted_wrapper, sort_keys=True)
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert composed.resolved["metadata"] == {"runtime_root": "/runtime/from-env"}
+    assert run_store.read_composition_manifest(run_uri) == composed.manifest.to_dict()
+    assert run_store.read_recipe_manifest(run_uri) == composed.recipe_manifest
+    assert composition_manifest_path.is_file()
+    assert recipe_manifest_path.is_file()
+    assert persisted_wrapper["schema_version"] == 1
+    assert persisted_wrapper["run_uri"] == run_uri
+    assert set(persisted_wrapper) == {
+        "schema_version",
+        "run_uri",
+        "created_at",
+        "composition_manifest",
+    }
+    assert persisted_wrapper["composition_manifest"] == composed.manifest.to_dict()
+    assert "oc.env:LOOM_E2E_RUNNER_ROOT" in serialized_wrapper
+    assert "/runtime/from-env" not in serialized_wrapper
+    assert "source_snapshots" not in serialized_wrapper
+    assert not (run_dir / "config" / "resolved.yaml").exists()
+    assert not (run_dir / "config" / "resolved.redacted.yaml").exists()
+
+
+def test_local_pipeline_run_fails_with_blocked_outcomes(tmp_path: Path) -> None:
+    run_store = _run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(
+            config=_failure_config(
+                "tests.support.pipeline_execution_stages.FailingStage"
+            ),
+            run_uri=run_uri,
+        )
+    )
+    blocked = run_store.read_stage_status(run_uri, "report")
+
+    assert result.status == RunStatus.FAILED
+    assert result.stage_results["build"].status == StageStatus.FAILED
+    assert result.stage_results["report"].status == StageStatus.BLOCKED
+    assert blocked is not None
+    assert blocked.status == StageStatus.BLOCKED
+    assert blocked.metadata["blocked_by"] == ["build"]
+    assert blocked.metadata["reason_code"] == "upstream_failed"
+    assert run_store.read_events(run_uri)[-1].event_type == "run.failed"
+
+
+def test_local_pipeline_run_uses_explicit_catalog_without_global_recipes(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "name: catalog-demo\npipeline:\n  _recipe_: explicit_catalog_pipeline\n",
+        encoding="utf-8",
+    )
+    register_recipe("explicit_catalog_pipeline", _legacy_catalog_recipe)
+    catalog = RecipeCatalog()
+    catalog.register("explicit_catalog_pipeline", _explicit_catalog_recipe)
+    composed = compose_config_with_catalog(config_path, recipe_catalog=catalog)
+    run_store = _run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(config=composed.resolved, run_uri=run_uri)
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert set(result.stage_results) == {"build", "report"}
+
+
+def test_local_pipeline_run_keeps_factory_init_separate_from_stage_config(
+    tmp_path: Path,
+) -> None:
+    run_store = _run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+    config = {
+        "pipeline": {
+            "name": "factory-init-demo",
+            "stages": [
+                {
+                    "name": "build",
+                    "factory": {
+                        "_target_": "tests.support.pipeline_execution_stages.ConfiguredProducerStage",
+                        "init": {"constructor_value": 7},
+                    },
+                    "config": {"runtime_value": 11},
+                    "outputs": {
+                        "data": {"artifact_type": "json", "codec_key": "json.v1"},
+                    },
+                }
+            ],
+        }
+    }
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(config=config, run_uri=run_uri)
+    )
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root(run_uri))
+    payload = artifact_store.load(result.stage_results["build"].outputs["data"])
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert payload == {
+        "constructor": 7,
+        "runtime": 11,
+        "constructor_in_stage_config": False,
+    }
+
+
+def test_local_pipeline_run_records_events_and_lock_lifecycle(tmp_path: Path) -> None:
+    run_store = _TrackingAuthorityBackedRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(config=local_execution_config(), run_uri=run_uri)
+    )
+    events = run_store.read_events(run_uri)
+    event_types = [event.event_type for event in events]
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert event_types[:2] == ["run.created", "run.planned"]
+    assert event_types[-1] == "run.completed"
+    assert run_store.lock_events == ["acquire", "release"]
+    assert run_store.read_run_lock(run_uri) is None

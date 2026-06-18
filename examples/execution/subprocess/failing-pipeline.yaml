@@ -1,0 +1,13 @@
+name: subprocess-failure-example
+schema_version: 1
+pipeline:
+  name: subprocess-failure-example
+  description: One stage that fails after writing stderr.
+  stages:
+    - name: fail
+      factory:
+        _target_: stages:FailingNumbersStage
+      outputs:
+        data:
+          artifact_type: json
+          codec_key: json.v1
