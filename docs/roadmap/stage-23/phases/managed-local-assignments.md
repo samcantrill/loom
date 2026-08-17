@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: v23 Phase 2
 - Manifest: `docs/roadmap/stage-23/implementation-plan.md`
 - Branch: `agent/stage-23-p2-managed-local-assignments`
@@ -17,7 +17,9 @@
 - Workflow path: expanded because this phase adds a public provider protocol,
   config-v2 records, exclusive leases, renewal deadlines, and process/resource
   compensation
-- Blockers: none; Phase 1 merged through PR `#209`
+- Blockers: independent review proved that mixed per-slot release outcomes can
+  hide a retryable failure behind ownership loss and mark the whole assignment
+  released; the phase's 3/3 correction budget is exhausted
 
 ## Objective And Context
 
@@ -307,9 +309,12 @@ Final commands:
   passed Ruff, Pyright, the default and config-extra suites, and package build.
   A fresh `make test-summary` receipt passed with 2,172 tests passed, zero
   failures/errors, and three config-extra skips
-- Independent review: required after implementation; unused
-- Blocker corrections: 3/3; budget exhausted with no known blocker pending
-- PR and merge: pending
+- Independent review: completed on 2026-08-18; not merge eligible because a
+  supported multi-slot cleanup retry can report ownership loss for an
+  already-released slot while another slot remains transiently unreleased
+- Blocker corrections: 3/3; budget exhausted, so the newly identified release
+  aggregation blocker was recorded without a fourth implementation correction
+- PR and merge: blocked; PR not opened
 
 ## Completion Record
 
@@ -319,5 +324,5 @@ Final commands:
 | Tests added or updated | Assignment/provider tests cover ordered selection, partial compensation, discriminator safety, injection validation, and immutable public mappings. Local tests cover binding conflict, pre-start and terminal cleanup, evidence rejection, independent renewal, ownership loss, and deadline termination. Config/preflight tests cover v1/v2, inventory/collision rejection, read-only limits, and missing capabilities. Real-SQLite integration proves cross-instance slot exclusivity/capacity; controller integration covers cancellation and handle-commit compensation with static assignments. Package coverage asserts facade exports and import-light CLI help. |
 | Validated revision/tree state and evidence | Implementation tree based on `a3fba14`, validated at `7433524`. The executor-generated receipt exposed the import-light regression and was superseded after correction. Manager `make validate-pr` passed Ruff, Pyright, the default and config-extra suites, and package build. The fresh `build/test-summary.md` receipt passed: 2,172 passed, zero failures/errors, and three config-extra skips. |
 | Validation-relevant changes after evidence | Documentation-only workflow-state and completion-record updates after the validated implementation revision; no source, test, dependency, build, or validation configuration changed. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | No residual blocker in the corrected cluster. Crash-time recovery, reattachment, provider discovery, and background renewal remain intentionally out of scope. |
+| PR, review, and merge | Independent review found one product blocker; not merge eligible and PR not opened. |
+| Residual risk and cleanup | Blocker: `StaticSlotAssignmentProvider.release()` raises the first per-slot error, so a retry can surface ownership loss from an already-released slot and cause the adapter to finalize while another slot still has a retryable release failure. Smallest fix: aggregate all per-slot outcomes with retryable/internal failure taking precedence over ownership loss, plus a focused two-slot retry regression test. Crash-time recovery, reattachment, provider discovery, and background renewal remain intentionally out of scope. |

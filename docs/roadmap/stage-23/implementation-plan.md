@@ -5,9 +5,10 @@ Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 2 in progress
-Blockers: none; Phase 2's three allowed blocker corrections are complete and
-the implementation and durable test-receipt gates pass
+Current phase: Phase 2 blocked
+Blockers: independent review found that a mixed multi-slot release retry can
+misclassify unfinished cleanup as complete after the 3/3 correction budget was
+exhausted
 
 ## Summary
 
@@ -107,7 +108,7 @@ the implementation and durable test-receipt gates pass
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `safe-pool-cycles` | merged | `docs/roadmap/stage-23/phases/safe-pool-cycles.md` | `agent/stage-23-p1-safe-pool-cycles` | `#209` | Queue controller/repository, typed coordination/admission, and scalar local-process safety | Atomically reconcile/fill one pool with deferral, scalar renewal, terminal-before-release, and post-start compensation. |
-| 2 | `managed-local-assignments` | in_progress | `docs/roadmap/stage-23/phases/managed-local-assignments.md` | `agent/stage-23-p2-managed-local-assignments` | pending | Queue-local assignment/config/preflight and integration with the established local lifecycle | Exclusively bind and renew static slots, apply safe bindings, capture logs, and preserve Phase 1 compensation. |
+| 2 | `managed-local-assignments` | blocked | `docs/roadmap/stage-23/phases/managed-local-assignments.md` | `agent/stage-23-p2-managed-local-assignments` | not opened | Queue-local assignment/config/preflight and integration with the established local lifecycle | Exclusively bind and renew static slots, apply safe bindings, capture logs, and preserve Phase 1 compensation. |
 | 3 | `operator-status-proof` | pending | `docs/roadmap/stage-23/phases/operator-status-proof.md` | `agent/stage-23-p3-operator-status-proof` | pending | Repository read model, status/CLI rendering, docs, examples, and end-to-end proof | Expose redacted pool summaries and prove twelve items over three generic slots. |
 
 The phases are vertical rather than module-only. Phase 1 includes scalar lease
@@ -148,5 +149,5 @@ adds the operator contract and public proof without scheduling in CLI.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | PR `#209` squash-merged as `e099b58` | Implementation, 94-test phase matrix, `make validate-pr`, test summary, CI, and fresh manager review passed | No known blocker; accepted controller-death, unkillable-process, controller-local-limit, and non-durable-renewal risks remain | Worktree and local/remote phase branch removed |
-| 2 | pending | pending | pending | pending |
+| 2 | Not opened; independent review found a product blocker after the 3/3 correction budget was exhausted | Implementation and full validation passed before review; mixed multi-slot release failure precedence remains incorrect | A retry can treat an assignment as fully released while one slot lease remains held until expiry | Worktree and branch retained for an explicitly authorized continuation |
 | 3 | pending | pending | pending | pending |
