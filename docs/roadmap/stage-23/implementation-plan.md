@@ -5,9 +5,9 @@ Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 1 in progress
-Blockers: five Phase 1 product blockers are under one maintainer-authorized
-bounded correction beyond the normal 3/3 budget
+Current phase: Phase 2 in progress
+Blockers: none; Phase 2's three allowed blocker corrections are complete and
+the implementation and durable test-receipt gates pass
 
 ## Summary
 
