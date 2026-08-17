@@ -128,11 +128,22 @@ Assumptions:
   `max_dispatches_per_cycle` under `controller`.
   `QueueDispatchResult` and `QueueDispatchInspection` each carry the optional
   timestamp so the controller can aggregate it without interpreting adapter
-  leases.
-- Trust and failure boundaries: only coordination kind `capacity` can become
-  queue deferral. Invalid/unsupported work terminates as failed under existing
-  ownership wording. Unavailable/lost/internal coordination truth fails closed
-  for the cycle and is not silently retried as queue policy.
+  leases. Existing result construction that omits a disposition is normalized
+  from today's `complete`/status combination; new results emit an explicit
+  disposition. Validation rejects a deferred handle, a started terminal status,
+  and a completed active status rather than guessing between them.
+- Trust and failure boundaries: coordination stores are the sole classifier and
+  expose `capacity`, `invalid_or_unsupported`, `unavailable`, `ownership_lost`,
+  or `internal` on the public coordination error. SQLite, service, and test
+  backends assign that kind where the failure originates; service rejection
+  codes are mapped there, not parsed later. Admission copies the kind into its
+  decision. Only `capacity` can become queue deferral, and only after no process
+  was started and every partially acquired lease was confirmed released. A
+  failed or uncertain compensation is `internal`/`unavailable`, blocks fill,
+  and must not requeue the item as ordinary capacity. Invalid/unsupported work
+  terminates as failed under existing ownership wording. Unavailable,
+  ownership-loss, and internal truth fails closed for the cycle and is not
+  silently retried as queue policy.
 - Cross-phase contracts: Phase 2 may supply concrete assignment deferral
   and renewal through the same disposition, local lifecycle, and maintenance
   aggregation. Phase 3 consumes a pool snapshot but cannot weaken guards.
@@ -141,9 +152,10 @@ Assumptions:
   codes/identities. Legacy config and `run_once()` results remain readable.
 - Private choices the executor may simplify: exact enum/class names if existing
   public compatibility is clearer, SQL transaction strategy, internal step and
-  termination-state helpers, concrete UUID/token encoding, and compatibility
-  constructor/normalizer. Identity non-reuse, dispositions, deadlines, and
-  guarded semantics are fixed.
+  termination-state helpers, concrete UUID/token encoding, compensation result
+  plumbing, and compatibility constructor/normalizer. Do not add a second
+  admission result hierarchy, repository revision column, or recovery callback.
+  Identity non-reuse, dispositions, deadlines, and guarded semantics are fixed.
 
 ## Proportionality
 
@@ -166,23 +178,37 @@ Assumptions:
 | A stale owner cannot defer, attach a handle, complete, or cancel a newer attempt. | Repository transaction guards | Delayed controller mutation after claim/attempt ownership changed. | New work is lost or misreported. | Stale claim, owner, attempt, adapter, and handle cases. |
 | Same-owner reclaim at the same attempt still has a distinct claim identity. | Controller identity generation and repository | Controller restart resets its counter after a deferral. | Stale writer becomes indistinguishable from current owner. | Injected restart/reclaim test with unchanged owner and attempt. |
 | Only pre-start capacity pressure requeues an item. | Coordination classification, admission, then controller | Backend errors or text changes are mistaken for capacity. | Unsafe retry or hidden uncertainty. | Backend contract matrix and controller disposition tests. |
+| Capacity deferral proves partial acquisition was fully compensated. | Resource admission | `_release_partial()` currently suppresses release failures before returning a capacity-coded decision. | A leaked lease is hidden behind a normal FIFO retry. | Inject capacity after one acquisition, then cover confirmed release and release failure separately. |
 | A cycle never exceeds its single-controller active or dispatch budget. | Controller | Synchronous completions and repeated claims bypass a loop bound. | Unbounded cycle or excess managed work. | Mixed started/completed/deferred unit and integration cases. |
 | FIFO deferral cannot immediately reclaim the same item in one cycle. | Controller | Loop resumes after guarded requeue. | Busy loop and audit churn. | One deferral, one audit event, no later dispatch calls. |
 | Local scalar leases renew or the process is stopped before safe reuse; release follows observed exit. | Local adapter | Long runtime, cancellation, lease loss, or failed handle commit. | Overlapping or unrecorded local process. | Fake-clock renewal plus terminate/exit/commit-failure tests. |
 
 ## Implementation Slices
 
-1. Add structured coordination failure kinds across the public error, SQLite,
-   authority-service, and in-memory contract harness; make admission preserve
-   those kinds and remove message-based retryability.
+1. Add one structured kind to the public coordination error across SQLite,
+   authority-service, and the in-memory contract harness; map failures at those
+   boundaries, make admission preserve the kind, and replace its message-based
+   classification. Make partial-release outcome explicit enough that capacity
+   is returned only after confirmed compensation; do not add a parallel error
+   hierarchy or generic retry layer.
 2. Introduce the three canonical dispatch dispositions and compatibility
    normalization for existing fake, synchronous, custom, and delegated
    adapters.
-3. Harden repository operations: atomic claim, expected-identity mutation
-   guards, and audited claim deferral without changing DB schema v1.
+3. Harden repository operations without DB schema changes. Claim begins the
+   SQLite write transaction before FIFO selection. Deferral, handle commit,
+   active completion, and active cancellation receive the expected snapshot
+   identity from the acting controller and compare the applicable status,
+   claim ID/owner/attempt, adapter, and handle ID in that same transaction;
+   zero affected rows is a conflict. Queued operator cancellation remains a
+   compatibility path and has no fabricated claim/handle expectations.
 4. Harden managed-local scalar lifecycle with session ownership, 50%/80%
    renewal scheduling, terminal-before-release cancellation, and post-start
-   handle-commit compensation; aggregate the earliest maintenance timestamp.
+   handle-commit compensation. A rejected handle commit must address the live
+   process by the newly returned handle even though it was never persisted,
+   using private wiring around the existing cancellable adapter contract. Send
+   termination, escalate privately if needed, and retain leases until
+   `poll()` observes exit; an unconfirmed exit degrades the cycle. Aggregate the
+   earliest maintenance timestamp without persisting renewal updates.
 5. Add controller config/cycle behavior, preserve `run_once()`/foreground
    semantics, and prove the full path with unit, contract, and SQLite/local
    integration coverage.
@@ -192,9 +218,9 @@ Assumptions:
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | required | Public dispatch/cycle/config imports stay intentional and cheap. | Expected exports import without CLI, concrete store, or optional config imports. |
-| Unit | required | Dispositions, controller budgets, config, admission kinds, scalar renewal, and local compensation. | Reconcile/fill; replacement; defer; legacy `run_once()`; deadline/loss; exit-before-release. |
-| Contract | required | Repository guards, result/evidence serialization, and coordination parity. | Round trips; no deferred handle; safe local keys only; stable kind across backends. |
-| Integration | required | Real SQLite claim/defer/refill and managed-local scalar concurrency. | No duplicate/reused claim; stale writer conflicts; capacity queues; renewal/termination prevents overlap. |
+| Unit | required | Dispositions, controller budgets, config, admission kinds, scalar renewal, and local compensation. | Valid/invalid result combinations; legacy construction and `run_once()`; reconcile/fill and replacement; confirmed versus failed partial release; deadline/loss; exit-before-release. |
+| Contract | required | Repository guards, result/evidence serialization, and coordination parity. | Round trips; no deferred handle; safe local keys only; acquire and renew failures retain the same kind across backends without message dependence. |
+| Integration | required | Real SQLite claim/defer/refill and managed-local scalar concurrency. | Barrier claim has one winner; same-owner reclaim changes identity; stale defer/commit/complete/cancel each conflict; capacity queues only after compensation; renewal/termination prevents overlap. |
 | E2E / opt-in | deferred to Phase 3 | User-visible status and subprocess proof require assignment/logging. | Phase 1 has no standalone user journey beyond existing queue compatibility tests. |
 
 Targeted commands:
@@ -212,14 +238,20 @@ Final commands:
 ## Risks, Review, And Stops
 
 - Main risks: non-atomic SQLite guards; reusable runtime identities; invalid
-  disposition/field combinations; backend category drift; releasing a scalar
-  lease before exit; and overstating a controller-local limit.
+  disposition/field combinations; backend category drift; treating uncertain
+  compensation as capacity; releasing a scalar lease before exit; and
+  overstating a controller-local limit.
 - Review focus: transactions/affected rows, identity non-reuse, dispositions,
-  every stop condition, scalar renewal/termination ordering, and delegated and
-  legacy one-step compatibility.
-- Stop if: guards require queue DDL; a backend lacks a stable category; process
-  exit cannot be confirmed through the runner seam; or compatibility requires
-  changing locked behavior. Record evidence and return to the manager.
+  boundary-owned classification, compensation-before-deferral, every cycle stop
+  condition, scalar renewal/termination ordering, and delegated and legacy
+  one-step compatibility. Do not require a Cartesian backend-by-lifecycle matrix:
+  backend contracts prove kinds, while focused admission/controller tests prove
+  their consequences.
+- Stop if: guards require queue DDL; a backend cannot expose a stable kind
+  without reopening the public agreement; partial release cannot report enough
+  truth to distinguish safe deferral from uncertainty; process exit cannot be
+  confirmed through the runner seam; or compatibility requires changing locked
+  behavior. Record evidence and return to the manager.
 - Accepted debt and revisit trigger: active limit remains controller-local;
   revisit only for a demonstrated multi-controller quota requirement.
 
@@ -239,9 +271,10 @@ Final commands:
 ## Workflow State
 
 - Manager preparation: complete on 2026-08-17 against current `origin/develop`
-- Expanded planning: pending because the phase changes a public dispatch
-  result, SQLite concurrency and mutation fencing, and coordination failure
-  semantics
+- Expanded planning: complete on 2026-08-17 at `a3a80ca`; current-source review
+  clarified result compatibility, caller-supplied SQLite mutation expectations,
+  boundary-owned failure kinds, and compensation-before-deferral without adding
+  schema, retry, or recovery machinery
 - Implementation: not started
 - Refiner: optional for a qualified implementation/test blocker; unused
 - Pre-submit gate: not run
