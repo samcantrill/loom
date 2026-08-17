@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: v23 Phase 2
 - Manifest: `docs/roadmap/stage-23/implementation-plan.md`
 - Branch: `agent/stage-23-p2-managed-local-assignments`
@@ -316,7 +316,7 @@ Final commands:
 - Blocker corrections: 4 total; the first 3 consumed the normal budget and the
   maintainer explicitly authorized one bounded correction for the independent
   review finding
-- PR and merge: pending
+- PR and merge: PR `#210` open against `develop`; GitHub checks pending
 
 ## Completion Record
 
@@ -326,5 +326,5 @@ Final commands:
 | Tests added or updated | Assignment/provider tests cover ordered selection, partial compensation, discriminator safety, injection validation, and immutable public mappings. Local tests cover binding conflict, pre-start and terminal cleanup, evidence rejection, independent renewal, ownership loss, and deadline termination. Config/preflight tests cover v1/v2, inventory/collision rejection, read-only limits, and missing capabilities. Real-SQLite integration proves cross-instance slot exclusivity/capacity; controller integration covers cancellation and handle-commit compensation with static assignments. Package coverage asserts facade exports and import-light CLI help. |
 | Validated revision/tree state and evidence | Implementation tree based on `a3fba14`, validated at `3b8693d`. The executor-generated receipt exposed the import-light regression and was superseded after correction. Final manager `make validate-pr` passed Ruff, Pyright, the default and config-extra suites, and package build. The fresh `build/test-summary.md` receipt passed: 2,173 passed, zero failures/errors, and three config-extra skips. |
 | Validation-relevant changes after evidence | Documentation-only workflow-state and completion-record updates after the validated implementation revision; no source, test, dependency, build, or validation configuration changed. |
-| PR, review, and merge | Independent review found one product blocker; the maintainer-authorized correction and manager verification close it. PR pending. |
+| PR, review, and merge | Independent review found one product blocker; the maintainer-authorized correction and manager verification close it. PR `#210` is open against `develop`, is not draft, and was mergeable when created; CI is pending. |
 | Residual risk and cleanup | No known blocker. Mixed multi-slot release now preserves retryable/internal failure precedence until every slot is accounted for. Crash-time recovery, reattachment, provider discovery, and background renewal remain intentionally out of scope. |
