@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from loom.pipeline.stores import WorkspaceIdentity
+from loom.pipeline.stores import (
+    CoordinationFailureKind,
+    CoordinationStoreError,
+    LifecycleReason,
+    WorkspaceIdentity,
+)
 from loom.serialization import thaw_plain_data
 from loom.queue.assignments import (
     EnvironmentListBinding,
@@ -154,3 +159,65 @@ def test_static_slots_compensate_partial_acquisition_on_contention() -> None:
     assert decision.disposition is ResourceAssignmentDisposition.DEFERRED
     assert store.read_resource_limit("workspace", "gpu-0").value == 0  # type: ignore[union-attr]
     assert store.read_resource_limit("workspace", "gpu-1").value == 1  # type: ignore[union-attr]
+
+
+def test_static_slot_release_prioritizes_unfinished_mixed_outcome() -> None:
+    store = _MixedReleaseStore()
+    store.create_workspace(WorkspaceIdentity("workspace"))
+    store.set_resource_limit("workspace", "gpu-0", limit=1)
+    store.set_resource_limit("workspace", "gpu-1", limit=1)
+    provider = StaticSlotAssignmentProvider(
+        store,
+        workspace_id="workspace",
+        slots=(
+            StaticSlot("gpu", "zero", "gpu-0", "0"),
+            StaticSlot("gpu", "one", "gpu-1", "1"),
+        ),
+    )
+    decision = provider.acquire(
+        ResourceAssignmentRequest(
+            consumer_id="item",
+            pool_name="pool",
+            owner_id="owner",
+            session_id="session",
+            resources={"gpu": 2},
+            admitted_lease_ids=("scalar",),
+            lease_ttl_seconds=30,
+        )
+    )
+    assert decision.assignment is not None
+    assignment = decision.assignment
+    store.unavailable_lease_id = assignment.leases[0].lease.lease_id
+    reason = LifecycleReason(code="test_release", message="test release")
+
+    for _attempt in range(2):
+        with pytest.raises(CoordinationStoreError) as raised:
+            provider.release(assignment, reason=reason)
+        assert raised.value.kind is CoordinationFailureKind.UNAVAILABLE
+        assert store.read_resource_limit("workspace", "gpu-0").value == 1  # type: ignore[union-attr]
+        assert store.read_resource_limit("workspace", "gpu-1").value == 0  # type: ignore[union-attr]
+
+    with pytest.raises(CoordinationStoreError) as raised:
+        provider.release(assignment, reason=reason)
+    assert raised.value.kind is CoordinationFailureKind.OWNERSHIP_LOST
+    assert store.read_resource_limit("workspace", "gpu-0").value == 0  # type: ignore[union-attr]
+    assert store.read_resource_limit("workspace", "gpu-1").value == 0  # type: ignore[union-attr]
+
+
+class _MixedReleaseStore(InMemoryWorkspaceCoordinationStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.unavailable_lease_id: str | None = None
+        self.unavailable_failures_remaining = 2
+
+    def release_lease(self, lease_id, **kwargs):  # noqa: ANN001, ANN003, ANN201
+        if (
+            lease_id == self.unavailable_lease_id
+            and self.unavailable_failures_remaining > 0
+        ):
+            self.unavailable_failures_remaining -= 1
+            raise CoordinationStoreError(
+                "injected release outage",
+                kind=CoordinationFailureKind.UNAVAILABLE,
+            )
+        return super().release_lease(lease_id, **kwargs)

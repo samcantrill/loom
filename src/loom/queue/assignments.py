@@ -500,7 +500,13 @@ class StaticSlotAssignmentProvider:
     def release(
         self, assignment: ResourceAssignment, *, reason: LifecycleReason
     ) -> None:
+        from loom.pipeline.stores import (
+            CoordinationFailureKind,
+            CoordinationStoreError,
+        )
+
         first_error: Exception | None = None
+        first_unfinished_error: Exception | None = None
         for lease in reversed(assignment.leases):
             try:
                 self._store.release_lease(
@@ -512,6 +518,13 @@ class StaticSlotAssignmentProvider:
             except Exception as exc:  # noqa: BLE001
                 if first_error is None:
                     first_error = exc
+                if first_unfinished_error is None and (
+                    not isinstance(exc, CoordinationStoreError)
+                    or exc.kind is not CoordinationFailureKind.OWNERSHIP_LOST
+                ):
+                    first_unfinished_error = exc
+        if first_unfinished_error is not None:
+            raise first_unfinished_error
         if first_error is not None:
             raise first_error
 
