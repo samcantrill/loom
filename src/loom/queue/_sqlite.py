@@ -106,6 +106,7 @@ class SQLiteQueueRepository:
         owner_id = validate_queue_id(owner_id, "owner_id")
         claim_id = validate_queue_id(claim_id, "claim_id")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
                 SELECT item_json
@@ -132,7 +133,8 @@ class SQLiteQueueRepository:
                 claim=claim,
                 updated_at=now,
             )
-            _update_item(conn, claimed)
+            if _update_item(conn, claimed, expected=current) != 1:
+                raise QueueConflictError("queue item claim conflicted")
             _append_audit_event(
                 conn,
                 queue_item_id=claimed.queue_item_id,
@@ -151,10 +153,13 @@ class SQLiteQueueRepository:
         self,
         queue_item_id: str,
         handle: DispatchHandle,
+        *,
+        expected: QueueItem | None = None,
     ) -> QueueItem:
         queue_item_id = validate_queue_id(queue_item_id, "queue_item_id")
         with self._connect() as conn:
             current = _require_item(conn, queue_item_id)
+            _verify_expected(current, expected)
             if QueueItemStatus(current.status) is not QueueItemStatus.CLAIMED:
                 raise QueueConflictError("queue item is not claimed")
             if handle.dispatch_attempt != current.dispatch_attempt:
@@ -165,7 +170,8 @@ class SQLiteQueueRepository:
                 dispatch_handle=handle,
                 updated_at=handle.dispatched_at,
             )
-            _update_item(conn, updated)
+            if _update_item(conn, updated, expected=current) != 1:
+                raise QueueConflictError("queue item dispatch handle conflicted")
             _append_audit_event(
                 conn,
                 queue_item_id=updated.queue_item_id,
@@ -186,6 +192,7 @@ class SQLiteQueueRepository:
         *,
         status: QueueItemStatus,
         reason: str,
+        expected: QueueItem | None = None,
     ) -> QueueItem:
         queue_item_id = validate_queue_id(queue_item_id, "queue_item_id")
         status = QueueItemStatus(status)
@@ -193,6 +200,7 @@ class SQLiteQueueRepository:
             raise QueueConflictError("completion status must be SUCCEEDED, FAILED, or UNKNOWN")
         with self._connect() as conn:
             current = _require_item(conn, queue_item_id)
+            _verify_expected(current, expected)
             if current.terminal:
                 raise QueueConflictError("queue item is already terminal")
             if QueueItemStatus(current.status) not in {
@@ -202,7 +210,8 @@ class SQLiteQueueRepository:
                 raise QueueConflictError("queue item has not been dispatched")
             now = self._clock()
             updated = replace(current, status=status, updated_at=now)
-            _update_item(conn, updated)
+            if _update_item(conn, updated, expected=current) != 1:
+                raise QueueConflictError("queue item completion conflicted")
             _append_audit_event(
                 conn,
                 queue_item_id=updated.queue_item_id,
@@ -217,10 +226,13 @@ class SQLiteQueueRepository:
         self,
         queue_item_id: str,
         cancellation: CancellationRecord,
+        *,
+        expected: QueueItem | None = None,
     ) -> QueueItem:
         queue_item_id = validate_queue_id(queue_item_id, "queue_item_id")
         with self._connect() as conn:
             current = _require_item(conn, queue_item_id)
+            _verify_expected(current, expected)
             if current.terminal:
                 raise QueueConflictError("queue item is already terminal")
             updated = replace(
@@ -229,7 +241,8 @@ class SQLiteQueueRepository:
                 cancellation=cancellation,
                 updated_at=cancellation.requested_at,
             )
-            _update_item(conn, updated)
+            if _update_item(conn, updated, expected=current) != 1:
+                raise QueueConflictError("queue item cancellation conflicted")
             _append_audit_event(
                 conn,
                 queue_item_id=updated.queue_item_id,
@@ -243,6 +256,41 @@ class SQLiteQueueRepository:
             )
             conn.commit()
             return updated
+
+    def defer_item(
+        self,
+        queue_item_id: str,
+        *,
+        reason_code: str,
+        expected: QueueItem,
+    ) -> QueueItem:
+        queue_item_id = validate_queue_id(queue_item_id, "queue_item_id")
+        if not isinstance(reason_code, str) or not reason_code:
+            raise QueueConflictError("defer reason_code must be a non-empty string")
+        with self._connect() as conn:
+            current = _require_item(conn, queue_item_id)
+            _verify_expected(current, expected)
+            if QueueItemStatus(current.status) is not QueueItemStatus.CLAIMED:
+                raise QueueConflictError("only claimed queue items can be deferred")
+            now = self._clock()
+            deferred = replace(
+                current,
+                status=QueueItemStatus.QUEUED,
+                claim=None,
+                dispatch_handle=None,
+                updated_at=now,
+            )
+            if _update_item(conn, deferred, expected=current) != 1:
+                raise QueueConflictError("queue item deferral conflicted")
+            _append_audit_event(
+                conn,
+                queue_item_id=queue_item_id,
+                event_type="queue.item.deferred",
+                timestamp=now,
+                detail={"reason_code": reason_code},
+            )
+            conn.commit()
+            return deferred
 
     def scan_recovery(self) -> tuple[QueueRecoveryRecord, ...]:
         with self._connect() as conn:
@@ -400,26 +448,38 @@ def _insert_item(conn: Any, item: QueueItem, *, item_json: str | None = None) ->
     )
 
 
-def _update_item(conn: Any, item: QueueItem) -> None:
-    conn.execute(
-        """
+def _update_item(
+    conn: Any, item: QueueItem, *, expected: QueueItem | None = None
+) -> int:
+    query = """
         UPDATE queue_items
         SET queue_name = ?, pool_name = ?, run_uri = ?, status = ?,
             dispatch_attempt = ?, enqueued_at = ?, updated_at = ?, item_json = ?
         WHERE queue_item_id = ?
-        """,
-        (
-            item.queue_name,
-            item.pool_name,
-            item.run_uri,
-            QueueItemStatus(item.status).value,
-            item.dispatch_attempt,
-            item.enqueued_at,
-            item.updated_at,
-            _item_json(item),
-            item.queue_item_id,
-        ),
+    """
+    values: list[object] = [
+        item.queue_name,
+        item.pool_name,
+        item.run_uri,
+        QueueItemStatus(item.status).value,
+        item.dispatch_attempt,
+        item.enqueued_at,
+        item.updated_at,
+        _item_json(item),
+        item.queue_item_id,
+    ]
+    if expected is not None:
+        query += " AND item_json = ?"
+        values.append(_item_json(expected))
+    cursor = conn.execute(
+        query, tuple(values)
     )
+    return int(cursor.rowcount)
+
+
+def _verify_expected(current: QueueItem, expected: QueueItem | None) -> None:
+    if expected is not None and current != expected:
+        raise QueueConflictError("queue item mutation conflicted with a stale snapshot")
 
 
 def _item_row_values(item: QueueItem, *, item_json: str | None = None) -> tuple[object, ...]:

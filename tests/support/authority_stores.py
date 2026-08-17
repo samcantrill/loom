@@ -33,7 +33,9 @@ from loom.pipeline.stores import (
     CleanupReportFact,
     CleanupResultFact,
     ConcurrencyCounter,
+    CoordinationFailureKind,
     CoordinationRecoveryRecord,
+    CoordinationStoreError,
     LeaseKind,
     LeaseRecord,
     LeaseState,
@@ -1022,7 +1024,9 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         resource_limit = self._resource_limits.get((workspace_id, resource_key))
         active_amount = self._active_resource_amount(workspace_id, resource_key)
         if resource_limit is not None and active_amount + amount > resource_limit:
-            raise ValueError("resource limit exceeded")
+            raise CoordinationStoreError(
+                "resource limit exceeded", kind=CoordinationFailureKind.CAPACITY
+            )
         lease = self._new_lease(
             kind=LeaseKind.RESOURCE,
             owner_id=owner_id,
@@ -1304,11 +1308,17 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
     ) -> LeaseRecord:
         lease = self._leases[lease_id]
         if lease.owner_id != owner_id or lease.fencing_token != fencing_token:
-            raise ValueError("stale or foreign lease token")
+            raise CoordinationStoreError(
+                "stale or foreign lease token", kind=CoordinationFailureKind.OWNERSHIP_LOST
+            )
         if lease.state is not LeaseState.ACTIVE:
-            raise ValueError("lease is not active")
+            raise CoordinationStoreError(
+                "lease is not active", kind=CoordinationFailureKind.OWNERSHIP_LOST
+            )
         if self._lease_expired(lease):
-            raise ValueError("lease has expired")
+            raise CoordinationStoreError(
+                "lease has expired", kind=CoordinationFailureKind.OWNERSHIP_LOST
+            )
         return lease
 
     def _replace_coordination_lease(self, lease: LeaseRecord) -> None:

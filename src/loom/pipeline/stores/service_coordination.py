@@ -15,6 +15,7 @@ from .capabilities import (
 )
 from .coordination import (
     ConcurrencyCounter,
+    CoordinationFailureKind,
     CoordinationRecoveryRecord,
     CoordinationStoreError,
     ResourceLeaseRecord,
@@ -317,9 +318,13 @@ def _accepted(response: AuthorityProtocolResponse) -> AuthorityProtocolResult:
         return response.result
     rejection = response.rejection
     if rejection is None:
-        raise CoordinationStoreError("authority coordination response was invalid")
+        raise CoordinationStoreError(
+            "authority coordination response was invalid",
+            kind=CoordinationFailureKind.INTERNAL,
+        )
     raise CoordinationStoreError(
-        f"{rejection.code}: {rejection.message}; detail={dict(rejection.detail)}"
+        f"{rejection.code}: {rejection.message}; detail={dict(rejection.detail)}",
+        kind=_rejection_kind(rejection.code),
     )
 
 
@@ -327,6 +332,18 @@ def _required(value: _T | None, field: str) -> _T:
     if value is None:
         raise CoordinationStoreError(f"authority response missing {field}")
     return value
+
+
+def _rejection_kind(code: str) -> CoordinationFailureKind:
+    if code in {"resource_limit_exceeded", "counter_limit_exceeded"}:
+        return CoordinationFailureKind.CAPACITY
+    if code in {"unsupported_resource", "invalid_request", "invalid_resource"}:
+        return CoordinationFailureKind.INVALID_OR_UNSUPPORTED
+    if code in {"stale_generation", "lease_not_active", "lease_expired", "stale_lease"}:
+        return CoordinationFailureKind.OWNERSHIP_LOST
+    if code in {"service_unavailable", "authority_unavailable"}:
+        return CoordinationFailureKind.UNAVAILABLE
+    return CoordinationFailureKind.INTERNAL
 
 
 __all__ = ["ServiceWorkspaceCoordinationStore"]

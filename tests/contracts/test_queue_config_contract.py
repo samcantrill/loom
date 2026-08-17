@@ -61,3 +61,18 @@ def test_queue_service_spec_contract_shape() -> None:
         },
         "metadata": {"workspace": "demo"},
     }
+
+
+def test_queue_config_schema_v2_normalizes_positive_cycle_limits() -> None:
+    spec = normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "pools": [{"pool_name": "pool", "mode": "managed"}],
+            "queues": [{"queue_name": "queue", "pool_name": "pool"}],
+            "controller": {"max_active_items": 3},
+        }
+    )
+
+    assert spec.controller.max_active_items == 3
+    assert spec.controller.max_dispatches_per_cycle is None
+    assert spec.to_dict()["controller"]["max_active_items"] == 3

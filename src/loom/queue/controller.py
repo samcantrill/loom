@@ -4,33 +4,57 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from typing import Protocol, cast, runtime_checkable
+from uuid import uuid4
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
-from loom.timestamps import utc_timestamp
+from loom.timestamps import parse_timestamp, utc_timestamp
 
 from .errors import QueueServiceError
 from .models import DispatchHandle, QueueItem, QueueItemStatus, QueueRecoveryRecord
 from .service import QueueService
 
 
+class QueueDispatchDisposition(StrEnum):
+    """Canonical externally observable dispatch outcomes."""
+
+    STARTED = "started"
+    COMPLETED = "completed"
+    DEFERRED = "deferred"
+
+
 @dataclass(frozen=True, slots=True)
 class QueueDispatchResult:
     """Result returned by a queue dispatch adapter."""
 
-    handle_id: str
+    handle_id: str | None = None
     status: QueueItemStatus = QueueItemStatus.SUCCEEDED
     reason: str = "fake-dispatch-completed"
     evidence: Mapping[str, PlainData] = field(default_factory=dict)
     complete: bool = True
+    disposition: QueueDispatchDisposition | str | None = None
+    next_maintenance_at: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.handle_id, str) or not self.handle_id:
-            raise QueueServiceError("handle_id must be a non-empty string")
         status = QueueItemStatus(self.status)
-        if self.complete:
+        disposition = (
+            QueueDispatchDisposition.COMPLETED
+            if self.complete
+            else QueueDispatchDisposition.STARTED
+        ) if self.disposition is None else QueueDispatchDisposition(self.disposition)
+        if disposition is QueueDispatchDisposition.DEFERRED:
+            if self.handle_id is not None:
+                raise QueueServiceError("deferred dispatch result cannot have a handle_id")
+            if not self.complete or status is QueueItemStatus.DISPATCHED:
+                raise QueueServiceError("deferred dispatch result must be complete before start")
+        elif not isinstance(self.handle_id, str) or not self.handle_id:
+            raise QueueServiceError("dispatch result handle_id must be a non-empty string")
+        if disposition is QueueDispatchDisposition.COMPLETED:
+            if not self.complete:
+                raise QueueServiceError("completed dispatch result must be complete")
             if status not in {
                 QueueItemStatus.SUCCEEDED,
                 QueueItemStatus.FAILED,
@@ -39,9 +63,12 @@ class QueueDispatchResult:
                 raise QueueServiceError(
                     "completed dispatch result status must be SUCCEEDED, FAILED, or UNKNOWN"
                 )
-        elif status is not QueueItemStatus.DISPATCHED:
+        elif disposition is QueueDispatchDisposition.STARTED and (
+            self.complete or status is not QueueItemStatus.DISPATCHED
+        ):
             raise QueueServiceError("active dispatch result status must be DISPATCHED")
         object.__setattr__(self, "status", status)
+        object.__setattr__(self, "disposition", disposition)
         if not isinstance(self.reason, str) or not self.reason:
             raise QueueServiceError("reason must be a non-empty string")
         try:
@@ -51,6 +78,12 @@ class QueueDispatchResult:
         if not isinstance(evidence, Mapping):
             raise QueueServiceError("evidence must be a mapping")
         object.__setattr__(self, "evidence", evidence)
+        if self.next_maintenance_at is not None:
+            if not isinstance(self.next_maintenance_at, str):
+                raise QueueServiceError("next_maintenance_at must be a timestamp string or None")
+            object.__setattr__(
+                self, "next_maintenance_at", utc_timestamp(parse_timestamp(self.next_maintenance_at))
+            )
 
 
 class QueueDispatchAdapter(Protocol):
@@ -70,11 +103,15 @@ class QueueDispatchInspection:
     evidence: Mapping[str, PlainData] = field(default_factory=dict)
     terminal: bool = False
     handoff_complete: bool = False
+    next_maintenance_at: str | None = None
+    degraded: bool = False
 
     def __post_init__(self) -> None:
         status = QueueItemStatus(self.status)
         if not isinstance(self.handoff_complete, bool):
-            raise QueueServiceError("handoff_complete must be a boolean")
+                raise QueueServiceError("handoff_complete must be a boolean")
+        if not isinstance(self.degraded, bool):
+            raise QueueServiceError("degraded must be a boolean")
         if self.terminal:
             if status not in {
                 QueueItemStatus.SUCCEEDED,
@@ -101,6 +138,12 @@ class QueueDispatchInspection:
         if not isinstance(evidence, Mapping):
             raise QueueServiceError("evidence must be a mapping")
         object.__setattr__(self, "evidence", evidence)
+        if self.next_maintenance_at is not None:
+            if not isinstance(self.next_maintenance_at, str):
+                raise QueueServiceError("next_maintenance_at must be a timestamp string or None")
+            object.__setattr__(
+                self, "next_maintenance_at", utc_timestamp(parse_timestamp(self.next_maintenance_at))
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +231,26 @@ class QueueDrainResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class QueueCycleResult:
+    """Plain-data result of reconciling and filling one selected pool."""
+
+    reconciliation_steps: tuple[QueueControllerStep, ...]
+    dispatch_steps: tuple[QueueControllerStep, ...]
+    active_count: int
+    capacity_blocked: bool
+    next_maintenance_at: str | None
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "reconciliation_steps": [step.to_dict() for step in self.reconciliation_steps],
+            "dispatch_steps": [step.to_dict() for step in self.dispatch_steps],
+            "active_count": self.active_count,
+            "capacity_blocked": self.capacity_blocked,
+            "next_maintenance_at": self.next_maintenance_at,
+        }
+
+
 class QueueController:
     """Claim queued items and dispatch them through injected adapters."""
 
@@ -203,7 +266,69 @@ class QueueController:
         self._adapters = dict(adapters) if adapters is not None else {"fake": FakeQueueDispatchAdapter()}
         self._owner_id = owner_id or service.spec.controller.owner_id
         self._clock = clock
-        self._claim_counter = 0
+        self._session_id = uuid4().hex
+
+    def run_cycle(self, *, pool_name: str) -> QueueCycleResult:
+        """Reconcile one pool then fill it within its controller-local budgets."""
+        if not isinstance(pool_name, str) or not pool_name:
+            raise QueueServiceError("run_cycle requires one non-empty pool_name")
+        reconciliation, degraded, deadlines = self._reconcile_all(pool_name)
+        active_count = self._active_count(pool_name)
+        dispatch_steps: list[QueueControllerStep] = []
+        capacity_blocked = False
+        if not degraded:
+            limit = self._service.spec.controller.max_active_items
+            budget = self._service.spec.controller.max_dispatches_per_cycle or limit
+            while active_count < limit and len(dispatch_steps) < budget:
+                claim = self._service.claim_next(
+                    pool_name, owner_id=self._owner_id, claim_id=self._next_claim_id()
+                )
+                if claim is None:
+                    break
+                item = claim.item
+                result = self._safe_dispatch(item)
+                if result.disposition is QueueDispatchDisposition.DEFERRED:
+                    deferred = self._service.defer_item(
+                        item.queue_item_id, reason_code=result.reason, expected=item
+                    )
+                    dispatch_steps.append(QueueControllerStep("deferred", deferred))
+                    capacity_blocked = True
+                    break
+                handle = DispatchHandle(
+                    adapter=item.launch_contract.adapter,
+                    handle_id=cast(str, result.handle_id),
+                    dispatched_at=self._clock(),
+                    dispatch_attempt=item.dispatch_attempt,
+                    evidence=_thaw_evidence(result.evidence),
+                )
+                try:
+                    persisted = self._service.record_dispatch_handle(
+                        item.queue_item_id, handle, expected=item
+                    )
+                except Exception:
+                    self._compensate_uncommitted_start(item, handle)
+                    raise
+                if result.disposition is QueueDispatchDisposition.COMPLETED:
+                    persisted = self._service.complete_item(
+                        item.queue_item_id,
+                        status=result.status,
+                        reason=result.reason,
+                        expected=persisted,
+                    )
+                else:
+                    active_count += 1
+                    if result.next_maintenance_at is not None:
+                        deadlines.append(result.next_maintenance_at)
+                dispatch_steps.append(
+                    QueueControllerStep("dispatched", persisted, handle)
+                )
+        return QueueCycleResult(
+            reconciliation_steps=tuple(reconciliation),
+            dispatch_steps=tuple(dispatch_steps),
+            active_count=self._active_count(pool_name),
+            capacity_blocked=capacity_blocked,
+            next_maintenance_at=min(deadlines) if deadlines else None,
+        )
 
     def run_once(
         self,
@@ -227,32 +352,28 @@ class QueueController:
             if claim is None:
                 continue
             item = claim.item
-            try:
-                result = self._dispatch(item)
-            except Exception as exc:  # noqa: BLE001
-                result = QueueDispatchResult(
-                    handle_id=f"dispatch-error:{item.queue_item_id}:{item.dispatch_attempt}",
-                    status=QueueItemStatus.UNKNOWN,
-                    reason="adapter dispatch failed",
-                    evidence={
-                        "adapter": item.launch_contract.adapter,
-                        "exception_type": type(exc).__name__,
-                        "message": str(exc),
-                    },
+            result = self._safe_dispatch(item)
+            if result.disposition is QueueDispatchDisposition.DEFERRED:
+                deferred = self._service.defer_item(
+                    item.queue_item_id, reason_code=result.reason, expected=item
                 )
+                return QueueControllerStep(outcome="deferred", item=deferred)
             handle = DispatchHandle(
                 adapter=item.launch_contract.adapter,
-                handle_id=result.handle_id,
+                handle_id=cast(str, result.handle_id),
                 dispatched_at=self._clock(),
                 dispatch_attempt=item.dispatch_attempt,
                 evidence=_thaw_evidence(result.evidence),
             )
-            self._service.record_dispatch_handle(item.queue_item_id, handle)
-            if result.complete:
+            persisted = self._service.record_dispatch_handle(
+                item.queue_item_id, handle, expected=item
+            )
+            if result.disposition is QueueDispatchDisposition.COMPLETED:
                 completed = self._service.complete_item(
                     item.queue_item_id,
                     status=result.status,
                     reason=result.reason,
+                    expected=persisted,
                 )
             else:
                 completed = self._service.read_item(item.queue_item_id)
@@ -300,12 +421,14 @@ class QueueController:
                     requested_by=self._owner_id,
                     reason=inspection.reason,
                     evidence=_thaw_evidence(inspection.evidence),
+                    expected=item,
                 )
                 return QueueControllerStep(outcome="cancelled", item=cancelled)
             completed = self._service.complete_item(
                 item.queue_item_id,
                 status=inspection.status,
                 reason=inspection.reason,
+                expected=item,
             )
             return QueueControllerStep(outcome="completed", item=completed)
         return QueueControllerStep(outcome="idle")
@@ -338,6 +461,7 @@ class QueueController:
             requested_by=requested_by,
             reason=reason,
             evidence=evidence,
+            expected=item,
         )
         return QueueControllerStep(outcome="cancelled", item=cancelled)
 
@@ -386,6 +510,115 @@ class QueueController:
             )
         return adapter.dispatch(item)
 
+    def _safe_dispatch(self, item: QueueItem) -> QueueDispatchResult:
+        try:
+            return self._dispatch(item)
+        except Exception as exc:  # noqa: BLE001
+            return QueueDispatchResult(
+                handle_id=f"dispatch-error:{item.queue_item_id}:{item.dispatch_attempt}",
+                status=QueueItemStatus.UNKNOWN,
+                reason="adapter dispatch failed",
+                evidence={
+                    "adapter": item.launch_contract.adapter,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+
+    def _reconcile_all(
+        self, pool_name: str
+    ) -> tuple[list[QueueControllerStep], bool, list[str]]:
+        steps: list[QueueControllerStep] = []
+        degraded = False
+        deadlines: list[str] = []
+        for item in self._service.recovery_items():
+            if item.pool_name != pool_name:
+                continue
+            if not self._owned_by_current_session(item):
+                continue
+            try:
+                step = self._reconcile_item(item, deadlines)
+            except Exception:  # an item-local failure is recorded and fill is stopped
+                degraded = True
+                continue
+            steps.append(step)
+            if step.outcome == "unknown":
+                degraded = True
+        return steps, degraded, deadlines
+
+    def _reconcile_item(self, item: QueueItem, deadlines: list[str]) -> QueueControllerStep:
+        if QueueItemStatus(item.status) is QueueItemStatus.CLAIMED:
+            return self._complete_unknown(
+                item,
+                reason="queue item was claimed but no dispatch handle was recorded",
+                evidence={"recovery_needed": True, "recovery_status": "claimed"},
+            )
+        adapter = self._adapters.get(item.launch_contract.adapter)
+        if adapter is None or not isinstance(adapter, QueueInspectableDispatchAdapter):
+            return self._complete_unknown(
+                item,
+                reason=f"adapter status unavailable: {item.launch_contract.adapter}",
+                evidence={"adapter": item.launch_contract.adapter, "recovery_needed": True},
+            )
+        inspection = adapter.inspect(item)
+        if inspection.next_maintenance_at is not None:
+            deadlines.append(inspection.next_maintenance_at)
+        if not inspection.terminal:
+            if inspection.degraded:
+                return QueueControllerStep("degraded", item)
+            return QueueControllerStep("handoff" if inspection.handoff_complete else "active", item)
+        if inspection.status is QueueItemStatus.CANCELLED:
+            return QueueControllerStep(
+                "cancelled",
+                self._service.cancel_item(
+                    item.queue_item_id,
+                    requested_by=self._owner_id,
+                    reason=inspection.reason,
+                    evidence=_thaw_evidence(inspection.evidence),
+                    expected=item,
+                ),
+            )
+        return QueueControllerStep(
+            "completed",
+            self._service.complete_item(
+                item.queue_item_id,
+                status=inspection.status,
+                reason=inspection.reason,
+                expected=item,
+            ),
+        )
+
+    def _active_count(self, pool_name: str) -> int:
+        return sum(
+            1
+            for item in self._service.recovery_items()
+            if item.pool_name == pool_name
+            and QueueItemStatus(item.status) in {QueueItemStatus.CLAIMED, QueueItemStatus.DISPATCHED}
+        )
+
+    def _owned_by_current_session(self, item: QueueItem) -> bool:
+        if item.launch_contract.adapter != "local" or item.dispatch_handle is None:
+            return True
+        managed = item.dispatch_handle.evidence.get("managed_local")
+        if not isinstance(managed, Mapping):
+            return True
+        adapter = self._adapters.get(item.launch_contract.adapter)
+        session_id = getattr(adapter, "session_id", None)
+        return isinstance(session_id, str) and managed.get("session_id") == session_id
+
+    def _compensate_uncommitted_start(self, item: QueueItem, handle: DispatchHandle) -> None:
+        adapter = self._adapters.get(item.launch_contract.adapter)
+        if adapter is None or not isinstance(adapter, QueueCancellableDispatchAdapter):
+            return
+        live_item = replace(
+            item,
+            status=QueueItemStatus.DISPATCHED,
+            dispatch_handle=handle,
+            updated_at=handle.dispatched_at,
+        )
+        adapter.cancel(
+            live_item, requested_by=self._owner_id, reason="queue-handle-commit-failed"
+        )
+
     def _complete_unknown(
         self,
         item: QueueItem,
@@ -401,17 +634,19 @@ class QueueController:
                 dispatch_attempt=item.dispatch_attempt,
                 evidence=evidence,
             )
-            item = self._service.record_dispatch_handle(item.queue_item_id, handle)
+            item = self._service.record_dispatch_handle(
+                item.queue_item_id, handle, expected=item
+            )
         completed = self._service.complete_item(
             item.queue_item_id,
             status=QueueItemStatus.UNKNOWN,
             reason=reason,
+            expected=item,
         )
         return QueueControllerStep(outcome="unknown", item=completed)
 
     def _next_claim_id(self) -> str:
-        self._claim_counter += 1
-        return f"{self._owner_id}:claim:{self._claim_counter}"
+        return f"{self._owner_id}:claim:{self._session_id}:{uuid4().hex}"
 
 
 def _thaw_evidence(evidence: Mapping[str, PlainData]) -> Mapping[str, PlainData]:
@@ -425,9 +660,11 @@ __all__ = [
     "FakeQueueDispatchAdapter",
     "QueueCancellableDispatchAdapter",
     "QueueController",
+    "QueueCycleResult",
     "QueueControllerStep",
     "QueueDispatchAdapter",
     "QueueDispatchCancellation",
+    "QueueDispatchDisposition",
     "QueueDispatchInspection",
     "QueueDispatchResult",
     "QueueDrainResult",

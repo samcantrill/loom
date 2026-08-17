@@ -131,6 +131,7 @@ class _FakeProcess:
 
     def terminate(self) -> None:
         self.terminated = True
+        self.returncode = -15
 
     def kill(self) -> None:
         self.killed = True

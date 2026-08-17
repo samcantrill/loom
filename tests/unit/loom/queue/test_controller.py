@@ -301,6 +301,39 @@ def test_daemon_run_once_continues_after_delegated_handoff_when_more_work_is_que
     assert handoff.outcome == "handoff"
 
 
+def test_cycle_defers_fifo_head_once_and_returns_serializable_capacity_result(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(
+        "2020-01-01T00:00:00Z",
+        "2020-01-01T00:00:01Z",
+        "2020-01-01T00:00:02Z",
+        "2020-01-01T00:00:03Z",
+    )
+    service = _started_service(tmp_path, clock=clock)
+    for item_id in ("item-1", "item-2"):
+        service.enqueue(
+            QueueEnqueueRequest(
+                queue_item_id=item_id,
+                queue_name="gpu",
+                run_uri=f"file:///runs/{item_id}",
+                adapter="deferred",
+            )
+        )
+    controller = QueueController(
+        service, adapters={"deferred": _DeferredAdapter()}, clock=clock
+    )
+
+    result = controller.run_cycle(pool_name="gpu-pool")
+
+    assert [step.outcome for step in result.dispatch_steps] == ["deferred"]
+    assert result.capacity_blocked is True
+    assert result.active_count == 0
+    assert service.read_item("item-1").status is QueueItemStatus.QUEUED
+    assert service.read_item("item-2").status is QueueItemStatus.QUEUED
+    assert result.to_dict()["next_maintenance_at"] is None
+
+
 class _AsyncAdapter:
     adapter_name = "async"
 
@@ -361,6 +394,17 @@ class _DelegatedHandoffAdapter:
             reason="delegated-handoff-complete",
             terminal=False,
             handoff_complete=True,
+        )
+
+
+class _DeferredAdapter:
+    adapter_name = "deferred"
+
+    def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
+        return QueueDispatchResult(
+            disposition="deferred",
+            status=QueueItemStatus.UNKNOWN,
+            reason="resource_admission.capacity_unavailable",
         )
 
 

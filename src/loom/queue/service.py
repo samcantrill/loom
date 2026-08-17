@@ -254,6 +254,7 @@ class QueueService:
         requested_by: str,
         reason: str,
         evidence: Mapping[str, PlainData] | None = None,
+        expected: QueueItem | None = None,
     ) -> QueueItem:
         self._ensure_running()
         cancellation = CancellationRecord(
@@ -262,7 +263,9 @@ class QueueService:
             reason=reason,
             evidence={} if evidence is None else evidence,
         )
-        return self.repository.request_cancellation(queue_item_id, cancellation)
+        return self.repository.request_cancellation(
+            queue_item_id, cancellation, expected=expected
+        )
 
     def claim_next(
         self,
@@ -283,9 +286,13 @@ class QueueService:
         self,
         queue_item_id: str,
         handle: DispatchHandle,
+        *,
+        expected: QueueItem | None = None,
     ) -> QueueItem:
         self._ensure_running()
-        return self.repository.record_dispatch_handle(queue_item_id, handle)
+        return self.repository.record_dispatch_handle(
+            queue_item_id, handle, expected=expected
+        )
 
     def complete_item(
         self,
@@ -293,9 +300,24 @@ class QueueService:
         *,
         status: QueueItemStatus,
         reason: str,
+        expected: QueueItem | None = None,
     ) -> QueueItem:
         self._ensure_running()
-        return self.repository.complete_item(queue_item_id, status=status, reason=reason)
+        return self.repository.complete_item(
+            queue_item_id, status=status, reason=reason, expected=expected
+        )
+
+    def defer_item(
+        self,
+        queue_item_id: str,
+        *,
+        reason_code: str,
+        expected: QueueItem,
+    ) -> QueueItem:
+        self._ensure_running()
+        return self.repository.defer_item(
+            queue_item_id, reason_code=reason_code, expected=expected
+        )
 
     def scan_recovery(self) -> tuple[QueueRecoveryRecord, ...]:
         self._ensure_running()

@@ -65,7 +65,7 @@ def test_managed_local_controller_dispatches_one_active_item_at_a_time(
     assert active.outcome == "active"
     assert started_while_first_active == [201]
     assert statuses[0].status is QueueItemStatus.DISPATCHED
-    assert "resource_admission" in statuses[0].authority_evidence
+    assert statuses[0].authority_evidence == {}
     assert active_amount_while_first_active == 1
     assert completed.item is not None
     assert completed.item.status is QueueItemStatus.SUCCEEDED
@@ -123,6 +123,7 @@ class _FakeProcess:
 
     def terminate(self) -> None:
         self.terminated = True
+        self.returncode = -15
 
     def kill(self) -> None:
         raise AssertionError("kill should not be needed")

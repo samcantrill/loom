@@ -41,6 +41,29 @@ def test_queue_repository_claim_contract_returns_claimed_item(tmp_path: Path) ->
     assert result.item.dispatch_attempt == 1
 
 
+def test_queue_repository_deferral_preserves_fifo_identity(tmp_path: Path) -> None:
+    repository = SQLiteQueueRepository(
+        tmp_path / "queue.sqlite", clock=lambda: "2020-01-01T00:00:01Z"
+    )
+    repository.enqueue(_item("item-1", "2020-01-01T00:00:00Z"))
+    claimed = repository.claim_next(
+        "gpu-pool", owner_id="controller-1", claim_id="claim-1"
+    ).item
+
+    deferred = repository.defer_item(
+        "item-1", reason_code="capacity", expected=claimed
+    )
+
+    assert deferred.status is QueueItemStatus.QUEUED
+    assert deferred.claim is None
+    assert deferred.dispatch_attempt == claimed.dispatch_attempt
+    assert [event.event_type for event in repository.list_audit_events("item-1")] == [
+        "queue.item.enqueued",
+        "queue.item.claimed",
+        "queue.item.deferred",
+    ]
+
+
 def _item(item_id: str, enqueued_at: str) -> QueueItem:
     run_uri = f"file:///runs/{item_id}"
     return QueueItem(

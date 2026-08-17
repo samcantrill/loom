@@ -20,7 +20,7 @@ from .models import (
     validate_queue_id,
 )
 
-QUEUE_CONFIG_SCHEMA_VERSION = 1
+QUEUE_CONFIG_SCHEMA_VERSION = 2
 _CONFIG_DEPENDENCY_HINT = "Install `loom` with its `weave` dependency before loading queue YAML configs."
 
 
@@ -30,6 +30,8 @@ class QueueControllerSpec:
 
     owner_id: str = "controller-1"
     default_pool_name: str | None = None
+    max_active_items: int = 1
+    max_dispatches_per_cycle: int | None = None
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -40,12 +42,25 @@ class QueueControllerSpec:
                 "default_pool_name",
                 validate_queue_id(self.default_pool_name, "default_pool_name"),
             )
+        for field_name, value in (("max_active_items", self.max_active_items),):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise QueueConfigError(f"controller.{field_name} must be a positive integer")
+        if self.max_dispatches_per_cycle is not None and (
+            isinstance(self.max_dispatches_per_cycle, bool)
+            or not isinstance(self.max_dispatches_per_cycle, int)
+            or self.max_dispatches_per_cycle <= 0
+        ):
+            raise QueueConfigError(
+                "controller.max_dispatches_per_cycle must be a positive integer or null"
+            )
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "owner_id": self.owner_id,
             "default_pool_name": self.default_pool_name,
+            "max_active_items": self.max_active_items,
+            "max_dispatches_per_cycle": self.max_dispatches_per_cycle,
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
@@ -62,10 +77,10 @@ class QueueServiceSpec:
     schema_version: int = QUEUE_CONFIG_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != QUEUE_CONFIG_SCHEMA_VERSION:
+        if self.schema_version not in {1, QUEUE_CONFIG_SCHEMA_VERSION}:
             raise QueueConfigError(
                 f"unsupported queue config schema_version '{self.schema_version}', "
-                f"expected {QUEUE_CONFIG_SCHEMA_VERSION}"
+                f"expected 1 or {QUEUE_CONFIG_SCHEMA_VERSION}"
             )
         pools = tuple(self.pools)
         queues = tuple(self.queues)
@@ -121,7 +136,9 @@ class QueueServiceSpec:
             "service": {"db_path": self.db_path},
             "pools": [pool.to_dict() for pool in self.pools],
             "queues": [queue.to_dict() for queue in self.queues],
-            "controller": self.controller.to_dict(),
+            "controller": _controller_dict(
+                self.controller, include_cycle_limits=self.schema_version >= 2
+            ),
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
@@ -142,7 +159,7 @@ def normalize_queue_spec(config: object) -> QueueServiceSpec:
         _queue_from_mapping(item, index) for index, item in enumerate(_sequence(payload.get("queues"), "queues"))
     )
     controller = _controller_from_mapping(
-        _mapping(payload.get("controller", {}), "controller")
+        _mapping(payload.get("controller", {}), "controller"), schema_version
     )
     metadata = _mapping(payload.get("metadata", {}), "metadata")
     return QueueServiceSpec(
@@ -244,18 +261,47 @@ def _queue_from_mapping(value: object, index: int) -> QueueDefinition:
     )
 
 
-def _controller_from_mapping(payload: Mapping[str, object]) -> QueueControllerSpec:
+def _controller_from_mapping(
+    payload: Mapping[str, object], schema_version: int
+) -> QueueControllerSpec:
     owner_id = payload.get("owner_id", "controller-1")
     if not isinstance(owner_id, str):
         raise QueueConfigError("controller.owner_id must be a string")
     default_pool_name = payload.get("default_pool_name")
     if default_pool_name is not None and not isinstance(default_pool_name, str):
         raise QueueConfigError("controller.default_pool_name must be a string or null")
+    max_active_items = payload.get("max_active_items", 1)
+    if isinstance(max_active_items, bool) or not isinstance(max_active_items, int):
+        raise QueueConfigError("controller.max_active_items must be an integer")
+    max_dispatches_per_cycle = payload.get("max_dispatches_per_cycle")
+    if max_dispatches_per_cycle is not None and (
+        isinstance(max_dispatches_per_cycle, bool)
+        or not isinstance(max_dispatches_per_cycle, int)
+    ):
+        raise QueueConfigError("controller.max_dispatches_per_cycle must be an integer or null")
+    if schema_version == 1 and (
+        "max_active_items" in payload or "max_dispatches_per_cycle" in payload
+    ):
+        raise QueueConfigError(
+            "controller cycle limits require queue config schema_version 2"
+        )
     return QueueControllerSpec(
         owner_id=owner_id,
         default_pool_name=default_pool_name,
+        max_active_items=max_active_items,
+        max_dispatches_per_cycle=max_dispatches_per_cycle,
         metadata=cast(Mapping[str, PlainData], _mapping(payload.get("metadata", {}), "controller.metadata")),
     )
+
+
+def _controller_dict(
+    controller: QueueControllerSpec, *, include_cycle_limits: bool
+) -> dict[str, PlainData]:
+    result = controller.to_dict()
+    if not include_cycle_limits:
+        result.pop("max_active_items")
+        result.pop("max_dispatches_per_cycle")
+    return result
 
 
 def _required_name(
