@@ -1020,10 +1020,9 @@ roadmap/stage-<id>/planning.md
   design agreement, validation strategy, phase shaping, and readiness notes.
 
 roadmap/stage-<id>/phases/
-  Phase execution plans, phase-scoped PR bodies, blocker-resolution sidecars,
-  and merge records for one roadmap stage. A phase execution plan is drafted at
-  the what level, refined at the how level, and then used as the implementation
-  contract for one phase.
+  One current phase execution plan per implementation phase. The plan carries
+  scope, fixed contracts, tests, workflow state, and concise completion evidence.
+  Older PR-body, review, refinement, and merge sidecars are historical only.
 ```
 
 ---

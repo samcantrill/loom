@@ -1,75 +1,44 @@
-# Roadmap-Stage Implementation
+# Roadmap Stage Implementation
 
-Use this entrypoint when a roadmap-stage implementation plan exists and Codex
-should implement its phases through branch/worktree creation, validation, PRs,
-CI-gated merges, metadata updates, and cleanup.
+## Goal
 
-The managing agent must perform the implementation-plan quality gate as the
-first workflow preflight before selecting or assigning any phase. The quality
-gate is automatic workflow behavior, not a separate user-facing entrypoint.
+Execute one approved compact implementation manifest through isolated phase
+worktrees, tests, validation, PRs, automatic merge to develop, metadata, and
+cleanup.
 
-"Perform" means:
+## Read
 
-1. Read the selected implementation plan's Plan quality gate section.
-2. If the gate is missing, incomplete, stale, ambiguous, or not passed for the
-   current plan content, run the review/refinement/confirmation sequence using
-   the implementation-plan prompts listed below.
-3. If the gate already records a current passed result, verify that evidence and
-   continue.
-4. Stop before phase planning if blocking plan findings remain.
+- AGENTS.md
+- .codex/prompts/subagent-lifecycle.md
+- .codex/prompts/phase-loop-management.md
+- the selected manifest and current phase execution plan
+- current source, tests, diff, PR, and CI evidence
 
-When the implementation plan cites roadmap-stage planning, the quality
-gate must also verify planning readiness: design-safety review completed or
-accepted risks recorded, validation strategy and phase shaping carried into the
-plan, and no unresolved `blocked` or `needs discussion` planning decisions.
+Do not load planning.md, unrelated phase plans, completed lifecycle detail, or
+superseded discussion unless a current blocker cites it.
 
-Canonical manager prompt:
+## Preconditions
 
-- `.codex/prompts/phase-loop-management.md`
+- Planning and implementation-plan quality gates are passed.
+- The manifest links one complete phase plan per phase.
+- The current develop base and worktree root are known.
+- Any legacy active plan has been audited before resumption.
 
-Primary downstream prompts:
+## Normal Phase Cost
 
-- `.codex/prompts/implementation-plan-review.md`
-- `.codex/prompts/implementation-plan-refinement.md`
-- `.codex/prompts/phase-execution-plan-draft.md`
-- `.codex/prompts/phase-execution-plan-refine.md`
-- `.codex/prompts/implementation-phase-execution.md`
-- `.codex/prompts/implementation-test-refinement.md`
-- `.codex/prompts/pr-body-draft.md`
-- `.codex/prompts/pr-body-refine.md`
-- `.codex/prompts/pull-request-review.md`
+- Manager-local setup and pre-submit work.
+- One loom_phase_executor.
+- No planner, refiner, PR preparer, or reviewer spawn by default.
 
-Primary templates:
+Use loom_phase_planner only for an expanded-path contract risk,
+loom_phase_refiner only for a qualified blocker, and loom_phase_reviewer only
+for expanded-path or material residual-risk review.
 
-- `.codex/templates/phase-assignment.md`
-- `.codex/templates/phase-execution-plan.md`
-- `.codex/templates/phase-implementation-handoff.md`
-- `.codex/templates/phase-refinement-report.md`
-- `.codex/templates/phase-pr-body.md`
-- `.codex/templates/phase-pr-review-report.md`
-- `.codex/templates/phase-merge-record.md`
+## Execution
 
-User request shape:
+Follow .codex/prompts/phase-loop-management.md as the canonical procedure.
+Every normal phase gets one branch, one worktree, and one PR targeting develop.
+Routine stacked PRs and new workflow sidecars are not used.
 
-```text
-Use .codex/workflows/roadmap-stage-implementation.md.
-Begin or continue implementation of docs/roadmap/stage-<id>/implementation-plan.md.
-Use Codex-managed automatic merges. Do not gate implementation on human PR
-review.
-```
-
-Manager responsibilities:
-
-- Read `AGENTS.md`, the selected implementation plan, existing phase artifacts,
-  and `.codex/templates/README.md`.
-- Perform the plan quality gate before phase selection or implementation.
-- Select one phase at a time.
-- Use `/home/samcantrill/work/loom-worktrees` for phase worktrees.
-- Use fast path unless expanded-path triggers apply.
-- Run or record `make validate-pr` and `make test-summary`.
-- Open phase PRs with explicit base/head/title.
-- Poll CI and merge eligible phase PRs into `develop` without waiting for human
-  approval; use admin merge authority for review-only branch protection when
-  available after automated gates pass.
-- Record merge metadata in the implementation plan and clean up phase branches
-  and worktrees when safe.
+A phase is complete only after remote merge, concise metadata update, and
+cleanup or an explicitly recorded cleanup blocker.

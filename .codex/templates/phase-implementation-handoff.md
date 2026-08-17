@@ -1,56 +1,15 @@
-# Phase Implementation Handoff
+# Phase Completion Fields
 
-## Metadata
+Record these in the phase execution plan Completion Record. Do not create a
+separate file.
 
-- Phase:
-- Branch:
-- Worktree:
-- Phase execution plan:
-- Executor:
-- Handoff date:
-
-## Implementation Summary
-
-- TBD
-
-## Commits
-
-| Commit | Summary |
-| --- | --- |
-|  |  |
-
-## Scope Control
-
-- Implements only the assigned phase:
-- Future-phase work avoided:
-- Unrelated refactors avoided:
-- Public contract decisions changed: yes/no
-
-If any public contract decision changed, stop and describe the blocker instead
-of handing off as complete.
-
-## Tests Added Or Updated
-
-- Package:
-- Unit:
-- Contract:
-- Integration:
-- E2E:
-- Opt-in:
-
-## Validation Run
-
-```text
-command:
-result:
-```
-
-## Known Issues Or Blockers
-
-- TBD
-
-## Refiner Handoff
-
-- Areas most likely to need validation attention:
-- Failing or unavailable checks:
-- Completion notes added to phase execution plan:
+- Implementation and changed paths:
+- Commits:
+- Tests added or updated by suite:
+- Targeted validation:
+- Final make validate-pr result:
+- Final make test-summary and build/test-summary.md:
+- Validated revision or tree state:
+- Later validation-relevant changes:
+- Scope or fixed-contract variance:
+- Residual blocker or risk:

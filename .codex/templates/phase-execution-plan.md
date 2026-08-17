@@ -1,191 +1,123 @@
-# Phase <N> Execution Plan: <Title>
+# Phase <P> Execution Plan: <Title>
 
 ## Metadata
 
-- Status: draft phase execution plan
-- Feature focus:
-- PR title: `<feature-focus> - Phase <N>: <Words to scope>`
-- Branch: `codex/<summary-of-feature>`
-- Worktree: `/home/samcantrill/work/loom-worktrees/<summary-of-feature>`
-- Phase execution plan path: `docs/roadmap/stage-<id>/phases/<summary-of-feature>.md`
-- Full plan: `docs/roadmap/stage-<id>/implementation-plan.md`
-- Source phase:
-- Stack predecessor:
-- Base branch:
-- Target branch:
-- Merge eligibility:
-- Workflow path: fast path / expanded path
-- Successor dependency notes:
-- Plan quality gate:
-- Plan quality gate loop budget:
-- Draft pass:
-- Refine pass:
-- Setup limitations:
+- Status: planned
+- Roadmap stage and phase:
+- Manifest:
+- Branch: agent/stage-<N>-p<P>-<phase-slug>
+- Worktree root and path:
+- Base revision:
+- PR target: develop
+- PR title:
+- Dependencies:
+- Workflow path: fast / expanded with trigger
 - Blockers:
 
-## Objective
+## Objective And Context
 
-State the phase objective in one concise paragraph.
+- Vertical outcome:
+- Earlier dependency:
+- Later work explicitly out of scope:
 
-## Full-Plan Context
+## Current Source And Harness
 
-Summarize how this phase fits into earlier and later phases. Name future-phase
-work that must remain out of scope.
+- Relevant files and symbols:
+- Existing tests and seams:
+- Import, dependency, or harness constraints:
 
-## Stack Context
+## Scope
 
-- Root or stacked phase:
-- Current predecessor branch or PR:
-- Why this base branch is correct:
-- Retarget/rebase plan after predecessor merge:
-- Branch cleanup constraints:
+In scope:
 
-## Source Phase Summary
+-
 
-- Goal:
-- Required scope:
-- Required checkpoints:
-- Acceptance criteria:
+Out of scope:
 
-## Current Source And Harness Findings
+-
 
-- Existing files or modules that constrain this phase:
-- Existing tests or harness behavior:
-- Import-boundary or dependency constraints:
+Assumptions:
 
-## In-Scope Work
+-
 
-- TBD
+## Fixed Contracts And Private Discretion
 
-## Out-of-Scope Work
+- Observable behavior:
+- Public or durable shapes:
+- Trust and failure boundaries:
+- Cross-phase contracts:
+- Reproducibility and compatibility:
+- Private choices the executor may simplify:
 
-- TBD
+## Proportionality
 
-## Assumptions
+- Existing seam reused:
+- Material additions and current justification:
+- Optional hardening and future capability deferred:
 
-- TBD
+## Invariant Ownership
 
-## Scope Contract
+| Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
+| --- | --- | --- | --- | --- |
+|  |  |  |  |  |
 
-Define the public behavior, module boundaries, data shapes, error behavior, and
-edge cases the executor must not redesign. Keep this to decisions that affect
-scope or public behavior; do not describe routine code edits. If no public
-contract changes are in scope, state that explicitly.
+## Implementation Slices
 
-## Design Impact
+Use three to six reviewable slices.
 
-- Maintainability:
-- Extensibility:
-- Domain neutrality:
-- Source-tree boundaries:
+1.
 
-## Future Compatibility
+## Test And Validation Plan
 
-- TBD
+| Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
+| --- | --- | --- | --- |
+| Package |  |  |  |
+| Unit |  |  |  |
+| Contract |  |  |  |
+| Integration |  |  |  |
+| E2E / opt-in |  |  |  |
 
-## Alternatives Rejected
+Targeted commands:
 
-| Alternative | Reason rejected |
-| --- | --- |
-|  |  |
+    <commands>
 
-## Debt Introduced
+Final commands:
 
-| Debt | Reason accepted | Revisit trigger |
-| --- | --- | --- |
-|  |  |  |
+    make validate-pr
+    make test-summary
 
-## Reviewability
+## Risks, Review, And Stops
 
-- Expected PR size and shape:
-- Files and areas to inspect:
-- Scope-control checks:
+- Main risks:
+- Review focus:
+- Stop if:
+- Accepted debt and revisit trigger:
 
-## Implementation Steps
+## Executor Handoff
 
-List three to six small, reviewable implementation slices. Avoid line-by-line
-instructions unless needed to prevent a public-contract or scope error.
-
-1. TBD
-
-## Test Plan
-
-### Package Suite
-
-- Status: required/deferred
-- Expected paths:
-- Required assertions or deferral reason:
-
-### Unit Suite
-
-- Status: required/deferred
-- Expected paths:
-- Required assertions or deferral reason:
-
-### Contract Suite
-
-- Status: required/deferred
-- Expected paths:
-- Required assertions or deferral reason:
-
-### Integration Suite
-
-- Status: required/deferred
-- Expected paths:
-- Required assertions or deferral reason:
-
-### E2E Suite
-
-- Status: required/deferred
-- Expected paths:
-- Required assertions or deferral reason:
-
-### Opt-In Suites
-
-- Status: required/deferred
-- Markers affected:
-- Required assertions or deferral reason:
-
-## Risks
-
-- TBD
-
-## Validation Commands
-
-Targeted development commands:
-
-```sh
-
-```
-
-Final PR-preparation commands:
-
-```sh
-make validate-pr
-make test-summary
-```
-
-## Handoff Notes For `loom_phase_executor`
-
+- Read section range:
 - Safe implementation slices:
-- Tests to run with each slice:
-- Decisions the executor must not revisit:
-- Conditions that require stopping for the manager:
+- Decisions not to revisit:
+- Conditions requiring manager action:
 
-## Refinement And Review Budget Status
+## Workflow State
 
-- Phase implementation refinement: unused
-- PR review: unused
-- Blocker resolution: 0/3 used
+- Manager preparation:
+- Expanded planning: not needed / result
+- Implementation:
+- Refiner: not needed / result
+- Pre-submit gate:
+- Independent review: not needed / result
+- Blocker corrections: 0/3
+- PR and merge:
 
-## Completion Notes
+## Completion Record
 
-- Draft plan:
-- Final phase execution plan:
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+| Item | Result |
+| --- | --- |
+| Implementation and changed paths |  |
+| Tests added or updated |  |
+| Validated revision/tree state and evidence |  |
+| Validation-relevant changes after evidence | none / details |
+| PR, review, and merge |  |
+| Residual risk and cleanup |  |

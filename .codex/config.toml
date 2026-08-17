@@ -1,4 +1,8 @@
-[agents]
-max_threads = 6
-max_depth = 2
+web_search = "live"
+tool_output_token_limit = 8000
 
+[tools]
+view_image = false
+
+[agents]
+max_concurrent_threads_per_session = 3
