@@ -275,20 +275,27 @@ Final commands:
   clarified result compatibility, caller-supplied SQLite mutation expectations,
   boundary-owned failure kinds, and compensation-before-deferral without adding
   schema, retry, or recovery machinery
-- Implementation: not started
+- Implementation: completed at `68e0b57`; repository/controller/config cycle,
+  typed coordination/admission classification, guarded SQLite mutations, and
+  managed-local scalar lifecycle are implemented with phase-scoped coverage
 - Refiner: optional for a qualified implementation/test blocker; unused
-- Pre-submit gate: not run
+- Pre-submit gate: blocked. Targeted commands passed (58 tests) and changed-path
+  `pyright` passed. `make validate-pr` repeatedly reached `uv run --extra
+  config pyright` after a clean Ruff pass, then terminated after roughly 30
+  seconds without diagnostics; the full-project Pyright invocation also did so.
+  `make test-summary` likewise did not complete after starting its harness.
 - Independent review: required after implementation; unused
-- Blocker corrections: 0/3
+- Blocker corrections: 0/3; no in-scope code remedy is evidenced because the
+  required gate emitted no diagnostic before termination
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
+| Implementation and changed paths | `68e0b57`: `src/loom/queue/{controller.py,repository.py,_sqlite.py,service.py,config.py,local.py,__init__.py}`, typed resource admission/coordination boundaries, and the in-memory coordination harness. |
+| Tests added or updated | Queue controller cycle/deferral, repository deferral identity, schema-v2 config, local lifecycle, and managed-local integration coverage; recorded targeted suites passed: 26 unit, 19 contract, 11 integration, and 2 config tests. |
+| Validated revision/tree state and evidence | Targeted commands passed at `68e0b57`; changed-path Ruff and Pyright passed. Required `make validate-pr` and `make test-summary` are blocked as recorded above: both full harnesses terminate without a diagnostic before producing their receipt. |
+| Validation-relevant changes after evidence | none; the gate attempt was against the implementation commit. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Blocked on unavailable full-gate evidence; no implementation residual beyond the accepted controller-local limit and live-session renewal limitation. Worktree cleanup awaits manager disposition. |
