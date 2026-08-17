@@ -89,6 +89,51 @@ def test_queue_config_schema_v2_normalizes_positive_cycle_limits() -> None:
     assert controller["max_active_items"] == 3
 
 
+def test_queue_config_schema_v2_accepts_only_static_assignment_records() -> None:
+    spec = normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "pools": [
+                {"pool_name": "pool", "mode": "managed", "resources": {"gpu": 2}}
+            ],
+            "queues": [{"queue_name": "queue", "pool_name": "pool"}],
+            "adapters": {
+                "local": {
+                    "assignments": {
+                        "pool": {
+                            "gpu": {
+                                "provider": "static-slots",
+                                "slots": [
+                                    {
+                                        "id": "zero",
+                                        "coordination_key": "gpu-0",
+                                        "value": "0",
+                                    },
+                                    {
+                                        "id": "one",
+                                        "coordination_key": "gpu-1",
+                                        "value": "1",
+                                        "label": "second",
+                                    },
+                                ],
+                                "binding": {
+                                    "type": "environment-list",
+                                    "name": "VISIBLE_GPUS",
+                                    "separator": ",",
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
+
+    assignment = spec.local_assignments["pool"]["gpu"]
+    assert [slot.slot_id for slot in assignment.slots] == ["zero", "one"]
+    assert assignment.to_dict()["provider"] == "static-slots"
+
+
 def test_unversioned_queue_config_keeps_legacy_schema_v1_defaults() -> None:
     spec = normalize_queue_spec(
         {

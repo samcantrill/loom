@@ -86,3 +86,54 @@ def test_queue_preflight_reconciles_managed_pool_limits_when_store_is_supplied(
     checks = {check.check_id: check for check in result.checks}
     assert checks["queue.managed_pool_limits"].status is QueuePreflightStatus.PASS
     assert checks["queue.managed_pool_limits"].details["ok"] is True
+
+
+def test_queue_preflight_reads_static_slot_limits_without_mutating_authority(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("yaml")
+    config_path = tmp_path / "queue.yaml"
+    config_path.write_text(
+        f"""
+        queue:
+          schema_version: 2
+          service:
+            db_path: {tmp_path / "queue.sqlite"}
+          pools:
+            - pool_name: gpu-pool
+              mode: managed
+              resources:
+                gpu: 1
+          queues:
+            - queue_name: gpu
+              pool_name: gpu-pool
+          adapters:
+            local:
+              assignments:
+                gpu-pool:
+                  gpu:
+                    provider: static-slots
+                    slots:
+                      - id: zero
+                        coordination_key: gpu-0
+                        value: "0"
+                    binding:
+                      type: environment-list
+                      name: VISIBLE_GPUS
+                      separator: ","
+        """,
+        encoding="utf-8",
+    )
+    store = InMemoryWorkspaceCoordinationStore()
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    scalar = store.set_resource_limit("workspace-1", "gpu", limit=1)
+    slot = store.set_resource_limit("workspace-1", "gpu-0", limit=1)
+
+    result = run_queue_preflight(
+        config_path, coordination_store=store, workspace_id="workspace-1"
+    )
+
+    checks = {check.check_id: check for check in result.checks}
+    assert checks["queue.static_assignments"].status is QueuePreflightStatus.PASS
+    assert store.read_resource_limit("workspace-1", "gpu").revision == scalar.revision  # type: ignore[union-attr]
+    assert store.read_resource_limit("workspace-1", "gpu-0").revision == slot.revision  # type: ignore[union-attr]
