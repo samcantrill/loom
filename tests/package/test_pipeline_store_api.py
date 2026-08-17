@@ -209,6 +209,7 @@ def test_pipeline_store_public_exports() -> None:
         "WorkspaceCoordinationStore",
         "ServiceWorkspaceCoordinationStore",
         "CoordinationStoreError",
+        "CoordinationFailureKind",
         "TrialState",
         "WorkspaceIdentity",
         "SweepIdentity",

@@ -288,9 +288,11 @@ Final commands:
   the pre-existing unavailable-harness evidence, not a remaining Pyright
   diagnostic.
 - Independent review: required after implementation; unused
-- Blocker corrections: 1/3 inclusive; corrected the qualified test-only
-  optional/plain-data Pyright diagnostic cluster. No further correction is
-  authorized without a distinct qualified blocker.
+- Blocker corrections: 2/3 inclusive; corrected the qualified test-only
+  optional/plain-data Pyright diagnostic cluster, then added the intentional
+  `CoordinationFailureKind` export to the two exact public-export allowlists
+  identified by the default harness. No further correction is authorized
+  without a distinct qualified blocker.
 - PR and merge: pending
 
 ## Completion Record
@@ -299,7 +301,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | `68e0b57`: `src/loom/queue/{controller.py,repository.py,_sqlite.py,service.py,config.py,local.py,__init__.py}`, typed resource admission/coordination boundaries, and the in-memory coordination harness. |
 | Tests added or updated | Queue controller cycle/deferral, repository deferral identity, schema-v2 config, local lifecycle, and managed-local integration coverage; the refiner added only typed assertions to those existing tests. The four affected modules passed: 19 tests. |
-| Validated revision/tree state and evidence | Refiner evidence: focused Pyright over the four affected tests reported 0 errors; their pytest run passed 19 tests. `make validate-pr` then passed Ruff and full-project Pyright (0 errors), but its default test harness again supplied no completion receipt before the run was stopped. |
-| Validation-relevant changes after evidence | Test-only narrowing and this completion record; the required gate was rerun against those changes. |
+| Validated revision/tree state and evidence | Refiner evidence: focused Pyright over the four affected tests reported 0 errors; their pytest run passed 19 tests. Manager rerun: `make validate-pr` passed Ruff and full-project Pyright (0 errors), then its default harness passed 1,983 tests and identified only two stale public-export allowlists; their bounded correction is pending focused validation. |
+| Validation-relevant changes after evidence | Two public-export allowlists and this completion record changed after the default-harness evidence; focused and final gates must be rerun. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | The qualified Pyright blocker is resolved. Full-harness receipt remains unavailable; no in-scope production or design remedy is evidenced. No implementation residual beyond the accepted controller-local limit and live-session renewal limitation. Worktree cleanup awaits manager disposition. |

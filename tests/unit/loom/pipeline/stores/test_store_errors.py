@@ -225,6 +225,7 @@ def test_store_error_exports() -> None:
         "WorkspaceCoordinationStore",
         "ServiceWorkspaceCoordinationStore",
         "CoordinationStoreError",
+        "CoordinationFailureKind",
         "TrialState",
         "WorkspaceIdentity",
         "SweepIdentity",
