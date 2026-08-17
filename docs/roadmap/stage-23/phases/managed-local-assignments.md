@@ -2,14 +2,13 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: v23 Phase 2
 - Manifest: `docs/roadmap/stage-23/implementation-plan.md`
 - Branch: `agent/stage-23-p2-managed-local-assignments`
 - Worktree root and path:
   `/home/can134/work/active/loom-worktrees/stage-23-p2-managed-local-assignments`
-- Base revision: current `origin/develop` after Phase 1 merges; record the exact
-  revision before branch creation
+- Base revision: `e47ed7796d61169d54846b2a2f60c2970b88116e`
 - PR target: `develop`
 - PR title: `Managed Local Concurrency - Phase 2: Static Assignment Lifecycle`
 - Dependencies: Phase 1 remotely merged and its disposition, guarded mutation,
@@ -17,7 +16,7 @@
 - Workflow path: expanded because this phase adds a public provider protocol,
   config-v2 records, exclusive leases, renewal deadlines, and process/resource
   compensation
-- Blockers: Phase 1 must merge before this phase is selected
+- Blockers: none; Phase 1 merged through PR `#209`
 
 ## Objective And Context
 
@@ -241,8 +240,10 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete in Stage 23 planning
-- Expanded planning: required after Phase 1 merge; pass unused
+- Manager preparation: complete on 2026-08-17 against `e47ed77`; Phase 1 merge,
+  plan/manifest consistency, worktree isolation, and expanded-route triggers
+  verified
+- Expanded planning: required; pass pending
 - Implementation: not started
 - Refiner: optional for a qualified implementation/test blocker; unused
 - Pre-submit gate: not run
