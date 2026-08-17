@@ -5,8 +5,9 @@ Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 1 in progress
-Blockers: none
+Current phase: Phase 1 blocked
+Blockers: Phase 1 exhausted its 3/3 correction budget with five unresolved
+product blockers; see its execution plan
 
 ## Summary
 
@@ -105,7 +106,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `safe-pool-cycles` | in_progress | `docs/roadmap/stage-23/phases/safe-pool-cycles.md` | `agent/stage-23-p1-safe-pool-cycles` | pending | Queue controller/repository, typed coordination/admission, and scalar local-process safety | Atomically reconcile/fill one pool with deferral, scalar renewal, terminal-before-release, and post-start compensation. |
+| 1 | `safe-pool-cycles` | blocked | `docs/roadmap/stage-23/phases/safe-pool-cycles.md` | `agent/stage-23-p1-safe-pool-cycles` | not opened | Queue controller/repository, typed coordination/admission, and scalar local-process safety | Atomically reconcile/fill one pool with deferral, scalar renewal, terminal-before-release, and post-start compensation. |
 | 2 | `managed-local-assignments` | pending | `docs/roadmap/stage-23/phases/managed-local-assignments.md` | `agent/stage-23-p2-managed-local-assignments` | pending | Queue-local assignment/config/preflight and integration with the established local lifecycle | Exclusively bind and renew static slots, apply safe bindings, capture logs, and preserve Phase 1 compensation. |
 | 3 | `operator-status-proof` | pending | `docs/roadmap/stage-23/phases/operator-status-proof.md` | `agent/stage-23-p3-operator-status-proof` | pending | Repository read model, status/CLI rendering, docs, examples, and end-to-end proof | Expose redacted pool summaries and prove twelve items over three generic slots. |
 
@@ -146,6 +147,6 @@ adds the operator contract and public proof without scheduling in CLI.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
+| 1 | Blocked before PR; no merge | Focused suites passed, but final gate failed delegated SLURM recovery and independent review found four product blockers | Delayed-exit compensation, service kind parity, renewal escalation/proof, fencing-token redaction, and SLURM restart compatibility remain unresolved | Worktree and branch retained because the phase is blocked |
 | 2 | pending | pending | pending | pending |
 | 3 | pending | pending | pending | pending |

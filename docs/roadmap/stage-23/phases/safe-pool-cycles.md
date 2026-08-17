@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: v23 Phase 1
 - Manifest: `docs/roadmap/stage-23/implementation-plan.md`
 - Branch: `agent/stage-23-p1-safe-pool-cycles`
@@ -16,7 +16,9 @@
   planning; no Stage 23 implementation dependency
 - Workflow path: expanded because this phase changes a public dispatch result,
   SQLite concurrency and mutation fencing, and coordination failure semantics
-- Blockers: none; phase selected on 2026-08-17
+- Blockers: correction budget exhausted with unresolved handle-commit process
+  ownership, service-backed failure classification, renewal escalation/evidence,
+  durable fencing-token redaction, and delegated SLURM recovery blockers
 
 ## Objective And Context
 
@@ -282,17 +284,19 @@ Final commands:
   cycle handling, current-session-only mutation, both handle-commit compensation
   paths, and cancellation-until-exit behavior without schema or public-surface
   expansion.
-- Pre-submit gate: the refiner's focused Pyright run is clean and its 19
-  affected tests pass. A rerun of `make validate-pr` passed Ruff and the
-  full-project Pyright gate (0 errors), then started its default test harness
-  without producing a completion receipt before the run was stopped; this is
-  the pre-existing unavailable-harness evidence, not a remaining Pyright
-  diagnostic.
-- Independent review: required after implementation; unused
+- Pre-submit gate: failed at `e80030d`. Ruff and full-project Pyright passed;
+  the default harness passed 1,991 tests and failed delegated SLURM recovery
+  because a restarted controller returned `idle` instead of completing the
+  existing handle. Config-extra tests and build did not run.
+- Independent review: completed once on 2026-08-17; not merge eligible. It
+  confirmed four product blockers: delayed-exit handle-commit compensation can
+  orphan a live process, service-backed coordination loses capacity/ownership
+  kinds, FR-9 lacks termination escalation and fake-clock proof, and local
+  cancellation/start-failure evidence can persist fencing tokens.
 - Blocker corrections: 3/3 inclusive; this final correction resolved the
   qualified safe-pool lifecycle cluster with controller/local/repository causal
   tests. No further correction is authorized without a distinct qualified blocker.
-- PR and merge: pending
+- PR and merge: blocked before submission; no PR opened
 
 ## Completion Record
 
@@ -300,7 +304,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Final correction: `src/loom/queue/{controller.py,local.py}`. Cycle reconciliation now records degraded steps and stops fill; only in-session active work is mutable; both operations compensate rejected handle commits; local cancellation remains reconcilable until exit. |
 | Tests added or updated | Added controller degraded/foreign/`run_once()` compensation coverage, delayed-exit local cancellation coverage, managed-local cancellation integration, and SQLite concurrent-claim/stale-mutation coverage. Recorded targeted suites passed: 30 unit, 19 contract, 14 integration, and 2 config tests. |
-| Validated revision/tree state and evidence | Final correction focused pytest passed 65 tests; Ruff on all changed paths passed; changed-path Pyright reported 0 errors. The earlier full-harness receipt remains the recorded external gate limitation. |
-| Validation-relevant changes after evidence | This final correction and completion record changed after the earlier default-harness evidence; no additional correction loop is authorized. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | Final correction budget is exhausted. Full-harness receipt remains unavailable; no in-scope production or design remedy is evidenced. No implementation residual beyond the accepted controller-local limit and live-session renewal limitation. Worktree cleanup awaits manager disposition. |
+| Validated revision/tree state and evidence | Final correction focused pytest passed 65 tests; changed-path Ruff/Pyright passed. Manager `make validate-pr` at `e80030d` passed Ruff/Pyright and 1,991 default tests, then failed delegated SLURM recovery; later gates did not run. |
+| Validation-relevant changes after evidence | This blocked-state metadata only; no validation-relevant source or test change followed the failed gate. |
+| PR, review, and merge | Blocked before submission; independent review found four product blockers and no PR was opened. |
+| Residual risk and cleanup | Unresolved blockers are the delayed-exit uncommitted-process path, service-backed kind parity, renewal escalation/fake-clock proof, fencing-token redaction, and delegated SLURM restart compatibility. Correction budget is 3/3 exhausted; worktree and branch are retained for maintainer disposition. |
