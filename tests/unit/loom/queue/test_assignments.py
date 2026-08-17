@@ -14,6 +14,7 @@ from loom.queue.assignments import (
     StaticSlot,
     StaticSlotAssignmentProvider,
 )
+from loom.queue.errors import QueueServiceError
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
 
 
@@ -37,6 +38,42 @@ def test_public_assignment_request_and_bindings_are_immutable() -> None:
     assert normalized.environment == {"VISIBLE_GPUS": "0"}
     with pytest.raises(TypeError):
         normalized.environment["VISIBLE_GPUS"] = "1"  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "slots, bindings, match",
+    [
+        (
+            (
+                StaticSlot("gpu", "zero", "gpu-0", "0"),
+                StaticSlot("gpu", "one", "gpu-0", "1"),
+            ),
+            {},
+            "must be unique",
+        ),
+        (
+            (StaticSlot("gpu", "zero", "gpu", "0"),),
+            {},
+            "must not collide",
+        ),
+        (
+            (StaticSlot("gpu", "zero", "gpu-0", "0,1"),),
+            {"gpu": EnvironmentListBinding("gpu", "VISIBLE_GPUS", ",")},
+            "safe for their environment-list binding",
+        ),
+    ],
+)
+def test_static_provider_rejects_invalid_injected_inventory(
+    slots: tuple[StaticSlot, ...],
+    bindings: dict[str, EnvironmentListBinding],
+    match: str,
+) -> None:
+    store = InMemoryWorkspaceCoordinationStore()
+
+    with pytest.raises(QueueServiceError, match=match):
+        StaticSlotAssignmentProvider(
+            store, workspace_id="workspace", slots=slots, bindings=bindings
+        )
 
 
 def test_static_slots_are_ordered_and_release_on_capacity_deferral() -> None:

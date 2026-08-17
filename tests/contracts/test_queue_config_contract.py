@@ -134,6 +134,34 @@ def test_queue_config_schema_v2_accepts_only_static_assignment_records() -> None
     assert assignment.to_dict()["provider"] == "static-slots"
 
 
+def test_queue_config_rejects_static_slot_key_colliding_with_any_logical_resource() -> (
+    None
+):
+    config = _static_assignment_config()
+    assignments = config["adapters"]["local"]["assignments"]  # type: ignore[index]
+    assignments["pool"]["gpu"]["slots"][0]["coordination_key"] = "cpu"  # type: ignore[index]
+
+    with pytest.raises(QueueConfigError, match="must not collide"):
+        normalize_queue_spec(config)
+
+
+def test_queue_config_rejects_static_inventory_mismatching_pool_capacity() -> None:
+    config = _static_assignment_config()
+    assignments = config["adapters"]["local"]["assignments"]  # type: ignore[index]
+    assignments["pool"]["gpu"]["slots"].pop()  # type: ignore[index]
+
+    with pytest.raises(QueueConfigError, match="inventory must equal"):
+        normalize_queue_spec(config)
+
+
+def test_queue_config_schema_v1_rejects_assignment_records() -> None:
+    config = _static_assignment_config()
+    config["schema_version"] = 1
+
+    with pytest.raises(QueueConfigError, match="require queue config schema_version 2"):
+        normalize_queue_spec(config)
+
+
 def test_unversioned_queue_config_keeps_legacy_schema_v1_defaults() -> None:
     spec = normalize_queue_spec(
         {
@@ -182,3 +210,45 @@ def test_queue_config_schema_v1_constructor_rejects_cycle_limits(
 
     with pytest.raises(QueueConfigError, match="require queue config schema_version 2"):
         replace(legacy, controller=controller)
+
+
+def _static_assignment_config() -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "pools": [
+            {
+                "pool_name": "pool",
+                "mode": "managed",
+                "resources": {"gpu": 2, "cpu": 1},
+            }
+        ],
+        "queues": [{"queue_name": "queue", "pool_name": "pool"}],
+        "adapters": {
+            "local": {
+                "assignments": {
+                    "pool": {
+                        "gpu": {
+                            "provider": "static-slots",
+                            "slots": [
+                                {
+                                    "id": "zero",
+                                    "coordination_key": "gpu-0",
+                                    "value": "0",
+                                },
+                                {
+                                    "id": "one",
+                                    "coordination_key": "gpu-1",
+                                    "value": "1",
+                                },
+                            ],
+                            "binding": {
+                                "type": "environment-list",
+                                "name": "VISIBLE_GPUS",
+                                "separator": ",",
+                            },
+                        }
+                    }
+                }
+            }
+        },
+    }

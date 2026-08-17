@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import cast
 
 from loom.serialization import (
@@ -167,14 +167,19 @@ class QueueServiceSpec:
         object.__setattr__(self, "queues", queues)
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
         assignments: dict[str, Mapping[str, LocalStaticAssignmentSpec]] = {}
+        logical_resource_names = {
+            resource_name for pool in pools for resource_name in pool.resources
+        }
+        slot_ids: set[str] = set()
+        slot_keys: set[str] = set()
         for pool_name, configured in self.local_assignments.items():
             if not self.has_pool(pool_name):
                 raise QueueConfigError(
                     f"assignments reference unknown pool: {pool_name}"
                 )
             pool = next(pool for pool in pools if pool.pool_name == pool_name)
-            slot_ids: set[str] = set()
-            slot_keys: set[str] = set()
+            if pool.mode is not QueuePoolMode.MANAGED:
+                raise QueueConfigError("local assignments require a managed queue pool")
             binding_names: set[str] = set()
             normalized: dict[str, LocalStaticAssignmentSpec] = {}
             for resource_name, assignment in configured.items():
@@ -201,9 +206,9 @@ class QueueServiceSpec:
                 for slot in assignment.slots:
                     if slot.slot_id in slot_ids or slot.coordination_key in slot_keys:
                         raise QueueConfigError(
-                            "static slot ids and coordination keys must be unique per pool"
+                            "static slot ids and coordination keys must be unique"
                         )
-                    if slot.coordination_key == resource_name:
+                    if slot.coordination_key in logical_resource_names:
                         raise QueueConfigError(
                             "logical resources and static slot coordination keys must not collide"
                         )

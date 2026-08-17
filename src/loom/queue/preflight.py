@@ -352,6 +352,21 @@ def _static_assignment_authority_check(
         for slot in assignment.slots
     }
     try:
+        from loom.pipeline.stores import coordination_requirement_diagnostics
+
+        diagnostics = coordination_requirement_diagnostics(
+            coordination_store.capabilities(), require_resource_leases=True
+        )
+        if diagnostics:
+            return QueuePreflightCheck(
+                check_id="queue.static_assignments",
+                status=QueuePreflightStatus.FAIL,
+                severity=QueuePreflightSeverity.ERROR,
+                message="static assignments require resource-lease capabilities",
+                details={
+                    "diagnostics": [diagnostic.to_dict() for diagnostic in diagnostics]
+                },
+            )
         results = []
         for resource_key, desired_limit in expected.items():
             counter = coordination_store.read_resource_limit(workspace_id, resource_key)

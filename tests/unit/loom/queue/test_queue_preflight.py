@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from loom.pipeline.stores import WorkspaceIdentity
+from loom.pipeline.stores import BackendCapabilitySet, WorkspaceIdentity
 from loom.queue.preflight import QueuePreflightStatus, run_queue_preflight
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
 
@@ -137,3 +137,58 @@ def test_queue_preflight_reads_static_slot_limits_without_mutating_authority(
     assert checks["queue.static_assignments"].status is QueuePreflightStatus.PASS
     assert store.read_resource_limit("workspace-1", "gpu").revision == scalar.revision  # type: ignore[union-attr]
     assert store.read_resource_limit("workspace-1", "gpu-0").revision == slot.revision  # type: ignore[union-attr]
+
+
+def test_queue_preflight_rejects_static_slots_without_lease_capabilities(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("yaml")
+    config_path = tmp_path / "queue.yaml"
+    config_path.write_text(
+        f"""
+        queue:
+          schema_version: 2
+          service:
+            db_path: {tmp_path / "queue.sqlite"}
+          pools:
+            - pool_name: gpu-pool
+              mode: managed
+              resources:
+                gpu: 1
+          queues:
+            - queue_name: gpu
+              pool_name: gpu-pool
+          adapters:
+            local:
+              assignments:
+                gpu-pool:
+                  gpu:
+                    provider: static-slots
+                    slots:
+                      - id: zero
+                        coordination_key: gpu-0
+                        value: "0"
+                    binding:
+                      type: environment-list
+                      name: VISIBLE_GPUS
+                      separator: ","
+        """,
+        encoding="utf-8",
+    )
+    store = _MissingLeaseCapabilityStore()
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    store.set_resource_limit("workspace-1", "gpu-0", limit=1)
+
+    result = run_queue_preflight(
+        config_path, coordination_store=store, workspace_id="workspace-1"
+    )
+
+    checks = {check.check_id: check for check in result.checks}
+    assert checks["queue.static_assignments"].status is QueuePreflightStatus.FAIL
+    assert checks["queue.static_assignments"].details["diagnostics"]
+
+
+class _MissingLeaseCapabilityStore(InMemoryWorkspaceCoordinationStore):
+    def capabilities(self) -> BackendCapabilitySet:
+        return BackendCapabilitySet(backend_name="missing-lease-support", records=())

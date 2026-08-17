@@ -298,20 +298,25 @@ Final commands:
 - Manager correction: completed on 2026-08-18 for the public import/immutable
   record boundary; assignment imports remain cheap and public request/binding
   mappings cannot be mutated after construction
+- Final manager correction: completed on 2026-08-18 for the remaining accepted
+  provider/config/preflight and coupled-renewal validation boundary; invalid
+  static inventory is rejected, preflight proves lease capabilities read-only,
+  and independent scalar/assignment renewal plus real-SQLite exclusivity have
+  focused coverage
 - Pre-submit gate: pending rerun; the executor's prior `make test-summary`
   receipt failed `test_cli_help_remains_import_light`, and that failure now has
   focused passing regression evidence
 - Independent review: required after implementation; unused
-- Blocker corrections: 2/3
+- Blocker corrections: 3/3; budget exhausted with no known blocker pending
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added `src/loom/queue/assignments.py`; updated queue exports, config normalization, local dispatch lifecycle, and preflight; added or updated Phase 2 queue unit, config-contract, preflight, and managed-local integration coverage. Qualified corrections updated assignment/local release state and strict slot-evidence projection, then removed the eager pipeline import and made public request/binding mappings immutable. |
-| Tests added or updated | Targeted Phase 2 commands passed; `tests/unit/loom/queue/test_assignments.py` covers ordered static acquisition, compensation, and immutable public mappings; `tests/unit/loom/queue/test_local_adapter.py` covers partial cleanup retry, pre-start cleanup after assignment acquire/binding failure, and evidence rejection before launch; config/preflight and managed-local controller tests cover schema-v2, read-only slot limits, unique slots, logs, and safe evidence; package coverage asserts the new facade exports and import-light CLI help. |
-| Validated revision/tree state and evidence | Implementation tree based on `a3fba14`. The executor-generated `build/test-summary.md` failed one package import-boundary test and is not a valid pass receipt. Lifecycle correction: focused Ruff and 28 assignment/local tests passed. Public-boundary correction: focused Ruff and 11 assignment/package tests passed, including `test_cli_help_remains_import_light`. Full gates remain pending. |
-| Validation-relevant changes after evidence | Lifecycle and public-boundary corrections plus this completion-record update; full implementation gate must be rerun by the manager before submission. |
+| Implementation and changed paths | Added `src/loom/queue/assignments.py`; updated queue exports, config normalization, local dispatch lifecycle, and preflight; added or updated Phase 2 queue unit, config-contract, preflight, and managed-local integration coverage. Qualified corrections added layer-aware cleanup and strict evidence projection, restored cheap immutable public records, validated injected/authored static inventory and authority capabilities, and made scalar/assignment renewal independent while preserving fail-closed deadlines. |
+| Tests added or updated | Assignment/provider tests cover ordered selection, partial compensation, discriminator safety, injection validation, and immutable public mappings. Local tests cover binding conflict, pre-start and terminal cleanup, evidence rejection, independent renewal, ownership loss, and deadline termination. Config/preflight tests cover v1/v2, inventory/collision rejection, read-only limits, and missing capabilities. Real-SQLite integration proves cross-instance slot exclusivity/capacity; controller integration covers cancellation and handle-commit compensation with static assignments. Package coverage asserts facade exports and import-light CLI help. |
+| Validated revision/tree state and evidence | Implementation tree based on `a3fba14`. The executor-generated `build/test-summary.md` failed one package import-boundary test and is not a valid pass receipt. Lifecycle correction: focused Ruff and 28 assignment/local tests passed. Public-boundary correction: focused Ruff and 11 assignment/package tests passed. Final correction: focused Ruff and Pyright passed; the complete Phase 2 targeted matrix plus public import checks passed (107 tests). Full gates remain pending. |
+| Validation-relevant changes after evidence | Final correction and this completion-record update; full implementation gate must be rerun by the manager before submission. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | No residual blocker in the corrected cluster. Crash-time recovery, reattachment, provider discovery, and background renewal remain intentionally out of scope. |

@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, TypedDict, cast
 from uuid import uuid4
 
 from loom.pipeline.execution.resource_admission import (
@@ -108,6 +108,13 @@ class _ActiveLocalDispatch:
     admission_released: bool = False
     termination_requested: bool = False
     cancellation_requested: bool = False
+
+
+class _CleanupResult(TypedDict):
+    pending: bool
+    assignment_released: list[PlainData]
+    admission_released: list[PlainData]
+    evidence: Mapping[str, PlainData]
 
 
 class SubprocessLocalProcessRunner:
@@ -285,6 +292,7 @@ class LocalQueueDispatchAdapter:
                 reason="local assignment acquisition failed",
                 exception=exc,
                 cleanup=cleanup,
+                uncertain=True,
             )
         if (
             assignment_decision.disposition
@@ -644,7 +652,7 @@ class LocalQueueDispatchAdapter:
         admission: ResourceAdmissionDecision,
         assignment: ResourceAssignment | None,
         code: str,
-    ) -> dict[str, object]:
+    ) -> _CleanupResult:
         """Try every owned layer, preserving uncertainty without short-circuiting."""
         active = _ActiveLocalDispatch(
             process=cast(LocalProcess, None),
@@ -664,31 +672,30 @@ class LocalQueueDispatchAdapter:
         *,
         reason: str,
         exception: Exception | None,
-        cleanup: Mapping[str, object],
+        cleanup: _CleanupResult,
+        uncertain: bool = False,
     ) -> QueueDispatchResult:
         pending = bool(cleanup["pending"])
         evidence: dict[str, PlainData] = {
             "local_process_started": False,
-            "released_resource_leases": cast(
-                list[PlainData], cleanup["admission_released"]
-            ),
-            "released_assignment_leases": cast(
-                list[PlainData], cleanup["assignment_released"]
-            ),
+            "released_resource_leases": cleanup["admission_released"],
+            "released_assignment_leases": cleanup["assignment_released"],
         }
         if exception is not None:
             evidence["exception_type"] = type(exception).__name__
-        evidence.update(cast(Mapping[str, PlainData], cleanup["evidence"]))
+        evidence.update(cleanup["evidence"])
         return QueueDispatchResult(
             handle_id=f"local-cleanup:{item.queue_item_id}:{item.dispatch_attempt}",
-            status=QueueItemStatus.UNKNOWN if pending else QueueItemStatus.FAILED,
+            status=QueueItemStatus.UNKNOWN
+            if pending or uncertain
+            else QueueItemStatus.FAILED,
             reason=reason,
             evidence=evidence,
         )
 
     def _cleanup_active(
         self, active: _ActiveLocalDispatch, *, code: str
-    ) -> dict[str, object]:
+    ) -> _CleanupResult:
         """Release assignment then scalar admission, retrying only unfinished layers."""
         evidence: dict[str, PlainData] = {}
         assignment_released: list[PlainData] = []
@@ -791,9 +798,9 @@ class LocalQueueDispatchAdapter:
         )
         if not scalar_due and not assignment_due:
             return None
-        try:
-            renewed = ()
-            if scalar_due:
+        failures: list[tuple[str, Exception]] = []
+        if scalar_due:
+            try:
                 renewed = tuple(
                     self.coordination_store.renew_lease(
                         lease.lease.lease_id,
@@ -803,64 +810,78 @@ class LocalQueueDispatchAdapter:
                     )
                     for lease in active.admission.leases
                 )
-            renewed_assignment = (
-                self.assignment_provider.renew(active.assignment)
-                if assignment_due
-                else None
-            )
-        except CoordinationStoreError as exc:
-            deadline_reached = _deadline_reached(
-                now, active.safety_deadline_at, active.assignment_safety_deadline_at
-            )
-            if exc.kind is CoordinationFailureKind.OWNERSHIP_LOST or deadline_reached:
-                active.process.terminate()
-                active.termination_requested = True
-            return QueueDispatchInspection(
-                status=QueueItemStatus.DISPATCHED,
-                reason="local managed lease renewal failed",
-                evidence={"renewal_failure_kind": exc.kind.value},
-                terminal=False,
-                degraded=True,
-                next_maintenance_at=_earliest_timestamp(
-                    active.safety_deadline_at, active.assignment_safety_deadline_at
+            except Exception as exc:  # noqa: BLE001
+                failures.append(("scalar", exc))
+            else:
+                active.admission = ResourceAdmissionDecision(
+                    status=ResourceAdmissionStatus.ADMITTED,
+                    request=active.admission.request,
+                    leases=tuple(
+                        replace_resource_lease(old, new)
+                        for old, new in zip(
+                            active.admission.leases, renewed, strict=True
+                        )
+                    ),
+                )
+                (
+                    active.next_renew_at,
+                    active.safety_deadline_at,
+                ) = _lease_maintenance_times(active.admission, self.lease_ttl_seconds)
+        if assignment_due:
+            try:
+                renewed_assignment = self.assignment_provider.renew(active.assignment)
+                if not isinstance(renewed_assignment, ResourceAssignment):
+                    raise QueueServiceError(
+                        "assignment renewal must return a ResourceAssignment"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                failures.append(("assignment", exc))
+            else:
+                active.assignment = renewed_assignment
+                active.assignment_safety_deadline_at = _assignment_safety_deadline(
+                    renewed_assignment, self.lease_ttl_seconds
+                )
+        if failures:
+            failed_layers = {layer for layer, _error in failures}
+            failed_deadlines = [
+                active.safety_deadline_at
+                if layer == "scalar"
+                else active.assignment_safety_deadline_at
+                for layer in failed_layers
+            ]
+            ownership_error = next(
+                (
+                    error
+                    for _layer, error in failures
+                    if isinstance(error, CoordinationStoreError)
+                    and error.kind is CoordinationFailureKind.OWNERSHIP_LOST
                 ),
+                None,
             )
-        except Exception as exc:  # noqa: BLE001
-            deadline_reached = _deadline_reached(
-                now, active.safety_deadline_at, active.assignment_safety_deadline_at
-            )
-            if deadline_reached:
+            if ownership_error is not None or _deadline_reached(now, *failed_deadlines):
                 active.process.terminate()
                 active.termination_requested = True
-            return QueueDispatchInspection(
-                status=QueueItemStatus.DISPATCHED,
-                reason="local managed lease renewal failed",
-                evidence={
+            selected_error = ownership_error or failures[0][1]
+            evidence: dict[str, PlainData]
+            if isinstance(selected_error, CoordinationStoreError):
+                evidence = {"renewal_failure_kind": selected_error.kind.value}
+            else:
+                evidence = {
                     "renewal_failure_kind": "internal",
-                    "exception_type": type(exc).__name__,
-                },
+                    "exception_type": type(selected_error).__name__,
+                }
+            retry_times = list(failed_deadlines)
+            if "scalar" not in failed_layers:
+                retry_times.append(active.next_renew_at)
+            if "assignment" not in failed_layers:
+                retry_times.append(active.assignment.next_maintenance_at)
+            return QueueDispatchInspection(
+                status=QueueItemStatus.DISPATCHED,
+                reason="local managed lease renewal failed",
+                evidence=evidence,
                 terminal=False,
                 degraded=True,
-                next_maintenance_at=_earliest_timestamp(
-                    active.safety_deadline_at, active.assignment_safety_deadline_at
-                ),
-            )
-        if scalar_due:
-            active.admission = ResourceAdmissionDecision(
-                status=ResourceAdmissionStatus.ADMITTED,
-                request=active.admission.request,
-                leases=tuple(
-                    replace_resource_lease(old, new)
-                    for old, new in zip(active.admission.leases, renewed, strict=True)
-                ),
-            )
-            active.next_renew_at, active.safety_deadline_at = _lease_maintenance_times(
-                active.admission, self.lease_ttl_seconds
-            )
-        if renewed_assignment is not None:
-            active.assignment = renewed_assignment
-            active.assignment_safety_deadline_at = _assignment_safety_deadline(
-                renewed_assignment, self.lease_ttl_seconds
+                next_maintenance_at=_earliest_timestamp(*retry_times),
             )
         return None
 
@@ -964,6 +985,10 @@ def _assignment_evidence_slots(assignment: ResourceAssignment) -> list[PlainData
     slots: list[PlainData] = []
     required = {"resource_name", "slot_id", "lease_id", "expires_at"}
     allowed = required | {"label"}
+    leases_by_id = {
+        lease.lease.lease_id: lease.lease.expires_at for lease in assignment.leases
+    }
+    projected_lease_ids: set[str] = set()
     for raw_slot in raw_slots:
         if (
             not isinstance(raw_slot, Mapping)
@@ -979,6 +1004,14 @@ def _assignment_evidence_slots(assignment: ResourceAssignment) -> list[PlainData
                     "assignment slot evidence values must be strings"
                 )
             slot[name] = value
+        lease_id = cast(str, slot["lease_id"])
+        expires_at = cast(str, slot["expires_at"])
+        if lease_id in projected_lease_ids or leases_by_id.get(lease_id) != expires_at:
+            raise QueueServiceError(
+                "assignment slot evidence must match its live assignment lease"
+            )
+        parse_timestamp(expires_at)
+        projected_lease_ids.add(lease_id)
         if "label" in raw_slot:
             label = raw_slot["label"]
             if not isinstance(label, str) or not label:
@@ -987,7 +1020,7 @@ def _assignment_evidence_slots(assignment: ResourceAssignment) -> list[PlainData
                 )
             slot["label"] = label
         slots.append(slot)
-    if len(slots) != len(assignment.leases):
+    if projected_lease_ids != set(leases_by_id):
         raise QueueServiceError("assignment slot evidence must match assignment leases")
     return slots
 

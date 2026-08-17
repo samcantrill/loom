@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
+import re
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
@@ -136,12 +137,20 @@ class ResourceAssignment:
             self, "safe_evidence", _plain_mapping(self.safe_evidence, "safe_evidence")
         )
         if self.next_maintenance_at is not None:
+            if not self.leases:
+                raise QueueServiceError(
+                    "assignment maintenance requires at least one live lease"
+                )
             try:
                 parse_timestamp(self.next_maintenance_at)
             except Exception as exc:  # noqa: BLE001
                 raise QueueServiceError(
                     "assignment next_maintenance_at must be a UTC timestamp"
                 ) from exc
+        elif self.leases:
+            raise QueueServiceError(
+                "assignments with live leases require next_maintenance_at"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +284,20 @@ class EnvironmentListBinding:
     name: str
     separator: str
 
+    def __post_init__(self) -> None:
+        _required_string(self.resource_name, "binding resource_name")
+        if (
+            not isinstance(self.name, str)
+            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.name) is None
+        ):
+            raise QueueServiceError("binding name must be environment-safe")
+        if (
+            not isinstance(self.separator, str)
+            or not self.separator
+            or "\0" in self.separator
+        ):
+            raise QueueServiceError("binding separator must be a non-empty safe string")
+
 
 class StaticSlotAssignmentProvider:
     """Acquire authored static slots in order using one authority lease per slot."""
@@ -293,10 +316,49 @@ class StaticSlotAssignmentProvider:
         self._workspace_id = _required_string(workspace_id, "workspace_id")
         self._slots = tuple(slots)
         self._bindings = dict(bindings or {})
-        for binding in self._bindings.values():
+        if not self._slots or not all(
+            isinstance(slot, StaticSlot) for slot in self._slots
+        ):
+            raise QueueServiceError(
+                "static slot providers require at least one StaticSlot"
+            )
+        resource_names = {slot.resource_name for slot in self._slots}
+        slot_ids: set[str] = set()
+        coordination_keys: set[str] = set()
+        for slot in self._slots:
+            if slot.slot_id in slot_ids or slot.coordination_key in coordination_keys:
+                raise QueueServiceError(
+                    "static slot ids and coordination keys must be unique"
+                )
+            if slot.coordination_key in resource_names:
+                raise QueueServiceError(
+                    "static slot coordination keys must not collide with logical resources"
+                )
+            slot_ids.add(slot.slot_id)
+            coordination_keys.add(slot.coordination_key)
+        binding_names: set[str] = set()
+        for resource_name, binding in self._bindings.items():
             if not isinstance(binding, EnvironmentListBinding):
                 raise QueueServiceError(
                     "static slot bindings must be EnvironmentListBinding"
+                )
+            if (
+                resource_name != binding.resource_name
+                or resource_name not in resource_names
+            ):
+                raise QueueServiceError(
+                    "static slot bindings must match a configured logical resource"
+                )
+            if binding.name in binding_names:
+                raise QueueServiceError("static slot binding names must be unique")
+            binding_names.add(binding.name)
+            if any(
+                "\0" in slot.value or binding.separator in slot.value
+                for slot in self._slots
+                if slot.resource_name == resource_name
+            ):
+                raise QueueServiceError(
+                    "static slot values must be safe for their environment-list binding"
                 )
 
     def acquire(self, request: ResourceAssignmentRequest) -> ResourceAssignmentDecision:
