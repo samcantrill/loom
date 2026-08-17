@@ -5,9 +5,8 @@ Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 2 PR open
-Blockers: none; the maintainer authorized one bounded correction beyond the
-normal 3/3 limit for the independent review's mixed-release finding
+Current phase: Phase 3 pending
+Blockers: none; Phase 2 merged through PR `#210`
 
 ## Summary
 
@@ -107,7 +106,7 @@ normal 3/3 limit for the independent review's mixed-release finding
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `safe-pool-cycles` | merged | `docs/roadmap/stage-23/phases/safe-pool-cycles.md` | `agent/stage-23-p1-safe-pool-cycles` | `#209` | Queue controller/repository, typed coordination/admission, and scalar local-process safety | Atomically reconcile/fill one pool with deferral, scalar renewal, terminal-before-release, and post-start compensation. |
-| 2 | `managed-local-assignments` | pr_open | `docs/roadmap/stage-23/phases/managed-local-assignments.md` | `agent/stage-23-p2-managed-local-assignments` | `#210` | Queue-local assignment/config/preflight and integration with the established local lifecycle | Exclusively bind and renew static slots, apply safe bindings, capture logs, and preserve Phase 1 compensation. |
+| 2 | `managed-local-assignments` | merged | `docs/roadmap/stage-23/phases/managed-local-assignments.md` | `agent/stage-23-p2-managed-local-assignments` | `#210` | Queue-local assignment/config/preflight and integration with the established local lifecycle | Exclusively bind and renew static slots, apply safe bindings, capture logs, and preserve Phase 1 compensation. |
 | 3 | `operator-status-proof` | pending | `docs/roadmap/stage-23/phases/operator-status-proof.md` | `agent/stage-23-p3-operator-status-proof` | pending | Repository read model, status/CLI rendering, docs, examples, and end-to-end proof | Expose redacted pool summaries and prove twelve items over three generic slots. |
 
 The phases are vertical rather than module-only. Phase 1 includes scalar lease
@@ -132,8 +131,9 @@ adds the operator contract and public proof without scheduling in CLI.
   claim identities are non-reusable; workflow statuses/refiner wording and the
   Phase 3 read surface were narrowed. Provider and maintenance contracts were
   made explicit.
-- Ready for implementation: yes; Phase 1 is merged and Phase 2 is eligible to
-  begin from current `origin/develop` through the normal phase workflow.
+- Ready for implementation: yes; Phases 1 and 2 are merged and Phase 3 is
+  eligible to begin from current `origin/develop` through the normal phase
+  workflow.
 - Accepted risks: exact item-count enforcement does not span controllers;
   controller death and an unkillable process can outlive a lease; acquisition
   evidence is not refreshed durably on every renewal; static authored inventory
@@ -148,5 +148,5 @@ adds the operator contract and public proof without scheduling in CLI.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | PR `#209` squash-merged as `e099b58` | Implementation, 94-test phase matrix, `make validate-pr`, test summary, CI, and fresh manager review passed | No known blocker; accepted controller-death, unkillable-process, controller-local-limit, and non-durable-renewal risks remain | Worktree and local/remote phase branch removed |
-| 2 | PR `#210` open against `develop`; CI pending | Implementation and full validation pass after the maintainer-authorized mixed-release correction | No known blocker; accepted crash-time, reattachment, static-inventory, and non-durable-renewal risks remain | Worktree and branch retained pending merge |
+| 2 | PR `#210` squash-merged as `7187829` after required CI passed | Implementation, focused mixed-release regression, `make validate-pr`, 2,173-test receipt, manager verification, and CI passed | No known blocker; accepted crash-time, reattachment, static-inventory, and non-durable-renewal risks remain | Worktree and local/remote phase branch removed |
 | 3 | pending | pending | pending | pending |
