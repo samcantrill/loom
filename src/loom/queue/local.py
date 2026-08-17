@@ -82,6 +82,7 @@ class _ActiveLocalDispatch:
     next_renew_at: str | None
     safety_deadline_at: str | None
     termination_requested: bool = False
+    cancellation_requested: bool = False
 
 
 class SubprocessLocalProcessRunner:
@@ -192,6 +193,13 @@ class LocalQueueDispatchAdapter:
                     evidence={"local_process_started": False},
                     disposition="deferred",
                 )
+            if admission.failure_kind is CoordinationFailureKind.INVALID_OR_UNSUPPORTED:
+                return QueueDispatchResult(
+                    handle_id=f"local-admission:{item.queue_item_id}:{item.dispatch_attempt}",
+                    status=QueueItemStatus.FAILED,
+                    reason=admission.reason_code or "resource_admission.unsupported_resource",
+                    evidence={"local_process_started": False},
+                )
             return QueueDispatchResult(
                 handle_id=f"local-admission:{item.queue_item_id}:{item.dispatch_attempt}",
                 status=QueueItemStatus.UNKNOWN,
@@ -282,8 +290,12 @@ class LocalQueueDispatchAdapter:
             active.admission,
             code="local_process_completed",
         )
-        status = QueueItemStatus.SUCCEEDED if returncode == 0 else QueueItemStatus.FAILED
-        reason = "local process succeeded" if returncode == 0 else "local process failed"
+        if active.cancellation_requested:
+            status = QueueItemStatus.CANCELLED
+            reason = "local process cancelled"
+        else:
+            status = QueueItemStatus.SUCCEEDED if returncode == 0 else QueueItemStatus.FAILED
+            reason = "local process succeeded" if returncode == 0 else "local process failed"
         return QueueDispatchInspection(
             status=status,
             reason=reason,
@@ -321,6 +333,7 @@ class LocalQueueDispatchAdapter:
             # The runner is the sole source of process-exit truth.  Keep the
             # leases when it cannot yet confirm exit rather than making them reusable.
             if active.process.poll() is None:
+                active.cancellation_requested = True
                 self._active[handle_id] = active
                 return QueueDispatchCancellation(
                     reason=reason,
@@ -407,6 +420,7 @@ class LocalQueueDispatchAdapter:
             )
             if exc.kind is CoordinationFailureKind.OWNERSHIP_LOST or deadline_reached:
                 active.process.terminate()
+                active.termination_requested = True
             return QueueDispatchInspection(
                 status=QueueItemStatus.DISPATCHED,
                 reason="local scalar lease renewal failed",
@@ -416,6 +430,13 @@ class LocalQueueDispatchAdapter:
                 next_maintenance_at=active.safety_deadline_at,
             )
         except Exception as exc:  # noqa: BLE001
+            deadline_reached = (
+                active.safety_deadline_at is not None
+                and now >= parse_timestamp(active.safety_deadline_at)
+            )
+            if deadline_reached:
+                active.process.terminate()
+                active.termination_requested = True
             return QueueDispatchInspection(
                 status=QueueItemStatus.DISPATCHED,
                 reason="local scalar lease renewal failed",

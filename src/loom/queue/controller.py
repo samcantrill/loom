@@ -267,6 +267,7 @@ class QueueController:
         self._owner_id = owner_id or service.spec.controller.owner_id
         self._clock = clock
         self._session_id = uuid4().hex
+        self._owned_handle_ids: set[str] = set()
 
     def run_cycle(self, *, pool_name: str) -> QueueCycleResult:
         """Reconcile one pool then fill it within its controller-local budgets."""
@@ -317,11 +318,14 @@ class QueueController:
                     )
                 else:
                     active_count += 1
+                    self._owned_handle_ids.add(handle.handle_id)
                     if result.next_maintenance_at is not None:
                         deadlines.append(result.next_maintenance_at)
                 dispatch_steps.append(
                     QueueControllerStep("dispatched", persisted, handle)
                 )
+                if result.status is QueueItemStatus.UNKNOWN:
+                    break
         return QueueCycleResult(
             reconciliation_steps=tuple(reconciliation),
             dispatch_steps=tuple(dispatch_steps),
@@ -365,9 +369,13 @@ class QueueController:
                 dispatch_attempt=item.dispatch_attempt,
                 evidence=_thaw_evidence(result.evidence),
             )
-            persisted = self._service.record_dispatch_handle(
-                item.queue_item_id, handle, expected=item
-            )
+            try:
+                persisted = self._service.record_dispatch_handle(
+                    item.queue_item_id, handle, expected=item
+                )
+            except Exception:
+                self._compensate_uncommitted_start(item, handle)
+                raise
             if result.disposition is QueueDispatchDisposition.COMPLETED:
                 completed = self._service.complete_item(
                     item.queue_item_id,
@@ -376,6 +384,7 @@ class QueueController:
                     expected=persisted,
                 )
             else:
+                self._owned_handle_ids.add(handle.handle_id)
                 completed = self._service.read_item(item.queue_item_id)
                 if completed is None:
                     raise QueueServiceError(
@@ -391,6 +400,8 @@ class QueueController:
     def reconcile_active(self, *, pool_name: str | None = None) -> QueueControllerStep:
         for item in self._service.recovery_items():
             if pool_name is not None and item.pool_name != pool_name:
+                continue
+            if not self._owned_by_current_session(item):
                 continue
             if QueueItemStatus(item.status) is QueueItemStatus.CLAIMED:
                 return self._complete_unknown(
@@ -455,6 +466,8 @@ class QueueController:
                 )
                 evidence = cancellation.evidence
                 reason = cancellation.reason
+                if cancellation.evidence.get("exit_observed") is False:
+                    return QueueControllerStep(outcome="cancelling", item=item)
         evidence = _thaw_evidence(evidence)
         cancelled = self._service.cancel_item(
             queue_item_id,
@@ -539,9 +552,10 @@ class QueueController:
                 step = self._reconcile_item(item, deadlines)
             except Exception:  # an item-local failure is recorded and fill is stopped
                 degraded = True
+                steps.append(QueueControllerStep("degraded", item))
                 continue
             steps.append(step)
-            if step.outcome == "unknown":
+            if step.outcome in {"unknown", "degraded"}:
                 degraded = True
         return steps, degraded, deadlines
 
@@ -596,11 +610,20 @@ class QueueController:
         )
 
     def _owned_by_current_session(self, item: QueueItem) -> bool:
+        if QueueItemStatus(item.status) is QueueItemStatus.CLAIMED:
+            return (
+                item.claim is not None
+                and item.claim.owner_id == self._owner_id
+                and f":{self._session_id}:" in item.claim.claim_id
+            )
         if item.launch_contract.adapter != "local" or item.dispatch_handle is None:
-            return True
+            return (
+                item.dispatch_handle is not None
+                and item.dispatch_handle.handle_id in self._owned_handle_ids
+            )
         managed = item.dispatch_handle.evidence.get("managed_local")
         if not isinstance(managed, Mapping):
-            return True
+            return False
         adapter = self._adapters.get(item.launch_contract.adapter)
         session_id = getattr(adapter, "session_id", None)
         return isinstance(session_id, str) and managed.get("session_id") == session_id

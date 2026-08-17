@@ -278,9 +278,10 @@ Final commands:
 - Implementation: completed at `68e0b57`; repository/controller/config cycle,
   typed coordination/admission classification, guarded SQLite mutations, and
   managed-local scalar lifecycle are implemented with phase-scoped coverage
-- Refiner: completed on 2026-08-17. The four affected test modules now make
-  their existing optional/plain-data assumptions explicit; no production
-  behavior changed.
+- Refiner: completed on 2026-08-17. Final scoped correction repairs fail-closed
+  cycle handling, current-session-only mutation, both handle-commit compensation
+  paths, and cancellation-until-exit behavior without schema or public-surface
+  expansion.
 - Pre-submit gate: the refiner's focused Pyright run is clean and its 19
   affected tests pass. A rerun of `make validate-pr` passed Ruff and the
   full-project Pyright gate (0 errors), then started its default test harness
@@ -288,20 +289,18 @@ Final commands:
   the pre-existing unavailable-harness evidence, not a remaining Pyright
   diagnostic.
 - Independent review: required after implementation; unused
-- Blocker corrections: 2/3 inclusive; corrected the qualified test-only
-  optional/plain-data Pyright diagnostic cluster, then added the intentional
-  `CoordinationFailureKind` export to the two exact public-export allowlists
-  identified by the default harness. No further correction is authorized
-  without a distinct qualified blocker.
+- Blocker corrections: 3/3 inclusive; this final correction resolved the
+  qualified safe-pool lifecycle cluster with controller/local/repository causal
+  tests. No further correction is authorized without a distinct qualified blocker.
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `68e0b57`: `src/loom/queue/{controller.py,repository.py,_sqlite.py,service.py,config.py,local.py,__init__.py}`, typed resource admission/coordination boundaries, and the in-memory coordination harness. |
-| Tests added or updated | Queue controller cycle/deferral, repository deferral identity, schema-v2 config, local lifecycle, and managed-local integration coverage; the refiner added only typed assertions to those existing tests. The four affected modules passed: 19 tests. |
-| Validated revision/tree state and evidence | Refiner evidence: focused Pyright over the four affected tests reported 0 errors; their pytest run passed 19 tests. Manager rerun: `make validate-pr` passed Ruff and full-project Pyright (0 errors), then its default harness passed 1,983 tests and identified only two stale public-export allowlists; their bounded correction is pending focused validation. |
-| Validation-relevant changes after evidence | Two public-export allowlists and this completion record changed after the default-harness evidence; focused and final gates must be rerun. |
+| Implementation and changed paths | Final correction: `src/loom/queue/{controller.py,local.py}`. Cycle reconciliation now records degraded steps and stops fill; only in-session active work is mutable; both operations compensate rejected handle commits; local cancellation remains reconcilable until exit. |
+| Tests added or updated | Added controller degraded/foreign/`run_once()` compensation coverage, delayed-exit local cancellation coverage, managed-local cancellation integration, and SQLite concurrent-claim/stale-mutation coverage. Recorded targeted suites passed: 30 unit, 19 contract, 14 integration, and 2 config tests. |
+| Validated revision/tree state and evidence | Final correction focused pytest passed 65 tests; Ruff on all changed paths passed; changed-path Pyright reported 0 errors. The earlier full-harness receipt remains the recorded external gate limitation. |
+| Validation-relevant changes after evidence | This final correction and completion record changed after the earlier default-harness evidence; no additional correction loop is authorized. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | The qualified Pyright blocker is resolved. Full-harness receipt remains unavailable; no in-scope production or design remedy is evidenced. No implementation residual beyond the accepted controller-local limit and live-session renewal limitation. Worktree cleanup awaits manager disposition. |
+| Residual risk and cleanup | Final correction budget is exhausted. Full-harness receipt remains unavailable; no in-scope production or design remedy is evidenced. No implementation residual beyond the accepted controller-local limit and live-session renewal limitation. Worktree cleanup awaits manager disposition. |

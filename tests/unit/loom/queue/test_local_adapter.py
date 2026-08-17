@@ -66,6 +66,27 @@ def test_local_adapter_cancel_terminates_process_group_and_releases_leases() -> 
     assert _active_amount(store, "gpu") == 0
 
 
+def test_local_adapter_keeps_leases_until_cancelled_process_exit_is_observed() -> None:
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    process = _FakeProcess(pid=106, pgid=106, exit_on_terminate=False)
+    adapter = _adapter(store, _FakeRunner(process))
+    item = _item("item-1", resources={"gpu": 1})
+    result = adapter.dispatch(item)
+    assert result.handle_id is not None
+    dispatched = _with_dispatch_handle(item, result.handle_id, result.evidence)
+
+    cancelling = adapter.cancel(dispatched, requested_by="operator", reason="stop")
+
+    assert cancelling.evidence["exit_observed"] is False
+    assert _active_amount(store, "gpu") == 1
+    process.returncode = -15
+    terminal = adapter.inspect(dispatched)
+    assert terminal.status is QueueItemStatus.CANCELLED
+    assert terminal.terminal is True
+    assert _active_amount(store, "gpu") == 0
+
+
 def test_local_adapter_detects_launch_contract_drift_before_resource_admission() -> None:
     store = _store()
     store.set_resource_limit("workspace-1", "gpu", limit=1)
@@ -127,13 +148,15 @@ class _FakeProcess:
     returncode: int | None = None
     terminated: bool = False
     killed: bool = False
+    exit_on_terminate: bool = True
 
     def poll(self) -> int | None:
         return self.returncode
 
     def terminate(self) -> None:
         self.terminated = True
-        self.returncode = -15
+        if self.exit_on_terminate:
+            self.returncode = -15
 
     def kill(self) -> None:
         self.killed = True

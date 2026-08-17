@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from loom.queue import (
     FakeQueueDispatchAdapter,
     QueueController,
@@ -338,6 +339,93 @@ def test_cycle_defers_fifo_head_once_and_returns_serializable_capacity_result(
     assert result.to_dict()["next_maintenance_at"] is None
 
 
+def test_cycle_stops_after_unknown_completion_and_degraded_reconciliation(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(12)])
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="active",
+            queue_name="gpu",
+            run_uri="file:///runs/active",
+            adapter="degrading",
+        )
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="queued",
+            queue_name="gpu",
+            run_uri="file:///runs/queued",
+        )
+    )
+    adapter = _DegradingAdapter()
+    controller = QueueController(
+        service, adapters={"degrading": adapter, "fake": FakeQueueDispatchAdapter()}, clock=clock
+    )
+    controller.run_once(pool_name="gpu-pool")
+
+    degraded = controller.run_cycle(pool_name="gpu-pool")
+
+    assert [step.outcome for step in degraded.reconciliation_steps] == ["degraded"]
+    assert degraded.dispatch_steps == ()
+    queued = service.read_item("queued")
+    assert queued is not None
+    assert queued.status is QueueItemStatus.QUEUED
+
+
+def test_cycle_counts_foreign_dispatch_without_inspecting_or_mutating_it(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(12)])
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="foreign",
+            queue_name="gpu",
+            run_uri="file:///runs/foreign",
+            adapter="counting",
+        )
+    )
+    first_adapter = _CountingAdapter()
+    first = QueueController(service, adapters={"counting": first_adapter}, clock=clock)
+    first.run_once(pool_name="gpu-pool")
+    foreign_before = service.read_item("foreign")
+    second_adapter = _CountingAdapter()
+
+    result = QueueController(
+        service, adapters={"counting": second_adapter}, clock=clock
+    ).run_cycle(pool_name="gpu-pool")
+
+    assert result.active_count == 1
+    assert result.reconciliation_steps == ()
+    assert second_adapter.inspections == 0
+    assert service.read_item("foreign") == foreign_before
+
+
+def test_run_once_compensates_started_handle_when_commit_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _clock("2020-01-01T00:00:00Z", "2020-01-01T00:00:01Z")
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1", queue_name="gpu", run_uri="file:///runs/item-1", adapter="cancellable"
+        )
+    )
+    adapter = _CancellableStartedAdapter()
+    controller = QueueController(service, adapters={"cancellable": adapter}, clock=clock)
+
+    def reject(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise RuntimeError("commit rejected")
+
+    monkeypatch.setattr(service, "record_dispatch_handle", reject)
+    with pytest.raises(RuntimeError, match="commit rejected"):
+        controller.run_once(pool_name="gpu-pool")
+
+    assert adapter.cancelled is True
+
+
 class _AsyncAdapter:
     adapter_name = "async"
 
@@ -410,6 +498,61 @@ class _DeferredAdapter:
             status=QueueItemStatus.UNKNOWN,
             reason="resource_admission.capacity_unavailable",
         )
+
+
+class _DegradingAdapter:
+    adapter_name = "degrading"
+
+    def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
+        return QueueDispatchResult(
+            handle_id=f"degrading:{item.queue_item_id}",
+            status=QueueItemStatus.DISPATCHED,
+            reason="started",
+            complete=False,
+        )
+
+    def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
+        return QueueDispatchInspection(
+            status=QueueItemStatus.DISPATCHED, reason="authority unavailable", degraded=True
+        )
+
+
+class _CountingAdapter:
+    adapter_name = "counting"
+
+    def __init__(self) -> None:
+        self.inspections = 0
+
+    def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
+        return QueueDispatchResult(
+            handle_id=f"counting:{item.queue_item_id}",
+            status=QueueItemStatus.DISPATCHED,
+            reason="started",
+            complete=False,
+        )
+
+    def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
+        self.inspections += 1
+        return QueueDispatchInspection(status=QueueItemStatus.DISPATCHED, reason="active")
+
+
+class _CancellableStartedAdapter:
+    adapter_name = "cancellable"
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
+        return QueueDispatchResult(
+            handle_id=f"cancellable:{item.queue_item_id}",
+            status=QueueItemStatus.DISPATCHED,
+            reason="started",
+            complete=False,
+        )
+
+    def cancel(self, item, *, requested_by, reason) -> QueueDispatchCancellation:  # noqa: ANN001
+        self.cancelled = True
+        return QueueDispatchCancellation(reason=reason)
 
 
 def _started_service(tmp_path: Path, *, clock) -> QueueService:

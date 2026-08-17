@@ -111,19 +111,56 @@ def test_managed_local_controller_cancellation_releases_authority_lease(
     assert _active_amount(store, "gpu") == 0
 
 
+def test_controller_keeps_cancellation_reconcilable_until_local_exit(tmp_path: Path) -> None:
+    clock = _clock(
+        "2020-01-01T00:00:00Z",
+        "2020-01-01T00:00:01Z",
+        "2020-01-01T00:00:02Z",
+        "2020-01-01T00:00:03Z",
+    )
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    process = _FakeProcess(pid=204, pgid=204, exit_on_terminate=False)
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(_request("item-1"))
+    adapter = LocalQueueDispatchAdapter(
+        workspace_id="workspace-1",
+        coordination_store=store,
+        owner_id="controller-1",
+        process_runner=_FakeRunner([process]),
+        current_drift_inputs={"config": "expected"},
+    )
+    controller = QueueController(service, adapters={"local": adapter}, clock=clock)
+    controller.run_once(pool_name="local-pool")
+
+    cancelling = controller.cancel_item("item-1", requested_by="operator", reason="stop")
+
+    assert cancelling.outcome == "cancelling"
+    still_active = service.read_item("item-1")
+    assert still_active is not None
+    assert still_active.status is QueueItemStatus.DISPATCHED
+    assert _active_amount(store, "gpu") == 1
+    process.returncode = -15
+    terminal = controller.run_once(pool_name="local-pool")
+    assert terminal.outcome == "cancelled"
+    assert _active_amount(store, "gpu") == 0
+
+
 @dataclass(slots=True)
 class _FakeProcess:
     pid: int
     pgid: int
     returncode: int | None = None
     terminated: bool = False
+    exit_on_terminate: bool = True
 
     def poll(self) -> int | None:
         return self.returncode
 
     def terminate(self) -> None:
         self.terminated = True
-        self.returncode = -15
+        if self.exit_on_terminate:
+            self.returncode = -15
 
     def kill(self) -> None:
         raise AssertionError("kill should not be needed")
