@@ -277,35 +277,34 @@ Final commands:
   clarified result compatibility, caller-supplied SQLite mutation expectations,
   boundary-owned failure kinds, and compensation-before-deferral without adding
   schema, retry, or recovery machinery
-- Implementation: completed at `68e0b57`; repository/controller/config cycle,
+- Implementation: completed at `2df89ce`; repository/controller/config cycle,
   typed coordination/admission classification, guarded SQLite mutations, and
   managed-local scalar lifecycle are implemented with phase-scoped coverage
 - Refiner: completed on 2026-08-17. Final scoped correction repairs fail-closed
   cycle handling, current-session-only mutation, both handle-commit compensation
   paths, and cancellation-until-exit behavior without schema or public-surface
   expansion.
-- Pre-submit gate: failed at `e80030d`. Ruff and full-project Pyright passed;
-  the default harness passed 1,991 tests and failed delegated SLURM recovery
-  because a restarted controller returned `idle` instead of completing the
-  existing handle. Config-extra tests and build did not run.
-- Independent review: completed once on 2026-08-17; not merge eligible. It
-  confirmed four product blockers: delayed-exit handle-commit compensation can
-  orphan a live process, service-backed coordination loses capacity/ownership
-  kinds, FR-9 lacks termination escalation and fake-clock proof, and local
-  cancellation/start-failure evidence can persist fencing tokens.
-- Blocker corrections: normal 3/3 budget exhausted; the maintainer authorized
-  one additional bounded correction on 2026-08-17 for the five recorded
-  process, coordination, renewal, redaction, and compatibility blockers
-- PR and merge: pending; no PR may open until the authorized correction,
-  current final gates, and fresh blocker audit pass
+- Pre-submit gate: passed at `2df89ce`. Ruff and full-project Pyright passed;
+  the isolated default harness passed 2,020 tests, config-extra passed 128
+  tests with 3 skips, and source/wheel builds succeeded.
+- Independent review: completed once on 2026-08-17. Its delayed-exit process,
+  service-backed failure-kind, renewal escalation/proof, evidence redaction,
+  and delegated restart findings are resolved at `2df89ce`.
+- Blocker corrections: normal 3/3 budget was exhausted; the maintainer
+  authorized one additional bounded correction on 2026-08-17. It is complete
+  at `2df89ce`, including the five recorded findings and manager-audit repairs
+  for legacy config opt-in, guarded active mutations, multi-lease timing and
+  cleanup, cycle budgets, and pending-start cancellation.
+- PR and merge: pending. The authorized correction, current final gates, and
+  fresh manager blocker audit pass; no remaining Phase 1 blocker is known.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Final correction: `src/loom/queue/{controller.py,local.py}`. Cycle reconciliation now records degraded steps and stops fill; only in-session active work is mutable; both operations compensate rejected handle commits; local cancellation remains reconcilable until exit. |
-| Tests added or updated | Added controller degraded/foreign/`run_once()` compensation coverage, delayed-exit local cancellation coverage, managed-local cancellation integration, and SQLite concurrent-claim/stale-mutation coverage. Recorded targeted suites passed: 30 unit, 19 contract, 14 integration, and 2 config tests. |
-| Validated revision/tree state and evidence | Final correction focused pytest passed 65 tests; changed-path Ruff/Pyright passed. Manager `make validate-pr` at `e80030d` passed Ruff/Pyright and 1,991 default tests, then failed delegated SLURM recovery; later gates did not run. |
-| Validation-relevant changes after evidence | This blocked-state metadata only; no validation-relevant source or test change followed the failed gate. |
-| PR, review, and merge | Pending; the maintainer authorized one bounded correction beyond 3/3 and no PR has been opened. |
-| Residual risk and cleanup | The delayed-exit uncommitted-process path, service-backed kind parity, renewal escalation/fake-clock proof, fencing-token redaction, and delegated SLURM restart compatibility are being corrected together. Worktree and branch remain active. |
+| Implementation and changed paths | Correction spans queue controller/config/repository/service/SQLite/local lifecycle plus authority-service classification. It preserves legacy schema-v1 opt-in, guards active mutations, retains delayed-start cleanup until exit, renews from the earliest lease, attempts every release, redacts local evidence, and preserves delegated restart recovery. |
+| Tests added or updated | Phase matrix passed 94 tests: 46 unit, 22 contract, 20 integration, and 6 config-extra. Coverage includes dispositions, cycle limits, reconcile-all, stale guards, backend failure kinds, compensation, fake-clock renewal/escalation, release retry, redaction, and delegated compatibility. |
+| Validated revision/tree state and evidence | `make validate-pr` passed at `2df89ce`: Ruff, Pyright, 2,020 default tests, 128 config-extra tests with 3 skips, and both package builds. `make test-summary` reports 2,148 passed, 3 skipped, and no failures or errors. |
+| Validation-relevant changes after evidence | None; only this phase metadata is updated after the passing receipt. |
+| PR, review, and merge | Fresh manager review found no remaining blocker. PR creation, CI, and merge remain pending. |
+| Residual risk and cleanup | Accepted stage risks remain: controller-local item limits, controller death or an unkillable process, and no durable per-renewal evidence. Worktree and branch remain active until merge. |

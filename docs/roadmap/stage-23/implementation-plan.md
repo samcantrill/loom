@@ -147,6 +147,6 @@ adds the operator contract and public proof without scheduling in CLI.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | Pending; no PR opened | One maintainer-authorized bounded correction is in progress for the failed gate and review blockers | Delayed-exit compensation, service kind parity, renewal escalation/proof, fencing-token redaction, and SLURM restart compatibility are under correction | Active worktree retained |
+| 1 | Pending; no PR opened | Implementation, 94-test phase matrix, `make validate-pr`, test summary, and fresh manager review pass at `2df89ce` | No known blocker; accepted controller-death, unkillable-process, controller-local-limit, and non-durable-renewal risks remain | Active worktree retained pending PR/merge |
 | 2 | pending | pending | pending | pending |
 | 3 | pending | pending | pending | pending |
