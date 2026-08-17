@@ -30,7 +30,9 @@ from loom.pipeline.stores import (
     StageAttempt,
     SweepIdentity,
     ConcurrencyCounter,
+    CoordinationFailureKind,
     CoordinationRecoveryRecord,
+    CoordinationStoreError,
     ResourceLeaseRecord,
     TrialLeaseRecord,
     TrialReference,
@@ -285,6 +287,11 @@ class AuthorityMutationService:
             return rejected_authority_response(
                 metadata,
                 _offline_import_rejection(exc, request_detail=_request_detail(payload)),
+            )
+        except CoordinationStoreError as exc:
+            return rejected_authority_response(
+                metadata,
+                _coordination_rejection(exc, request_detail=_request_detail(payload)),
             )
         except (AuthorityMutationValidationError, TypeError) as exc:
             return rejected_authority_response(
@@ -1243,6 +1250,32 @@ def _value_error_rejection(
         category=category,
         code=code,
         message=message,
+        detail=request_detail,
+    )
+
+
+def _coordination_rejection(
+    exc: CoordinationStoreError,
+    *,
+    request_detail: Mapping[str, PlainData],
+) -> AuthorityProtocolRejection:
+    category = {
+        CoordinationFailureKind.CAPACITY: AuthorityProtocolErrorCategory.CONFLICT,
+        CoordinationFailureKind.INVALID_OR_UNSUPPORTED: (
+            AuthorityProtocolErrorCategory.VALIDATION
+        ),
+        CoordinationFailureKind.UNAVAILABLE: (
+            AuthorityProtocolErrorCategory.UNAVAILABLE_SERVICE
+        ),
+        CoordinationFailureKind.OWNERSHIP_LOST: (
+            AuthorityProtocolErrorCategory.STALE_FENCING
+        ),
+        CoordinationFailureKind.INTERNAL: AuthorityProtocolErrorCategory.INTERNAL_ERROR,
+    }[exc.kind]
+    return AuthorityProtocolRejection(
+        category=category,
+        code=f"coordination_{exc.kind.value}",
+        message=str(exc),
         detail=request_detail,
     )
 

@@ -23,6 +23,8 @@ from loom.pipeline.stores import (
     AuthorityProtocolMetadata,
     AuthorityProtocolOperationKind,
     AuthorityProtocolResult,
+    CoordinationFailureKind,
+    CoordinationStoreError,
     LifecycleReason,
     ServiceWorkspaceCoordinationStore,
     WorkspaceIdentity,
@@ -259,6 +261,35 @@ def test_resource_admission_releases_partial_leases_after_later_failure() -> Non
     ).status is ResourceAdmissionStatus.ADMITTED
 
 
+def test_resource_admission_fails_closed_when_partial_release_is_uncertain() -> None:
+    store = _PartialReleaseFailureStore()
+    store.create_workspace(WorkspaceIdentity(workspace_id="workspace-1"))
+    store.set_resource_limit("workspace-1", "cpu", limit=1)
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    store.acquire_resource_lease(
+        "workspace-1",
+        "gpu",
+        owner_id="existing-worker",
+        amount=1,
+        lease_ttl_seconds=30,
+    )
+
+    decision = acquire_resource_admission(
+        store,
+        _admission_request(
+            ResourceLeaseRequest("cpu", 1),
+            ResourceLeaseRequest("gpu", 1),
+        ),
+    )
+
+    assert decision.status is ResourceAdmissionStatus.REJECTED
+    assert decision.failure_kind is CoordinationFailureKind.INTERNAL
+    assert decision.reason_code == "resource_admission.acquisition_failed"
+    cpu = store.read_resource_limit("workspace-1", "cpu")
+    assert cpu is not None
+    assert cpu.value == 1
+
+
 def test_service_workspace_coordination_store_fails_fast_when_capacity_is_exhausted() -> None:
     store = _service_store_with_workspace()
     store.set_resource_limit("workspace-1", "gpu", limit=1)
@@ -409,6 +440,14 @@ def _store_with_workspace() -> InMemoryWorkspaceCoordinationStore:
     store = InMemoryWorkspaceCoordinationStore()
     store.create_workspace(WorkspaceIdentity(workspace_id="workspace-1"))
     return store
+
+
+class _PartialReleaseFailureStore(InMemoryWorkspaceCoordinationStore):
+    def release_lease(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        raise CoordinationStoreError(
+            "partial release result unavailable",
+            kind=CoordinationFailureKind.INTERNAL,
+        )
 
 
 def _service_store_with_workspace() -> ServiceWorkspaceCoordinationStore:

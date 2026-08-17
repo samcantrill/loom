@@ -31,6 +31,25 @@ from .schema_policy import AuthoritySchemaCheck
 class CoordinationStoreError(ValueError):
     """Raised when workspace coordination records are invalid."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: CoordinationFailureKind | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = CoordinationFailureKind.INTERNAL if kind is None else CoordinationFailureKind(kind)
+
+
+class CoordinationFailureKind(StrEnum):
+    """Stable categories for authority failures at the store boundary."""
+
+    CAPACITY = "capacity"
+    INVALID_OR_UNSUPPORTED = "invalid_or_unsupported"
+    UNAVAILABLE = "unavailable"
+    OWNERSHIP_LOST = "ownership_lost"
+    INTERNAL = "internal"
+
 
 class TrialState(StrEnum):
     PENDING = "pending"
@@ -674,6 +693,7 @@ def _coerce_trial_state(value: object) -> TrialState:
 
 
 __all__ = [
+    "CoordinationFailureKind",
     "CoordinationStoreError",
     "TrialState",
     "WorkspaceIdentity",

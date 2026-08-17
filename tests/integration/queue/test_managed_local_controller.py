@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from loom.pipeline.stores import WorkspaceIdentity
+import pytest
+
+from loom.pipeline.stores import (
+    CoordinationFailureKind,
+    CoordinationStoreError,
+    WorkspaceIdentity,
+)
 from loom.queue import (
     LaunchContract,
     QueueController,
@@ -65,7 +72,7 @@ def test_managed_local_controller_dispatches_one_active_item_at_a_time(
     assert active.outcome == "active"
     assert started_while_first_active == [201]
     assert statuses[0].status is QueueItemStatus.DISPATCHED
-    assert "resource_admission" in statuses[0].authority_evidence
+    assert statuses[0].authority_evidence == {}
     assert active_amount_while_first_active == 1
     assert completed.item is not None
     assert completed.item.status is QueueItemStatus.SUCCEEDED
@@ -107,8 +114,202 @@ def test_managed_local_controller_cancellation_releases_authority_lease(
 
     assert cancelled.item is not None
     assert cancelled.item.status is QueueItemStatus.CANCELLED
+    assert cancelled.item.cancellation is not None
+    _assert_no_private_launch_evidence(cancelled.item.cancellation.evidence)
     assert process.terminated is True
     assert _active_amount(store, "gpu") == 0
+
+
+def test_controller_keeps_cancellation_reconcilable_until_local_exit(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(
+        "2020-01-01T00:00:00Z",
+        "2020-01-01T00:00:01Z",
+        "2020-01-01T00:00:02Z",
+        "2020-01-01T00:00:03Z",
+    )
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    process = _FakeProcess(pid=204, pgid=204, exit_on_terminate=False)
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(_request("item-1"))
+    adapter = LocalQueueDispatchAdapter(
+        workspace_id="workspace-1",
+        coordination_store=store,
+        owner_id="controller-1",
+        process_runner=_FakeRunner([process]),
+        current_drift_inputs={"config": "expected"},
+    )
+    controller = QueueController(service, adapters={"local": adapter}, clock=clock)
+    controller.run_once(pool_name="local-pool")
+
+    cancelling = controller.cancel_item(
+        "item-1", requested_by="operator", reason="stop"
+    )
+
+    assert cancelling.outcome == "cancelling"
+    still_active = service.read_item("item-1")
+    assert still_active is not None
+    assert still_active.status is QueueItemStatus.DISPATCHED
+    assert _active_amount(store, "gpu") == 1
+    terminal = controller.run_once(pool_name="local-pool")
+    assert terminal.outcome == "cancelled"
+    assert process.killed is True
+    assert _active_amount(store, "gpu") == 0
+
+
+@pytest.mark.parametrize("operation", ["run_once", "run_cycle"])
+def test_controller_reconciles_delayed_exit_after_handle_commit_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(20)])
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    process = _FakeProcess(pid=205, pgid=205, exit_on_terminate=False)
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(_request("item-1"))
+    adapter = LocalQueueDispatchAdapter(
+        workspace_id="workspace-1",
+        coordination_store=store,
+        owner_id="controller-1",
+        process_runner=_FakeRunner([process]),
+        current_drift_inputs={"config": "expected"},
+    )
+    controller = QueueController(service, adapters={"local": adapter}, clock=clock)
+    record_dispatch_handle = service.record_dispatch_handle
+
+    def reject_commit(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise RuntimeError("commit rejected")
+
+    monkeypatch.setattr(service, "record_dispatch_handle", reject_commit)
+    with pytest.raises(RuntimeError, match="commit rejected"):
+        if operation == "run_once":
+            controller.run_once(pool_name="local-pool")
+        else:
+            controller.run_cycle(pool_name="local-pool")
+    monkeypatch.setattr(service, "record_dispatch_handle", record_dispatch_handle)
+
+    claimed = service.read_item("item-1")
+    assert claimed is not None
+    assert claimed.status is QueueItemStatus.CLAIMED
+    assert process.terminated is True
+    assert process.killed is False
+    assert _active_amount(store, "gpu") == 1
+
+    if operation == "run_once":
+        reconciled = controller.run_once(pool_name="local-pool")
+        assert reconciled.outcome == "cancelled"
+    else:
+        cycle = controller.run_cycle(pool_name="local-pool")
+        assert [step.outcome for step in cycle.reconciliation_steps] == ["cancelled"]
+    terminal = service.read_item("item-1")
+    assert terminal is not None
+    assert terminal.status is QueueItemStatus.CANCELLED
+    assert process.killed is True
+    assert _active_amount(store, "gpu") == 0
+
+
+def test_controller_cancel_finishes_pending_handle_commit_compensation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(20)])
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    process = _FakeProcess(pid=208, pgid=208, exit_on_terminate=False)
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(_request("item-1"))
+    adapter = LocalQueueDispatchAdapter(
+        workspace_id="workspace-1",
+        coordination_store=store,
+        owner_id="controller-1",
+        process_runner=_FakeRunner([process]),
+        current_drift_inputs={"config": "expected"},
+    )
+    controller = QueueController(service, adapters={"local": adapter}, clock=clock)
+    record_dispatch_handle = service.record_dispatch_handle
+
+    def reject_commit(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise RuntimeError("commit rejected")
+
+    monkeypatch.setattr(service, "record_dispatch_handle", reject_commit)
+    with pytest.raises(RuntimeError, match="commit rejected"):
+        controller.run_once(pool_name="local-pool")
+    monkeypatch.setattr(service, "record_dispatch_handle", record_dispatch_handle)
+
+    cancelled = controller.cancel_item("item-1", requested_by="operator", reason="stop")
+
+    assert cancelled.outcome == "cancelled"
+    assert cancelled.item is not None
+    assert cancelled.item.status is QueueItemStatus.CANCELLED
+    assert process.killed is True
+    assert _active_amount(store, "gpu") == 0
+
+
+def test_renewal_outage_stops_fill_then_releases_and_refills_after_exit(
+    tmp_path: Path,
+) -> None:
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    store = _UnavailableRenewalStore()
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    first_process = _FakeProcess(pid=206, pgid=206, exit_on_terminate=False)
+    second_process = _FakeProcess(pid=207, pgid=207)
+    runner = _FakeRunner([first_process, second_process])
+    service = _started_service(tmp_path, clock=clock, max_active_items=2)
+    service.enqueue(_request("item-1"))
+    service.enqueue(_request("item-2"))
+    adapter = LocalQueueDispatchAdapter(
+        workspace_id="workspace-1",
+        coordination_store=store,
+        owner_id="controller-1",
+        process_runner=runner,
+        current_drift_inputs={"config": "expected"},
+        lease_ttl_seconds=10,
+        clock=clock,
+    )
+    controller = QueueController(service, adapters={"local": adapter}, clock=clock)
+
+    first = controller.run_cycle(pool_name="local-pool")
+    assert first.capacity_blocked is True
+    assert first.next_maintenance_at == "2020-01-01T00:00:05Z"
+    assert [process.pid for process in runner.started] == [206]
+
+    store.advance_time(5)
+    clock.value = "2020-01-01T00:00:05Z"
+    before_deadline = controller.run_cycle(pool_name="local-pool")
+    assert [step.outcome for step in before_deadline.reconciliation_steps] == [
+        "degraded"
+    ]
+    assert before_deadline.dispatch_steps == ()
+    assert first_process.terminated is False
+
+    store.advance_time(3)
+    clock.value = "2020-01-01T00:00:08Z"
+    at_deadline = controller.run_cycle(pool_name="local-pool")
+    assert at_deadline.dispatch_steps == ()
+    assert first_process.terminated is True
+    assert first_process.killed is False
+    assert _active_amount(store, "gpu") == 1
+
+    store.advance_time(1)
+    clock.value = "2020-01-01T00:00:09Z"
+    replacement = controller.run_cycle(pool_name="local-pool")
+
+    assert [step.outcome for step in replacement.reconciliation_steps] == ["completed"]
+    assert [step.outcome for step in replacement.dispatch_steps] == ["dispatched"]
+    assert first_process.killed is True
+    assert [process.pid for process in runner.started] == [206, 207]
+    first_item = service.read_item("item-1")
+    second_item = service.read_item("item-2")
+    assert first_item is not None
+    assert second_item is not None
+    assert first_item.status is QueueItemStatus.FAILED
+    assert second_item.status is QueueItemStatus.DISPATCHED
+    assert _active_amount(store, "gpu") == 1
 
 
 @dataclass(slots=True)
@@ -117,15 +318,22 @@ class _FakeProcess:
     pgid: int
     returncode: int | None = None
     terminated: bool = False
+    killed: bool = False
+    exit_on_terminate: bool = True
+    exit_on_kill: bool = True
 
     def poll(self) -> int | None:
         return self.returncode
 
     def terminate(self) -> None:
         self.terminated = True
+        if self.exit_on_terminate:
+            self.returncode = -15
 
     def kill(self) -> None:
-        raise AssertionError("kill should not be needed")
+        self.killed = True
+        if self.exit_on_kill:
+            self.returncode = -9
 
 
 class _FakeRunner:
@@ -137,6 +345,21 @@ class _FakeRunner:
         process = self._processes.pop(0)
         self.started.append(process)
         return process
+
+
+@dataclass(slots=True)
+class _MutableClock:
+    value: str
+
+    def __call__(self) -> str:
+        return self.value
+
+
+class _UnavailableRenewalStore(InMemoryWorkspaceCoordinationStore):
+    def renew_lease(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        raise CoordinationStoreError(
+            "authority unavailable", kind=CoordinationFailureKind.UNAVAILABLE
+        )
 
 
 def _request(item_id: str) -> QueueEnqueueRequest:
@@ -154,14 +377,21 @@ def _request(item_id: str) -> QueueEnqueueRequest:
     )
 
 
-def _started_service(tmp_path: Path, *, clock) -> QueueService:
+def _started_service(
+    tmp_path: Path,
+    *,
+    clock,
+    max_active_items: int = 1,  # noqa: ANN001
+) -> QueueService:
     spec = normalize_queue_spec(
         {
+            "schema_version": 2,
             "db_path": str(tmp_path / "queue.sqlite"),
             "pools": [
                 {"pool_name": "local-pool", "mode": "managed", "resources": {"gpu": 1}},
             ],
             "queues": [{"queue_name": "local", "pool_name": "local-pool"}],
+            "controller": {"max_active_items": max_active_items},
         }
     )
     service = QueueService(
@@ -183,6 +413,17 @@ def _active_amount(store: InMemoryWorkspaceCoordinationStore, resource_key: str)
     counter = store.read_resource_limit("workspace-1", resource_key)
     assert counter is not None
     return counter.value
+
+
+def _assert_no_private_launch_evidence(value: object) -> None:
+    forbidden = {"fencing_token", "argv", "command", "cwd", "env", "environment"}
+    if isinstance(value, Mapping):
+        assert forbidden.isdisjoint(value)
+        for nested in value.values():
+            _assert_no_private_launch_evidence(nested)
+    elif isinstance(value, (list, tuple)):
+        for nested in value:
+            _assert_no_private_launch_evidence(nested)
 
 
 def _clock(*values: str):

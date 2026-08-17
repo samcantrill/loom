@@ -23,6 +23,8 @@ from .capabilities import (
 )
 from .coordination import (
     ConcurrencyCounter,
+    CoordinationFailureKind,
+    CoordinationStoreError,
     CoordinationRecoveryRecord,
     ResourceLeaseRecord,
     SweepIdentity,
@@ -355,7 +357,9 @@ class SQLiteWorkspaceCoordinationStore:
                 conn, workspace_id, resource_key, now
             )
             if limit is not None and active_amount + amount > limit:
-                raise ValueError("resource limit exceeded")
+                raise CoordinationStoreError(
+                    "resource limit exceeded", kind=CoordinationFailureKind.CAPACITY
+                )
             lease = self._insert_lease(
                 conn,
                 kind=LeaseKind.RESOURCE,
@@ -769,14 +773,22 @@ class SQLiteWorkspaceCoordinationStore:
             (lease_id,),
         ).fetchone()
         if row is None:
-            raise ValueError(f"unknown lease: {lease_id}")
+            raise CoordinationStoreError(
+                f"unknown lease: {lease_id}", kind=CoordinationFailureKind.OWNERSHIP_LOST
+            )
         lease = _lease_from_row(row, conn=conn)
         if lease.owner_id != owner_id or lease.fencing_token != fencing_token:
-            raise ValueError("stale or foreign lease token")
+            raise CoordinationStoreError(
+                "stale or foreign lease token", kind=CoordinationFailureKind.OWNERSHIP_LOST
+            )
         if lease.state is not LeaseState.ACTIVE:
-            raise ValueError("lease is not active")
+            raise CoordinationStoreError(
+                "lease is not active", kind=CoordinationFailureKind.OWNERSHIP_LOST
+            )
         if _timestamp_expired(lease.expires_at, now):
-            raise ValueError("lease has expired")
+            raise CoordinationStoreError(
+                "lease has expired", kind=CoordinationFailureKind.OWNERSHIP_LOST
+            )
         return lease
 
     def _finish_lease(

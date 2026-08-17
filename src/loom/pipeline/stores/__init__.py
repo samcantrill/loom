@@ -179,6 +179,7 @@ from .config import (
 )
 from .coordination import (
     ConcurrencyCounter,
+    CoordinationFailureKind,
     CoordinationRecoveryRecord,
     CoordinationStoreError,
     ResourceLeaseRecord,
@@ -528,6 +529,7 @@ __all__ = [
     "WorkspaceCoordinationStore",
     "ServiceWorkspaceCoordinationStore",
     "CoordinationStoreError",
+    "CoordinationFailureKind",
     "TrialState",
     "WorkspaceIdentity",
     "SweepIdentity",

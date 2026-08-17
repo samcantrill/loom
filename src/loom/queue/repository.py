@@ -42,6 +42,8 @@ class QueueRepository(Protocol):
         self,
         queue_item_id: str,
         handle: DispatchHandle,
+        *,
+        expected: QueueItem,
     ) -> QueueItem: ...
 
     def complete_item(
@@ -50,12 +52,23 @@ class QueueRepository(Protocol):
         *,
         status: QueueItemStatus,
         reason: str,
+        expected: QueueItem,
     ) -> QueueItem: ...
 
     def request_cancellation(
         self,
         queue_item_id: str,
         cancellation: CancellationRecord,
+        *,
+        expected: QueueItem | None = None,
+    ) -> QueueItem: ...
+
+    def defer_item(
+        self,
+        queue_item_id: str,
+        *,
+        reason_code: str,
+        expected: QueueItem,
     ) -> QueueItem: ...
 
     def scan_recovery(self) -> tuple[QueueRecoveryRecord, ...]: ...

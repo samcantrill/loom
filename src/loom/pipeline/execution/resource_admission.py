@@ -13,6 +13,8 @@ from loom.pipeline.stores import (
     ConcurrencyCounter,
     LifecycleReason,
     ResourceLeaseRecord,
+    CoordinationFailureKind,
+    CoordinationStoreError,
     WorkspaceCoordinationStore,
 )
 from loom.serialization import PlainData, ensure_plain_data
@@ -172,6 +174,7 @@ class ResourceAdmissionDecision:
     leases: tuple[ResourceLeaseRecord, ...] = ()
     message: str | None = None
     reason_code: str | None = None
+    failure_kind: CoordinationFailureKind | None = None
     reason_context: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -183,6 +186,10 @@ class ResourceAdmissionDecision:
             raise ResourceAdmissionError(
                 "reason_code must be a non-empty string",
                 code="resource_admission.invalid_decision",
+            )
+        if self.failure_kind is not None:
+            object.__setattr__(
+                self, "failure_kind", CoordinationFailureKind(self.failure_kind)
             )
         object.__setattr__(
             self,
@@ -201,6 +208,9 @@ class ResourceAdmissionDecision:
             "leases": [lease.to_dict() for lease in self.leases],
             "message": self.message,
             "reason_code": self.reason_code,
+            "failure_kind": None
+            if self.failure_kind is None
+            else self.failure_kind.value,
             "reason_context": dict(self.reason_context),
         }
 
@@ -381,7 +391,23 @@ def acquire_resource_admission(
             )
         except Exception as exc:
             last_error = exc if isinstance(exc, Exception) else Exception(str(exc))
-            _release_partial(store, request, acquired)
+            compensation_error = _release_partial(store, request, acquired)
+            failure_kind = _admission_failure_kind(last_error)
+            if compensation_error is not None:
+                last_error = compensation_error
+                failure_kind = _admission_failure_kind(compensation_error)
+                if failure_kind is CoordinationFailureKind.CAPACITY:
+                    failure_kind = CoordinationFailureKind.INTERNAL
+                return ResourceAdmissionDecision(
+                    status=ResourceAdmissionStatus.REJECTED,
+                    request=request,
+                    message=str(last_error),
+                    reason_code=_admission_reason_code(last_error, failure_kind),
+                    failure_kind=failure_kind,
+                    reason_context=_admission_reason_context(
+                        request, last_error, waited=request.waits
+                    ),
+                )
             if not request.waits or monotonic() >= deadline:
                 return ResourceAdmissionDecision(
                     status=ResourceAdmissionStatus.BLOCKED
@@ -389,7 +415,8 @@ def acquire_resource_admission(
                     else ResourceAdmissionStatus.REJECTED,
                     request=request,
                     message=str(last_error),
-                    reason_code=_admission_reason_code(last_error),
+                    reason_code=_admission_reason_code(last_error, failure_kind),
+                    failure_kind=failure_kind,
                     reason_context=_admission_reason_context(
                         request,
                         last_error,
@@ -423,11 +450,12 @@ def _release_partial(
     store: WorkspaceCoordinationStore,
     request: ResourceAdmissionRequest,
     leases: list[ResourceLeaseRecord],
-) -> None:
+) -> Exception | None:
     reason = LifecycleReason(
         code="resource_admission_partial_release",
         message=f"released partial resource admission for stage {request.stage_name}",
     )
+    first_error: Exception | None = None
     for lease in leases:
         try:
             store.release_lease(
@@ -436,8 +464,10 @@ def _release_partial(
                 fencing_token=lease.lease.fencing_token,
                 reason=reason,
             )
-        except Exception:
-            continue
+        except Exception as exc:  # noqa: BLE001
+            if first_error is None:
+                first_error = exc
+    return first_error
 
 
 def _resource_limit_reconciliation_result(
@@ -479,17 +509,27 @@ def _resource_limit_reconciliation_result(
     )
 
 
-def _admission_reason_code(exc: Exception) -> str:
+def _admission_reason_code(
+    exc: Exception, kind: CoordinationFailureKind | None = None
+) -> str:
     if isinstance(exc, ResourceAdmissionError):
         return exc.code
-    message = str(exc).lower()
-    if "resource limit" in message or "capacity" in message:
+    kind = kind or _admission_failure_kind(exc)
+    if kind is CoordinationFailureKind.CAPACITY:
         return "resource_admission.capacity_unavailable"
-    if "unsupported_resource" in message or "unsupported resource" in message:
+    if kind is CoordinationFailureKind.INVALID_OR_UNSUPPORTED:
         return "resource_admission.unsupported_resource"
-    if "unavailable" in message or "stale_generation" in message:
+    if kind is CoordinationFailureKind.UNAVAILABLE:
         return "resource_admission.unavailable_authority"
+    if kind is CoordinationFailureKind.OWNERSHIP_LOST:
+        return "resource_admission.ownership_lost"
     return "resource_admission.acquisition_failed"
+
+
+def _admission_failure_kind(exc: Exception) -> CoordinationFailureKind:
+    if isinstance(exc, CoordinationStoreError):
+        return exc.kind
+    return CoordinationFailureKind.INTERNAL
 
 
 def _admission_reason_context(
