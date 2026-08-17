@@ -9,6 +9,7 @@
 - Worktree root and path:
   `/home/can134/work/active/loom-worktrees/stage-23-p2-managed-local-assignments`
 - Base revision: `e47ed7796d61169d54846b2a2f60c2970b88116e`
+- Planning evidence revision: `0baa20e`
 - PR target: `develop`
 - PR title: `Managed Local Concurrency - Phase 2: Static Assignment Lifecycle`
 - Dependencies: Phase 1 remotely merged and its disposition, guarded mutation,
@@ -125,19 +126,50 @@ Assumptions:
   leases, bindings, `safe_evidence`, and `next_maintenance_at`.
   `ResourceAssignmentDecision` fixes disposition, optional assignment,
   `reason_code`, and plain-data reason context: assigned requires an assignment;
-  deferred/failed forbid one. Its serializer excludes the live token.
+  deferred/failed forbid one. The public provider boundary is only these four
+  operations and their records: it does not imply registration, discovery,
+  recovery, callbacks, or a separately durable provider state. Any plain-data
+  serialization of a decision excludes the live token.
   Successful renewal returns the full replacement assignment; typed renewal
   failure leaves the prior assignment owned until Phase 1's deadline/termination
-  path resolves it. Release consumes the current assignment exactly once.
+  path resolves it. The adapter atomically replaces its private current
+  assignment only after successful renewal. Release consumes that current
+  assignment exactly once; the protocol does not prescribe provider-internal
+  token or lease bookkeeping.
   Phase 2 extends Phase 1's schema-tagged `managed_local` handle evidence with
-  nested assignment provider/slot labels and lease IDs/timing plus relative log
-  paths. It excludes fencing tokens, command/cwd, binding names/values, and
-  provider-private payloads.
+  only two nested projections. `assignment` contains `provider_name`, `slots`,
+  and `next_maintenance_at`; each `slots` entry contains `resource_name`,
+  `slot_id`, `lease_id`, `expires_at`, and optional `label`. `logs` contains
+  `stdout_path` and `stderr_path`, both queue-relative. Tests assert those
+  complete required/optional key sets at every nested level. The projection
+  excludes coordination keys, fencing tokens, command/cwd, binding names and
+  values, absolute paths, and all provider-private payloads. Renewal does not
+  add per-renewal durable evidence.
+- Authored schema boundary: schema v2 accepts exactly the recorded
+  `static-slots` provider record and `environment-list` binding under
+  `adapters.local.assignments.<pool>.<resource>`; schema v1 has no assignment
+  record and continues to normalize to the no-op provider. Parsing and
+  preflight may use private normalized records. Preflight reads configured
+  authority capabilities and limits but performs no DDL, limit mutation,
+  inventory discovery, or provider loading.
 - Trust and failure boundaries: authored argv/env and assignment config are
   trusted, but are validated before crossing `subprocess`. Every failure after
-  scalar acquisition unwinds in reverse order. If handle persistence fails
+  scalar acquisition unwinds the resources actually acquired in reverse order.
+  Assignment deferral/failure, binding rejection, log preparation failure, and
+  process-start failure therefore release assignment if present and then scalar
+  admission without publishing an active handle. If handle persistence fails
   after start, the controller uses the adapter's existing cancellation boundary
-  with the just-created handle, confirms exit, and only then releases resources.
+  with the just-created handle, confirms process exit, and only then releases
+  assignment and scalar resources.
+- Coupled renewal boundary: scalar and assignment leases retain their own due
+  times and safety deadlines, while the cycle exposes their earliest required
+  maintenance time. A typed transient failure keeps the current owned value and
+  requests a retry no later than its existing safety deadline. Definitive
+  ownership loss, or reaching either deadline without a successful renewal,
+  fails the whole local dispatch closed: request process-group termination,
+  confirm terminal state, then release the other still-owned assignment/scalar
+  resources exactly once. A scalar success cannot mask assignment loss, nor an
+  assignment success scalar loss.
 - Cross-phase contracts: Phase 3 reads only the safe evidence projection and
   may label optional same-session inspection separately. It must not depend on
   live tokens or binding values.
@@ -145,10 +177,11 @@ Assumptions:
   logical integer mapping and queue records gain no slot/vendor field.
   Schema-v1 config normalizes to no-op assignment/one active item. Existing
   fake/custom/SLURM adapters and local call sites without assignment continue.
-- Private choices the executor may simplify: internal cleanup helpers, log
-  filename punctuation, opaque token type, provider helper layout, and factory
-  wiring. Exported names/methods/discriminators, config spelling, evidence
-  allowlist, and renewal semantics are fixed.
+- Private choices the executor may simplify: normalized config types, active
+  state representation, cleanup/evidence helpers, log filename punctuation,
+  opaque token type, provider helper layout, and factory wiring. Exported
+  names/methods/discriminators, authored config spelling, the persisted evidence
+  allowlist, and observable renewal/compensation semantics are fixed.
 
 ## Proportionality
 
@@ -168,9 +201,9 @@ Assumptions:
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
 | Two valid live assignments never hold the same static slot lease. | Static provider plus authority | Concurrent providers race for one authored slot. | Concrete resource overlap. | Real SQLite coordination with multiple adapter instances. |
-| Partial scalar or slot acquisition never leaks usable capacity. | Admission/provider; local adapter orchestrates | Later slot/binding/start step fails after earlier leases succeed. | Starvation or false capacity. | Failure injection at every acquisition/launch boundary. |
+| Partial scalar or slot acquisition never leaks usable capacity. | Admission/provider; local adapter orchestrates | Assignment defers/fails after scalar admission, a later slot conflicts, or binding/log/start fails after assignment. | Starvation or false capacity. | One focused test per distinct owned-state transition; no Cartesian fault matrix. |
 | A process is terminal before its scalar/slot leases are released. | Local adapter | Cancellation, renewal loss, or commit failure releases immediately after signal. | Replacement overlaps a still-running process. | Fake process wait/escalation and commit-failure tests. |
-| Live leases renew before the safety deadline or the owner fails closed. | Local adapter and controller maintenance schedule | Transient outage or stale lease during a long process. | Process silently runs without authority. | Fake monotonic clock at due/deadline/loss boundaries. |
+| Live scalar and assignment leases renew before their respective safety deadlines or the whole dispatch fails closed. | Local adapter and controller maintenance schedule | One lease class renews while the other is transient, lost, or overdue during a long process. | Process silently runs with only partial authority. | Fake monotonic clock proves earliest maintenance, one-class transient retry, and either-class loss/deadline termination. |
 | Launch binding cannot silently override authored environment. | Binding application | Snapshot provides a different value for the configured name. | Work runs on unintended resource. | Same-value allow and different-value reject tests. |
 | Status-safe evidence contains no launch secret or fencing authority. | Local adapter evidence builder | Broad admission serialization or command/env is persisted. | Credential/command disclosure. | Exact-key allowlist and negative serialization assertions. |
 
@@ -183,7 +216,9 @@ Assumptions:
 3. Extend Phase 1's local active state with assignment and logs; add deterministic
    binding, queue-owned log preparation, and safe evidence.
 4. Compose assignment acquire/renew/release into Phase 1's compensation,
-   termination, and earliest-maintenance paths without blocking acquisition.
+   terminal-before-release, and earliest-maintenance paths. Keep acquisition
+   synchronous with the established dispatch step; do not add background
+   renewal, callbacks, or durable recovery state.
 5. Prove multiple local handles, unique slots, distinct logs, exact cleanup,
    foreign-session non-inspection, and compatibility across unit, contract, and
    real-SQLite integration tests.
@@ -193,9 +228,9 @@ Assumptions:
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | required | Intentional assignment/local exports and cheap queue import. | Protocol/records/built-ins import without optional/vendor dependencies. |
-| Unit | required | Selection, binding, config/preflight, renewal, cleanup, logs, and multi-handle state. | Deterministic multi-slot order; rollback; conflicts; deadline/loss; each release once. |
-| Contract | required | Provider fakeability, config v1/v2, failure kinds, evidence allowlist, and no authority mutation. | Discriminated decisions round trip where public; preflight only reads; forbidden keys absent. |
-| Integration | required | Static slots over real SQLite coordination and local controller cycles. | More items than slots; unique active slots; capacity deferred; success/failure/cancel refill; foreign session preserved. |
+| Unit | required | Selection, binding, config/preflight, renewal, cleanup, logs, and multi-handle state. | Deterministic multi-slot order; rollback at each distinct owned-state transition; earliest deadline; either-class loss fails closed; each release once. |
+| Contract | required | Provider fakeability, authored config v1/v2, failure kinds, evidence allowlist, and no authority mutation. | Public decisions obey their discriminator invariants; v1 normalizes to no-op; v2 accepts the fixed records; preflight only reads; complete evidence key sets match and forbidden keys are absent. |
+| Integration | required | Static slots over real SQLite coordination and local controller cycles. | More items than slots; unique active slots; capacity deferred without attempt/FIFO change; success/failure/cancel refill only after terminal release; foreign session preserved. |
 | E2E / opt-in | default subprocess proof deferred to Phase 3; real accelerator profile remains opt-in | Phase 2 owns lifecycle mechanics, while Phase 3 owns the documented operator journey. | No real accelerator, vendor command, or external service in default gates. |
 
 Targeted commands:
@@ -215,13 +250,19 @@ Final commands:
 - Main risks: regressing Phase 1 release ordering, losing a partially renewed
   assignment, persisting fencing/binding data, over-generalizing the provider,
   and claiming crash safety that in-memory ownership cannot provide.
-- Review focus: acquire/release ordering, all process terminal paths, typed
-  transient versus definitive renewal failures, session ownership, config-v1
-  normalization, exact persisted keys, and no limit mutation.
+- Review focus: the provider surface contains no discovery/recovery mechanism;
+  schema-v1 and non-local compatibility remain unchanged; authored schema-v2
+  records are the only new config form; persisted assignment/log evidence is an
+  exact allowlist; and scalar/assignment renewal, process termination, reverse
+  release, and refill occur in that causal order for either-class loss. Confirm
+  preflight performs no authority mutation or DDL.
 - Stop if: the coordination protocol cannot distinguish a required failure;
   safe process shutdown needs a new durable recovery state; a supported platform
   cannot provide queue-owned logs through the process-runner boundary; or new
-  queue/authority DDL appears necessary. Return evidence to the manager.
+  queue/authority DDL appears necessary. Also stop rather than adding provider
+  discovery, a durable live token, reattachment, a renewal daemon, or a second
+  owner of release state. Return the concrete failing path and evidence to the
+  manager; do not broaden the phase.
 - Accepted debt and revisit trigger: authored inventory and live-only tokens are
   accepted until dynamic placement or restart recovery is a current consumer;
   controller death/unkillable process remains explicit recovery-needed risk.
@@ -230,8 +271,8 @@ Final commands:
 
 - Read section range: this entire phase plan plus planning requirements `FR-6`
   through `FR-12` and decisions `A-2` through `A-7`.
-- Safe implementation slices: execute slices 1-5 in order; keep assignment
-  types queue-local and commit protocol/config, lifecycle, and tests separately.
+- Safe implementation slices: execute slices 1-5 in order and keep assignment
+  types queue-local; internal commit grouping is discretionary.
 - Decisions not to revisit: no resource-instance schema, registry/recovery hook,
   dynamic discovery, vendor semantics, per-renewal queue write, arbitrary
   binding, or crash-time guarantee.
@@ -243,7 +284,9 @@ Final commands:
 - Manager preparation: complete on 2026-08-17 against `e47ed77`; Phase 1 merge,
   plan/manifest consistency, worktree isolation, and expanded-route triggers
   verified
-- Expanded planning: required; pass pending
+- Expanded planning: complete on 2026-08-17; fixed the public provider boundary,
+  schema-v2 authored record boundary, durable evidence allowlist, and causally
+  coupled renewal/compensation checks without adding recovery or DDL
 - Implementation: not started
 - Refiner: optional for a qualified implementation/test blocker; unused
 - Pre-submit gate: not run
