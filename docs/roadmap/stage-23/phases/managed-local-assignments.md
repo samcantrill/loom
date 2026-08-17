@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: in_progress
 - Roadmap stage and phase: v23 Phase 2
 - Manifest: `docs/roadmap/stage-23/implementation-plan.md`
 - Branch: `agent/stage-23-p2-managed-local-assignments`
@@ -17,9 +17,8 @@
 - Workflow path: expanded because this phase adds a public provider protocol,
   config-v2 records, exclusive leases, renewal deadlines, and process/resource
   compensation
-- Blockers: independent review proved that mixed per-slot release outcomes can
-  hide a retryable failure behind ownership loss and mark the whole assignment
-  released; the phase's 3/3 correction budget is exhausted
+- Blockers: none; the maintainer authorized one bounded correction beyond the
+  normal 3/3 limit and the mixed per-slot release finding is resolved
 
 ## Objective And Context
 
@@ -305,16 +304,19 @@ Final commands:
   static inventory is rejected, preflight proves lease capabilities read-only,
   and independent scalar/assignment renewal plus real-SQLite exclusivity have
   focused coverage
-- Pre-submit gate: complete on 2026-08-18 at `7433524`; `make validate-pr`
+- Pre-submit gate: complete on 2026-08-18 at `3b8693d`; `make validate-pr`
   passed Ruff, Pyright, the default and config-extra suites, and package build.
-  A fresh `make test-summary` receipt passed with 2,172 tests passed, zero
+  A fresh `make test-summary` receipt passed with 2,173 tests passed, zero
   failures/errors, and three config-extra skips
 - Independent review: completed on 2026-08-18; not merge eligible because a
   supported multi-slot cleanup retry can report ownership loss for an
-  already-released slot while another slot remains transiently unreleased
-- Blocker corrections: 3/3; budget exhausted, so the newly identified release
-  aggregation blocker was recorded without a fourth implementation correction
-- PR and merge: blocked; PR not opened
+  already-released slot while another slot remains transiently unreleased. The
+  maintainer-authorized correction now gives unfinished failures precedence;
+  manager verification and the focused regression test close the finding
+- Blocker corrections: 4 total; the first 3 consumed the normal budget and the
+  maintainer explicitly authorized one bounded correction for the independent
+  review finding
+- PR and merge: pending
 
 ## Completion Record
 
@@ -322,7 +324,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added `src/loom/queue/assignments.py`; updated queue exports, config normalization, local dispatch lifecycle, and preflight; added or updated Phase 2 queue unit, config-contract, preflight, and managed-local integration coverage. Qualified corrections added layer-aware cleanup and strict evidence projection, restored cheap immutable public records, validated injected/authored static inventory and authority capabilities, and made scalar/assignment renewal independent while preserving fail-closed deadlines. |
 | Tests added or updated | Assignment/provider tests cover ordered selection, partial compensation, discriminator safety, injection validation, and immutable public mappings. Local tests cover binding conflict, pre-start and terminal cleanup, evidence rejection, independent renewal, ownership loss, and deadline termination. Config/preflight tests cover v1/v2, inventory/collision rejection, read-only limits, and missing capabilities. Real-SQLite integration proves cross-instance slot exclusivity/capacity; controller integration covers cancellation and handle-commit compensation with static assignments. Package coverage asserts facade exports and import-light CLI help. |
-| Validated revision/tree state and evidence | Implementation tree based on `a3fba14`, validated at `7433524`. The executor-generated receipt exposed the import-light regression and was superseded after correction. Manager `make validate-pr` passed Ruff, Pyright, the default and config-extra suites, and package build. The fresh `build/test-summary.md` receipt passed: 2,172 passed, zero failures/errors, and three config-extra skips. |
+| Validated revision/tree state and evidence | Implementation tree based on `a3fba14`, validated at `3b8693d`. The executor-generated receipt exposed the import-light regression and was superseded after correction. Final manager `make validate-pr` passed Ruff, Pyright, the default and config-extra suites, and package build. The fresh `build/test-summary.md` receipt passed: 2,173 passed, zero failures/errors, and three config-extra skips. |
 | Validation-relevant changes after evidence | Documentation-only workflow-state and completion-record updates after the validated implementation revision; no source, test, dependency, build, or validation configuration changed. |
-| PR, review, and merge | Independent review found one product blocker; not merge eligible and PR not opened. |
-| Residual risk and cleanup | Blocker: `StaticSlotAssignmentProvider.release()` raises the first per-slot error, so a retry can surface ownership loss from an already-released slot and cause the adapter to finalize while another slot still has a retryable release failure. Smallest fix: aggregate all per-slot outcomes with retryable/internal failure taking precedence over ownership loss, plus a focused two-slot retry regression test. Crash-time recovery, reattachment, provider discovery, and background renewal remain intentionally out of scope. |
+| PR, review, and merge | Independent review found one product blocker; the maintainer-authorized correction and manager verification close it. PR pending. |
+| Residual risk and cleanup | No known blocker. Mixed multi-slot release now preserves retryable/internal failure precedence until every slot is accounted for. Crash-time recovery, reattachment, provider discovery, and background renewal remain intentionally out of scope. |
