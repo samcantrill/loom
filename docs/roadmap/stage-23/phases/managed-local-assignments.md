@@ -287,9 +287,12 @@ Final commands:
 - Expanded planning: complete on 2026-08-17; fixed the public provider boundary,
   schema-v2 authored record boundary, durable evidence allowlist, and causally
   coupled renewal/compensation checks without adding recovery or DDL
-- Implementation: not started
+- Implementation: complete on 2026-08-18; added the queue-local static
+  assignment protocol/providers, schema-v2 normalization and read-only
+  preflight, coupled local lifecycle handling, queue-relative logs, and
+  phase-scoped tests
 - Refiner: optional for a qualified implementation/test blocker; unused
-- Pre-submit gate: not run
+- Pre-submit gate: passed on 2026-08-18 (`make validate-pr`)
 - Independent review: required after implementation; unused
 - Blocker corrections: 0/3
 - PR and merge: pending
@@ -298,9 +301,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
+| Implementation and changed paths | Added `src/loom/queue/assignments.py`; updated queue exports, config normalization, local dispatch lifecycle, and preflight; added or updated Phase 2 queue unit, config-contract, preflight, and managed-local integration coverage. |
+| Tests added or updated | Targeted Phase 2 commands passed; `tests/unit/loom/queue/test_assignments.py` covers ordered static acquisition and compensation; config/preflight and managed-local controller tests cover schema-v2, read-only slot limits, unique slots, logs, and safe evidence. |
+| Validated revision/tree state and evidence | Implementation tree based on `a3fba14`; `make validate-pr` passed and `make test-summary` passed on 2026-08-18. Evidence: `build/test-summary.md` (package, unit, contract, integration, e2e, and config-extra suites all passed). |
+| Validation-relevant changes after evidence | none; completion-record update only |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No residual blocker. Crash-time recovery, reattachment, provider discovery, and background renewal remain intentionally out of scope. |
