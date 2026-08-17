@@ -5,9 +5,9 @@ Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 1 in progress
-Blockers: five Phase 1 product blockers are under one maintainer-authorized
-bounded correction beyond the normal 3/3 budget
+Current phase: Phase 2 PR open
+Blockers: none; the maintainer authorized one bounded correction beyond the
+normal 3/3 limit for the independent review's mixed-release finding
 
 ## Summary
 
@@ -107,7 +107,7 @@ bounded correction beyond the normal 3/3 budget
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `safe-pool-cycles` | merged | `docs/roadmap/stage-23/phases/safe-pool-cycles.md` | `agent/stage-23-p1-safe-pool-cycles` | `#209` | Queue controller/repository, typed coordination/admission, and scalar local-process safety | Atomically reconcile/fill one pool with deferral, scalar renewal, terminal-before-release, and post-start compensation. |
-| 2 | `managed-local-assignments` | pending | `docs/roadmap/stage-23/phases/managed-local-assignments.md` | `agent/stage-23-p2-managed-local-assignments` | pending | Queue-local assignment/config/preflight and integration with the established local lifecycle | Exclusively bind and renew static slots, apply safe bindings, capture logs, and preserve Phase 1 compensation. |
+| 2 | `managed-local-assignments` | pr_open | `docs/roadmap/stage-23/phases/managed-local-assignments.md` | `agent/stage-23-p2-managed-local-assignments` | `#210` | Queue-local assignment/config/preflight and integration with the established local lifecycle | Exclusively bind and renew static slots, apply safe bindings, capture logs, and preserve Phase 1 compensation. |
 | 3 | `operator-status-proof` | pending | `docs/roadmap/stage-23/phases/operator-status-proof.md` | `agent/stage-23-p3-operator-status-proof` | pending | Repository read model, status/CLI rendering, docs, examples, and end-to-end proof | Expose redacted pool summaries and prove twelve items over three generic slots. |
 
 The phases are vertical rather than module-only. Phase 1 includes scalar lease
@@ -148,5 +148,5 @@ adds the operator contract and public proof without scheduling in CLI.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | PR `#209` squash-merged as `e099b58` | Implementation, 94-test phase matrix, `make validate-pr`, test summary, CI, and fresh manager review passed | No known blocker; accepted controller-death, unkillable-process, controller-local-limit, and non-durable-renewal risks remain | Worktree and local/remote phase branch removed |
-| 2 | pending | pending | pending | pending |
+| 2 | PR `#210` open against `develop`; CI pending | Implementation and full validation pass after the maintainer-authorized mixed-release correction | No known blocker; accepted crash-time, reattachment, static-inventory, and non-durable-renewal risks remain | Worktree and branch retained pending merge |
 | 3 | pending | pending | pending | pending |

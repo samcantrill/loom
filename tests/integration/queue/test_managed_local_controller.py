@@ -13,6 +13,7 @@ from loom.pipeline.stores import (
     CoordinationStoreError,
     WorkspaceIdentity,
 )
+from loom.pipeline.stores.sqlite_coordination import SQLiteWorkspaceCoordinationStore
 from loom.queue import (
     LaunchContract,
     QueueController,
@@ -23,7 +24,15 @@ from loom.queue import (
     normalize_queue_spec,
 )
 from loom.queue.local import LocalQueueDispatchAdapter
+from loom.queue.assignments import (
+    EnvironmentListBinding,
+    ResourceAssignmentDisposition,
+    ResourceAssignmentRequest,
+    StaticSlot,
+    StaticSlotAssignmentProvider,
+)
 from loom.queue.status import inspect_managed_queue_status
+from loom.serialization import thaw_plain_data
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
 
 
@@ -82,6 +91,132 @@ def test_managed_local_controller_dispatches_one_active_item_at_a_time(
     assert [process.pid for process in runner.started] == [201, 202]
 
 
+def test_managed_local_cycle_uses_unique_static_slots_and_queue_relative_logs(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(20)])
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=2)
+    store.set_resource_limit("workspace-1", "gpu-0", limit=1)
+    store.set_resource_limit("workspace-1", "gpu-1", limit=1)
+    service = _started_service(
+        tmp_path, clock=clock, max_active_items=2, gpu_capacity=2
+    )
+    service.enqueue(_request("item-1"))
+    service.enqueue(_request("item-2"))
+    provider = StaticSlotAssignmentProvider(
+        store,
+        workspace_id="workspace-1",
+        slots=(
+            StaticSlot("gpu", "slot-0", "gpu-0", "0"),
+            StaticSlot("gpu", "slot-1", "gpu-1", "1", "second"),
+        ),
+        bindings={"gpu": EnvironmentListBinding("gpu", "VISIBLE_GPUS", ",")},
+    )
+    adapter = LocalQueueDispatchAdapter(
+        workspace_id="workspace-1",
+        coordination_store=store,
+        owner_id="controller-1",
+        process_runner=_FakeRunner(
+            [_FakeProcess(pid=251, pgid=251), _FakeProcess(pid=252, pgid=252)]
+        ),
+        current_drift_inputs={"config": "expected"},
+        assignment_provider=provider,
+        log_directory=tmp_path / "queue-state" / "logs",
+    )
+
+    cycle = QueueController(
+        service, adapters={"local": adapter}, clock=clock
+    ).run_cycle(pool_name="local-pool")
+
+    assert len(cycle.dispatch_steps) == 2
+    items = [service.read_item(item_id) for item_id in ("item-1", "item-2")]
+    managed_records = []
+    for item in items:
+        assert item is not None and item.dispatch_handle is not None
+        managed = thaw_plain_data(
+            item.dispatch_handle.evidence["managed_local"], path="managed_local"
+        )
+        assert isinstance(managed, dict)
+        assert set(managed) == {
+            "schema_version",
+            "owner_id",
+            "session_id",
+            "pid",
+            "pgid",
+            "dispatched_at",
+            "scalar_leases",
+            "assignment",
+            "logs",
+        }
+        managed_records.append(managed)
+    assigned_slots: set[str] = set()
+    for record in managed_records:
+        assignment = record["assignment"]
+        assert isinstance(assignment, dict)
+        slots = assignment["slots"]
+        assert isinstance(slots, list) and isinstance(slots[0], dict)
+        assert set(slots[0]) <= {
+            "resource_name",
+            "slot_id",
+            "lease_id",
+            "expires_at",
+            "label",
+        }
+        assert {
+            "resource_name",
+            "slot_id",
+            "lease_id",
+            "expires_at",
+        } <= set(slots[0])
+        slot_id = slots[0]["slot_id"]
+        assert isinstance(slot_id, str)
+        assigned_slots.add(slot_id)
+    assert assigned_slots == {"slot-0", "slot-1"}
+    for managed in managed_records:
+        assert set(managed["assignment"]) == {
+            "provider_name",
+            "slots",
+            "next_maintenance_at",
+        }
+        assert set(managed["logs"]) == {"stdout_path", "stderr_path"}
+        assert str(managed["logs"]["stdout_path"]).startswith("logs/")
+        assert "VISIBLE_GPUS" not in str(managed)
+
+
+def test_static_slots_are_exclusive_across_sqlite_provider_instances(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "coordination.sqlite"
+    first_store = SQLiteWorkspaceCoordinationStore(database_path)
+    first_store.create_workspace(WorkspaceIdentity("workspace-1"))
+    first_store.set_resource_limit("workspace-1", "gpu-0", limit=1)
+    first_store.set_resource_limit("workspace-1", "gpu-1", limit=1)
+    second_store = SQLiteWorkspaceCoordinationStore(database_path)
+    slots = (
+        StaticSlot("gpu", "zero", "gpu-0", "0"),
+        StaticSlot("gpu", "one", "gpu-1", "1"),
+    )
+    first_provider = StaticSlotAssignmentProvider(
+        first_store, workspace_id="workspace-1", slots=slots
+    )
+    second_provider = StaticSlotAssignmentProvider(
+        second_store, workspace_id="workspace-1", slots=slots
+    )
+
+    first = first_provider.acquire(_assignment_request("item-1"))
+    second = second_provider.acquire(_assignment_request("item-2"))
+    blocked = second_provider.acquire(_assignment_request("item-3"))
+
+    assert first.disposition is ResourceAssignmentDisposition.ASSIGNED
+    assert second.disposition is ResourceAssignmentDisposition.ASSIGNED
+    assert blocked.disposition is ResourceAssignmentDisposition.DEFERRED
+    assert first.assignment is not None
+    assert second.assignment is not None
+    assert first.assignment.leases[0].resource_key == "gpu-0"
+    assert second.assignment.leases[0].resource_key == "gpu-1"
+
+
 def test_managed_local_controller_cancellation_releases_authority_lease(
     tmp_path: Path,
 ) -> None:
@@ -93,6 +228,7 @@ def test_managed_local_controller_cancellation_releases_authority_lease(
     )
     store = _store()
     store.set_resource_limit("workspace-1", "gpu", limit=1)
+    store.set_resource_limit("workspace-1", "gpu-0", limit=1)
     process = _FakeProcess(pid=203, pgid=203)
     service = _started_service(tmp_path, clock=clock)
     service.enqueue(_request("item-1"))
@@ -102,6 +238,11 @@ def test_managed_local_controller_cancellation_releases_authority_lease(
         owner_id="controller-1",
         process_runner=_FakeRunner([process]),
         current_drift_inputs={"config": "expected"},
+        assignment_provider=StaticSlotAssignmentProvider(
+            store,
+            workspace_id="workspace-1",
+            slots=(StaticSlot("gpu", "zero", "gpu-0", "0"),),
+        ),
     )
     controller = QueueController(service, adapters={"local": adapter}, clock=clock)
     controller.run_once(pool_name="local-pool")
@@ -118,6 +259,7 @@ def test_managed_local_controller_cancellation_releases_authority_lease(
     _assert_no_private_launch_evidence(cancelled.item.cancellation.evidence)
     assert process.terminated is True
     assert _active_amount(store, "gpu") == 0
+    assert _active_amount(store, "gpu-0") == 0
 
 
 def test_controller_keeps_cancellation_reconcilable_until_local_exit(
@@ -168,6 +310,7 @@ def test_controller_reconciles_delayed_exit_after_handle_commit_rejection(
     clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(20)])
     store = _store()
     store.set_resource_limit("workspace-1", "gpu", limit=1)
+    store.set_resource_limit("workspace-1", "gpu-0", limit=1)
     process = _FakeProcess(pid=205, pgid=205, exit_on_terminate=False)
     service = _started_service(tmp_path, clock=clock)
     service.enqueue(_request("item-1"))
@@ -177,6 +320,11 @@ def test_controller_reconciles_delayed_exit_after_handle_commit_rejection(
         owner_id="controller-1",
         process_runner=_FakeRunner([process]),
         current_drift_inputs={"config": "expected"},
+        assignment_provider=StaticSlotAssignmentProvider(
+            store,
+            workspace_id="workspace-1",
+            slots=(StaticSlot("gpu", "zero", "gpu-0", "0"),),
+        ),
     )
     controller = QueueController(service, adapters={"local": adapter}, clock=clock)
     record_dispatch_handle = service.record_dispatch_handle
@@ -210,6 +358,7 @@ def test_controller_reconciles_delayed_exit_after_handle_commit_rejection(
     assert terminal.status is QueueItemStatus.CANCELLED
     assert process.killed is True
     assert _active_amount(store, "gpu") == 0
+    assert _active_amount(store, "gpu-0") == 0
 
 
 def test_controller_cancel_finishes_pending_handle_commit_compensation(
@@ -377,18 +526,35 @@ def _request(item_id: str) -> QueueEnqueueRequest:
     )
 
 
+def _assignment_request(item_id: str) -> ResourceAssignmentRequest:
+    return ResourceAssignmentRequest(
+        consumer_id=item_id,
+        pool_name="local-pool",
+        owner_id="controller-1",
+        session_id=item_id,
+        resources={"gpu": 1},
+        admitted_lease_ids=(f"scalar-{item_id}",),
+        lease_ttl_seconds=30,
+    )
+
+
 def _started_service(
     tmp_path: Path,
     *,
     clock,
     max_active_items: int = 1,  # noqa: ANN001
+    gpu_capacity: int = 1,
 ) -> QueueService:
     spec = normalize_queue_spec(
         {
             "schema_version": 2,
             "db_path": str(tmp_path / "queue.sqlite"),
             "pools": [
-                {"pool_name": "local-pool", "mode": "managed", "resources": {"gpu": 1}},
+                {
+                    "pool_name": "local-pool",
+                    "mode": "managed",
+                    "resources": {"gpu": gpu_capacity},
+                },
             ],
             "queues": [{"queue_name": "local", "pool_name": "local-pool"}],
             "controller": {"max_active_items": max_active_items},

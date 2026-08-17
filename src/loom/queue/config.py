@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+import re
 from pathlib import Path
 from typing import cast
 
@@ -16,6 +17,7 @@ from loom.serialization import (
 from loom.serialization.errors import PlainDataError
 
 from .errors import QueueConfigError
+from .assignments import EnvironmentListBinding, StaticSlot
 from .models import (
     QUEUE_RECORD_SCHEMA_VERSION,
     QueueDefinition,
@@ -77,6 +79,34 @@ class QueueControllerSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class LocalStaticAssignmentSpec:
+    """Normalized v2 static-slot configuration for one pool resource."""
+
+    resource_name: str
+    slots: tuple[StaticSlot, ...]
+    binding: EnvironmentListBinding
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "provider": "static-slots",
+            "slots": [
+                {
+                    "id": slot.slot_id,
+                    "coordination_key": slot.coordination_key,
+                    "value": slot.value,
+                    **({"label": slot.label} if slot.label is not None else {}),
+                }
+                for slot in self.slots
+            ],
+            "binding": {
+                "type": "environment-list",
+                "name": self.binding.name,
+                "separator": self.binding.separator,
+            },
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class QueueServiceSpec:
     """Normalized trusted queue service configuration."""
 
@@ -85,6 +115,9 @@ class QueueServiceSpec:
     db_path: str | None = None
     controller: QueueControllerSpec = field(default_factory=QueueControllerSpec)
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    local_assignments: Mapping[str, Mapping[str, LocalStaticAssignmentSpec]] = field(
+        default_factory=dict
+    )
     schema_version: int = QUEUE_CONFIG_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -120,6 +153,10 @@ class QueueServiceSpec:
             raise QueueConfigError(
                 "controller cycle limits require queue config schema_version 2"
             )
+        if self.schema_version == 1 and self.local_assignments:
+            raise QueueConfigError(
+                "local assignments require queue config schema_version 2"
+            )
         if self.controller.default_pool_name is not None and not self.has_pool(
             self.controller.default_pool_name
         ):
@@ -129,6 +166,57 @@ class QueueServiceSpec:
         object.__setattr__(self, "pools", pools)
         object.__setattr__(self, "queues", queues)
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+        assignments: dict[str, Mapping[str, LocalStaticAssignmentSpec]] = {}
+        logical_resource_names = {
+            resource_name for pool in pools for resource_name in pool.resources
+        }
+        slot_ids: set[str] = set()
+        slot_keys: set[str] = set()
+        for pool_name, configured in self.local_assignments.items():
+            if not self.has_pool(pool_name):
+                raise QueueConfigError(
+                    f"assignments reference unknown pool: {pool_name}"
+                )
+            pool = next(pool for pool in pools if pool.pool_name == pool_name)
+            if pool.mode is not QueuePoolMode.MANAGED:
+                raise QueueConfigError("local assignments require a managed queue pool")
+            binding_names: set[str] = set()
+            normalized: dict[str, LocalStaticAssignmentSpec] = {}
+            for resource_name, assignment in configured.items():
+                if not isinstance(assignment, LocalStaticAssignmentSpec):
+                    raise QueueConfigError(
+                        "local assignments must contain static assignment specs"
+                    )
+                if (
+                    resource_name != assignment.resource_name
+                    or resource_name not in pool.resources
+                ):
+                    raise QueueConfigError(
+                        "assignment resources must be declared by their managed pool"
+                    )
+                if len(assignment.slots) != pool.resources[resource_name]:
+                    raise QueueConfigError(
+                        "static assignment inventory must equal the pool resource capacity"
+                    )
+                if assignment.binding.name in binding_names:
+                    raise QueueConfigError(
+                        "static assignment binding names must be unique per pool"
+                    )
+                binding_names.add(assignment.binding.name)
+                for slot in assignment.slots:
+                    if slot.slot_id in slot_ids or slot.coordination_key in slot_keys:
+                        raise QueueConfigError(
+                            "static slot ids and coordination keys must be unique"
+                        )
+                    if slot.coordination_key in logical_resource_names:
+                        raise QueueConfigError(
+                            "logical resources and static slot coordination keys must not collide"
+                        )
+                    slot_ids.add(slot.slot_id)
+                    slot_keys.add(slot.coordination_key)
+                normalized[resource_name] = assignment
+            assignments[pool_name] = normalized
+        object.__setattr__(self, "local_assignments", assignments)
 
     @property
     def pool_names(self) -> tuple[str, ...]:
@@ -149,7 +237,7 @@ class QueueServiceSpec:
         raise QueueConfigError(f"unknown queue: {queue_name}")
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {
+        result: dict[str, PlainData] = {
             "schema_version": self.schema_version,
             "service": {"db_path": self.db_path},
             "pools": [pool.to_dict() for pool in self.pools],
@@ -159,6 +247,19 @@ class QueueServiceSpec:
             ),
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
+        if self.schema_version >= 2 and self.local_assignments:
+            result["adapters"] = {
+                "local": {
+                    "assignments": {
+                        pool_name: {
+                            resource_name: assignment.to_dict()
+                            for resource_name, assignment in resources.items()
+                        }
+                        for pool_name, resources in self.local_assignments.items()
+                    }
+                }
+            }
+        return result
 
 
 def normalize_queue_spec(config: object) -> QueueServiceSpec:
@@ -186,12 +287,16 @@ def normalize_queue_spec(config: object) -> QueueServiceSpec:
         _mapping(payload.get("controller", {}), "controller"), schema_version
     )
     metadata = _mapping(payload.get("metadata", {}), "metadata")
+    assignments = _local_assignments_from_mapping(
+        payload.get("adapters", {}), schema_version
+    )
     return QueueServiceSpec(
         pools=pools,
         queues=queues,
         db_path=db_path,
         controller=controller,
         metadata=cast(Mapping[str, PlainData], metadata),
+        local_assignments=assignments,
         schema_version=schema_version,
     )
 
@@ -339,6 +444,109 @@ def _controller_dict(
     if not include_cycle_limits:
         result.pop("max_active_items")
         result.pop("max_dispatches_per_cycle")
+    return result
+
+
+def _local_assignments_from_mapping(
+    value: object, schema_version: int
+) -> Mapping[str, Mapping[str, LocalStaticAssignmentSpec]]:
+    adapters = _mapping(value, "adapters")
+    if not adapters:
+        return {}
+    if schema_version < 2:
+        raise QueueConfigError(
+            "local assignments require queue config schema_version 2"
+        )
+    if set(adapters) != {"local"}:
+        raise QueueConfigError("adapters supports only the local assignment record")
+    local = _mapping(adapters["local"], "adapters.local")
+    if set(local) != {"assignments"}:
+        raise QueueConfigError("adapters.local supports only assignments")
+    pools = _mapping(local["assignments"], "adapters.local.assignments")
+    result: dict[str, Mapping[str, LocalStaticAssignmentSpec]] = {}
+    for pool_name, resource_value in pools.items():
+        validate_queue_id(pool_name, "assignment pool_name")
+        resources = _mapping(resource_value, f"adapters.local.assignments.{pool_name}")
+        parsed: dict[str, LocalStaticAssignmentSpec] = {}
+        for resource_name, record_value in resources.items():
+            if not isinstance(resource_name, str) or not resource_name:
+                raise QueueConfigError(
+                    "assignment resource names must be non-empty strings"
+                )
+            record = _mapping(
+                record_value, f"adapters.local.assignments.{pool_name}.{resource_name}"
+            )
+            if set(record) != {"provider", "slots", "binding"}:
+                raise QueueConfigError(
+                    "static assignment records require provider, slots, and binding"
+                )
+            if record["provider"] != "static-slots":
+                raise QueueConfigError("assignment provider must be static-slots")
+            slot_values = _sequence(record["slots"], "assignment slots")
+            slots: list[StaticSlot] = []
+            seen_ids: set[str] = set()
+            seen_keys: set[str] = set()
+            for index, slot_value in enumerate(slot_values):
+                slot = _mapping(slot_value, f"assignment slots[{index}]")
+                if set(slot) - {"id", "coordination_key", "value", "label"} or not {
+                    "id",
+                    "coordination_key",
+                    "value",
+                }.issubset(slot):
+                    raise QueueConfigError(
+                        "static slots require id, coordination_key, value, and optional label"
+                    )
+                try:
+                    parsed_slot = StaticSlot(
+                        resource_name=resource_name,
+                        slot_id=cast(str, slot["id"]),
+                        coordination_key=cast(str, slot["coordination_key"]),
+                        value=cast(str, slot["value"]),
+                        label=cast(str | None, slot.get("label")),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    raise QueueConfigError(str(exc)) from exc
+                if (
+                    parsed_slot.slot_id in seen_ids
+                    or parsed_slot.coordination_key in seen_keys
+                ):
+                    raise QueueConfigError(
+                        "static slot ids and coordination keys must be unique"
+                    )
+                seen_ids.add(parsed_slot.slot_id)
+                seen_keys.add(parsed_slot.coordination_key)
+                slots.append(parsed_slot)
+            if not slots:
+                raise QueueConfigError("static assignments require at least one slot")
+            binding = _mapping(record["binding"], "assignment binding")
+            if (
+                set(binding) != {"type", "name", "separator"}
+                or binding["type"] != "environment-list"
+            ):
+                raise QueueConfigError(
+                    "assignment binding must be an environment-list record"
+                )
+            name = binding["name"]
+            separator = binding["separator"]
+            if (
+                not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None
+            ):
+                raise QueueConfigError(
+                    "assignment binding name must be environment-safe"
+                )
+            if not isinstance(separator, str) or not separator or "\0" in separator:
+                raise QueueConfigError("assignment binding separator must be non-empty")
+            if any("\0" in slot.value or separator in slot.value for slot in slots):
+                raise QueueConfigError(
+                    "assignment slot values must be environment-safe and not contain the binding separator"
+                )
+            parsed[resource_name] = LocalStaticAssignmentSpec(
+                resource_name=resource_name,
+                slots=tuple(slots),
+                binding=EnvironmentListBinding(resource_name, name, separator),
+            )
+        result[pool_name] = parsed
     return result
 
 

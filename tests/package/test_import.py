@@ -68,6 +68,8 @@ def test_import_loom_queue_public_api() -> None:
     assert "QueueController" in loom.queue.__all__
     assert "QueueCycleResult" in loom.queue.__all__
     assert "QueueDispatchDisposition" in loom.queue.__all__
+    assert "ResourceAssignmentProvider" in loom.queue.__all__
+    assert "StaticSlotAssignmentProvider" in loom.queue.__all__
     assert "load_queue_spec" in loom.queue.__all__
     assert "SQLiteQueueRepository" in loom.queue.__all__
     assert "validate_one_queue_per_pool" in loom.queue.__all__

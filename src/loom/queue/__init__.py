@@ -13,6 +13,16 @@ from .config import (
     normalize_queue_spec,
     queue_spec_from_composed_config,
 )
+from .assignments import (
+    LaunchEnvironmentBindings,
+    NoOpResourceAssignmentProvider,
+    ResourceAssignment,
+    ResourceAssignmentDecision,
+    ResourceAssignmentDisposition,
+    ResourceAssignmentProvider,
+    ResourceAssignmentRequest,
+    StaticSlotAssignmentProvider,
+)
 from .controller import (
     FakeQueueDispatchAdapter,
     QueueCancellableDispatchAdapter,
@@ -70,6 +80,13 @@ __all__ = [
     "DispatchHandle",
     "FakeQueueDispatchAdapter",
     "LaunchContract",
+    "LaunchEnvironmentBindings",
+    "NoOpResourceAssignmentProvider",
+    "ResourceAssignment",
+    "ResourceAssignmentDecision",
+    "ResourceAssignmentDisposition",
+    "ResourceAssignmentProvider",
+    "ResourceAssignmentRequest",
     "QueueAuditEvent",
     "QueueCancellableDispatchAdapter",
     "QueueClaim",
@@ -109,6 +126,7 @@ __all__ = [
     "QueueValidationError",
     "RunIntent",
     "SQLiteQueueRepository",
+    "StaticSlotAssignmentProvider",
     "compose_queue_spec",
     "load_queue_spec",
     "normalize_queue_spec",

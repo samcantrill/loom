@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
+import pytest
+
 from loom.serialization import thaw_plain_data
 from loom.timestamps import utc_timestamp
 from loom.pipeline.stores import (
@@ -17,6 +19,15 @@ from loom.queue import (
     QueueItem,
     QueueItemStatus,
     RunIntent,
+)
+from loom.queue.assignments import (
+    EnvironmentListBinding,
+    LaunchEnvironmentBindings,
+    ResourceAssignment,
+    ResourceAssignmentDecision,
+    ResourceAssignmentDisposition,
+    StaticSlot,
+    StaticSlotAssignmentProvider,
 )
 from loom.queue.local import LocalProcessRunner, LocalQueueDispatchAdapter
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
@@ -285,6 +296,222 @@ def test_local_adapter_attempts_every_release_after_ownership_loss() -> None:
     assert _active_amount(store, "cpu") == 0
 
 
+def test_local_adapter_retries_only_unfinished_scalar_release() -> None:
+    store = _ReleaseStore(failures_remaining=1)
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    provider = _AssignmentProvider()
+    process = _FakeProcess(pid=114, pgid=114, returncode=0)
+    adapter = _adapter(store, _FakeRunner(process), assignment_provider=provider)
+    _item_record, dispatched = _dispatch_item(adapter, "item-1")
+
+    pending = adapter.inspect(dispatched)
+    terminal = adapter.inspect(dispatched)
+
+    assert pending.terminal is False
+    assert terminal.terminal is True
+    assert provider.release_calls == 1
+    assert store.release_calls == 2
+    assert _active_amount(store, "gpu") == 0
+
+
+def test_local_adapter_releases_scalar_when_assignment_launch_cleanup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    provider = _AssignmentProvider(release_error=RuntimeError("assignment unavailable"))
+    adapter = _adapter(
+        store,
+        _FakeRunner(_FakeProcess(pid=115, pgid=115)),
+        assignment_provider=provider,
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_prepare_log_paths",
+        lambda item: (_ for _ in ()).throw(OSError("no logs")),
+    )
+
+    result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
+
+    assert result.status is QueueItemStatus.UNKNOWN
+    assert provider.release_calls == 1
+    assert _active_amount(store, "gpu") == 0
+
+
+def test_local_adapter_rejects_private_assignment_evidence_before_start() -> None:
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    provider = _AssignmentProvider(
+        safe_evidence={"slots": [], "fencing_token": "secret"}
+    )
+    runner = _FakeRunner(_FakeProcess(pid=116, pgid=116))
+    adapter = _adapter(store, runner, assignment_provider=provider)
+
+    result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
+
+    assert result.status is QueueItemStatus.FAILED
+    assert runner.argv is None
+    assert provider.release_calls == 1
+    assert _active_amount(store, "gpu") == 0
+
+
+def test_local_adapter_compensates_scalar_admission_when_assignment_acquire_raises() -> (
+    None
+):
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    adapter = _adapter(
+        store,
+        _FakeRunner(_FakeProcess(pid=117, pgid=117)),
+        assignment_provider=_AcquireFailingAssignmentProvider(),
+    )
+
+    result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
+
+    assert result.status is QueueItemStatus.UNKNOWN
+    assert _active_amount(store, "gpu") == 0
+
+
+def test_local_adapter_accepts_identical_assignment_environment_binding() -> None:
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    process = _FakeProcess(pid=118, pgid=118)
+    runner = _FakeRunner(process)
+    provider = _AssignmentProvider(
+        bindings=LaunchEnvironmentBindings({"VISIBLE_GPUS": "0"})
+    )
+    adapter = _adapter(store, runner, assignment_provider=provider)
+
+    result = adapter.dispatch(
+        _item("item-1", resources={"gpu": 1}, env={"VISIBLE_GPUS": "0"})
+    )
+
+    assert result.status is QueueItemStatus.DISPATCHED
+    assert runner.env == {"VISIBLE_GPUS": "0"}
+
+
+def test_local_adapter_rejects_conflicting_assignment_environment_binding() -> None:
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    runner = _FakeRunner(_FakeProcess(pid=119, pgid=119))
+    provider = _AssignmentProvider(
+        bindings=LaunchEnvironmentBindings({"VISIBLE_GPUS": "0"})
+    )
+    adapter = _adapter(store, runner, assignment_provider=provider)
+
+    result = adapter.dispatch(
+        _item("item-1", resources={"gpu": 1}, env={"VISIBLE_GPUS": "other"})
+    )
+
+    assert result.status is QueueItemStatus.FAILED
+    assert runner.argv is None
+    assert provider.release_calls == 1
+    assert _active_amount(store, "gpu") == 0
+
+
+def test_local_adapter_renews_assignment_when_scalar_renewal_is_transient() -> None:
+    store = _RenewalStore(
+        failure_kind=CoordinationFailureKind.UNAVAILABLE, failures_remaining=1
+    )
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    store.set_resource_limit("workspace-1", "gpu-0", limit=1)
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    process = _FakeProcess(pid=120, pgid=120)
+    adapter = _adapter(
+        store,
+        _FakeRunner(process),
+        assignment_provider=_static_provider(store),
+        lease_ttl_seconds=10,
+        clock=clock,
+    )
+    _item_record, dispatched = _dispatch_item(adapter, "item-1")
+
+    store.advance_time(5)
+    clock.value = "2020-01-01T00:00:05Z"
+    unavailable = adapter.inspect(dispatched)
+    store.advance_time(2)
+    clock.value = "2020-01-01T00:00:07Z"
+    recovered = adapter.inspect(dispatched)
+
+    assert unavailable.degraded is True
+    assert unavailable.next_maintenance_at == "2020-01-01T00:00:08Z"
+    assert process.terminated is False
+    assert recovered.degraded is False
+    assert recovered.next_maintenance_at == "2020-01-01T00:00:10Z"
+    assert store.renew_calls == 3
+
+
+def test_local_adapter_assignment_ownership_loss_fails_closed() -> None:
+    store = _SelectedRenewalFailureStore(
+        failure_calls={2}, failure_kind=CoordinationFailureKind.OWNERSHIP_LOST
+    )
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    store.set_resource_limit("workspace-1", "gpu-0", limit=1)
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    process = _FakeProcess(pid=121, pgid=121, exit_on_terminate=False)
+    adapter = _adapter(
+        store,
+        _FakeRunner(process),
+        assignment_provider=_static_provider(store),
+        lease_ttl_seconds=10,
+        clock=clock,
+    )
+    _item_record, dispatched = _dispatch_item(adapter, "item-1")
+
+    store.advance_time(5)
+    clock.value = "2020-01-01T00:00:05Z"
+    lost = adapter.inspect(dispatched)
+    clock.value = "2020-01-01T00:00:06Z"
+    terminal = adapter.inspect(dispatched)
+
+    assert lost.degraded is True
+    assert lost.evidence["renewal_failure_kind"] == "ownership_lost"
+    assert process.terminated is True
+    assert process.killed is True
+    assert terminal.terminal is True
+    assert _active_amount(store, "gpu") == 0
+    assert _active_amount(store, "gpu-0") == 0
+
+
+def test_local_adapter_assignment_outage_terminates_at_its_deadline() -> None:
+    store = _SelectedRenewalFailureStore(
+        failure_calls={2, 3}, failure_kind=CoordinationFailureKind.UNAVAILABLE
+    )
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    store.set_resource_limit("workspace-1", "gpu-0", limit=1)
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    process = _FakeProcess(pid=122, pgid=122, exit_on_terminate=False)
+    adapter = _adapter(
+        store,
+        _FakeRunner(process),
+        assignment_provider=_static_provider(store),
+        lease_ttl_seconds=10,
+        clock=clock,
+    )
+    _item_record, dispatched = _dispatch_item(adapter, "item-1")
+
+    store.advance_time(5)
+    clock.value = "2020-01-01T00:00:05Z"
+    before_deadline = adapter.inspect(dispatched)
+    store.advance_time(3)
+    clock.value = "2020-01-01T00:00:08Z"
+    at_deadline = adapter.inspect(dispatched)
+    clock.value = "2020-01-01T00:00:09Z"
+    terminal = adapter.inspect(dispatched)
+
+    assert before_deadline.next_maintenance_at == "2020-01-01T00:00:08Z"
+    assert process.terminated is True
+    assert at_deadline.degraded is True
+    assert process.killed is True
+    assert terminal.terminal is True
+    assert _active_amount(store, "gpu") == 0
+    assert _active_amount(store, "gpu-0") == 0
+
+
 def test_local_adapter_checks_drift_before_resource_admission() -> None:
     store = _store()
     store.set_resource_limit("workspace-1", "gpu", limit=1)
@@ -367,9 +594,11 @@ class _FakeRunner:
     def __init__(self, process: _FakeProcess) -> None:
         self.process = process
         self.argv: tuple[str, ...] | None = None
+        self.env: Mapping[str, str] | None = None
 
     def start(self, argv, *, cwd=None, env=None):  # noqa: ANN001, ANN201
         self.argv = tuple(argv)
+        self.env = env
         return self.process
 
 
@@ -425,6 +654,26 @@ class _StaggeredAcquisitionStore(_RenewalStore):
         return lease
 
 
+class _SelectedRenewalFailureStore(_RenewalStore):
+    def __init__(
+        self,
+        *,
+        failure_calls: set[int],
+        failure_kind: CoordinationFailureKind,
+    ) -> None:
+        super().__init__()
+        self.failure_calls = failure_calls
+        self.selected_failure_kind = failure_kind
+
+    def renew_lease(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        self.renew_calls += 1
+        if self.renew_calls in self.failure_calls:
+            raise CoordinationStoreError(
+                "injected selected renewal failure", kind=self.selected_failure_kind
+            )
+        return InMemoryWorkspaceCoordinationStore.renew_lease(self, *args, **kwargs)
+
+
 class _ReleaseStore(_RenewalStore):
     def __init__(self, *, failures_remaining: int) -> None:
         super().__init__()
@@ -458,6 +707,55 @@ class _OwnershipLostReleaseStore(_RenewalStore):
         return released
 
 
+class _AssignmentProvider:
+    provider_name = "test"
+
+    def __init__(
+        self,
+        *,
+        release_error: Exception | None = None,
+        safe_evidence: Mapping[str, object] | None = None,
+        bindings: LaunchEnvironmentBindings | None = None,
+    ) -> None:
+        self.release_error = release_error
+        self.safe_evidence = {"slots": []} if safe_evidence is None else safe_evidence
+        self.bindings = bindings or LaunchEnvironmentBindings()
+        self.release_calls = 0
+
+    def acquire(self, request):  # noqa: ANN001, ANN201
+        return ResourceAssignmentDecision(
+            disposition=ResourceAssignmentDisposition.ASSIGNED,
+            assignment=ResourceAssignment(
+                provider_name=self.provider_name,
+                live_token=object(),
+                leases=(),
+                bindings=self.bindings,
+                safe_evidence=self.safe_evidence,  # type: ignore[arg-type]
+            ),
+        )
+
+    def renew(self, assignment):  # noqa: ANN001, ANN201
+        return assignment
+
+    def release(self, assignment, *, reason):  # noqa: ANN001, ANN201
+        self.release_calls += 1
+        if self.release_error is not None:
+            raise self.release_error
+
+
+class _AcquireFailingAssignmentProvider:
+    provider_name = "test"
+
+    def acquire(self, request):  # noqa: ANN001, ANN201
+        raise RuntimeError("assignment acquisition failed")
+
+    def renew(self, assignment):  # noqa: ANN001, ANN201
+        return assignment
+
+    def release(self, assignment, *, reason):  # noqa: ANN001, ANN201
+        return None
+
+
 def _adapter(
     store: InMemoryWorkspaceCoordinationStore,
     runner: LocalProcessRunner,
@@ -465,6 +763,7 @@ def _adapter(
     current_drift_inputs: dict[str, str] | None = None,
     lease_ttl_seconds: int = 30,
     clock: Callable[[], str] | None = None,
+    assignment_provider: object | None = None,
 ) -> LocalQueueDispatchAdapter:
     return LocalQueueDispatchAdapter(
         workspace_id="workspace-1",
@@ -476,6 +775,7 @@ def _adapter(
         else current_drift_inputs,
         lease_ttl_seconds=lease_ttl_seconds,
         clock=utc_timestamp if clock is None else clock,
+        assignment_provider=assignment_provider,  # type: ignore[arg-type]
     )
 
 
@@ -499,7 +799,12 @@ def _assert_no_private_launch_evidence(value: object) -> None:
             _assert_no_private_launch_evidence(nested)
 
 
-def _item(item_id: str, *, resources: dict[str, int] | None = None) -> QueueItem:
+def _item(
+    item_id: str,
+    *,
+    resources: dict[str, int] | None = None,
+    env: Mapping[str, str] | None = None,
+) -> QueueItem:
     run_uri = f"file:///runs/{item_id}"
     return QueueItem(
         queue_item_id=item_id,
@@ -511,7 +816,10 @@ def _item(item_id: str, *, resources: dict[str, int] | None = None) -> QueueItem
             adapter="local",
             entrypoint="argv",
             resources={} if resources is None else resources,
-            snapshot={"argv": ["python", "-c", "print('ok')"]},
+            snapshot={
+                "argv": ["python", "-c", "print('ok')"],
+                **({"env": dict(env)} if env is not None else {}),
+            },
             drift_inputs={"config": "expected"},
         ),
         enqueued_at="2020-01-01T00:00:00Z",
@@ -541,6 +849,17 @@ def _store() -> InMemoryWorkspaceCoordinationStore:
     store = InMemoryWorkspaceCoordinationStore()
     store.create_workspace(WorkspaceIdentity("workspace-1"))
     return store
+
+
+def _static_provider(
+    store: InMemoryWorkspaceCoordinationStore,
+) -> StaticSlotAssignmentProvider:
+    return StaticSlotAssignmentProvider(
+        store,
+        workspace_id="workspace-1",
+        slots=(StaticSlot("gpu", "zero", "gpu-0", "0"),),
+        bindings={"gpu": EnvironmentListBinding("gpu", "VISIBLE_GPUS", ",")},
+    )
 
 
 def _active_amount(store: InMemoryWorkspaceCoordinationStore, resource_key: str) -> int:
