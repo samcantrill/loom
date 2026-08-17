@@ -71,7 +71,9 @@ def test_sqlite_repository_concurrent_claim_has_one_winner(tmp_path: Path) -> No
 
     def claim(repository: SQLiteQueueRepository, claim_id: str):
         barrier.wait()
-        return repository.claim_next("gpu-pool", owner_id="controller", claim_id=claim_id)
+        return repository.claim_next(
+            "gpu-pool", owner_id="controller", claim_id=claim_id
+        )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = tuple(
@@ -104,11 +106,14 @@ def test_sqlite_repository_records_dispatch_and_completion(tmp_path: Path) -> No
         evidence={"pid": 123},
     )
 
-    dispatched = repository.record_dispatch_handle("item-1", handle)
+    dispatched = repository.record_dispatch_handle(
+        "item-1", handle, expected=claim.item
+    )
     completed = repository.complete_item(
         "item-1",
         status=QueueItemStatus.SUCCEEDED,
         reason="authority-run-succeeded",
+        expected=dispatched,
     )
     events = repository.list_audit_events("item-1")
 
@@ -127,13 +132,14 @@ def test_sqlite_repository_rejects_completion_before_claim_or_dispatch(
     tmp_path: Path,
 ) -> None:
     repository = SQLiteQueueRepository(tmp_path / "queue.sqlite")
-    repository.enqueue(_item("item-1", "gpu-pool", "2020-01-01T00:00:00Z"))
+    queued = repository.enqueue(_item("item-1", "gpu-pool", "2020-01-01T00:00:00Z"))
 
     with pytest.raises(QueueConflictError, match="not been dispatched"):
         repository.complete_item(
             "item-1",
             status=QueueItemStatus.SUCCEEDED,
             reason="no-dispatch",
+            expected=queued,
         )
 
 
@@ -145,7 +151,9 @@ def test_sqlite_repository_rejects_stale_guarded_mutations(tmp_path: Path) -> No
     claim = repository.claim_next("gpu-pool", owner_id="controller", claim_id="claim-1")
     assert claim is not None
     repository.defer_item("item-1", reason_code="capacity", expected=claim.item)
-    reclaim = repository.claim_next("gpu-pool", owner_id="controller", claim_id="claim-2")
+    reclaim = repository.claim_next(
+        "gpu-pool", owner_id="controller", claim_id="claim-2"
+    )
     assert reclaim is not None
 
     with pytest.raises(QueueConflictError):
@@ -177,7 +185,10 @@ def test_sqlite_repository_rejects_stale_guarded_mutations(tmp_path: Path) -> No
     )
     with pytest.raises(QueueConflictError):
         repository.complete_item(
-            "item-1", status=QueueItemStatus.SUCCEEDED, reason="stale", expected=dispatched
+            "item-1",
+            status=QueueItemStatus.SUCCEEDED,
+            reason="stale",
+            expected=dispatched,
         )
     with pytest.raises(QueueConflictError):
         repository.request_cancellation(
@@ -210,6 +221,25 @@ def test_sqlite_repository_records_cancellation_and_excludes_recovery(
     assert repository.scan_recovery() == ()
 
 
+def test_sqlite_repository_requires_snapshot_for_active_cancellation(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteQueueRepository(tmp_path / "queue.sqlite")
+    repository.enqueue(_item("item-1", "gpu-pool", "2020-01-01T00:00:00Z"))
+    claim = repository.claim_next(
+        "gpu-pool", owner_id="controller-1", claim_id="claim-1"
+    )
+    assert claim is not None
+    cancellation = CancellationRecord(
+        requested_at="2020-01-01T00:00:01Z",
+        requested_by="controller-1",
+        reason="user-request",
+    )
+
+    with pytest.raises(QueueConflictError, match="requires an expected snapshot"):
+        repository.request_cancellation("item-1", cancellation)
+
+
 def test_sqlite_repository_scans_claimed_and_dispatched_recovery(
     tmp_path: Path,
 ) -> None:
@@ -234,6 +264,7 @@ def test_sqlite_repository_scans_claimed_and_dispatched_recovery(
             dispatched_at="2020-01-01T00:00:02Z",
             dispatch_attempt=second.item.dispatch_attempt,
         ),
+        expected=second.item,
     )
 
     recovery = repository.scan_recovery()

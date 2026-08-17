@@ -154,7 +154,7 @@ class SQLiteQueueRepository:
         queue_item_id: str,
         handle: DispatchHandle,
         *,
-        expected: QueueItem | None = None,
+        expected: QueueItem,
     ) -> QueueItem:
         queue_item_id = validate_queue_id(queue_item_id, "queue_item_id")
         with self._connect() as conn:
@@ -192,12 +192,14 @@ class SQLiteQueueRepository:
         *,
         status: QueueItemStatus,
         reason: str,
-        expected: QueueItem | None = None,
+        expected: QueueItem,
     ) -> QueueItem:
         queue_item_id = validate_queue_id(queue_item_id, "queue_item_id")
         status = QueueItemStatus(status)
         if status not in _COMPLETION_STATUSES:
-            raise QueueConflictError("completion status must be SUCCEEDED, FAILED, or UNKNOWN")
+            raise QueueConflictError(
+                "completion status must be SUCCEEDED, FAILED, or UNKNOWN"
+            )
         with self._connect() as conn:
             current = _require_item(conn, queue_item_id)
             _verify_expected(current, expected)
@@ -235,6 +237,14 @@ class SQLiteQueueRepository:
             _verify_expected(current, expected)
             if current.terminal:
                 raise QueueConflictError("queue item is already terminal")
+            if (
+                QueueItemStatus(current.status)
+                in {QueueItemStatus.CLAIMED, QueueItemStatus.DISPATCHED}
+                and expected is None
+            ):
+                raise QueueConflictError(
+                    "active queue item cancellation requires an expected snapshot"
+                )
             updated = replace(
                 current,
                 status=QueueItemStatus.CANCELLED,
@@ -339,7 +349,9 @@ class SQLiteQueueRepository:
                 """,
                 (queue_item_id,),
             ).fetchall()
-        return tuple(_audit_event_from_json(cast(str, row["event_json"])) for row in rows)
+        return tuple(
+            _audit_event_from_json(cast(str, row["event_json"])) for row in rows
+        )
 
     def _connect(self) -> Any:
         sqlite = _sqlite3()
@@ -471,9 +483,7 @@ def _update_item(
     if expected is not None:
         query += " AND item_json = ?"
         values.append(_item_json(expected))
-    cursor = conn.execute(
-        query, tuple(values)
-    )
+    cursor = conn.execute(query, tuple(values))
     return int(cursor.rowcount)
 
 
@@ -482,7 +492,9 @@ def _verify_expected(current: QueueItem, expected: QueueItem | None) -> None:
         raise QueueConflictError("queue item mutation conflicted with a stale snapshot")
 
 
-def _item_row_values(item: QueueItem, *, item_json: str | None = None) -> tuple[object, ...]:
+def _item_row_values(
+    item: QueueItem, *, item_json: str | None = None
+) -> tuple[object, ...]:
     return (
         item.queue_item_id,
         item.queue_name,
@@ -563,7 +575,9 @@ def _sqlite3() -> ModuleType:
     try:
         import sqlite3
     except ModuleNotFoundError as exc:
-        raise QueueStorageError("sqlite3 is required for SQLiteQueueRepository") from exc
+        raise QueueStorageError(
+            "sqlite3 is required for SQLiteQueueRepository"
+        ) from exc
     return sqlite3
 
 

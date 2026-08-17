@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
-from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data, thaw_plain_data
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 from loom.serialization.errors import PlainDataError
 
 from .errors import QueueConfigError
@@ -21,7 +26,9 @@ from .models import (
 )
 
 QUEUE_CONFIG_SCHEMA_VERSION = 2
-_CONFIG_DEPENDENCY_HINT = "Install `loom` with its `weave` dependency before loading queue YAML configs."
+_CONFIG_DEPENDENCY_HINT = (
+    "Install `loom` with its `weave` dependency before loading queue YAML configs."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +42,9 @@ class QueueControllerSpec:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "owner_id", validate_queue_id(self.owner_id, "owner_id"))
+        object.__setattr__(
+            self, "owner_id", validate_queue_id(self.owner_id, "owner_id")
+        )
         if self.default_pool_name is not None:
             object.__setattr__(
                 self,
@@ -44,7 +53,9 @@ class QueueControllerSpec:
             )
         for field_name, value in (("max_active_items", self.max_active_items),):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise QueueConfigError(f"controller.{field_name} must be a positive integer")
+                raise QueueConfigError(
+                    f"controller.{field_name} must be a positive integer"
+                )
         if self.max_dispatches_per_cycle is not None and (
             isinstance(self.max_dispatches_per_cycle, bool)
             or not isinstance(self.max_dispatches_per_cycle, int)
@@ -102,6 +113,13 @@ class QueueServiceSpec:
             raise QueueConfigError("db_path must be a string or None")
         if not isinstance(self.controller, QueueControllerSpec):
             raise QueueConfigError("controller must be a QueueControllerSpec")
+        if self.schema_version == 1 and (
+            self.controller.max_active_items != 1
+            or self.controller.max_dispatches_per_cycle is not None
+        ):
+            raise QueueConfigError(
+                "controller cycle limits require queue config schema_version 2"
+            )
         if self.controller.default_pool_name is not None and not self.has_pool(
             self.controller.default_pool_name
         ):
@@ -147,16 +165,22 @@ def normalize_queue_spec(config: object) -> QueueServiceSpec:
     """Normalize trusted queue config data into a service spec."""
 
     payload = _queue_section(config)
-    schema_version = payload.get("schema_version", QUEUE_CONFIG_SCHEMA_VERSION)
+    # An omitted version is legacy authored config.  New cycle-limit writers
+    # must opt into schema v2 explicitly.
+    schema_version = payload.get("schema_version", 1)
     if not isinstance(schema_version, int) or isinstance(schema_version, bool):
         raise QueueConfigError("schema_version must be an integer")
     service = _mapping(payload.get("service", {}), "service")
     db_path = payload.get("db_path", service.get("db_path"))
     if db_path is not None and not isinstance(db_path, str):
         raise QueueConfigError("db_path must be a string or null")
-    pools = tuple(_pool_from_mapping(item, index) for index, item in enumerate(_sequence(payload.get("pools"), "pools")))
+    pools = tuple(
+        _pool_from_mapping(item, index)
+        for index, item in enumerate(_sequence(payload.get("pools"), "pools"))
+    )
     queues = tuple(
-        _queue_from_mapping(item, index) for index, item in enumerate(_sequence(payload.get("queues"), "queues"))
+        _queue_from_mapping(item, index)
+        for index, item in enumerate(_sequence(payload.get("queues"), "queues"))
     )
     controller = _controller_from_mapping(
         _mapping(payload.get("controller", {}), "controller"), schema_version
@@ -243,8 +267,14 @@ def _pool_from_mapping(value: object, index: int) -> QueuePool:
     return QueuePool(
         pool_name=pool_name,
         mode=QueuePoolMode(mode),
-        resources=cast(Mapping[str, int], _mapping(payload.get("resources", {}), f"pools[{index}].resources")),
-        metadata=cast(Mapping[str, PlainData], _mapping(payload.get("metadata", {}), f"pools[{index}].metadata")),
+        resources=cast(
+            Mapping[str, int],
+            _mapping(payload.get("resources", {}), f"pools[{index}].resources"),
+        ),
+        metadata=cast(
+            Mapping[str, PlainData],
+            _mapping(payload.get("metadata", {}), f"pools[{index}].metadata"),
+        ),
         schema_version=QUEUE_RECORD_SCHEMA_VERSION,
     )
 
@@ -256,7 +286,10 @@ def _queue_from_mapping(value: object, index: int) -> QueueDefinition:
     return QueueDefinition(
         queue_name=queue_name,
         pool_name=pool_name,
-        metadata=cast(Mapping[str, PlainData], _mapping(payload.get("metadata", {}), f"queues[{index}].metadata")),
+        metadata=cast(
+            Mapping[str, PlainData],
+            _mapping(payload.get("metadata", {}), f"queues[{index}].metadata"),
+        ),
         schema_version=QUEUE_RECORD_SCHEMA_VERSION,
     )
 
@@ -278,7 +311,9 @@ def _controller_from_mapping(
         isinstance(max_dispatches_per_cycle, bool)
         or not isinstance(max_dispatches_per_cycle, int)
     ):
-        raise QueueConfigError("controller.max_dispatches_per_cycle must be an integer or null")
+        raise QueueConfigError(
+            "controller.max_dispatches_per_cycle must be an integer or null"
+        )
     if schema_version == 1 and (
         "max_active_items" in payload or "max_dispatches_per_cycle" in payload
     ):
@@ -290,7 +325,10 @@ def _controller_from_mapping(
         default_pool_name=default_pool_name,
         max_active_items=max_active_items,
         max_dispatches_per_cycle=max_dispatches_per_cycle,
-        metadata=cast(Mapping[str, PlainData], _mapping(payload.get("metadata", {}), "controller.metadata")),
+        metadata=cast(
+            Mapping[str, PlainData],
+            _mapping(payload.get("metadata", {}), "controller.metadata"),
+        ),
     )
 
 
@@ -331,7 +369,9 @@ def _sequence(value: object, path: str) -> Sequence[object]:
     return value
 
 
-def _plain_mapping(value: Mapping[str, PlainData], path: str) -> Mapping[str, PlainData]:
+def _plain_mapping(
+    value: Mapping[str, PlainData], path: str
+) -> Mapping[str, PlainData]:
     try:
         frozen = freeze_plain_data(value, path=path)
     except PlainDataError as exc:

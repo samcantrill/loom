@@ -62,7 +62,9 @@ class QueueEnqueueRequest:
             "queue_item_id",
             validate_queue_id(self.queue_item_id, "queue_item_id"),
         )
-        object.__setattr__(self, "queue_name", validate_queue_id(self.queue_name, "queue_name"))
+        object.__setattr__(
+            self, "queue_name", validate_queue_id(self.queue_name, "queue_name")
+        )
         if not isinstance(self.run_uri, str) or not self.run_uri:
             raise QueueServiceError("run_uri must be a non-empty string")
         object.__setattr__(self, "request", _plain_mapping(self.request, "request"))
@@ -98,7 +100,9 @@ class QueueEnqueueRequest:
                 self.delegated_verification,
                 path="delegated_verification",
             ),
-            "launch_metadata": thaw_plain_data(self.launch_metadata, path="launch_metadata"),
+            "launch_metadata": thaw_plain_data(
+                self.launch_metadata, path="launch_metadata"
+            ),
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
@@ -155,7 +159,9 @@ class QueueService:
     ) -> "QueueService":
         if repository is None:
             if spec.db_path is None:
-                raise QueueConfigError("queue service spec requires db_path when no repository is provided")
+                raise QueueConfigError(
+                    "queue service spec requires db_path when no repository is provided"
+                )
             repository = SQLiteQueueRepository(spec.db_path, clock=clock)
         return cls(spec, repository, clock=clock)
 
@@ -287,7 +293,7 @@ class QueueService:
         queue_item_id: str,
         handle: DispatchHandle,
         *,
-        expected: QueueItem | None = None,
+        expected: QueueItem,
     ) -> QueueItem:
         self._ensure_running()
         return self.repository.record_dispatch_handle(
@@ -300,7 +306,7 @@ class QueueService:
         *,
         status: QueueItemStatus,
         reason: str,
-        expected: QueueItem | None = None,
+        expected: QueueItem,
     ) -> QueueItem:
         self._ensure_running()
         return self.repository.complete_item(
@@ -340,7 +346,9 @@ class QueueService:
             raise QueueServiceError(f"unknown pool: {pool_name}")
 
 
-def _plain_mapping(value: Mapping[str, PlainData], path: str) -> Mapping[str, PlainData]:
+def _plain_mapping(
+    value: Mapping[str, PlainData], path: str
+) -> Mapping[str, PlainData]:
     try:
         frozen = freeze_plain_data(value, path=path)
     except PlainDataError as exc:
@@ -350,7 +358,9 @@ def _plain_mapping(value: Mapping[str, PlainData], path: str) -> Mapping[str, Pl
     return cast(Mapping[str, PlainData], frozen)
 
 
-def _thawed_mapping(value: Mapping[str, PlainData], path: str) -> Mapping[str, PlainData]:
+def _thawed_mapping(
+    value: Mapping[str, PlainData], path: str
+) -> Mapping[str, PlainData]:
     thawed = thaw_plain_data(value, path=path)
     if not isinstance(thawed, Mapping):
         raise QueueServiceError(f"{path} must be a mapping")

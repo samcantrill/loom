@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from loom.queue import normalize_queue_spec
+from dataclasses import replace
+
+import pytest
+
+from loom.queue import (
+    QueueConfigError,
+    QueueControllerSpec,
+    normalize_queue_spec,
+)
 
 
 def test_queue_service_spec_contract_shape() -> None:
@@ -79,3 +87,53 @@ def test_queue_config_schema_v2_normalizes_positive_cycle_limits() -> None:
     controller = serialized["controller"]
     assert isinstance(controller, dict)
     assert controller["max_active_items"] == 3
+
+
+def test_unversioned_queue_config_keeps_legacy_schema_v1_defaults() -> None:
+    spec = normalize_queue_spec(
+        {
+            "pools": [{"pool_name": "pool", "mode": "managed"}],
+            "queues": [{"queue_name": "queue", "pool_name": "pool"}],
+        }
+    )
+
+    assert spec.schema_version == 1
+    assert spec.controller.max_active_items == 1
+    assert spec.controller.max_dispatches_per_cycle is None
+    controller = spec.to_dict()["controller"]
+    assert isinstance(controller, dict)
+    assert "max_active_items" not in controller
+    assert "max_dispatches_per_cycle" not in controller
+
+
+def test_unversioned_queue_config_rejects_schema_v2_cycle_limits() -> None:
+    with pytest.raises(QueueConfigError, match="require queue config schema_version 2"):
+        normalize_queue_spec(
+            {
+                "pools": [{"pool_name": "pool", "mode": "managed"}],
+                "queues": [{"queue_name": "queue", "pool_name": "pool"}],
+                "controller": {"max_active_items": 2},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "controller",
+    [
+        QueueControllerSpec(max_active_items=2),
+        QueueControllerSpec(max_dispatches_per_cycle=2),
+    ],
+)
+def test_queue_config_schema_v1_constructor_rejects_cycle_limits(
+    controller: QueueControllerSpec,
+) -> None:
+    legacy = normalize_queue_spec(
+        {
+            "schema_version": 1,
+            "pools": [{"pool_name": "pool", "mode": "managed"}],
+            "queues": [{"queue_name": "queue", "pool_name": "pool"}],
+        }
+    )
+
+    with pytest.raises(QueueConfigError, match="require queue config schema_version 2"):
+        replace(legacy, controller=controller)

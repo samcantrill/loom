@@ -41,17 +41,27 @@ class QueueDispatchResult:
     def __post_init__(self) -> None:
         status = QueueItemStatus(self.status)
         disposition = (
-            QueueDispatchDisposition.COMPLETED
-            if self.complete
-            else QueueDispatchDisposition.STARTED
-        ) if self.disposition is None else QueueDispatchDisposition(self.disposition)
+            (
+                QueueDispatchDisposition.COMPLETED
+                if self.complete
+                else QueueDispatchDisposition.STARTED
+            )
+            if self.disposition is None
+            else QueueDispatchDisposition(self.disposition)
+        )
         if disposition is QueueDispatchDisposition.DEFERRED:
             if self.handle_id is not None:
-                raise QueueServiceError("deferred dispatch result cannot have a handle_id")
+                raise QueueServiceError(
+                    "deferred dispatch result cannot have a handle_id"
+                )
             if not self.complete or status is QueueItemStatus.DISPATCHED:
-                raise QueueServiceError("deferred dispatch result must be complete before start")
+                raise QueueServiceError(
+                    "deferred dispatch result must be complete before start"
+                )
         elif not isinstance(self.handle_id, str) or not self.handle_id:
-            raise QueueServiceError("dispatch result handle_id must be a non-empty string")
+            raise QueueServiceError(
+                "dispatch result handle_id must be a non-empty string"
+            )
         if disposition is QueueDispatchDisposition.COMPLETED:
             if not self.complete:
                 raise QueueServiceError("completed dispatch result must be complete")
@@ -80,9 +90,13 @@ class QueueDispatchResult:
         object.__setattr__(self, "evidence", evidence)
         if self.next_maintenance_at is not None:
             if not isinstance(self.next_maintenance_at, str):
-                raise QueueServiceError("next_maintenance_at must be a timestamp string or None")
+                raise QueueServiceError(
+                    "next_maintenance_at must be a timestamp string or None"
+                )
             object.__setattr__(
-                self, "next_maintenance_at", utc_timestamp(parse_timestamp(self.next_maintenance_at))
+                self,
+                "next_maintenance_at",
+                utc_timestamp(parse_timestamp(self.next_maintenance_at)),
             )
 
 
@@ -109,7 +123,7 @@ class QueueDispatchInspection:
     def __post_init__(self) -> None:
         status = QueueItemStatus(self.status)
         if not isinstance(self.handoff_complete, bool):
-                raise QueueServiceError("handoff_complete must be a boolean")
+            raise QueueServiceError("handoff_complete must be a boolean")
         if not isinstance(self.degraded, bool):
             raise QueueServiceError("degraded must be a boolean")
         if self.terminal:
@@ -140,9 +154,13 @@ class QueueDispatchInspection:
         object.__setattr__(self, "evidence", evidence)
         if self.next_maintenance_at is not None:
             if not isinstance(self.next_maintenance_at, str):
-                raise QueueServiceError("next_maintenance_at must be a timestamp string or None")
+                raise QueueServiceError(
+                    "next_maintenance_at must be a timestamp string or None"
+                )
             object.__setattr__(
-                self, "next_maintenance_at", utc_timestamp(parse_timestamp(self.next_maintenance_at))
+                self,
+                "next_maintenance_at",
+                utc_timestamp(parse_timestamp(self.next_maintenance_at)),
             )
 
 
@@ -243,7 +261,9 @@ class QueueCycleResult:
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "reconciliation_steps": [step.to_dict() for step in self.reconciliation_steps],
+            "reconciliation_steps": [
+                step.to_dict() for step in self.reconciliation_steps
+            ],
             "dispatch_steps": [step.to_dict() for step in self.dispatch_steps],
             "active_count": self.active_count,
             "capacity_blocked": self.capacity_blocked,
@@ -263,11 +283,16 @@ class QueueController:
         clock: Callable[[], str] = utc_timestamp,
     ) -> None:
         self._service = service
-        self._adapters = dict(adapters) if adapters is not None else {"fake": FakeQueueDispatchAdapter()}
+        self._adapters = (
+            dict(adapters)
+            if adapters is not None
+            else {"fake": FakeQueueDispatchAdapter()}
+        )
         self._owner_id = owner_id or service.spec.controller.owner_id
         self._clock = clock
         self._session_id = uuid4().hex
         self._owned_handle_ids: set[str] = set()
+        self._pending_start_compensations: dict[str, QueueItem] = {}
 
     def run_cycle(self, *, pool_name: str) -> QueueCycleResult:
         """Reconcile one pool then fill it within its controller-local budgets."""
@@ -403,6 +428,8 @@ class QueueController:
                 continue
             if not self._owned_by_current_session(item):
                 continue
+            if item.queue_item_id in self._pending_start_compensations:
+                return self._reconcile_pending_start(item, [])
             if QueueItemStatus(item.status) is QueueItemStatus.CLAIMED:
                 return self._complete_unknown(
                     item,
@@ -412,7 +439,9 @@ class QueueController:
             if QueueItemStatus(item.status) is not QueueItemStatus.DISPATCHED:
                 continue
             adapter = self._adapters.get(item.launch_contract.adapter)
-            if adapter is None or not isinstance(adapter, QueueInspectableDispatchAdapter):
+            if adapter is None or not isinstance(
+                adapter, QueueInspectableDispatchAdapter
+            ):
                 return self._complete_unknown(
                     item,
                     reason=f"adapter status unavailable: {item.launch_contract.adapter}",
@@ -455,10 +484,17 @@ class QueueController:
         item = self._service.read_item(queue_item_id)
         if item is None:
             raise QueueServiceError(f"unknown queue item: {queue_item_id}")
+        if queue_item_id in self._pending_start_compensations:
+            step = self._reconcile_pending_start(item, [])
+            if step.outcome in {"active", "degraded"}:
+                return QueueControllerStep(outcome="cancelling", item=item)
+            return step
         evidence: Mapping[str, PlainData] = {}
         if QueueItemStatus(item.status) is QueueItemStatus.DISPATCHED:
             adapter = self._adapters.get(item.launch_contract.adapter)
-            if adapter is not None and isinstance(adapter, QueueCancellableDispatchAdapter):
+            if adapter is not None and isinstance(
+                adapter, QueueCancellableDispatchAdapter
+            ):
                 cancellation = adapter.cancel(
                     item,
                     requested_by=requested_by,
@@ -559,7 +595,11 @@ class QueueController:
                 degraded = True
         return steps, degraded, deadlines
 
-    def _reconcile_item(self, item: QueueItem, deadlines: list[str]) -> QueueControllerStep:
+    def _reconcile_item(
+        self, item: QueueItem, deadlines: list[str]
+    ) -> QueueControllerStep:
+        if item.queue_item_id in self._pending_start_compensations:
+            return self._reconcile_pending_start(item, deadlines)
         if QueueItemStatus(item.status) is QueueItemStatus.CLAIMED:
             return self._complete_unknown(
                 item,
@@ -571,7 +611,10 @@ class QueueController:
             return self._complete_unknown(
                 item,
                 reason=f"adapter status unavailable: {item.launch_contract.adapter}",
-                evidence={"adapter": item.launch_contract.adapter, "recovery_needed": True},
+                evidence={
+                    "adapter": item.launch_contract.adapter,
+                    "recovery_needed": True,
+                },
             )
         inspection = adapter.inspect(item)
         if inspection.next_maintenance_at is not None:
@@ -579,7 +622,9 @@ class QueueController:
         if not inspection.terminal:
             if inspection.degraded:
                 return QueueControllerStep("degraded", item)
-            return QueueControllerStep("handoff" if inspection.handoff_complete else "active", item)
+            return QueueControllerStep(
+                "handoff" if inspection.handoff_complete else "active", item
+            )
         if inspection.status is QueueItemStatus.CANCELLED:
             return QueueControllerStep(
                 "cancelled",
@@ -606,7 +651,8 @@ class QueueController:
             1
             for item in self._service.recovery_items()
             if item.pool_name == pool_name
-            and QueueItemStatus(item.status) in {QueueItemStatus.CLAIMED, QueueItemStatus.DISPATCHED}
+            and QueueItemStatus(item.status)
+            in {QueueItemStatus.CLAIMED, QueueItemStatus.DISPATCHED}
         )
 
     def _owned_by_current_session(self, item: QueueItem) -> bool:
@@ -616,19 +662,23 @@ class QueueController:
                 and item.claim.owner_id == self._owner_id
                 and f":{self._session_id}:" in item.claim.claim_id
             )
-        if item.launch_contract.adapter != "local" or item.dispatch_handle is None:
-            return (
-                item.dispatch_handle is not None
-                and item.dispatch_handle.handle_id in self._owned_handle_ids
-            )
+        if item.dispatch_handle is None:
+            return False
+        if item.launch_contract.adapter != "local":
+            # Scheduler and other durable adapters retain their established
+            # cross-controller recovery behavior.  Session fencing is needed
+            # only for the in-memory managed-local process owner.
+            return True
         managed = item.dispatch_handle.evidence.get("managed_local")
         if not isinstance(managed, Mapping):
-            return False
+            return item.dispatch_handle.handle_id in self._owned_handle_ids
         adapter = self._adapters.get(item.launch_contract.adapter)
         session_id = getattr(adapter, "session_id", None)
         return isinstance(session_id, str) and managed.get("session_id") == session_id
 
-    def _compensate_uncommitted_start(self, item: QueueItem, handle: DispatchHandle) -> None:
+    def _compensate_uncommitted_start(
+        self, item: QueueItem, handle: DispatchHandle
+    ) -> None:
         adapter = self._adapters.get(item.launch_contract.adapter)
         if adapter is None or not isinstance(adapter, QueueCancellableDispatchAdapter):
             return
@@ -638,9 +688,57 @@ class QueueController:
             dispatch_handle=handle,
             updated_at=handle.dispatched_at,
         )
-        adapter.cancel(
-            live_item, requested_by=self._owner_id, reason="queue-handle-commit-failed"
+        self._pending_start_compensations[item.queue_item_id] = live_item
+        try:
+            cancellation = adapter.cancel(
+                live_item,
+                requested_by=self._owner_id,
+                reason="queue-handle-commit-failed",
+            )
+        except Exception:  # cleanup remains owned for later reconciliation
+            return
+        if cancellation.evidence.get("exit_observed") is not False:
+            self._pending_start_compensations.pop(item.queue_item_id, None)
+
+    def _reconcile_pending_start(
+        self, item: QueueItem, deadlines: list[str]
+    ) -> QueueControllerStep:
+        live_item = self._pending_start_compensations[item.queue_item_id]
+        adapter = self._adapters.get(live_item.launch_contract.adapter)
+        if adapter is None or not isinstance(adapter, QueueInspectableDispatchAdapter):
+            return QueueControllerStep("degraded", item)
+        inspection = adapter.inspect(live_item)
+        if inspection.next_maintenance_at is not None:
+            deadlines.append(inspection.next_maintenance_at)
+        if not inspection.terminal:
+            return QueueControllerStep(
+                "degraded" if inspection.degraded else "active", item
+            )
+        if inspection.evidence.get("resource_leases_released") is False:
+            return QueueControllerStep("degraded", item)
+        handle = live_item.dispatch_handle
+        if handle is None:
+            raise QueueServiceError("pending start compensation lost its handle")
+        self._pending_start_compensations.pop(item.queue_item_id, None)
+        persisted = self._service.record_dispatch_handle(
+            item.queue_item_id, handle, expected=item
         )
+        if inspection.status is QueueItemStatus.CANCELLED:
+            terminal = self._service.cancel_item(
+                item.queue_item_id,
+                requested_by=self._owner_id,
+                reason=inspection.reason,
+                evidence=_thaw_evidence(inspection.evidence),
+                expected=persisted,
+            )
+            return QueueControllerStep("cancelled", terminal, handle)
+        terminal = self._service.complete_item(
+            item.queue_item_id,
+            status=inspection.status,
+            reason=inspection.reason,
+            expected=persisted,
+        )
+        return QueueControllerStep("completed", terminal, handle)
 
     def _complete_unknown(
         self,

@@ -5,19 +5,78 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from loom.serialization import PlainData
 from loom.queue import (
     FakeQueueDispatchAdapter,
     QueueController,
     QueueDispatchCancellation,
+    QueueDispatchDisposition,
     QueueDispatchInspection,
     QueueDispatchResult,
     QueueEnqueueRequest,
     QueueItemStatus,
     QueueService,
+    QueueServiceError,
     QueueServiceSpec,
     SQLiteQueueRepository,
     normalize_queue_spec,
 )
+
+
+def test_dispatch_result_normalizes_legacy_and_explicit_dispositions() -> None:
+    completed = QueueDispatchResult(handle_id="completed")
+    started = QueueDispatchResult(
+        handle_id="started",
+        status=QueueItemStatus.DISPATCHED,
+        complete=False,
+    )
+    deferred = QueueDispatchResult(
+        disposition="deferred",
+        status=QueueItemStatus.UNKNOWN,
+        reason="capacity",
+    )
+
+    assert completed.disposition is QueueDispatchDisposition.COMPLETED
+    assert started.disposition is QueueDispatchDisposition.STARTED
+    assert deferred.disposition is QueueDispatchDisposition.DEFERRED
+    assert deferred.handle_id is None
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        (
+            {
+                "handle_id": "deferred",
+                "status": QueueItemStatus.UNKNOWN,
+                "disposition": "deferred",
+            },
+            "cannot have a handle_id",
+        ),
+        (
+            {
+                "handle_id": "started",
+                "status": QueueItemStatus.SUCCEEDED,
+                "complete": False,
+                "disposition": "started",
+            },
+            "active dispatch result status must be DISPATCHED",
+        ),
+        (
+            {
+                "handle_id": "completed",
+                "status": QueueItemStatus.DISPATCHED,
+                "disposition": "completed",
+            },
+            "completed dispatch result status",
+        ),
+    ],
+)
+def test_dispatch_result_rejects_ambiguous_dispositions(
+    kwargs: dict[str, object], message: str
+) -> None:
+    with pytest.raises(QueueServiceError, match=message):
+        QueueDispatchResult(**kwargs)  # type: ignore[arg-type]
 
 
 def test_controller_run_once_dispatches_one_fake_item(tmp_path: Path) -> None:
@@ -78,7 +137,9 @@ def test_foreground_drain_completes_fake_work_without_orphaned_claims(
 
     result = QueueController(service, clock=clock).drain_foreground()
 
-    assert [step.item.queue_item_id for step in result.steps if step.item is not None] == [
+    assert [
+        step.item.queue_item_id for step in result.steps if step.item is not None
+    ] == [
         "item-1",
         "item-2",
     ]
@@ -339,6 +400,101 @@ def test_cycle_defers_fifo_head_once_and_returns_serializable_capacity_result(
     assert result.to_dict()["next_maintenance_at"] is None
 
 
+def test_cycle_bounds_synchronous_completions_by_dispatch_budget(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(20)])
+    service = _started_service(
+        tmp_path,
+        clock=clock,
+        max_active_items=3,
+        max_dispatches_per_cycle=2,
+    )
+    for item_id in ("item-1", "item-2", "item-3"):
+        service.enqueue(
+            QueueEnqueueRequest(
+                queue_item_id=item_id,
+                queue_name="gpu",
+                run_uri=f"file:///runs/{item_id}",
+            )
+        )
+
+    result = QueueController(service, clock=clock).run_cycle(pool_name="gpu-pool")
+
+    assert [step.item.queue_item_id for step in result.dispatch_steps if step.item] == [
+        "item-1",
+        "item-2",
+    ]
+    queued = service.read_item("item-3")
+    assert queued is not None
+    assert queued.status is QueueItemStatus.QUEUED
+
+
+def test_cycle_stops_new_starts_at_active_limit(tmp_path: Path) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(20)])
+    service = _started_service(
+        tmp_path,
+        clock=clock,
+        max_active_items=2,
+        max_dispatches_per_cycle=3,
+    )
+    for item_id in ("item-1", "item-2", "item-3"):
+        service.enqueue(
+            QueueEnqueueRequest(
+                queue_item_id=item_id,
+                queue_name="gpu",
+                run_uri=f"file:///runs/{item_id}",
+                adapter="async",
+            )
+        )
+
+    result = QueueController(
+        service, adapters={"async": _AsyncAdapter()}, clock=clock
+    ).run_cycle(pool_name="gpu-pool")
+
+    assert len(result.dispatch_steps) == 2
+    assert result.active_count == 2
+    queued = service.read_item("item-3")
+    assert queued is not None
+    assert queued.status is QueueItemStatus.QUEUED
+
+
+def test_cycle_reconciles_later_items_after_one_item_local_failure(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(30)])
+    service = _started_service(tmp_path, clock=clock, max_active_items=2)
+    for item_id in ("item-1", "item-2", "item-3"):
+        service.enqueue(
+            QueueEnqueueRequest(
+                queue_item_id=item_id,
+                queue_name="gpu",
+                run_uri=f"file:///runs/{item_id}",
+                adapter="item-local-failure",
+            )
+        )
+    adapter = _ItemLocalFailureAdapter()
+    controller = QueueController(
+        service, adapters={adapter.adapter_name: adapter}, clock=clock
+    )
+    controller.run_cycle(pool_name="gpu-pool")
+
+    result = controller.run_cycle(pool_name="gpu-pool")
+
+    assert [step.outcome for step in result.reconciliation_steps] == [
+        "degraded",
+        "completed",
+    ]
+    assert adapter.inspected == ["item-1", "item-2"]
+    assert result.dispatch_steps == ()
+    completed = service.read_item("item-2")
+    queued = service.read_item("item-3")
+    assert completed is not None
+    assert completed.status is QueueItemStatus.SUCCEEDED
+    assert queued is not None
+    assert queued.status is QueueItemStatus.QUEUED
+
+
 def test_cycle_stops_after_unknown_completion_and_degraded_reconciliation(
     tmp_path: Path,
 ) -> None:
@@ -361,7 +517,9 @@ def test_cycle_stops_after_unknown_completion_and_degraded_reconciliation(
     )
     adapter = _DegradingAdapter()
     controller = QueueController(
-        service, adapters={"degrading": adapter, "fake": FakeQueueDispatchAdapter()}, clock=clock
+        service,
+        adapters={"degrading": adapter, "fake": FakeQueueDispatchAdapter()},
+        clock=clock,
     )
     controller.run_once(pool_name="gpu-pool")
 
@@ -384,17 +542,17 @@ def test_cycle_counts_foreign_dispatch_without_inspecting_or_mutating_it(
             queue_item_id="foreign",
             queue_name="gpu",
             run_uri="file:///runs/foreign",
-            adapter="counting",
+            adapter="local",
         )
     )
-    first_adapter = _CountingAdapter()
-    first = QueueController(service, adapters={"counting": first_adapter}, clock=clock)
+    first_adapter = _CountingAdapter(adapter_name="local", session_id="session-1")
+    first = QueueController(service, adapters={"local": first_adapter}, clock=clock)
     first.run_once(pool_name="gpu-pool")
     foreign_before = service.read_item("foreign")
-    second_adapter = _CountingAdapter()
+    second_adapter = _CountingAdapter(adapter_name="local", session_id="session-2")
 
     result = QueueController(
-        service, adapters={"counting": second_adapter}, clock=clock
+        service, adapters={"local": second_adapter}, clock=clock
     ).run_cycle(pool_name="gpu-pool")
 
     assert result.active_count == 1
@@ -410,11 +568,16 @@ def test_run_once_compensates_started_handle_when_commit_is_rejected(
     service = _started_service(tmp_path, clock=clock)
     service.enqueue(
         QueueEnqueueRequest(
-            queue_item_id="item-1", queue_name="gpu", run_uri="file:///runs/item-1", adapter="cancellable"
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            adapter="cancellable",
         )
     )
     adapter = _CancellableStartedAdapter()
-    controller = QueueController(service, adapters={"cancellable": adapter}, clock=clock)
+    controller = QueueController(
+        service, adapters={"cancellable": adapter}, clock=clock
+    )
 
     def reject(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
         raise RuntimeError("commit rejected")
@@ -513,27 +676,64 @@ class _DegradingAdapter:
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
         return QueueDispatchInspection(
-            status=QueueItemStatus.DISPATCHED, reason="authority unavailable", degraded=True
+            status=QueueItemStatus.DISPATCHED,
+            reason="authority unavailable",
+            degraded=True,
         )
 
 
-class _CountingAdapter:
-    adapter_name = "counting"
+class _ItemLocalFailureAdapter:
+    adapter_name = "item-local-failure"
 
     def __init__(self) -> None:
-        self.inspections = 0
+        self.inspected: list[str] = []
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
-            handle_id=f"counting:{item.queue_item_id}",
+            handle_id=f"item-local-failure:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
             reason="started",
             complete=False,
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
+        self.inspected.append(item.queue_item_id)
+        if item.queue_item_id == "item-1":
+            raise RuntimeError("injected item-local inspection failure")
+        return QueueDispatchInspection(
+            status=QueueItemStatus.SUCCEEDED,
+            reason="completed",
+            terminal=True,
+        )
+
+
+class _CountingAdapter:
+    def __init__(
+        self, *, adapter_name: str = "counting", session_id: str | None = None
+    ) -> None:
+        self.adapter_name = adapter_name
+        self.session_id = session_id
+        self.inspections = 0
+
+    def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
+        evidence: dict[str, PlainData] = (
+            {}
+            if self.session_id is None
+            else {"managed_local": {"session_id": self.session_id}}
+        )
+        return QueueDispatchResult(
+            handle_id=f"counting:{item.queue_item_id}",
+            status=QueueItemStatus.DISPATCHED,
+            reason="started",
+            evidence=evidence,
+            complete=False,
+        )
+
+    def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
         self.inspections += 1
-        return QueueDispatchInspection(status=QueueItemStatus.DISPATCHED, reason="active")
+        return QueueDispatchInspection(
+            status=QueueItemStatus.DISPATCHED, reason="active"
+        )
 
 
 class _CancellableStartedAdapter:
@@ -555,8 +755,18 @@ class _CancellableStartedAdapter:
         return QueueDispatchCancellation(reason=reason)
 
 
-def _started_service(tmp_path: Path, *, clock) -> QueueService:
-    spec = _spec(tmp_path)
+def _started_service(
+    tmp_path: Path,
+    *,
+    clock,
+    max_active_items: int = 1,
+    max_dispatches_per_cycle: int | None = None,
+) -> QueueService:
+    spec = _spec(
+        tmp_path,
+        max_active_items=max_active_items,
+        max_dispatches_per_cycle=max_dispatches_per_cycle,
+    )
     repository = SQLiteQueueRepository(tmp_path / "queue.sqlite", clock=clock)
     service = QueueService(spec, repository, clock=clock)
     service.start()
@@ -583,12 +793,22 @@ def _two_pool_service(tmp_path: Path, *, clock) -> QueueService:
     return service
 
 
-def _spec(tmp_path: Path) -> QueueServiceSpec:
+def _spec(
+    tmp_path: Path,
+    *,
+    max_active_items: int = 1,
+    max_dispatches_per_cycle: int | None = None,
+) -> QueueServiceSpec:
     return normalize_queue_spec(
         {
+            "schema_version": 2,
             "db_path": str(tmp_path / "queue.sqlite"),
             "pools": [{"pool_name": "gpu-pool", "mode": "managed"}],
             "queues": [{"queue_name": "gpu", "pool_name": "gpu-pool"}],
+            "controller": {
+                "max_active_items": max_active_items,
+                "max_dispatches_per_cycle": max_dispatches_per_cycle,
+            },
         }
     )
 

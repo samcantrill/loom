@@ -43,7 +43,7 @@ class QueueRepository(Protocol):
         queue_item_id: str,
         handle: DispatchHandle,
         *,
-        expected: QueueItem | None = None,
+        expected: QueueItem,
     ) -> QueueItem: ...
 
     def complete_item(
@@ -52,7 +52,7 @@ class QueueRepository(Protocol):
         *,
         status: QueueItemStatus,
         reason: str,
-        expected: QueueItem | None = None,
+        expected: QueueItem,
     ) -> QueueItem: ...
 
     def request_cancellation(

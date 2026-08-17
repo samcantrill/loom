@@ -18,7 +18,6 @@ from loom.pipeline.execution.resource_admission import (
     ResourceAdmissionStatus,
     ResourceLeaseRequest,
     acquire_resource_admission,
-    release_resource_admission,
 )
 from loom.pipeline.stores import (
     CoordinationFailureKind,
@@ -197,7 +196,8 @@ class LocalQueueDispatchAdapter:
                 return QueueDispatchResult(
                     handle_id=f"local-admission:{item.queue_item_id}:{item.dispatch_attempt}",
                     status=QueueItemStatus.FAILED,
-                    reason=admission.reason_code or "resource_admission.unsupported_resource",
+                    reason=admission.reason_code
+                    or "resource_admission.unsupported_resource",
                     evidence={"local_process_started": False},
                 )
             return QueueDispatchResult(
@@ -215,14 +215,15 @@ class LocalQueueDispatchAdapter:
                 env=command.env,
             )
         except Exception as exc:
-            released = self._release_admission(admission, code="local_process_start_failed")
+            released = self._release_admission(
+                admission, code="local_process_start_failed"
+            )
             return QueueDispatchResult(
                 handle_id=f"local-start:{item.queue_item_id}:{item.dispatch_attempt}",
                 status=QueueItemStatus.FAILED,
                 reason="local process start failed",
                 evidence={
                     "exception_type": type(exc).__name__,
-                    "message": str(exc),
                     "released_resource_leases": released,
                     "local_process_started": False,
                 },
@@ -271,9 +272,27 @@ class LocalQueueDispatchAdapter:
             )
         returncode = active.process.poll()
         if returncode is None:
-            renewal = self._renew_if_due(active)
-            if renewal is not None:
-                return renewal
+            if active.termination_requested:
+                active.process.kill()
+                returncode = active.process.poll()
+                if returncode is None:
+                    return QueueDispatchInspection(
+                        status=QueueItemStatus.DISPATCHED,
+                        reason="local process termination pending",
+                        evidence={
+                            "handle_id": handle_id,
+                            "pid": active.process.pid,
+                            "pgid": active.process.pgid,
+                        },
+                        terminal=False,
+                        degraded=True,
+                        next_maintenance_at=self._clock(),
+                    )
+            else:
+                renewal = self._renew_if_due(active)
+                if renewal is not None:
+                    return renewal
+        if returncode is None:
             return QueueDispatchInspection(
                 status=QueueItemStatus.DISPATCHED,
                 reason="local process active",
@@ -285,27 +304,60 @@ class LocalQueueDispatchAdapter:
                 terminal=False,
                 next_maintenance_at=active.next_renew_at,
             )
-        active = self._active.pop(handle_id)
-        released = self._release_admission(
-            active.admission,
-            code="local_process_completed",
-        )
+        release_failure_kind: str | None = None
+        try:
+            released = self._release_admission(
+                active.admission,
+                code="local_process_completed",
+            )
+        except CoordinationStoreError as exc:
+            if exc.kind is not CoordinationFailureKind.OWNERSHIP_LOST:
+                return QueueDispatchInspection(
+                    status=QueueItemStatus.DISPATCHED,
+                    reason="local resource release pending",
+                    evidence={"release_failure_kind": exc.kind.value},
+                    terminal=False,
+                    degraded=True,
+                    next_maintenance_at=self._clock(),
+                )
+            released = []
+            release_failure_kind = exc.kind.value
+        except Exception as exc:  # noqa: BLE001
+            return QueueDispatchInspection(
+                status=QueueItemStatus.DISPATCHED,
+                reason="local resource release pending",
+                evidence={
+                    "release_failure_kind": "internal",
+                    "exception_type": type(exc).__name__,
+                },
+                terminal=False,
+                degraded=True,
+                next_maintenance_at=self._clock(),
+            )
+        self._active.pop(handle_id, None)
         if active.cancellation_requested:
             status = QueueItemStatus.CANCELLED
             reason = "local process cancelled"
         else:
-            status = QueueItemStatus.SUCCEEDED if returncode == 0 else QueueItemStatus.FAILED
-            reason = "local process succeeded" if returncode == 0 else "local process failed"
+            status = (
+                QueueItemStatus.SUCCEEDED if returncode == 0 else QueueItemStatus.FAILED
+            )
+            reason = (
+                "local process succeeded" if returncode == 0 else "local process failed"
+            )
+        evidence: dict[str, PlainData] = {
+            "handle_id": handle_id,
+            "pid": active.process.pid,
+            "pgid": active.process.pgid,
+            "returncode": returncode,
+            "released_resource_leases": released,
+        }
+        if release_failure_kind is not None:
+            evidence["release_failure_kind"] = release_failure_kind
         return QueueDispatchInspection(
             status=status,
             reason=reason,
-            evidence={
-                "handle_id": handle_id,
-                "pid": active.process.pid,
-                "pgid": active.process.pgid,
-                "returncode": returncode,
-                "released_resource_leases": released,
-            },
+            evidence=evidence,
             terminal=True,
         )
 
@@ -317,7 +369,7 @@ class LocalQueueDispatchAdapter:
         reason: str,
     ) -> QueueDispatchCancellation:
         handle_id = _dispatch_handle_id(item)
-        active = self._active.pop(handle_id, None)
+        active = self._active.get(handle_id)
         if active is None:
             return QueueDispatchCancellation(
                 reason=reason,
@@ -325,15 +377,17 @@ class LocalQueueDispatchAdapter:
                     "handle_id": handle_id,
                     "recovery_needed": True,
                     "resource_leases_released": False,
+                    "exit_observed": False,
                 },
             )
+        active.cancellation_requested = True
         returncode = active.process.poll()
         if returncode is None:
             active.process.terminate()
             # The runner is the sole source of process-exit truth.  Keep the
             # leases when it cannot yet confirm exit rather than making them reusable.
             if active.process.poll() is None:
-                active.cancellation_requested = True
+                active.termination_requested = True
                 self._active[handle_id] = active
                 return QueueDispatchCancellation(
                     reason=reason,
@@ -347,19 +401,32 @@ class LocalQueueDispatchAdapter:
                         "released_resource_leases": False,
                     },
                 )
-        released = self._release_admission(active.admission, code="local_process_cancelled")
+        release_failure_kind: str | None = None
+        try:
+            released = self._release_admission(
+                active.admission, code="local_process_cancelled"
+            )
+        except CoordinationStoreError as exc:
+            if exc.kind is not CoordinationFailureKind.OWNERSHIP_LOST:
+                raise
+            released = []
+            release_failure_kind = exc.kind.value
+        self._active.pop(handle_id, None)
+        evidence: dict[str, PlainData] = {
+            "handle_id": handle_id,
+            "pid": active.process.pid,
+            "pgid": active.process.pgid,
+            "requested_by": requested_by,
+            "returncode": returncode,
+            "terminated_process_group": returncode is None,
+            "exit_observed": True,
+            "released_resource_leases": released,
+        }
+        if release_failure_kind is not None:
+            evidence["release_failure_kind"] = release_failure_kind
         return QueueDispatchCancellation(
             reason=reason,
-            evidence={
-                "handle_id": handle_id,
-                "pid": active.process.pid,
-                "pgid": active.process.pgid,
-                "requested_by": requested_by,
-                "returncode": returncode,
-                "terminated_process_group": returncode is None,
-                "exit_observed": True,
-                "released_resource_leases": released,
-            },
+            evidence=evidence,
         )
 
     def _drift_evidence(self, item: QueueItem) -> Mapping[str, PlainData] | None:
@@ -385,15 +452,43 @@ class LocalQueueDispatchAdapter:
         *,
         code: str,
     ) -> list[PlainData]:
-        released = release_resource_admission(
-            self.coordination_store,
-            admission,
-            reason=LifecycleReason(
-                code=code,
-                message=f"released local queue resource admission for {admission.request.run_uri}",
-            ),
+        reason = LifecycleReason(
+            code=code,
+            message=f"released local queue resource admission for {admission.request.run_uri}",
         )
-        return [record.to_dict() for record in released]
+        released: list[PlainData] = []
+        ownership_error: CoordinationStoreError | None = None
+        retryable_error: Exception | None = None
+        for record in admission.leases:
+            try:
+                self.coordination_store.release_lease(
+                    record.lease.lease_id,
+                    owner_id=record.lease.owner_id,
+                    fencing_token=record.lease.fencing_token,
+                    reason=reason,
+                )
+                released.append(
+                    {
+                        "resource_key": record.resource_key,
+                        "lease_id": record.lease.lease_id,
+                        "amount": record.amount,
+                        "released": True,
+                    }
+                )
+            except CoordinationStoreError as exc:
+                if exc.kind is CoordinationFailureKind.OWNERSHIP_LOST:
+                    if ownership_error is None:
+                        ownership_error = exc
+                elif retryable_error is None:
+                    retryable_error = exc
+            except Exception as exc:  # noqa: BLE001
+                if retryable_error is None:
+                    retryable_error = exc
+        if retryable_error is not None:
+            raise retryable_error
+        if ownership_error is not None:
+            raise ownership_error
+        return released
 
     def _renew_if_due(
         self, active: _ActiveLocalDispatch
@@ -440,7 +535,10 @@ class LocalQueueDispatchAdapter:
             return QueueDispatchInspection(
                 status=QueueItemStatus.DISPATCHED,
                 reason="local scalar lease renewal failed",
-                evidence={"renewal_failure_kind": "internal", "exception_type": type(exc).__name__},
+                evidence={
+                    "renewal_failure_kind": "internal",
+                    "exception_type": type(exc).__name__,
+                },
                 terminal=False,
                 degraded=True,
                 next_maintenance_at=active.safety_deadline_at,
@@ -470,7 +568,9 @@ def _lease_maintenance_times(
 ) -> tuple[str | None, str | None]:
     if not admission.leases:
         return None, None
-    renewed_at = max(parse_timestamp(record.lease.renewed_at) for record in admission.leases)
+    renewed_at = min(
+        parse_timestamp(record.lease.renewed_at) for record in admission.leases
+    )
     return (
         utc_timestamp(renewed_at + timedelta(seconds=ttl_seconds * 0.5)),
         utc_timestamp(renewed_at + timedelta(seconds=ttl_seconds * 0.8)),
@@ -559,7 +659,9 @@ def _string(value: object, field: str) -> str:
     return value
 
 
-def _plain_mapping(value: Mapping[str, PlainData], path: str) -> Mapping[str, PlainData]:
+def _plain_mapping(
+    value: Mapping[str, PlainData], path: str
+) -> Mapping[str, PlainData]:
     try:
         frozen = freeze_plain_data(value, path=path)
     except PlainDataError as exc:

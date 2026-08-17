@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import TypeVar
 
 from .authority_client import AuthorityClient
-from .authority_protocol import AuthorityProtocolResponse, AuthorityProtocolResult
+from .authority_protocol import (
+    AuthorityProtocolErrorCategory,
+    AuthorityProtocolRejection,
+    AuthorityProtocolResponse,
+    AuthorityProtocolResult,
+)
 from .capabilities import (
     BackendCapability,
     BackendCapabilityRecord,
@@ -324,7 +329,7 @@ def _accepted(response: AuthorityProtocolResponse) -> AuthorityProtocolResult:
         )
     raise CoordinationStoreError(
         f"{rejection.code}: {rejection.message}; detail={dict(rejection.detail)}",
-        kind=_rejection_kind(rejection.code),
+        kind=_rejection_kind(rejection),
     )
 
 
@@ -334,15 +339,47 @@ def _required(value: _T | None, field: str) -> _T:
     return value
 
 
-def _rejection_kind(code: str) -> CoordinationFailureKind:
-    if code in {"resource_limit_exceeded", "counter_limit_exceeded"}:
+def _rejection_kind(rejection: AuthorityProtocolRejection) -> CoordinationFailureKind:
+    code = rejection.code
+    if code in {
+        "coordination_capacity",
+        "resource_limit_exceeded",
+        "counter_limit_exceeded",
+    }:
         return CoordinationFailureKind.CAPACITY
-    if code in {"unsupported_resource", "invalid_request", "invalid_resource"}:
+    if code in {
+        "coordination_invalid_or_unsupported",
+        "unsupported_resource",
+        "invalid_request",
+        "invalid_resource",
+    }:
         return CoordinationFailureKind.INVALID_OR_UNSUPPORTED
-    if code in {"stale_generation", "lease_not_active", "lease_expired", "stale_lease"}:
+    if code in {
+        "coordination_ownership_lost",
+        "stale_generation",
+        "lease_not_active",
+        "lease_expired",
+        "stale_lease",
+    }:
         return CoordinationFailureKind.OWNERSHIP_LOST
-    if code in {"service_unavailable", "authority_unavailable"}:
+    if code in {
+        "coordination_unavailable",
+        "service_unavailable",
+        "authority_unavailable",
+    }:
         return CoordinationFailureKind.UNAVAILABLE
+    if rejection.category in {
+        AuthorityProtocolErrorCategory.STALE_FENCING,
+        AuthorityProtocolErrorCategory.STALE_GENERATION,
+    }:
+        return CoordinationFailureKind.OWNERSHIP_LOST
+    if rejection.category is AuthorityProtocolErrorCategory.UNAVAILABLE_SERVICE:
+        return CoordinationFailureKind.UNAVAILABLE
+    if rejection.category in {
+        AuthorityProtocolErrorCategory.VALIDATION,
+        AuthorityProtocolErrorCategory.UNSUPPORTED_CAPABILITY,
+    }:
+        return CoordinationFailureKind.INVALID_OR_UNSUPPORTED
     return CoordinationFailureKind.INTERNAL
 
 
