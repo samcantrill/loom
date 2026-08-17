@@ -5,8 +5,9 @@ Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 3 pending
-Blockers: none; Phase 2 merged through PR `#210`
+Current phase: Phase 3 in progress
+Blockers: none; Phase 2 merged through PR `#210` and Phase 3 is isolated from
+current `origin/develop`
 
 ## Summary
 
@@ -107,7 +108,7 @@ Blockers: none; Phase 2 merged through PR `#210`
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `safe-pool-cycles` | merged | `docs/roadmap/stage-23/phases/safe-pool-cycles.md` | `agent/stage-23-p1-safe-pool-cycles` | `#209` | Queue controller/repository, typed coordination/admission, and scalar local-process safety | Atomically reconcile/fill one pool with deferral, scalar renewal, terminal-before-release, and post-start compensation. |
 | 2 | `managed-local-assignments` | merged | `docs/roadmap/stage-23/phases/managed-local-assignments.md` | `agent/stage-23-p2-managed-local-assignments` | `#210` | Queue-local assignment/config/preflight and integration with the established local lifecycle | Exclusively bind and renew static slots, apply safe bindings, capture logs, and preserve Phase 1 compensation. |
-| 3 | `operator-status-proof` | pending | `docs/roadmap/stage-23/phases/operator-status-proof.md` | `agent/stage-23-p3-operator-status-proof` | pending | Repository read model, status/CLI rendering, docs, examples, and end-to-end proof | Expose redacted pool summaries and prove twelve items over three generic slots. |
+| 3 | `operator-status-proof` | in_progress | `docs/roadmap/stage-23/phases/operator-status-proof.md` | `agent/stage-23-p3-operator-status-proof` | pending | Repository read model, status/CLI rendering, docs, examples, and end-to-end proof | Expose redacted pool summaries and prove twelve items over three generic slots. |
 
 The phases are vertical rather than module-only. Phase 1 includes scalar lease
 renewal, local termination-before-release, session ownership, and post-start
