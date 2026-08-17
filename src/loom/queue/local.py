@@ -104,6 +104,8 @@ class _ActiveLocalDispatch:
     next_renew_at: str | None
     safety_deadline_at: str | None
     assignment_safety_deadline_at: str | None
+    assignment_released: bool = False
+    admission_released: bool = False
     termination_requested: bool = False
     cancellation_requested: bool = False
 
@@ -254,28 +256,52 @@ class LocalQueueDispatchAdapter:
                     "local_process_started": False,
                 },
             )
-        assignment_decision = self.assignment_provider.acquire(
-            ResourceAssignmentRequest(
-                consumer_id=item.queue_item_id,
-                pool_name=item.pool_name,
-                owner_id=self.owner_id,
-                session_id=self.session_id,
-                resources={
-                    key: amount
-                    for key, amount in item.launch_contract.resources.items()
-                    if amount > 0
-                },
-                admitted_lease_ids=tuple(
-                    record.lease.lease_id for record in admission.leases
-                ),
-                lease_ttl_seconds=self.lease_ttl_seconds,
+        try:
+            assignment_decision = self.assignment_provider.acquire(
+                ResourceAssignmentRequest(
+                    consumer_id=item.queue_item_id,
+                    pool_name=item.pool_name,
+                    owner_id=self.owner_id,
+                    session_id=self.session_id,
+                    resources={
+                        key: amount
+                        for key, amount in item.launch_contract.resources.items()
+                        if amount > 0
+                    },
+                    admitted_lease_ids=tuple(
+                        record.lease.lease_id for record in admission.leases
+                    ),
+                    lease_ttl_seconds=self.lease_ttl_seconds,
+                )
             )
-        )
+        except Exception as exc:  # noqa: BLE001
+            cleanup = self._cleanup_pre_start(
+                admission=admission,
+                assignment=None,
+                code="local_assignment_acquire_failed",
+            )
+            return self._pre_start_cleanup_result(
+                item,
+                reason="local assignment acquisition failed",
+                exception=exc,
+                cleanup=cleanup,
+            )
         if (
             assignment_decision.disposition
             is not ResourceAssignmentDisposition.ASSIGNED
         ):
-            self._release_admission(admission, code="local_assignment_not_started")
+            cleanup = self._cleanup_pre_start(
+                admission=admission,
+                assignment=None,
+                code="local_assignment_not_started",
+            )
+            if cleanup["pending"]:
+                return self._pre_start_cleanup_result(
+                    item,
+                    reason="local assignment cleanup pending",
+                    exception=None,
+                    cleanup=cleanup,
+                )
             if (
                 assignment_decision.disposition
                 is ResourceAssignmentDisposition.DEFERRED
@@ -299,19 +325,18 @@ class LocalQueueDispatchAdapter:
         try:
             environment = _merge_assignment_environment(command.env, assignment)
             stdout_path, stderr_path = self._prepare_log_paths(item)
+            assignment_slots = _assignment_evidence_slots(assignment)
         except Exception as exc:  # noqa: BLE001
-            self._release_assignment(
-                assignment, code="local_assignment_launch_rejected"
+            cleanup = self._cleanup_pre_start(
+                admission=admission,
+                assignment=assignment,
+                code="local_assignment_launch_rejected",
             )
-            self._release_admission(admission, code="local_assignment_launch_rejected")
-            return QueueDispatchResult(
-                handle_id=f"local-binding:{item.queue_item_id}:{item.dispatch_attempt}",
-                status=QueueItemStatus.FAILED,
+            return self._pre_start_cleanup_result(
+                item,
                 reason="local assignment launch preparation failed",
-                evidence={
-                    "exception_type": type(exc).__name__,
-                    "local_process_started": False,
-                },
+                exception=exc,
+                cleanup=cleanup,
             )
         try:
             process = self._start_process(
@@ -322,19 +347,16 @@ class LocalQueueDispatchAdapter:
                 stderr_path=stderr_path,
             )
         except Exception as exc:
-            self._release_assignment(assignment, code="local_process_start_failed")
-            released = self._release_admission(
-                admission, code="local_process_start_failed"
+            cleanup = self._cleanup_pre_start(
+                admission=admission,
+                assignment=assignment,
+                code="local_process_start_failed",
             )
-            return QueueDispatchResult(
-                handle_id=f"local-start:{item.queue_item_id}:{item.dispatch_attempt}",
-                status=QueueItemStatus.FAILED,
+            return self._pre_start_cleanup_result(
+                item,
                 reason="local process start failed",
-                evidence={
-                    "exception_type": type(exc).__name__,
-                    "released_resource_leases": released,
-                    "local_process_started": False,
-                },
+                exception=exc,
+                cleanup=cleanup,
             )
         handle_id = f"local:{item.queue_item_id}:{item.dispatch_attempt}:{process.pid}"
         next_renew_at, safety_deadline_at = _lease_maintenance_times(
@@ -363,6 +385,7 @@ class LocalQueueDispatchAdapter:
                     admission=admission,
                     dispatched_at=self._clock(),
                     assignment=assignment,
+                    assignment_slots=assignment_slots,
                     stdout_path=stdout_path,
                     stderr_path=stderr_path,
                     log_root=self.log_directory,
@@ -425,35 +448,12 @@ class LocalQueueDispatchAdapter:
                     active.next_renew_at, active.assignment.next_maintenance_at
                 ),
             )
-        release_failure_kind: str | None = None
-        try:
-            assignment_released = self._release_assignment(
-                active.assignment, code="local_process_completed"
-            )
-            released = self._release_admission(
-                active.admission, code="local_process_completed"
-            )
-        except CoordinationStoreError as exc:
-            if exc.kind is not CoordinationFailureKind.OWNERSHIP_LOST:
-                return QueueDispatchInspection(
-                    status=QueueItemStatus.DISPATCHED,
-                    reason="local resource release pending",
-                    evidence={"release_failure_kind": exc.kind.value},
-                    terminal=False,
-                    degraded=True,
-                    next_maintenance_at=self._clock(),
-                )
-            released = []
-            assignment_released = []
-            release_failure_kind = exc.kind.value
-        except Exception as exc:  # noqa: BLE001
+        cleanup = self._cleanup_active(active, code="local_process_completed")
+        if cleanup["pending"]:
             return QueueDispatchInspection(
                 status=QueueItemStatus.DISPATCHED,
                 reason="local resource release pending",
-                evidence={
-                    "release_failure_kind": "internal",
-                    "exception_type": type(exc).__name__,
-                },
+                evidence=cleanup["evidence"],
                 terminal=False,
                 degraded=True,
                 next_maintenance_at=self._clock(),
@@ -474,11 +474,10 @@ class LocalQueueDispatchAdapter:
             "pid": active.process.pid,
             "pgid": active.process.pgid,
             "returncode": returncode,
-            "released_resource_leases": released,
-            "released_assignment_leases": assignment_released,
+            "released_resource_leases": cleanup["admission_released"],
+            "released_assignment_leases": cleanup["assignment_released"],
         }
-        if release_failure_kind is not None:
-            evidence["release_failure_kind"] = release_failure_kind
+        evidence.update(cleanup["evidence"])
         return QueueDispatchInspection(
             status=status,
             reason=reason,
@@ -526,20 +525,23 @@ class LocalQueueDispatchAdapter:
                         "released_resource_leases": False,
                     },
                 )
-        release_failure_kind: str | None = None
-        try:
-            assignment_released = self._release_assignment(
-                active.assignment, code="local_process_cancelled"
+        cleanup = self._cleanup_active(active, code="local_process_cancelled")
+        if cleanup["pending"]:
+            return QueueDispatchCancellation(
+                reason=reason,
+                evidence={
+                    "handle_id": handle_id,
+                    "pid": active.process.pid,
+                    "pgid": active.process.pgid,
+                    "requested_by": requested_by,
+                    # Keep the queue item reconcilable until every owned
+                    # layer has been released, even though process exit is
+                    # already known.
+                    "exit_observed": False,
+                    "released_resource_leases": False,
+                    **cleanup["evidence"],
+                },
             )
-            released = self._release_admission(
-                active.admission, code="local_process_cancelled"
-            )
-        except CoordinationStoreError as exc:
-            if exc.kind is not CoordinationFailureKind.OWNERSHIP_LOST:
-                raise
-            released = []
-            assignment_released = []
-            release_failure_kind = exc.kind.value
         self._active.pop(handle_id, None)
         evidence: dict[str, PlainData] = {
             "handle_id": handle_id,
@@ -549,11 +551,10 @@ class LocalQueueDispatchAdapter:
             "returncode": returncode,
             "terminated_process_group": returncode is None,
             "exit_observed": True,
-            "released_resource_leases": released,
-            "released_assignment_leases": assignment_released,
+            "released_resource_leases": cleanup["admission_released"],
+            "released_assignment_leases": cleanup["assignment_released"],
         }
-        if release_failure_kind is not None:
-            evidence["release_failure_kind"] = release_failure_kind
+        evidence.update(cleanup["evidence"])
         return QueueDispatchCancellation(
             reason=reason,
             evidence=evidence,
@@ -636,6 +637,104 @@ class LocalQueueDispatchAdapter:
             }
             for lease in assignment.leases
         ]
+
+    def _cleanup_pre_start(
+        self,
+        *,
+        admission: ResourceAdmissionDecision,
+        assignment: ResourceAssignment | None,
+        code: str,
+    ) -> dict[str, object]:
+        """Try every owned layer, preserving uncertainty without short-circuiting."""
+        active = _ActiveLocalDispatch(
+            process=cast(LocalProcess, None),
+            admission=admission,
+            assignment=assignment
+            or ResourceAssignment(provider_name="no-op", live_token=None, leases=()),
+            next_renew_at=None,
+            safety_deadline_at=None,
+            assignment_safety_deadline_at=None,
+            assignment_released=assignment is None,
+        )
+        return self._cleanup_active(active, code=code)
+
+    def _pre_start_cleanup_result(
+        self,
+        item: QueueItem,
+        *,
+        reason: str,
+        exception: Exception | None,
+        cleanup: Mapping[str, object],
+    ) -> QueueDispatchResult:
+        pending = bool(cleanup["pending"])
+        evidence: dict[str, PlainData] = {
+            "local_process_started": False,
+            "released_resource_leases": cast(
+                list[PlainData], cleanup["admission_released"]
+            ),
+            "released_assignment_leases": cast(
+                list[PlainData], cleanup["assignment_released"]
+            ),
+        }
+        if exception is not None:
+            evidence["exception_type"] = type(exception).__name__
+        evidence.update(cast(Mapping[str, PlainData], cleanup["evidence"]))
+        return QueueDispatchResult(
+            handle_id=f"local-cleanup:{item.queue_item_id}:{item.dispatch_attempt}",
+            status=QueueItemStatus.UNKNOWN if pending else QueueItemStatus.FAILED,
+            reason=reason,
+            evidence=evidence,
+        )
+
+    def _cleanup_active(
+        self, active: _ActiveLocalDispatch, *, code: str
+    ) -> dict[str, object]:
+        """Release assignment then scalar admission, retrying only unfinished layers."""
+        evidence: dict[str, PlainData] = {}
+        assignment_released: list[PlainData] = []
+        admission_released: list[PlainData] = []
+        pending = False
+        for layer in ("assignment", "admission"):
+            if layer == "assignment":
+                if active.assignment_released:
+                    continue
+            else:
+                if active.admission_released:
+                    continue
+            try:
+                released = (
+                    self._release_assignment(active.assignment, code=code)
+                    if layer == "assignment"
+                    else self._release_admission(active.admission, code=code)
+                )
+            except CoordinationStoreError as exc:
+                if exc.kind is CoordinationFailureKind.OWNERSHIP_LOST:
+                    if layer == "assignment":
+                        active.assignment_released = True
+                    else:
+                        active.admission_released = True
+                    evidence.setdefault("release_failure_kind", exc.kind.value)
+                else:
+                    pending = True
+                    evidence.setdefault("release_failure_kind", exc.kind.value)
+                continue
+            except Exception as exc:  # noqa: BLE001
+                pending = True
+                evidence.setdefault("release_failure_kind", "internal")
+                evidence.setdefault("release_exception_type", type(exc).__name__)
+                continue
+            if layer == "assignment":
+                active.assignment_released = True
+                assignment_released = released
+            else:
+                active.admission_released = True
+                admission_released = released
+        return {
+            "pending": pending,
+            "assignment_released": assignment_released,
+            "admission_released": admission_released,
+            "evidence": evidence,
+        }
 
     def _prepare_log_paths(self, item: QueueItem) -> tuple[Path, Path]:
         # Item ids and attempts are already validated queue identities; the
@@ -822,12 +921,11 @@ def _managed_local_evidence(
     admission: ResourceAdmissionDecision,
     dispatched_at: str,
     assignment: ResourceAssignment,
+    assignment_slots: list[PlainData],
     stdout_path: Path,
     stderr_path: Path,
     log_root: Path,
 ) -> dict[str, PlainData]:
-    safe_evidence = thaw_plain_data(assignment.safe_evidence, path="safe_evidence")
-    slots = safe_evidence.get("slots", []) if isinstance(safe_evidence, Mapping) else []
     return {
         "schema_version": 1,
         "owner_id": owner_id,
@@ -845,7 +943,7 @@ def _managed_local_evidence(
         ],
         "assignment": {
             "provider_name": assignment.provider_name,
-            "slots": slots,
+            "slots": assignment_slots,
             "next_maintenance_at": assignment.next_maintenance_at,
         },
         "logs": {
@@ -853,6 +951,45 @@ def _managed_local_evidence(
             "stderr_path": str(stderr_path.relative_to(log_root.parent)),
         },
     }
+
+
+def _assignment_evidence_slots(assignment: ResourceAssignment) -> list[PlainData]:
+    """Project the fixed durable slot allowlist before crossing subprocess."""
+    safe_evidence = thaw_plain_data(assignment.safe_evidence, path="safe_evidence")
+    if not isinstance(safe_evidence, Mapping) or set(safe_evidence) != {"slots"}:
+        raise QueueServiceError("assignment safe evidence must contain only slots")
+    raw_slots = safe_evidence["slots"]
+    if not isinstance(raw_slots, list):
+        raise QueueServiceError("assignment safe evidence slots must be a list")
+    slots: list[PlainData] = []
+    required = {"resource_name", "slot_id", "lease_id", "expires_at"}
+    allowed = required | {"label"}
+    for raw_slot in raw_slots:
+        if (
+            not isinstance(raw_slot, Mapping)
+            or not required.issubset(raw_slot)
+            or set(raw_slot) - allowed
+        ):
+            raise QueueServiceError("assignment slot evidence has an invalid shape")
+        slot: dict[str, PlainData] = {}
+        for name in required:
+            value = raw_slot[name]
+            if not isinstance(value, str) or not value:
+                raise QueueServiceError(
+                    "assignment slot evidence values must be strings"
+                )
+            slot[name] = value
+        if "label" in raw_slot:
+            label = raw_slot["label"]
+            if not isinstance(label, str) or not label:
+                raise QueueServiceError(
+                    "assignment slot label must be a non-empty string"
+                )
+            slot["label"] = label
+        slots.append(slot)
+    if len(slots) != len(assignment.leases):
+        raise QueueServiceError("assignment slot evidence must match assignment leases")
+    return slots
 
 
 def _launch_command(item: QueueItem) -> LocalLaunchCommand:

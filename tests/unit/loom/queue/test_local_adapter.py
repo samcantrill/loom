@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
+import pytest
+
 from loom.serialization import thaw_plain_data
 from loom.timestamps import utc_timestamp
 from loom.pipeline.stores import (
@@ -17,6 +19,12 @@ from loom.queue import (
     QueueItem,
     QueueItemStatus,
     RunIntent,
+)
+from loom.queue.assignments import (
+    LaunchEnvironmentBindings,
+    ResourceAssignment,
+    ResourceAssignmentDecision,
+    ResourceAssignmentDisposition,
 )
 from loom.queue.local import LocalProcessRunner, LocalQueueDispatchAdapter
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
@@ -285,6 +293,83 @@ def test_local_adapter_attempts_every_release_after_ownership_loss() -> None:
     assert _active_amount(store, "cpu") == 0
 
 
+def test_local_adapter_retries_only_unfinished_scalar_release() -> None:
+    store = _ReleaseStore(failures_remaining=1)
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    provider = _AssignmentProvider()
+    process = _FakeProcess(pid=114, pgid=114, returncode=0)
+    adapter = _adapter(store, _FakeRunner(process), assignment_provider=provider)
+    _item_record, dispatched = _dispatch_item(adapter, "item-1")
+
+    pending = adapter.inspect(dispatched)
+    terminal = adapter.inspect(dispatched)
+
+    assert pending.terminal is False
+    assert terminal.terminal is True
+    assert provider.release_calls == 1
+    assert store.release_calls == 2
+    assert _active_amount(store, "gpu") == 0
+
+
+def test_local_adapter_releases_scalar_when_assignment_launch_cleanup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    provider = _AssignmentProvider(release_error=RuntimeError("assignment unavailable"))
+    adapter = _adapter(
+        store,
+        _FakeRunner(_FakeProcess(pid=115, pgid=115)),
+        assignment_provider=provider,
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_prepare_log_paths",
+        lambda item: (_ for _ in ()).throw(OSError("no logs")),
+    )
+
+    result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
+
+    assert result.status is QueueItemStatus.UNKNOWN
+    assert provider.release_calls == 1
+    assert _active_amount(store, "gpu") == 0
+
+
+def test_local_adapter_rejects_private_assignment_evidence_before_start() -> None:
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    provider = _AssignmentProvider(
+        safe_evidence={"slots": [], "fencing_token": "secret"}
+    )
+    runner = _FakeRunner(_FakeProcess(pid=116, pgid=116))
+    adapter = _adapter(store, runner, assignment_provider=provider)
+
+    result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
+
+    assert result.status is QueueItemStatus.FAILED
+    assert runner.argv is None
+    assert provider.release_calls == 1
+    assert _active_amount(store, "gpu") == 0
+
+
+def test_local_adapter_compensates_scalar_admission_when_assignment_acquire_raises() -> (
+    None
+):
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    adapter = _adapter(
+        store,
+        _FakeRunner(_FakeProcess(pid=117, pgid=117)),
+        assignment_provider=_AcquireFailingAssignmentProvider(),
+    )
+
+    result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
+
+    assert result.status is QueueItemStatus.FAILED
+    assert _active_amount(store, "gpu") == 0
+
+
 def test_local_adapter_checks_drift_before_resource_admission() -> None:
     store = _store()
     store.set_resource_limit("workspace-1", "gpu", limit=1)
@@ -458,6 +543,53 @@ class _OwnershipLostReleaseStore(_RenewalStore):
         return released
 
 
+class _AssignmentProvider:
+    provider_name = "test"
+
+    def __init__(
+        self,
+        *,
+        release_error: Exception | None = None,
+        safe_evidence: Mapping[str, object] | None = None,
+    ) -> None:
+        self.release_error = release_error
+        self.safe_evidence = {"slots": []} if safe_evidence is None else safe_evidence
+        self.release_calls = 0
+
+    def acquire(self, request):  # noqa: ANN001, ANN201
+        return ResourceAssignmentDecision(
+            disposition=ResourceAssignmentDisposition.ASSIGNED,
+            assignment=ResourceAssignment(
+                provider_name=self.provider_name,
+                live_token=object(),
+                leases=(),
+                bindings=LaunchEnvironmentBindings(),
+                safe_evidence=self.safe_evidence,  # type: ignore[arg-type]
+            ),
+        )
+
+    def renew(self, assignment):  # noqa: ANN001, ANN201
+        return assignment
+
+    def release(self, assignment, *, reason):  # noqa: ANN001, ANN201
+        self.release_calls += 1
+        if self.release_error is not None:
+            raise self.release_error
+
+
+class _AcquireFailingAssignmentProvider:
+    provider_name = "test"
+
+    def acquire(self, request):  # noqa: ANN001, ANN201
+        raise RuntimeError("assignment acquisition failed")
+
+    def renew(self, assignment):  # noqa: ANN001, ANN201
+        return assignment
+
+    def release(self, assignment, *, reason):  # noqa: ANN001, ANN201
+        return None
+
+
 def _adapter(
     store: InMemoryWorkspaceCoordinationStore,
     runner: LocalProcessRunner,
@@ -465,6 +597,7 @@ def _adapter(
     current_drift_inputs: dict[str, str] | None = None,
     lease_ttl_seconds: int = 30,
     clock: Callable[[], str] | None = None,
+    assignment_provider: object | None = None,
 ) -> LocalQueueDispatchAdapter:
     return LocalQueueDispatchAdapter(
         workspace_id="workspace-1",
@@ -476,6 +609,7 @@ def _adapter(
         else current_drift_inputs,
         lease_ttl_seconds=lease_ttl_seconds,
         clock=utc_timestamp if clock is None else clock,
+        assignment_provider=assignment_provider,  # type: ignore[arg-type]
     )
 
 

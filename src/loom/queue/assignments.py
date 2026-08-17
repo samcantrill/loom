@@ -225,7 +225,10 @@ class NoOpResourceAssignmentProvider:
         return ResourceAssignmentDecision(
             disposition=ResourceAssignmentDisposition.ASSIGNED,
             assignment=ResourceAssignment(
-                provider_name=self.provider_name, live_token=None, leases=()
+                provider_name=self.provider_name,
+                live_token=None,
+                leases=(),
+                safe_evidence={"slots": []},
             ),
         )
 
@@ -426,7 +429,7 @@ class StaticSlotAssignmentProvider:
         self, assignment: ResourceAssignment, *, reason: LifecycleReason
     ) -> None:
         first_error: Exception | None = None
-        for lease in assignment.leases:
+        for lease in reversed(assignment.leases):
             try:
                 self._store.release_lease(
                     lease.lease.lease_id,

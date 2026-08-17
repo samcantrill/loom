@@ -58,3 +58,37 @@ def test_static_slots_are_ordered_and_release_on_capacity_deferral() -> None:
         )
     assert store.read_resource_limit("workspace", "gpu-0").value == 0  # type: ignore[union-attr]
     assert store.read_resource_limit("workspace", "gpu-1").value == 0  # type: ignore[union-attr]
+
+
+def test_static_slots_compensate_partial_acquisition_on_contention() -> None:
+    store = InMemoryWorkspaceCoordinationStore()
+    store.create_workspace(WorkspaceIdentity("workspace"))
+    store.set_resource_limit("workspace", "gpu-0", limit=1)
+    store.set_resource_limit("workspace", "gpu-1", limit=1)
+    store.acquire_resource_lease(
+        "workspace", "gpu-1", owner_id="other", amount=1, lease_ttl_seconds=30
+    )
+    provider = StaticSlotAssignmentProvider(
+        store,
+        workspace_id="workspace",
+        slots=(
+            StaticSlot("gpu", "zero", "gpu-0", "0"),
+            StaticSlot("gpu", "one", "gpu-1", "1"),
+        ),
+    )
+
+    decision = provider.acquire(
+        ResourceAssignmentRequest(
+            consumer_id="item",
+            pool_name="pool",
+            owner_id="owner",
+            session_id="session",
+            resources={"gpu": 2},
+            admitted_lease_ids=("scalar",),
+            lease_ttl_seconds=30,
+        )
+    )
+
+    assert decision.disposition is ResourceAssignmentDisposition.DEFERRED
+    assert store.read_resource_limit("workspace", "gpu-0").value == 0  # type: ignore[union-attr]
+    assert store.read_resource_limit("workspace", "gpu-1").value == 1  # type: ignore[union-attr]

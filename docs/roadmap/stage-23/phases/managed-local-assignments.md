@@ -291,19 +291,22 @@ Final commands:
   assignment protocol/providers, schema-v2 normalization and read-only
   preflight, coupled local lifecycle handling, queue-relative logs, and
   phase-scoped tests
-- Refiner: optional for a qualified implementation/test blocker; unused
+- Refiner: completed on 2026-08-18 for the qualified local assignment cleanup
+  and evidence-projection blocker; retries now skip successfully released
+  layers, pre-start compensation attempts both layers, and evidence is
+  projected before process start
 - Pre-submit gate: passed on 2026-08-18 (`make validate-pr`)
 - Independent review: required after implementation; unused
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added `src/loom/queue/assignments.py`; updated queue exports, config normalization, local dispatch lifecycle, and preflight; added or updated Phase 2 queue unit, config-contract, preflight, and managed-local integration coverage. |
-| Tests added or updated | Targeted Phase 2 commands passed; `tests/unit/loom/queue/test_assignments.py` covers ordered static acquisition and compensation; config/preflight and managed-local controller tests cover schema-v2, read-only slot limits, unique slots, logs, and safe evidence. |
-| Validated revision/tree state and evidence | Implementation tree based on `a3fba14`; `make validate-pr` passed and `make test-summary` passed on 2026-08-18. Evidence: `build/test-summary.md` (package, unit, contract, integration, e2e, and config-extra suites all passed). |
-| Validation-relevant changes after evidence | none; completion-record update only |
+| Implementation and changed paths | Added `src/loom/queue/assignments.py`; updated queue exports, config normalization, local dispatch lifecycle, and preflight; added or updated Phase 2 queue unit, config-contract, preflight, and managed-local integration coverage. Qualified correction: updated assignment/local release state and strict slot-evidence projection; added focused local-adapter and static-slot regression coverage. |
+| Tests added or updated | Targeted Phase 2 commands passed; `tests/unit/loom/queue/test_assignments.py` covers ordered static acquisition and compensation; `tests/unit/loom/queue/test_local_adapter.py` covers partial cleanup retry, pre-start cleanup after assignment acquire/binding failure, and evidence rejection before launch; config/preflight and managed-local controller tests cover schema-v2, read-only slot limits, unique slots, logs, and safe evidence. |
+| Validated revision/tree state and evidence | Implementation tree based on `a3fba14`; prior `make validate-pr` and `make test-summary` passed on 2026-08-18. Qualified correction validation: `uv run ruff check src/loom/queue/local.py src/loom/queue/assignments.py tests/unit/loom/queue/test_local_adapter.py tests/unit/loom/queue/test_assignments.py` and `uv run pytest tests/unit/loom/queue/test_local_adapter.py tests/unit/loom/queue/test_assignments.py tests/integration/queue/test_managed_local_controller.py` passed on 2026-08-18 (28 tests). |
+| Validation-relevant changes after evidence | Qualified lifecycle correction and this completion-record update; full implementation gate must be rerun by the manager before submission. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | No residual blocker. Crash-time recovery, reattachment, provider discovery, and background renewal remain intentionally out of scope. |
+| Residual risk and cleanup | No residual blocker in the corrected cluster. Crash-time recovery, reattachment, provider discovery, and background renewal remain intentionally out of scope. |
