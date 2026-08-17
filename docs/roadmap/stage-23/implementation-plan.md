@@ -106,7 +106,7 @@ bounded correction beyond the normal 3/3 budget
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `safe-pool-cycles` | in_progress | `docs/roadmap/stage-23/phases/safe-pool-cycles.md` | `agent/stage-23-p1-safe-pool-cycles` | pending | Queue controller/repository, typed coordination/admission, and scalar local-process safety | Atomically reconcile/fill one pool with deferral, scalar renewal, terminal-before-release, and post-start compensation. |
+| 1 | `safe-pool-cycles` | merged | `docs/roadmap/stage-23/phases/safe-pool-cycles.md` | `agent/stage-23-p1-safe-pool-cycles` | `#209` | Queue controller/repository, typed coordination/admission, and scalar local-process safety | Atomically reconcile/fill one pool with deferral, scalar renewal, terminal-before-release, and post-start compensation. |
 | 2 | `managed-local-assignments` | pending | `docs/roadmap/stage-23/phases/managed-local-assignments.md` | `agent/stage-23-p2-managed-local-assignments` | pending | Queue-local assignment/config/preflight and integration with the established local lifecycle | Exclusively bind and renew static slots, apply safe bindings, capture logs, and preserve Phase 1 compensation. |
 | 3 | `operator-status-proof` | pending | `docs/roadmap/stage-23/phases/operator-status-proof.md` | `agent/stage-23-p3-operator-status-proof` | pending | Repository read model, status/CLI rendering, docs, examples, and end-to-end proof | Expose redacted pool summaries and prove twelve items over three generic slots. |
 
@@ -132,8 +132,8 @@ adds the operator contract and public proof without scheduling in CLI.
   claim identities are non-reusable; workflow statuses/refiner wording and the
   Phase 3 read surface were narrowed. Provider and maintenance contracts were
   made explicit.
-- Ready for implementation: yes; Phase 1 remains pending and must begin through
-  the normal expanded phase workflow.
+- Ready for implementation: yes; Phase 1 is merged and Phase 2 is eligible to
+  begin from current `origin/develop` through the normal phase workflow.
 - Accepted risks: exact item-count enforcement does not span controllers;
   controller death and an unkillable process can outlive a lease; acquisition
   evidence is not refreshed durably on every renewal; static authored inventory
@@ -147,6 +147,6 @@ adds the operator contract and public proof without scheduling in CLI.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | Pending; no PR opened | Implementation, 94-test phase matrix, `make validate-pr`, test summary, and fresh manager review pass at `2df89ce` | No known blocker; accepted controller-death, unkillable-process, controller-local-limit, and non-durable-renewal risks remain | Active worktree retained pending PR/merge |
+| 1 | PR `#209` squash-merged as `e099b58` | Implementation, 94-test phase matrix, `make validate-pr`, test summary, CI, and fresh manager review passed | No known blocker; accepted controller-death, unkillable-process, controller-local-limit, and non-durable-renewal risks remain | Worktree and local/remote phase branch removed |
 | 2 | pending | pending | pending | pending |
 | 3 | pending | pending | pending | pending |

@@ -295,8 +295,10 @@ Final commands:
   at `2df89ce`, including the five recorded findings and manager-audit repairs
   for legacy config opt-in, guarded active mutations, multi-lease timing and
   cleanup, cycle budgets, and pending-start cancellation.
-- PR and merge: pending. The authorized correction, current final gates, and
-  fresh manager blocker audit pass; no remaining Phase 1 blocker is known.
+- PR and merge: PR `#209` passed CI and squash-merged into `develop` as
+  `e099b58` on 2026-08-17. The first merge request returned a base-modified
+  race after creating `b11eb3d`; the successful retry recorded the merge with
+  an identical-tree commit, so the anomaly added no content delta.
 
 ## Completion Record
 
@@ -305,6 +307,6 @@ Final commands:
 | Implementation and changed paths | Correction spans queue controller/config/repository/service/SQLite/local lifecycle plus authority-service classification. It preserves legacy schema-v1 opt-in, guards active mutations, retains delayed-start cleanup until exit, renews from the earliest lease, attempts every release, redacts local evidence, and preserves delegated restart recovery. |
 | Tests added or updated | Phase matrix passed 94 tests: 46 unit, 22 contract, 20 integration, and 6 config-extra. Coverage includes dispositions, cycle limits, reconcile-all, stale guards, backend failure kinds, compensation, fake-clock renewal/escalation, release retry, redaction, and delegated compatibility. |
 | Validated revision/tree state and evidence | `make validate-pr` passed at `2df89ce`: Ruff, Pyright, 2,020 default tests, 128 config-extra tests with 3 skips, and both package builds. `make test-summary` reports 2,148 passed, 3 skipped, and no failures or errors. |
-| Validation-relevant changes after evidence | None; only this phase metadata is updated after the passing receipt. |
-| PR, review, and merge | Fresh manager review found no remaining blocker. PR creation, CI, and merge remain pending. |
-| Residual risk and cleanup | Accepted stage risks remain: controller-local item limits, controller death or an unkillable process, and no durable per-renewal evidence. Worktree and branch remain active until merge. |
+| Validation-relevant changes after evidence | None; only merge-state metadata follows the passing receipt. |
+| PR, review, and merge | Fresh manager review found no remaining blocker. PR `#209` passed CI and squash-merged as `e099b58`. |
+| Residual risk and cleanup | Accepted stage risks remain: controller-local item limits, controller death or an unkillable process, and no durable per-renewal evidence. Worktree and local/remote phase branch were removed. |
