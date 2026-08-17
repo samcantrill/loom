@@ -329,8 +329,12 @@ def test_cycle_defers_fifo_head_once_and_returns_serializable_capacity_result(
     assert [step.outcome for step in result.dispatch_steps] == ["deferred"]
     assert result.capacity_blocked is True
     assert result.active_count == 0
-    assert service.read_item("item-1").status is QueueItemStatus.QUEUED
-    assert service.read_item("item-2").status is QueueItemStatus.QUEUED
+    first_item = service.read_item("item-1")
+    second_item = service.read_item("item-2")
+    assert first_item is not None
+    assert second_item is not None
+    assert first_item.status is QueueItemStatus.QUEUED
+    assert second_item.status is QueueItemStatus.QUEUED
     assert result.to_dict()["next_maintenance_at"] is None
 
 

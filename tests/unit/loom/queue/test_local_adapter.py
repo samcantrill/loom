@@ -31,6 +31,7 @@ def test_local_adapter_launches_observes_and_releases_resource_leases() -> None:
     assert runner.argv == ("python", "-c", "print('ok')")
     assert _active_amount(store, "gpu") == 1
 
+    assert result.handle_id is not None
     dispatched = _with_dispatch_handle(item, result.handle_id, result.evidence)
     active = adapter.inspect(dispatched)
     assert active.terminal is False
@@ -50,6 +51,7 @@ def test_local_adapter_cancel_terminates_process_group_and_releases_leases() -> 
     adapter = _adapter(store, _FakeRunner(process))
     item = _item("item-1", resources={"gpu": 1})
     result = adapter.dispatch(item)
+    assert result.handle_id is not None
     dispatched = _with_dispatch_handle(item, result.handle_id, result.evidence)
 
     cancellation = adapter.cancel(

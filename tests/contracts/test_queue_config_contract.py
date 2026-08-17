@@ -75,4 +75,7 @@ def test_queue_config_schema_v2_normalizes_positive_cycle_limits() -> None:
 
     assert spec.controller.max_active_items == 3
     assert spec.controller.max_dispatches_per_cycle is None
-    assert spec.to_dict()["controller"]["max_active_items"] == 3
+    serialized = spec.to_dict()
+    controller = serialized["controller"]
+    assert isinstance(controller, dict)
+    assert controller["max_active_items"] == 3
