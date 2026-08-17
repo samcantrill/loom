@@ -2,16 +2,41 @@
 
 from __future__ import annotations
 
+import pytest
+
 from loom.pipeline.stores import WorkspaceIdentity
 from loom.serialization import thaw_plain_data
 from loom.queue.assignments import (
     EnvironmentListBinding,
+    LaunchEnvironmentBindings,
     ResourceAssignmentDisposition,
     ResourceAssignmentRequest,
     StaticSlot,
     StaticSlotAssignmentProvider,
 )
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
+
+
+def test_public_assignment_request_and_bindings_are_immutable() -> None:
+    request = ResourceAssignmentRequest(
+        consumer_id="item",
+        pool_name="pool",
+        owner_id="owner",
+        session_id="session",
+        resources={"gpu": 1},
+        admitted_lease_ids=("scalar",),
+        lease_ttl_seconds=30,
+    )
+    with pytest.raises(TypeError):
+        request.resources["gpu"] = 2  # type: ignore[index]
+
+    assigned_bindings = {"VISIBLE_GPUS": "0"}
+    normalized = LaunchEnvironmentBindings(environment=assigned_bindings)
+    assigned_bindings["VISIBLE_GPUS"] = "secret"
+
+    assert normalized.environment == {"VISIBLE_GPUS": "0"}
+    with pytest.raises(TypeError):
+        normalized.environment["VISIBLE_GPUS"] = "1"  # type: ignore[index]
 
 
 def test_static_slots_are_ordered_and_release_on_capacity_deferral() -> None:

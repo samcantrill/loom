@@ -10,20 +10,21 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
-from typing import Protocol, cast, runtime_checkable
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
-from loom.pipeline.stores import (
-    CoordinationFailureKind,
-    CoordinationStoreError,
-    LifecycleReason,
-    ResourceLeaseRecord,
-    WorkspaceCoordinationStore,
-)
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_timestamp
 
 from .errors import QueueServiceError
+
+if TYPE_CHECKING:
+    from loom.pipeline.stores import (
+        LifecycleReason,
+        ResourceLeaseRecord,
+        WorkspaceCoordinationStore,
+    )
 
 
 class ResourceAssignmentDisposition(StrEnum):
@@ -50,7 +51,7 @@ class LaunchEnvironmentBindings:
             if not isinstance(value, str):
                 raise QueueServiceError("assignment environment values must be strings")
             normalized[name] = value
-        object.__setattr__(self, "environment", normalized)
+        object.__setattr__(self, "environment", MappingProxyType(normalized))
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +99,7 @@ class ResourceAssignmentRequest:
             raise QueueServiceError(
                 "assignment lease_ttl_seconds must be a positive integer"
             )
-        object.__setattr__(self, "resources", resources)
+        object.__setattr__(self, "resources", MappingProxyType(resources))
         object.__setattr__(self, "admitted_lease_ids", tuple(self.admitted_lease_ids))
 
 
@@ -116,6 +117,8 @@ class ResourceAssignment:
     next_maintenance_at: str | None = None
 
     def __post_init__(self) -> None:
+        from loom.pipeline.stores import ResourceLeaseRecord
+
         if not isinstance(self.provider_name, str) or not self.provider_name:
             raise QueueServiceError(
                 "assignment provider_name must be a non-empty string"
@@ -297,6 +300,11 @@ class StaticSlotAssignmentProvider:
                 )
 
     def acquire(self, request: ResourceAssignmentRequest) -> ResourceAssignmentDecision:
+        from loom.pipeline.stores import (
+            CoordinationFailureKind,
+            CoordinationStoreError,
+        )
+
         selected: list[tuple[StaticSlot, ResourceLeaseRecord]] = []
         for resource_name, amount in request.resources.items():
             candidates = [
@@ -387,6 +395,8 @@ class StaticSlotAssignmentProvider:
         )
 
     def renew(self, assignment: ResourceAssignment) -> ResourceAssignment:
+        from loom.pipeline.stores import ResourceLeaseRecord
+
         renewed = tuple(
             self._store.renew_lease(
                 lease.lease.lease_id,
@@ -446,6 +456,8 @@ class StaticSlotAssignmentProvider:
     def _release_partial(
         self, selected: list[tuple[StaticSlot, ResourceLeaseRecord]], code: str
     ) -> None:
+        from loom.pipeline.stores import LifecycleReason
+
         reason = LifecycleReason(
             code=code, message="released partial static slot assignment"
         )
