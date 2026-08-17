@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: in_progress
 - Roadmap stage and phase: v23 Phase 1
 - Manifest: `docs/roadmap/stage-23/implementation-plan.md`
 - Branch: `agent/stage-23-p1-safe-pool-cycles`
@@ -16,9 +16,9 @@
   planning; no Stage 23 implementation dependency
 - Workflow path: expanded because this phase changes a public dispatch result,
   SQLite concurrency and mutation fencing, and coordination failure semantics
-- Blockers: correction budget exhausted with unresolved handle-commit process
-  ownership, service-backed failure classification, renewal escalation/evidence,
-  durable fencing-token redaction, and delegated SLURM recovery blockers
+- Blockers: five review findings are under one maintainer-authorized bounded
+  correction beyond the normal 3/3 budget; no PR may open until all five and
+  any fresh audit blocker are resolved
 
 ## Objective And Context
 
@@ -293,10 +293,11 @@ Final commands:
   orphan a live process, service-backed coordination loses capacity/ownership
   kinds, FR-9 lacks termination escalation and fake-clock proof, and local
   cancellation/start-failure evidence can persist fencing tokens.
-- Blocker corrections: 3/3 inclusive; this final correction resolved the
-  qualified safe-pool lifecycle cluster with controller/local/repository causal
-  tests. No further correction is authorized without a distinct qualified blocker.
-- PR and merge: blocked before submission; no PR opened
+- Blocker corrections: normal 3/3 budget exhausted; the maintainer authorized
+  one additional bounded correction on 2026-08-17 for the five recorded
+  process, coordination, renewal, redaction, and compatibility blockers
+- PR and merge: pending; no PR may open until the authorized correction,
+  current final gates, and fresh blocker audit pass
 
 ## Completion Record
 
@@ -306,5 +307,5 @@ Final commands:
 | Tests added or updated | Added controller degraded/foreign/`run_once()` compensation coverage, delayed-exit local cancellation coverage, managed-local cancellation integration, and SQLite concurrent-claim/stale-mutation coverage. Recorded targeted suites passed: 30 unit, 19 contract, 14 integration, and 2 config tests. |
 | Validated revision/tree state and evidence | Final correction focused pytest passed 65 tests; changed-path Ruff/Pyright passed. Manager `make validate-pr` at `e80030d` passed Ruff/Pyright and 1,991 default tests, then failed delegated SLURM recovery; later gates did not run. |
 | Validation-relevant changes after evidence | This blocked-state metadata only; no validation-relevant source or test change followed the failed gate. |
-| PR, review, and merge | Blocked before submission; independent review found four product blockers and no PR was opened. |
-| Residual risk and cleanup | Unresolved blockers are the delayed-exit uncommitted-process path, service-backed kind parity, renewal escalation/fake-clock proof, fencing-token redaction, and delegated SLURM restart compatibility. Correction budget is 3/3 exhausted; worktree and branch are retained for maintainer disposition. |
+| PR, review, and merge | Pending; the maintainer authorized one bounded correction beyond 3/3 and no PR has been opened. |
+| Residual risk and cleanup | The delayed-exit uncommitted-process path, service-backed kind parity, renewal escalation/fake-clock proof, fencing-token redaction, and delegated SLURM restart compatibility are being corrected together. Worktree and branch remain active. |
