@@ -23,7 +23,7 @@ from loom.queue.managed_local import (
 
 
 def test_runtime_gates_restart_recovery_and_drains_without_new_claims(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     spec = normalize_queue_spec(
         {
@@ -67,6 +67,11 @@ def test_runtime_gates_restart_recovery_and_drains_without_new_claims(
     assert queued is not None and queued.status is QueueItemStatus.QUEUED
 
     first_process.returncode = 0
+    monkeypatch.setattr(
+        runtime.adapter,
+        "cancel",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("cancel")),
+    )
     stop = Event()
     stop.set()
     stopped = runtime.serve(stop, poll_interval_seconds=0, wait=lambda _timeout: None)
@@ -207,7 +212,12 @@ def test_runtime_cancel_timeout_keeps_current_item_and_lease_active(
     stop.set()
 
     with pytest.raises(ManagedLocalShutdownTimeoutError) as error:
-        runtime.serve(stop, poll_interval_seconds=1, shutdown_timeout_seconds=0)
+        runtime.serve(
+            stop,
+            poll_interval_seconds=1,
+            shutdown_mode="cancel",
+            shutdown_timeout_seconds=0,
+        )
 
     assert error.value.remaining_item_ids == ("active",)
     assert runtime.state is ManagedLocalQueueRuntimeState.CANCELLING
@@ -215,6 +225,54 @@ def test_runtime_cancel_timeout_keeps_current_item_and_lease_active(
     assert active is not None and active.status is QueueItemStatus.DISPATCHED
     counter = store.read_resource_limit("workspace-1", "gpu")
     assert counter is not None and counter.value == 1
+
+
+def test_runtime_explicit_cancel_only_finishes_current_work_after_cleanup(
+    tmp_path: Path,
+) -> None:
+    spec = normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {"pool_name": "local", "mode": "managed", "resources": {"gpu": 1}}
+            ],
+            "queues": [{"queue_name": "local", "pool_name": "local"}],
+            "controller": {"owner_id": "runtime-owner", "max_active_items": 1},
+        }
+    )
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    process = _Process(pid=113)
+    runtime = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+        process_runner=_Runner([process]),
+        clock=lambda: "2020-01-01T00:00:00Z",
+    )
+    runtime.start()
+    runtime.service.enqueue(_request("active"))
+    runtime.service.enqueue(_request("queued"))
+    runtime.run_cycle()
+    stop = Event()
+    stop.set()
+
+    stopped = runtime.serve(
+        stop,
+        poll_interval_seconds=0,
+        shutdown_mode="cancel",
+        wait=lambda _timeout: None,
+    )
+
+    assert process.returncode == -15
+    assert stopped.state is ManagedLocalQueueRuntimeState.STOPPED
+    assert stopped.pool_status is not None
+    assert stopped.pool_status.counts.cancelled == 1
+    assert stopped.pool_status.counts.queued == 1
+    counter = store.read_resource_limit("workspace-1", "gpu")
+    assert counter is not None and counter.value == 0
 
 
 def test_runtime_degraded_work_blocks_refill_until_a_later_healthy_reconciliation(

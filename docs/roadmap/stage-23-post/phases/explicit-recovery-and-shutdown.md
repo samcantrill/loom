@@ -266,20 +266,24 @@ Final commands:
 - Expanded planning: not needed; Phase 1 leaves the approved exact-item foreign
   recovery target and current-session ownership boundary unambiguous
 - Implementation: complete at `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a`
-- Refiner: not needed unless a qualified blocker is found
-- Pre-submit gate: passed at `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a`
+- Refiner: completed qualified blocker correction 1/3: restored the approved
+  drain default for omitted `serve()` shutdown mode and rejected non-finite
+  poll/timeout inputs that defeat bounded shutdown timing
+- Pre-submit gate: prior full gate passed at
+  `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a`; refiner narrow runtime tests
+  and static checks passed after the correction
 - Independent review: recommended because recovery attestation authorizes a
   durable terminal mutation and shutdown affects lease safety
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added guarded optional completion evidence in `src/loom/queue/repository.py`, `service.py`, and `_sqlite.py`; added explicit foreign-local `UNKNOWN` recovery, `CANCELLING`, cancel/drain timeout accounting, and the managed-local timeout error in `src/loom/queue/managed_local.py`. |
-| Tests added or updated | Updated `tests/contracts/test_queue_python_api_contract.py`; added completion-evidence contract coverage in `tests/contracts/test_queue_repository_contract.py`; added recovery, audit-redaction, foreign-lease-retention, recovery-state-refresh, and cancel-timeout coverage in `tests/integration/queue/test_managed_local_runtime.py`. |
-| Validated revision/tree state and evidence | `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a` is the final validation-relevant revision. Targeted unit, contract, and integration commands passed: 85 tests. `make validate-pr` passed (Ruff, Pyright, default, config-extra, build). `make test-summary` passed and wrote `build/test-summary.md`: package 113, unit 1,494, contract 271, integration 189, e2e 49, and config-extra 128 passed; 3 config-extra skips. |
+| Implementation and changed paths | Added guarded optional completion evidence in `src/loom/queue/repository.py`, `service.py`, and `_sqlite.py`; added explicit foreign-local `UNKNOWN` recovery, `CANCELLING`, cancel/drain timeout accounting, and the managed-local timeout error in `src/loom/queue/managed_local.py`. Refiner correction 1 restored `serve()`'s omitted-mode drain default and rejects non-finite shutdown timing inputs. |
+| Tests added or updated | Updated `tests/contracts/test_queue_python_api_contract.py`; added completion-evidence contract coverage in `tests/contracts/test_queue_repository_contract.py`; added recovery, audit-redaction, foreign-lease-retention, recovery-state-refresh, drain-default/no-cancel, explicit-cancel cleanup, and cancel-timeout coverage in `tests/integration/queue/test_managed_local_runtime.py`; added non-finite timing validation in `tests/unit/loom/queue/test_managed_local_runtime.py`. |
+| Validated revision/tree state and evidence | Before correction, `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a` passed the phase targeted suites (85 tests), `make validate-pr`, and `make test-summary`. Refiner correction 1 passed `uv run --extra config pytest tests/unit/loom/queue/test_managed_local_runtime.py tests/integration/queue/test_managed_local_runtime.py -q` (17 passed), Ruff on the edited source/tests, and Pyright on the edited source/tests (0 errors). |
 | Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | The accepted external process-containment assertion remains intentionally unverified; timeout deliberately retains current work and leases for the external supervisor. PR, review, merge, and worktree cleanup remain manager-owned pending. |

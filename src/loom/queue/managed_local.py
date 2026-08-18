@@ -8,6 +8,7 @@ local adapter retain dispatch and lease ownership respectively.
 from __future__ import annotations
 
 import os
+from math import isfinite
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -354,22 +355,30 @@ class ManagedLocalQueueRuntime:
         *,
         poll_interval_seconds: float = 0.1,
         wait: Callable[[float], object] | None = None,
-        shutdown_mode: str = "cancel",
+        shutdown_mode: str = "drain",
         shutdown_timeout_seconds: float | None = None,
     ) -> ManagedLocalQueueRuntimeStatus:
         """Serve until stop, then drain or cancel current-session work safely."""
 
-        if poll_interval_seconds < 0:
-            raise QueueServiceError("poll_interval_seconds must be non-negative")
+        if (
+            not isinstance(poll_interval_seconds, (int, float))
+            or isinstance(poll_interval_seconds, bool)
+            or not isfinite(poll_interval_seconds)
+            or poll_interval_seconds < 0
+        ):
+            raise QueueServiceError(
+                "poll_interval_seconds must be a finite non-negative number"
+            )
         if shutdown_mode not in {"drain", "cancel"}:
             raise QueueServiceError("shutdown_mode must be 'drain' or 'cancel'")
         if shutdown_timeout_seconds is not None and (
             not isinstance(shutdown_timeout_seconds, (int, float))
             or isinstance(shutdown_timeout_seconds, bool)
+            or not isfinite(shutdown_timeout_seconds)
             or shutdown_timeout_seconds < 0
         ):
             raise QueueServiceError(
-                "shutdown_timeout_seconds must be non-negative or None"
+                "shutdown_timeout_seconds must be a finite non-negative number or None"
             )
         if self._state is ManagedLocalQueueRuntimeState.READY:
             self.start()

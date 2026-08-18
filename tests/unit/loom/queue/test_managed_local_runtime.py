@@ -185,6 +185,24 @@ def test_runtime_serve_waits_for_the_earlier_of_poll_and_maintenance_deadline(
     assert stopped.state.value == "STOPPED"
 
 
+@pytest.mark.parametrize(
+    ("keyword", "value"),
+    [
+        ("poll_interval_seconds", float("nan")),
+        ("poll_interval_seconds", float("inf")),
+        ("shutdown_timeout_seconds", float("nan")),
+        ("shutdown_timeout_seconds", float("inf")),
+    ],
+)
+def test_runtime_serve_rejects_non_finite_shutdown_timing(
+    tmp_path, keyword, value
+) -> None:  # noqa: ANN001
+    runtime = _runtime(tmp_path)
+
+    with pytest.raises(QueueServiceError, match="finite non-negative"):
+        runtime.serve(_StopAfterWait(), **{keyword: value})
+
+
 def _store(tmp_path) -> SQLiteWorkspaceCoordinationStore:  # noqa: ANN001
     store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
     store.create_workspace(WorkspaceIdentity("workspace-1"))
