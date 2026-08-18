@@ -322,6 +322,13 @@ class QueueService:
             if evidence is None
             else _thawed_mapping(evidence, "completion_evidence")
         )
+        if completion_evidence is None:
+            return self.repository.complete_item(
+                queue_item_id,
+                status=status,
+                reason=reason,
+                expected=expected,
+            )
         return self.repository.complete_item(
             queue_item_id,
             status=status,

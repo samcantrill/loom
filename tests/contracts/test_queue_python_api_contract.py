@@ -9,6 +9,7 @@ from loom.queue import (
     QueueController,
     QueueEnqueueRequest,
     QueueService,
+    QueueServiceError,
     QueueServiceState,
     SQLiteQueueRepository,
     normalize_queue_spec,
@@ -61,6 +62,7 @@ def test_managed_local_queue_runtime_api_is_an_explicit_submodule() -> None:
         ManagedLocalQueueRuntime,
         ManagedLocalQueueRuntimeState,
         ManagedLocalQueueRuntimeStatus,
+        ManagedLocalShutdownTimeoutError,
     )
 
     assert ManagedLocalQueueRuntime
@@ -73,6 +75,7 @@ def test_managed_local_queue_runtime_api_is_an_explicit_submodule() -> None:
         "STOPPED",
     ]
     assert ManagedLocalQueueRuntimeStatus.__name__ == "ManagedLocalQueueRuntimeStatus"
+    assert issubclass(ManagedLocalShutdownTimeoutError, QueueServiceError)
 
 
 def _clock(*values: str):

@@ -331,7 +331,7 @@ class ManagedLocalQueueRuntime:
             self._state = ManagedLocalQueueRuntimeState.DEGRADED
             raise
         self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
-        if self._foreign_item_ids:
+        if self._foreign_item_ids and not self._shutdown_active:
             self._state = ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
             raise QueueServiceError(
                 "managed local runtime requires recovery before running a cycle"
@@ -380,7 +380,7 @@ class ManagedLocalQueueRuntime:
             raise QueueServiceError(
                 "shutdown_timeout_seconds must be a finite non-negative number or None"
             )
-        if self._state is ManagedLocalQueueRuntimeState.READY:
+        if self.service.state is not QueueServiceState.RUNNING:
             self.start()
         self._ensure_started()
         waiter = stop_event.wait if wait is None else wait
@@ -389,11 +389,7 @@ class ManagedLocalQueueRuntime:
             if (
                 shutdown_started_at is None
                 and stop_event.is_set()
-                and self._state
-                not in {
-                    ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED,
-                    ManagedLocalQueueRuntimeState.STOPPED,
-                }
+                and self._state is not ManagedLocalQueueRuntimeState.STOPPED
             ):
                 shutdown_started_at = self._clock()
                 self._shutdown_active = True
@@ -410,11 +406,20 @@ class ManagedLocalQueueRuntime:
                 # The degraded state is the observable result; a later loop gets
                 # another reconciliation attempt rather than a synthetic success.
                 pass
-            if self._state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED:
+            if (
+                self._state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+                and shutdown_started_at is None
+            ):
                 return self.status()
             if shutdown_started_at is not None:
-                current, _foreign = self._classify_recovery()
+                current, foreign = self._classify_recovery()
+                self._foreign_item_ids = tuple(
+                    item.queue_item_id for item in foreign
+                )
                 if not current:
+                    if foreign:
+                        self._state = ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+                        return self.status()
                     self._state = ManagedLocalQueueRuntimeState.STOPPED
                     self._last_pool_status = self._pool_status()
                     self.service.stop()

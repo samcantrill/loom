@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+from loom.serialization import PlainData
 
 from .models import (
     CancellationRecord,
@@ -14,7 +16,6 @@ from .models import (
     QueueItemStatus,
     QueueRecoveryRecord,
 )
-from loom.serialization import PlainData
 
 
 @dataclass(frozen=True, slots=True)

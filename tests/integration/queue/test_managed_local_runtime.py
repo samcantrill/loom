@@ -10,6 +10,7 @@ import pytest
 from loom.pipeline.stores import WorkspaceIdentity
 from loom.pipeline.stores.sqlite_coordination import SQLiteWorkspaceCoordinationStore
 from loom.queue import (
+    QueueConflictError,
     QueueEnqueueRequest,
     QueueItemStatus,
     QueueServiceError,
@@ -179,6 +180,153 @@ def test_runtime_explicitly_resolves_one_contained_foreign_item_without_leases(
     }
 
 
+def test_runtime_resolves_a_claimed_foreign_item_to_unknown(tmp_path: Path) -> None:
+    spec = normalize_queue_spec(
+        {
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {"pool_name": "local", "mode": "managed", "resources": {"gpu": 1}}
+            ],
+            "queues": [{"queue_name": "local", "pool_name": "local"}],
+            "controller": {"owner_id": "runtime-owner"},
+        }
+    )
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    runtime = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+        clock=lambda: "2020-01-01T00:00:00Z",
+    )
+    runtime.start()
+    runtime.service.enqueue(_request("claimed"))
+    claim = runtime.service.claim_next(
+        "local", owner_id="runtime-owner", claim_id="previous-session-claim"
+    )
+    assert claim is not None
+    assert runtime.start().state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+
+    resolved = runtime.resolve_recovery_unknown(
+        "claimed",
+        previous_processes_confirmed_stopped=True,
+        requested_by="operator-1",
+        reason="previous service group stopped",
+    )
+
+    assert resolved.status is QueueItemStatus.UNKNOWN
+    assert resolved.dispatch_handle is not None
+    assert resolved.dispatch_handle.handle_id.startswith("managed-local-recovery:")
+    event = runtime.service.inspect_item("claimed").audit_events[-1]
+    assert event.detail["evidence"] == {
+        "managed_local_recovery": {
+            "action": "explicit_unknown_recovery",
+            "requested_by": "operator-1",
+            "reason": "previous service group stopped",
+            "previous_status": "CLAIMED",
+            "previous_processes_confirmed_stopped": True,
+        }
+    }
+
+
+def test_runtime_recovery_conflict_leaves_the_newer_item_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, restarted, _store, process = _foreign_runtime_pair(tmp_path)
+    process.returncode = 0
+    complete_item = restarted.service.complete_item
+
+    def racing_complete_item(queue_item_id, *, status, reason, expected, evidence=None):  # noqa: ANN001, ANN202
+        current = restarted.service.read_item(queue_item_id)
+        assert current is not None
+        restarted.service.cancel_item(
+            queue_item_id,
+            requested_by="concurrent-operator",
+            reason="newer decision",
+            expected=current,
+        )
+        return complete_item(
+            queue_item_id,
+            status=status,
+            reason=reason,
+            expected=expected,
+            evidence=evidence,
+        )
+
+    monkeypatch.setattr(restarted.service, "complete_item", racing_complete_item)
+
+    with pytest.raises(QueueConflictError):
+        restarted.resolve_recovery_unknown(
+            "active",
+            previous_processes_confirmed_stopped=True,
+            requested_by="operator-1",
+            reason="previous service group stopped",
+        )
+
+    newer = restarted.service.read_item("active")
+    assert newer is not None and newer.status is QueueItemStatus.CANCELLED
+    assert runtime.service.read_item("active") == newer
+
+
+def test_runtime_recovery_retains_two_slot_scalar_and_member_leases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _two_slot_spec(tmp_path)
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=2)
+    store.set_resource_limit("workspace-1", "gpu-0", limit=1)
+    store.set_resource_limit("workspace-1", "gpu-1", limit=1)
+    process = _Process(pid=120)
+    first = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+        process_runner=_Runner([process]),
+        clock=lambda: "2020-01-01T00:00:00Z",
+    )
+    first.start()
+    first.service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="active",
+            queue_name="local",
+            run_uri="file:///runs/active",
+            adapter="local",
+            resources={"gpu": 2},
+            snapshot={"argv": ["fake"]},
+        )
+    )
+    first.run_cycle()
+    process.returncode = 0
+    restarted = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+        process_runner=_Runner([]),
+        clock=lambda: "2020-01-01T00:00:01Z",
+    )
+    assert restarted.start().state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+
+    def forbidden_lease_mutation(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("foreign lease mutation")
+
+    monkeypatch.setattr(store, "renew_lease", forbidden_lease_mutation)
+    monkeypatch.setattr(store, "release_lease", forbidden_lease_mutation)
+
+    resolved = restarted.resolve_recovery_unknown(
+        "active",
+        previous_processes_confirmed_stopped=True,
+        requested_by="operator-1",
+        reason="previous service group stopped",
+    )
+
+    assert resolved.status is QueueItemStatus.UNKNOWN
+    for resource_key, expected_value in (("gpu", 2), ("gpu-0", 1), ("gpu-1", 1)):
+        counter = store.read_resource_limit("workspace-1", resource_key)
+        assert counter is not None and counter.value == expected_value
+
+
 def test_runtime_cancel_timeout_keeps_current_item_and_lease_active(
     tmp_path: Path,
 ) -> None:
@@ -273,6 +421,31 @@ def test_runtime_explicit_cancel_only_finishes_current_work_after_cleanup(
     assert stopped.pool_status.counts.queued == 1
     counter = store.read_resource_limit("workspace-1", "gpu")
     assert counter is not None and counter.value == 0
+
+
+def test_runtime_cancel_does_not_touch_foreign_work(tmp_path: Path) -> None:
+    runtime, _restarted, _store, process = _foreign_runtime_pair(tmp_path)
+    runtime.service.enqueue(_request("foreign"))
+    foreign = runtime.service.claim_next(
+        "local", owner_id="other-owner", claim_id="other-session-claim"
+    )
+    assert foreign is not None
+    stop = Event()
+    stop.set()
+
+    status = runtime.serve(
+        stop,
+        poll_interval_seconds=0,
+        shutdown_mode="cancel",
+        wait=lambda _timeout: None,
+    )
+
+    assert process.returncode == -15
+    current = runtime.service.read_item("active")
+    untouched = runtime.service.read_item("foreign")
+    assert current is not None and current.status is QueueItemStatus.CANCELLED
+    assert untouched == foreign.item
+    assert status.state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
 
 
 def test_runtime_degraded_work_blocks_refill_until_a_later_healthy_reconciliation(
@@ -451,3 +624,74 @@ class _Runner:
     def start(self, argv, *, cwd=None, env=None, stdout_path=None, stderr_path=None):  # noqa: ANN001, ANN201
         self.environments.append(dict(env or {}))
         return self._processes.pop(0)
+
+
+def _foreign_runtime_pair(tmp_path):  # noqa: ANN001, ANN202
+    spec = normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {"pool_name": "local", "mode": "managed", "resources": {"gpu": 1}}
+            ],
+            "queues": [{"queue_name": "local", "pool_name": "local"}],
+            "controller": {"owner_id": "runtime-owner", "max_active_items": 1},
+        }
+    )
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    process = _Process(pid=121)
+    first = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+        process_runner=_Runner([process]),
+        clock=lambda: "2020-01-01T00:00:00Z",
+    )
+    first.start()
+    first.service.enqueue(_request("active"))
+    first.run_cycle()
+    restarted = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+        process_runner=_Runner([]),
+        clock=lambda: "2020-01-01T00:00:01Z",
+    )
+    assert restarted.start().state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+    return first, restarted, store, process
+
+
+def _two_slot_spec(tmp_path):  # noqa: ANN001, ANN202
+    return normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {"pool_name": "local", "mode": "managed", "resources": {"gpu": 2}}
+            ],
+            "queues": [{"queue_name": "local", "pool_name": "local"}],
+            "controller": {"owner_id": "runtime-owner"},
+            "adapters": {
+                "local": {
+                    "assignments": {
+                        "local": {
+                            "gpu": {
+                                "provider": "static-slots",
+                                "slots": [
+                                    {"id": "gpu-0", "coordination_key": "gpu-0", "value": "0"},
+                                    {"id": "gpu-1", "coordination_key": "gpu-1", "value": "1"},
+                                ],
+                                "binding": {
+                                    "type": "environment-list",
+                                    "name": "VISIBLE_GPUS",
+                                    "separator": ",",
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
