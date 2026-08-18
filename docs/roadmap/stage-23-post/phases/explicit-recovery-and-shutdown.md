@@ -265,15 +265,17 @@ Final commands:
   completion plus current/foreign classification seams remain available
 - Expanded planning: not needed; Phase 1 leaves the approved exact-item foreign
   recovery target and current-session ownership boundary unambiguous
-- Implementation: complete at `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a`
+- Implementation: complete at final validation-relevant revision
+  `bd61fd9408c92210534c405fa4dee0ec27a32eb8`
 - Refiner: completed qualified blocker correction 1/3: restored the approved
   drain default for omitted `serve()` shutdown mode and rejected non-finite
   poll/timeout inputs that defeat bounded shutdown timing
-- Pre-submit gate: prior full gate passed at
-  `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a`; refiner narrow runtime tests
-  and static checks passed after the correction
-- Independent review: recommended because recovery attestation authorizes a
-  durable terminal mutation and shutdown affects lease safety
+- Pre-submit gate: passed manager-locally at `bd61fd9`; scope, exact-item CAS,
+  audit allowlist, no foreign mutation, shutdown ordering, compatibility,
+  tests, and proportionality match the approved phase
+- Independent review: pending one `loom_phase_reviewer` after PR creation
+  because recovery attestation authorizes a durable terminal mutation and
+  shutdown affects lease safety
 - Blocker corrections: 3/3; manager correction 2 preserves normal-completion
   compatibility for repositories without the new optional keyword and adds
   missing claimed/CAS/mixed-session/two-slot recovery proof; manager correction
@@ -286,7 +288,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added guarded optional completion evidence in `src/loom/queue/repository.py`, `service.py`, and `_sqlite.py`; added explicit foreign-local `UNKNOWN` recovery, `CANCELLING`, cancel/drain timeout accounting, and the managed-local timeout error in `src/loom/queue/managed_local.py`. Refiner correction 1 restored `serve()`'s omitted-mode drain default and rejects non-finite shutdown timing inputs. Manager correction 2 omits the optional repository keyword on unchanged normal completion for downstream implementation compatibility. |
 | Tests added or updated | Updated `tests/contracts/test_queue_python_api_contract.py`; added completion-evidence contract coverage in `tests/contracts/test_queue_repository_contract.py`; added recovery, audit-redaction, claimed-item/CAS conflict, two-slot foreign lease retention, mixed-session cancellation, current-item rejection, recovery-state-refresh, drain-default/no-cancel, explicit-cancel cleanup, and drain/cancel timeout coverage in `tests/integration/queue/test_managed_local_runtime.py`; added legacy repository completion coverage in `tests/integration/queue/test_service_lifecycle.py` and non-finite timing validation in `tests/unit/loom/queue/test_managed_local_runtime.py`. |
-| Validated revision/tree state and evidence | Before correction, `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a` passed the phase targeted suites (85 tests), `make validate-pr`, and `make test-summary`. Refiner correction 1 passed the managed-local runtime slice (17 tests), Ruff, and Pyright. Manager correction 2 passed the recovery/API/service slice (19 tests), Ruff, and Pyright with 0 errors. After correction 3, all recorded phase-targeted commands passed: 97 tests; focused Ruff and Pyright also passed. |
-| Validation-relevant changes after evidence | Corrections 1 through 3 changed shutdown defaults/input validation, mixed-session recovery behavior, and normal completion dispatch, and completed causal recovery/shutdown coverage; the prior full-suite receipt is stale. |
+| Validated revision/tree state and evidence | `bd61fd9408c92210534c405fa4dee0ec27a32eb8` is the final validation-relevant revision. All recorded phase-targeted commands passed: 97 tests. `make validate-pr` passed (Ruff, Pyright 0 errors, default 2,128 passed, config-extra 128 passed/3 skipped, build). `make test-summary` passed; `build/test-summary.md` records package 113, unit 1,498, contract 271, integration 197, e2e 49, and config-extra 128 passed with 3 skipped. |
+| Validation-relevant changes after evidence | none; only completion/PR metadata may follow the validated revision |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | The accepted external process-containment assertion remains intentionally unverified; timeout deliberately retains current work and leases for the external supervisor. PR, review, merge, and worktree cleanup remain manager-owned pending. |
