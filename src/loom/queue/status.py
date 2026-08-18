@@ -414,8 +414,11 @@ def _same_session_adapter(
     projection: Mapping[str, PlainData],
 ) -> bool:
     handle = item.dispatch_handle
+    claim = item.claim
     return bool(
         handle is not None
+        and claim is not None
+        and claim.owner_id == projection["owner_id"]
         and getattr(adapter, "owner_id", None) == projection["owner_id"]
         and getattr(adapter, "session_id", None) == projection["session_id"]
     )

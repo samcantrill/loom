@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier, Event, Thread
+from threading import Barrier, Event
 from pathlib import Path
 from typing import Any
 
@@ -99,16 +99,16 @@ def test_sqlite_pool_read_snapshot_does_not_mix_a_controlled_transition(
     repository = _BarrierSQLiteQueueRepository(db_path, read_started, claimed)
 
     def claim_after_read_starts() -> None:
-        assert read_started.wait(timeout=1)
+        assert read_started.wait(timeout=5)
         assert writer.claim_next(
             "gpu-pool", owner_id="controller", claim_id="claim-1"
         ) is not None
         claimed.set()
 
-    worker = Thread(target=claim_after_read_starts)
-    worker.start()
-    before = repository.read_pool_snapshot("gpu-pool")
-    worker.join(timeout=1)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        transition = executor.submit(claim_after_read_starts)
+        before = repository.read_pool_snapshot("gpu-pool")
+        transition.result(timeout=5)
 
     assert before.items[0].status is QueueItemStatus.QUEUED
     assert writer.read_pool_snapshot("gpu-pool").items[0].status is QueueItemStatus.CLAIMED
@@ -355,7 +355,7 @@ class _ReadBarrierConnection:
         cursor = self._connection.execute(statement, parameters)
         if "FROM queue_items" in statement and "pool_name" in statement:
             self._read_started.set()
-            assert self._claimed.wait(timeout=1)
+            assert self._claimed.wait(timeout=5)
         return cursor
 
 

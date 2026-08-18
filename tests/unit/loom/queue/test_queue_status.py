@@ -23,6 +23,7 @@ from loom.queue.controller import (
     QueueInspectableDispatchAdapter,
 )
 from loom.queue.status import build_queue_operational_status, build_queue_pool_status
+from loom.serialization import PlainData
 
 
 pytestmark = pytest.mark.unit
@@ -157,6 +158,22 @@ def test_pool_status_has_exact_allowlisted_shape_and_never_reads_legacy_evidence
     }
     assert attempt["evidence_source"] == "persisted"
     assert attempt["live_observation"] == "not_requested"
+    process = cast(Mapping[str, object], attempt["process"])
+    assignment = cast(Mapping[str, object], attempt["assignment"])
+    logs = cast(Mapping[str, object], attempt["logs"])
+    slot = cast(
+        Mapping[str, object], cast(list[object], assignment["slots"])[0]
+    )
+    assert set(process) == {"pid", "pgid"}
+    assert set(assignment) == {"provider_name", "slots"}
+    assert set(slot) == {
+        "resource_name",
+        "slot_id",
+        "label",
+        "lease_id",
+        "expires_at",
+    }
+    assert set(logs) == {"stdout_path", "stderr_path"}
     rendered = str(pool)
     assert "do-not-render" not in rendered
     assert "fencing_token" not in rendered
@@ -230,6 +247,18 @@ def test_pool_status_labels_only_matching_same_session_observation(
             {"local": _InspectableAdapter("controller", "other", "handle-1")},
         ),
     ).to_dict()
+    failed_pool = build_queue_pool_status(
+        service,
+        pool_name="gpu-pool",
+        adapters=cast(
+            Mapping[str, QueueInspectableDispatchAdapter],
+            {
+                "local": _InspectableAdapter(
+                    "controller", "session-1", "handle-1", fail=True
+                )
+            },
+        ),
+    ).to_dict()
     matching = cast(
         Mapping[str, object],
         cast(list[object], matching_pool["active_attempts"])[0],
@@ -238,11 +267,109 @@ def test_pool_status_labels_only_matching_same_session_observation(
         Mapping[str, object],
         cast(list[object], mismatch_pool["active_attempts"])[0],
     )
+    failed = cast(
+        Mapping[str, object],
+        cast(list[object], failed_pool["active_attempts"])[0],
+    )
 
     assert matching["evidence_source"] == "same_session_live"
     assert matching["live_observation"] == "same_session"
     assert mismatch["evidence_source"] == "persisted"
     assert mismatch["live_observation"] == "unavailable"
+    assert failed["evidence_source"] == "persisted"
+    assert failed["live_observation"] == "unavailable"
+
+
+def test_pool_status_requires_durable_claim_owner_for_live_observation(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="active",
+            queue_name="gpu",
+            run_uri="file:///runs/active",
+            adapter="local",
+        )
+    )
+    claimed = service.claim_next("gpu-pool", owner_id="controller", claim_id="claim")
+    assert claimed is not None
+    service.record_dispatch_handle(
+        "active", _managed_handle(owner_id="evidence-owner"), expected=claimed.item
+    )
+
+    pool = build_queue_pool_status(
+        service,
+        pool_name="gpu-pool",
+        adapters=cast(
+            Mapping[str, QueueInspectableDispatchAdapter],
+            {
+                "local": _InspectableAdapter(
+                    "evidence-owner", "session-1", "handle-1"
+                )
+            },
+        ),
+    ).to_dict()
+    attempt = cast(
+        Mapping[str, object], cast(list[object], pool["active_attempts"])[0]
+    )
+
+    assert attempt["owner_id"] == "controller"
+    assert attempt["evidence_source"] == "persisted"
+    assert attempt["live_observation"] == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "managed_local",
+    [
+        {"schema_version": 2, "secret_value": "do-not-render"},
+        {
+            "schema_version": 1,
+            "owner_id": "controller",
+            "secret_value": "do-not-render",
+        },
+    ],
+)
+def test_pool_status_omits_unknown_or_malformed_managed_evidence(
+    tmp_path: Path, managed_local: Mapping[str, PlainData]
+) -> None:
+    service = _service(tmp_path)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="active",
+            queue_name="gpu",
+            run_uri="file:///runs/active",
+            adapter="local",
+        )
+    )
+    claimed = service.claim_next("gpu-pool", owner_id="controller", claim_id="claim")
+    assert claimed is not None
+    service.record_dispatch_handle(
+        "active",
+        DispatchHandle(
+            adapter="local",
+            handle_id="handle-1",
+            dispatched_at="2020-01-01T00:00:01Z",
+            dispatch_attempt=1,
+            evidence={"managed_local": dict(managed_local)},
+        ),
+        expected=claimed.item,
+    )
+
+    report = build_queue_operational_status(service, pool_name="gpu-pool")
+    attempt = cast(
+        Mapping[str, object],
+        cast(
+            list[object],
+            cast(Mapping[str, object], report.to_dict()["pool"])["active_attempts"],
+        )[0],
+    )
+
+    assert attempt["evidence_source"] == "unavailable"
+    assert attempt["process"] is None
+    assert attempt["assignment"] is None
+    assert attempt["logs"] is None
+    assert "do-not-render" not in format_queue_status_text(report)
 
 
 def test_pool_status_text_matches_json_safe_facts_and_redaction(tmp_path: Path) -> None:
@@ -261,14 +388,15 @@ def test_pool_status_text_matches_json_safe_facts_and_redaction(tmp_path: Path) 
 
     report = build_queue_operational_status(service, pool_name="gpu-pool")
     payload = report.to_dict()
+    pool_payload = cast(Mapping[str, object], payload["pool"])
     attempt = cast(
         Mapping[str, object],
-        cast(list[object], cast(Mapping[str, object], payload["pool"])["active_attempts"])[0],
+        cast(list[object], pool_payload["active_attempts"])[0],
     )
     text = format_queue_status_text(report)
 
     for value in (
-        payload["pool"]["pool_name"],
+        pool_payload["pool_name"],
         attempt["queue_item_id"],
         attempt["owner_id"],
         attempt["session_id"],
@@ -286,7 +414,7 @@ def test_pool_status_text_matches_json_safe_facts_and_redaction(tmp_path: Path) 
     assert "fencing_token" not in text
 
 
-def _managed_handle() -> DispatchHandle:
+def _managed_handle(*, owner_id: str = "controller") -> DispatchHandle:
     return DispatchHandle(
         adapter="local",
         handle_id="handle-1",
@@ -295,7 +423,7 @@ def _managed_handle() -> DispatchHandle:
         evidence={
             "managed_local": {
                 "schema_version": 1,
-                "owner_id": "controller",
+                "owner_id": owner_id,
                 "session_id": "session-1",
                 "pid": 101,
                 "pgid": 101,
@@ -323,12 +451,17 @@ def _managed_handle() -> DispatchHandle:
 class _InspectableAdapter:
     adapter_name = "local"
 
-    def __init__(self, owner_id: str, session_id: str, handle_id: str) -> None:
+    def __init__(
+        self, owner_id: str, session_id: str, handle_id: str, *, fail: bool = False
+    ) -> None:
         self.owner_id = owner_id
         self.session_id = session_id
         self._handle_id = handle_id
+        self._fail = fail
 
     def inspect(self, _item: QueueItem) -> QueueDispatchInspection:
+        if self._fail:
+            raise RuntimeError("injected observation failure")
         return QueueDispatchInspection(
             status=QueueItemStatus.DISPATCHED,
             reason="active",

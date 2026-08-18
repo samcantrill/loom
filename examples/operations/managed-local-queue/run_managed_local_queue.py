@@ -96,13 +96,13 @@ def main() -> None:
         log_directory=output_root / "queue-state" / "logs",
     )
     controller = QueueController(service, adapters={"local": adapter})
-    for _ in range(12):
-        controller.run_cycle(pool_name="local-pool")
-        counts = build_queue_pool_status(service, pool_name="local-pool").counts
-        if counts.queued == 0 and counts.active == 0:
-            break
-    else:
-        raise RuntimeError("example queue did not settle")
+    controller.run_cycle(pool_name="local-pool")
+    active_status = build_queue_pool_status(
+        service, pool_name="local-pool", adapters={"local": adapter}
+    ).to_dict()
+    if active_status["counts"]["active"] != 2 or active_status["counts"]["queued"] != 1:
+        raise RuntimeError("example queue did not fill the two static slots")
+    controller.drain_foreground(pool_name="local-pool", poll_interval_seconds=0.01)
     status = build_queue_pool_status(
         service, pool_name="local-pool", adapters={"local": adapter}
     ).to_dict()
@@ -113,6 +113,17 @@ def main() -> None:
     } != {"item-1", "item-2", "item-3"}:
         raise RuntimeError("example queue did not produce distinct command logs")
     print("managed_local_queue:")
+    print("  active_status:")
+    for attempt in active_status["active_attempts"]:
+        assignment = attempt["assignment"]
+        attempt_logs = attempt["logs"]
+        slots = [] if assignment is None else assignment["slots"]
+        slot_ids = [slot["slot_id"] for slot in slots]
+        stdout_path = None if attempt_logs is None else attempt_logs["stdout_path"]
+        print(
+            f"    {attempt['queue_item_id']}: slots={slot_ids} "
+            f"stdout={stdout_path} source={attempt['evidence_source']}"
+        )
     print(f"  succeeded: {status['counts']['succeeded']}")
     print(f"  active: {status['counts']['active']}")
     print(f"  queued: {status['counts']['queued']}")
