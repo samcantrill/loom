@@ -31,7 +31,13 @@ from .config import QueueServiceSpec
 from .controller import QueueController, QueueCycleResult
 from .errors import QueueServiceError
 from .local import LocalProcessRunner, LocalQueueDispatchAdapter
-from .models import QueueItem, QueuePool, QueuePoolMode
+from .models import (
+    DispatchHandle,
+    QueueItem,
+    QueueItemStatus,
+    QueuePool,
+    QueuePoolMode,
+)
 from .repository import QueueRepository
 from .resources import require_managed_pool_limits
 from .service import QueueService, QueueServiceState
@@ -45,7 +51,19 @@ class ManagedLocalQueueRuntimeState(StrEnum):
     DEGRADED = "DEGRADED"
     RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
     DRAINING = "DRAINING"
+    CANCELLING = "CANCELLING"
     STOPPED = "STOPPED"
+
+
+class ManagedLocalShutdownTimeoutError(QueueServiceError):
+    """Raised when managed-local shutdown still owns active work at its deadline."""
+
+    def __init__(self, remaining_item_ids: tuple[str, ...]) -> None:
+        self.remaining_item_ids = remaining_item_ids
+        super().__init__(
+            "managed local shutdown timed out with remaining items: "
+            + ", ".join(remaining_item_ids)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +236,88 @@ class ManagedLocalQueueRuntime:
         )
         return self.status()
 
+    def resolve_recovery_unknown(
+        self,
+        queue_item_id: str,
+        *,
+        previous_processes_confirmed_stopped: bool,
+        requested_by: str,
+        reason: str,
+    ) -> QueueItem:
+        """Resolve one foreign local item after trusted process containment.
+
+        ``previous_processes_confirmed_stopped=True`` is an explicit trusted
+        operator assertion that the previous runtime's entire process
+        containment group is stopped. Loom does not independently verify it.
+        """
+
+        if previous_processes_confirmed_stopped is not True:
+            raise QueueServiceError(
+                "recovery requires previous_processes_confirmed_stopped=True"
+            )
+        if not isinstance(requested_by, str) or not requested_by:
+            raise QueueServiceError("requested_by must be a non-empty string")
+        if not isinstance(reason, str) or not reason:
+            raise QueueServiceError("reason must be a non-empty string")
+        self._ensure_started()
+        if self._state is not ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED:
+            raise QueueServiceError("managed local runtime does not require recovery")
+
+        _current, foreign = self._classify_recovery()
+        item = next(
+            (
+                candidate
+                for candidate in foreign
+                if candidate.queue_item_id == queue_item_id
+            ),
+            None,
+        )
+        if item is None:
+            raise QueueServiceError("recovery requires one foreign selected-pool item")
+        if item.launch_contract.adapter != self.adapter.adapter_name:
+            raise QueueServiceError("recovery requires a foreign local queue item")
+        if QueueItemStatus(item.status) not in {
+            QueueItemStatus.CLAIMED,
+            QueueItemStatus.DISPATCHED,
+        }:
+            raise QueueServiceError("recovery requires an active queue item")
+
+        previous_session_id = _managed_local_session_id(item)
+        recovery_evidence: dict[str, PlainData] = {
+            "action": "explicit_unknown_recovery",
+            "requested_by": requested_by,
+            "reason": reason,
+            "previous_status": QueueItemStatus(item.status).value,
+            "previous_processes_confirmed_stopped": True,
+        }
+        if previous_session_id is not None:
+            recovery_evidence["previous_session_id"] = previous_session_id
+        evidence: dict[str, PlainData] = {"managed_local_recovery": recovery_evidence}
+        if QueueItemStatus(item.status) is QueueItemStatus.CLAIMED:
+            item = self.service.record_dispatch_handle(
+                item.queue_item_id,
+                DispatchHandle(
+                    adapter=self.adapter.adapter_name,
+                    handle_id=(
+                        f"managed-local-recovery:{item.queue_item_id}:"
+                        f"{item.dispatch_attempt}"
+                    ),
+                    dispatched_at=self._clock(),
+                    dispatch_attempt=item.dispatch_attempt,
+                    evidence={"managed_local_recovery": True},
+                ),
+                expected=item,
+            )
+        completed = self.service.complete_item(
+            item.queue_item_id,
+            status=QueueItemStatus.UNKNOWN,
+            reason="managed-local-explicit-recovery",
+            expected=item,
+            evidence=evidence,
+        )
+        self._refresh_recovery_state()
+        return completed
+
     def run_cycle(self) -> QueueCycleResult:
         """Reconcile then fill the selected pool unless health/recovery forbids it."""
 
@@ -234,7 +334,10 @@ class ManagedLocalQueueRuntime:
                 "managed local runtime requires recovery before running a cycle"
             )
         try:
-            if self._state is ManagedLocalQueueRuntimeState.DRAINING:
+            if self._state in {
+                ManagedLocalQueueRuntimeState.DRAINING,
+                ManagedLocalQueueRuntimeState.CANCELLING,
+            }:
                 result = self.controller.reconcile_current_session(
                     pool_name=self.pool_name
                 )
@@ -252,21 +355,43 @@ class ManagedLocalQueueRuntime:
         *,
         poll_interval_seconds: float = 0.1,
         wait: Callable[[float], object] | None = None,
+        shutdown_mode: str = "cancel",
+        shutdown_timeout_seconds: float | None = None,
     ) -> ManagedLocalQueueRuntimeStatus:
-        """Serve until stop, then drain current-session work without new claims."""
+        """Serve until stop, then drain or cancel current-session work safely."""
 
         if poll_interval_seconds < 0:
             raise QueueServiceError("poll_interval_seconds must be non-negative")
+        if shutdown_mode not in {"drain", "cancel"}:
+            raise QueueServiceError("shutdown_mode must be 'drain' or 'cancel'")
+        if shutdown_timeout_seconds is not None and (
+            not isinstance(shutdown_timeout_seconds, (int, float))
+            or isinstance(shutdown_timeout_seconds, bool)
+            or shutdown_timeout_seconds < 0
+        ):
+            raise QueueServiceError(
+                "shutdown_timeout_seconds must be non-negative or None"
+            )
         if self._state is ManagedLocalQueueRuntimeState.READY:
             self.start()
         self._ensure_started()
         waiter = stop_event.wait if wait is None else wait
+        shutdown_started_at: str | None = None
         while True:
             if stop_event.is_set() and self._state not in {
                 ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED,
                 ManagedLocalQueueRuntimeState.STOPPED,
+                ManagedLocalQueueRuntimeState.DRAINING,
+                ManagedLocalQueueRuntimeState.CANCELLING,
             }:
-                self._state = ManagedLocalQueueRuntimeState.DRAINING
+                shutdown_started_at = self._clock()
+                self._state = (
+                    ManagedLocalQueueRuntimeState.DRAINING
+                    if shutdown_mode == "drain"
+                    else ManagedLocalQueueRuntimeState.CANCELLING
+                )
+                if self._state is ManagedLocalQueueRuntimeState.CANCELLING:
+                    self._cancel_current_session_items()
             try:
                 self.run_cycle()
             except Exception:
@@ -275,14 +400,26 @@ class ManagedLocalQueueRuntime:
                 pass
             if self._state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED:
                 return self.status()
-            if self._state is ManagedLocalQueueRuntimeState.DRAINING:
+            if self._state in {
+                ManagedLocalQueueRuntimeState.DRAINING,
+                ManagedLocalQueueRuntimeState.CANCELLING,
+            }:
                 current, _foreign = self._classify_recovery()
                 if not current:
                     self._state = ManagedLocalQueueRuntimeState.STOPPED
                     self._last_pool_status = self._pool_status()
                     self.service.stop()
                     return self.status()
+                if self._shutdown_timed_out(
+                    shutdown_started_at, shutdown_timeout_seconds
+                ):
+                    raise ManagedLocalShutdownTimeoutError(
+                        tuple(item.queue_item_id for item in current)
+                    )
             timeout = self._next_wait_seconds(poll_interval_seconds)
+            timeout = self._bounded_shutdown_wait(
+                timeout, shutdown_started_at, shutdown_timeout_seconds
+            )
             waiter(timeout)
 
     def status(self) -> ManagedLocalQueueRuntimeStatus:
@@ -309,7 +446,9 @@ class ManagedLocalQueueRuntime:
         if self._pool.mode is not QueuePoolMode.MANAGED:
             raise QueueServiceError("managed local runtime requires a managed pool")
         if os.name != "posix":
-            raise QueueServiceError("managed local runtime requires POSIX process groups")
+            raise QueueServiceError(
+                "managed local runtime requires POSIX process groups"
+            )
         diagnostics = coordination_requirement_diagnostics(
             self._coordination_store.capabilities(), require_resource_leases=True
         )
@@ -344,7 +483,10 @@ class ManagedLocalQueueRuntime:
             if step.item is not None and step.outcome in {"degraded", "unknown"}
         )
         self._degraded_item_ids = degraded
-        if self._state is ManagedLocalQueueRuntimeState.DRAINING:
+        if self._state in {
+            ManagedLocalQueueRuntimeState.DRAINING,
+            ManagedLocalQueueRuntimeState.CANCELLING,
+        }:
             return
         if degraded:
             self._state = ManagedLocalQueueRuntimeState.DEGRADED
@@ -387,6 +529,51 @@ class ManagedLocalQueueRuntime:
         if self._state is ManagedLocalQueueRuntimeState.STOPPED:
             raise QueueServiceError("managed local runtime is stopped")
 
+    def _refresh_recovery_state(self) -> None:
+        try:
+            _current, foreign = self._classify_recovery()
+        except Exception:
+            self._state = ManagedLocalQueueRuntimeState.DEGRADED
+            raise
+        self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
+        self._state = (
+            ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+            if self._foreign_item_ids
+            else ManagedLocalQueueRuntimeState.READY
+        )
+
+    def _cancel_current_session_items(self) -> None:
+        current, _foreign = self._classify_recovery()
+        for item in current:
+            self.controller.cancel_item(
+                item.queue_item_id,
+                requested_by=self.owner_id,
+                reason="managed-local-shutdown",
+            )
+
+    def _shutdown_timed_out(
+        self, started_at: str | None, timeout_seconds: float | None
+    ) -> bool:
+        if started_at is None or timeout_seconds is None:
+            return False
+        elapsed = (
+            parse_timestamp(self._clock()) - parse_timestamp(started_at)
+        ).total_seconds()
+        return elapsed >= timeout_seconds
+
+    def _bounded_shutdown_wait(
+        self,
+        wait_seconds: float,
+        started_at: str | None,
+        timeout_seconds: float | None,
+    ) -> float:
+        if started_at is None or timeout_seconds is None:
+            return wait_seconds
+        elapsed = (
+            parse_timestamp(self._clock()) - parse_timestamp(started_at)
+        ).total_seconds()
+        return min(wait_seconds, max(0.0, timeout_seconds - elapsed))
+
     def _next_wait_seconds(self, poll_interval_seconds: float) -> float:
         if self._next_maintenance_at is None:
             return poll_interval_seconds
@@ -400,7 +587,9 @@ def _select_pool(spec: QueueServiceSpec, pool_name: str | None) -> QueuePool:
     selected_name = pool_name or spec.controller.default_pool_name
     if selected_name is None:
         if len(spec.pools) != 1:
-            raise QueueServiceError("managed local runtime requires one selected pool_name")
+            raise QueueServiceError(
+                "managed local runtime requires one selected pool_name"
+            )
         return spec.pools[0]
     for pool in spec.pools:
         if pool.pool_name == selected_name:
@@ -418,8 +607,19 @@ _OBSERVATION_SCOPE: Mapping[str, str] = MappingProxyType(
 )
 
 
+def _managed_local_session_id(item: QueueItem) -> str | None:
+    if item.dispatch_handle is None:
+        return None
+    managed = item.dispatch_handle.evidence.get("managed_local")
+    if not isinstance(managed, Mapping):
+        return None
+    session_id = managed.get("session_id")
+    return session_id if isinstance(session_id, str) and session_id else None
+
+
 __all__ = [
     "ManagedLocalQueueRuntime",
+    "ManagedLocalShutdownTimeoutError",
     "ManagedLocalQueueRuntimeState",
     "ManagedLocalQueueRuntimeStatus",
 ]

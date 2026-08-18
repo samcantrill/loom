@@ -69,6 +69,7 @@ def test_managed_local_queue_runtime_api_is_an_explicit_submodule() -> None:
         "DEGRADED",
         "RECOVERY_REQUIRED",
         "DRAINING",
+        "CANCELLING",
         "STOPPED",
     ]
     assert ManagedLocalQueueRuntimeStatus.__name__ == "ManagedLocalQueueRuntimeStatus"

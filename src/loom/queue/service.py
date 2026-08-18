@@ -314,10 +314,20 @@ class QueueService:
         status: QueueItemStatus,
         reason: str,
         expected: QueueItem,
+        evidence: Mapping[str, PlainData] | None = None,
     ) -> QueueItem:
         self._ensure_running()
+        completion_evidence = (
+            None
+            if evidence is None
+            else _thawed_mapping(evidence, "completion_evidence")
+        )
         return self.repository.complete_item(
-            queue_item_id, status=status, reason=reason, expected=expected
+            queue_item_id,
+            status=status,
+            reason=reason,
+            expected=expected,
+            evidence=completion_evidence,
         )
 
     def defer_item(

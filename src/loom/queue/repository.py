@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
 from .models import (
@@ -13,6 +14,7 @@ from .models import (
     QueueItemStatus,
     QueueRecoveryRecord,
 )
+from loom.serialization import PlainData
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +65,7 @@ class QueueRepository(Protocol):
         status: QueueItemStatus,
         reason: str,
         expected: QueueItem,
+        evidence: Mapping[str, PlainData] | None = None,
     ) -> QueueItem: ...
 
     def request_cancellation(
