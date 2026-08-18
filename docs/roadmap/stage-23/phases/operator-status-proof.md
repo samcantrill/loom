@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: v23 Phase 3
 - Manifest: `docs/roadmap/stage-23/implementation-plan.md`
 - Branch: `agent/stage-23-p3-operator-status-proof`
@@ -11,6 +11,7 @@
 - Base revision: `246fb29a4e16ec3130fac1e0ea726dd5d11fa0de`
 - PR target: `develop`
 - PR title: `Managed Local Concurrency - Phase 3: Operator Status and Proof`
+- PR: `#211`
 - Dependencies: Phases 1 and 2 remotely merged with their cycle, evidence,
   config, ownership, and local lifecycle contracts intact
 - Workflow path: expanded because status serialization/redaction, CLI envelope
@@ -290,7 +291,7 @@ Final commands:
   the final manager-local pass requires a nonterminal dispatched observation
   before using live labels and makes the Python API example isolated,
   rerunnable, cataloged, and exercised by the default queue e2e profile
-- PR and merge: pending
+- PR and merge: PR `#211` is open against `develop`; required CI is pending
 
 ## Completion Record
 
@@ -303,5 +304,5 @@ Final commands:
 | Blocker correction (inclusive budget) | Closed the accepted operator-proof cluster (1/3): text status now renders the fixed owner/session and slot facts present in JSON; parity/redaction coverage exercises the shared model; controlled SQLite snapshot coverage holds a read on one side of a claim; the real SQLite queue/coordination proof drives twelve items through three slots and success/failure/cancellation refill barriers; and the example reconciles all three commands, verifies distinct stdout logs, and prints final status. Narrow validation passed: `uv run pytest tests/integration/queue/test_sqlite_repository.py tests/integration/queue/test_managed_local_controller.py tests/unit/loom/queue/test_queue_status.py tests/e2e/test_queue_cli.py` (30 passed), targeted Ruff, and the managed-local example. |
 | Manager correction (inclusive budget) | Closed the remaining accepted status/example/docs cluster (2/3): same-session observation now also matches the durable claim owner; exact nested shapes, malformed/unknown evidence, observation failure, and owner mismatch have focused coverage; the SQLite proof explicitly preserves the queued FIFO head at capacity; the example uses the existing foreground drain rather than a bounded timing loop and prints redacted active slot/log facts; queue docs cover schema v1/v2, static config, deferral, renewal/crash limits, logs, and opt-in downstream accelerator binding. |
 | Final review correction (inclusive budget) | Closed both independent-review findings (3/3): a matching terminal inspection now retains persisted evidence and reports live observation unavailable; a focused regression covers that case. The managed-local script now allocates one isolated run directory per invocation, its manifest and operations catalog identify the public Python surface and real default e2e validation, and the e2e executes it twice against one output base while checking active assignments, completion, and six distinct logs per run. Targeted Ruff and 40 focused unit/e2e/catalog tests passed. |
-| PR, review, and merge | pending |
+| PR, review, and merge | Independent review findings are closed; PR `#211` is open against `develop` and awaits required CI. |
 | Residual risk and cleanup | No known Phase 3 blocker. Accepted controller-local limit, crash-time/re-attachment, persisted-acquisition-versus-live-observation, and static-inventory risks remain. Worktree/branch/PR cleanup are manager-owned. |
