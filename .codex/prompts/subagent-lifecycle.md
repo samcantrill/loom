@@ -8,8 +8,10 @@ Use this contract only when an active workflow requires a subagent.
    revision, and current blocker or decision. Never paste prompt bodies,
    artifact bodies, diffs, logs, or manager history.
 3. Spawn with fork_turns=none. State that the child cannot delegate.
-4. Continue independent work, then use the maximum event-driven wait. Do not
-   poll, list agents, send heartbeats, or duplicate healthy work.
+4. Continue independent work, then wait event-first with the maximum supported
+   timeout: 3,600,000 ms (one hour). If that wait times out without an event,
+   begin another full one-hour wait. Do not poll between waits, list agents,
+   send heartbeats, or duplicate healthy work.
 5. Accept only a terminal result with the requested artifact, finding, or
    explicit blocker.
 6. Verify scope and evidence before advancing.
