@@ -2,18 +2,18 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: 23-post, Phase 3
 - Manifest: `docs/roadmap/stage-23-post/implementation-plan.md`
 - Branch: `agent/stage-23-post-p3-downstream-operations-proof`
 - Worktree root and path: `../loom-worktrees`; `../loom-worktrees/stage-23-post-p3-downstream-operations-proof`
-- Base revision: current `origin/develop` after Phase 2 is remotely merged
+- Base revision: `db382ac5fbc247b0345125e8c4d0d5a8abeceff4`
 - PR target: develop
 - PR title: `Managed Local Operations - Phase 3: Downstream Proof`
 - Dependencies: Phase 2 remotely merged; branch must be based on refreshed `origin/develop`
 - Requirement coverage: FR-1, FR-9, FR-10, FR-11, and FR-12
 - Workflow path: fast; this phase applies the accepted runtime/recovery contracts to examples, docs, and e2e proof
-- Blockers: Phase 2 merge
+- Blockers: none
 
 ## Objective And Context
 
@@ -262,8 +262,10 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 2 merge verification and refreshed
-  example/docs review
+- Manager preparation: complete at
+  `db382ac5fbc247b0345125e8c4d0d5a8abeceff4`; Phase 2 remote merge and cleanup
+  are verified, and the example/docs still contain the planned manual-owner,
+  lifecycle-guidance, bundle-proof, and roadmap-status gaps
 - Expanded planning: not needed
 - Implementation: pending one `loom_phase_executor`
 - Refiner: not needed unless a qualified blocker is found

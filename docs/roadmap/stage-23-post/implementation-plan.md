@@ -1,6 +1,6 @@
 # Roadmap Stage 23-post Implementation Plan
 
-Status: confirmed; Phase 2 merged; Phase 3 pending
+Status: confirmed; Phase 3 in progress
 Roadmap stage: 23-post
 Planning document: docs/roadmap/stage-23-post/planning.md
 Artifact layout: manifest-and-phase-plans-v1
@@ -89,7 +89,7 @@ Blockers: none
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `safe-managed-local-runtime` | merged | `docs/roadmap/stage-23-post/phases/safe-managed-local-runtime.md` | `agent/stage-23-post-p1-safe-managed-local-runtime` | [#212](https://github.com/samcantrill/loom/pull/212) | Managed-local runtime construction, timing, health, startup gate, drain, and minimal controller/resource seams | Provide a safe normal-operation runtime that cannot silently miss maintenance or refill across degraded/foreign work. |
 | 2 | `explicit-recovery-and-shutdown` | merged | `docs/roadmap/stage-23-post/phases/explicit-recovery-and-shutdown.md` | `agent/stage-23-post-p2-explicit-recovery-and-shutdown` | [#213](https://github.com/samcantrill/loom/pull/213) | Guarded recovery resolution/audit and cancel/timeout shutdown | Let an operator resolve externally contained crash leftovers without taking over leases, and stop current work predictably. |
-| 3 | `downstream-operations-proof` | pending | `docs/roadmap/stage-23-post/phases/downstream-operations-proof.md` | `agent/stage-23-post-p3-downstream-operations-proof` | pending | Canonical example, bundle-provider pattern, e2e proof, queue docs, deployment/recovery guide, and small Stage 23 fixes | Make the safe path easy to copy and prove single-item two-slot assignment, live status, logs, refill, and bundle ownership. |
+| 3 | `downstream-operations-proof` | in_progress | `docs/roadmap/stage-23-post/phases/downstream-operations-proof.md` | `agent/stage-23-post-p3-downstream-operations-proof` | pending | Canonical example, bundle-provider pattern, e2e proof, queue docs, deployment/recovery guide, and small Stage 23 fixes | Make the safe path easy to copy and prove single-item two-slot assignment, live status, logs, refill, and bundle ownership. |
 
 ## Quality Gate
 
