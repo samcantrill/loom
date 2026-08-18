@@ -268,9 +268,12 @@ Final commands:
 - Implementation: complete at `32af4e3f0c75acf6062236497b4168f6ef94eeb7`
 - Refiner: completed blocker correction 1; recovery-classification failures now
   fail closed as `DEGRADED` in both startup and cycles
-- Pre-submit gate: pending
-- Independent review: recommended only if implementation expands the public
-  surface or changes controller default behavior; otherwise manager-local
+- Pre-submit gate: passed manager-locally at `3aacfc3`; scope, fixed contracts,
+  import direction, failure behavior, tests, and proportionality match the
+  approved phase
+- Independent review: not used; the implementation adds only the approved
+  explicit submodule and leaves controller default behavior unchanged, with no
+  material residual risk beyond the accepted plan risks
 - Blocker corrections: 3/3; manager correction 2 separates runtime, persisted
   queue, same-session process, and unobserved hardware/lease status scopes;
   manager correction 3 adds missing spec-owner/static-provider and read-only
@@ -283,7 +286,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added `loom.queue.managed_local.ManagedLocalQueueRuntime`, its typed runtime state/status, selected-pool startup validation, deadline-aware drain serving, recovery gating, and controller current-session classification/reconciliation in `src/loom/queue/managed_local.py` and `src/loom/queue/controller.py`. The first blocker correction additionally wraps startup and cycle recovery classification plus both cycle execution paths in failure-closed `DEGRADED` transitions. The second correction reports runtime, queue, process, and hardware/lease observation scopes independently. Kept `loom.queue` root imports unchanged. |
 | Tests added or updated | Added managed-local package/API, unit, and SQLite integration coverage; added controller no-fill reconciliation coverage; added `tests/integration/queue/__init__.py` so same-named unit/integration test modules collect together. The first blocker correction adds startup/cycle recovery-scan failure, earlier-of-poll/deadline wait, and degraded-to-healthy refill causal coverage; the second adds exact safe status-scope wording; the third proves spec-owner live status, authored static binding, and read-only static-limit failure. |
-| Validated revision/tree state and evidence | `32af4e3f0c75acf6062236497b4168f6ef94eeb7` matched the original validated implementation tree. Targeted queue/package/contract/integration suites: 138 passed. `make validate-pr`: passed (Ruff, Pyright 0 errors, default 2,106 passed, config-extra 128 passed/3 skipped, build). `make test-summary`: passed; `build/test-summary.md` records 2,234 passed, 3 skipped. After blocker correction 1, `uv run --extra config pytest tests/unit/loom/queue/test_managed_local_runtime.py tests/integration/queue/test_managed_local_runtime.py -q`: 7 passed; focused Ruff and diff checks passed. |
-| Validation-relevant changes after evidence | Blocker corrections 1 through 3 change runtime failure-state/status-shape behavior and complete causal construction/startup coverage; the prior full-suite receipt is stale. |
+| Validated revision/tree state and evidence | `3aacfc30b0afe27acc16f66f64c0af1ce396fe3b` is the final validation-relevant revision. Targeted queue/package/contract/integration suites: 143 passed before the final construction tests; the final managed-local unit/integration slice then passed 10 tests. `make validate-pr`: passed (Ruff, Pyright 0 errors, default 2,113 passed, config-extra 128 passed/3 skipped, build). `make test-summary`: passed; `build/test-summary.md` records package 113, unit 1,494, contract 270, integration 187, e2e 49, and config-extra 128 passed with 3 skipped. |
+| Validation-relevant changes after evidence | none; only this completion-evidence update follows the validated implementation revision |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | The recovery-scan false-`READY` and ambiguous observation-scope blockers are resolved. Foreign recovery remains intentionally visible as `RECOVERY_REQUIRED` without mutation; Phase 2 owns explicit resolution. |
