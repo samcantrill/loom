@@ -271,12 +271,20 @@ Final commands:
   with schema-v2 static assignments and one config-owned owner; the example-only
   paired-member provider, focused lifecycle tests, e2e proof, and operational
   documentation are complete.
-- Refiner: not needed unless a qualified blocker is found
-- Pre-submit gate: pending
+- Refiner: not used; both bounded review/gate corrections were completed
+  manager-locally without changing core source or accepted design
+- Pre-submit gate: passed manager-locally at final validation-relevant revision
+  `7cc084ee2490b43b5e2fa3fb4eba80eda3b52155`; scope, deterministic live proof,
+  bundle member ownership/rollback, downstream guidance, and roadmap status
+  match the approved phase
 - Independent review: not needed on the fast path; manager must review every
   operational claim against the merged runtime
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Blocker corrections: 2/3; correction 1 rolls back an unexpected second-member
+  acquisition failure, replaces timing-dependent live observation with a
+  bounded filesystem signal, and removes stale manual-loop guidance;
+  correction 2 restores the runnable-example `Public Python Surface` heading
+  required by the documentation contract
+- PR and merge: pending PR creation; manager review and local gates pass
 
 ## Completion Record
 
@@ -284,7 +292,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | `examples/operations/managed-local-queue/` runtime example, metadata, README, and paired-member provider; focused provider unit test; e2e proof; queue/roadmap docs. No core/schema/dependency changes. |
 | Tests added or updated | Added `tests/unit/loom/queue/test_example_paired_assignment_provider.py`; strengthened `tests/e2e/test_queue_cli.py::test_managed_local_queue_example_is_rerunnable` for owner, live status, two slots, bindings, logs, and reruns. |
-| Validated revision/tree state and evidence | 2026-08-18 targeted checks passed: Ruff check/format; unit `21 passed`; contracts `14 passed`; managed-local integration `23 passed`; example e2e `1 passed`. `make validate-pr` and `make test-summary` remain manager gates. |
+| Validated revision/tree state and evidence | `7cc084ee2490b43b5e2fa3fb4eba80eda3b52155` is the final validation-relevant revision. Phase-targeted commands passed 60 tests. `make validate-pr` passed (Ruff, Pyright 0 errors, default 2,133 passed, config-extra 128 passed/3 skipped, build). `make test-summary` passed; `build/test-summary.md` records package 113, unit 1,502, contract 271, integration 198, e2e 49, and config-extra 128 passed with 3 skipped. |
 | Validation-relevant changes after evidence | None; this completion-record update is metadata only. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| PR, review, and merge | Manager review and local gates pass; PR creation, GitHub CI, and merge are pending. |
+| Residual risk and cleanup | The bundle provider remains a project-owned copyable pattern rather than a core promise. Supervisor containment is an operator assertion; hardware health and current lease liveness remain unobserved. Worktree and branch remain through PR and merge. |
