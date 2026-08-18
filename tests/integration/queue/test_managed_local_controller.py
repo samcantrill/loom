@@ -32,6 +32,7 @@ from loom.queue.assignments import (
     StaticSlotAssignmentProvider,
 )
 from loom.queue.status import inspect_managed_queue_status
+from loom.queue.status import build_queue_pool_status
 from loom.serialization import thaw_plain_data
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
 
@@ -459,6 +460,83 @@ def test_renewal_outage_stops_fill_then_releases_and_refills_after_exit(
     assert first_item.status is QueueItemStatus.FAILED
     assert second_item.status is QueueItemStatus.DISPATCHED
     assert _active_amount(store, "gpu") == 1
+
+
+def test_sqlite_managed_local_three_slots_refill_after_each_terminal_path(
+    tmp_path: Path,
+) -> None:
+    """Prove FIFO refill across success, failure, and cancellation barriers."""
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    for key in ("gpu", "gpu-0", "gpu-1", "gpu-2"):
+        store.set_resource_limit("workspace-1", key, limit=3 if key == "gpu" else 1)
+    service = _started_service(tmp_path, clock=_clock("2020-01-01T00:00:00Z"), max_active_items=3, gpu_capacity=3)
+    for index in range(1, 13):
+        service.enqueue(_request(f"item-{index:02d}"))
+    processes = [_FakeProcess(pid=300 + index, pgid=300 + index) for index in range(12)]
+    runner = _FakeRunner(processes)
+    provider = StaticSlotAssignmentProvider(
+        store,
+        workspace_id="workspace-1",
+        slots=tuple(
+            StaticSlot("gpu", f"slot-{index}", f"gpu-{index}", str(index))
+            for index in range(3)
+        ),
+    )
+    adapter = LocalQueueDispatchAdapter(
+        workspace_id="workspace-1",
+        coordination_store=store,
+        owner_id="controller-1",
+        process_runner=runner,
+        current_drift_inputs={"config": "expected"},
+        assignment_provider=provider,
+    )
+    controller = QueueController(service, adapters={"local": adapter})
+
+    first = controller.run_cycle(pool_name="local-pool")
+    assert [step.item.queue_item_id for step in first.dispatch_steps if step.item] == [
+        "item-01", "item-02", "item-03"
+    ]
+    _assert_three_slot_peak(service)
+    assert build_queue_pool_status(service, pool_name="local-pool").counts.queued == 9
+
+    runner.started[0].returncode = 0
+    success_refill = controller.run_cycle(pool_name="local-pool")
+    assert [step.item.queue_item_id for step in success_refill.dispatch_steps if step.item] == ["item-04"]
+    _assert_three_slot_peak(service)
+
+    runner.started[1].returncode = 7
+    failed_refill = controller.run_cycle(pool_name="local-pool")
+    assert [step.item.queue_item_id for step in failed_refill.dispatch_steps if step.item] == ["item-05"]
+    _assert_three_slot_peak(service)
+
+    cancelled = controller.cancel_item("item-03", requested_by="operator", reason="stop")
+    assert cancelled.item is not None and cancelled.item.status is QueueItemStatus.CANCELLED
+    cancellation_refill = controller.run_cycle(pool_name="local-pool")
+    assert [step.item.queue_item_id for step in cancellation_refill.dispatch_steps if step.item] == ["item-06"]
+    _assert_three_slot_peak(service)
+
+    while build_queue_pool_status(service, pool_name="local-pool").counts.active:
+        for process in runner.started:
+            if process.returncode is None:
+                process.returncode = 0
+        controller.run_cycle(pool_name="local-pool")
+        _assert_three_slot_peak(service)
+
+    counts = build_queue_pool_status(service, pool_name="local-pool").counts
+    assert (counts.succeeded, counts.failed, counts.cancelled, counts.unknown) == (10, 1, 1, 0)
+
+
+def _assert_three_slot_peak(service: QueueService) -> None:
+    pool = build_queue_pool_status(service, pool_name="local-pool").to_dict()
+    attempts = pool["active_attempts"]
+    assert pool["counts"]["active"] <= 3
+    slots = {
+        attempt["assignment"]["slots"][0]["slot_id"]
+        for attempt in attempts
+        if attempt["assignment"] is not None
+    }
+    assert len(slots) == len(attempts)
 
 
 @dataclass(slots=True)

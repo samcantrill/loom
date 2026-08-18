@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event, Thread
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -84,6 +85,33 @@ def test_sqlite_repository_concurrent_claim_has_one_winner(tmp_path: Path) -> No
         )
 
     assert sum(result is not None for result in results) == 1
+
+
+def test_sqlite_pool_read_snapshot_does_not_mix_a_controlled_transition(
+    tmp_path: Path,
+) -> None:
+    """A selected-pool read remains on one SQLite side of a claim barrier."""
+    db_path = tmp_path / "queue.sqlite"
+    writer = SQLiteQueueRepository(db_path)
+    writer.enqueue(_item("item-1", "gpu-pool", "2020-01-01T00:00:00Z"))
+    read_started = Event()
+    claimed = Event()
+    repository = _BarrierSQLiteQueueRepository(db_path, read_started, claimed)
+
+    def claim_after_read_starts() -> None:
+        assert read_started.wait(timeout=1)
+        assert writer.claim_next(
+            "gpu-pool", owner_id="controller", claim_id="claim-1"
+        ) is not None
+        claimed.set()
+
+    worker = Thread(target=claim_after_read_starts)
+    worker.start()
+    before = repository.read_pool_snapshot("gpu-pool")
+    worker.join(timeout=1)
+
+    assert before.items[0].status is QueueItemStatus.QUEUED
+    assert writer.read_pool_snapshot("gpu-pool").items[0].status is QueueItemStatus.CLAIMED
 
 
 def test_sqlite_repository_records_dispatch_and_completion(tmp_path: Path) -> None:
@@ -296,6 +324,39 @@ def test_sqlite_repository_rejects_incompatible_schema(tmp_path: Path) -> None:
 
     with pytest.raises(QueueSchemaError, match="unsupported queue schema version"):
         SQLiteQueueRepository(db_path)
+
+
+class _BarrierSQLiteQueueRepository(SQLiteQueueRepository):
+    def __init__(self, db_path: Path, read_started: Event, claimed: Event) -> None:
+        self._read_started = read_started
+        self._claimed = claimed
+        super().__init__(db_path)
+
+    def _connect(self) -> Any:
+        return _ReadBarrierConnection(
+            super()._connect(), self._read_started, self._claimed
+        )
+
+
+class _ReadBarrierConnection:
+    def __init__(self, connection: Any, read_started: Event, claimed: Event) -> None:
+        self._connection = connection
+        self._read_started = read_started
+        self._claimed = claimed
+
+    def __enter__(self) -> "_ReadBarrierConnection":
+        self._connection.__enter__()
+        return self
+
+    def __exit__(self, *args: object) -> object:
+        return self._connection.__exit__(*args)
+
+    def execute(self, statement: str, parameters: tuple[object, ...] = ()) -> Any:
+        cursor = self._connection.execute(statement, parameters)
+        if "FROM queue_items" in statement and "pool_name" in statement:
+            self._read_started.set()
+            assert self._claimed.wait(timeout=1)
+        return cursor
 
 
 def _item(item_id: str, pool_name: str, enqueued_at: str) -> QueueItem:

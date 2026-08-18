@@ -96,14 +96,26 @@ def main() -> None:
         log_directory=output_root / "queue-state" / "logs",
     )
     controller = QueueController(service, adapters={"local": adapter})
-    controller.run_cycle(pool_name="local-pool")
-    active = build_queue_pool_status(
+    for _ in range(12):
+        controller.run_cycle(pool_name="local-pool")
+        counts = build_queue_pool_status(service, pool_name="local-pool").counts
+        if counts.queued == 0 and counts.active == 0:
+            break
+    else:
+        raise RuntimeError("example queue did not settle")
+    status = build_queue_pool_status(
         service, pool_name="local-pool", adapters={"local": adapter}
     ).to_dict()
+    logs = sorted((output_root / "queue-state" / "logs").rglob("*.log"))
+    stdout_logs = [path for path in logs if path.name.endswith(".stdout.log")]
+    if len(logs) != 6 or {
+        path.read_text(encoding="utf-8").strip() for path in stdout_logs
+    } != {"item-1", "item-2", "item-3"}:
+        raise RuntimeError("example queue did not produce distinct command logs")
     print("managed_local_queue:")
-    print(f"  active: {active['counts']['active']}")
-    print(f"  active_attempts: {len(active['active_attempts'])}")
-    print(f"  queued: {active['counts']['queued']}")
+    print(f"  succeeded: {status['counts']['succeeded']}")
+    print(f"  active: {status['counts']['active']}")
+    print(f"  queued: {status['counts']['queued']}")
     print(f"  logs_root: {output_root / 'queue-state' / 'logs'}")
 
 

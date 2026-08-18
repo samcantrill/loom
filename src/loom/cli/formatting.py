@@ -589,6 +589,7 @@ def format_queue_status_text(result: object) -> str:
         for attempt in attempts:
             lines.append(
                 f"attempt {attempt['queue_item_id']}: {attempt['status']} "
+                f"owner={attempt['owner_id']} session={attempt['session_id']} "
                 f"source={attempt['evidence_source']} "
                 f"live={attempt['live_observation']}"
             )
@@ -599,6 +600,19 @@ def format_queue_status_text(result: object) -> str:
                 lines.append(f"  process: pid={process['pid']} pgid={process['pgid']}")
             if isinstance(assignment, Mapping):
                 lines.append(f"  assignment: {assignment['provider_name']}")
+                slots = assignment.get("slots")
+                if isinstance(slots, Sequence) and not isinstance(slots, str):
+                    for slot in slots:
+                        if not isinstance(slot, Mapping):
+                            continue
+                        lines.append(
+                            "    slot: "
+                            f"resource_name={slot.get('resource_name')} "
+                            f"slot_id={slot.get('slot_id')} "
+                            f"label={slot.get('label')} "
+                            f"lease_id={slot.get('lease_id')} "
+                            f"expires_at={slot.get('expires_at')}"
+                        )
             if isinstance(logs, Mapping):
                 lines.append(
                     f"  logs: stdout={logs['stdout_path']} stderr={logs['stderr_path']}"

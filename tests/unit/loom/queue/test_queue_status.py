@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 
+from loom.cli.formatting import format_queue_status_text
 from loom.queue import (
     DispatchHandle,
     QueueEnqueueRequest,
@@ -244,6 +245,47 @@ def test_pool_status_labels_only_matching_same_session_observation(
     assert mismatch["live_observation"] == "unavailable"
 
 
+def test_pool_status_text_matches_json_safe_facts_and_redaction(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="active",
+            queue_name="gpu",
+            run_uri="file:///runs/active",
+            adapter="local",
+        )
+    )
+    claimed = service.claim_next("gpu-pool", owner_id="controller", claim_id="claim")
+    assert claimed is not None
+    service.record_dispatch_handle("active", _managed_handle(), expected=claimed.item)
+
+    report = build_queue_operational_status(service, pool_name="gpu-pool")
+    payload = report.to_dict()
+    attempt = cast(
+        Mapping[str, object],
+        cast(list[object], cast(Mapping[str, object], payload["pool"])["active_attempts"])[0],
+    )
+    text = format_queue_status_text(report)
+
+    for value in (
+        payload["pool"]["pool_name"],
+        attempt["queue_item_id"],
+        attempt["owner_id"],
+        attempt["session_id"],
+        attempt["evidence_source"],
+        attempt["live_observation"],
+        "101",
+        "static-slots",
+        "slot-a",
+        "lease-1",
+        "logs/active.stdout.log",
+        "logs/active.stderr.log",
+    ):
+        assert str(value) in text
+    assert "argv" not in text
+    assert "fencing_token" not in text
+
+
 def _managed_handle() -> DispatchHandle:
     return DispatchHandle(
         adapter="local",
@@ -257,7 +299,18 @@ def _managed_handle() -> DispatchHandle:
                 "session_id": "session-1",
                 "pid": 101,
                 "pgid": 101,
-                "assignment": {"provider_name": "static-slots", "slots": []},
+                "assignment": {
+                    "provider_name": "static-slots",
+                    "slots": [
+                        {
+                            "resource_name": "gpu",
+                            "slot_id": "slot-a",
+                            "label": "A",
+                            "lease_id": "lease-1",
+                            "expires_at": "2020-01-01T00:01:00Z",
+                        }
+                    ],
+                },
                 "logs": {
                     "stdout_path": "logs/active.stdout.log",
                     "stderr_path": "logs/active.stderr.log",
