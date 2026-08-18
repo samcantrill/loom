@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 23-post, Phase 2
 - Manifest: `docs/roadmap/stage-23-post/implementation-plan.md`
 - Branch: `agent/stage-23-post-p2-explicit-recovery-and-shutdown`
@@ -271,22 +271,25 @@ Final commands:
 - Expanded planning: not needed; Phase 1 leaves the approved exact-item foreign
   recovery target and current-session ownership boundary unambiguous
 - Implementation: complete at final validation-relevant revision
-  `bd61fd9408c92210534c405fa4dee0ec27a32eb8`
+  `a4aacabba44342ca174152b4c8553af866a74506`
 - Refiner: completed qualified blocker correction 1/3: restored the approved
   drain default for omitted `serve()` shutdown mode and rejected non-finite
   poll/timeout inputs that defeat bounded shutdown timing
-- Pre-submit gate: passed manager-locally at `bd61fd9`; scope, exact-item CAS,
+- Pre-submit gate: passed manager-locally at `a4aacab`; scope, exact-item CAS,
   audit allowlist, no foreign mutation, shutdown ordering, compatibility,
   tests, and proportionality match the approved phase
 - Independent review: completed on PR #213; exact-item recovery and foreign
   lease safety passed; the maintainer approved one narrow correction-budget
   exception for the reproduced shutdown deadline-ordering blocker
-- Blocker corrections: 3/3; manager correction 2 preserves normal-completion
+- Blocker corrections: 3/3 plus one maintainer-approved narrow exception;
+  manager correction 2 preserves normal-completion
   compatibility for repositories without the new optional keyword and adds
   missing claimed/CAS/mixed-session/two-slot recovery proof; manager correction
-  3 adds drain-and-cancel timeout parity and current-item recovery rejection
+  3 adds drain-and-cancel timeout parity and current-item recovery rejection;
+  the exceptional correction enforces an expired deadline before the next
+  reconciliation and proves the crossed-deadline path retains item and lease
 - PR and merge: PR [#213](https://github.com/samcantrill/loom/pull/213) is open
-  against `develop`; the approved review correction is pending final gates
+  against `develop`; local gates pass and GitHub CI is pending
 
 ## Completion Record
 
@@ -294,7 +297,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added guarded optional completion evidence in `src/loom/queue/repository.py`, `service.py`, and `_sqlite.py`; added explicit foreign-local `UNKNOWN` recovery, `CANCELLING`, cancel/drain timeout accounting, and the managed-local timeout error in `src/loom/queue/managed_local.py`. Refiner correction 1 restored `serve()`'s omitted-mode drain default and rejects non-finite shutdown timing inputs. Manager correction 2 omits the optional repository keyword on unchanged normal completion for downstream implementation compatibility. |
 | Tests added or updated | Updated `tests/contracts/test_queue_python_api_contract.py`; added completion-evidence contract coverage in `tests/contracts/test_queue_repository_contract.py`; added recovery, audit-redaction, claimed-item/CAS conflict, two-slot foreign lease retention, mixed-session cancellation, current-item rejection, recovery-state-refresh, drain-default/no-cancel, explicit-cancel cleanup, and drain/cancel timeout coverage in `tests/integration/queue/test_managed_local_runtime.py`; added legacy repository completion coverage in `tests/integration/queue/test_service_lifecycle.py` and non-finite timing validation in `tests/unit/loom/queue/test_managed_local_runtime.py`. |
-| Validated revision/tree state and evidence | `bd61fd9408c92210534c405fa4dee0ec27a32eb8` is the final validation-relevant revision. All recorded phase-targeted commands passed: 97 tests. `make validate-pr` passed (Ruff, Pyright 0 errors, default 2,128 passed, config-extra 128 passed/3 skipped, build). `make test-summary` passed; `build/test-summary.md` records package 113, unit 1,498, contract 271, integration 197, e2e 49, and config-extra 128 passed with 3 skipped. |
+| Validated revision/tree state and evidence | `a4aacabba44342ca174152b4c8553af866a74506` is the final validation-relevant revision. All recorded phase-targeted commands passed: 98 tests. `make validate-pr` passed (Ruff, Pyright 0 errors, default 2,129 passed, config-extra 128 passed/3 skipped, build). `make test-summary` passed; `build/test-summary.md` records package 113, unit 1,498, contract 271, integration 198, e2e 49, and config-extra 128 passed with 3 skipped. |
 | Validation-relevant changes after evidence | none; only completion/PR metadata may follow the validated revision |
-| PR, review, and merge | PR [#213](https://github.com/samcantrill/loom/pull/213) is open against `develop`. The maintainer approved one exceptional, narrowly scoped fourth correction: enforce an expired shutdown deadline before the next reconciliation and cover the crossed-deadline path. Final gates are pending. |
+| PR, review, and merge | PR [#213](https://github.com/samcantrill/loom/pull/213) is open against `develop`. The maintainer approved one exceptional, narrowly scoped fourth correction: enforce an expired shutdown deadline before the next reconciliation and cover the crossed-deadline path. Manager review and local gates pass; GitHub CI is pending. |
 | Residual risk and cleanup | The accepted external process-containment assertion remains intentionally unverified. The timeout-ordering correction is implemented with a regression that advances the wait beyond the deadline while the process exits and proves the item remains `DISPATCHED` with its lease retained. Worktree and branch remain through validation and merge. |
