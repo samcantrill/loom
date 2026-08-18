@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
@@ -217,6 +217,7 @@ class SQLiteQueueRepository:
         status: QueueItemStatus,
         reason: str,
         expected: QueueItem,
+        evidence: Mapping[str, PlainData] | None = None,
     ) -> QueueItem:
         queue_item_id = validate_queue_id(queue_item_id, "queue_item_id")
         status = QueueItemStatus(status)
@@ -238,12 +239,15 @@ class SQLiteQueueRepository:
             updated = replace(current, status=status, updated_at=now)
             if _update_item(conn, updated, expected=current) != 1:
                 raise QueueConflictError("queue item completion conflicted")
+            detail: dict[str, PlainData] = {"status": status.value, "reason": reason}
+            if evidence is not None:
+                detail["evidence"] = dict(evidence)
             _append_audit_event(
                 conn,
                 queue_item_id=updated.queue_item_id,
                 event_type="queue.item.completed",
                 timestamp=now,
-                detail={"status": status.value, "reason": reason},
+                detail=detail,
             )
             conn.commit()
             return updated
