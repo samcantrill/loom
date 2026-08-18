@@ -6,15 +6,15 @@ level: advanced
 introduced_in: v23
 status: runnable
 validation: full
-surface: cli
+surface: python_api
 public_surfaces:
-  - cli
+  - python_api
 owner_docs:
   - examples/operations/README.md
   - docs/features/queue.md
 owner_stages:
   - v23
-validation_path: tests/e2e/test_queue_cli.py::test_queue_cli_pool_status_uses_existing_v1_envelope
+validation_path: tests/e2e/test_queue_cli.py::test_managed_local_queue_example_is_rerunnable
 entrypoints:
   - path: run_managed_local_queue.py
     kind: python

@@ -259,6 +259,21 @@ def test_pool_status_labels_only_matching_same_session_observation(
             },
         ),
     ).to_dict()
+    terminal_pool = build_queue_pool_status(
+        service,
+        pool_name="gpu-pool",
+        adapters=cast(
+            Mapping[str, QueueInspectableDispatchAdapter],
+            {
+                "local": _InspectableAdapter(
+                    "controller",
+                    "session-1",
+                    "handle-1",
+                    status=QueueItemStatus.SUCCEEDED,
+                )
+            },
+        ),
+    ).to_dict()
     matching = cast(
         Mapping[str, object],
         cast(list[object], matching_pool["active_attempts"])[0],
@@ -271,6 +286,10 @@ def test_pool_status_labels_only_matching_same_session_observation(
         Mapping[str, object],
         cast(list[object], failed_pool["active_attempts"])[0],
     )
+    terminal = cast(
+        Mapping[str, object],
+        cast(list[object], terminal_pool["active_attempts"])[0],
+    )
 
     assert matching["evidence_source"] == "same_session_live"
     assert matching["live_observation"] == "same_session"
@@ -278,6 +297,8 @@ def test_pool_status_labels_only_matching_same_session_observation(
     assert mismatch["live_observation"] == "unavailable"
     assert failed["evidence_source"] == "persisted"
     assert failed["live_observation"] == "unavailable"
+    assert terminal["evidence_source"] == "persisted"
+    assert terminal["live_observation"] == "unavailable"
 
 
 def test_pool_status_requires_durable_claim_owner_for_live_observation(
@@ -452,20 +473,30 @@ class _InspectableAdapter:
     adapter_name = "local"
 
     def __init__(
-        self, owner_id: str, session_id: str, handle_id: str, *, fail: bool = False
+        self,
+        owner_id: str,
+        session_id: str,
+        handle_id: str,
+        *,
+        fail: bool = False,
+        status: QueueItemStatus = QueueItemStatus.DISPATCHED,
     ) -> None:
         self.owner_id = owner_id
         self.session_id = session_id
         self._handle_id = handle_id
         self._fail = fail
+        self._status = status
 
     def inspect(self, _item: QueueItem) -> QueueDispatchInspection:
         if self._fail:
             raise RuntimeError("injected observation failure")
         return QueueDispatchInspection(
-            status=QueueItemStatus.DISPATCHED,
-            reason="active",
+            status=self._status,
+            reason="active"
+            if self._status is QueueItemStatus.DISPATCHED
+            else "complete",
             evidence={"handle_id": self._handle_id},
+            terminal=self._status is not QueueItemStatus.DISPATCHED,
         )
 
     def dispatch(self, _item: QueueItem) -> QueueDispatchResult:

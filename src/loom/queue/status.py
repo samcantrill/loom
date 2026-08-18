@@ -330,7 +330,11 @@ def _active_attempt_status(
             except Exception:  # observation is optional and never changes durable facts
                 live_observation = "unavailable"
             else:
-                if inspection.evidence.get("handle_id") == handle.handle_id:
+                if (
+                    inspection.evidence.get("handle_id") == handle.handle_id
+                    and inspection.status is QueueItemStatus.DISPATCHED
+                    and not inspection.terminal
+                ):
                     live_observation = "same_session"
                     evidence_source = "same_session_live"
                 else:

@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
+import tempfile
 
 REPO_ROOT = next(
     parent
@@ -40,7 +41,8 @@ HERE = Path(__file__).resolve().parent
 def main() -> None:
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE / "output"))
     output_root.mkdir(parents=True, exist_ok=True)
-    store = SQLiteWorkspaceCoordinationStore(output_root / "coordination.sqlite")
+    run_root = Path(tempfile.mkdtemp(prefix="run-", dir=output_root))
+    store = SQLiteWorkspaceCoordinationStore(run_root / "coordination.sqlite")
     store.create_workspace(WorkspaceIdentity("example-workspace"))
     for key in ("gpu", "slot-a-key", "slot-b-key"):
         store.set_resource_limit(
@@ -50,7 +52,7 @@ def main() -> None:
         normalize_queue_spec(
             {
                 "schema_version": 2,
-                "db_path": str(output_root / "queue.sqlite"),
+                "db_path": str(run_root / "queue.sqlite"),
                 "controller": {"max_active_items": 2},
                 "pools": [
                     {
@@ -93,7 +95,7 @@ def main() -> None:
         owner_id="example-controller",
         current_drift_inputs={},
         assignment_provider=provider,
-        log_directory=output_root / "queue-state" / "logs",
+        log_directory=run_root / "queue-state" / "logs",
     )
     controller = QueueController(service, adapters={"local": adapter})
     controller.run_cycle(pool_name="local-pool")
@@ -106,7 +108,7 @@ def main() -> None:
     status = build_queue_pool_status(
         service, pool_name="local-pool", adapters={"local": adapter}
     ).to_dict()
-    logs = sorted((output_root / "queue-state" / "logs").rglob("*.log"))
+    logs = sorted((run_root / "queue-state" / "logs").rglob("*.log"))
     stdout_logs = [path for path in logs if path.name.endswith(".stdout.log")]
     if len(logs) != 6 or {
         path.read_text(encoding="utf-8").strip() for path in stdout_logs
@@ -127,7 +129,7 @@ def main() -> None:
     print(f"  succeeded: {status['counts']['succeeded']}")
     print(f"  active: {status['counts']['active']}")
     print(f"  queued: {status['counts']['queued']}")
-    print(f"  logs_root: {output_root / 'queue-state' / 'logs'}")
+    print(f"  logs_root: {run_root / 'queue-state' / 'logs'}")
 
 
 if __name__ == "__main__":

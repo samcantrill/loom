@@ -14,6 +14,13 @@ The configured active limit is controller-local; static-slot authority leases
 are the exclusivity boundary. The output intentionally does not display command
 arguments, environment bindings, fencing tokens, or provider-private data.
 
+## Public Python Surface
+
+The script constructs `QueueService`, `QueueController`,
+`StaticSlotAssignmentProvider`, and `LocalQueueDispatchAdapter` through their
+public Python APIs. Each invocation writes to a new run directory below
+`LOOM_EXAMPLE_OUTPUT_ROOT`, so rerunning it preserves earlier evidence.
+
 ## Variants
 
 Inspect a persisted queue configuration with the CLI using:
