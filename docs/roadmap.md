@@ -1792,9 +1792,10 @@ Implementation plan:
 
 Status:
 
-- Planning is confirmed, the expanded design-safety review is complete, and the
-  corrected implementation manifest and linked phase plans passed their quality
-  gate on 2026-08-17. Phase 1 has not started.
+- Stage 23 implementation is complete. The narrowly scoped operational follow-up
+  is tracked in the [Stage 23-post implementation plan](roadmap/stage-23-post/implementation-plan.md);
+  it adds the managed-local runtime/recovery proof without reopening the
+  completed Stage 23 plans.
 
 Goal:
 

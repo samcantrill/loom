@@ -115,8 +115,10 @@ Foreground drain is a compatibility mode:
 client.drain_foreground(max_items=1)
 ```
 
-Daemon or service style controllers should call `run_once()` repeatedly from a
-long-running process and keep adapter instances alive.
+For managed-local pools, use the long-lived `ManagedLocalQueueRuntime` described
+below so adapter state and maintenance timing have one owner. Direct
+`run_once()` loops remain a low-level seam for other custom adapters; they are
+not the recommended managed-local construction pattern.
 
 ## Managed Local Pools
 
@@ -178,14 +180,55 @@ is not a crash-time guarantee: controller death and process reattachment still
 require explicit recovery.
 
 Each attempt writes distinct stdout and stderr files beneath queue-owned state.
-The [managed-local operations example](../../examples/operations/managed-local-queue/README.md)
-shows public Python construction, two generic slots, refill, redacted status,
-and queue-relative log paths.
+For a managed-local pool, construct one
+[`ManagedLocalQueueRuntime`](../../examples/operations/managed-local-queue/README.md)
+with `ManagedLocalQueueRuntime.from_spec(...)`; it derives its single owner from
+`controller.owner_id`, constructs the service/controller/local adapter/static
+provider together, and owns maintenance timing. `import loom.queue.managed_local`
+is the explicit operational import path. Do not manually construct those parts
+with independent owners or duplicate the controller timing loop.
 
-A downstream deployment may author the same generic binding with a conventional
-name such as `CUDA_VISIBLE_DEVICES`; Loom treats that as trusted configuration,
-not accelerator discovery or vendor semantics. Real accelerator checks remain
-manual/opt-in and are not part of `make validate-pr`.
+The recommended long-lived path passes a `threading.Event` (usually set by a
+SIGINT/SIGTERM handler) to `runtime.serve(...)`. `start()` and `run_cycle()` are
+narrow advanced/test seams. The runtime is process-local and has these states:
+`READY`, `DEGRADED`, `RECOVERY_REQUIRED`, `DRAINING`, `CANCELLING`, and
+`STOPPED`. A normal stop drains: it stops new claims while reconciliation and
+renewal continue. `shutdown_mode="cancel"` cancels current-session work. A
+timeout reports remaining work and never force-releases a lease.
+
+Status must be read by observation scope. Queue records, assignment evidence,
+and log paths are persisted facts; `same_session_live` is an in-process
+observation for an owner/session match; hardware health and current lease
+liveness are not observed. In particular, persisted lease expiry evidence is
+not current hardware availability.
+
+On restart, selected-pool work from another session puts the runtime in
+`RECOVERY_REQUIRED`. First use an external supervisor/operator to contain the
+previous process group. Only then may an operator call
+`resolve_recovery_unknown(item_id, previous_processes_confirmed_stopped=True,
+requested_by=..., reason=...)` for one exact item. That boolean is an operator
+attestation; Loom neither verifies prior processes, reattaches, kills by PID,
+nor renews/releases foreign leases. For the POSIX built-in runner, a small
+systemd deployment can use `KillMode=control-group` and a stop timeout. This is
+an operational pattern, not a Loom daemon or a required default test service.
+
+For independent devices, request the ordinary generic amount:
+
+```python
+resources={"accelerator": 2}
+```
+
+The two authored slots bind an environment list such as
+`LOOM_ASSIGNED_ACCELERATORS`; `CUDA_VISIBLE_DEVICES` is only a downstream
+naming variant, not vendor behavior. When a placement is genuinely indivisible,
+keep a project-owned provider that acquires, renews, releases, and rolls back
+the same physical member coordination keys used by individual allocation. The
+[paired example provider](../../examples/operations/managed-local-queue/paired_assignment_provider.py)
+is a copyable pattern, not a supported core import or a synthetic bundle-key
+scheme. The controller active limit is one-runtime-local policy, not a
+distributed quota. Candidate selection remains Stage 24 work; generic
+scheduling, reattachment, resource observation, and notification policy remain
+Stage 25 work.
 
 ## Delegated SLURM Pools
 

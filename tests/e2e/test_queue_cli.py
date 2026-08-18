@@ -84,11 +84,22 @@ def test_queue_cli_pool_status_uses_existing_v1_envelope(tmp_path: Path) -> None
     )
     output = io.StringIO()
 
-    assert main(
-        ["queue", "status", str(config_path), "--pool", "local-pool", "--format", "json"],
-        stdout=output,
-        stderr=io.StringIO(),
-    ) == 0
+    assert (
+        main(
+            [
+                "queue",
+                "status",
+                str(config_path),
+                "--pool",
+                "local-pool",
+                "--format",
+                "json",
+            ],
+            stdout=output,
+            stderr=io.StringIO(),
+        )
+        == 0
+    )
 
     envelope = json.loads(output.getvalue())
     assert envelope["schema_version"] == "loom.cli.queue.status.v1"
@@ -127,10 +138,9 @@ def test_managed_local_queue_example_is_rerunnable(tmp_path: Path) -> None:
                 f"managed-local example failed with exit {result.returncode}\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
-        assert "item-1: slots=[" in result.stdout
-        assert "item-2: slots=[" in result.stdout
-        assert "slot-a" in result.stdout
-        assert "slot-b" in result.stdout
+        assert "owner: example-runtime" in result.stdout
+        assert "item-1: slots=['slot-a', 'slot-b']" in result.stdout
+        assert "source=same_session_live" in result.stdout
         assert "succeeded: 3" in result.stdout
         assert "active: 0" in result.stdout
         assert "queued: 0" in result.stdout
@@ -141,6 +151,9 @@ def test_managed_local_queue_example_is_rerunnable(tmp_path: Path) -> None:
         logs = sorted((run_root / "queue-state" / "logs").rglob("*.log"))
         stdout_logs = [path for path in logs if path.name.endswith(".stdout.log")]
         assert len(logs) == 6
-        assert {
-            path.read_text(encoding="utf-8").strip() for path in stdout_logs
-        } == {"item-1", "item-2", "item-3"}
+        assert {path.read_text(encoding="utf-8").strip() for path in stdout_logs} == {
+            "item-1:a,b",
+            "item-2:a",
+            "item-3:b",
+        }
+        assert len({path.name for path in logs}) == len(logs)
