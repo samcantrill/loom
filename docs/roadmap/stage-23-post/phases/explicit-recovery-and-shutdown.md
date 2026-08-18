@@ -274,9 +274,10 @@ Final commands:
   and static checks passed after the correction
 - Independent review: recommended because recovery attestation authorizes a
   durable terminal mutation and shutdown affects lease safety
-- Blocker corrections: 2/3; manager correction 2 preserves normal-completion
+- Blocker corrections: 3/3; manager correction 2 preserves normal-completion
   compatibility for repositories without the new optional keyword and adds
-  missing claimed/CAS/mixed-session/two-slot recovery proof
+  missing claimed/CAS/mixed-session/two-slot recovery proof; manager correction
+  3 adds drain-and-cancel timeout parity and current-item recovery rejection
 - PR and merge: pending
 
 ## Completion Record
@@ -284,8 +285,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Added guarded optional completion evidence in `src/loom/queue/repository.py`, `service.py`, and `_sqlite.py`; added explicit foreign-local `UNKNOWN` recovery, `CANCELLING`, cancel/drain timeout accounting, and the managed-local timeout error in `src/loom/queue/managed_local.py`. Refiner correction 1 restored `serve()`'s omitted-mode drain default and rejects non-finite shutdown timing inputs. Manager correction 2 omits the optional repository keyword on unchanged normal completion for downstream implementation compatibility. |
-| Tests added or updated | Updated `tests/contracts/test_queue_python_api_contract.py`; added completion-evidence contract coverage in `tests/contracts/test_queue_repository_contract.py`; added recovery, audit-redaction, claimed-item/CAS conflict, two-slot foreign lease retention, mixed-session cancellation, recovery-state-refresh, drain-default/no-cancel, explicit-cancel cleanup, and cancel-timeout coverage in `tests/integration/queue/test_managed_local_runtime.py`; added legacy repository completion coverage in `tests/integration/queue/test_service_lifecycle.py` and non-finite timing validation in `tests/unit/loom/queue/test_managed_local_runtime.py`. |
-| Validated revision/tree state and evidence | Before correction, `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a` passed the phase targeted suites (85 tests), `make validate-pr`, and `make test-summary`. Refiner correction 1 passed the managed-local runtime slice (17 tests), Ruff, and Pyright. Manager correction 2 passed the recovery/API/service slice (19 tests), Ruff, and Pyright with 0 errors. |
-| Validation-relevant changes after evidence | Corrections 1 and 2 changed shutdown defaults/input validation and normal completion dispatch, and added causal recovery/shutdown coverage; the prior full-suite receipt is stale. |
+| Tests added or updated | Updated `tests/contracts/test_queue_python_api_contract.py`; added completion-evidence contract coverage in `tests/contracts/test_queue_repository_contract.py`; added recovery, audit-redaction, claimed-item/CAS conflict, two-slot foreign lease retention, mixed-session cancellation, current-item rejection, recovery-state-refresh, drain-default/no-cancel, explicit-cancel cleanup, and drain/cancel timeout coverage in `tests/integration/queue/test_managed_local_runtime.py`; added legacy repository completion coverage in `tests/integration/queue/test_service_lifecycle.py` and non-finite timing validation in `tests/unit/loom/queue/test_managed_local_runtime.py`. |
+| Validated revision/tree state and evidence | Before correction, `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a` passed the phase targeted suites (85 tests), `make validate-pr`, and `make test-summary`. Refiner correction 1 passed the managed-local runtime slice (17 tests), Ruff, and Pyright. Manager correction 2 passed the recovery/API/service slice (19 tests), Ruff, and Pyright with 0 errors. After correction 3, all recorded phase-targeted commands passed: 97 tests; focused Ruff and Pyright also passed. |
+| Validation-relevant changes after evidence | Corrections 1 through 3 changed shutdown defaults/input validation, mixed-session recovery behavior, and normal completion dispatch, and completed causal recovery/shutdown coverage; the prior full-suite receipt is stale. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | The accepted external process-containment assertion remains intentionally unverified; timeout deliberately retains current work and leases for the external supervisor. PR, review, merge, and worktree cleanup remain manager-owned pending. |

@@ -327,8 +327,17 @@ def test_runtime_recovery_retains_two_slot_scalar_and_member_leases(
         assert counter is not None and counter.value == expected_value
 
 
-def test_runtime_cancel_timeout_keeps_current_item_and_lease_active(
+@pytest.mark.parametrize(
+    ("shutdown_mode", "expected_state"),
+    [
+        ("drain", ManagedLocalQueueRuntimeState.DRAINING),
+        ("cancel", ManagedLocalQueueRuntimeState.CANCELLING),
+    ],
+)
+def test_runtime_shutdown_timeout_keeps_current_item_and_lease_active(
     tmp_path: Path,
+    shutdown_mode: str,
+    expected_state: ManagedLocalQueueRuntimeState,
 ) -> None:
     clock = _MutableClock("2020-01-01T00:00:00Z")
     spec = normalize_queue_spec(
@@ -363,12 +372,12 @@ def test_runtime_cancel_timeout_keeps_current_item_and_lease_active(
         runtime.serve(
             stop,
             poll_interval_seconds=1,
-            shutdown_mode="cancel",
+            shutdown_mode=shutdown_mode,
             shutdown_timeout_seconds=0,
         )
 
     assert error.value.remaining_item_ids == ("active",)
-    assert runtime.state is ManagedLocalQueueRuntimeState.CANCELLING
+    assert runtime.state is expected_state
     active = runtime.service.read_item("active")
     assert active is not None and active.status is QueueItemStatus.DISPATCHED
     counter = store.read_resource_limit("workspace-1", "gpu")
@@ -446,6 +455,30 @@ def test_runtime_cancel_does_not_touch_foreign_work(tmp_path: Path) -> None:
     assert current is not None and current.status is QueueItemStatus.CANCELLED
     assert untouched == foreign.item
     assert status.state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+
+
+def test_runtime_recovery_rejects_a_current_session_item(tmp_path: Path) -> None:
+    runtime, _restarted, _store, process = _foreign_runtime_pair(tmp_path)
+    runtime.service.enqueue(_request("foreign"))
+    foreign = runtime.service.claim_next(
+        "local", owner_id="other-owner", claim_id="other-session-claim"
+    )
+    assert foreign is not None
+    with pytest.raises(QueueServiceError, match="requires recovery"):
+        runtime.run_cycle()
+    current_before = runtime.service.read_item("active")
+
+    with pytest.raises(QueueServiceError, match="foreign selected-pool item"):
+        runtime.resolve_recovery_unknown(
+            "active",
+            previous_processes_confirmed_stopped=True,
+            requested_by="operator-1",
+            reason="previous service group stopped",
+        )
+
+    assert runtime.service.read_item("active") == current_before
+    assert runtime.service.read_item("foreign") == foreign.item
+    assert process.returncode is None
 
 
 def test_runtime_degraded_work_blocks_refill_until_a_later_healthy_reconciliation(
