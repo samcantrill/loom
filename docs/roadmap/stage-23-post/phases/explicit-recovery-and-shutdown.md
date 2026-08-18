@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: 23-post, Phase 2
 - Manifest: `docs/roadmap/stage-23-post/implementation-plan.md`
 - Branch: `agent/stage-23-post-p2-explicit-recovery-and-shutdown`
@@ -13,7 +13,12 @@
 - Dependencies: Phase 1 remotely merged; branch must be based on refreshed `origin/develop`
 - Requirement coverage: FR-6, FR-7, FR-8, and FR-9
 - Workflow path: expanded because operator attestation authorizes a guarded terminal mutation after process-owner loss
-- Blockers: none
+- Blockers: shutdown checks its expired deadline after one more reconciliation,
+  so an item that exits after the bounded wait can become terminal and release
+  leases instead of raising `ManagedLocalShutdownTimeoutError`; independent
+  review and manager reproduction both confirmed `STOPPED`/`SUCCEEDED`/zero
+  active lease after a five-second timeout crossed to six seconds; all three
+  scoped correction passes are exhausted
 
 ## Objective And Context
 
@@ -273,14 +278,14 @@ Final commands:
 - Pre-submit gate: passed manager-locally at `bd61fd9`; scope, exact-item CAS,
   audit allowlist, no foreign mutation, shutdown ordering, compatibility,
   tests, and proportionality match the approved phase
-- Independent review: pending one `loom_phase_reviewer` after PR creation
-  because recovery attestation authorizes a durable terminal mutation and
-  shutdown affects lease safety
+- Independent review: completed on PR #213; exact-item recovery and foreign
+  lease safety passed, but shutdown deadline ordering is a product blocker
 - Blocker corrections: 3/3; manager correction 2 preserves normal-completion
   compatibility for repositories without the new optional keyword and adds
   missing claimed/CAS/mixed-session/two-slot recovery proof; manager correction
   3 adds drain-and-cancel timeout parity and current-item recovery rejection
-- PR and merge: pending
+- PR and merge: PR [#213](https://github.com/samcantrill/loom/pull/213) is open
+  against `develop` but is not merge-eligible while the review blocker remains
 
 ## Completion Record
 
@@ -290,5 +295,5 @@ Final commands:
 | Tests added or updated | Updated `tests/contracts/test_queue_python_api_contract.py`; added completion-evidence contract coverage in `tests/contracts/test_queue_repository_contract.py`; added recovery, audit-redaction, claimed-item/CAS conflict, two-slot foreign lease retention, mixed-session cancellation, current-item rejection, recovery-state-refresh, drain-default/no-cancel, explicit-cancel cleanup, and drain/cancel timeout coverage in `tests/integration/queue/test_managed_local_runtime.py`; added legacy repository completion coverage in `tests/integration/queue/test_service_lifecycle.py` and non-finite timing validation in `tests/unit/loom/queue/test_managed_local_runtime.py`. |
 | Validated revision/tree state and evidence | `bd61fd9408c92210534c405fa4dee0ec27a32eb8` is the final validation-relevant revision. All recorded phase-targeted commands passed: 97 tests. `make validate-pr` passed (Ruff, Pyright 0 errors, default 2,128 passed, config-extra 128 passed/3 skipped, build). `make test-summary` passed; `build/test-summary.md` records package 113, unit 1,498, contract 271, integration 197, e2e 49, and config-extra 128 passed with 3 skipped. |
 | Validation-relevant changes after evidence | none; only completion/PR metadata may follow the validated revision |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | The accepted external process-containment assertion remains intentionally unverified; timeout deliberately retains current work and leases for the external supervisor. PR, review, merge, and worktree cleanup remain manager-owned pending. |
+| PR, review, and merge | PR [#213](https://github.com/samcantrill/loom/pull/213) is open against `develop`. Independent review found one product blocker: timeout is enforced after a subsequent reconciliation, permitting post-deadline terminal mutation and release. Merge is blocked. |
+| Residual risk and cleanup | The accepted external process-containment assertion remains intentionally unverified. The timeout-ordering blocker requires checking an expired shutdown deadline before the next reconciliation and a crossed-deadline regression. The phase has used 3/3 correction passes, so the worktree and branch remain for maintainer direction. |
