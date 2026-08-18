@@ -22,6 +22,14 @@ class QueueClaimResult:
     item: QueueItem
 
 
+@dataclass(frozen=True, slots=True)
+class QueuePoolSnapshot:
+    """One deterministic repository read of every item in a selected pool."""
+
+    pool_name: str
+    items: tuple[QueueItem, ...]
+
+
 @runtime_checkable
 class QueueRepository(Protocol):
     """Repository operations required by the first queue persistence phase."""
@@ -29,6 +37,8 @@ class QueueRepository(Protocol):
     def enqueue(self, item: QueueItem) -> QueueItem: ...
 
     def read_item(self, queue_item_id: str) -> QueueItem | None: ...
+
+    def read_pool_snapshot(self, pool_name: str) -> QueuePoolSnapshot: ...
 
     def claim_next(
         self,
@@ -78,5 +88,6 @@ class QueueRepository(Protocol):
 
 __all__ = [
     "QueueClaimResult",
+    "QueuePoolSnapshot",
     "QueueRepository",
 ]

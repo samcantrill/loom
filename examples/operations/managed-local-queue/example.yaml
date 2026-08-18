@@ -1,0 +1,26 @@
+id: operations.managed-local-queue
+title: Managed Local Queue Status
+summary: Run three short local commands across two generic static slots and inspect the redacted pool status.
+capability: operations
+level: advanced
+introduced_in: v23
+status: runnable
+validation: full
+surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/operations/README.md
+  - docs/features/queue.md
+owner_stages:
+  - v23
+validation_path: tests/e2e/test_queue_cli.py::test_queue_cli_pool_status_uses_existing_v1_envelope
+entrypoints:
+  - path: run_managed_local_queue.py
+    kind: python
+    description: Start three local argv commands over two generic static slots and print the queue-status facts.
+tags:
+  - queue
+  - local
+  - static-slots
+  - status

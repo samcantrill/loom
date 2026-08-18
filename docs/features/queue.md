@@ -157,6 +157,7 @@ loom queue preflight queue.yaml
 loom queue start queue.yaml
 loom queue status queue.yaml
 loom queue status queue.yaml --item run-001
+loom queue status queue.yaml --pool gpu-pool --format json
 loom queue cancel queue.yaml run-001 --reason operator-requested
 loom queue drain-foreground queue.yaml --max-items 1
 ```
@@ -189,3 +190,13 @@ limits, or requires a real SLURM cluster.
 Queue status output includes explicit ownership wording so operators can see
 which facts come from queue state, authority state, or delegated scheduler
 evidence.
+
+`--pool` adds a redacted selected-pool mapping to the existing status result.
+It reports controller-local active-limit configuration, lifecycle counts, and
+active attempt facts from one SQLite snapshot. Managed-local rows expose only
+persisted owner/session, PID/PGID, safe slot labels and lease expiry, and
+queue-relative stdout/stderr paths. Missing, malformed, unknown-version, or
+legacy evidence is marked unavailable; status never emits raw handle evidence,
+commands, working directories, environment bindings, fencing tokens, or
+provider-private data. Persisted acquisition evidence is not a liveness claim;
+same-session observation is labeled separately.

@@ -20,6 +20,7 @@ workflows.
 | `operations.resource-preflight` | Local executor resource warnings and strict preflight escalation. |
 | `operations.offline-import-rejections` | Stable machine-readable rejections for incomplete and conflicting offline imports. |
 | `operations.slurm-live-jobs` | Manual scheduler-aware status and cancellation commands for a real submitted SLURM run. |
+| `operations.managed-local-queue` | Three local commands over two generic static slots with redacted pool status and separate logs. |
 
 ## Public Python API Workflows
 
@@ -44,6 +45,7 @@ uv run python examples/operations/captured-logs/run_captured_logs.py
 uv run python examples/operations/resource-preflight/run_resource_preflight.py
 uv run python examples/operations/resource-leases/run_resource_leases.py
 uv run python examples/operations/offline-import-rejections/run_offline_import_rejections.py
+uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
 ```
 
 Set `LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to redirect generated

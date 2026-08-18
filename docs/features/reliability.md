@@ -5,6 +5,11 @@
 Reliability policies describe how `loom` records, responds to, and cleans up
 runtime failures.
 
+Managed-local queue status preserves acquisition-time safe evidence, including
+queue-relative logs, but does not claim that persisted lease expiry or process
+facts are currently live. A living same-session adapter may label an observation;
+controller death and process reattachment remain outside that guarantee.
+
 The initial runtime should be conservative: record enough information to debug
 and resume safely, avoid surprising deletion, and keep retry/cleanup behavior
 explicit.
