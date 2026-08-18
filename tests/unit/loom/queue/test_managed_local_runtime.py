@@ -78,6 +78,57 @@ def test_runtime_start_validates_limits_before_starting_service(tmp_path) -> Non
     assert after is not None and after.revision == before.revision
 
 
+def test_runtime_start_validates_static_slot_limits_without_mutation(tmp_path) -> None:  # noqa: ANN001
+    spec = normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {"pool_name": "local", "mode": "managed", "resources": {"gpu": 1}}
+            ],
+            "queues": [{"queue_name": "local", "pool_name": "local"}],
+            "adapters": {
+                "local": {
+                    "assignments": {
+                        "local": {
+                            "gpu": {
+                                "provider": "static-slots",
+                                "slots": [
+                                    {
+                                        "id": "gpu-0",
+                                        "coordination_key": "gpu-0",
+                                        "value": "0",
+                                    }
+                                ],
+                                "binding": {
+                                    "type": "environment-list",
+                                    "name": "VISIBLE_GPUS",
+                                    "separator": ",",
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
+    store = _store(tmp_path)
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    before = store.set_resource_limit("workspace-1", "gpu-0", limit=2)
+    runtime = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+    )
+
+    with pytest.raises(QueueServiceError, match="static assignment slot limits"):
+        runtime.start()
+
+    after = store.read_resource_limit("workspace-1", "gpu-0")
+    assert runtime.service.state.value == "stopped"
+    assert after is not None and after.revision == before.revision
+
+
 def test_runtime_degrades_when_startup_recovery_scan_fails(
     tmp_path, monkeypatch
 ) -> None:  # noqa: ANN001

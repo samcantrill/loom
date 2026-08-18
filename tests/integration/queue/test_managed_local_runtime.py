@@ -125,6 +125,73 @@ def test_runtime_degraded_work_blocks_refill_until_a_later_healthy_reconciliatio
     ] == ["queued"]
 
 
+def test_runtime_uses_spec_owner_and_authored_static_assignment(tmp_path: Path) -> None:
+    spec = normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {"pool_name": "local", "mode": "managed", "resources": {"gpu": 1}}
+            ],
+            "queues": [{"queue_name": "local", "pool_name": "local"}],
+            "controller": {"owner_id": "runtime-owner", "max_active_items": 1},
+            "adapters": {
+                "local": {
+                    "assignments": {
+                        "local": {
+                            "gpu": {
+                                "provider": "static-slots",
+                                "slots": [
+                                    {
+                                        "id": "gpu-0",
+                                        "coordination_key": "gpu-0",
+                                        "value": "0",
+                                    }
+                                ],
+                                "binding": {
+                                    "type": "environment-list",
+                                    "name": "VISIBLE_GPUS",
+                                    "separator": ",",
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    store.set_resource_limit("workspace-1", "gpu-0", limit=1)
+    runner = _Runner([_Process(pid=103)])
+    runtime = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+        process_runner=runner,
+        clock=lambda: "2020-01-01T00:00:00Z",
+    )
+    runtime.start()
+    runtime.service.enqueue(_request("active"))
+
+    runtime.run_cycle()
+    status = runtime.status()
+
+    assert runtime.owner_id == "runtime-owner"
+    assert runtime.adapter.owner_id == "runtime-owner"
+    item = runtime.service.read_item("active")
+    assert item is not None and item.claim is not None
+    assert item.claim.owner_id == "runtime-owner"
+    assert runner.environments == [{"VISIBLE_GPUS": "0"}]
+    assert status.pool_status is not None
+    attempt = status.pool_status.active_attempts[0]
+    assert attempt.owner_id == "runtime-owner"
+    assert attempt.evidence_source == "same_session_live"
+    assert attempt.assignment is not None
+    assert attempt.assignment["provider_name"] == "static-slots"
+
+
 def _request(queue_item_id: str) -> QueueEnqueueRequest:
     return QueueEnqueueRequest(
         queue_item_id=queue_item_id,
@@ -155,6 +222,8 @@ class _Process:
 class _Runner:
     def __init__(self, processes: list[_Process]) -> None:
         self._processes = processes
+        self.environments: list[dict[str, str]] = []
 
     def start(self, argv, *, cwd=None, env=None, stdout_path=None, stderr_path=None):  # noqa: ANN001, ANN201
+        self.environments.append(dict(env or {}))
         return self._processes.pop(0)
