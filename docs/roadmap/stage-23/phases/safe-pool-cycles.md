@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: merged
 - Roadmap stage and phase: v23 Phase 1
 - Manifest: `docs/roadmap/stage-23/implementation-plan.md`
 - Branch: `agent/stage-23-p1-safe-pool-cycles`
@@ -16,9 +16,8 @@
   planning; no Stage 23 implementation dependency
 - Workflow path: expanded because this phase changes a public dispatch result,
   SQLite concurrency and mutation fencing, and coordination failure semantics
-- Blockers: five review findings are under one maintainer-authorized bounded
-  correction beyond the normal 3/3 budget; no PR may open until all five and
-  any fresh audit blocker are resolved
+- Blockers: none; the maintainer-authorized bounded correction closed the five
+  review findings before PR `#209` merged into `develop` as `e099b58`
 
 ## Objective And Context
 
