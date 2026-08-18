@@ -1920,9 +1920,9 @@ Phase execution plans:
 
 Status:
 
-- Planning is in progress. The minimum design and completed expanded
-  design-safety review are recorded in `docs/roadmap/stage-24/planning.md`;
-  maintainer confirmation remains before implementation-plan drafting.
+- Planning is confirmed. Expanded design-safety review and the implementation-
+  plan quality gate passed; both phases remain pending. Phase 1 must not start
+  until Stage 23 is merged and its final contracts are refreshed.
 
 Goal:
 
@@ -1952,7 +1952,7 @@ Implement:
 - Policy-controlled bounded continuation after typed pre-start capacity
   deferral. FIFO retains Stage 23's stop behavior; an injected policy may try a
   different, previously unattempted candidate in the same cycle.
-- Safe cycle and audit evidence containing the policy name, selected item, and
+- Safe cycle and audit evidence containing the policy ID, selected item, and
   reason code without persisting full capacity snapshots or arbitrary
   policy-private state.
 - A dependency-free downstream first-fit example and real SQLite queue/
@@ -1993,9 +1993,22 @@ Primary feature docs:
 - `runtime-resources.md`
 - `testing.md`
 
+Design guide:
+
+- `docs/roadmap/stage-24/design-guide.md`
+
 Planning notes:
 
 - `docs/roadmap/stage-24/planning.md`
+
+Implementation plan:
+
+- `docs/roadmap/stage-24/implementation-plan.md`
+
+Phase execution plans:
+
+- `docs/roadmap/stage-24/phases/safe-resource-aware-selection.md`
+- `docs/roadmap/stage-24/phases/bounded-head-bypass-proof.md`
 
 ## v25 - Downstream Operations Design
 

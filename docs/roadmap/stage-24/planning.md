@@ -1,32 +1,30 @@
 # Roadmap v24 Planning: Resource-Aware Whole-Run Queue Selection
 
-Status: draft; expanded design-safety review passed; awaiting maintainer confirmation
+Status: confirmed; implementation-plan quality gate passed
 Roadmap stage: v24
-Evidence tree: `/home/can134/work/active/loom` at
-`68f43f12f7d99b2845a64265b1f5d82300273280`; relevant pre-existing dirty paths
-are `docs/roadmap.md` and untracked `docs/roadmap/stage-23/`; unrelated edits
-are preserved; reviewed queue/resource paths are unchanged on `origin/develop`
-at `a6bd1ef54523ac394b6a875c7486f9d8d7f68b95`
+Evidence tree: `/home/can134/work/active/loom` on `develop` at
+`91e772e9e1874a2f44dcba47b19b165ab4602f17`; the source tree was clean before
+planning edits and reviewed queue/resource paths are unchanged from the
+original source review
 Planning route: expanded because this stage introduces a public policy
 extension point across queue selection, SQLite claim concurrency, resource
 observation, and Stage 23 deferral behavior
-Current gate: planning ready for maintainer confirmation
-Blockers: none; maintainer confirmation remains required before detailed
-implementation planning
+Plain-language design guide: `docs/roadmap/stage-24/design-guide.md`
+Current gate: planning workflow complete; Phase 1 not started
+Blockers: Stage 23 merge is an execution dependency; no planning blocker
 
-Stage 24 follows Stage 23 rather than changing its confirmed plans: Stage 23
-establishes safe concurrent FIFO cycles; Stage 24 makes candidate preference
-replaceable while Loom retains lifecycle safety.
+Stage 24 builds on Stage 23's safe concurrent FIFO cycles by making candidate
+preference replaceable while Loom retains lifecycle safety.
 
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
 | Evidence | Queue selection, SQLite claims, controller flow, resource counters, and adjacent roadmap contracts were inspected at the baseline. | None. | Preserve the queue/authority boundary. |
-| Functionality | Default FIFO remains; Python callers may inject one bounded pool-local policy. | Maintainer confirmation. | Confirm the behavior boundary. |
+| Functionality | Default FIFO remains; Python callers may inject one bounded pool-local policy. | None. | Preserve the confirmed behavior boundary. |
 | Design | Policy prefers; repository claims; authority admits; providers place; controller orchestrates. | None. | Preserve removal-first findings. |
-| Validation | Claim races, stale capacity, compatibility, and bounded bypass need causal coverage. | Phase detail follows confirmation. | Carry tests into detailed planning. |
-| Detailed plan / approval | No implementation manifest or phase plan exists. | Planning is not yet confirmed. | Draft downstream artifacts only after confirmation. |
+| Validation | Claim races, stale capacity, compatibility, and bounded bypass need causal coverage. | None. | Execute the recorded suite obligations by phase. |
+| Detailed plan / approval | The manifest and two phase plans passed one review and bounded correction; the user requested this workflow on 2026-08-17. | Stage 23 must merge before execution. | Refresh its contracts at Phase 1 selection. |
 
 ## Evidence And Scope
 
@@ -58,10 +56,9 @@ replaceable while Loom retains lifecycle safety.
 - Demonstrated failure: a managed pool can have usable capacity while its oldest
   request cannot fit, and downstream code cannot choose a later item without
   taking over persistence.
-- Public or durable surfaces affected: queue candidate, context, and decision
-  records; a structural selection protocol; controller constructor injection;
-  repository candidate-read and exact-claim behavior; cycle/audit evidence.
-  No queue-item or authority schema change is currently justified.
+- Affected surfaces: queue candidate/context/decision records, structural
+  policy, controller injection, repository read/claim behavior, and evidence.
+  No queue-item or authority schema change is justified.
 
 ## Minimum Useful Change
 
@@ -211,27 +208,28 @@ Other validation stays in focused unit or contract tests.
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Safe candidate selection | Queue-local policy records/protocol, bounded candidate reads, atomic exact claims, controller injection, and unchanged default FIFO. | Queue selection, repository, service, and controller only; no resource-fit context or non-FIFO core policy. | Stage 23 merged. | Custom fake can choose a later item; races stay safe; default path is unchanged. | proposed |
-| 2. Resource-aware head bypass proof | Advisory logical availability, private attempt filtering, bounded continuation after deferral, safe claim/cycle evidence, downstream first-fit example, docs, and causal integration/e2e proof. | Managed whole-run pools; no priorities, fairness, reservations, config registry, SLURM policy, or stage scheduler. | Phase 1 merged. | B-two/A-one scenario starts A, stale observations remain safe, all bounds/redaction/compatibility checks pass. | proposed |
+| 1. Safe resource-aware selection | Queue-local policy records/protocol, advisory logical availability, bounded candidate reads, atomic exact claims, controller injection, selected-claim evidence, and unchanged default FIFO. | Managed queue selection, repository, service, and controller; no post-deferral continuation or non-FIFO core policy. | Stage 23 merged. | Injected first-fit fake starts A in the B-two/A-one case; claim races stay safe; default path is unchanged. | pending |
+| 2. Bounded head-bypass proof | Private attempt filtering, bounded continuation after unexpected capacity deferral, safe cycle stop/error evidence, downstream example, docs, and causal integration/e2e proof. | Managed whole-run pools; no priorities, fairness, reservations, config registry, SLURM policy, or stage scheduler. | Phase 1 merged. | Stale observations safely defer then consider another candidate; all bounds/redaction/compatibility checks pass. | pending |
 
-Two phases keep persistence/concurrency review separate from resource-aware
-policy behavior. Neither phase may implement Stage 25's universal scheduler
-design.
+Two phases separate persistence/concurrency from head-bypass behavior. Neither
+may implement Stage 25's universal scheduler design.
 
 ## Quality Gate
 
 | Check | Evidence | Result |
 | --- | --- | --- |
-| Behavior locked | FR/FQ rows cover default, opt-in, failures, and exclusions. | pass; confirmation pending |
+| Behavior locked | FR/FQ rows cover default, opt-in, failures, and exclusions; the user confirmed progression on 2026-08-17. | pass |
 | Design justified | Reuse Stage 23 FIFO/cycles, counters, storage, and admission. | pass |
 | Complexity proportionate | FIFO object, policy cycle state, extra budgets/codecs, fairness, registry, config, and universal scheduling are removed/deferred. | pass |
 | Ownership clear | Policy prefers; controller filters/bounds; repository claims; authority admits; provider places. | pass |
 | Validation proportionate | Three causal combinations; validate each other invariant once. | pass |
 | Phases reviewable | Two vertical phases retain Stage 23 default. | pass |
-| No blocker | Findings are repository-resolved; maintainer confirmation remains. | pass |
+| Plan review | One independent review and one bounded correction fixed exact-shape, safe-code, pool-mapping, budget, and traceability findings. | pass |
+| No blocker | Stage 23 merge is an execution dependency, not a planning-quality blocker. | pass |
 
-Gate result: expanded design-safety review passed with no blocker. The artifact
-is ready for maintainer confirmation, but not implementation-plan drafting.
+Gate result: planning, expanded design-safety review, implementation planning,
+and plan-quality review are complete. Phase 1 remains pending until Stage 23 is
+merged and its concrete contracts are refreshed.
 
 Accepted risks and revisit triggers:
 
