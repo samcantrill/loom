@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: 23-post, Phase 1
 - Manifest: `docs/roadmap/stage-23-post/implementation-plan.md`
 - Branch: `agent/stage-23-post-p1-safe-managed-local-runtime`
 - Worktree root and path: `../loom-worktrees`; `../loom-worktrees/stage-23-post-p1-safe-managed-local-runtime`
-- Base revision: current `origin/develop` at phase start; planning baseline `4c7059bcf4358da866700df416d068eaab62c80b`
+- Base revision: `e0b22c23978435f4a45bfbf2e4f3de8cbdce80b6`
 - PR target: develop
 - PR title: `Managed Local Operations - Phase 1: Safe Runtime Loop`
 - Dependencies: completed Stage 23; no Stage 24 implementation dependency
@@ -259,11 +259,13 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete in draft; recheck `origin/develop`, dirty-path
-  isolation, manifest approval, and Stage 24 source state at phase start
+- Manager preparation: complete at `e0b22c23978435f4a45bfbf2e4f3de8cbdce80b6`;
+  the dedicated worktree is clean and based on current `origin/develop`, the
+  manifest remains approved, and Stage 24 has not changed the controller cycle
+  contract
 - Expanded planning: not needed unless the recheck finds a changed public cycle
   or import-boundary risk
-- Implementation: pending one `loom_phase_executor`
+- Implementation: in progress with one `loom_phase_executor`
 - Refiner: not needed unless a qualified blocker is found
 - Pre-submit gate: pending
 - Independent review: recommended only if implementation expands the public
