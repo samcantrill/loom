@@ -56,6 +56,24 @@ def test_queue_python_api_contract(tmp_path: Path) -> None:
     assert step.to_dict()["outcome"] == "dispatched"
 
 
+def test_managed_local_queue_runtime_api_is_an_explicit_submodule() -> None:
+    from loom.queue.managed_local import (
+        ManagedLocalQueueRuntime,
+        ManagedLocalQueueRuntimeState,
+        ManagedLocalQueueRuntimeStatus,
+    )
+
+    assert ManagedLocalQueueRuntime
+    assert [state.value for state in ManagedLocalQueueRuntimeState] == [
+        "READY",
+        "DEGRADED",
+        "RECOVERY_REQUIRED",
+        "DRAINING",
+        "STOPPED",
+    ]
+    assert ManagedLocalQueueRuntimeStatus.__name__ == "ManagedLocalQueueRuntimeStatus"
+
+
 def _clock(*values: str):
     remaining = list(values)
 

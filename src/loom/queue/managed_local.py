@@ -1,0 +1,413 @@
+"""Foreground runtime for one safely managed local queue pool.
+
+The facade deliberately owns only process-local lifetime and loop policy.  The
+queue service remains the durable queue boundary, while the controller and
+local adapter retain dispatch and lease ownership respectively.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+from typing import Protocol
+
+from loom.pipeline.stores import (
+    WorkspaceCoordinationStore,
+    coordination_requirement_diagnostics,
+)
+from loom.serialization import PlainData
+from loom.timestamps import parse_timestamp, utc_timestamp
+
+from .assignments import (
+    NoOpResourceAssignmentProvider,
+    ResourceAssignmentProvider,
+    StaticSlotAssignmentProvider,
+)
+from .config import QueueServiceSpec
+from .controller import QueueController, QueueCycleResult
+from .errors import QueueServiceError
+from .local import LocalProcessRunner, LocalQueueDispatchAdapter
+from .models import QueueItem, QueuePool, QueuePoolMode
+from .repository import QueueRepository
+from .resources import require_managed_pool_limits
+from .service import QueueService, QueueServiceState
+from .status import QueuePoolStatus, build_queue_pool_status
+
+
+class ManagedLocalQueueRuntimeState(StrEnum):
+    """Process-local lifecycle state for a managed local pool."""
+
+    READY = "READY"
+    DEGRADED = "DEGRADED"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
+    DRAINING = "DRAINING"
+    STOPPED = "STOPPED"
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedLocalQueueRuntimeStatus:
+    """Plain-data, non-durable operational status for one runtime instance."""
+
+    state: ManagedLocalQueueRuntimeState
+    owner_id: str
+    pool_name: str
+    last_cycle_at: str | None
+    next_maintenance_at: str | None
+    degraded_item_ids: tuple[str, ...]
+    foreign_item_ids: tuple[str, ...]
+    pool_status: QueuePoolStatus | None
+    observation_scope: str
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "state": self.state.value,
+            "owner_id": self.owner_id,
+            "pool_name": self.pool_name,
+            "last_cycle_at": self.last_cycle_at,
+            "next_maintenance_at": self.next_maintenance_at,
+            "degraded_item_ids": list(self.degraded_item_ids),
+            "foreign_item_ids": list(self.foreign_item_ids),
+            "pool_status": None
+            if self.pool_status is None
+            else self.pool_status.to_dict(),
+            "observation_scope": self.observation_scope,
+        }
+
+
+class _StopEvent(Protocol):
+    def is_set(self) -> bool: ...
+
+    def wait(self, timeout: float | None = None) -> bool: ...
+
+
+class ManagedLocalQueueRuntime:
+    """Run one selected managed pool with local process dispatch.
+
+    This object is intentionally in-process state.  A fresh instance never
+    treats prior local handles as its own and therefore gates on recovery
+    rather than attempting reattachment.
+    """
+
+    def __init__(
+        self,
+        *,
+        spec: QueueServiceSpec,
+        service: QueueService,
+        pool: QueuePool,
+        coordination_store: WorkspaceCoordinationStore,
+        workspace_id: str,
+        adapter: LocalQueueDispatchAdapter,
+        controller: QueueController,
+        clock: Callable[[], str],
+    ) -> None:
+        self.spec = spec
+        self.service = service
+        self.pool_name = pool.pool_name
+        self.owner_id = spec.controller.owner_id
+        self._pool = pool
+        self._coordination_store = coordination_store
+        self._workspace_id = workspace_id
+        self.adapter = adapter
+        self.controller = controller
+        self._clock = clock
+        self._state = ManagedLocalQueueRuntimeState.READY
+        self._last_cycle_at: str | None = None
+        self._next_maintenance_at: str | None = None
+        self._degraded_item_ids: tuple[str, ...] = ()
+        self._foreign_item_ids: tuple[str, ...] = ()
+        self._last_pool_status: QueuePoolStatus | None = None
+
+    @classmethod
+    def from_spec(
+        cls,
+        spec: QueueServiceSpec,
+        *,
+        workspace_id: str,
+        coordination_store: WorkspaceCoordinationStore,
+        pool_name: str | None = None,
+        repository: QueueRepository | None = None,
+        process_runner: LocalProcessRunner | None = None,
+        current_drift_inputs: Mapping[str, PlainData] | None = None,
+        lease_ttl_seconds: int = 60,
+        wait_timeout_seconds: float = 0.0,
+        assignment_provider: ResourceAssignmentProvider | None = None,
+        log_directory: str | Path | None = None,
+        clock: Callable[[], str] = utc_timestamp,
+    ) -> "ManagedLocalQueueRuntime":
+        """Construct one selected local runtime with one spec-owned owner."""
+
+        pool = _select_pool(spec, pool_name)
+        authored = spec.local_assignments.get(pool.pool_name, {})
+        if authored and assignment_provider is not None:
+            raise QueueServiceError(
+                "authored local assignments and an explicit assignment_provider are ambiguous"
+            )
+        if authored:
+            provider: ResourceAssignmentProvider = StaticSlotAssignmentProvider(
+                coordination_store,
+                workspace_id=workspace_id,
+                slots=tuple(
+                    slot
+                    for assignment in authored.values()
+                    for slot in assignment.slots
+                ),
+                bindings={
+                    resource_name: assignment.binding
+                    for resource_name, assignment in authored.items()
+                },
+            )
+        else:
+            provider = assignment_provider or NoOpResourceAssignmentProvider()
+        service = QueueService.from_spec(spec, repository, clock=clock)
+        owner_id = spec.controller.owner_id
+        adapter = LocalQueueDispatchAdapter(
+            workspace_id=workspace_id,
+            coordination_store=coordination_store,
+            owner_id=owner_id,
+            process_runner=process_runner,
+            current_drift_inputs=current_drift_inputs,
+            lease_ttl_seconds=lease_ttl_seconds,
+            wait_timeout_seconds=wait_timeout_seconds,
+            clock=clock,
+            assignment_provider=provider,
+            log_directory=log_directory,
+        )
+        controller = QueueController(
+            service,
+            adapters={adapter.adapter_name: adapter},
+            owner_id=owner_id,
+            clock=clock,
+        )
+        return cls(
+            spec=spec,
+            service=service,
+            pool=pool,
+            coordination_store=coordination_store,
+            workspace_id=workspace_id,
+            adapter=adapter,
+            controller=controller,
+            clock=clock,
+        )
+
+    @property
+    def state(self) -> ManagedLocalQueueRuntimeState:
+        return self._state
+
+    def start(self) -> ManagedLocalQueueRuntimeStatus:
+        """Read-only validate authority state, then start this in-process service."""
+
+        self._validate_startup()
+        if self.service.state is not QueueServiceState.RUNNING:
+            self.service.start()
+        _current, foreign = self._classify_recovery()
+        self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
+        self._degraded_item_ids = ()
+        self._next_maintenance_at = None
+        self._state = (
+            ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+            if self._foreign_item_ids
+            else ManagedLocalQueueRuntimeState.READY
+        )
+        return self.status()
+
+    def run_cycle(self) -> QueueCycleResult:
+        """Reconcile then fill the selected pool unless health/recovery forbids it."""
+
+        self._ensure_started()
+        _current, foreign = self._classify_recovery()
+        self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
+        if self._foreign_item_ids:
+            self._state = ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+            raise QueueServiceError(
+                "managed local runtime requires recovery before running a cycle"
+            )
+        elif self._state is ManagedLocalQueueRuntimeState.DRAINING:
+            result = self.controller.reconcile_current_session(pool_name=self.pool_name)
+        else:
+            try:
+                result = self.controller.run_cycle(pool_name=self.pool_name)
+            except Exception:
+                self._state = ManagedLocalQueueRuntimeState.DEGRADED
+                raise
+        self._record_cycle(result)
+        return result
+
+    def serve(
+        self,
+        stop_event: _StopEvent,
+        *,
+        poll_interval_seconds: float = 0.1,
+        wait: Callable[[float], object] | None = None,
+    ) -> ManagedLocalQueueRuntimeStatus:
+        """Serve until stop, then drain current-session work without new claims."""
+
+        if poll_interval_seconds < 0:
+            raise QueueServiceError("poll_interval_seconds must be non-negative")
+        if self._state is ManagedLocalQueueRuntimeState.READY:
+            self.start()
+        self._ensure_started()
+        waiter = stop_event.wait if wait is None else wait
+        while True:
+            if stop_event.is_set() and self._state not in {
+                ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED,
+                ManagedLocalQueueRuntimeState.STOPPED,
+            }:
+                self._state = ManagedLocalQueueRuntimeState.DRAINING
+            try:
+                self.run_cycle()
+            except Exception:
+                # The degraded state is the observable result; a later loop gets
+                # another reconciliation attempt rather than a synthetic success.
+                pass
+            if self._state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED:
+                return self.status()
+            if self._state is ManagedLocalQueueRuntimeState.DRAINING:
+                current, _foreign = self._classify_recovery()
+                if not current:
+                    self._state = ManagedLocalQueueRuntimeState.STOPPED
+                    self._last_pool_status = self._pool_status()
+                    self.service.stop()
+                    return self.status()
+            timeout = self._next_wait_seconds(poll_interval_seconds)
+            waiter(timeout)
+
+    def status(self) -> ManagedLocalQueueRuntimeStatus:
+        """Return safe status without representing persisted leases as hardware truth."""
+
+        pool_status = self._pool_status()
+        if pool_status is not None:
+            self._last_pool_status = pool_status
+        elif self._last_pool_status is not None:
+            pool_status = self._last_pool_status
+        observation_scope = (
+            "not_observed"
+            if self.service.state is not QueueServiceState.RUNNING
+            else (
+                "same_session_or_unavailable"
+                if pool_status is not None and pool_status.active_attempts
+                else "persisted"
+            )
+        )
+        return ManagedLocalQueueRuntimeStatus(
+            state=self._state,
+            owner_id=self.owner_id,
+            pool_name=self.pool_name,
+            last_cycle_at=self._last_cycle_at,
+            next_maintenance_at=self._next_maintenance_at,
+            degraded_item_ids=self._degraded_item_ids,
+            foreign_item_ids=self._foreign_item_ids,
+            pool_status=pool_status,
+            observation_scope=observation_scope,
+        )
+
+    def _validate_startup(self) -> None:
+        if self._pool.mode is not QueuePoolMode.MANAGED:
+            raise QueueServiceError("managed local runtime requires a managed pool")
+        if os.name != "posix":
+            raise QueueServiceError("managed local runtime requires POSIX process groups")
+        diagnostics = coordination_requirement_diagnostics(
+            self._coordination_store.capabilities(), require_resource_leases=True
+        )
+        if diagnostics:
+            raise QueueServiceError(
+                "managed local runtime requires resource-lease coordination: "
+                + ", ".join(diagnostic.code for diagnostic in diagnostics)
+            )
+        require_managed_pool_limits(
+            self.spec,
+            self._coordination_store,
+            workspace_id=self._workspace_id,
+            pool_names=(self.pool_name,),
+        )
+        for assignment in self.spec.local_assignments.get(self.pool_name, {}).values():
+            for slot in assignment.slots:
+                counter = self._coordination_store.read_resource_limit(
+                    self._workspace_id, slot.coordination_key
+                )
+                if counter is None or counter.limit != 1:
+                    raise QueueServiceError(
+                        "static assignment slot limits do not match authority: "
+                        + slot.coordination_key
+                    )
+
+    def _record_cycle(self, result: QueueCycleResult) -> None:
+        self._last_cycle_at = self._clock()
+        self._next_maintenance_at = result.next_maintenance_at
+        degraded = tuple(
+            step.item.queue_item_id
+            for step in result.reconciliation_steps
+            if step.item is not None and step.outcome in {"degraded", "unknown"}
+        )
+        self._degraded_item_ids = degraded
+        if self._state is ManagedLocalQueueRuntimeState.DRAINING:
+            return
+        if degraded:
+            self._state = ManagedLocalQueueRuntimeState.DEGRADED
+        elif not self._foreign_item_ids:
+            self._state = ManagedLocalQueueRuntimeState.READY
+
+    def _pool_status(self) -> QueuePoolStatus | None:
+        if self.service.state is not QueueServiceState.RUNNING:
+            return None
+        return build_queue_pool_status(
+            self.service,
+            pool_name=self.pool_name,
+            adapters={self.adapter.adapter_name: self.adapter},
+        )
+
+    def _classify_recovery(
+        self,
+    ) -> tuple[tuple[QueueItem, ...], tuple[QueueItem, ...]]:
+        """Fence this local runtime from all non-current-local recovery work."""
+
+        classification = self.controller.classify_recovery(pool_name=self.pool_name)
+        current = tuple(
+            item
+            for item in classification.current_items
+            if item.launch_contract.adapter == self.adapter.adapter_name
+        )
+        foreign = (
+            *classification.foreign_items,
+            *(
+                item
+                for item in classification.current_items
+                if item.launch_contract.adapter != self.adapter.adapter_name
+            ),
+        )
+        return current, foreign
+
+    def _ensure_started(self) -> None:
+        if self.service.state is not QueueServiceState.RUNNING:
+            raise QueueServiceError("managed local runtime is not started")
+        if self._state is ManagedLocalQueueRuntimeState.STOPPED:
+            raise QueueServiceError("managed local runtime is stopped")
+
+    def _next_wait_seconds(self, poll_interval_seconds: float) -> float:
+        if self._next_maintenance_at is None:
+            return poll_interval_seconds
+        seconds = (
+            parse_timestamp(self._next_maintenance_at) - parse_timestamp(self._clock())
+        ).total_seconds()
+        return min(poll_interval_seconds, max(0.0, seconds))
+
+
+def _select_pool(spec: QueueServiceSpec, pool_name: str | None) -> QueuePool:
+    selected_name = pool_name or spec.controller.default_pool_name
+    if selected_name is None:
+        if len(spec.pools) != 1:
+            raise QueueServiceError("managed local runtime requires one selected pool_name")
+        return spec.pools[0]
+    for pool in spec.pools:
+        if pool.pool_name == selected_name:
+            return pool
+    raise QueueServiceError(f"unknown pool: {selected_name}")
+
+
+__all__ = [
+    "ManagedLocalQueueRuntime",
+    "ManagedLocalQueueRuntimeState",
+    "ManagedLocalQueueRuntimeStatus",
+]
