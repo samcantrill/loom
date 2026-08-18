@@ -267,7 +267,10 @@ Final commands:
   are verified, and the example/docs still contain the planned manual-owner,
   lifecycle-guidance, bundle-proof, and roadmap-status gaps
 - Expanded planning: not needed
-- Implementation: pending one `loom_phase_executor`
+- Implementation: complete. The canonical example now uses the runtime factory
+  with schema-v2 static assignments and one config-owned owner; the example-only
+  paired-member provider, focused lifecycle tests, e2e proof, and operational
+  documentation are complete.
 - Refiner: not needed unless a qualified blocker is found
 - Pre-submit gate: pending
 - Independent review: not needed on the fast path; manager must review every
@@ -279,9 +282,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
+| Implementation and changed paths | `examples/operations/managed-local-queue/` runtime example, metadata, README, and paired-member provider; focused provider unit test; e2e proof; queue/roadmap docs. No core/schema/dependency changes. |
+| Tests added or updated | Added `tests/unit/loom/queue/test_example_paired_assignment_provider.py`; strengthened `tests/e2e/test_queue_cli.py::test_managed_local_queue_example_is_rerunnable` for owner, live status, two slots, bindings, logs, and reruns. |
+| Validated revision/tree state and evidence | 2026-08-18 targeted checks passed: Ruff check/format; unit `21 passed`; contracts `14 passed`; managed-local integration `23 passed`; example e2e `1 passed`. `make validate-pr` and `make test-summary` remain manager gates. |
+| Validation-relevant changes after evidence | None; this completion-record update is metadata only. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
