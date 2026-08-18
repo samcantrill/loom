@@ -1,11 +1,11 @@
 # Roadmap Stage 23-post Implementation Plan
 
-Status: confirmed; Phase 3 PR open
+Status: complete; all phases merged
 Roadmap stage: 23-post
 Planning document: docs/roadmap/stage-23-post/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 3 (`downstream-operations-proof`)
+Current phase: none; all phases merged
 Blockers: none
 
 ## Summary
@@ -89,7 +89,7 @@ Blockers: none
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `safe-managed-local-runtime` | merged | `docs/roadmap/stage-23-post/phases/safe-managed-local-runtime.md` | `agent/stage-23-post-p1-safe-managed-local-runtime` | [#212](https://github.com/samcantrill/loom/pull/212) | Managed-local runtime construction, timing, health, startup gate, drain, and minimal controller/resource seams | Provide a safe normal-operation runtime that cannot silently miss maintenance or refill across degraded/foreign work. |
 | 2 | `explicit-recovery-and-shutdown` | merged | `docs/roadmap/stage-23-post/phases/explicit-recovery-and-shutdown.md` | `agent/stage-23-post-p2-explicit-recovery-and-shutdown` | [#213](https://github.com/samcantrill/loom/pull/213) | Guarded recovery resolution/audit and cancel/timeout shutdown | Let an operator resolve externally contained crash leftovers without taking over leases, and stop current work predictably. |
-| 3 | `downstream-operations-proof` | pr_open | `docs/roadmap/stage-23-post/phases/downstream-operations-proof.md` | `agent/stage-23-post-p3-downstream-operations-proof` | [#214](https://github.com/samcantrill/loom/pull/214) | Canonical example, bundle-provider pattern, e2e proof, queue docs, deployment/recovery guide, and small Stage 23 fixes | Make the safe path easy to copy and prove single-item two-slot assignment, live status, logs, refill, and bundle ownership. |
+| 3 | `downstream-operations-proof` | merged | `docs/roadmap/stage-23-post/phases/downstream-operations-proof.md` | `agent/stage-23-post-p3-downstream-operations-proof` | [#214](https://github.com/samcantrill/loom/pull/214) | Canonical example, bundle-provider pattern, e2e proof, queue docs, deployment/recovery guide, and small Stage 23 fixes | Make the safe path easy to copy and prove single-item two-slot assignment, live status, logs, refill, and bundle ownership. |
 
 ## Quality Gate
 
@@ -104,8 +104,8 @@ Blockers: none
   corrected before merge.
 - Correction: the maintainer approved one narrow exception to the Phase 2
   correction budget for that exact reproduced blocker.
-- Ready for implementation: yes; Phase 3 may start from the remotely merged
-  Phase 2 revision.
+- Completion gate: passed; all three phase PRs were remotely merged after local
+  validation, manager review, and GitHub CI.
 - Accepted risks: deployment still relies on one externally supervised runtime
   per pool; an unkillable process can outlive a shutdown timeout; custom
   providers can be incorrect; status does not observe hardware health.
@@ -119,4 +119,4 @@ Blockers: none
 | --- | --- | --- | --- | --- |
 | 1 | PR [#212](https://github.com/samcantrill/loom/pull/212) merged into `develop` as `895d45cedcef1010ba8d57253ae08f3938cf6673` | Implementation, manager review, GitHub CI, `make validate-pr`, and `make test-summary` passed | Accepted one-runtime-per-pool deployment rule and deliberately unobserved hardware health | dedicated worktree and local/remote branch removed |
 | 2 | PR [#213](https://github.com/samcantrill/loom/pull/213) merged into `develop` as `15a9ddcd734cbe5702813101ae1893f59d91770e` | Approved timeout-ordering correction and exact regression passed targeted tests, `make validate-pr`, `make test-summary`, manager review, and GitHub CI | Accepted containment assertion; timeout reporting cannot terminate an unkillable process | dedicated worktree and local/remote branch removed |
-| 3 | PR [#214](https://github.com/samcantrill/loom/pull/214) open against `develop`; GitHub CI pending | Phase implementation, manager review, 60 targeted tests, `make validate-pr`, and `make test-summary` passed | Example-local bundle pattern remains project-owned; supervisor/hardware limits remain accepted | worktree/branch retained through CI and merge |
+| 3 | PR [#214](https://github.com/samcantrill/loom/pull/214) merged into `develop` as `4f057402aacd1a96385b73a0d36dd249d4dc25fe` | Phase implementation, manager review, 60 targeted tests, `make validate-pr`, `make test-summary`, and GitHub CI passed | Example-local bundle pattern remains project-owned; supervisor/hardware limits remain accepted | dedicated worktree and local/remote branch removed |

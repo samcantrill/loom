@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 23-post, Phase 3
 - Manifest: `docs/roadmap/stage-23-post/implementation-plan.md`
 - Branch: `agent/stage-23-post-p3-downstream-operations-proof`
@@ -284,9 +284,9 @@ Final commands:
   bounded filesystem signal, and removes stale manual-loop guidance;
   correction 2 restores the runnable-example `Public Python Surface` heading
   required by the documentation contract
-- PR and merge: PR [#214](https://github.com/samcantrill/loom/pull/214) is open
-  against `develop`; manager review and local gates pass, and GitHub CI is
-  pending
+- PR and merge: PR [#214](https://github.com/samcantrill/loom/pull/214) passed
+  GitHub CI and manager review, then squash-merged into `develop` as
+  `4f057402aacd1a96385b73a0d36dd249d4dc25fe`
 
 ## Completion Record
 
@@ -296,5 +296,5 @@ Final commands:
 | Tests added or updated | Added `tests/unit/loom/queue/test_example_paired_assignment_provider.py`; strengthened `tests/e2e/test_queue_cli.py::test_managed_local_queue_example_is_rerunnable` for owner, live status, two slots, bindings, logs, and reruns. |
 | Validated revision/tree state and evidence | `7cc084ee2490b43b5e2fa3fb4eba80eda3b52155` is the final validation-relevant revision. Phase-targeted commands passed 60 tests. `make validate-pr` passed (Ruff, Pyright 0 errors, default 2,133 passed, config-extra 128 passed/3 skipped, build). `make test-summary` passed; `build/test-summary.md` records package 113, unit 1,502, contract 271, integration 198, e2e 49, and config-extra 128 passed with 3 skipped. |
 | Validation-relevant changes after evidence | None; this completion-record update is metadata only. |
-| PR, review, and merge | PR [#214](https://github.com/samcantrill/loom/pull/214) is open against `develop`. Manager review and local gates pass; GitHub CI and merge are pending. |
-| Residual risk and cleanup | The bundle provider remains a project-owned copyable pattern rather than a core promise. Supervisor containment is an operator assertion; hardware health and current lease liveness remain unobserved. Worktree and branch remain through PR and merge. |
+| PR, review, and merge | PR [#214](https://github.com/samcantrill/loom/pull/214) passed manager review and GitHub CI, then squash-merged into `develop` as `4f057402aacd1a96385b73a0d36dd249d4dc25fe`. |
+| Residual risk and cleanup | The bundle provider remains a project-owned copyable pattern rather than a core promise. Supervisor containment is an operator assertion; hardware health and current lease liveness remain unobserved. The dedicated worktree and local/remote branch were removed after remote merge verification. |
