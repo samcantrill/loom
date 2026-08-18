@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: 23-post, Phase 1
 - Manifest: `docs/roadmap/stage-23-post/implementation-plan.md`
 - Branch: `agent/stage-23-post-p1-safe-managed-local-runtime`
@@ -278,7 +278,8 @@ Final commands:
   queue, same-session process, and unobserved hardware/lease status scopes;
   manager correction 3 adds missing spec-owner/static-provider and read-only
   static-boundary proof
-- PR and merge: pending
+- PR and merge: PR [#212](https://github.com/samcantrill/loom/pull/212) is
+  open against `develop`; required CI and squash merge are pending
 
 ## Completion Record
 
@@ -288,5 +289,5 @@ Final commands:
 | Tests added or updated | Added managed-local package/API, unit, and SQLite integration coverage; added controller no-fill reconciliation coverage; added `tests/integration/queue/__init__.py` so same-named unit/integration test modules collect together. The first blocker correction adds startup/cycle recovery-scan failure, earlier-of-poll/deadline wait, and degraded-to-healthy refill causal coverage; the second adds exact safe status-scope wording; the third proves spec-owner live status, authored static binding, and read-only static-limit failure. |
 | Validated revision/tree state and evidence | `3aacfc30b0afe27acc16f66f64c0af1ce396fe3b` is the final validation-relevant revision. Targeted queue/package/contract/integration suites: 143 passed before the final construction tests; the final managed-local unit/integration slice then passed 10 tests. `make validate-pr`: passed (Ruff, Pyright 0 errors, default 2,113 passed, config-extra 128 passed/3 skipped, build). `make test-summary`: passed; `build/test-summary.md` records package 113, unit 1,494, contract 270, integration 187, e2e 49, and config-extra 128 passed with 3 skipped. |
 | Validation-relevant changes after evidence | none; only this completion-evidence update follows the validated implementation revision |
-| PR, review, and merge | pending |
+| PR, review, and merge | PR [#212](https://github.com/samcantrill/loom/pull/212) is open, non-draft, mergeable, and correctly targets `develop`; manager review passed with no blocker; CI and squash merge pending. |
 | Residual risk and cleanup | The recovery-scan false-`READY` and ambiguous observation-scope blockers are resolved. Foreign recovery remains intentionally visible as `RECOVERY_REQUIRED` without mutation; Phase 2 owns explicit resolution. |
