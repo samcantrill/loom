@@ -193,6 +193,11 @@ def test_authoritative_read_contract_carries_backend_facts_and_materialized_refs
     read_model_case.store.transition_run(
         read_model_case.run_uri,
         from_status=RunStatus.CREATED,
+        to_status=RunStatus.RUNNING,
+    )
+    read_model_case.store.transition_run(
+        read_model_case.run_uri,
+        from_status=RunStatus.RUNNING,
         to_status=RunStatus.SUCCEEDED,
     )
 

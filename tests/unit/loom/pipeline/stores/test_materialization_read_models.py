@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import pickle
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -126,10 +127,32 @@ def test_authoritative_read_derives_payload_refs_without_loading_payloads(
             },
         ),
     )
-    assert latest_commit.materialized_refs == (
-        snapshot.materialized_refs[0],
-    )
+    assert latest_commit.materialized_refs == (snapshot.materialized_refs[0],)
     assert snapshot.warnings == ()
+
+
+def test_read_model_detail_is_frozen_and_serialization_is_independent() -> None:
+    source: Any = {"nested": {"items": ["original"]}}
+    reason = LifecycleReason(code="unit", detail=source)
+
+    source["nested"]["items"].append("changed")
+    assert reason.detail == {"nested": {"items": ("original",)}}
+    payload = cast(Any, reason.to_dict())
+    payload["detail"]["nested"]["items"].append("serialized")
+    assert reason.to_dict()["detail"] == {"nested": {"items": ["original"]}}
+    assert LifecycleReason.from_dict(reason.to_dict()) == reason
+
+
+def test_authoritative_snapshot_round_trips_through_process_serialization() -> None:
+    snapshot = AuthoritativeRunSnapshot(
+        run_uri="file:///runs/demo",
+        status=RunStatus.SUCCEEDED,
+        schema_version=1,
+        revision=BackendRevision(sequence=1, token="revision-1"),
+        metadata={"nested": {"items": ["original"]}},
+    )
+
+    assert pickle.loads(pickle.dumps(snapshot)) == snapshot
 
 
 def test_missing_materialized_refs_warn_or_raise_in_strict_mode(
@@ -161,7 +184,9 @@ def test_missing_materialized_refs_warn_or_raise_in_strict_mode(
             ),
         )
 
-    assert exc_info.value.warnings[0].code is ReadModelWarningCode.MISSING_MATERIALIZED_REF
+    assert (
+        exc_info.value.warnings[0].code is ReadModelWarningCode.MISSING_MATERIALIZED_REF
+    )
 
 
 def test_corrupt_materialized_refs_warn_or_raise_in_strict_mode(
@@ -199,8 +224,7 @@ def test_corrupt_materialized_refs_warn_or_raise_in_strict_mode(
         )
 
     assert (
-        exc_info.value.warnings[0].code
-        is ReadModelWarningCode.CORRUPT_MATERIALIZED_REF
+        exc_info.value.warnings[0].code is ReadModelWarningCode.CORRUPT_MATERIALIZED_REF
     )
 
 
@@ -260,7 +284,8 @@ def test_local_materialization_helpers_classify_expected_refs(
     )
 
     refs = {
-        (ref.kind, ref.metadata.get("stream")): ref for ref in snapshot.materialized_refs
+        (ref.kind, ref.metadata.get("stream")): ref
+        for ref in snapshot.materialized_refs
     }
     assert refs[(MaterializedRefKind.STAGE_LOG, "stdout")].exists is True
     assert refs[(MaterializedRefKind.STAGE_LOG, "stderr")].exists is False
@@ -273,10 +298,17 @@ def test_completed_bundle_metadata_is_payload_free_and_completed_run_checked(
     tmp_path: Path,
 ) -> None:
     run_uri = path_to_run_uri(tmp_path / "run")
-    store = _committed_store(run_uri, tmp_path / "run" / "artifacts" / "build" / "out.json")
+    store = _committed_store(
+        run_uri, tmp_path / "run" / "artifacts" / "build" / "out.json"
+    )
     store.transition_run(
         run_uri,
         from_status=RunStatus.CREATED,
+        to_status=RunStatus.RUNNING,
+    )
+    store.transition_run(
+        run_uri,
+        from_status=RunStatus.RUNNING,
         to_status=RunStatus.SUCCEEDED,
     )
 
@@ -290,7 +322,9 @@ def test_completed_bundle_metadata_is_payload_free_and_completed_run_checked(
 
 def test_completed_bundle_metadata_warns_for_active_run(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "run")
-    store = _committed_store(run_uri, tmp_path / "run" / "artifacts" / "build" / "out.json")
+    store = _committed_store(
+        run_uri, tmp_path / "run" / "artifacts" / "build" / "out.json"
+    )
 
     bundle = read_completed_run_bundle_metadata(store, run_uri)
 
@@ -299,7 +333,9 @@ def test_completed_bundle_metadata_warns_for_active_run(tmp_path: Path) -> None:
 
 def test_projection_revision_and_schema_failures_are_warnings(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "run")
-    store = _committed_store(run_uri, tmp_path / "run" / "artifacts" / "build" / "out.json")
+    store = _committed_store(
+        run_uri, tmp_path / "run" / "artifacts" / "build" / "out.json"
+    )
     stale_revision = BackendRevision(sequence=1, token="rev-1")
 
     snapshot = read_authoritative_run(
@@ -317,7 +353,9 @@ def test_schema_failure_can_be_reported_without_becoming_state_truth(
     tmp_path: Path,
 ) -> None:
     run_uri = path_to_run_uri(tmp_path / "run")
-    base = _committed_store(run_uri, tmp_path / "run" / "artifacts" / "build" / "out.json")
+    base = _committed_store(
+        run_uri, tmp_path / "run" / "artifacts" / "build" / "out.json"
+    )
 
     class WarningOnlySchemaStore(InMemoryPerRunAuthorityStore):
         def check_schema(self, run_uri: str) -> AuthoritySchemaCheck:
@@ -441,7 +479,7 @@ def test_partial_commit_warning_and_cleanup_candidates_carry_to_read_and_bundle(
         if warning.code is ReadModelWarningCode.PARTIAL_COMMIT
     ]
     assert read_snapshot.cleanup_candidates == (cleanup,)
-    assert partial_warnings[0].detail["missing_outputs"] == ["missing"]
+    assert partial_warnings[0].detail["missing_outputs"] == ("missing",)
 
     bundle = read_completed_run_bundle_metadata(
         cast(PerRunAuthorityStore, _SnapshotStore(snapshot)),

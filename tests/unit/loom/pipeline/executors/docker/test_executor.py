@@ -159,7 +159,6 @@ def _request(
             stage_config={},
             local_output_dir=store.local_stage_artifact_dir(run_uri, "build"),
             local_workspace_dir=store.local_stage_workspace_dir(run_uri, "build"),
-            run_store=store,
             artifact_store=artifact_store,
             output_specs=stage.outputs,
         ),

@@ -27,7 +27,7 @@ from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import RunStatus, StageStatus, StageStatusRecord
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-from loom.serialization import PlainData
+from loom.serialization import PlainData, thaw_plain_data
 from loom.serialization import json_dumps_pretty
 
 
@@ -202,7 +202,11 @@ def test_run_stage_worker_infers_attempt_and_writes_only_worker_result(
     assert status.status == StageStatus.PENDING
     assert executor.request is not None
     assert executor.request.stage.factory.target_path.endswith("JsonProducerStage")
-    assert executor.request.context.resolved_config["pipeline"] == {
+    resolved_config = cast(
+        Mapping[str, object],
+        thaw_plain_data(executor.request.context.resolved_config),
+    )
+    assert resolved_config["pipeline"] == {
         "name": "snapshot-demo",
         "stages": [{"name": "build"}],
     }

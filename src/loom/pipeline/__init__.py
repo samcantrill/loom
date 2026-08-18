@@ -85,6 +85,11 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.status import parse_run_status, parse_stage_status
+from loom.pipeline.transition_policy import (
+    InvalidRunTransition,
+    InvalidStageTransition,
+    TransitionIntent,
+)
 
 if TYPE_CHECKING:
     from loom.pipeline.context import StageContext
@@ -116,6 +121,9 @@ __all__ = [
     "Stage",
     "StageContext",
     "RunStatus",
+    "TransitionIntent",
+    "InvalidRunTransition",
+    "InvalidStageTransition",
     "StageStatus",
     "RunStatusRecord",
     "StageStatusRecord",

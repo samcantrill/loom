@@ -293,7 +293,7 @@ def test_local_pipeline_run_fails_with_blocked_outcomes(tmp_path: Path) -> None:
     assert result.stage_results["report"].status == StageStatus.BLOCKED
     assert blocked is not None
     assert blocked.status == StageStatus.BLOCKED
-    assert blocked.metadata["blocked_by"] == ["build"]
+    assert blocked.metadata["blocked_by"] == ("build",)
     assert blocked.metadata["reason_code"] == "upstream_failed"
     assert run_store.read_events(run_uri)[-1].event_type == "run.failed"
 

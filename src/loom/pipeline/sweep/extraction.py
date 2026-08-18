@@ -6,7 +6,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from loom.serialization import PlainData, PlainDataError, ensure_plain_data
+from loom._validation import require_schema_version
+from loom.serialization import (
+    PlainData,
+    PlainDataError,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 
 from .errors import SweepExtractionError
 
@@ -29,7 +35,9 @@ def _required(mapping: Mapping[str, object], field_name: str) -> object:
     return mapping[field_name]
 
 
-def _reject_unknown(mapping: Mapping[str, object], allowed: set[str], *, object_name: str) -> None:
+def _reject_unknown(
+    mapping: Mapping[str, object], allowed: set[str], *, object_name: str
+) -> None:
     unknown = set(mapping) - allowed
     if unknown:
         fields = ", ".join(sorted(unknown))
@@ -68,19 +76,21 @@ def _schema_version(value: object, field_name: str) -> int:
     return value
 
 
-def _plain_mapping(value: object, field_name: str) -> dict[str, PlainData]:
+def _plain_mapping(value: object, field_name: str) -> Mapping[str, PlainData]:
     if not isinstance(value, Mapping):
         raise SweepExtractionError(f"{field_name} must be a mapping")
     try:
-        normalized = ensure_plain_data(value, path=field_name)
+        normalized = freeze_plain_data(value, path=field_name)
     except (PlainDataError, TypeError) as exc:
         raise SweepExtractionError(f"{field_name} must contain plain data") from exc
-    if not isinstance(normalized, dict):
+    if not isinstance(normalized, Mapping):
         raise SweepExtractionError(f"{field_name} must be a mapping")
-    return dict(normalized)
+    return normalized
 
 
-def _to_diagnostics(values: Sequence[object], field: str) -> tuple["SweepExtractionDiagnostic", ...]:
+def _to_diagnostics(
+    values: Sequence[object], field: str
+) -> tuple["SweepExtractionDiagnostic", ...]:
     diagnostics: list[SweepExtractionDiagnostic] = []
     for index, value in enumerate(values):
         if isinstance(value, SweepExtractionDiagnostic):
@@ -120,8 +130,11 @@ class SweepExtractionRequest:
     request_metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != SWEEP_EXTRACTION_SCHEMA_VERSION:
-            raise SweepExtractionError("SweepExtractionRequest.schema_version must be 1")
+        require_schema_version(
+            self.schema_version,
+            current=SWEEP_EXTRACTION_SCHEMA_VERSION,
+            error_type=SweepExtractionError,
+        )
         object.__setattr__(self, "sweep_id", _required_text(self.sweep_id, "sweep_id"))
         object.__setattr__(self, "trial_id", _required_text(self.trial_id, "trial_id"))
         object.__setattr__(
@@ -147,13 +160,17 @@ class SweepExtractionRequest:
             "trial_index": self.trial_index,
             "requested_at": self.requested_at,
             "run_uri": self.run_uri,
-            "request_metadata": dict(self.request_metadata),
+            "request_metadata": thaw_plain_data(
+                self.request_metadata, path="request_metadata"
+            ),
         }
 
     @classmethod
     def from_dict(cls, data: object) -> "SweepExtractionRequest":
         if not isinstance(data, Mapping):
-            raise SweepExtractionError("SweepExtractionRequest payload must be a mapping")
+            raise SweepExtractionError(
+                "SweepExtractionRequest payload must be a mapping"
+            )
         _reject_unknown(
             data,
             {
@@ -176,9 +193,13 @@ class SweepExtractionRequest:
             trial_index=_non_negative_int(
                 _required(data, "trial_index"), "trial_index"
             ),
-            requested_at=_required_text(_required(data, "requested_at"), "requested_at"),
+            requested_at=_required_text(
+                _required(data, "requested_at"), "requested_at"
+            ),
             run_uri=_optional_text(data.get("run_uri"), "run_uri"),
-            request_metadata=_plain_mapping(data.get("request_metadata", {}), "request_metadata"),
+            request_metadata=_plain_mapping(
+                data.get("request_metadata", {}), "request_metadata"
+            ),
         )
 
 
@@ -199,13 +220,15 @@ class SweepExtractionDiagnostic:
         return {
             "code": self.code,
             "message": self.message,
-            "detail": dict(self.detail),
+            "detail": thaw_plain_data(self.detail, path="detail"),
         }
 
     @classmethod
     def from_dict(cls, data: object) -> "SweepExtractionDiagnostic":
         if not isinstance(data, Mapping):
-            raise SweepExtractionError("SweepExtractionDiagnostic payload must be a mapping")
+            raise SweepExtractionError(
+                "SweepExtractionDiagnostic payload must be a mapping"
+            )
         _reject_unknown(
             data,
             {"code", "message", "detail"},
@@ -230,8 +253,11 @@ class SweepExtractionResult:
     extraction_metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != SWEEP_EXTRACTION_SCHEMA_VERSION:
-            raise SweepExtractionError("SweepExtractionResult.schema_version must be 1")
+        require_schema_version(
+            self.schema_version,
+            current=SWEEP_EXTRACTION_SCHEMA_VERSION,
+            error_type=SweepExtractionError,
+        )
         if not isinstance(self.request, SweepExtractionRequest):
             raise SweepExtractionError("request must be a SweepExtractionRequest")
         object.__setattr__(
@@ -276,16 +302,20 @@ class SweepExtractionResult:
             "extracted_payload": (
                 None
                 if self.extracted_payload is None
-                else dict(self.extracted_payload)
+                else thaw_plain_data(self.extracted_payload, path="extracted_payload")
             ),
             "diagnostics": [diagnostic.to_dict() for diagnostic in self.diagnostics],
-            "extraction_metadata": dict(self.extraction_metadata),
+            "extraction_metadata": thaw_plain_data(
+                self.extraction_metadata, path="extraction_metadata"
+            ),
         }
 
     @classmethod
     def from_dict(cls, data: object) -> "SweepExtractionResult":
         if not isinstance(data, Mapping):
-            raise SweepExtractionError("SweepExtractionResult payload must be a mapping")
+            raise SweepExtractionError(
+                "SweepExtractionResult payload must be a mapping"
+            )
         _reject_unknown(
             data,
             {

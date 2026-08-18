@@ -18,6 +18,11 @@ from loom.pipeline.reliability import (
     TimeoutOutcomeRecord,
 )
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import (
+    TransitionIntent,
+    ensure_run_transition,
+    ensure_stage_transition,
+)
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
     AUTHORITY_SCHEMA_VERSION,
@@ -71,11 +76,20 @@ from loom.pipeline.stores.reliability_facts import (
 from loom.serialization import PlainData
 
 
+def _require_expected_revision(
+    current: BackendRevision, expected: BackendRevision | None
+) -> None:
+    if expected is not None and current != expected:
+        raise ValueError("stale authority revision")
+
+
 @dataclass(slots=True)
 class _RunState:
     run_uri: str
     status: RunStatus
     revision: BackendRevision
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    idempotency_key: str | None = None
     stage_statuses: dict[str, StageStatus] = field(default_factory=dict)
     attempts: dict[str, list[StageAttempt]] = field(default_factory=dict)
     leases: dict[str, LeaseRecord] = field(default_factory=dict)
@@ -155,11 +169,26 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         *,
         status: RunStatus = RunStatus.CREATED,
         metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> BackendRevision:
-        if run_uri in self._runs:
+        normalized_metadata = dict(metadata or {})
+        existing = self._runs.get(run_uri)
+        if existing is not None:
+            if (
+                idempotency_key is not None
+                and existing.idempotency_key == idempotency_key
+                and existing.metadata == normalized_metadata
+            ):
+                return existing.revision
             raise ValueError(f"run already exists: {run_uri}")
         revision = self._next_revision()
-        self._runs[run_uri] = _RunState(run_uri, RunStatus(status), revision)
+        self._runs[run_uri] = _RunState(
+            run_uri,
+            RunStatus(status),
+            revision,
+            metadata=normalized_metadata,
+            idempotency_key=idempotency_key,
+        )
         return revision
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
@@ -172,11 +201,15 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         from_status: RunStatus,
         to_status: RunStatus,
         reason: LifecycleReason | None = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> StatusTransition:
         state = self._require_run(run_uri)
+        _require_expected_revision(state.revision, expected_revision)
         if state.status is not from_status:
             raise ValueError("stale run transition")
         previous = state.status
+        ensure_run_transition(previous, to_status, intent=intent)
         state.status = to_status
         state.revision = self._next_revision()
         return StatusTransition(
@@ -195,11 +228,15 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         from_status: StageStatus | None,
         to_status: StageStatus,
         reason: LifecycleReason | None = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> StatusTransition:
         state = self._require_run(run_uri)
+        _require_expected_revision(state.revision, expected_revision)
         current = state.stage_statuses.get(stage_name)
         if current is not from_status:
             raise ValueError("stale stage transition")
+        ensure_stage_transition(current, to_status, intent=intent)
         state.stage_statuses[stage_name] = to_status
         state.revision = self._next_revision()
         return StatusTransition(
@@ -542,6 +579,14 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         self, run_uri: str, event: PipelineEvent
     ) -> PipelineEventRecord:
         state = self._require_run(run_uri)
+        existing = next(
+            (record for record in state.events if record.event_id == event.event_id),
+            None,
+        )
+        if existing is not None:
+            if not _event_matches_record(event, existing):
+                raise ValueError(f"event_id {event.event_id!r} conflicts with an existing event")
+            return existing
         record = PipelineEventRecord(
             run_uri=run_uri,
             sequence=len(state.events) + 1,
@@ -549,6 +594,7 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             scope=event.scope,
             event_type=event.event_type,
             payload=event.payload,
+            event_id=event.event_id,
         )
         state.events.append(record)
         state.revision = self._next_revision()
@@ -916,6 +962,16 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
     def _at_tick(tick: int) -> str:
         value = datetime(2020, 1, 1, tzinfo=UTC) + timedelta(seconds=tick)
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
+    if (
+        record.scope != event.scope
+        or record.event_type != event.event_type
+        or record.payload != event.payload
+    ):
+        return False
+    return event.timestamp is None or record.timestamp == event.timestamp
 
 
 class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):

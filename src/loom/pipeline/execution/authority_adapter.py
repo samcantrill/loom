@@ -19,6 +19,7 @@ from loom.pipeline.reliability import (
     TimeoutOutcomeRecord,
 )
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
     AttemptAllocation,
     AuthorityBackendKind,
@@ -34,6 +35,7 @@ from loom.pipeline.stores import (
     BackendCapabilitySet,
     LeaseKind,
     LocalRunStore,
+    OrphanedLocalRunError,
     OutputCommit,
     PerRunAuthorityStore,
     ServiceWorkspaceCoordinationStore,
@@ -139,12 +141,14 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
         *,
         status: RunStatus = RunStatus.CREATED,
         metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> BackendRevision:
         result = self._result(
             self._client.admit_run(
                 run_uri,
                 status=status,
                 metadata=metadata,
+                idempotency_key=idempotency_key,
                 service_generation=self._service_generation,
                 workspace_id=self._workspace_id,
             ),
@@ -175,12 +179,16 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
         from_status: RunStatus,
         to_status: RunStatus,
         reason: LifecycleReason | None = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> StatusTransition:
         result = self._result(
             self._client.transition_run(
                 run_uri,
                 from_status=from_status,
                 to_status=to_status,
+                expected_revision=expected_revision,
+                intent=intent,
                 reason=reason,
                 service_generation=self._service_generation,
                 workspace_id=self._workspace_id,
@@ -197,6 +205,8 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
         from_status: StageStatus | None,
         to_status: StageStatus,
         reason: LifecycleReason | None = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> StatusTransition:
         result = self._result(
             self._client.transition_stage(
@@ -204,6 +214,8 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
                 stage_name,
                 from_status=from_status,
                 to_status=to_status,
+                expected_revision=expected_revision,
+                intent=intent,
                 reason=reason,
                 service_generation=self._service_generation,
                 workspace_id=self._workspace_id,
@@ -794,10 +806,34 @@ class AuthorityBackedSerialRunStore:
         return self.local_store.allocate_run_uri()
 
     def create_run(
-        self, run_uri: str, *, metadata: Mapping[str, PlainData] | None = None
+        self,
+        run_uri: str,
+        *,
+        metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
-        self.local_store.create_run(run_uri, metadata=metadata)
-        self.authority_store.create_run(run_uri, metadata=metadata or {})
+        if self.local_store.run_uri_exists(run_uri):
+            try:
+                self.authority_store.open_run(run_uri)
+            except Exception as exc:
+                if not _is_missing_authority_run(exc):
+                    raise
+                raise OrphanedLocalRunError(
+                    f"local run {run_uri!r} has no confirmed authority admission"
+                ) from exc
+            self.authority_store.create_run(
+                run_uri,
+                metadata=metadata or {},
+                idempotency_key=idempotency_key,
+            )
+            self.local_store.ensure_run(run_uri, metadata=metadata)
+            return
+        self.authority_store.create_run(
+            run_uri,
+            metadata=metadata or {},
+            idempotency_key=idempotency_key,
+        )
+        self.local_store.ensure_run(run_uri, metadata=metadata)
 
     def open_run(self, run_uri: str) -> None:
         self.local_store.open_run(run_uri)
@@ -865,12 +901,24 @@ class AuthorityBackedSerialRunStore:
         )
 
     def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:
-        current = self.authority_store.snapshot(run_uri).status
+        self.write_run_status_with_intent(run_uri, status, intent=TransitionIntent.NORMAL)
+
+    def write_run_status_with_intent(
+        self,
+        run_uri: str,
+        status: RunStatusRecord,
+        *,
+        intent: TransitionIntent,
+    ) -> None:
+        snapshot = self.authority_store.snapshot(run_uri)
+        current = snapshot.status
         if current is not status.status:
             self.authority_store.transition_run(
                 run_uri,
                 from_status=current,
                 to_status=status.status,
+                expected_revision=snapshot.revision,
+                intent=intent,
                 reason=_reason(
                     f"run_{status.status.value.lower()}",
                     status.message,
@@ -1136,9 +1184,22 @@ class AuthorityBackedSerialRunStore:
                 Mapping[str, PlainData],
                 thaw_plain_data(event.payload, path="event.payload"),
             ),
+            event_id=event.event_id,
         )
         record = self.authority_store.append_audit_event(run_uri, authority_event)
-        self.local_store.append_event(run_uri, event)
+        self.local_store.append_event(
+            run_uri,
+            PipelineEvent(
+                scope=event.scope,
+                event_type=event.event_type,
+                timestamp=record.timestamp,
+                payload=cast(
+                    Mapping[str, PlainData],
+                    thaw_plain_data(event.payload, path="event.payload"),
+                ),
+                event_id=event.event_id,
+            ),
+        )
         return record
 
     def read_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
@@ -1264,6 +1325,26 @@ class AuthorityBackedSerialRunStore:
     def write_stage_status(
         self, run_uri: str, stage_name: str, status: StageStatusRecord
     ) -> None:
+        self._write_stage_status(run_uri, stage_name, status, intent=None)
+
+    def write_stage_status_with_intent(
+        self,
+        run_uri: str,
+        stage_name: str,
+        status: StageStatusRecord,
+        *,
+        intent: TransitionIntent,
+    ) -> None:
+        self._write_stage_status(run_uri, stage_name, status, intent=intent)
+
+    def _write_stage_status(
+        self,
+        run_uri: str,
+        stage_name: str,
+        status: StageStatusRecord,
+        *,
+        intent: TransitionIntent | None,
+    ) -> None:
         self._validate_stage_status(run_uri, stage_name, status)
         if status.status in {
             StageStatus.PENDING,
@@ -1271,23 +1352,42 @@ class AuthorityBackedSerialRunStore:
             StageStatus.SUBMITTED,
         }:
             self._ensure_stage_attempt(run_uri, stage_name, status.attempt)
-        current_stage = self._stage_snapshot(run_uri, stage_name)
+        run_snapshot = self.authority_store.snapshot(run_uri)
+        current_stage = next(
+            (
+                stage
+                for stage in run_snapshot.stages
+                if stage.stage_name == stage_name
+            ),
+            None,
+        )
         current = None if current_stage is None else current_stage.status
         if current is not status.status:
-            if current is StageStatus.SUCCEEDED and status.status is StageStatus.SUCCEEDED:
-                pass
-            else:
-                self.authority_store.transition_stage(
-                    run_uri,
-                    stage_name,
-                    from_status=current,
-                    to_status=status.status,
-                    reason=_reason(
-                        f"stage_{status.status.value.lower()}",
-                        status.message,
-                        status.metadata,
-                    ),
-                )
+            resolved_intent = intent or (
+                TransitionIntent.RESUME
+                if current in {
+                    StageStatus.SUCCEEDED,
+                    StageStatus.FAILED,
+                    StageStatus.BLOCKED,
+                    StageStatus.SKIPPED,
+                    StageStatus.STALE,
+                    StageStatus.CANCELLED,
+                }
+                else TransitionIntent.NORMAL
+            )
+            self.authority_store.transition_stage(
+                run_uri,
+                stage_name,
+                from_status=current,
+                to_status=status.status,
+                expected_revision=run_snapshot.revision,
+                intent=resolved_intent,
+                reason=_reason(
+                    f"stage_{status.status.value.lower()}",
+                    status.message,
+                    status.metadata,
+                ),
+            )
         if status.status is StageStatus.FAILED:
             self._fail_stage_lease(run_uri, stage_name, status.attempt, status)
         self.local_store.write_stage_status(run_uri, stage_name, status)
@@ -1898,6 +1998,14 @@ def _created_at(
         return fallback or utc_timestamp()
     created = document.get("created_at")
     return created if isinstance(created, str) else fallback or utc_timestamp()
+
+
+def _is_missing_authority_run(exc: Exception) -> bool:
+    """Classify only the established per-run absence response as an orphan."""
+
+    return isinstance(exc, (AuthorityStoreError, ValueError)) and "unknown run" in str(
+        exc
+    )
 
 
 def _reason(

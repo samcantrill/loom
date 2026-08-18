@@ -1,10 +1,11 @@
 """Unit tests for StageContext."""
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
+from loom.artifacts import ArtifactRef
 from loom.pipeline.context import StageContext
 from loom.pipeline.early_stopping import EarlyStopSignal
 from loom.pipeline.errors import PipelineValidationError
@@ -24,6 +25,28 @@ def test_context_normalizes_paths_and_mappings() -> None:
     )
     pipeline_config = cast(dict[str, PlainData], context.resolved_config["pipeline"])
     assert pipeline_config["name"] == "x"
+
+
+def test_context_freezes_nested_mappings_and_inputs() -> None:
+    resolved: Any = {"pipeline": {"name": "x"}}
+    inputs: dict[str, ArtifactRef] = {}
+    context = StageContext(
+        run_uri="run-1",
+        stage_name="build",
+        resolved_config=resolved,
+        stage_config={},
+        inputs=inputs,
+    )
+
+    resolved["pipeline"]["name"] = "changed"
+    inputs["late"] = cast(ArtifactRef, object())
+
+    assert cast(Any, context.resolved_config["pipeline"])["name"] == "x"
+    assert "late" not in context.inputs
+    with pytest.raises(TypeError):
+        cast(dict[str, object], context.resolved_config["pipeline"])["name"] = "no"
+    with pytest.raises(TypeError):
+        cast(dict[str, ArtifactRef], context.inputs)["late"] = cast(ArtifactRef, object())
 
 
 def test_context_rejects_non_plain_data_config() -> None:
@@ -90,7 +113,6 @@ def test_context_helpers_save_and_register_declared_outputs(tmp_path: Path) -> N
         stage_config={},
         local_output_dir=run_store.local_stage_artifact_dir(run_uri, "build"),
         local_workspace_dir=run_store.local_stage_workspace_dir(run_uri, "build"),
-        run_store=run_store,
         artifact_store=artifact_store,
         output_specs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
     )

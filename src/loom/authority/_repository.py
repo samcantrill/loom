@@ -18,6 +18,13 @@ from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.offline_evidence import OfflineEvidenceManifest, OfflineStageEvidence
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import (
+    InvalidRunTransition,
+    InvalidStageTransition,
+    TransitionIntent,
+    ensure_run_transition,
+    ensure_stage_transition,
+)
 from loom.pipeline.stores.authority import (
     AttemptAllocation,
     OutputCommit,
@@ -61,6 +68,7 @@ AUTHORITY_REPOSITORY_SCHEMA_VERSION = 3
 AUTHORITY_REPOSITORY_DB_NAME = "authority.sqlite3"
 AUTHORITY_REPOSITORY_COORDINATION_DB_NAME = "coordination.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
+_ADMISSION_IDEMPOTENCY_METADATA_KEY = "_loom_admission_idempotency_key"
 _METADATA_TABLE = "repository_metadata"
 _REQUIRED_SCHEMA_COLUMNS = {
     _METADATA_TABLE: frozenset({"key", "value"}),
@@ -387,18 +395,27 @@ class AuthorityRepository:
         *,
         status: RunStatus = RunStatus.CREATED,
         metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> BackendRevision:
         """Persist a newly admitted run and return its initial revision."""
 
         run_uri = _non_empty(run_uri, "run_uri")
         run_status = RunStatus(status)
         run_metadata = _plain_mapping(metadata or {}, "metadata")
+        persisted_metadata = _admission_metadata(run_metadata, idempotency_key)
         with self.transaction() as conn:
             existing = conn.execute(
-                "SELECT 1 FROM authority_runs WHERE run_uri = ?",
+                "SELECT metadata_json FROM authority_runs WHERE run_uri = ?",
                 (run_uri,),
             ).fetchone()
             if existing is not None:
+                existing_metadata = _plain_mapping(
+                    _json_loads(cast(str, existing["metadata_json"])), "metadata"
+                )
+                if _admission_matches(
+                    existing_metadata, run_metadata, idempotency_key
+                ):
+                    return _current_run_revision(conn, run_uri)
                 raise AuthorityRepositoryError(f"run already exists: {run_uri}")
             revision = self._next_revision(conn)
             conn.execute(
@@ -412,7 +429,7 @@ class AuthorityRepository:
                 (
                     run_uri,
                     run_status.value,
-                    _json_dumps(dict(run_metadata)),
+                    _json_dumps(dict(persisted_metadata)),
                     revision.sequence,
                     revision.sequence,
                 ),
@@ -438,6 +455,7 @@ class AuthorityRepository:
         from_status: RunStatus,
         to_status: RunStatus,
         expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
         reason: LifecycleReason | None = None,
     ) -> StatusTransition:
         """Persist a run status transition after status and revision checks."""
@@ -456,6 +474,10 @@ class AuthorityRepository:
             _require_expected_revision(current_revision, expected_revision)
             if current is not from_status:
                 raise AuthorityRepositoryError("stale run transition")
+            try:
+                ensure_run_transition(current, to_status, intent=intent)
+            except InvalidRunTransition as exc:
+                raise AuthorityRepositoryError(str(exc)) from exc
             revision = self._next_revision(conn)
             conn.execute(
                 """
@@ -486,6 +508,7 @@ class AuthorityRepository:
         from_status: StageStatus | None,
         to_status: StageStatus,
         expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
         reason: LifecycleReason | None = None,
     ) -> StatusTransition:
         """Persist a stage status transition after status and revision checks."""
@@ -510,6 +533,10 @@ class AuthorityRepository:
             current = None if row is None else StageStatus(cast(str, row["status"]))
             if current is not expected_status:
                 raise AuthorityRepositoryError("stale stage transition")
+            try:
+                ensure_stage_transition(current, to_status, intent=intent)
+            except InvalidStageTransition as exc:
+                raise AuthorityRepositoryError(str(exc)) from exc
             revision = self._next_revision(conn)
             _upsert_stage(
                 conn,
@@ -1214,6 +1241,17 @@ class AuthorityRepository:
         with self.transaction() as conn:
             _ensure_audit_event_json_column(conn)
             current = _current_run_revision(conn, run_uri)
+            for row in conn.execute(
+                "SELECT * FROM audit_events WHERE run_uri = ? ORDER BY sequence",
+                (run_uri,),
+            ):
+                existing = _audit_event_from_row(row, run_uri=run_uri)
+                if existing.event_id == event.event_id:
+                    if not _event_matches_record(event, existing):
+                        raise AuthorityRepositoryError(
+                            f"event_id {event.event_id!r} conflicts with an existing event"
+                        )
+                    return existing
             _require_expected_revision(current, expected_revision)
             revision = self._next_revision(conn)
             timestamp = event.timestamp or self._now()
@@ -1229,6 +1267,7 @@ class AuthorityRepository:
                 scope=event.scope,
                 event_type=event.event_type,
                 payload=payload,
+                event_id=event.event_id,
             )
             conn.execute(
                 """
@@ -2662,8 +2701,54 @@ def _run_snapshot(
         cleanup_candidates=_cleanup_candidates(conn, run_uri),
         cleanup_reports=_cleanup_report_facts(conn, run_uri),
         cleanup_results=_cleanup_result_facts(conn, run_uri),
-        metadata=_plain_mapping(_json_loads(cast(str, run_row["metadata_json"])), "metadata"),
+        metadata=_public_run_metadata(
+            _plain_mapping(_json_loads(cast(str, run_row["metadata_json"])), "metadata")
+        ),
     )
+
+
+def _admission_metadata(
+    metadata: Mapping[str, PlainData], idempotency_key: str | None
+) -> dict[str, PlainData]:
+    if _ADMISSION_IDEMPOTENCY_METADATA_KEY in metadata:
+        raise AuthorityRepositoryError("metadata uses a reserved authority key")
+    persisted = dict(metadata)
+    if idempotency_key is not None:
+        persisted[_ADMISSION_IDEMPOTENCY_METADATA_KEY] = _non_empty(
+            idempotency_key, "idempotency_key"
+        )
+    return persisted
+
+
+def _admission_matches(
+    existing: Mapping[str, PlainData],
+    metadata: Mapping[str, PlainData],
+    idempotency_key: str | None,
+) -> bool:
+    if idempotency_key is None:
+        return False
+    return (
+        existing.get(_ADMISSION_IDEMPOTENCY_METADATA_KEY) == idempotency_key
+        and _public_run_metadata(existing) == dict(metadata)
+    )
+
+
+def _public_run_metadata(metadata: Mapping[str, PlainData]) -> dict[str, PlainData]:
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key != _ADMISSION_IDEMPOTENCY_METADATA_KEY
+    }
+
+
+def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
+    if (
+        record.scope != event.scope
+        or record.event_type != event.event_type
+        or record.payload != event.payload
+    ):
+        return False
+    return event.timestamp is None or record.timestamp == event.timestamp
 
 
 def _offline_import_provenance(

@@ -127,7 +127,7 @@ def test_fingerprint_tracks_factory_init_and_declared_fingerprint_fields() -> No
     assert with_init.payload.factory_init == {"worker_count": 4}
     assert base.fingerprint != with_fingerprint_fields.fingerprint
     assert with_fingerprint_fields.payload.fingerprint_fields == {
-        "input_subset": ["foo", "bar"]
+        "input_subset": ("foo", "bar")
     }
 
 

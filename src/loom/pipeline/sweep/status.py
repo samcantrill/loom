@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from loom.pipeline.early_stopping import EARLY_STOP_REASON_CODE
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from .errors import SweepProtocolError
 
@@ -95,7 +95,7 @@ class SweepTrialStatus:
             "queue_status": self.queue_status,
             "coordination_state": self.coordination_state,
             "early_stopped": self.early_stopped,
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
 
@@ -180,9 +180,8 @@ def build_sweep_status(
             run_statuses=run_statuses,
             run_status_reader=run_status_reader,
         )
-        queue_item = (
-            queue_by_run_uri.get(trial.run_uri or "")
-            or queue_by_trial_id.get(trial.trial_id)
+        queue_item = queue_by_run_uri.get(trial.run_uri or "") or queue_by_trial_id.get(
+            trial.trial_id
         )
         coordination = coordination_by_trial_id.get(trial.trial_id)
         trial_statuses.append(
@@ -377,9 +376,11 @@ def _optional_text(value: object, field: str) -> str | None:
     return _text(value, field)
 
 
-def _plain_mapping(value: Mapping[str, PlainData], field: str) -> dict[str, PlainData]:
-    normalized = ensure_plain_data(value, path=field)
-    if not isinstance(normalized, dict):
+def _plain_mapping(
+    value: Mapping[str, PlainData], field: str
+) -> Mapping[str, PlainData]:
+    normalized = freeze_plain_data(value, path=field)
+    if not isinstance(normalized, Mapping):
         raise SweepProtocolError(f"{field} must be a plain-data mapping")
     return normalized
 

@@ -14,6 +14,7 @@ from loom.pipeline.reliability import (
     TimeoutOutcomeRecord,
 )
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData
 
@@ -139,11 +140,13 @@ class _PerRunAuthorityRunStore:
         *,
         status: RunStatus = RunStatus.CREATED,
         metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> BackendRevision:
         return self._authority_store.create_run(
             run_uri,
             status=status,
             metadata=metadata,
+            idempotency_key=idempotency_key,
         )
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
@@ -156,11 +159,15 @@ class _PerRunAuthorityRunStore:
         from_status: RunStatus,
         to_status: RunStatus,
         reason: LifecycleReason | None = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> StatusTransition:
         return self._authority_store.transition_run(
             run_uri,
             from_status=from_status,
             to_status=to_status,
+            expected_revision=expected_revision,
+            intent=intent,
             reason=reason,
         )
 
@@ -366,12 +373,16 @@ class _PerRunAuthorityStageStore:
         from_status: StageStatus | None,
         to_status: StageStatus,
         reason: LifecycleReason | None = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> StatusTransition:
         return self._authority_store.transition_stage(
             self._run_uri,
             self._stage_name,
             from_status=from_status,
             to_status=to_status,
+            expected_revision=expected_revision,
+            intent=intent,
             reason=reason,
         )
 

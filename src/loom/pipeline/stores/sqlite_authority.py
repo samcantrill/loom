@@ -14,7 +14,7 @@ from typing import Any, cast
 from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
-from loom.pipeline.events import PipelineEvent, PipelineEventRecord
+from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
     RetryDecisionRecord,
@@ -22,6 +22,13 @@ from loom.pipeline.reliability import (
     TimeoutOutcomeRecord,
 )
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import (
+    InvalidRunTransition,
+    InvalidStageTransition,
+    TransitionIntent,
+    ensure_run_transition,
+    ensure_stage_transition,
+)
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
@@ -82,6 +89,7 @@ from .schema_policy import (
 _AUTHORITY_DIR = ".loom"
 _AUTHORITY_DB_NAME = "authority.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
+_ADMISSION_IDEMPOTENCY_METADATA_KEY = "_loom_admission_idempotency_key"
 
 _SUPPORTED_PER_RUN_CAPABILITIES = (
     BackendCapability.RUN_ADMISSION,
@@ -376,8 +384,11 @@ class SQLitePerRunAuthorityStore:
         *,
         status: RunStatus = RunStatus.CREATED,
         metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> BackendRevision:
         self._bind_run_uri(run_uri)
+        run_metadata = _plain_mapping(metadata or {}, "metadata")
+        persisted_metadata = _admission_metadata(run_metadata, idempotency_key)
         database_path = _authority_database_path(run_uri)
         database_exists = database_path.exists()
         database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -385,8 +396,17 @@ class SQLitePerRunAuthorityStore:
             database_path, initialize=not database_exists
         ) as conn:
             _raise_for_schema(conn)
-            existing = conn.execute("SELECT 1 FROM run_state WHERE id = 1").fetchone()
+            existing = conn.execute(
+                "SELECT metadata_json FROM run_state WHERE id = 1"
+            ).fetchone()
             if existing is not None:
+                existing_metadata = _plain_mapping(
+                    _json_loads(cast(str, existing["metadata_json"])), "metadata"
+                )
+                if _admission_matches(
+                    existing_metadata, run_metadata, idempotency_key
+                ):
+                    return _current_run_revision(conn)
                 raise AuthorityStoreError(f"run already exists: {run_uri}")
             revision = self._next_revision(conn)
             conn.execute(
@@ -399,7 +419,7 @@ class SQLitePerRunAuthorityStore:
                 """,
                 (
                     RunStatus(status).value,
-                    _json_dumps(_plain_mapping(metadata or {}, "metadata")),
+                    _json_dumps(persisted_metadata),
                     revision.sequence,
                     revision.sequence,
                 ),
@@ -416,12 +436,20 @@ class SQLitePerRunAuthorityStore:
         from_status: RunStatus,
         to_status: RunStatus,
         reason: LifecycleReason | None = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> StatusTransition:
         self._bind_run_uri(run_uri)
         with self._transaction(run_uri) as conn:
             current = _require_run_status(conn)
+            current_revision = _current_run_revision(conn)
+            _require_expected_revision(current_revision, expected_revision)
             if current is not RunStatus(from_status):
                 raise AuthorityStoreError("stale run transition")
+            try:
+                ensure_run_transition(current, RunStatus(to_status), intent=intent)
+            except InvalidRunTransition as exc:
+                raise AuthorityStoreError(str(exc)) from exc
             revision = self._next_revision(conn)
             conn.execute(
                 """
@@ -451,10 +479,14 @@ class SQLitePerRunAuthorityStore:
         from_status: StageStatus | None,
         to_status: StageStatus,
         reason: LifecycleReason | None = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> StatusTransition:
         self._bind_run_uri(run_uri)
         _non_empty(stage_name, "stage_name")
         with self._transaction(run_uri) as conn:
+            current_revision = _current_run_revision(conn)
+            _require_expected_revision(current_revision, expected_revision)
             row = conn.execute(
                 "SELECT status FROM stages WHERE stage_name = ?",
                 (stage_name,),
@@ -463,6 +495,10 @@ class SQLitePerRunAuthorityStore:
             expected = None if from_status is None else StageStatus(from_status)
             if current is not expected:
                 raise AuthorityStoreError("stale stage transition")
+            try:
+                ensure_stage_transition(current, StageStatus(to_status), intent=intent)
+            except InvalidStageTransition as exc:
+                raise AuthorityStoreError(str(exc)) from exc
             revision = self._next_revision(conn)
             if row is None:
                 conn.execute(
@@ -1184,6 +1220,14 @@ class SQLitePerRunAuthorityStore:
             raise AuthorityStoreError("event must be a PipelineEvent")
         with self._transaction(run_uri) as conn:
             _ensure_audit_event_json_column(conn)
+            for row in conn.execute("SELECT * FROM audit_events ORDER BY sequence"):
+                existing = _audit_event_from_row(row, run_uri=run_uri)
+                if existing.event_id == event.event_id:
+                    if not _event_matches_record(event, existing):
+                        raise AuthorityStoreError(
+                            f"event_id {event.event_id!r} conflicts with an existing event"
+                        )
+                    return existing
             revision = self._next_revision(conn)
             timestamp = event.timestamp or self._now()
             payload = cast(
@@ -1198,6 +1242,7 @@ class SQLitePerRunAuthorityStore:
                 scope=event.scope,
                 event_type=event.event_type,
                 payload=payload,
+                event_id=event.event_id,
             )
             conn.execute(
                 """
@@ -2044,6 +2089,22 @@ def _next_audit_event_sequence(conn: sqlite3.Connection) -> int:
     return cast(int, row[0])
 
 
+def _audit_event_from_row(
+    row: sqlite3.Row, *, run_uri: str
+) -> PipelineEventRecord:
+    event_json = row["event_json"]
+    if event_json is not None:
+        return PipelineEventRecord.from_dict(_json_loads(cast(str, event_json)))
+    return PipelineEventRecord(
+        run_uri=run_uri,
+        sequence=cast(int, row["sequence"]),
+        timestamp=cast(str, row["timestamp"]),
+        scope=EventScope.from_dict(_json_loads(cast(str, row["scope_json"]))),
+        event_type=cast(str, row["event_type"]),
+        payload=cast(Mapping[str, PlainData], _json_loads(cast(str, row["payload_json"]))),
+    )
+
+
 def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
     try:
         row = conn.execute(
@@ -2596,6 +2657,13 @@ def _current_run_revision(conn: sqlite3.Connection) -> BackendRevision:
     return _revision_for(conn, cast(int, row["updated_revision_sequence"]))
 
 
+def _require_expected_revision(
+    current: BackendRevision, expected: BackendRevision | None
+) -> None:
+    if expected is not None and current != expected:
+        raise AuthorityStoreError("stale authority revision")
+
+
 def _require_run_status(conn: sqlite3.Connection) -> RunStatus:
     row = conn.execute("SELECT status FROM run_state WHERE id = 1").fetchone()
     if row is None:
@@ -2787,6 +2855,47 @@ def _plain_mapping(
     if not isinstance(normalized, Mapping):
         raise AuthorityStoreError(f"{field} must be a mapping")
     return cast(Mapping[str, PlainData], normalized)
+
+
+def _admission_metadata(
+    metadata: Mapping[str, PlainData], idempotency_key: str | None
+) -> dict[str, PlainData]:
+    if _ADMISSION_IDEMPOTENCY_METADATA_KEY in metadata:
+        raise AuthorityStoreError("metadata uses a reserved authority key")
+    persisted = dict(metadata)
+    if idempotency_key is not None:
+        persisted[_ADMISSION_IDEMPOTENCY_METADATA_KEY] = _non_empty(
+            idempotency_key, "idempotency_key"
+        )
+    return persisted
+
+
+def _admission_matches(
+    existing: Mapping[str, PlainData],
+    metadata: Mapping[str, PlainData],
+    idempotency_key: str | None,
+) -> bool:
+    if idempotency_key is None:
+        return False
+    return (
+        existing.get(_ADMISSION_IDEMPOTENCY_METADATA_KEY) == idempotency_key
+        and {
+            key: value
+            for key, value in existing.items()
+            if key != _ADMISSION_IDEMPOTENCY_METADATA_KEY
+        }
+        == dict(metadata)
+    )
+
+
+def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
+    if (
+        record.scope != event.scope
+        or record.event_type != event.event_type
+        or record.payload != event.payload
+    ):
+        return False
+    return event.timestamp is None or record.timestamp == event.timestamp
 
 
 def _validate_observer_fact_run_uri(actual: str, expected: str, label: str) -> None:

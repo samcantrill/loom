@@ -129,6 +129,11 @@ def test_sqlite_completed_bundle_metadata_uses_backend_revision_not_files(
     store.transition_run(
         run_uri,
         from_status=RunStatus.CREATED,
+        to_status=RunStatus.RUNNING,
+    )
+    store.transition_run(
+        run_uri,
+        from_status=RunStatus.RUNNING,
         to_status=RunStatus.SUCCEEDED,
     )
 

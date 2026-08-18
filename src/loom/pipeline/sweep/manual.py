@@ -40,7 +40,8 @@ class ManualSweepProposalProvider:
                 metadata.setdefault("trial_name", trial.name)
             proposals.append(
                 TrialProposal(
-                    provider_trial_id=trial.provider_trial_id or f"manual-{index + 1:04d}",
+                    provider_trial_id=trial.provider_trial_id
+                    or f"manual-{index + 1:04d}",
                     trial_index=index,
                     overrides=dict(trial.overrides),
                     metadata=metadata,

@@ -174,6 +174,16 @@ def _create_run(
     )
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
+    if status is RunStatus.SUCCEEDED:
+        store.write_run_status(
+            run_uri,
+            RunStatusRecord(
+                run_uri=run_uri,
+                status=RunStatus.RUNNING,
+                created_at="2020-01-01T00:00:00Z",
+                updated_at="2020-01-01T00:00:00Z",
+            ),
+        )
     store.write_run_status(
         run_uri,
         RunStatusRecord(
@@ -186,6 +196,18 @@ def _create_run(
     store.write_composition_manifest(run_uri, {"fingerprint": config_fingerprint})
     store.write_plan(run_uri, {"pipeline_fingerprint": "pipeline-demo"})
     store.write_runtime_metadata(run_uri, {"executor": "local", "backend": "local"})
+    if status is RunStatus.SUCCEEDED:
+        store.write_stage_status(
+            run_uri,
+            "build",
+            StageStatusRecord(
+                run_uri=run_uri,
+                stage_name="build",
+                status=StageStatus.RUNNING,
+                attempt=1,
+                updated_at="2020-01-01T00:00:00Z",
+            ),
+        )
     store.write_stage_status(
         run_uri,
         "build",
@@ -245,6 +267,11 @@ def _create_completed_authority_run(run_path: Path) -> str:
     store.transition_run(
         run_uri,
         from_status=RunStatus.CREATED,
+        to_status=RunStatus.RUNNING,
+    )
+    store.transition_run(
+        run_uri,
+        from_status=RunStatus.RUNNING,
         to_status=RunStatus.SUCCEEDED,
     )
     return run_uri

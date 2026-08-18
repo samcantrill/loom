@@ -81,6 +81,14 @@ class RunAlreadyExistsError(RunStoreError):
     """Raised when attempting to initialize an existing run directory."""
 
 
+class RunProjectionError(RunStoreError):
+    """Raised when a local run projection cannot match authority truth."""
+
+
+class OrphanedLocalRunError(RunProjectionError):
+    """Raised when local run state has no corresponding authority run."""
+
+
 class RunNotFoundError(RunStoreError):
     """Raised when a run directory is missing."""
 
@@ -114,6 +122,8 @@ __all__ = [
     "ArtifactChecksumMismatchError",
     "ArtifactChecksumUnsupportedError",
     "RunAlreadyExistsError",
+    "RunProjectionError",
+    "OrphanedLocalRunError",
     "RunNotFoundError",
     "MissingStoreDocumentError",
     "CorruptStoreDocumentError",

@@ -190,7 +190,9 @@ def trial_state_from_run_status(value: object) -> TrialState:
     try:
         return _RUN_STATUS_TO_TRIAL_STATE[status]
     except KeyError as exc:
-        raise SweepProtocolError(f"unsupported run status for trial state: {status}") from exc
+        raise SweepProtocolError(
+            f"unsupported run status for trial state: {status}"
+        ) from exc
 
 
 def trial_state_from_queue_status(value: object) -> TrialState:

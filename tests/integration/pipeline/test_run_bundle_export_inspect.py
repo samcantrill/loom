@@ -67,6 +67,11 @@ def test_export_and_inspect_completed_run_bundle(tmp_path: Path) -> None:
     store.transition_run(
         run_uri,
         from_status=RunStatus.CREATED,
+        to_status=RunStatus.RUNNING,
+    )
+    store.transition_run(
+        run_uri,
+        from_status=RunStatus.RUNNING,
         to_status=RunStatus.SUCCEEDED,
     )
 

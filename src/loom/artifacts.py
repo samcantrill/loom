@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, cast
 
+from loom._validation import require_positive_int, require_schema_version
 from loom.errors import ArtifactError, FingerprintError, ValidationError
 from loom.fingerprints import validate_digest
 from loom.ids import (
@@ -91,8 +92,11 @@ class ArtifactRef:
             raise ArtifactValidationError(
                 "codec_key must be None or a non-empty string"
             )
-        if not isinstance(self.schema_version, int) or self.schema_version <= 0:
-            raise ArtifactValidationError("schema_version must be a positive integer")
+        object.__setattr__(
+            self,
+            "schema_version",
+            _require_artifact_ref_schema_version(self.schema_version),
+        )
         if self.checksum is not None:
             object.__setattr__(
                 self, "checksum", _ensure_digest(self.checksum, "checksum")
@@ -1115,9 +1119,7 @@ def _ensure_stage_id(value: Any) -> str | None:
 
 
 def _require_positive_int(value: Any, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise ArtifactValidationError(f"{field} must be a positive integer")
-    return value
+    return require_positive_int(value, field, error_type=ArtifactValidationError)
 
 
 def _require_non_negative_int(value: Any, field: str) -> int | None:
@@ -1131,15 +1133,20 @@ def _require_non_negative_int(value: Any, field: str) -> int | None:
 def _require_artifact_ref_schema_version(
     value: Any, field: str = "schema_version"
 ) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise ArtifactValidationError(f"{field} must be a positive integer")
-    return value
+    return require_schema_version(
+        value,
+        field=field,
+        error_type=ArtifactValidationError,
+    )
 
 
 def _require_record_schema_version(value: Any, field: str = "schema_version") -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value != 1:
-        raise ArtifactValidationError(f"{field} must be 1")
-    return value
+    return require_schema_version(
+        value,
+        field=field,
+        current=1,
+        error_type=ArtifactValidationError,
+    )
 
 
 def _ensure_digest(value: Any, field: str) -> str | None:

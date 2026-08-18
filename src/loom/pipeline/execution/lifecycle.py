@@ -14,6 +14,7 @@ from loom.pipeline.status import (
     StageStatus,
     StageStatusRecord,
 )
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import LegacyRunStore as RunStore
 from loom.pipeline.stores import LifecycleReason
 from loom.pipeline.stores.artifact_store import ArtifactStore
@@ -300,6 +301,7 @@ def record_stage_failure_and_failed_run(
     executor_name: str,
     clock: Callable[[], str] = utc_timestamp,
     event_dispatcher: RuntimeEventDispatcher | None = None,
+    finalize_run: bool = True,
 ) -> ExecutionFailure:
     try:
         failure = persist_stage_failure(
@@ -324,13 +326,14 @@ def record_stage_failure_and_failed_run(
             message=str(exc) or type(exc).__name__,
             exception_type=f"{type(exc).__module__}.{type(exc).__name__}",
         )
-    write_failed_run(
-        run_store,
-        run_uri=run_uri,
-        created_at=created_at,
-        started_at=run_started_at,
-        failure=failure,
-    )
+    if finalize_run:
+        write_failed_run(
+            run_store,
+            run_uri=run_uri,
+            created_at=created_at,
+            started_at=run_started_at,
+            failure=failure,
+        )
     return failure
 
 
@@ -350,6 +353,7 @@ def commit_stage_execution_result(
     executor_name: str,
     clock: Callable[[], str] = utc_timestamp,
     event_dispatcher: RuntimeEventDispatcher | None = None,
+    finalize_run_on_failure: bool = True,
 ) -> StageRunResult:
     if execution_result.status == StageStatus.FAILED:
         failure = execution_result.failure or ExecutionFailure(
@@ -374,6 +378,7 @@ def commit_stage_execution_result(
             executor_name=executor_name,
             clock=clock,
             event_dispatcher=event_dispatcher,
+            finalize_run=finalize_run_on_failure,
         )
         record_timeout_outcome_from_metadata(
             run_store,
@@ -543,6 +548,7 @@ def write_run_status(
     finished_at: str | None = None,
     message: str | None = None,
     metadata: Mapping[str, PlainData] | None = None,
+    intent: TransitionIntent = TransitionIntent.NORMAL,
 ) -> RunStatusRecord:
     normalized_metadata = ensure_plain_data(dict(metadata or {}), path="metadata")
     if not isinstance(normalized_metadata, dict):
@@ -557,7 +563,11 @@ def write_run_status(
         message=message,
         metadata=normalized_metadata,
     )
-    run_store.write_run_status(run_uri, record)
+    write_with_intent = getattr(run_store, "write_run_status_with_intent", None)
+    if callable(write_with_intent):
+        write_with_intent(run_uri, record, intent=intent)
+    else:
+        run_store.write_run_status(run_uri, record)
     return record
 
 

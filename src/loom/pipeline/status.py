@@ -6,8 +6,14 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Mapping, cast
 
+from loom._validation import require_positive_int, require_schema_version
 from loom.ids import RunURI, StageID
-from loom.serialization import PlainData, ensure_plain_data, load_versioned_document
+from loom.serialization import (
+    PlainData,
+    freeze_plain_data,
+    load_versioned_document,
+    thaw_plain_data,
+)
 from loom.serialization.errors import PlainDataError, SchemaVersionError
 from loom.timestamps import parse_timestamp
 
@@ -60,13 +66,11 @@ def parse_stage_status(value: object) -> StageStatus:
 def _validate_status_schema_version(value: object) -> int:
     if value is None:
         raise StatusSerializationError("schema_version is required")
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise StatusSerializationError("schema_version must be a positive integer")
-    if value != STATUS_SCHEMA_VERSION:
-        raise StatusSerializationError(
-            f"unsupported schema_version '{value}', expected {STATUS_SCHEMA_VERSION}"
-        )
-    return value
+    return require_schema_version(
+        value,
+        current=STATUS_SCHEMA_VERSION,
+        error_type=StatusSerializationError,
+    )
 
 
 def _validate_timestamp(value: object, *, field: str) -> str:
@@ -108,21 +112,21 @@ def _validate_status_message(value: object, *, field: str) -> str | None:
 def _validate_attempt(value: object) -> int:
     if value is None:
         raise StatusSerializationError("attempt is required")
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise StatusSerializationError("attempt must be a positive integer")
-    if value <= 0:
-        raise StatusSerializationError("attempt must be a positive integer")
-    return value
+    return require_positive_int(
+        value,
+        "attempt",
+        error_type=StatusSerializationError,
+    )
 
 
-def _validate_plain_mapping(value: object, *, field: str) -> dict[str, PlainData]:
+def _validate_plain_mapping(value: object, *, field: str) -> Mapping[str, PlainData]:
     try:
-        normalized = ensure_plain_data(value, path=field)
+        normalized = freeze_plain_data(value, path=field)
     except PlainDataError as exc:
         raise StatusSerializationError(
             f"{field} must be plain-data-compatible: {exc}"
         ) from exc
-    if not isinstance(normalized, dict):
+    if not isinstance(normalized, Mapping):
         raise StatusSerializationError(f"{field} must be a mapping")
     return normalized
 
@@ -169,7 +173,7 @@ class RunStatusRecord:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "message": self.message,
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -255,8 +259,8 @@ class StageStatusRecord:
             "finished_at": self.finished_at,
             "attempt": self.attempt,
             "message": self.message,
-            "owner": dict(self.owner),
-            "metadata": dict(self.metadata),
+            "owner": thaw_plain_data(self.owner, path="owner"),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod

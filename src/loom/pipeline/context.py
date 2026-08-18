@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 
 from loom.artifacts import ArtifactRef
 from loom.ids import RunURI, StageID
@@ -12,8 +13,7 @@ from loom.pipeline.errors import PipelineValidationError
 from loom.pipeline.specs import OutputSpec
 from loom.pipeline.stores._paths import validate_output_name
 from loom.pipeline.stores.artifact_store import ArtifactStore
-from loom.pipeline.stores.run_store import LegacyRunStore
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, freeze_plain_data
 from loom.serialization.errors import PlainDataError
 
 
@@ -26,15 +26,13 @@ class StageContext:
     inputs: Mapping[str, ArtifactRef] = field(default_factory=dict)
     provenance: Mapping[str, PlainData] = field(default_factory=dict)
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
-    run_store: InitVar[LegacyRunStore | None] = None
     artifact_store: InitVar[ArtifactStore | None] = None
     output_specs: InitVar[Mapping[str, OutputSpec] | None] = None
     local_output_dir: InitVar[str | Path | None] = None
     local_workspace_dir: InitVar[str | Path | None] = None
 
-    _run_store: LegacyRunStore | None = field(default=None, init=False, repr=False)
     _artifact_store: ArtifactStore | None = field(default=None, init=False, repr=False)
-    _output_specs: dict[str, OutputSpec] = field(
+    _output_specs: Mapping[str, OutputSpec] = field(
         default_factory=dict,
         init=False,
         repr=False,
@@ -44,7 +42,6 @@ class StageContext:
 
     def __post_init__(
         self,
-        run_store: LegacyRunStore | None,
         artifact_store: ArtifactStore | None,
         output_specs: Mapping[str, OutputSpec] | None,
         local_output_dir: str | Path | None,
@@ -58,22 +55,22 @@ class StageContext:
             object.__setattr__(
                 self,
                 "resolved_config",
-                ensure_plain_data(dict(self.resolved_config), path="resolved_config"),
+                freeze_plain_data(dict(self.resolved_config), path="resolved_config"),
             )
             object.__setattr__(
                 self,
                 "stage_config",
-                ensure_plain_data(dict(self.stage_config), path="stage_config"),
+                freeze_plain_data(dict(self.stage_config), path="stage_config"),
             )
             object.__setattr__(
                 self,
                 "provenance",
-                ensure_plain_data(dict(self.provenance), path="provenance"),
+                freeze_plain_data(dict(self.provenance), path="provenance"),
             )
             object.__setattr__(
                 self,
                 "metadata",
-                ensure_plain_data(dict(self.metadata), path="metadata"),
+                freeze_plain_data(dict(self.metadata), path="metadata"),
             )
         except PlainDataError as exc:
             raise PipelineValidationError(
@@ -88,17 +85,12 @@ class StageContext:
             if not isinstance(ref, ArtifactRef):
                 raise PipelineValidationError("inputs values must be ArtifactRef")
             normalized_inputs[name] = ref
-        object.__setattr__(self, "inputs", normalized_inputs)
+        object.__setattr__(self, "inputs", MappingProxyType(normalized_inputs))
 
-        if run_store is not None and not isinstance(run_store, LegacyRunStore):
-            raise PipelineValidationError(
-                "run_store must satisfy LegacyRunStore when supplied"
-            )
         if artifact_store is not None and not isinstance(artifact_store, ArtifactStore):
             raise PipelineValidationError(
                 "artifact_store must satisfy ArtifactStore when supplied"
             )
-        object.__setattr__(self, "_run_store", run_store)
         object.__setattr__(self, "_artifact_store", artifact_store)
 
         specs = {} if output_specs is None else dict(output_specs)
@@ -116,7 +108,7 @@ class StageContext:
                     "output_specs must map output names to OutputSpec"
                 )
             normalized_specs[name] = spec
-        object.__setattr__(self, "_output_specs", normalized_specs)
+        object.__setattr__(self, "_output_specs", MappingProxyType(normalized_specs))
 
         if local_output_dir is not None:
             object.__setattr__(self, "_local_output_dir", Path(local_output_dir))

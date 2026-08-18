@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from loom.io import uri_to_path
+from loom.fingerprints import hash_mapping
 from loom.pipeline import (
     OutputSpec,
     StageFactorySpec,
@@ -18,6 +19,7 @@ from loom.pipeline.planning import (
     PlanReasonCode,
     ResumeOptions,
     ResumeStateError,
+    StageFingerprintPayload,
     build_stage_fingerprint,
 )
 from loom.pipeline.planning.resume import check_stage_resume
@@ -120,45 +122,49 @@ def test_direct_resume_flags_legacy_v1_fingerprints_as_policy_changed(
     run_store.write_stage_status(run_uri, "build", _status(run_uri))
     run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
     run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
+    legacy_fingerprint = {
+        "schema_version": 1,
+        "algorithm": "sha256",
+        "policy_name": "loom.stage.v1",
+        "policy_version": 1,
+        "fingerprint": "",
+        "payload": {
+            "schema_version": 1,
+            "policy_name": "loom.stage.v1",
+            "policy_version": 1,
+            "stage_name": "build",
+            "target_path": "project.Build",
+            "stage_config": {},
+            "declared_inputs": {},
+            "bound_inputs": {},
+            "declared_outputs": {
+                "data": {
+                    "artifact_type": "json",
+                    "codec_key": "json.v1",
+                    "schema_version": None,
+                    "metadata": {},
+                }
+            },
+            "python_version": "3.12.0",
+            "loom_version": "0.1.0",
+            "git": {},
+            "dependencies": {},
+            "extra": {},
+        },
+        "inputs_summary": {
+            "stage_name": "build",
+            "factory_target": "project.Build",
+            "input_names": [],
+            "output_names": ["data"],
+        },
+    }
+    legacy_fingerprint["fingerprint"] = hash_mapping(
+        StageFingerprintPayload.from_dict(legacy_fingerprint["payload"]).to_hash_input()
+    )
     run_store.write_stage_fingerprint(
         run_uri,
         "build",
-        {
-            "schema_version": 1,
-            "algorithm": "sha256",
-            "policy_name": "loom.stage.v1",
-            "policy_version": 1,
-            "fingerprint": "sha256:" + "9" * 64,
-            "payload": {
-                "schema_version": 1,
-                "policy_name": "loom.stage.v1",
-                "policy_version": 1,
-                "stage_name": "build",
-                "target_path": "project.Build",
-                "stage_config": {},
-                "declared_inputs": {},
-                "bound_inputs": {},
-                "declared_outputs": {
-                    "data": {
-                        "artifact_type": "json",
-                        "codec_key": "json.v1",
-                        "schema_version": None,
-                        "metadata": {},
-                    }
-                },
-                "python_version": "3.12.0",
-                "loom_version": "0.1.0",
-                "git": {},
-                "dependencies": {},
-                "extra": {},
-            },
-            "inputs_summary": {
-                "stage_name": "build",
-                "factory_target": "project.Build",
-                "input_names": [],
-                "output_names": ["data"],
-            },
-        },
+        legacy_fingerprint,
         attempt=1,
     )
     run_store.write_artifact_index(run_uri, {"build.data": output})

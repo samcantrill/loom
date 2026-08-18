@@ -192,7 +192,9 @@ def test_local_runner_dispatches_sinks_after_committed_facts(
     )
 
     assert result.status == RunStatus.SUCCEEDED
-    assert observed_event_types == [event.event_type for event in run_store.read_events(run_uri)]
+    assert observed_event_types == [
+        event.event_type for event in run_store.read_events(run_uri)
+    ]
     assert run_store.read_event_sink_failures(run_uri) == ()
 
 
@@ -238,7 +240,7 @@ def test_local_runner_non_durable_sink_failure_does_not_fail_run(
     assert len(failures) == len(observed)
     assert {failure.sink_name for failure in failures} == {"audit.fail"}
     warnings = result.metadata["event_sink_warnings"]
-    assert isinstance(warnings, list)
+    assert isinstance(warnings, tuple)
     assert len(warnings) == len(observed)
 
 
@@ -280,14 +282,10 @@ def test_local_runner_uses_http_authority_resource_admission(
             options={
                 "stage_options": {
                     "build": {
-                        "resources": {
-                            "entries": {"cpu": {"kind": "cpu", "amount": 1}}
-                        }
+                        "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 1}}}
                     },
                     "report": {
-                        "resources": {
-                            "entries": {"cpu": {"kind": "cpu", "amount": 1}}
-                        }
+                        "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 1}}}
                     },
                 }
             },
@@ -295,7 +293,9 @@ def test_local_runner_uses_http_authority_resource_admission(
     )
 
     assert result.status == RunStatus.SUCCEEDED
-    assert coordination_store.set_resource_limit("workspace-a", "cpu", limit=1).value == 0
+    assert (
+        coordination_store.set_resource_limit("workspace-a", "cpu", limit=1).value == 0
+    )
 
 
 def test_local_runner_http_authority_resource_admission_rejection_blocks_stage_execution(
@@ -322,9 +322,7 @@ def test_local_runner_http_authority_resource_admission_rejection_blocks_stage_e
             options={
                 "stage_options": {
                     "build": {
-                        "resources": {
-                            "entries": {"cpu": {"kind": "cpu", "amount": 1}}
-                        }
+                        "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 1}}}
                     }
                 }
             },
@@ -337,7 +335,9 @@ def test_local_runner_http_authority_resource_admission_rejection_blocks_stage_e
     assert failed.failure is not None
     assert failed.failure.failure_type == "resource_admission"
     assert failed.failure.details["code"] == "resource_admission.rejected"
-    assert all(event.event_type != "stage.started" for event in run_store.read_events(run_uri))
+    assert all(
+        event.event_type != "stage.started" for event in run_store.read_events(run_uri)
+    )
 
 
 def test_local_runner_persists_composed_config_manifest_without_resolved_snapshots(

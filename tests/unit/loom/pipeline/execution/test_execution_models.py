@@ -1,6 +1,7 @@
 """Unit tests for execution models."""
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -316,6 +317,30 @@ def test_execution_failure_round_trips_plain_data() -> None:
     assert ExecutionFailure.from_dict(failure.to_dict()) == failure
 
 
+def test_execution_failure_plain_data_is_frozen_and_serialization_is_independent() -> (
+    None
+):
+    details: Any = {"nested": {"items": ["original"]}}
+    failure = ExecutionFailure(
+        schema_version=1,
+        run_uri="run1",
+        stage_name="build",
+        attempt=1,
+        failed_at="2020-01-01T00:00:00Z",
+        executor="local",
+        failure_type="stage_exception",
+        message="boom",
+        details=details,
+    )
+
+    details["nested"]["items"].append("changed")
+    assert failure.details == {"nested": {"items": ("original",)}}
+    payload = cast(Any, failure.to_dict())
+    payload["details"]["nested"]["items"].append("serialized")
+    assert failure.to_dict()["details"] == {"nested": {"items": ["original"]}}
+    assert ExecutionFailure.from_dict(failure.to_dict()) == failure
+
+
 def test_execution_failure_preserves_signal_separately_from_exit_code() -> None:
     failure = ExecutionFailure(
         schema_version=1,
@@ -407,6 +432,35 @@ def test_stage_worker_result_round_trips_success() -> None:
     )
 
     assert StageWorkerResult.from_dict(result.to_dict()) == result
+
+
+def test_execution_schema_versions_reject_bool_in_direct_construction() -> None:
+    with pytest.raises(RunRequestError, match="schema_version"):
+        ExecutionFailure(
+            schema_version=True,
+            run_uri="file:///tmp/run",
+            stage_name="build",
+            attempt=1,
+            failed_at="2020-01-01T00:00:00Z",
+            executor="local",
+            failure_type="stage_exception",
+            message="boom",
+        )
+    with pytest.raises(RunRequestError, match="schema_version"):
+        replace(_worker_request(), schema_version=True)
+    with pytest.raises(RunRequestError, match="schema_version"):
+        StageWorkerResult(
+            schema_version=True,
+            run_uri="file:///tmp/run",
+            stage_name="build",
+            attempt=1,
+            status=StageStatus.SUCCEEDED,
+            started_at="2020-01-01T00:00:00Z",
+            finished_at="2020-01-01T00:00:01Z",
+            executor_name="worker",
+            outputs={"data": _artifact_ref()},
+            exit_code=0,
+        )
 
 
 def test_stage_worker_result_rejects_conflicting_success_failure_metadata() -> None:

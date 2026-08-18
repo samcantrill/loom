@@ -164,6 +164,16 @@ def _create_run(
     )
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri)
+    if status is RunStatus.SUCCEEDED:
+        store.write_run_status(
+            run_uri,
+            RunStatusRecord(
+                run_uri=run_uri,
+                status=RunStatus.RUNNING,
+                created_at="2020-01-01T00:00:00Z",
+                updated_at="2020-01-01T00:00:00Z",
+            ),
+        )
     store.write_run_status(
         run_uri,
         RunStatusRecord(
@@ -177,6 +187,18 @@ def _create_run(
     store.write_plan(run_uri, {"pipeline_fingerprint": pipeline})
     store.write_runtime_metadata(run_uri, {"executor": "local", "backend": "local"})
     store.write_provenance_document(run_uri, "git", {"commit": git_commit})
+    if status is RunStatus.SUCCEEDED:
+        store.write_stage_status(
+            run_uri,
+            stage_name,
+            StageStatusRecord(
+                run_uri=run_uri,
+                stage_name=stage_name,
+                status=StageStatus.RUNNING,
+                attempt=1,
+                updated_at="2020-01-01T00:00:00Z",
+            ),
+        )
     store.write_stage_status(
         run_uri,
         stage_name,

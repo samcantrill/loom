@@ -55,6 +55,13 @@ def test_queue_records_reject_unknown_fields_and_bad_versions() -> None:
     with pytest.raises(QueueValidationError, match="unsupported schema version"):
         QueueItem.from_dict(data)
 
+    with pytest.raises(QueueValidationError, match="schema_version"):
+        QueuePool("gpu", QueuePoolMode.MANAGED, schema_version=True)
+    pool_data = QueuePool("gpu", QueuePoolMode.MANAGED).to_dict()
+    pool_data["schema_version"] = True
+    with pytest.raises(QueueValidationError, match="schema_version"):
+        QueuePool.from_dict(pool_data)
+
 
 def test_queue_item_state_validation_requires_matching_records() -> None:
     item = _queue_item()
@@ -79,14 +86,17 @@ def test_queue_item_state_validation_requires_matching_records() -> None:
                 "claim": None,
             }
         )
-    assert QueueItem.from_dict(
-        {
-            **item.to_dict(),
-            "status": QueueItemStatus.CLAIMED.value,
-            "updated_at": "2020-01-01T00:00:01Z",
-            "claim": claim.to_dict(),
-        }
-    ).claim == claim
+    assert (
+        QueueItem.from_dict(
+            {
+                **item.to_dict(),
+                "status": QueueItemStatus.CLAIMED.value,
+                "updated_at": "2020-01-01T00:00:01Z",
+                "claim": claim.to_dict(),
+            }
+        ).claim
+        == claim
+    )
     with pytest.raises(QueueValidationError, match="DISPATCHED"):
         QueueItem.from_dict(
             {
@@ -97,15 +107,18 @@ def test_queue_item_state_validation_requires_matching_records() -> None:
                 "dispatch_handle": None,
             }
         )
-    assert QueueItem.from_dict(
-        {
-            **item.to_dict(),
-            "status": QueueItemStatus.DISPATCHED.value,
-            "updated_at": "2020-01-01T00:00:02Z",
-            "claim": claim.to_dict(),
-            "dispatch_handle": handle.to_dict(),
-        }
-    ).dispatch_handle == handle
+    assert (
+        QueueItem.from_dict(
+            {
+                **item.to_dict(),
+                "status": QueueItemStatus.DISPATCHED.value,
+                "updated_at": "2020-01-01T00:00:02Z",
+                "claim": claim.to_dict(),
+                "dispatch_handle": handle.to_dict(),
+            }
+        ).dispatch_handle
+        == handle
+    )
 
 
 def test_queue_topology_enforces_one_queue_per_pool() -> None:
@@ -127,6 +140,22 @@ def test_queue_topology_enforces_one_queue_per_pool() -> None:
         )
     with pytest.raises(QueueValidationError, match="missing queue"):
         validate_one_queue_per_pool([QueuePool("gpu", "managed")], [])
+
+
+def test_queue_pool_resources_and_tags_are_frozen_at_construction() -> None:
+    resources = {"gpu": 1}
+    tags = {"project": "demo"}
+    pool = QueuePool("gpu", QueuePoolMode.MANAGED, resources=resources)
+    intent = RunIntent(run_uri="file:///runs/demo", tags=tags)
+
+    resources["gpu"] = 2
+    tags["project"] = "changed"
+    assert pool.resources == {"gpu": 1}
+    assert intent.tags == {"project": "demo"}
+    with pytest.raises(TypeError):
+        pool.resources["gpu"] = 3  # type: ignore[index]
+    assert QueuePool.from_dict(pool.to_dict()) == pool
+    assert RunIntent.from_dict(intent.to_dict()) == intent
 
 
 def test_cancellation_record_preserves_evidence_slot() -> None:

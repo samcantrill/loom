@@ -1,8 +1,9 @@
 """Unit tests for runner stage construction delegation."""
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -19,11 +20,13 @@ from loom.pipeline.execution import (
     PipelineRunner,
     RunRequest,
     RunRequestError,
+    RuntimeServices,
     StageExecutionRequest,
     StageExecutionResult,
     run_pipeline,
 )
 from loom.pipeline.execution.models import EXECUTION_FAILURE_SCHEMA_VERSION
+import loom.pipeline.execution.services as execution_services
 from loom.pipeline.execution.authority_adapter import (
     AuthorityBackedSerialRunStore,
     create_authority_backed_serial_run_store,
@@ -144,6 +147,106 @@ def _authority_run_store_with_coordination(
 
 def _run_uri(tmp_path: Path) -> str:
     return path_to_run_uri(tmp_path / "runs" / "run1")
+
+
+def test_runner_accepts_explicit_runtime_services(tmp_path: Path) -> None:
+    run_store = _authority_run_store(tmp_path)
+    services = RuntimeServices.from_legacy(run_store)
+
+    runner = PipelineRunner(services=services)
+
+    assert runner.services is services
+    assert runner.services.local_paths is run_store
+
+
+def _facet(protocol: type[object], target: object) -> Any:
+    class Facet(protocol):  # type: ignore[misc, valid-type]
+        def __init__(self, target: object) -> None:
+            self._target = target
+
+        def __getattribute__(self, name: str) -> object:
+            if name.startswith("_"):
+                return object.__getattribute__(self, name)
+            return getattr(object.__getattribute__(self, "_target"), name)
+
+    return Facet(target)
+
+
+def test_runner_accepts_split_nonlegacy_runtime_services(tmp_path: Path) -> None:
+    run_store = _authority_run_store(tmp_path)
+    service_fields = {
+        "lifecycle": execution_services.RunLifecycleStore,
+        "documents": execution_services.RunDocumentStore,
+        "freshness": execution_services.RunFreshnessStore,
+        "run_status": execution_services.RunStatusStore,
+        "plans": execution_services.RunPlanStore,
+        "prepared_runs": execution_services.RunPreparedRunStore,
+        "artifact_index": execution_services.RunArtifactIndexStore,
+        "config": execution_services.RunConfigStore,
+        "provenance": execution_services.RunProvenanceStore,
+        "events": execution_services.RunEventStore,
+        "event_sink_failures": execution_services.RunEventSinkFailureStore,
+        "event_observer_links": execution_services.RunEventObserverLinkStore,
+        "locks": execution_services.RunLockStore,
+        "inspection": execution_services.RunInspectionStore,
+        "runtime_metadata": execution_services.RunRuntimeMetadataStore,
+        "submitted_operations": execution_services.RunSubmittedOperationStore,
+        "reliability": execution_services.RunReliabilityStore,
+        "stage_state": execution_services.StageStateStore,
+        "stage_logs": execution_services.StageLogStore,
+        "stage_workspaces": execution_services.StageWorkspaceStore,
+        "worker_results": execution_services.StageWorkerResultStore,
+        "local_paths": execution_services.LocalRunStorePaths,
+    }
+    service_values: dict[str, Any] = {
+        name: _facet(protocol, run_store) for name, protocol in service_fields.items()
+    }
+    service_values["authority_store"] = run_store.authority_store
+    services = RuntimeServices(**service_values)
+
+    runner = PipelineRunner(services=services)
+    runner._create_or_open_run(
+        _run_uri(tmp_path),
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                    ),
+                )
+            )
+        ),
+    )
+
+    assert not isinstance(services.lifecycle, execution_services.LegacyRunStore)
+    assert run_store.read_run_status(_run_uri(tmp_path)) is not None
+    assert cast(Any, runner.run_store).authority_config() is None
+
+
+def test_runtime_store_facade_routes_replaced_lifecycle_facet(tmp_path: Path) -> None:
+    run_store = _authority_run_store(tmp_path)
+    calls: list[str] = []
+
+    class LifecycleReplacement:
+        def create_run(self, run_uri: str, **kwargs: object) -> None:
+            cast(Any, run_store.create_run)(run_uri, **kwargs)
+
+        def open_run(self, run_uri: str) -> object:
+            return run_store.open_run(run_uri)
+
+        def resolve_run_uri(self, run_uri: str) -> str:
+            return run_store.resolve_run_uri(run_uri)
+
+        def allocate_run_uri(self) -> str:
+            calls.append("allocate")
+            return "file:///replacement"
+
+    services = replace(
+        RuntimeServices.from_legacy(run_store), lifecycle=LifecycleReplacement()
+    )
+
+    assert execution_services.runtime_store_facade(services).allocate_run_uri() == "file:///replacement"
+    assert calls == ["allocate"]
 
 
 class TrackingExecutor:
@@ -989,6 +1092,82 @@ def test_runner_requires_run_uri_for_open_existing(tmp_path: Path) -> None:
                 open_existing=True,
             )
         )
+
+
+def test_runner_marks_fresh_preparation_failure_without_created_reset(
+    tmp_path: Path,
+) -> None:
+    run_store = _authority_run_store(tmp_path)
+
+    def failing_artifact_store(_root: Path):
+        raise RuntimeError("artifact setup failed")
+
+    with pytest.raises(RuntimeError, match="artifact setup failed"):
+        PipelineRunner(
+            run_store=run_store, artifact_store_factory=failing_artifact_store
+        ).run(
+            RunRequest(
+                pipeline=PipelineSpec(
+                    stages=(
+                        _stage(
+                            target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                        ),
+                    )
+                )
+            )
+        )
+
+    run_uri = next(run_store.local_store.root.glob("*"))
+    status = run_store.read_run_status(run_uri.as_uri())
+    assert status is not None
+    assert status.status is RunStatus.FAILED
+    assert status.metadata == {
+        "failure_phase": "preparation",
+        "error_type": "RuntimeError",
+    }
+    events = run_store.read_events(run_uri.as_uri())
+    assert events[-1].event_type == "run.preparation_failed"
+    assert events[-1].payload == {
+        "prior_status": "CREATED",
+        "error_type": "RuntimeError",
+        "message": "artifact setup failed",
+    }
+
+
+def test_runner_preserves_terminal_status_when_existing_preparation_fails(
+    tmp_path: Path,
+) -> None:
+    run_store = _authority_run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+    run_store.create_run(run_uri)
+    run_store.authority_store.transition_run(
+        run_uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING
+    )
+    run_store.authority_store.transition_run(
+        run_uri, from_status=RunStatus.RUNNING, to_status=RunStatus.SUCCEEDED
+    )
+
+    def failing_artifact_store(_root: Path):
+        raise RuntimeError("artifact setup failed")
+
+    with pytest.raises(RuntimeError, match="artifact setup failed"):
+        PipelineRunner(
+            run_store=run_store, artifact_store_factory=failing_artifact_store
+        ).run(
+            RunRequest(
+                pipeline=PipelineSpec(
+                    stages=(
+                        _stage(
+                            target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                        ),
+                    )
+                ),
+                run_uri=run_uri,
+                open_existing=True,
+            )
+        )
+
+    assert run_store.authority_store.open_run(run_uri).status is RunStatus.SUCCEEDED
 
 
 def test_runner_persists_composed_config_artifact_manifest_without_resolved_snapshots(

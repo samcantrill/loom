@@ -15,6 +15,7 @@ from loom.pipeline.status import (
     StageStatus,
     StageStatusRecord,
 )
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.runs import CatalogWarningCode, RunCatalog, RunFilter, RunFilterKind
@@ -92,6 +93,16 @@ def test_run_catalog_list_reconciles_new_changed_deleted_and_stale_rows(
         authority_store=SQLitePerRunAuthorityStore(),
     )
     first_store.open_run(first_uri)
+    first_store.write_run_status_with_intent(
+        first_uri,
+        RunStatusRecord(
+            run_uri=first_uri,
+            status=RunStatus.RUNNING,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:04Z",
+        ),
+        intent=TransitionIntent.RESUME,
+    )
     first_store.write_run_status(
         first_uri,
         RunStatusRecord(
@@ -238,6 +249,16 @@ def _create_catalog_run(
     run_uri = path_to_run_uri(run_path)
     checksum = checksum or format_digest("sha256", "a" * 64)
     store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
+    if status is RunStatus.SUCCEEDED:
+        store.write_run_status(
+            run_uri,
+            RunStatusRecord(
+                run_uri=run_uri,
+                status=RunStatus.RUNNING,
+                created_at="2020-01-01T00:00:00Z",
+                updated_at="2020-01-01T00:00:00Z",
+            ),
+        )
     store.write_run_status(
         run_uri,
         RunStatusRecord(
@@ -251,6 +272,18 @@ def _create_catalog_run(
     store.write_plan(run_uri, {"pipeline_fingerprint": pipeline_fingerprint})
     store.write_runtime_metadata(run_uri, {"executor": executor, "backend": backend})
     store.write_provenance_document(run_uri, "git", {"commit": git_commit})
+    if status is RunStatus.SUCCEEDED:
+        store.write_stage_status(
+            run_uri,
+            "build",
+            StageStatusRecord(
+                run_uri=run_uri,
+                stage_name="build",
+                status=StageStatus.RUNNING,
+                attempt=1,
+                updated_at="2020-01-01T00:00:00Z",
+            ),
+        )
     store.write_stage_status(
         run_uri,
         "build",
@@ -294,6 +327,16 @@ def _create_minimal_catalog_run(
     )
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
+    if status is RunStatus.SUCCEEDED:
+        store.write_run_status(
+            run_uri,
+            RunStatusRecord(
+                run_uri=run_uri,
+                status=RunStatus.RUNNING,
+                created_at="2020-01-01T00:00:00Z",
+                updated_at="2020-01-01T00:00:00Z",
+            ),
+        )
     store.write_run_status(
         run_uri,
         RunStatusRecord(

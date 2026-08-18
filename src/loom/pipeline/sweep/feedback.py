@@ -6,7 +6,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from loom.serialization import PlainData, PlainDataError, ensure_plain_data
+from loom._validation import require_schema_version
+from loom.serialization import (
+    PlainData,
+    PlainDataError,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 
 from .errors import SweepProtocolError
 
@@ -32,7 +38,9 @@ def _required(mapping: Mapping[str, object], field_name: str) -> object:
     return mapping[field_name]
 
 
-def _reject_unknown(mapping: Mapping[str, object], allowed: set[str], *, object_name: str) -> None:
+def _reject_unknown(
+    mapping: Mapping[str, object], allowed: set[str], *, object_name: str
+) -> None:
     unknown = set(mapping) - allowed
     if unknown:
         fields = ", ".join(sorted(unknown))
@@ -63,26 +71,28 @@ def _non_negative_int(value: object, field_name: str) -> int:
     return value
 
 
-def _plain_mapping(value: object, field_name: str) -> dict[str, PlainData]:
+def _plain_mapping(value: object, field_name: str) -> Mapping[str, PlainData]:
     if not isinstance(value, Mapping):
         raise SweepProtocolError(f"{field_name} must be a mapping")
     try:
-        normalized = ensure_plain_data(value, path=field_name)
+        normalized = freeze_plain_data(value, path=field_name)
     except (PlainDataError, TypeError) as exc:
         raise SweepProtocolError(f"{field_name} must contain plain data") from exc
-    if not isinstance(normalized, dict):
+    if not isinstance(normalized, Mapping):
         raise SweepProtocolError(f"{field_name} must be a mapping")
-    return dict(normalized)
+    return normalized
 
 
 def _plain_value(value: object, field_name: str) -> PlainData:
     try:
-        return ensure_plain_data(value, path=field_name)
+        return freeze_plain_data(value, path=field_name)
     except (PlainDataError, TypeError) as exc:
         raise SweepProtocolError(f"{field_name} must be plain data") from exc
 
 
-def _to_observations(values: Sequence[object], field_name: str) -> tuple["SweepFeedbackObservation", ...]:
+def _to_observations(
+    values: Sequence[object], field_name: str
+) -> tuple["SweepFeedbackObservation", ...]:
     observations: list[SweepFeedbackObservation] = []
     for index, value in enumerate(values):
         if isinstance(value, SweepFeedbackObservation):
@@ -112,14 +122,16 @@ class SweepFeedbackObservation:
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "key": self.key,
-            "value": self.value,
-            "metadata": dict(self.metadata),
+            "value": thaw_plain_data(self.value, path="value"),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
     def from_dict(cls, data: object) -> "SweepFeedbackObservation":
         if not isinstance(data, Mapping):
-            raise SweepProtocolError("SweepFeedbackObservation payload must be a mapping")
+            raise SweepProtocolError(
+                "SweepFeedbackObservation payload must be a mapping"
+            )
         _reject_unknown(
             data,
             {"key", "value", "metadata"},
@@ -150,10 +162,11 @@ class SweepTrialFeedbackRecord:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != SWEEP_FEEDBACK_SCHEMA_VERSION:
-            raise SweepProtocolError(
-                "SweepTrialFeedbackRecord.schema_version must be 1"
-            )
+        require_schema_version(
+            self.schema_version,
+            current=SWEEP_FEEDBACK_SCHEMA_VERSION,
+            error_type=SweepProtocolError,
+        )
         object.__setattr__(self, "sweep_id", _non_empty_text(self.sweep_id, "sweep_id"))
         object.__setattr__(self, "trial_id", _non_empty_text(self.trial_id, "trial_id"))
         object.__setattr__(
@@ -162,9 +175,13 @@ class SweepTrialFeedbackRecord:
             _non_negative_int(self.trial_index, "trial_index"),
         )
         object.__setattr__(
-            self, "status", SweepFeedbackStatus(self.status),
+            self,
+            "status",
+            SweepFeedbackStatus(self.status),
         )
-        object.__setattr__(self, "observed_at", _non_empty_text(self.observed_at, "observed_at"))
+        object.__setattr__(
+            self, "observed_at", _non_empty_text(self.observed_at, "observed_at")
+        )
         object.__setattr__(self, "run_uri", _optional_text(self.run_uri, "run_uri"))
         object.__setattr__(
             self,
@@ -195,15 +212,19 @@ class SweepTrialFeedbackRecord:
             "run_uri": self.run_uri,
             "provider_trial_id": self.provider_trial_id,
             "reason": self.reason,
-            "artifact_refs": dict(self.artifact_refs),
-            "observations": [observation.to_dict() for observation in self.observations],
-            "metadata": dict(self.metadata),
+            "artifact_refs": thaw_plain_data(self.artifact_refs, path="artifact_refs"),
+            "observations": [
+                observation.to_dict() for observation in self.observations
+            ],
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
     def from_dict(cls, data: object) -> "SweepTrialFeedbackRecord":
         if not isinstance(data, Mapping):
-            raise SweepProtocolError("SweepTrialFeedbackRecord payload must be a mapping")
+            raise SweepProtocolError(
+                "SweepTrialFeedbackRecord payload must be a mapping"
+            )
         _reject_unknown(
             data,
             {
@@ -239,7 +260,9 @@ class SweepTrialFeedbackRecord:
                 data.get("provider_trial_id"), "provider_trial_id"
             ),
             reason=_optional_text(data.get("reason"), "reason"),
-            artifact_refs=_plain_mapping(data.get("artifact_refs", {}), "artifact_refs"),
+            artifact_refs=_plain_mapping(
+                data.get("artifact_refs", {}), "artifact_refs"
+            ),
             observations=_to_observations(
                 list(data.get("observations", ())), "observations"
             ),

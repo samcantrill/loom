@@ -25,12 +25,14 @@ from loom.pipeline.event_sinks import (
 )
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.stores import (
     BackendCapability,
     CapabilityScope,
     LeaseState,
     PerRunAuthorityStore,
+    create_run_store,
     path_to_run_uri,
 )
 from loom.pipeline.stores.service_authority import (
@@ -181,6 +183,128 @@ def test_sqlite_store_satisfies_per_run_authority_protocol(tmp_path: Path) -> No
     assert store.capabilities().supports(
         BackendCapability.ATOMIC_OUTPUT_COMMIT,
         scope=CapabilityScope.PER_RUN,
+    )
+
+
+def test_transition_policy_is_conformant_across_public_authority_backends(
+    tmp_path: Path,
+) -> None:
+    stores: list[tuple[PerRunAuthorityStore, str]] = [
+        (InMemoryPerRunAuthorityStore(), "file:///runs/in-memory-transition"),
+        (
+            SQLitePerRunAuthorityStore(
+                path_to_run_uri(tmp_path / "sqlite-transition")
+            ),
+            path_to_run_uri(tmp_path / "sqlite-transition"),
+        ),
+    ]
+    with LocalAuthorityService.start() as service:
+        stores.append(
+            (
+                create_service_authority_store(service.config()),
+                path_to_run_uri(tmp_path / "service-transition"),
+            )
+        )
+        for store, run_uri in stores:
+            _assert_transition_policy(store, run_uri)
+
+
+def test_public_run_store_wrapper_propagates_transition_policy_and_revision() -> None:
+    store = create_run_store(authority_store=InMemoryPerRunAuthorityStore())
+    run_uri = "file:///runs/public-transition"
+    initial = store.admit_run(run_uri)
+    running = store.transition_run(
+        run_uri,
+        from_status=RunStatus.CREATED,
+        to_status=RunStatus.RUNNING,
+        expected_revision=initial,
+    )
+    succeeded = store.transition_run(
+        run_uri,
+        from_status=RunStatus.RUNNING,
+        to_status=RunStatus.SUCCEEDED,
+        expected_revision=running.revision,
+    )
+    with pytest.raises(ValueError):
+        store.transition_run(
+            run_uri,
+            from_status=RunStatus.SUCCEEDED,
+            to_status=RunStatus.RUNNING,
+            expected_revision=succeeded.revision,
+        )
+    store.transition_run(
+        run_uri,
+        from_status=RunStatus.SUCCEEDED,
+        to_status=RunStatus.RUNNING,
+        expected_revision=succeeded.revision,
+        intent=TransitionIntent.RESUME,
+    )
+
+
+def _assert_transition_policy(store: PerRunAuthorityStore, run_uri: str) -> None:
+    initial = store.create_run(run_uri)
+    running = store.transition_run(
+        run_uri,
+        from_status=RunStatus.CREATED,
+        to_status=RunStatus.RUNNING,
+        expected_revision=initial,
+    )
+    succeeded = store.transition_run(
+        run_uri,
+        from_status=RunStatus.RUNNING,
+        to_status=RunStatus.SUCCEEDED,
+        expected_revision=running.revision,
+    )
+    with pytest.raises(ValueError):
+        store.transition_run(
+            run_uri,
+            from_status=RunStatus.SUCCEEDED,
+            to_status=RunStatus.RUNNING,
+            expected_revision=succeeded.revision,
+        )
+    resumed = store.transition_run(
+        run_uri,
+        from_status=RunStatus.SUCCEEDED,
+        to_status=RunStatus.RUNNING,
+        expected_revision=succeeded.revision,
+        intent=TransitionIntent.RESUME,
+    )
+    pending = store.transition_stage(
+        run_uri,
+        "build",
+        from_status=None,
+        to_status=StageStatus.PENDING,
+        expected_revision=resumed.revision,
+    )
+    stage_running = store.transition_stage(
+        run_uri,
+        "build",
+        from_status=StageStatus.PENDING,
+        to_status=StageStatus.RUNNING,
+        expected_revision=pending.revision,
+    )
+    stage_succeeded = store.transition_stage(
+        run_uri,
+        "build",
+        from_status=StageStatus.RUNNING,
+        to_status=StageStatus.SUCCEEDED,
+        expected_revision=stage_running.revision,
+    )
+    with pytest.raises(ValueError):
+        store.transition_stage(
+            run_uri,
+            "build",
+            from_status=StageStatus.SUCCEEDED,
+            to_status=StageStatus.PENDING,
+            expected_revision=stage_succeeded.revision,
+        )
+    store.transition_stage(
+        run_uri,
+        "build",
+        from_status=StageStatus.SUCCEEDED,
+        to_status=StageStatus.PENDING,
+        expected_revision=stage_succeeded.revision,
+        intent=TransitionIntent.RESUME,
     )
 
 

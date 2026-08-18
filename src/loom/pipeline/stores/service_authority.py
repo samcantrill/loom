@@ -24,6 +24,11 @@ from loom.pipeline.reliability import (
     TimeoutOutcomeRecord,
 )
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import (
+    TransitionIntent,
+    ensure_run_transition,
+    ensure_stage_transition,
+)
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, thaw_plain_data
 
@@ -241,6 +246,7 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
         *,
         status: RunStatus = RunStatus.CREATED,
         metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> BackendRevision:
         return cast(
             BackendRevision,
@@ -249,6 +255,7 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
                 run_uri,
                 status=status,
                 metadata=_plain_mapping_or_none(metadata, "metadata"),
+                idempotency_key=idempotency_key,
             ),
         )
 
@@ -262,6 +269,8 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
         from_status: RunStatus,
         to_status: RunStatus,
         reason: LifecycleReason | None = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> StatusTransition:
         return StatusTransition.from_dict(
             self._call(
@@ -269,6 +278,8 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
                 run_uri,
                 from_status=from_status,
                 to_status=to_status,
+                expected_revision=expected_revision,
+                intent=intent,
                 reason=_reason_to_wire(reason),
             ),
         )
@@ -281,6 +292,8 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
         from_status: StageStatus | None,
         to_status: StageStatus,
         reason: LifecycleReason | None = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> StatusTransition:
         return StatusTransition.from_dict(
             self._call(
@@ -289,6 +302,8 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
                 stage_name,
                 from_status=from_status,
                 to_status=to_status,
+                expected_revision=expected_revision,
+                intent=intent,
                 reason=_reason_to_wire(reason),
             ),
         )
@@ -740,10 +755,20 @@ def _config_for_local_service(
 
 
 class _RunState:
-    def __init__(self, run_uri: str, status: RunStatus, revision: BackendRevision):
+    def __init__(
+        self,
+        run_uri: str,
+        status: RunStatus,
+        revision: BackendRevision,
+        *,
+        metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
+    ):
         self.run_uri = run_uri
         self.status = status
         self.revision = revision
+        self.metadata = dict(metadata or {})
+        self.idempotency_key = idempotency_key
         self.stage_statuses: dict[str, StageStatus] = {}
         self.attempts: dict[str, list[StageAttempt]] = {}
         self.leases: dict[str, LeaseRecord] = {}
@@ -860,13 +885,27 @@ class _ServiceAuthorityCore:
         *,
         status: RunStatus = RunStatus.CREATED,
         metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> BackendRevision:
         validate_run_uri(run_uri)
         with self._lock:
-            if run_uri in self._runs:
+            existing = self._runs.get(run_uri)
+            if existing is not None:
+                if (
+                    idempotency_key is not None
+                    and existing.idempotency_key == idempotency_key
+                    and existing.metadata == dict(metadata or {})
+                ):
+                    return existing.revision
                 raise ValueError(f"run already exists: {run_uri}")
             revision = self._next_revision()
-            self._runs[run_uri] = _RunState(run_uri, RunStatus(status), revision)
+            self._runs[run_uri] = _RunState(
+                run_uri,
+                RunStatus(status),
+                revision,
+                metadata=metadata,
+                idempotency_key=idempotency_key,
+            )
             return revision
 
     def open_run(self, run_uri: str) -> dict[str, PlainData]:
@@ -879,12 +918,16 @@ class _ServiceAuthorityCore:
         from_status: RunStatus,
         to_status: RunStatus,
         reason: object = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> dict[str, PlainData]:
         with self._lock:
             state = self._require_run(run_uri)
+            _require_expected_revision(state.revision, expected_revision)
             if state.status is not from_status:
                 raise ValueError("stale run transition")
             previous = state.status
+            ensure_run_transition(previous, to_status, intent=intent)
             state.status = to_status
             state.revision = self._next_revision()
             return StatusTransition(
@@ -903,12 +946,16 @@ class _ServiceAuthorityCore:
         from_status: StageStatus | None,
         to_status: StageStatus,
         reason: object = None,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> dict[str, PlainData]:
         with self._lock:
             state = self._require_run(run_uri)
+            _require_expected_revision(state.revision, expected_revision)
             current = state.stage_statuses.get(stage_name)
             if current is not from_status:
                 raise ValueError("stale stage transition")
+            ensure_stage_transition(current, to_status, intent=intent)
             state.stage_statuses[stage_name] = to_status
             state.revision = self._next_revision()
             return StatusTransition(
@@ -1313,6 +1360,20 @@ class _ServiceAuthorityCore:
         with self._lock:
             state = self._require_run(run_uri)
             resolved_event = _pipeline_event_from_wire(event)
+            existing = next(
+                (
+                    record
+                    for record in state.events
+                    if record.event_id == resolved_event.event_id
+                ),
+                None,
+            )
+            if existing is not None:
+                if not _event_matches_record(resolved_event, existing):
+                    raise ValueError(
+                        f"event_id {resolved_event.event_id!r} conflicts with an existing event"
+                    )
+                return existing.to_dict()
             record = PipelineEventRecord(
                 run_uri=run_uri,
                 sequence=len(state.events) + 1,
@@ -1322,6 +1383,7 @@ class _ServiceAuthorityCore:
                 payload=_plain_mapping_from_wire(
                     resolved_event.payload, "PipelineEventRecord.payload"
                 ),
+                event_id=resolved_event.event_id,
             )
             state.events.append(record)
             state.revision = self._next_revision()
@@ -1797,6 +1859,13 @@ def _reason_from_wire(reason: object) -> LifecycleReason | None:
     return LifecycleReason.from_dict(reason)
 
 
+def _require_expected_revision(
+    current: BackendRevision, expected: BackendRevision | None
+) -> None:
+    if expected is not None and current != expected:
+        raise AuthorityStoreError("stale authority revision")
+
+
 def _pipeline_event_from_wire(value: object) -> PipelineEvent:
     if isinstance(value, PipelineEvent):
         return value
@@ -1812,7 +1881,18 @@ def _pipeline_event_from_wire(value: object) -> PipelineEvent:
         event_type=event_type,
         payload=_plain_mapping_from_wire(mapping.get("payload", {}), "PipelineEvent.payload"),
         timestamp=timestamp,
+        event_id=cast(str | None, mapping.get("event_id")),
     )
+
+
+def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
+    if (
+        record.scope != event.scope
+        or record.event_type != event.event_type
+        or record.payload != event.payload
+    ):
+        return False
+    return event.timestamp is None or record.timestamp == event.timestamp
 
 
 def _plain_mapping_from_wire(value: object, path: str) -> dict[str, PlainData]:

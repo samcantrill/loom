@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -83,7 +84,6 @@ def _request(
             stage_config={},
             local_output_dir=store.local_stage_artifact_dir(run_uri, "build"),
             local_workspace_dir=store.local_stage_workspace_dir(run_uri, "build"),
-            run_store=store,
             artifact_store=artifact_store,
             output_specs=stage.outputs,
         ),
@@ -252,6 +252,34 @@ def test_subprocess_executor_reads_successful_worker_result(tmp_path: Path) -> N
     assert result.executor_name == "subprocess"
     assert result.executor_metadata["returncode"] == 0
     assert calls[0][0] == "/usr/bin/python"
+
+
+def test_subprocess_executor_uses_result_facet_and_request_authority_args(
+    tmp_path: Path,
+) -> None:
+    _store, run_uri, request = _request(tmp_path)
+    request = replace(
+        request,
+        worker_authority_cli_args=("--authority-reference", "worker-authority"),
+    )
+    calls: list[tuple[str, ...]] = []
+
+    class ResultOnlyStore:
+        def read_stage_worker_result(
+            self, run_uri: str, stage_name: str, *, attempt: int
+        ) -> dict[str, PlainData] | None:
+            assert (run_uri, stage_name, attempt) == (request.run_uri, "build", 1)
+            return _worker_success(run_uri).to_dict()
+
+    result = SubprocessExecutor(
+        worker_results=ResultOnlyStore(),
+        process_runner=lambda command, *, timeout_seconds=None: (
+            calls.append(tuple(command)) or SubprocessRunResult(returncode=0)
+        ),
+    ).execute(request)
+
+    assert result.status is StageStatus.SUCCEEDED
+    assert calls[0][calls[0].index("--authority-reference") + 1] == "worker-authority"
 
 
 def test_subprocess_executor_passes_reliability_timeout_to_process_runner(

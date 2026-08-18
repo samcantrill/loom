@@ -5,8 +5,16 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import cast
 
-from loom.serialization import PlainData, PlainDataError, ensure_plain_data, stable_json_dumps
+from loom.serialization import (
+    PlainData,
+    PlainDataError,
+    ensure_plain_data,
+    freeze_plain_data,
+    stable_json_dumps,
+    thaw_plain_data,
+)
 
 from .errors import SweepProtocolError
 
@@ -27,11 +35,15 @@ def _required(mapping: Mapping[str, object], field_name: str) -> object:
     return mapping[field_name]
 
 
-def _reject_unknown(mapping: Mapping[str, object], allowed: set[str], *, object_name: str) -> None:
+def _reject_unknown(
+    mapping: Mapping[str, object], allowed: set[str], *, object_name: str
+) -> None:
     unknown = set(mapping) - allowed
     if unknown:
         fields = ", ".join(sorted(unknown))
-        raise SweepProtocolError(f"{object_name} payload has unknown field(s): {fields}")
+        raise SweepProtocolError(
+            f"{object_name} payload has unknown field(s): {fields}"
+        )
 
 
 def _non_empty_text(value: object, field_name: str) -> str:
@@ -58,18 +70,18 @@ def _schema_version(value: object) -> int:
     return value
 
 
-def _plain_mapping(value: object, field_name: str) -> dict[str, PlainData]:
+def _plain_mapping(value: object, field_name: str) -> Mapping[str, PlainData]:
     if value is None:
         return {}
     if not isinstance(value, Mapping):
         raise SweepProtocolError(f"{field_name} must be a mapping")
     try:
-        normalized = ensure_plain_data(value, path=field_name)
+        normalized = freeze_plain_data(value, path=field_name)
     except (PlainDataError, TypeError) as exc:
         raise SweepProtocolError(f"{field_name} must contain plain data") from exc
-    if not isinstance(normalized, dict):
+    if not isinstance(normalized, Mapping):
         raise SweepProtocolError(f"{field_name} must be a mapping")
-    return dict(normalized)
+    return normalized
 
 
 def _positive_or_unlimited(value: object, field_name: str) -> int | None:
@@ -94,7 +106,7 @@ def _axis_values(value: object, field_name: str) -> tuple[PlainData, ...]:
     return tuple(normalized)
 
 
-def _grid_axes(value: object) -> dict[str, tuple[PlainData, ...]]:
+def _grid_axes(value: object) -> Mapping[str, Sequence[PlainData]]:
     if not isinstance(value, Mapping):
         raise SweepProtocolError("grid must be a mapping of axis names to values")
     if not value:
@@ -104,7 +116,10 @@ def _grid_axes(value: object) -> dict[str, tuple[PlainData, ...]]:
         axis_name = _non_empty_text(raw_name, "grid axis name")
         axes[axis_name] = _axis_values(raw_values, f"grid.{axis_name}")
     _validate_override_paths({name: values[0] for name, values in axes.items()})
-    return axes
+    frozen = freeze_plain_data(axes, path="grid")
+    if not isinstance(frozen, Mapping):
+        raise SweepProtocolError("grid must be a mapping")
+    return cast(Mapping[str, Sequence[PlainData]], frozen)
 
 
 def _manual_trials(value: object) -> tuple["ManualTrialSpec", ...]:
@@ -113,9 +128,15 @@ def _manual_trials(value: object) -> tuple["ManualTrialSpec", ...]:
     trials: list[ManualTrialSpec] = []
     for index, item in enumerate(value):
         try:
-            trial = item if isinstance(item, ManualTrialSpec) else ManualTrialSpec.from_dict(item)
+            trial = (
+                item
+                if isinstance(item, ManualTrialSpec)
+                else ManualTrialSpec.from_dict(item)
+            )
         except SweepProtocolError as exc:
-            raise SweepProtocolError(f"invalid manual trial at index {index}: {exc}") from exc
+            raise SweepProtocolError(
+                f"invalid manual trial at index {index}: {exc}"
+            ) from exc
         trials.append(trial)
     if not trials:
         raise SweepProtocolError("manual sweep must define at least one trial")
@@ -126,7 +147,9 @@ def _validate_override_paths(overrides: Mapping[str, PlainData]) -> None:
     for path in overrides:
         _non_empty_text(path, "override path")
         normalized_path = path[1:] if path.startswith("+") else path
-        if not normalized_path or any(not segment for segment in normalized_path.split(".")):
+        if not normalized_path or any(
+            not segment for segment in normalized_path.split(".")
+        ):
             raise SweepProtocolError(f"invalid override path {path!r}")
 
 
@@ -159,8 +182,8 @@ class ManualTrialSpec:
         return {
             "name": self.name,
             "provider_trial_id": self.provider_trial_id,
-            "overrides": dict(self.overrides),
-            "metadata": dict(self.metadata),
+            "overrides": thaw_plain_data(self.overrides, path="overrides"),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -174,7 +197,9 @@ class ManualTrialSpec:
         )
         return cls(
             name=_optional_text(data.get("name"), "name"),
-            provider_trial_id=_optional_text(data.get("provider_trial_id"), "provider_trial_id"),
+            provider_trial_id=_optional_text(
+                data.get("provider_trial_id"), "provider_trial_id"
+            ),
             overrides=_plain_mapping(_required(data, "overrides"), "overrides"),
             metadata=_plain_mapping(data.get("metadata", {}), "metadata"),
         )
@@ -195,8 +220,12 @@ class GridSweepSpec:
     def __post_init__(self) -> None:
         object.__setattr__(self, "schema_version", _schema_version(self.schema_version))
         object.__setattr__(self, "sweep_id", _non_empty_text(self.sweep_id, "sweep_id"))
-        object.__setattr__(self, "sweep_name", _optional_text(self.sweep_name, "sweep_name"))
-        object.__setattr__(self, "run_uri_root", _optional_text(self.run_uri_root, "run_uri_root"))
+        object.__setattr__(
+            self, "sweep_name", _optional_text(self.sweep_name, "sweep_name")
+        )
+        object.__setattr__(
+            self, "run_uri_root", _optional_text(self.run_uri_root, "run_uri_root")
+        )
         object.__setattr__(
             self,
             "max_generated_trials",
@@ -217,8 +246,8 @@ class GridSweepSpec:
             "sweep_name": self.sweep_name,
             "run_uri_root": self.run_uri_root,
             "max_generated_trials": self.max_generated_trials,
-            "grid": {axis: list(values) for axis, values in self.grid.items()},
-            "metadata": dict(self.metadata),
+            "grid": thaw_plain_data(self.grid, path="grid"),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -241,7 +270,9 @@ class GridSweepSpec:
         )
         _validate_mode(data.get("mode"), SweepMode.GRID)
         return cls(
-            schema_version=_schema_version(data.get("schema_version", SWEEP_SPEC_SCHEMA_VERSION)),
+            schema_version=_schema_version(
+                data.get("schema_version", SWEEP_SPEC_SCHEMA_VERSION)
+            ),
             sweep_id=_non_empty_text(_required(data, "sweep_id"), "sweep_id"),
             sweep_name=_optional_text(data.get("sweep_name"), "sweep_name"),
             run_uri_root=_optional_text(data.get("run_uri_root"), "run_uri_root"),
@@ -269,8 +300,12 @@ class ManualSweepSpec:
     def __post_init__(self) -> None:
         object.__setattr__(self, "schema_version", _schema_version(self.schema_version))
         object.__setattr__(self, "sweep_id", _non_empty_text(self.sweep_id, "sweep_id"))
-        object.__setattr__(self, "sweep_name", _optional_text(self.sweep_name, "sweep_name"))
-        object.__setattr__(self, "run_uri_root", _optional_text(self.run_uri_root, "run_uri_root"))
+        object.__setattr__(
+            self, "sweep_name", _optional_text(self.sweep_name, "sweep_name")
+        )
+        object.__setattr__(
+            self, "run_uri_root", _optional_text(self.run_uri_root, "run_uri_root")
+        )
         object.__setattr__(
             self,
             "max_generated_trials",
@@ -292,7 +327,7 @@ class ManualSweepSpec:
             "run_uri_root": self.run_uri_root,
             "max_generated_trials": self.max_generated_trials,
             "trials": [trial.to_dict() for trial in self.trials],
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -315,7 +350,9 @@ class ManualSweepSpec:
         )
         _validate_mode(data.get("mode"), SweepMode.MANUAL)
         return cls(
-            schema_version=_schema_version(data.get("schema_version", SWEEP_SPEC_SCHEMA_VERSION)),
+            schema_version=_schema_version(
+                data.get("schema_version", SWEEP_SPEC_SCHEMA_VERSION)
+            ),
             sweep_id=_non_empty_text(_required(data, "sweep_id"), "sweep_id"),
             sweep_name=_optional_text(data.get("sweep_name"), "sweep_name"),
             run_uri_root=_optional_text(data.get("run_uri_root"), "run_uri_root"),

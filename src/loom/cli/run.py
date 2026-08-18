@@ -1557,7 +1557,7 @@ def _build_executor(executor: str, store: Any) -> "Executor":
     if executor == "subprocess":
         from loom.pipeline.executors import SubprocessExecutor
 
-        return SubprocessExecutor(run_store=store)
+        return SubprocessExecutor(worker_results=store)
     if executor == "docker":
         from loom.pipeline.executors import DockerExecutor
 
@@ -1585,9 +1585,17 @@ def _run_pipeline(
     *,
     executor: "Executor",
 ) -> "RunResult":
-    from loom.pipeline.execution import PipelineRunner
+    from loom.pipeline.execution import (
+        PipelineRunner,
+        RuntimeServices,
+        is_offline_evidence_run_store,
+    )
 
-    return PipelineRunner(run_store=store, executor=executor).run(request)
+    if is_offline_evidence_run_store(store):
+        return PipelineRunner(run_store=store, executor=executor).run(request)
+    return PipelineRunner(
+        services=RuntimeServices.from_legacy(store), executor=executor
+    ).run(request)
 
 
 def _require_slurm_live_authority(store: Any, *, executor: str) -> None:

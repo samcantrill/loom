@@ -6,15 +6,12 @@ from collections.abc import Mapping
 from typing import cast
 
 from loom.artifacts import ArtifactRef
-from loom.fingerprints import hash_mapping
 from loom.pipeline.specs import OutputSpec, StageSpec
 from loom.serialization import PlainData
 
 from .errors import StageFingerprintError
 from .models import (
     DEFAULT_FINGERPRINT_ALGORITHM,
-    STAGE_FINGERPRINT_POLICY_NAME,
-    STAGE_FINGERPRINT_POLICY_VERSION,
     STAGE_FINGERPRINT_SCHEMA_VERSION,
     FingerprintContext,
     StageFingerprintPayload,
@@ -79,13 +76,8 @@ def build_stage_fingerprint(
         extra=context.extra,
     )
     algorithm = context.algorithm or DEFAULT_FINGERPRINT_ALGORITHM
-    digest = hash_mapping(payload.to_hash_input(), algorithm=algorithm)
-    return StageFingerprintRecord(
-        schema_version=STAGE_FINGERPRINT_SCHEMA_VERSION,
+    return StageFingerprintRecord.create(
         algorithm=algorithm,
-        policy_name=context.policy_name or STAGE_FINGERPRINT_POLICY_NAME,
-        policy_version=context.policy_version or STAGE_FINGERPRINT_POLICY_VERSION,
-        fingerprint=digest,
         payload=payload,
         inputs_summary=_inputs_summary(stage, bound_inputs, context),
     )

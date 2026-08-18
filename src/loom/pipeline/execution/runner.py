@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Thread
-from typing import cast
+from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.context import StageContext
@@ -40,6 +40,7 @@ from loom.pipeline.specs import PipelineSpec, StageSpec, parse_pipeline_config
 from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
     AuthorityStoreError,
     BackendCapability,
@@ -54,6 +55,7 @@ from loom.pipeline.stores import (
     StoreDiagnostic,
     admit_authority_capabilities,
 )
+from loom.pipeline.stores.config import authority_config_to_cli_args
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
 from loom.serialization import PlainData, ensure_plain_data, json_dumps_pretty
@@ -93,6 +95,7 @@ from .models import (
     StageRunResult,
 )
 from .offline_adapter import OfflineEvidenceRunStore, is_offline_evidence_run_store
+from .services import RuntimeServices, runtime_store_facade
 from .reliability import (
     record_resolved_reliability_policy_fact,
     record_retry_decision_for_stage_result,
@@ -177,15 +180,34 @@ class PipelineRunner:
     def __init__(
         self,
         *,
-        run_store: RunnerRunStore,
+        services: RuntimeServices | None = None,
+        run_store: RunnerRunStore | None = None,
         executor: Executor | None = None,
         artifact_store_factory: ArtifactStoreFactory | None = None,
         clock: Callable[[], str] = utc_timestamp,
     ) -> None:
-        offline_evidence_store = is_offline_evidence_run_store(run_store)
-        if not offline_evidence_store and not isinstance(run_store, LegacyRunStore):
-            raise PipelineExecutionError("run_store must satisfy LegacyRunStore")
-        if isinstance(run_store, LocalRunStore):
+        offline_execution = is_offline_evidence_run_store(run_store)
+        if services is None:
+            if run_store is None:
+                raise PipelineExecutionError("PipelineRunner requires services")
+            if offline_execution:
+                services = RuntimeServices.from_legacy(
+                    cast(Any, run_store).local_store
+                )
+            else:
+                services = RuntimeServices.from_legacy(cast(LegacyRunStore, run_store))
+        elif run_store is not None:
+            raise PipelineExecutionError("PipelineRunner accepts either services or run_store")
+        execution_store = (
+            run_store
+            if is_offline_evidence_run_store(run_store)
+            else runtime_store_facade(services)
+        )
+        if (
+            isinstance(services.local_paths, LocalRunStore)
+            and services.authority_store is None
+            and not offline_execution
+        ):
             raise PipelineExecutionError(
                 "PipelineRunner requires an authority-backed runtime store; "
                 "LocalRunStore is limited to local artifact/materialization access. "
@@ -198,7 +220,8 @@ class PipelineRunner:
             executor = LocalExecutor()
         if not isinstance(executor, Executor):
             raise PipelineExecutionError("executor must satisfy Executor")
-        self.run_store = cast(LegacyRunStore, run_store)
+        self.services = services
+        self.run_store = cast(LegacyRunStore, execution_store)
         self.executor = executor
         self.artifact_store_factory = artifact_store_factory or (
             lambda root: LocalArtifactStore(root)
@@ -328,7 +351,7 @@ class PipelineRunner:
                     "max_parallel_stages": policy.max_parallel_stages,
                 },
             )
-        authority_store = getattr(self.run_store, "authority_store", None)
+        authority_store = self.services.authority_store
         if authority_store is None:
             diagnostic = StoreDiagnostic(
                 code="missing_authority_backend",
@@ -372,15 +395,14 @@ class PipelineRunner:
         error_code: str,
         context: Mapping[str, PlainData],
     ) -> None:
-        authority_store = getattr(self.run_store, "authority_store", None)
+        authority_store = self.services.authority_store
         if authority_store is None:
             raise ParallelExecutionUnsupportedError(
                 f"{feature} requires an authoritative backend",
                 code=error_code,
                 context=dict(context or {}),
             )
-        config_provider = getattr(self.run_store, "authority_config", None)
-        config = config_provider() if callable(config_provider) else None
+        config = self.services.authority_config
         from loom.pipeline.stores import AuthorityConfig
 
         if not isinstance(config, AuthorityConfig):
@@ -416,42 +438,42 @@ class PipelineRunner:
         started_at: str,
     ) -> RunResult:
         created_at = self._created_at(run_uri, started_at)
-        write_run_status(
-            self.run_store,
-            run_uri=run_uri,
-            status=RunStatus.CREATED,
-            created_at=created_at,
-            updated_at=started_at,
-            started_at=started_at,
-            metadata=request.metadata,
-        )
-        options = _options_with_resolved_run_uri(options, run_uri)
-        resolved_runtime = resolve_run_runtime(
-            options,
-            stage_ids=spec.stage_names,
-        )
-        self.run_store.write_runtime_metadata(
-            run_uri,
-            build_runtime_metadata(
+        prior_status = self._run_status_before_preparation(run_uri)
+        try:
+            options = _options_with_resolved_run_uri(options, run_uri)
+            resolved_runtime = resolve_run_runtime(
                 options,
                 stage_ids=spec.stage_names,
-            ).to_dict(),
-        )
-        self._write_config_and_provenance(run_uri, request, config_mapping)
-        artifact_store = self.artifact_store_factory(
-            local_run_store.local_artifact_root(run_uri)
-        )
-
-        plan = plan_pipeline(
-            spec,
-            run_uri=run_uri,
-            run_store=self.run_store,
-            artifact_store=artifact_store,
-            selectors=request.selectors,
-            resume=request.resume,
-            fingerprint_context=request.fingerprint_context,
-            persist=True,
-        )
+            )
+            self.run_store.write_runtime_metadata(
+                run_uri,
+                build_runtime_metadata(
+                    options,
+                    stage_ids=spec.stage_names,
+                ).to_dict(),
+            )
+            self._write_config_and_provenance(run_uri, request, config_mapping)
+            artifact_store = self.artifact_store_factory(
+                local_run_store.local_artifact_root(run_uri)
+            )
+            plan = plan_pipeline(
+                spec,
+                run_uri=run_uri,
+                run_store=self.run_store,
+                artifact_store=artifact_store,
+                selectors=request.selectors,
+                resume=request.resume,
+                fingerprint_context=request.fingerprint_context,
+                persist=True,
+            )
+        except Exception as exc:
+            self._record_preparation_failure(
+                run_uri=run_uri,
+                created_at=created_at,
+                prior_status=prior_status,
+                exc=exc,
+            )
+            raise
         write_run_status(
             self.run_store,
             run_uri=run_uri,
@@ -460,6 +482,11 @@ class PipelineRunner:
             updated_at=self.clock(),
             started_at=started_at,
             metadata={"plan_summary": dict(plan.summary)},
+            intent=(
+                TransitionIntent.RESUME
+                if prior_status is not RunStatus.CREATED
+                else TransitionIntent.NORMAL
+            ),
         )
         self._emit_run_event(
             run_uri,
@@ -861,7 +888,6 @@ class PipelineRunner:
             failure = self._plan_failure(
                 run_uri, stage, stage_plan.action, stage_plan.reasons
             )
-            self._write_failed_run(run_uri, created_at, run_started_at, failure)
             return self._block_plan_stage(
                 run_uri=run_uri,
                 stage_plan=stage_plan,
@@ -1404,7 +1430,6 @@ class PipelineRunner:
                     "factory_target": stage.factory.target_path,
                     "worker_request": True,
                 },
-                run_store=self.run_store,
                 artifact_store=artifact_store,
                 output_specs=stage.outputs,
             )
@@ -1422,6 +1447,7 @@ class PipelineRunner:
                 traceback_path=Path(prepared.traceback_path),
                 metadata={"worker_request": True},
                 resolved_runtime=resolved_runtime,
+                worker_authority_cli_args=_worker_authority_cli_args(self.services),
             )
             execution_result = self._execute_stage_request_with_lease_renewal(
                 run_uri=run_uri,
@@ -1507,6 +1533,7 @@ class PipelineRunner:
             executor_name=str(getattr(self.executor, "name", "unknown")),
             clock=self.clock,
             event_dispatcher=self._event_dispatcher,
+            finalize_run_on_failure=False,
         )
 
     def _execute_stage_request_with_lease_renewal(
@@ -1518,7 +1545,7 @@ class PipelineRunner:
         request: StageExecutionRequest,
     ) -> StageExecutionResult:
         renew_stage_attempt_lease = getattr(
-            self.run_store,
+            self.services.stage_state,
             "renew_stage_attempt_lease",
             None,
         )
@@ -1576,21 +1603,17 @@ class PipelineRunner:
         )
         if not resources:
             return None
-        coordination_store = getattr(
-            self.run_store,
-            "workspace_coordination_store",
-            None,
-        )
+        coordination_store = self.services.coordination_store
         if coordination_store is None:
             return None
-        workspace_id = getattr(self.run_store, "workspace_id", None)
+        workspace_id = self.services.workspace_id
         if not isinstance(workspace_id, str) or not workspace_id:
             raise ResourceAdmissionError(
                 "resource admission requires an authority workspace_id",
                 code="resource_admission.missing_workspace",
                 context={"run_uri": run_uri, "stage_name": stage_name},
             )
-        owner_id = str(getattr(self.run_store, "owner_id", "serial-controller"))
+        owner_id = self.services.owner_id or "serial-controller"
         execution = cast(ExecutionOptions, resolved_runtime.execution)
         settings = execution.settings
         request = ResourceAdmissionRequest(
@@ -1617,11 +1640,7 @@ class PipelineRunner:
     def _release_stage_resource_admission(
         self, decision: ResourceAdmissionDecision
     ) -> None:
-        coordination_store = getattr(
-            self.run_store,
-            "workspace_coordination_store",
-            None,
-        )
+        coordination_store = self.services.coordination_store
         if coordination_store is None:
             return
         try:
@@ -1644,11 +1663,7 @@ class PipelineRunner:
     def _require_local_run_store(self) -> LocalRunStorePaths:
         if isinstance(self.run_store, OfflineEvidenceRunStore):
             return self.run_store.local_store
-        if not isinstance(self.run_store, LocalRunStorePaths):
-            raise PipelineExecutionError(
-                "PipelineRunner requires a run_store that exposes local_* path helpers"
-            )
-        return self.run_store
+        return self.services.local_paths
 
     def _write_offline_evidence_manifest_if_needed(self, run_uri: str) -> None:
         if not is_offline_evidence_run_store(self.run_store):
@@ -1682,7 +1697,56 @@ class PipelineRunner:
         if request.open_existing:
             self.run_store.open_run(run_uri)
         else:
-            self.run_store.create_run(run_uri, metadata=request.metadata)
+            self.run_store.create_run(
+                run_uri,
+                metadata=request.metadata,
+                idempotency_key=request.idempotency_key,
+            )
+
+    def _run_status_before_preparation(self, run_uri: str) -> RunStatus:
+        snapshot = self.run_store.open_run(run_uri)
+        status = getattr(snapshot, "status", None)
+        if isinstance(status, RunStatus):
+            return status
+        local_status = self.run_store.read_run_status(run_uri)
+        return RunStatus.CREATED if local_status is None else local_status.status
+
+    def _record_preparation_failure(
+        self,
+        *,
+        run_uri: str,
+        created_at: str,
+        prior_status: RunStatus,
+        exc: Exception,
+    ) -> None:
+        failed_at = self.clock()
+        try:
+            self._emit_run_event(
+                run_uri,
+                "run.preparation_failed",
+                timestamp=failed_at,
+                payload={
+                    "prior_status": prior_status.value,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            )
+        except Exception:
+            # Failure recording must never hide the preparation error.
+            pass
+        if prior_status is RunStatus.CREATED:
+            write_run_status(
+                self.run_store,
+                run_uri=run_uri,
+                status=RunStatus.FAILED,
+                created_at=created_at,
+                updated_at=failed_at,
+                finished_at=failed_at,
+                metadata={
+                    "failure_phase": "preparation",
+                    "error_type": type(exc).__name__,
+                },
+            )
 
     def _resolve_config_and_spec(
         self, request: RunRequest
@@ -1962,7 +2026,6 @@ class PipelineRunner:
                     message=f"REUSE stage {stage_plan.stage_name!r} has no reusable outputs",
                     executor=str(getattr(self.executor, "name", "unknown")),
                 )
-                self._write_failed_run(run_uri, created_at, started_at, failure)
                 return StageRunResult(
                     stage_name=stage_plan.stage_name,
                     action=PlanAction.BLOCKED,
@@ -1986,7 +2049,6 @@ class PipelineRunner:
                 failure_type="store_commit",
                 exc=exc,
             )
-            self._write_failed_run(run_uri, created_at, started_at, failure)
             return StageRunResult(
                 stage_name=stage_plan.stage_name,
                 action=PlanAction.BLOCKED,
@@ -2059,7 +2121,6 @@ class PipelineRunner:
                 failure_type="store_commit",
                 exc=exc,
             )
-            self._write_failed_run(run_uri, created_at, started_at, failure)
             return StageRunResult(
                 stage_name=stage_plan.stage_name,
                 action=PlanAction.BLOCKED,
@@ -2184,6 +2245,7 @@ class PipelineRunner:
             executor_name=str(getattr(self.executor, "name", "unknown")),
             clock=self.clock,
             event_dispatcher=self._event_dispatcher,
+            finalize_run=False,
         )
 
     def _write_failed_run(
@@ -2479,6 +2541,14 @@ def _is_composed_config(value: object) -> bool:
             "recipe_manifest",
         )
     )
+
+
+def _worker_authority_cli_args(services: RuntimeServices) -> tuple[str, ...]:
+    """Return launch-only authority facts without changing worker payloads."""
+
+    if services.authority_config is None:
+        return ()
+    return tuple(authority_config_to_cli_args(services.authority_config))
 
 
 def _plain(value: object) -> dict[str, PlainData]:

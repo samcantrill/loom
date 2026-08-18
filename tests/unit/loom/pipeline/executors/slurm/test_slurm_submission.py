@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,6 +12,10 @@ import pytest
 
 import loom.pipeline.executors.slurm.authority as slurm_authority
 from loom.pipeline.execution import create_authority_backed_serial_run_store
+from loom.pipeline.execution.slurm_controller import (
+    SlurmSubmissionServices,
+    submit_single_job_slurm as submit_single_job_slurm_with_services,
+)
 from loom.pipeline.executors.slurm import (
     FakeSlurmCommandRunner,
     SlurmActiveSubmissionError,
@@ -59,6 +64,19 @@ class _ProbeRequiredAuthority(SQLitePerRunAuthorityStore):
     requires_live_endpoint_readiness = True
 
 
+class _TrackingRunStatusStore:
+    def __init__(self, delegate: Any) -> None:
+        self.delegate = delegate
+        self.writes: list[Any] = []
+
+    def read_run_status(self, run_uri: str) -> Any:
+        return self.delegate.read_run_status(run_uri)
+
+    def write_run_status(self, run_uri: str, status: Any) -> None:
+        self.writes.append(status)
+        self.delegate.write_run_status(run_uri, status)
+
+
 def test_submit_single_job_slurm_persists_scheduler_identity(
     tmp_path: Path,
 ) -> None:
@@ -91,6 +109,28 @@ def test_submit_single_job_slurm_persists_scheduler_identity(
     assert status.status is RunStatus.SUBMITTED
     authority = cast(Mapping[str, object], registry.backend_metadata["authority"])
     assert authority["mutation_source"] == "authority_service"
+
+
+def test_execution_controller_routes_run_status_to_explicit_facet(
+    tmp_path: Path,
+) -> None:
+    store, run_uri, planning = _planning_result(tmp_path)
+    tracking_status = _TrackingRunStatusStore(store)
+    services = replace(
+        SlurmSubmissionServices.from_legacy(store),
+        run_status=tracking_status,
+    )
+
+    result = submit_single_job_slurm_with_services(
+        services=services,
+        run_uri=run_uri,
+        planning_result=planning,
+        command_runner=FakeSlurmCommandRunner(starting_job_id=4321),
+        submitted_at="2026-05-08T00:00:03Z",
+    )
+
+    assert result.status == "SUBMITTED"
+    assert [record.status for record in tracking_status.writes] == [RunStatus.SUBMITTED]
 
 
 def test_submit_single_job_slurm_marks_unavailable_sbatch_failed(

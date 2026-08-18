@@ -10,6 +10,7 @@ from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.offline_evidence import OfflineEvidenceManifest
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
     AuthorityProtocolErrorCategory,
     AuthorityProtocolMetadata,
@@ -407,6 +408,7 @@ class AuthorityMutationService:
             _required_run_uri(request),
             status=RunStatus(_body_value(request, "status", RunStatus.CREATED.value)),
             metadata=_optional_body_mapping(request, "metadata"),
+            idempotency_key=request.metadata.idempotency_key,
         )
         return _result(revision=revision, service_generation=self._service_generation)
 
@@ -426,6 +428,9 @@ class AuthorityMutationService:
             from_status=RunStatus(_required_body_value(request, "from_status")),
             to_status=RunStatus(_required_body_value(request, "to_status")),
             expected_revision=request.expected_revision,
+            intent=TransitionIntent(
+                cast(str, request.body.get("intent", TransitionIntent.NORMAL.value))
+            ),
             reason=_optional_reason(request),
         )
         return _result(
@@ -548,6 +553,9 @@ class AuthorityMutationService:
             else StageStatus(cast(str, from_status_value)),
             to_status=StageStatus(_required_body_value(request, "to_status")),
             expected_revision=request.expected_revision,
+            intent=TransitionIntent(
+                cast(str, request.body.get("intent", TransitionIntent.NORMAL.value))
+            ),
             reason=_optional_reason(request),
         )
         return _result(

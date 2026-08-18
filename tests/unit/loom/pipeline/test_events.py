@@ -162,6 +162,7 @@ def test_pipeline_event_validates_payload_and_optional_timestamp() -> None:
         "event_type": "stage.started",
         "payload": {"labels": ["x"]},
         "timestamp": timestamp,
+        "event_id": event.event_id,
     }
     with pytest.raises(TypeError):
         cast(Any, event.payload)["labels"] = ["changed"]

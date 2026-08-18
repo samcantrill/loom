@@ -13,12 +13,17 @@ from loom.serialization import (
     PlainData,
     PlainDataError,
     ensure_plain_data,
+    freeze_plain_data,
     json_dumps_pretty,
     json_loads,
     stable_json_dumps,
 )
 
-from .errors import SweepManifestCompatibilityDiagnostic, SweepManifestError, SweepProtocolError
+from .errors import (
+    SweepManifestCompatibilityDiagnostic,
+    SweepManifestError,
+    SweepProtocolError,
+)
 from .grid import GridSweepProposalProvider
 from .manifest import (
     SWEEP_MANIFEST_FILE_NAME,
@@ -59,6 +64,21 @@ class SweepPlan:
     authored_spec: Mapping[str, PlainData]
     provider: SweepProviderIdentity
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.sweep_manifest, SweepManifest):
+            raise SweepProtocolError("sweep_manifest must be a SweepManifest")
+        if not isinstance(self.trials_manifest, TrialsManifest):
+            raise SweepProtocolError("trials_manifest must be a TrialsManifest")
+        if not isinstance(self.provider, SweepProviderIdentity):
+            raise SweepProtocolError("provider must be a SweepProviderIdentity")
+        try:
+            authored_spec = freeze_plain_data(self.authored_spec, path="authored_spec")
+        except PlainDataError as exc:
+            raise SweepProtocolError("authored_spec must contain plain data") from exc
+        if not isinstance(authored_spec, Mapping):
+            raise SweepProtocolError("authored_spec must be a mapping")
+        object.__setattr__(self, "authored_spec", authored_spec)
+
     @property
     def sweep_id(self) -> str:
         return self.sweep_manifest.sweep_id
@@ -87,7 +107,11 @@ class SweepPlanCompatibilityResult:
 
     @property
     def compatible(self) -> bool:
-        return not self.diagnostics and self.sweep_manifest is not None and self.trials_manifest is not None
+        return (
+            not self.diagnostics
+            and self.sweep_manifest is not None
+            and self.trials_manifest is not None
+        )
 
 
 def provider_for_spec(spec: SweepSpec) -> SweepProposalProvider:
@@ -127,7 +151,9 @@ def plan_sweep(
         )
 
     timestamp = created_at or _utc_now()
-    root = run_uri_root or parsed_spec.run_uri_root or _default_run_uri_root(parsed_spec)
+    root = (
+        run_uri_root or parsed_spec.run_uri_root or _default_run_uri_root(parsed_spec)
+    )
     trials = _canonical_trial_records(
         sweep_id=parsed_spec.sweep_id,
         proposals=proposals,
@@ -203,7 +229,11 @@ def write_sweep_plan(
 
     write_sweep_manifest(plan.sweep_manifest, sweep_manifest_path)
     write_trials_manifest(plan.trials_manifest, trials_manifest_path)
-    payload = authored_spec_payload if authored_spec_payload is not None else plan.authored_spec
+    payload = (
+        authored_spec_payload
+        if authored_spec_payload is not None
+        else plan.authored_spec
+    )
     _write_plain_json(authored_spec_path, payload)
 
     return SweepPlanPaths(
@@ -237,7 +267,14 @@ def check_existing_sweep_plan(
     trials_manifest: TrialsManifest | None = None
 
     if not sweep_path.exists():
-        diagnostics.append(_diagnostic(root, SWEEP_MANIFEST_FILE_NAME, "missing_sweep_manifest", "sweep manifest is missing"))
+        diagnostics.append(
+            _diagnostic(
+                root,
+                SWEEP_MANIFEST_FILE_NAME,
+                "missing_sweep_manifest",
+                "sweep manifest is missing",
+            )
+        )
     else:
         try:
             sweep_payload = _read_json_object(sweep_path)
@@ -246,15 +283,26 @@ def check_existing_sweep_plan(
             )
         except (OSError, json.JSONDecodeError, SweepManifestError) as exc:
             sweep_diagnostics = (
-                _diagnostic(root, SWEEP_MANIFEST_FILE_NAME, "malformed_sweep_manifest", str(exc)),
+                _diagnostic(
+                    root, SWEEP_MANIFEST_FILE_NAME, "malformed_sweep_manifest", str(exc)
+                ),
             )
         diagnostics.extend(sweep_diagnostics)
 
-    expected_sweep_id = expected_plan.sweep_id if expected_plan is not None else (
-        sweep_manifest.sweep_id if sweep_manifest is not None else None
+    expected_sweep_id = (
+        expected_plan.sweep_id
+        if expected_plan is not None
+        else (sweep_manifest.sweep_id if sweep_manifest is not None else None)
     )
     if not trials_path.exists():
-        diagnostics.append(_diagnostic(root, TRIALS_MANIFEST_FILE_NAME, "missing_trials_manifest", "trials manifest is missing"))
+        diagnostics.append(
+            _diagnostic(
+                root,
+                TRIALS_MANIFEST_FILE_NAME,
+                "missing_trials_manifest",
+                "trials manifest is missing",
+            )
+        )
     else:
         try:
             trials_payload = _read_json_object(trials_path)
@@ -265,13 +313,20 @@ def check_existing_sweep_plan(
             )
         except (OSError, json.JSONDecodeError, SweepManifestError) as exc:
             trials_diagnostics = (
-                _diagnostic(root, TRIALS_MANIFEST_FILE_NAME, "malformed_trials_manifest", str(exc)),
+                _diagnostic(
+                    root,
+                    TRIALS_MANIFEST_FILE_NAME,
+                    "malformed_trials_manifest",
+                    str(exc),
+                ),
             )
         diagnostics.extend(trials_diagnostics)
 
     if expected_plan is not None and not diagnostics:
         diagnostics.extend(
-            _plan_match_diagnostics(root, expected_plan, sweep_manifest, trials_manifest)
+            _plan_match_diagnostics(
+                root, expected_plan, sweep_manifest, trials_manifest
+            )
         )
 
     return SweepPlanCompatibilityResult(
@@ -303,7 +358,9 @@ def build_trial_run_uri(run_uri_root: str, trial_id: str) -> str:
 def trial_override_expressions(overrides: Mapping[str, PlainData]) -> tuple[str, ...]:
     """Render override facts with the existing Loom override syntax."""
 
-    return tuple(f"{path}={stable_json_dumps(value)}" for path, value in overrides.items())
+    return tuple(
+        f"{path}={stable_json_dumps(value)}" for path, value in overrides.items()
+    )
 
 
 def _canonical_trial_records(
@@ -322,7 +379,9 @@ def _canonical_trial_records(
         trial_id = build_trial_id(index)
         metadata: dict[str, PlainData] = {
             "provider": provider.to_dict(),
-            "override_expressions": list(trial_override_expressions(proposal.overrides)),
+            "override_expressions": list(
+                trial_override_expressions(proposal.overrides)
+            ),
         }
         metadata.update(dict(proposal.metadata))
         records.append(
@@ -350,19 +409,41 @@ def _plan_match_diagnostics(
         return ()
     if sweep_manifest.sweep_id != expected_plan.sweep_id:
         diagnostics.append(
-            _diagnostic(root, SWEEP_MANIFEST_FILE_NAME, "sweep_id_mismatch", "existing sweep_id does not match generated plan")
+            _diagnostic(
+                root,
+                SWEEP_MANIFEST_FILE_NAME,
+                "sweep_id_mismatch",
+                "existing sweep_id does not match generated plan",
+            )
         )
     if sweep_manifest.provider != expected_plan.provider:
         diagnostics.append(
-            _diagnostic(root, SWEEP_MANIFEST_FILE_NAME, "provider_mismatch", "existing provider does not match generated plan")
+            _diagnostic(
+                root,
+                SWEEP_MANIFEST_FILE_NAME,
+                "provider_mismatch",
+                "existing provider does not match generated plan",
+            )
         )
     if sweep_manifest.trial_count != expected_plan.sweep_manifest.trial_count:
         diagnostics.append(
-            _diagnostic(root, SWEEP_MANIFEST_FILE_NAME, "trial_count_mismatch", "existing trial count does not match generated plan")
+            _diagnostic(
+                root,
+                SWEEP_MANIFEST_FILE_NAME,
+                "trial_count_mismatch",
+                "existing trial count does not match generated plan",
+            )
         )
-    if _plan_fingerprint(trials_manifest.trials) != _plan_fingerprint(expected_plan.trials):
+    if _plan_fingerprint(trials_manifest.trials) != _plan_fingerprint(
+        expected_plan.trials
+    ):
         diagnostics.append(
-            _diagnostic(root, TRIALS_MANIFEST_FILE_NAME, "trial_plan_mismatch", "existing trial plan does not match generated plan")
+            _diagnostic(
+                root,
+                TRIALS_MANIFEST_FILE_NAME,
+                "trial_plan_mismatch",
+                "existing trial plan does not match generated plan",
+            )
         )
     return tuple(diagnostics)
 
@@ -397,7 +478,9 @@ def _write_plain_json(path: Path, payload: Mapping[str, object]) -> None:
     try:
         plain = ensure_plain_data(payload, path=str(path))
     except (PlainDataError, TypeError) as exc:
-        raise SweepProtocolError("authored sweep spec payload must contain plain data") from exc
+        raise SweepProtocolError(
+            "authored sweep spec payload must contain plain data"
+        ) from exc
     if not isinstance(plain, dict):
         raise SweepProtocolError("authored sweep spec payload must be a mapping")
     path.parent.mkdir(parents=True, exist_ok=True)

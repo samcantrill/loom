@@ -6,8 +6,10 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import cast
 
+from loom._validation import require_schema_version
 from loom.serialization import (
     PlainData,
     SchemaVersionError,
@@ -63,7 +65,9 @@ class QueuePool:
     schema_version: int = QUEUE_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "pool_name", validate_queue_id(self.pool_name, "pool_name"))
+        object.__setattr__(
+            self, "pool_name", validate_queue_id(self.pool_name, "pool_name")
+        )
         object.__setattr__(self, "mode", QueuePoolMode(self.mode))
         object.__setattr__(
             self,
@@ -114,7 +118,9 @@ class QueueDefinition:
         object.__setattr__(
             self, "queue_name", validate_queue_id(self.queue_name, "queue_name")
         )
-        object.__setattr__(self, "pool_name", validate_queue_id(self.pool_name, "pool_name"))
+        object.__setattr__(
+            self, "pool_name", validate_queue_id(self.pool_name, "pool_name")
+        )
         object.__setattr__(
             self,
             "metadata",
@@ -204,7 +210,9 @@ class LaunchContract:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "adapter", validate_queue_id(self.adapter, "adapter"))
-        object.__setattr__(self, "entrypoint", _non_empty_string(self.entrypoint, "entrypoint"))
+        object.__setattr__(
+            self, "entrypoint", _non_empty_string(self.entrypoint, "entrypoint")
+        )
         object.__setattr__(
             self,
             "resources",
@@ -283,9 +291,15 @@ class QueueClaim:
     schema_version: int = QUEUE_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "claim_id", validate_queue_id(self.claim_id, "claim_id"))
-        object.__setattr__(self, "owner_id", validate_queue_id(self.owner_id, "owner_id"))
-        object.__setattr__(self, "claimed_at", _timestamp(self.claimed_at, "claimed_at"))
+        object.__setattr__(
+            self, "claim_id", validate_queue_id(self.claim_id, "claim_id")
+        )
+        object.__setattr__(
+            self, "owner_id", validate_queue_id(self.owner_id, "owner_id")
+        )
+        object.__setattr__(
+            self, "claimed_at", _timestamp(self.claimed_at, "claimed_at")
+        )
         object.__setattr__(
             self,
             "dispatch_attempt",
@@ -330,8 +344,12 @@ class DispatchHandle:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "adapter", validate_queue_id(self.adapter, "adapter"))
-        object.__setattr__(self, "handle_id", _non_empty_string(self.handle_id, "handle_id"))
-        object.__setattr__(self, "dispatched_at", _timestamp(self.dispatched_at, "dispatched_at"))
+        object.__setattr__(
+            self, "handle_id", _non_empty_string(self.handle_id, "handle_id")
+        )
+        object.__setattr__(
+            self, "dispatched_at", _timestamp(self.dispatched_at, "dispatched_at")
+        )
         object.__setattr__(
             self,
             "dispatch_attempt",
@@ -383,7 +401,9 @@ class CancellationRecord:
     schema_version: int = QUEUE_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "requested_at", _timestamp(self.requested_at, "requested_at"))
+        object.__setattr__(
+            self, "requested_at", _timestamp(self.requested_at, "requested_at")
+        )
         object.__setattr__(
             self,
             "requested_by",
@@ -448,16 +468,24 @@ class QueueItem:
             "queue_name",
             validate_queue_id(self.queue_name, "queue_name"),
         )
-        object.__setattr__(self, "pool_name", validate_queue_id(self.pool_name, "pool_name"))
+        object.__setattr__(
+            self, "pool_name", validate_queue_id(self.pool_name, "pool_name")
+        )
         object.__setattr__(self, "run_uri", _non_empty_string(self.run_uri, "run_uri"))
         if not isinstance(self.run_intent, RunIntent):
             raise QueueValidationError("run_intent must be a RunIntent")
         if self.run_intent.run_uri != self.run_uri:
-            raise QueueValidationError("run_intent.run_uri must match queue item run_uri")
+            raise QueueValidationError(
+                "run_intent.run_uri must match queue item run_uri"
+            )
         if not isinstance(self.launch_contract, LaunchContract):
             raise QueueValidationError("launch_contract must be a LaunchContract")
-        object.__setattr__(self, "enqueued_at", _timestamp(self.enqueued_at, "enqueued_at"))
-        object.__setattr__(self, "updated_at", _timestamp(self.updated_at, "updated_at"))
+        object.__setattr__(
+            self, "enqueued_at", _timestamp(self.enqueued_at, "enqueued_at")
+        )
+        object.__setattr__(
+            self, "updated_at", _timestamp(self.updated_at, "updated_at")
+        )
         object.__setattr__(self, "status", QueueItemStatus(self.status))
         object.__setattr__(
             self,
@@ -572,7 +600,9 @@ class QueueAuditEvent:
     schema_version: int = QUEUE_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "event_id", validate_queue_id(self.event_id, "event_id"))
+        object.__setattr__(
+            self, "event_id", validate_queue_id(self.event_id, "event_id")
+        )
         object.__setattr__(
             self,
             "queue_item_id",
@@ -586,7 +616,9 @@ class QueueAuditEvent:
         object.__setattr__(self, "timestamp", _timestamp(self.timestamp, "timestamp"))
         object.__setattr__(self, "detail", _freeze_mapping(self.detail, "detail"))
         if self.sequence is not None:
-            object.__setattr__(self, "sequence", _positive_int(self.sequence, "sequence"))
+            object.__setattr__(
+                self, "sequence", _positive_int(self.sequence, "sequence")
+            )
         _validate_schema(self.schema_version)
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -741,7 +773,9 @@ def _load_record(
         raise QueueValidationError(f"{record_name}.from_dict: {exc}") from exc
 
 
-def _freeze_mapping(value: Mapping[str, PlainData], field_name: str) -> Mapping[str, PlainData]:
+def _freeze_mapping(
+    value: Mapping[str, PlainData], field_name: str
+) -> Mapping[str, PlainData]:
     try:
         frozen = freeze_plain_data(value, path=field_name)
     except PlainDataError as exc:
@@ -761,9 +795,11 @@ def _validate_non_negative_int_mapping(
     for key, amount in value.items():
         validate_queue_id(key, f"{field_name} key")
         if not isinstance(amount, int) or isinstance(amount, bool) or amount < 0:
-            raise QueueValidationError(f"{field_name}.{key} must be a non-negative integer")
+            raise QueueValidationError(
+                f"{field_name}.{key} must be a non-negative integer"
+            )
         output[key] = amount
-    return output
+    return MappingProxyType(output)
 
 
 def _validate_string_mapping(
@@ -776,15 +812,15 @@ def _validate_string_mapping(
     for key, item in value.items():
         validate_queue_id(key, f"{field_name} key")
         output[key] = _non_empty_string(item, f"{field_name}.{key}")
-    return output
+    return MappingProxyType(output)
 
 
-def _validate_schema(schema_version: int) -> None:
-    if schema_version != QUEUE_RECORD_SCHEMA_VERSION:
-        raise QueueValidationError(
-            f"unsupported schema_version '{schema_version}', expected "
-            f"{QUEUE_RECORD_SCHEMA_VERSION}"
-        )
+def _validate_schema(schema_version: object) -> None:
+    require_schema_version(
+        schema_version,
+        current=QUEUE_RECORD_SCHEMA_VERSION,
+        error_type=QueueValidationError,
+    )
 
 
 def _non_empty_string(value: object, field_name: str) -> str:
@@ -804,7 +840,9 @@ def _timestamp(value: object, field_name: str) -> str:
     try:
         parse_timestamp(text)
     except ValueError as exc:
-        raise QueueValidationError(f"{field_name} must be an ISO-8601 timestamp") from exc
+        raise QueueValidationError(
+            f"{field_name} must be an ISO-8601 timestamp"
+        ) from exc
     return text
 
 

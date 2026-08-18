@@ -37,6 +37,7 @@ from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.serialization import (
     PlainData,
     ensure_plain_data,
+    freeze_plain_data,
     json_loads,
     stable_json_dumps,
     thaw_plain_data,
@@ -61,6 +62,7 @@ from .errors import (
     CorruptStoreDocumentError,
     MissingStoreDocumentError,
     PreparedRunStorePayloadError,
+    RunProjectionError,
     RunAlreadyExistsError,
     RunLockConflictError,
     RunLockReleaseError,
@@ -129,8 +131,16 @@ class LocalRunStore:
         return allocate_local_run_uri(self.root)
 
     def create_run(
-        self, run_uri: str, *, metadata: Mapping[str, PlainData] | None = None
+        self,
+        run_uri: str,
+        *,
+        metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
+        if idempotency_key is not None and (
+            not isinstance(idempotency_key, str) or not idempotency_key
+        ):
+            raise CorruptStoreDocumentError("idempotency_key must be a non-empty string")
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
         run_dir = self.local_run_dir(run_uri_text)
         if run_dir.exists():
@@ -147,6 +157,42 @@ class LocalRunStore:
             ) from exc
 
         self.write_run_user_metadata(run_uri_text, metadata or {})
+
+    def ensure_run(
+        self, run_uri: str, *, metadata: Mapping[str, PlainData] | None = None
+    ) -> None:
+        """Materialize an authority-admitted run without changing its identity."""
+
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        normalized_metadata = ensure_plain_data(metadata or {}, path="metadata")
+        if not isinstance(normalized_metadata, dict):
+            raise RunProjectionError("run metadata must be a mapping")
+        run_dir = self.local_run_dir(run_uri_text)
+        if run_dir.exists():
+            if not (run_dir / "run.json").exists():
+                try:
+                    (run_dir / "config").mkdir(parents=True, exist_ok=True)
+                    (run_dir / "provenance").mkdir(parents=True, exist_ok=True)
+                    (run_dir / "stages").mkdir(parents=True, exist_ok=True)
+                    (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    raise RunProjectionError(
+                        f"unable to materialize local run projection {run_uri_text}"
+                    ) from exc
+                self.write_run_user_metadata(run_uri_text, normalized_metadata)
+                return
+            try:
+                existing = self.read_run_user_metadata(run_uri_text)
+            except (MissingStoreDocumentError, CorruptStoreDocumentError) as exc:
+                raise RunProjectionError(
+                    f"local run projection for {run_uri_text} is incomplete"
+                ) from exc
+            if any(existing.get(key) != value for key, value in normalized_metadata.items()):
+                raise RunProjectionError(
+                    f"local run projection metadata conflicts for {run_uri_text}"
+                )
+            return
+        self.create_run(run_uri_text, metadata=normalized_metadata)
 
     def open_run(self, run_uri: str) -> None:
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
@@ -938,6 +984,15 @@ class LocalRunStore:
         path = run_dir / "events.jsonl"
         with self._event_lock:
             existing = self.read_events(run_uri_text)
+            matching = next(
+                (record for record in existing if record.event_id == event.event_id), None
+            )
+            if matching is not None:
+                if not _event_matches_record(event, matching):
+                    raise CorruptStoreDocumentError(
+                        f"event_id {event.event_id!r} conflicts with an existing event"
+                    )
+                return matching
             sequence = existing[-1].sequence + 1 if existing else 1
             record = PipelineEventRecord(
                 run_uri=run_uri_text,
@@ -949,6 +1004,7 @@ class LocalRunStore:
                     Mapping[str, PlainData],
                     thaw_plain_data(event.payload, path="event.payload"),
                 ),
+                event_id=event.event_id,
             )
             try:
                 with path.open("a", encoding="utf-8") as handle:
@@ -2037,6 +2093,17 @@ def _reliability_id_key(value: str) -> str:
 
 def _run_uri_from_reliability_path(path: Path) -> str:
     return path_to_run_uri(path.parents[2])
+
+
+def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
+    if (
+        record.event_type != event.event_type
+        or record.scope != event.scope
+        or record.payload
+        != freeze_plain_data(event.payload, path="event.payload")
+    ):
+        return False
+    return event.timestamp is None or record.timestamp == event.timestamp
 
 
 __all__ = ["LocalRunStore"]

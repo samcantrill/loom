@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Any, TypedDict, cast
 from urllib.parse import urlsplit
 
 import pytest
@@ -33,6 +33,7 @@ from loom.pipeline.execution.continuation import (
     run_stage_job,
 )
 from loom.pipeline.execution.lifecycle import write_run_status, write_stage_submitted
+from loom.pipeline.events import EventScope, PipelineEvent
 from loom.pipeline.execution.stage_attempts import prepare_stage_attempt
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.reliability import StageAttemptTransactionState
@@ -51,6 +52,7 @@ from loom.pipeline.stores import (
     AuthorityStoreError,
     LocalArtifactStore,
     LocalRunStore,
+    OrphanedLocalRunError,
     PerRunAuthorityStore,
     path_to_run_uri,
     run_uri_to_path,
@@ -64,6 +66,7 @@ from loom.pipeline.submitted import (
     submitted_stage_metadata,
 )
 from loom.serialization import PlainData
+from tests.support.authority_stores import InMemoryPerRunAuthorityStore
 
 
 class CommitFailingAuthority(SQLitePerRunAuthorityStore):
@@ -718,3 +721,188 @@ def test_public_local_run_store_still_uses_file_lock(tmp_path: Path) -> None:
     run_store.release_run_lock(run_uri, lock.token)
     assert run_store.read_run_lock(run_uri) is None
     assert not (tmp_path / "runs" / "run1" / "lock.json").exists()
+
+
+def test_authority_admission_precedes_local_projection_and_retry_repairs_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authority = InMemoryPerRunAuthorityStore()
+    local = LocalRunStore(tmp_path / "runs")
+    store = AuthorityBackedSerialRunStore(
+        local_store=local, authority_store=authority
+    )
+    run_uri = _run_uri(tmp_path)
+    original_ensure = local.ensure_run
+    calls = 0
+
+    def fail_once(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("local projection unavailable")
+        cast(Any, original_ensure)(*args, **kwargs)
+
+    monkeypatch.setattr(local, "ensure_run", fail_once)
+    with pytest.raises(OSError, match="projection unavailable"):
+        store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+
+    assert authority.open_run(run_uri).run_uri == run_uri
+    assert not local.run_uri_exists(run_uri)
+
+    store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+    assert local.read_run_user_metadata(run_uri) == {"owner": "unit"}
+
+
+def test_authority_failure_and_local_orphan_do_not_create_authority_state(
+    tmp_path: Path,
+) -> None:
+    authority = InMemoryPerRunAuthorityStore()
+    local = LocalRunStore(tmp_path / "runs")
+    store = AuthorityBackedSerialRunStore(
+        local_store=local, authority_store=authority
+    )
+    run_uri = _run_uri(tmp_path)
+    local.create_run(run_uri, metadata={"owner": "unit"})
+
+    with pytest.raises(OrphanedLocalRunError):
+        store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+    with pytest.raises(ValueError, match="unknown run"):
+        authority.open_run(run_uri)
+
+
+def test_existing_local_projection_propagates_authority_unavailability(
+    tmp_path: Path,
+) -> None:
+    class UnavailableAuthority(InMemoryPerRunAuthorityStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.create_calls = 0
+
+        def open_run(self, run_uri: str):
+            raise AuthorityStoreError("authority unavailable")
+
+        def create_run(self, *args: object, **kwargs: object):
+            self.create_calls += 1
+            return cast(Any, super().create_run)(*args, **kwargs)
+
+    authority = UnavailableAuthority()
+    local = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    local.create_run(run_uri, metadata={"owner": "unit"})
+    store = AuthorityBackedSerialRunStore(
+        local_store=local, authority_store=authority
+    )
+
+    with pytest.raises(AuthorityStoreError, match="authority unavailable"):
+        store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+    assert authority.create_calls == 0
+    assert local.read_run_user_metadata(run_uri) == {"owner": "unit"}
+
+
+def test_admission_retry_accepts_projection_metadata_added_after_admission(
+    tmp_path: Path,
+) -> None:
+    authority = InMemoryPerRunAuthorityStore()
+    local = LocalRunStore(tmp_path / "runs")
+    store = AuthorityBackedSerialRunStore(
+        local_store=local, authority_store=authority
+    )
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+    local.write_run_user_metadata(
+        run_uri,
+        {"owner": "unit", "config_provenance": {"recipe": "unit"}},
+    )
+
+    store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+    assert local.read_run_user_metadata(run_uri) == {
+        "owner": "unit",
+        "config_provenance": {"recipe": "unit"},
+    }
+
+
+def test_authority_admission_failure_creates_no_local_projection(tmp_path: Path) -> None:
+    class FailingAuthority(InMemoryPerRunAuthorityStore):
+        def create_run(self, *args: object, **kwargs: object):
+            raise AuthorityStoreError("authority unavailable")
+
+    local = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store = AuthorityBackedSerialRunStore(
+        local_store=local, authority_store=FailingAuthority()
+    )
+
+    with pytest.raises(AuthorityStoreError, match="unavailable"):
+        store.create_run(run_uri, idempotency_key="r1")
+    assert not local.run_uri_exists(run_uri)
+
+
+def test_admission_conflicts_and_event_projection_retries_are_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authority = InMemoryPerRunAuthorityStore()
+    local = LocalRunStore(tmp_path / "runs")
+    store = AuthorityBackedSerialRunStore(
+        local_store=local, authority_store=authority
+    )
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+    store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+    with pytest.raises(ValueError, match="already exists"):
+        store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r2")
+    with pytest.raises(ValueError, match="already exists"):
+        store.create_run(run_uri, metadata={"owner": "other"}, idempotency_key="r1")
+
+    event = PipelineEvent(
+        event_id="event-1",
+        scope=EventScope.run(),
+        event_type="run.started",
+        timestamp="2020-01-01T00:00:00Z",
+    )
+    original_append = local.append_event
+    failed = False
+
+    def fail_once(*args: object, **kwargs: object):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("local event projection unavailable")
+        return cast(Any, original_append)(*args, **kwargs)
+
+    monkeypatch.setattr(local, "append_event", fail_once)
+    with pytest.raises(OSError, match="projection unavailable"):
+        store.append_event(run_uri, event)
+    store.append_event(run_uri, event)
+
+    assert len(authority._runs[run_uri].events) == 1
+    assert [record.event_id for record in local.read_events(run_uri)] == ["event-1"]
+    with pytest.raises(ValueError, match="conflicts"):
+        store.append_event(
+            run_uri,
+            PipelineEvent(
+                event_id="event-1",
+                scope=EventScope.run(),
+                event_type="run.failed",
+                timestamp="2020-01-01T00:00:00Z",
+            ),
+        )
+
+
+def test_http_authority_admission_forwards_idempotency_key(tmp_path: Path) -> None:
+    store = _http_authority_run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+
+    store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+    store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
+
+    with pytest.raises(AuthorityStoreError, match="already exists"):
+        store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r2")
+
+
+def test_http_authority_reports_a_confirmed_local_orphan(tmp_path: Path) -> None:
+    store = _http_authority_run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+    store.local_store.create_run(run_uri, metadata={"owner": "unit"})
+
+    with pytest.raises(OrphanedLocalRunError):
+        store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")

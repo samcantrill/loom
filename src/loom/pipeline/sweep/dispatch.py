@@ -8,7 +8,14 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from loom.serialization import PlainData, PlainDataError, ensure_plain_data, thaw_plain_data
+from loom._validation import require_schema_version
+from loom.serialization import (
+    PlainData,
+    PlainDataError,
+    ensure_plain_data,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 from loom.timestamps import utc_timestamp
 
 from .errors import SweepProtocolError
@@ -57,7 +64,9 @@ def _required(mapping: Mapping[str, object], field_name: str) -> object:
     return mapping[field_name]
 
 
-def _reject_unknown(mapping: Mapping[str, object], allowed: set[str], *, object_name: str) -> None:
+def _reject_unknown(
+    mapping: Mapping[str, object], allowed: set[str], *, object_name: str
+) -> None:
     unknown = set(mapping) - allowed
     if unknown:
         fields = ", ".join(sorted(unknown))
@@ -88,16 +97,16 @@ def _non_negative_int(value: object, field_name: str) -> int:
     return value
 
 
-def _plain_mapping(value: object, field_name: str) -> dict[str, PlainData]:
+def _plain_mapping(value: object, field_name: str) -> Mapping[str, PlainData]:
     if not isinstance(value, Mapping):
         raise SweepProtocolError(f"{field_name} must be a mapping")
     try:
-        normalized = ensure_plain_data(value, path=field_name)
+        normalized = freeze_plain_data(value, path=field_name)
     except (PlainDataError, TypeError) as exc:
         raise SweepProtocolError(f"{field_name} must contain plain data") from exc
-    if not isinstance(normalized, dict):
+    if not isinstance(normalized, Mapping):
         raise SweepProtocolError(f"{field_name} must be a mapping")
-    return dict(normalized)
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,10 +123,11 @@ class SweepDispatchRequest:
     request_metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != SWEEP_DISPATCH_SCHEMA_VERSION:
-            raise SweepProtocolError(
-                "SweepDispatchRequest.schema_version must be 1"
-            )
+        require_schema_version(
+            self.schema_version,
+            current=SWEEP_DISPATCH_SCHEMA_VERSION,
+            error_type=SweepProtocolError,
+        )
         object.__setattr__(self, "sweep_id", _text(self.sweep_id, "sweep_id"))
         object.__setattr__(self, "trial_id", _text(self.trial_id, "trial_id"))
         object.__setattr__(
@@ -149,7 +159,9 @@ class SweepDispatchRequest:
             "requested_at": self.requested_at,
             "run_uri": self.run_uri,
             "provider_trial_id": self.provider_trial_id,
-            "request_metadata": dict(self.request_metadata),
+            "request_metadata": thaw_plain_data(
+                self.request_metadata, path="request_metadata"
+            ),
         }
 
     @classmethod
@@ -204,10 +216,11 @@ class SweepDispatchResult:
     result_metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != SWEEP_DISPATCH_SCHEMA_VERSION:
-            raise SweepProtocolError(
-                "SweepDispatchResult.schema_version must be 1"
-            )
+        require_schema_version(
+            self.schema_version,
+            current=SWEEP_DISPATCH_SCHEMA_VERSION,
+            error_type=SweepProtocolError,
+        )
         if not isinstance(self.request, SweepDispatchRequest):
             raise SweepProtocolError("request must be a SweepDispatchRequest")
         object.__setattr__(
@@ -250,7 +263,9 @@ class SweepDispatchResult:
             "run_uri": self.run_uri,
             "dispatched_at": self.dispatched_at,
             "reason": self.reason,
-            "result_metadata": dict(self.result_metadata),
+            "result_metadata": thaw_plain_data(
+                self.result_metadata, path="result_metadata"
+            ),
         }
 
     @classmethod
@@ -285,18 +300,24 @@ class SweepDispatchResult:
             run_uri=_optional_text(data.get("run_uri"), "run_uri"),
             dispatched_at=_optional_text(data.get("dispatched_at"), "dispatched_at"),
             reason=_optional_text(data.get("reason"), "reason"),
-            result_metadata=_plain_mapping(data.get("result_metadata", {}), "result_metadata"),
+            result_metadata=_plain_mapping(
+                data.get("result_metadata", {}), "result_metadata"
+            ),
         )
 
 
-def _normalize_results(values: Sequence[object], *, field: str) -> tuple[SweepDispatchResult, ...]:
+def _normalize_results(
+    values: Sequence[object], *, field: str
+) -> tuple[SweepDispatchResult, ...]:
     normalized: list[SweepDispatchResult] = []
     for index, value in enumerate(values):
         if isinstance(value, SweepDispatchResult):
             normalized.append(value)
             continue
         if not isinstance(value, Mapping):
-            raise SweepProtocolError(f"{field}[{index}] must be a mapping or SweepDispatchResult")
+            raise SweepProtocolError(
+                f"{field}[{index}] must be a mapping or SweepDispatchResult"
+            )
         normalized.append(SweepDispatchResult.from_dict(value))
     return tuple(normalized)
 
@@ -382,7 +403,9 @@ class DirectSweepRunResult:
 
     @property
     def succeeded_count(self) -> int:
-        return sum(1 for result in self.trial_results if result.run_status == "SUCCEEDED")
+        return sum(
+            1 for result in self.trial_results if result.run_status == "SUCCEEDED"
+        )
 
     @property
     def failed_count(self) -> int:
@@ -587,8 +610,12 @@ def run_sweep_direct(
     *,
     runner: Any,
     request_template: "RunRequest",
-    request_factory: Callable[["SweepTrialRecord", SweepDispatchRequest], "RunRequest"] | None = None,
-    runner_factory: Callable[["SweepTrialRecord", SweepDispatchRequest, "RunRequest"], Any] | None = None,
+    request_factory: Callable[["SweepTrialRecord", SweepDispatchRequest], "RunRequest"]
+    | None = None,
+    runner_factory: Callable[
+        ["SweepTrialRecord", SweepDispatchRequest, "RunRequest"], Any
+    ]
+    | None = None,
     sweep_dir: str | None = None,
     open_existing: bool = False,
     requested_at: str | None = None,
@@ -612,7 +639,10 @@ def run_sweep_direct(
                 diagnostic.code for diagnostic in compatibility.diagnostics
             )
             raise SweepProtocolError(f"incompatible existing sweep plan: {codes}")
-        if compatibility.sweep_manifest is None or compatibility.trials_manifest is None:
+        if (
+            compatibility.sweep_manifest is None
+            or compatibility.trials_manifest is None
+        ):
             write_sweep_plan(plan, sweep_dir)
 
     started_at = requested_at or utc_timestamp()
@@ -783,8 +813,12 @@ def enqueue_sweep_trials(
     queue_service: Any,
     queue_name: str,
     request_template: "RunRequest",
-    request_factory: Callable[["SweepTrialRecord", SweepDispatchRequest], "RunRequest"] | None = None,
-    enqueue_request_factory: Callable[["SweepTrialRecord", SweepDispatchRequest, "RunRequest"], "QueueEnqueueRequest"] | None = None,
+    request_factory: Callable[["SweepTrialRecord", SweepDispatchRequest], "RunRequest"]
+    | None = None,
+    enqueue_request_factory: Callable[
+        ["SweepTrialRecord", SweepDispatchRequest, "RunRequest"], "QueueEnqueueRequest"
+    ]
+    | None = None,
     sweep_dir: str | None = None,
     open_existing: bool = False,
     requested_at: str | None = None,
@@ -815,7 +849,10 @@ def enqueue_sweep_trials(
                 diagnostic.code for diagnostic in compatibility.diagnostics
             )
             raise SweepProtocolError(f"incompatible existing sweep plan: {codes}")
-        if compatibility.sweep_manifest is None or compatibility.trials_manifest is None:
+        if (
+            compatibility.sweep_manifest is None
+            or compatibility.trials_manifest is None
+        ):
             write_sweep_plan(plan, sweep_dir)
 
     timestamp = requested_at or utc_timestamp()
@@ -1028,9 +1065,7 @@ def _queue_safe_component(value: str) -> str:
     if not isinstance(value, str) or not value:
         raise SweepProtocolError("queue item component must be a non-empty string")
     sanitized = "".join(
-        character
-        if character.isalnum() or character in {"_", ".", ":", "-"}
-        else "-"
+        character if character.isalnum() or character in {"_", ".", ":", "-"} else "-"
         for character in value
     )
     if sanitized[0].isalnum():

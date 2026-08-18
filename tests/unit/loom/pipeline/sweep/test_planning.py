@@ -58,17 +58,18 @@ def test_grid_plan_is_deterministic_and_writes_manifests(tmp_path: Path) -> None
     ]
     assert first.trials[0].run_uri == "file:///tmp/loom/sweeps/sweep-grid/trial-0001"
     assert first.trials[0].provider_trial_id == "grid-0001"
-    assert first.trials[0].metadata["override_expressions"] == [
+    assert first.trials[0].metadata["override_expressions"] == (
         "pipeline.lr=0.1",
         "pipeline.seed=1",
-    ]
+    )
 
     paths = write_sweep_plan(first, tmp_path)
 
     assert read_sweep_manifest(paths.sweep_manifest_path) == first.sweep_manifest
-    assert read_trials_manifest(
-        paths.trials_manifest_path, sweep_id="sweep-grid"
-    ) == first.trials_manifest
+    assert (
+        read_trials_manifest(paths.trials_manifest_path, sweep_id="sweep-grid")
+        == first.trials_manifest
+    )
     assert paths.authored_spec_path.read_text(encoding="utf-8")
     readback = read_sweep_plan(tmp_path)
     assert readback.compatible
