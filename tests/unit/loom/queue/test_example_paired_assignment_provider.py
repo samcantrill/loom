@@ -67,6 +67,18 @@ def test_bundle_rolls_back_first_member_when_second_member_is_unavailable() -> N
     assert _value(store, "accelerator-slot-b") == 1
 
 
+def test_bundle_rolls_back_first_member_on_unexpected_second_acquire_failure() -> None:
+    store, members = _store_and_members(_UnexpectedSecondAcquireStore())
+    bundle = _bundle_provider(store, members)
+
+    decision = bundle.acquire(_request("bundle", {"accelerator-pair": 1}))
+
+    assert decision.disposition is ResourceAssignmentDisposition.FAILED
+    assert decision.reason_code == "resource_assignment.internal"
+    assert _value(store, "accelerator-slot-a") == 0
+    assert _value(store, "accelerator-slot-b") == 0
+
+
 def test_bundle_renews_and_releases_every_member_with_two_value_binding() -> None:
     store, members = _store_and_members()
     provider = _bundle_provider(store, members)
@@ -93,10 +105,10 @@ def test_bundle_renews_and_releases_every_member_with_two_value_binding() -> Non
     assert _value(store, "accelerator-slot-b") == 0
 
 
-def _store_and_members() -> tuple[
-    InMemoryWorkspaceCoordinationStore, tuple[StaticSlot, ...]
-]:
-    store = InMemoryWorkspaceCoordinationStore()
+def _store_and_members(
+    store: InMemoryWorkspaceCoordinationStore | None = None,
+) -> tuple[InMemoryWorkspaceCoordinationStore, tuple[StaticSlot, ...]]:
+    store = store or InMemoryWorkspaceCoordinationStore()
     store.create_workspace(WorkspaceIdentity("workspace"))
     store.set_resource_limit("workspace", "accelerator-slot-a", limit=1)
     store.set_resource_limit("workspace", "accelerator-slot-b", limit=1)
@@ -135,3 +147,15 @@ def _value(store: InMemoryWorkspaceCoordinationStore, resource_key: str) -> int:
     counter = store.read_resource_limit("workspace", resource_key)
     assert counter is not None
     return counter.value
+
+
+class _UnexpectedSecondAcquireStore(InMemoryWorkspaceCoordinationStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.acquire_calls = 0
+
+    def acquire_resource_lease(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        self.acquire_calls += 1
+        if self.acquire_calls == 2:
+            raise RuntimeError("injected second-member failure")
+        return super().acquire_resource_lease(*args, **kwargs)

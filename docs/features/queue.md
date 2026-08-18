@@ -115,8 +115,10 @@ Foreground drain is a compatibility mode:
 client.drain_foreground(max_items=1)
 ```
 
-Daemon or service style controllers should call `run_once()` repeatedly from a
-long-running process and keep adapter instances alive.
+For managed-local pools, use the long-lived `ManagedLocalQueueRuntime` described
+below so adapter state and maintenance timing have one owner. Direct
+`run_once()` loops remain a low-level seam for other custom adapters; they are
+not the recommended managed-local construction pattern.
 
 ## Managed Local Pools
 

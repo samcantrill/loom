@@ -100,6 +100,12 @@ class PairedMemberAssignmentProvider:
                     disposition=ResourceAssignmentDisposition.FAILED,
                     reason_code=f"resource_assignment.{exc.kind.value}",
                 )
+            except Exception:  # noqa: BLE001
+                self._release_partial(acquired)
+                return ResourceAssignmentDecision(
+                    disposition=ResourceAssignmentDisposition.FAILED,
+                    reason_code="resource_assignment.internal",
+                )
             acquired.append((member, lease))
         return ResourceAssignmentDecision(
             disposition=ResourceAssignmentDisposition.ASSIGNED,

@@ -47,14 +47,26 @@ def main() -> None:
         log_directory=run_root / "queue-state" / "logs",
     )
     runtime.start()
+    release_first_item = run_root / "release-item-1"
     for item_id, amount in (("item-1", 2), ("item-2", 1), ("item-3", 1)):
-        runtime.service.enqueue(_request(item_id, amount))
+        runtime.service.enqueue(
+            _request(
+                item_id,
+                amount,
+                release_path=release_first_item if item_id == "item-1" else None,
+            )
+        )
 
     # The first cycle starts the two-slot request.  The runtime's serve loop
     # owns all later reconciliation, refill, renewal, and graceful shutdown.
     runtime.run_cycle()
     active_status = runtime.status().to_dict()
-    _assert_active_two_slot_item(active_status)
+    try:
+        _assert_active_two_slot_item(active_status)
+    finally:
+        # The first child waits on this bounded, filesystem-visible signal so
+        # live-status observation does not depend on scheduler timing.
+        release_first_item.touch()
     _serve_until_example_completes(runtime)
     status = runtime.status().to_dict()
     _assert_completed_example(status, run_root)
@@ -136,11 +148,28 @@ def _spec(run_root: Path):  # noqa: ANN201
     )
 
 
-def _request(item_id: str, amount: int) -> QueueEnqueueRequest:
-    command = (
-        "import os, time; "
-        f"print('{item_id}:' + os.environ['LOOM_ASSIGNED_ACCELERATORS'], flush=True); "
-        "time.sleep(0.02)"
+def _request(
+    item_id: str, amount: int, *, release_path: Path | None = None
+) -> QueueEnqueueRequest:
+    command = "\n".join(
+        (
+            "import os",
+            "from pathlib import Path",
+            "import time",
+            f"print('{item_id}:' + os.environ['LOOM_ASSIGNED_ACCELERATORS'], flush=True)",
+            *(
+                (
+                    f"release_path = Path({str(release_path)!r})",
+                    "deadline = time.monotonic() + 5",
+                    "while not release_path.exists():",
+                    "    if time.monotonic() >= deadline:",
+                    "        raise RuntimeError('example release signal timed out')",
+                    "    time.sleep(0.01)",
+                )
+                if release_path is not None
+                else ("time.sleep(0.02)",)
+            ),
+        )
     )
     return QueueEnqueueRequest(
         queue_item_id=item_id,
