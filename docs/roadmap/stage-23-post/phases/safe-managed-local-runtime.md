@@ -271,16 +271,17 @@ Final commands:
 - Pre-submit gate: pending
 - Independent review: recommended only if implementation expands the public
   surface or changes controller default behavior; otherwise manager-local
-- Blocker corrections: 1/3
+- Blocker corrections: 2/3; manager correction 2 separates runtime, persisted
+  queue, same-session process, and unobserved hardware/lease status scopes
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added `loom.queue.managed_local.ManagedLocalQueueRuntime`, its typed runtime state/status, selected-pool startup validation, deadline-aware drain serving, recovery gating, and controller current-session classification/reconciliation in `src/loom/queue/managed_local.py` and `src/loom/queue/controller.py`. The first blocker correction additionally wraps startup and cycle recovery classification plus both cycle execution paths in failure-closed `DEGRADED` transitions. Kept `loom.queue` root imports unchanged. |
-| Tests added or updated | Added managed-local package/API, unit, and SQLite integration coverage; added controller no-fill reconciliation coverage; added `tests/integration/queue/__init__.py` so same-named unit/integration test modules collect together. The first blocker correction adds startup/cycle recovery-scan failure, earlier-of-poll/deadline wait, and degraded-to-healthy refill causal coverage. |
+| Implementation and changed paths | Added `loom.queue.managed_local.ManagedLocalQueueRuntime`, its typed runtime state/status, selected-pool startup validation, deadline-aware drain serving, recovery gating, and controller current-session classification/reconciliation in `src/loom/queue/managed_local.py` and `src/loom/queue/controller.py`. The first blocker correction additionally wraps startup and cycle recovery classification plus both cycle execution paths in failure-closed `DEGRADED` transitions. The second correction reports runtime, queue, process, and hardware/lease observation scopes independently. Kept `loom.queue` root imports unchanged. |
+| Tests added or updated | Added managed-local package/API, unit, and SQLite integration coverage; added controller no-fill reconciliation coverage; added `tests/integration/queue/__init__.py` so same-named unit/integration test modules collect together. The first blocker correction adds startup/cycle recovery-scan failure, earlier-of-poll/deadline wait, and degraded-to-healthy refill causal coverage; the second adds exact safe status-scope wording. |
 | Validated revision/tree state and evidence | `32af4e3f0c75acf6062236497b4168f6ef94eeb7` matched the original validated implementation tree. Targeted queue/package/contract/integration suites: 138 passed. `make validate-pr`: passed (Ruff, Pyright 0 errors, default 2,106 passed, config-extra 128 passed/3 skipped, build). `make test-summary`: passed; `build/test-summary.md` records 2,234 passed, 3 skipped. After blocker correction 1, `uv run --extra config pytest tests/unit/loom/queue/test_managed_local_runtime.py tests/integration/queue/test_managed_local_runtime.py -q`: 7 passed; focused Ruff and diff checks passed. |
-| Validation-relevant changes after evidence | Blocker correction 1 changes runtime recovery-scan and cycle operational-failure state transitions and adds causal runtime coverage; the prior full-suite receipt is stale. |
+| Validation-relevant changes after evidence | Blocker corrections 1 and 2 change runtime failure-state and status-shape behavior and add causal runtime coverage; the prior full-suite receipt is stale. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | The recovery-scan false-`READY` blocker is resolved. Foreign recovery remains intentionally visible as `RECOVERY_REQUIRED` without mutation; Phase 2 owns explicit resolution. |
+| Residual risk and cleanup | The recovery-scan false-`READY` and ambiguous observation-scope blockers are resolved. Foreign recovery remains intentionally visible as `RECOVERY_REQUIRED` without mutation; Phase 2 owns explicit resolution. |

@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Protocol
 
 from loom.pipeline.stores import (
@@ -59,7 +60,7 @@ class ManagedLocalQueueRuntimeStatus:
     degraded_item_ids: tuple[str, ...]
     foreign_item_ids: tuple[str, ...]
     pool_status: QueuePoolStatus | None
-    observation_scope: str
+    observation_scope: Mapping[str, str]
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -73,7 +74,7 @@ class ManagedLocalQueueRuntimeStatus:
             "pool_status": None
             if self.pool_status is None
             else self.pool_status.to_dict(),
-            "observation_scope": self.observation_scope,
+            "observation_scope": dict(self.observation_scope),
         }
 
 
@@ -292,15 +293,6 @@ class ManagedLocalQueueRuntime:
             self._last_pool_status = pool_status
         elif self._last_pool_status is not None:
             pool_status = self._last_pool_status
-        observation_scope = (
-            "not_observed"
-            if self.service.state is not QueueServiceState.RUNNING
-            else (
-                "same_session_or_unavailable"
-                if pool_status is not None and pool_status.active_attempts
-                else "persisted"
-            )
-        )
         return ManagedLocalQueueRuntimeStatus(
             state=self._state,
             owner_id=self.owner_id,
@@ -310,7 +302,7 @@ class ManagedLocalQueueRuntime:
             degraded_item_ids=self._degraded_item_ids,
             foreign_item_ids=self._foreign_item_ids,
             pool_status=pool_status,
-            observation_scope=observation_scope,
+            observation_scope=_OBSERVATION_SCOPE,
         )
 
     def _validate_startup(self) -> None:
@@ -414,6 +406,16 @@ def _select_pool(spec: QueueServiceSpec, pool_name: str | None) -> QueuePool:
         if pool.pool_name == selected_name:
             return pool
     raise QueueServiceError(f"unknown pool: {selected_name}")
+
+
+_OBSERVATION_SCOPE: Mapping[str, str] = MappingProxyType(
+    {
+        "runtime_health": "same_process",
+        "queue_facts": "persisted",
+        "process": "same_session_or_unavailable",
+        "hardware_and_lease_liveness": "not_observed",
+    }
+)
 
 
 __all__ = [

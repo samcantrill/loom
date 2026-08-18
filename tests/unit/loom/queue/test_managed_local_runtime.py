@@ -91,6 +91,19 @@ def test_runtime_degrades_when_startup_recovery_scan_fails(
     assert runtime.service.state.value == "running"
 
 
+def test_runtime_status_separates_observation_scopes(tmp_path) -> None:  # noqa: ANN001
+    runtime = _runtime(tmp_path)
+
+    status = runtime.start().to_dict()
+
+    assert status["observation_scope"] == {
+        "runtime_health": "same_process",
+        "queue_facts": "persisted",
+        "process": "same_session_or_unavailable",
+        "hardware_and_lease_liveness": "not_observed",
+    }
+
+
 def test_runtime_degrades_when_cycle_recovery_scan_fails(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     runtime = _runtime(tmp_path)
     runtime.start()
