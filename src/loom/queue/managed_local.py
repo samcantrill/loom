@@ -202,7 +202,11 @@ class ManagedLocalQueueRuntime:
         self._validate_startup()
         if self.service.state is not QueueServiceState.RUNNING:
             self.service.start()
-        _current, foreign = self._classify_recovery()
+        try:
+            _current, foreign = self._classify_recovery()
+        except Exception:
+            self._state = ManagedLocalQueueRuntimeState.DEGRADED
+            raise
         self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
         self._degraded_item_ids = ()
         self._next_maintenance_at = None
@@ -217,21 +221,27 @@ class ManagedLocalQueueRuntime:
         """Reconcile then fill the selected pool unless health/recovery forbids it."""
 
         self._ensure_started()
-        _current, foreign = self._classify_recovery()
+        try:
+            _current, foreign = self._classify_recovery()
+        except Exception:
+            self._state = ManagedLocalQueueRuntimeState.DEGRADED
+            raise
         self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
         if self._foreign_item_ids:
             self._state = ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
             raise QueueServiceError(
                 "managed local runtime requires recovery before running a cycle"
             )
-        elif self._state is ManagedLocalQueueRuntimeState.DRAINING:
-            result = self.controller.reconcile_current_session(pool_name=self.pool_name)
-        else:
-            try:
+        try:
+            if self._state is ManagedLocalQueueRuntimeState.DRAINING:
+                result = self.controller.reconcile_current_session(
+                    pool_name=self.pool_name
+                )
+            else:
                 result = self.controller.run_cycle(pool_name=self.pool_name)
-            except Exception:
-                self._state = ManagedLocalQueueRuntimeState.DEGRADED
-                raise
+        except Exception:
+            self._state = ManagedLocalQueueRuntimeState.DEGRADED
+            raise
         self._record_cycle(result)
         return result
 

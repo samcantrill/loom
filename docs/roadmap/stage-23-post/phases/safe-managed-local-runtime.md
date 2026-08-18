@@ -266,20 +266,21 @@ Final commands:
 - Expanded planning: not needed unless the recheck finds a changed public cycle
   or import-boundary risk
 - Implementation: complete at `32af4e3f0c75acf6062236497b4168f6ef94eeb7`
-- Refiner: not needed unless a qualified blocker is found
+- Refiner: completed blocker correction 1; recovery-classification failures now
+  fail closed as `DEGRADED` in both startup and cycles
 - Pre-submit gate: pending
 - Independent review: recommended only if implementation expands the public
   surface or changes controller default behavior; otherwise manager-local
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added `loom.queue.managed_local.ManagedLocalQueueRuntime`, its typed runtime state/status, selected-pool startup validation, deadline-aware drain serving, recovery gating, and controller current-session classification/reconciliation in `src/loom/queue/managed_local.py` and `src/loom/queue/controller.py`. Kept `loom.queue` root imports unchanged. |
-| Tests added or updated | Added managed-local package/API, unit, and SQLite integration coverage; added controller no-fill reconciliation coverage; added `tests/integration/queue/__init__.py` so same-named unit/integration test modules collect together. |
-| Validated revision/tree state and evidence | `32af4e3f0c75acf6062236497b4168f6ef94eeb7` matched the validated implementation tree. Targeted queue/package/contract/integration suites: 138 passed. `make validate-pr`: passed (Ruff, Pyright 0 errors, default 2,106 passed, config-extra 128 passed/3 skipped, build). `make test-summary`: passed; `build/test-summary.md` records 2,234 passed, 3 skipped. |
-| Validation-relevant changes after evidence | none |
+| Implementation and changed paths | Added `loom.queue.managed_local.ManagedLocalQueueRuntime`, its typed runtime state/status, selected-pool startup validation, deadline-aware drain serving, recovery gating, and controller current-session classification/reconciliation in `src/loom/queue/managed_local.py` and `src/loom/queue/controller.py`. The first blocker correction additionally wraps startup and cycle recovery classification plus both cycle execution paths in failure-closed `DEGRADED` transitions. Kept `loom.queue` root imports unchanged. |
+| Tests added or updated | Added managed-local package/API, unit, and SQLite integration coverage; added controller no-fill reconciliation coverage; added `tests/integration/queue/__init__.py` so same-named unit/integration test modules collect together. The first blocker correction adds startup/cycle recovery-scan failure, earlier-of-poll/deadline wait, and degraded-to-healthy refill causal coverage. |
+| Validated revision/tree state and evidence | `32af4e3f0c75acf6062236497b4168f6ef94eeb7` matched the original validated implementation tree. Targeted queue/package/contract/integration suites: 138 passed. `make validate-pr`: passed (Ruff, Pyright 0 errors, default 2,106 passed, config-extra 128 passed/3 skipped, build). `make test-summary`: passed; `build/test-summary.md` records 2,234 passed, 3 skipped. After blocker correction 1, `uv run --extra config pytest tests/unit/loom/queue/test_managed_local_runtime.py tests/integration/queue/test_managed_local_runtime.py -q`: 7 passed; focused Ruff and diff checks passed. |
+| Validation-relevant changes after evidence | Blocker correction 1 changes runtime recovery-scan and cycle operational-failure state transitions and adds causal runtime coverage; the prior full-suite receipt is stale. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | No blocker. Foreign recovery remains intentionally visible as `RECOVERY_REQUIRED` without mutation; Phase 2 owns explicit resolution. |
+| Residual risk and cleanup | The recovery-scan false-`READY` blocker is resolved. Foreign recovery remains intentionally visible as `RECOVERY_REQUIRED` without mutation; Phase 2 owns explicit resolution. |
