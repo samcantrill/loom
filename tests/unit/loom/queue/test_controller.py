@@ -561,6 +561,37 @@ def test_cycle_counts_foreign_dispatch_without_inspecting_or_mutating_it(
     assert service.read_item("foreign") == foreign_before
 
 
+def test_controller_current_session_reconciliation_does_not_fill(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(12)])
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="active",
+            queue_name="gpu",
+            run_uri="file:///runs/active",
+            adapter="async",
+        )
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="queued",
+            queue_name="gpu",
+            run_uri="file:///runs/queued",
+        )
+    )
+    controller = QueueController(service, adapters={"async": _AsyncAdapter()}, clock=clock)
+    controller.run_once(pool_name="gpu-pool")
+
+    result = controller.reconcile_current_session(pool_name="gpu-pool")
+
+    assert result.dispatch_steps == ()
+    assert result.active_count == 1
+    queued = service.read_item("queued")
+    assert queued is not None and queued.status is QueueItemStatus.QUEUED
+
+
 def test_run_once_compensates_started_handle_when_commit_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

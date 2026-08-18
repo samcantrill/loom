@@ -271,6 +271,14 @@ class QueueCycleResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class QueueRecoveryClassification:
+    """Current-controller versus other-session recovery work for one pool."""
+
+    current_items: tuple[QueueItem, ...]
+    foreign_items: tuple[QueueItem, ...]
+
+
 class QueueController:
     """Claim queued items and dispatch them through injected adapters."""
 
@@ -356,6 +364,36 @@ class QueueController:
             dispatch_steps=tuple(dispatch_steps),
             active_count=self._active_count(pool_name),
             capacity_blocked=capacity_blocked,
+            next_maintenance_at=min(deadlines) if deadlines else None,
+        )
+
+    def classify_recovery(self, *, pool_name: str) -> QueueRecoveryClassification:
+        """Classify active selected-pool work without inspecting or mutating it."""
+
+        if not isinstance(pool_name, str) or not pool_name:
+            raise QueueServiceError("classify_recovery requires one non-empty pool_name")
+        current: list[QueueItem] = []
+        foreign: list[QueueItem] = []
+        for item in self._service.recovery_items():
+            if item.pool_name != pool_name:
+                continue
+            (current if self._owned_by_current_session(item) else foreign).append(item)
+        return QueueRecoveryClassification(tuple(current), tuple(foreign))
+
+    def reconcile_current_session(self, *, pool_name: str) -> QueueCycleResult:
+        """Reconcile all current-session work without claiming queued items."""
+
+        if not isinstance(pool_name, str) or not pool_name:
+            raise QueueServiceError(
+                "reconcile_current_session requires one non-empty pool_name"
+            )
+        reconciliation, degraded, deadlines = self._reconcile_all(pool_name)
+        classification = self.classify_recovery(pool_name=pool_name)
+        return QueueCycleResult(
+            reconciliation_steps=tuple(reconciliation),
+            dispatch_steps=(),
+            active_count=len(classification.current_items),
+            capacity_blocked=degraded,
             next_maintenance_at=min(deadlines) if deadlines else None,
         )
 
@@ -782,6 +820,7 @@ __all__ = [
     "QueueCancellableDispatchAdapter",
     "QueueController",
     "QueueCycleResult",
+    "QueueRecoveryClassification",
     "QueueControllerStep",
     "QueueDispatchAdapter",
     "QueueDispatchCancellation",

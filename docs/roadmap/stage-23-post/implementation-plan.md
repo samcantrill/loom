@@ -5,7 +5,7 @@ Roadmap stage: 23-post
 Planning document: docs/roadmap/stage-23-post/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: none
+Current phase: Phase 1 (`safe-managed-local-runtime`)
 Blockers: none
 
 ## Summary
@@ -87,7 +87,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `safe-managed-local-runtime` | pending | `docs/roadmap/stage-23-post/phases/safe-managed-local-runtime.md` | `agent/stage-23-post-p1-safe-managed-local-runtime` | pending | Managed-local runtime construction, timing, health, startup gate, drain, and minimal controller/resource seams | Provide a safe normal-operation runtime that cannot silently miss maintenance or refill across degraded/foreign work. |
+| 1 | `safe-managed-local-runtime` | pr_open | `docs/roadmap/stage-23-post/phases/safe-managed-local-runtime.md` | `agent/stage-23-post-p1-safe-managed-local-runtime` | [#212](https://github.com/samcantrill/loom/pull/212) | Managed-local runtime construction, timing, health, startup gate, drain, and minimal controller/resource seams | Provide a safe normal-operation runtime that cannot silently miss maintenance or refill across degraded/foreign work. |
 | 2 | `explicit-recovery-and-shutdown` | pending | `docs/roadmap/stage-23-post/phases/explicit-recovery-and-shutdown.md` | `agent/stage-23-post-p2-explicit-recovery-and-shutdown` | pending | Guarded recovery resolution/audit and cancel/timeout shutdown | Let an operator resolve externally contained crash leftovers without taking over leases, and stop current work predictably. |
 | 3 | `downstream-operations-proof` | pending | `docs/roadmap/stage-23-post/phases/downstream-operations-proof.md` | `agent/stage-23-post-p3-downstream-operations-proof` | pending | Canonical example, bundle-provider pattern, e2e proof, queue docs, deployment/recovery guide, and small Stage 23 fixes | Make the safe path easy to copy and prove single-item two-slot assignment, live status, logs, refill, and bundle ownership. |
 
@@ -104,7 +104,8 @@ Blockers: none
   by requiring external process-exit attestation and prohibiting foreign lease
   mutation.
 - Correction: not needed.
-- Ready for implementation: yes; Phase 1 remains pending.
+- Ready for implementation: yes; Phase 1 manager preparation is complete and
+  implementation is in progress.
 - Accepted risks: deployment still relies on one externally supervised runtime
   per pool; an unkillable process can outlive a shutdown timeout; custom
   providers can be incorrect; status does not observe hardware health.
@@ -116,6 +117,6 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
+| 1 | PR [#212](https://github.com/samcantrill/loom/pull/212) open against `develop`; merge pending CI | Implementation, manager review, `make validate-pr`, and `make test-summary` passed | Accepted one-runtime-per-pool deployment rule and deliberately unobserved hardware health | pending remote merge |
 | 2 | pending | pending | pending | pending |
 | 3 | pending | pending | pending | pending |

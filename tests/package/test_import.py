@@ -75,6 +75,14 @@ def test_import_loom_queue_public_api() -> None:
     assert "validate_one_queue_per_pool" in loom.queue.__all__
 
 
+def test_import_managed_local_queue_runtime_is_explicit() -> None:
+    import loom.queue
+    from loom.queue.managed_local import ManagedLocalQueueRuntime
+
+    assert ManagedLocalQueueRuntime
+    assert "ManagedLocalQueueRuntime" not in loom.queue.__all__
+
+
 def test_package_includes_typing_marker() -> None:
     assert files("loom").joinpath("py.typed").is_file()
 

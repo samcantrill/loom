@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: planned
+- Status: pr_open
 - Roadmap stage and phase: 23-post, Phase 1
 - Manifest: `docs/roadmap/stage-23-post/implementation-plan.md`
 - Branch: `agent/stage-23-post-p1-safe-managed-local-runtime`
 - Worktree root and path: `../loom-worktrees`; `../loom-worktrees/stage-23-post-p1-safe-managed-local-runtime`
-- Base revision: current `origin/develop` at phase start; planning baseline `4c7059bcf4358da866700df416d068eaab62c80b`
+- Base revision: `e0b22c23978435f4a45bfbf2e4f3de8cbdce80b6`
 - PR target: develop
 - PR title: `Managed Local Operations - Phase 1: Safe Runtime Loop`
 - Dependencies: completed Stage 23; no Stage 24 implementation dependency
@@ -259,25 +259,35 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete in draft; recheck `origin/develop`, dirty-path
-  isolation, manifest approval, and Stage 24 source state at phase start
+- Manager preparation: complete at `e0b22c23978435f4a45bfbf2e4f3de8cbdce80b6`;
+  the dedicated worktree is clean and based on current `origin/develop`, the
+  manifest remains approved, and Stage 24 has not changed the controller cycle
+  contract
 - Expanded planning: not needed unless the recheck finds a changed public cycle
   or import-boundary risk
-- Implementation: pending one `loom_phase_executor`
-- Refiner: not needed unless a qualified blocker is found
-- Pre-submit gate: pending
-- Independent review: recommended only if implementation expands the public
-  surface or changes controller default behavior; otherwise manager-local
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Implementation: complete at `32af4e3f0c75acf6062236497b4168f6ef94eeb7`
+- Refiner: completed blocker correction 1; recovery-classification failures now
+  fail closed as `DEGRADED` in both startup and cycles
+- Pre-submit gate: passed manager-locally at `3aacfc3`; scope, fixed contracts,
+  import direction, failure behavior, tests, and proportionality match the
+  approved phase
+- Independent review: not used; the implementation adds only the approved
+  explicit submodule and leaves controller default behavior unchanged, with no
+  material residual risk beyond the accepted plan risks
+- Blocker corrections: 3/3; manager correction 2 separates runtime, persisted
+  queue, same-session process, and unobserved hardware/lease status scopes;
+  manager correction 3 adds missing spec-owner/static-provider and read-only
+  static-boundary proof
+- PR and merge: PR [#212](https://github.com/samcantrill/loom/pull/212) is
+  open against `develop`; required CI and squash merge are pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added `loom.queue.managed_local.ManagedLocalQueueRuntime`, its typed runtime state/status, selected-pool startup validation, deadline-aware drain serving, recovery gating, and controller current-session classification/reconciliation in `src/loom/queue/managed_local.py` and `src/loom/queue/controller.py`. The first blocker correction additionally wraps startup and cycle recovery classification plus both cycle execution paths in failure-closed `DEGRADED` transitions. The second correction reports runtime, queue, process, and hardware/lease observation scopes independently. Kept `loom.queue` root imports unchanged. |
+| Tests added or updated | Added managed-local package/API, unit, and SQLite integration coverage; added controller no-fill reconciliation coverage; added `tests/integration/queue/__init__.py` so same-named unit/integration test modules collect together. The first blocker correction adds startup/cycle recovery-scan failure, earlier-of-poll/deadline wait, and degraded-to-healthy refill causal coverage; the second adds exact safe status-scope wording; the third proves spec-owner live status, authored static binding, and read-only static-limit failure. |
+| Validated revision/tree state and evidence | `3aacfc30b0afe27acc16f66f64c0af1ce396fe3b` is the final validation-relevant revision. Targeted queue/package/contract/integration suites: 143 passed before the final construction tests; the final managed-local unit/integration slice then passed 10 tests. `make validate-pr`: passed (Ruff, Pyright 0 errors, default 2,113 passed, config-extra 128 passed/3 skipped, build). `make test-summary`: passed; `build/test-summary.md` records package 113, unit 1,494, contract 270, integration 187, e2e 49, and config-extra 128 passed with 3 skipped. |
+| Validation-relevant changes after evidence | none; only this completion-evidence update follows the validated implementation revision |
+| PR, review, and merge | PR [#212](https://github.com/samcantrill/loom/pull/212) is open, non-draft, mergeable, and correctly targets `develop`; manager review passed with no blocker; CI and squash merge pending. |
+| Residual risk and cleanup | The recovery-scan false-`READY` and ambiguous observation-scope blockers are resolved. Foreign recovery remains intentionally visible as `RECOVERY_REQUIRED` without mutation; Phase 2 owns explicit resolution. |
