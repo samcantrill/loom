@@ -265,9 +265,9 @@ Final commands:
   completion plus current/foreign classification seams remain available
 - Expanded planning: not needed; Phase 1 leaves the approved exact-item foreign
   recovery target and current-session ownership boundary unambiguous
-- Implementation: in progress with one `loom_phase_executor`
+- Implementation: complete at `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a`
 - Refiner: not needed unless a qualified blocker is found
-- Pre-submit gate: pending
+- Pre-submit gate: passed at `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a`
 - Independent review: recommended because recovery attestation authorizes a
   durable terminal mutation and shutdown affects lease safety
 - Blocker corrections: 0/3
@@ -277,9 +277,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
+| Implementation and changed paths | Added guarded optional completion evidence in `src/loom/queue/repository.py`, `service.py`, and `_sqlite.py`; added explicit foreign-local `UNKNOWN` recovery, `CANCELLING`, cancel/drain timeout accounting, and the managed-local timeout error in `src/loom/queue/managed_local.py`. |
+| Tests added or updated | Updated `tests/contracts/test_queue_python_api_contract.py`; added completion-evidence contract coverage in `tests/contracts/test_queue_repository_contract.py`; added recovery, audit-redaction, foreign-lease-retention, recovery-state-refresh, and cancel-timeout coverage in `tests/integration/queue/test_managed_local_runtime.py`. |
+| Validated revision/tree state and evidence | `cfeaeb3fca964064f035a7a18dc0ed44ee273b1a` is the final validation-relevant revision. Targeted unit, contract, and integration commands passed: 85 tests. `make validate-pr` passed (Ruff, Pyright, default, config-extra, build). `make test-summary` passed and wrote `build/test-summary.md`: package 113, unit 1,494, contract 271, integration 189, e2e 49, and config-extra 128 passed; 3 config-extra skips. |
+| Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | The accepted external process-containment assertion remains intentionally unverified; timeout deliberately retains current work and leases for the external supervisor. PR, review, merge, and worktree cleanup remain manager-owned pending. |
