@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 23-post, Phase 2
 - Manifest: `docs/roadmap/stage-23-post/implementation-plan.md`
 - Branch: `agent/stage-23-post-p2-explicit-recovery-and-shutdown`
@@ -13,12 +13,8 @@
 - Dependencies: Phase 1 remotely merged; branch must be based on refreshed `origin/develop`
 - Requirement coverage: FR-6, FR-7, FR-8, and FR-9
 - Workflow path: expanded because operator attestation authorizes a guarded terminal mutation after process-owner loss
-- Blockers: shutdown checks its expired deadline after one more reconciliation,
-  so an item that exits after the bounded wait can become terminal and release
-  leases instead of raising `ManagedLocalShutdownTimeoutError`; independent
-  review and manager reproduction both confirmed `STOPPED`/`SUCCEEDED`/zero
-  active lease after a five-second timeout crossed to six seconds; all three
-  scoped correction passes are exhausted
+- Blockers: none; the independently reproduced shutdown deadline-ordering
+  blocker was corrected under a maintainer-approved narrow budget exception
 
 ## Objective And Context
 
@@ -288,8 +284,9 @@ Final commands:
   3 adds drain-and-cancel timeout parity and current-item recovery rejection;
   the exceptional correction enforces an expired deadline before the next
   reconciliation and proves the crossed-deadline path retains item and lease
-- PR and merge: PR [#213](https://github.com/samcantrill/loom/pull/213) is open
-  against `develop`; local gates pass and GitHub CI is pending
+- PR and merge: PR [#213](https://github.com/samcantrill/loom/pull/213) passed
+  GitHub CI and manager review, then squash-merged into `develop` as
+  `15a9ddcd734cbe5702813101ae1893f59d91770e`
 
 ## Completion Record
 
@@ -299,5 +296,5 @@ Final commands:
 | Tests added or updated | Updated `tests/contracts/test_queue_python_api_contract.py`; added completion-evidence contract coverage in `tests/contracts/test_queue_repository_contract.py`; added recovery, audit-redaction, claimed-item/CAS conflict, two-slot foreign lease retention, mixed-session cancellation, current-item rejection, recovery-state-refresh, drain-default/no-cancel, explicit-cancel cleanup, and drain/cancel timeout coverage in `tests/integration/queue/test_managed_local_runtime.py`; added legacy repository completion coverage in `tests/integration/queue/test_service_lifecycle.py` and non-finite timing validation in `tests/unit/loom/queue/test_managed_local_runtime.py`. |
 | Validated revision/tree state and evidence | `a4aacabba44342ca174152b4c8553af866a74506` is the final validation-relevant revision. All recorded phase-targeted commands passed: 98 tests. `make validate-pr` passed (Ruff, Pyright 0 errors, default 2,129 passed, config-extra 128 passed/3 skipped, build). `make test-summary` passed; `build/test-summary.md` records package 113, unit 1,498, contract 271, integration 198, e2e 49, and config-extra 128 passed with 3 skipped. |
 | Validation-relevant changes after evidence | none; only completion/PR metadata may follow the validated revision |
-| PR, review, and merge | PR [#213](https://github.com/samcantrill/loom/pull/213) is open against `develop`. The maintainer approved one exceptional, narrowly scoped fourth correction: enforce an expired shutdown deadline before the next reconciliation and cover the crossed-deadline path. Manager review and local gates pass; GitHub CI is pending. |
-| Residual risk and cleanup | The accepted external process-containment assertion remains intentionally unverified. The timeout-ordering correction is implemented with a regression that advances the wait beyond the deadline while the process exits and proves the item remains `DISPATCHED` with its lease retained. Worktree and branch remain through validation and merge. |
+| PR, review, and merge | PR [#213](https://github.com/samcantrill/loom/pull/213) passed manager review and GitHub CI, then squash-merged into `develop` as `15a9ddcd734cbe5702813101ae1893f59d91770e`. The maintainer-approved exceptional correction enforces an expired shutdown deadline before the next reconciliation and covers the crossed-deadline path. |
+| Residual risk and cleanup | The accepted external process-containment assertion remains intentionally unverified. The timeout-ordering regression advances the wait beyond the deadline and proves the item remains `DISPATCHED` with its lease retained. The dedicated worktree and local/remote branch were removed after remote merge verification. |
