@@ -272,7 +272,7 @@ Final commands:
 - Expanded planning: completed on 2026-08-18 against `13f8512`; durable status
   redaction, additive CLI envelope compatibility, and the causally interacting
   twelve-over-three proof have fixed acceptance and stop conditions
-- Implementation: not started
+- Implementation: complete on 2026-08-18; awaiting manager pre-submit/review
 - Refiner: optional for a qualified implementation/test blocker; unused
 - Pre-submit gate: not run
 - Independent review: required after implementation; unused
@@ -283,9 +283,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
+| Implementation and changed paths | Added selected-pool SQLite snapshots, allowlisted pool/attempt status models, `status --pool`, shared text rendering, and the managed-local operations example in `src/loom/queue/{repository.py,_sqlite.py,service.py,status.py,__init__.py}`, `src/loom/cli/{queue.py,formatting.py}`, `examples/operations/managed-local-queue/`, its inventory, and Phase 3 feature documentation. |
+| Tests added or updated | Added pool-snapshot repository contract coverage; unit coverage for exact status keys, redaction, claimed null facts, additive legacy shape, and same-session labels; and queue CLI envelope/pool e2e coverage. Targeted queue matrix passed: 15 contract, 27 integration/e2e, and 79 unit tests. |
+| Validated revision/tree state and evidence | Final gate passed against the implementation tree: `make validate-pr` completed Ruff, Pyright (0 errors), default harness (2,051 passed), config-extra harness (128 passed, 3 skipped), and `uv build`. `make test-summary` wrote `build/test-summary.md`: package 112, unit 1,444, contract 267, integration 180, e2e 48, config-extra 128 passed (3 skipped). Implementation commit `e0ee341`; removal-only generated-example cleanup `1f5b1d0`. |
+| Validation-relevant changes after evidence | None. The only post-gate change before this record was removal of an accidentally generated example SQLite file. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No known Phase 3 blocker. Accepted controller-local limit, crash-time/re-attachment, persisted-acquisition-versus-live-observation, and static-inventory risks remain. Worktree/branch/PR cleanup are manager-owned. |
