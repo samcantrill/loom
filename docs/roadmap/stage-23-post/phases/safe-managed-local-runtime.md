@@ -265,7 +265,7 @@ Final commands:
   contract
 - Expanded planning: not needed unless the recheck finds a changed public cycle
   or import-boundary risk
-- Implementation: in progress with one `loom_phase_executor`
+- Implementation: complete at `32af4e3f0c75acf6062236497b4168f6ef94eeb7`
 - Refiner: not needed unless a qualified blocker is found
 - Pre-submit gate: pending
 - Independent review: recommended only if implementation expands the public
@@ -277,9 +277,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
+| Implementation and changed paths | Added `loom.queue.managed_local.ManagedLocalQueueRuntime`, its typed runtime state/status, selected-pool startup validation, deadline-aware drain serving, recovery gating, and controller current-session classification/reconciliation in `src/loom/queue/managed_local.py` and `src/loom/queue/controller.py`. Kept `loom.queue` root imports unchanged. |
+| Tests added or updated | Added managed-local package/API, unit, and SQLite integration coverage; added controller no-fill reconciliation coverage; added `tests/integration/queue/__init__.py` so same-named unit/integration test modules collect together. |
+| Validated revision/tree state and evidence | `32af4e3f0c75acf6062236497b4168f6ef94eeb7` matched the validated implementation tree. Targeted queue/package/contract/integration suites: 138 passed. `make validate-pr`: passed (Ruff, Pyright 0 errors, default 2,106 passed, config-extra 128 passed/3 skipped, build). `make test-summary`: passed; `build/test-summary.md` records 2,234 passed, 3 skipped. |
+| Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No blocker. Foreign recovery remains intentionally visible as `RECOVERY_REQUIRED` without mutation; Phase 2 owns explicit resolution. |
