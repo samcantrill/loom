@@ -1,14 +1,13 @@
 # Roadmap Stage 23-post Implementation Plan
 
-Status: confirmed; Phase 2 blocked after independent review
+Status: confirmed; Phase 2 correction approved after independent review
 Roadmap stage: 23-post
 Planning document: docs/roadmap/stage-23-post/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Current phase: Phase 2 (`explicit-recovery-and-shutdown`)
-Blockers: Phase 2 shutdown timeout is checked after reconciliation, allowing a
-terminal mutation and lease release after the reporting deadline; the phase's
-three scoped correction passes are exhausted
+Blockers: none; the maintainer approved one narrowly scoped correction-budget
+exception for the reproduced Phase 2 shutdown deadline-ordering blocker
 
 ## Summary
 
@@ -90,7 +89,7 @@ three scoped correction passes are exhausted
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `safe-managed-local-runtime` | merged | `docs/roadmap/stage-23-post/phases/safe-managed-local-runtime.md` | `agent/stage-23-post-p1-safe-managed-local-runtime` | [#212](https://github.com/samcantrill/loom/pull/212) | Managed-local runtime construction, timing, health, startup gate, drain, and minimal controller/resource seams | Provide a safe normal-operation runtime that cannot silently miss maintenance or refill across degraded/foreign work. |
-| 2 | `explicit-recovery-and-shutdown` | blocked | `docs/roadmap/stage-23-post/phases/explicit-recovery-and-shutdown.md` | `agent/stage-23-post-p2-explicit-recovery-and-shutdown` | [#213](https://github.com/samcantrill/loom/pull/213) | Guarded recovery resolution/audit and cancel/timeout shutdown | Let an operator resolve externally contained crash leftovers without taking over leases, and stop current work predictably. |
+| 2 | `explicit-recovery-and-shutdown` | in_progress | `docs/roadmap/stage-23-post/phases/explicit-recovery-and-shutdown.md` | `agent/stage-23-post-p2-explicit-recovery-and-shutdown` | [#213](https://github.com/samcantrill/loom/pull/213) | Guarded recovery resolution/audit and cancel/timeout shutdown | Let an operator resolve externally contained crash leftovers without taking over leases, and stop current work predictably. |
 | 3 | `downstream-operations-proof` | pending | `docs/roadmap/stage-23-post/phases/downstream-operations-proof.md` | `agent/stage-23-post-p3-downstream-operations-proof` | pending | Canonical example, bundle-provider pattern, e2e proof, queue docs, deployment/recovery guide, and small Stage 23 fixes | Make the safe path easy to copy and prove single-item two-slot assignment, live status, logs, refill, and bundle ownership. |
 
 ## Quality Gate
@@ -106,8 +105,8 @@ three scoped correction passes are exhausted
   by requiring external process-exit attestation and prohibiting foreign lease
   mutation.
 - Correction: not needed.
-- Ready for implementation: no; Phase 2 independent review found a shutdown
-  deadline-ordering blocker after the three-pass correction budget was spent.
+- Ready for implementation: yes; the maintainer approved one narrow exception
+  to correct the independently reproduced shutdown deadline-ordering blocker.
 - Accepted risks: deployment still relies on one externally supervised runtime
   per pool; an unkillable process can outlive a shutdown timeout; custom
   providers can be incorrect; status does not observe hardware health.
@@ -120,5 +119,5 @@ three scoped correction passes are exhausted
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | PR [#212](https://github.com/samcantrill/loom/pull/212) merged into `develop` as `895d45cedcef1010ba8d57253ae08f3938cf6673` | Implementation, manager review, GitHub CI, `make validate-pr`, and `make test-summary` passed | Accepted one-runtime-per-pool deployment rule and deliberately unobserved hardware health | dedicated worktree and local/remote branch removed |
-| 2 | PR [#213](https://github.com/samcantrill/loom/pull/213) open against `develop`; merge blocked | Implementation and full local validation passed, but independent review reproduced a post-deadline terminal mutation/lease release | Accepted containment assertion plus unresolved timeout-ordering blocker | worktree/branch retained for a maintainer-approved correction |
+| 2 | PR [#213](https://github.com/samcantrill/loom/pull/213) open against `develop`; correction validation in progress | Original implementation and full local validation passed; the approved timeout-ordering correction and exact regression are pending final gates | Accepted containment assertion; corrected timeout ordering pending final validation | worktree/branch retained through validation and merge |
 | 3 | pending | pending | pending | pending |

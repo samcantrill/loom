@@ -384,6 +384,61 @@ def test_runtime_shutdown_timeout_keeps_current_item_and_lease_active(
     assert counter is not None and counter.value == 1
 
 
+def test_runtime_shutdown_deadline_precedes_post_wait_reconciliation(
+    tmp_path: Path,
+) -> None:
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    spec = normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {"pool_name": "local", "mode": "managed", "resources": {"gpu": 1}}
+            ],
+            "queues": [{"queue_name": "local", "pool_name": "local"}],
+            "controller": {"owner_id": "runtime-owner", "max_active_items": 1},
+        }
+    )
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    process = _Process(pid=122)
+    runtime = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+        process_runner=_Runner([process]),
+        clock=clock,
+    )
+    runtime.start()
+    runtime.service.enqueue(_request("active"))
+    runtime.run_cycle()
+    stop = Event()
+    stop.set()
+    waits: list[float] = []
+
+    def cross_deadline(timeout: float) -> None:
+        waits.append(timeout)
+        clock.value = "2020-01-01T00:00:06Z"
+        process.returncode = 0
+
+    with pytest.raises(ManagedLocalShutdownTimeoutError) as error:
+        runtime.serve(
+            stop,
+            poll_interval_seconds=10,
+            shutdown_timeout_seconds=5,
+            wait=cross_deadline,
+        )
+
+    assert waits == [5]
+    assert error.value.remaining_item_ids == ("active",)
+    assert runtime.state is ManagedLocalQueueRuntimeState.DRAINING
+    active = runtime.service.read_item("active")
+    assert active is not None and active.status is QueueItemStatus.DISPATCHED
+    counter = store.read_resource_limit("workspace-1", "gpu")
+    assert counter is not None and counter.value == 1
+
+
 def test_runtime_explicit_cancel_only_finishes_current_work_after_cleanup(
     tmp_path: Path,
 ) -> None:

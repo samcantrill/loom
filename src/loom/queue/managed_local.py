@@ -400,6 +400,20 @@ class ManagedLocalQueueRuntime:
                 )
                 if self._state is ManagedLocalQueueRuntimeState.CANCELLING:
                     self._cancel_current_session_items()
+            if (
+                shutdown_started_at is not None
+                and self._shutdown_timed_out(
+                    shutdown_started_at, shutdown_timeout_seconds
+                )
+            ):
+                current, foreign = self._classify_recovery()
+                self._foreign_item_ids = tuple(
+                    item.queue_item_id for item in foreign
+                )
+                if current:
+                    raise ManagedLocalShutdownTimeoutError(
+                        tuple(item.queue_item_id for item in current)
+                    )
             try:
                 self.run_cycle()
             except Exception:
