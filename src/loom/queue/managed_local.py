@@ -138,6 +138,7 @@ class ManagedLocalQueueRuntime:
         self._degraded_item_ids: tuple[str, ...] = ()
         self._foreign_item_ids: tuple[str, ...] = ()
         self._last_pool_status: QueuePoolStatus | None = None
+        self._shutdown_active = False
 
     @classmethod
     def from_spec(
@@ -218,6 +219,7 @@ class ManagedLocalQueueRuntime:
     def start(self) -> ManagedLocalQueueRuntimeStatus:
         """Read-only validate authority state, then start this in-process service."""
 
+        self._shutdown_active = False
         self._validate_startup()
         if self.service.state is not QueueServiceState.RUNNING:
             self.service.start()
@@ -334,10 +336,7 @@ class ManagedLocalQueueRuntime:
                 "managed local runtime requires recovery before running a cycle"
             )
         try:
-            if self._state in {
-                ManagedLocalQueueRuntimeState.DRAINING,
-                ManagedLocalQueueRuntimeState.CANCELLING,
-            }:
+            if self._shutdown_active:
                 result = self.controller.reconcile_current_session(
                     pool_name=self.pool_name
                 )
@@ -378,13 +377,17 @@ class ManagedLocalQueueRuntime:
         waiter = stop_event.wait if wait is None else wait
         shutdown_started_at: str | None = None
         while True:
-            if stop_event.is_set() and self._state not in {
-                ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED,
-                ManagedLocalQueueRuntimeState.STOPPED,
-                ManagedLocalQueueRuntimeState.DRAINING,
-                ManagedLocalQueueRuntimeState.CANCELLING,
-            }:
+            if (
+                shutdown_started_at is None
+                and stop_event.is_set()
+                and self._state
+                not in {
+                    ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED,
+                    ManagedLocalQueueRuntimeState.STOPPED,
+                }
+            ):
                 shutdown_started_at = self._clock()
+                self._shutdown_active = True
                 self._state = (
                     ManagedLocalQueueRuntimeState.DRAINING
                     if shutdown_mode == "drain"
@@ -400,10 +403,7 @@ class ManagedLocalQueueRuntime:
                 pass
             if self._state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED:
                 return self.status()
-            if self._state in {
-                ManagedLocalQueueRuntimeState.DRAINING,
-                ManagedLocalQueueRuntimeState.CANCELLING,
-            }:
+            if shutdown_started_at is not None:
                 current, _foreign = self._classify_recovery()
                 if not current:
                     self._state = ManagedLocalQueueRuntimeState.STOPPED
@@ -483,10 +483,7 @@ class ManagedLocalQueueRuntime:
             if step.item is not None and step.outcome in {"degraded", "unknown"}
         )
         self._degraded_item_ids = degraded
-        if self._state in {
-            ManagedLocalQueueRuntimeState.DRAINING,
-            ManagedLocalQueueRuntimeState.CANCELLING,
-        }:
+        if self._shutdown_active:
             return
         if degraded:
             self._state = ManagedLocalQueueRuntimeState.DEGRADED
