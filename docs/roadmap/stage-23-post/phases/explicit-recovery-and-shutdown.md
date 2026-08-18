@@ -2,18 +2,18 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: 23-post, Phase 2
 - Manifest: `docs/roadmap/stage-23-post/implementation-plan.md`
 - Branch: `agent/stage-23-post-p2-explicit-recovery-and-shutdown`
 - Worktree root and path: `../loom-worktrees`; `../loom-worktrees/stage-23-post-p2-explicit-recovery-and-shutdown`
-- Base revision: current `origin/develop` after Phase 1 is remotely merged
+- Base revision: `849157b50a2864f583cafb1d3e1c3f8c8b7db528`
 - PR target: develop
 - PR title: `Managed Local Operations - Phase 2: Recovery and Shutdown`
 - Dependencies: Phase 1 remotely merged; branch must be based on refreshed `origin/develop`
 - Requirement coverage: FR-6, FR-7, FR-8, and FR-9
 - Workflow path: expanded because operator attestation authorizes a guarded terminal mutation after process-owner loss
-- Blockers: Phase 1 merge
+- Blockers: none
 
 ## Objective And Context
 
@@ -259,11 +259,13 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 1 merge verification and refreshed source
-  review
-- Expanded planning: not needed unless Phase 1 implementation leaves the
-  recovery target/ownership boundary ambiguous
-- Implementation: pending one `loom_phase_executor`
+- Manager preparation: complete at
+  `849157b50a2864f583cafb1d3e1c3f8c8b7db528`; Phase 1 PR #212 is remotely
+  merged, the dedicated worktree is clean, and the guarded repository/service
+  completion plus current/foreign classification seams remain available
+- Expanded planning: not needed; Phase 1 leaves the approved exact-item foreign
+  recovery target and current-session ownership boundary unambiguous
+- Implementation: in progress with one `loom_phase_executor`
 - Refiner: not needed unless a qualified blocker is found
 - Pre-submit gate: pending
 - Independent review: recommended because recovery attestation authorizes a
