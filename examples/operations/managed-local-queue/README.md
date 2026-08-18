@@ -16,7 +16,7 @@ and separate stdout/stderr logs. The active output is deliberately redacted,
 but proves that `item-1` owns two distinct slots and is
 `source=same_session_live`.
 
-## Recommended Runtime Shape
+## Public Python Surface
 
 The runtime constructs and keeps alive the queue service, local adapter,
 controller, and authored static-slot provider. Do not manually give those
