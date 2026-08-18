@@ -276,7 +276,10 @@ Final commands:
 - Refiner: completed on 2026-08-18 for the incomplete operator-proof cluster;
   text/JSON parity, controlled snapshot behavior, deterministic twelve-over-three
   refill, and the completing example now have focused coverage
-- Pre-submit gate: not run
+- Pre-submit gate: complete on 2026-08-18 at `3022dc7`; `make validate-pr`
+  passed Ruff, Pyright, 2,057 default tests, 128 config-extra tests with three
+  expected skips, and package build. A fresh `make test-summary` receipt passed
+  2,185 tests with zero failures/errors and three skips
 - Independent review: required after implementation; unused
 - Blocker corrections: 2/3; one refiner pass closed the incomplete operator
   proof, and one manager-local pass completed live-identity validation,
@@ -289,9 +292,9 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Added selected-pool SQLite snapshots, allowlisted pool/attempt status models, `status --pool`, shared text rendering, and the managed-local operations example in `src/loom/queue/{repository.py,_sqlite.py,service.py,status.py,__init__.py}`, `src/loom/cli/{queue.py,formatting.py}`, `examples/operations/managed-local-queue/`, its inventory, and Phase 3 feature documentation. |
-| Tests added or updated | Added pool-snapshot repository contract coverage; unit coverage for exact status keys, redaction, claimed null facts, additive legacy shape, and same-session labels; and queue CLI envelope/pool e2e coverage. Targeted queue matrix passed: 15 contract, 27 integration/e2e, and 79 unit tests. |
-| Validated revision/tree state and evidence | Final gate passed against the implementation tree: `make validate-pr` completed Ruff, Pyright (0 errors), default harness (2,051 passed), config-extra harness (128 passed, 3 skipped), and `uv build`. `make test-summary` wrote `build/test-summary.md`: package 112, unit 1,444, contract 267, integration 180, e2e 48, config-extra 128 passed (3 skipped). Implementation commit `e0ee341`; removal-only generated-example cleanup `1f5b1d0`. |
-| Validation-relevant changes after evidence | None. The only post-gate change before this record was removal of an accidentally generated example SQLite file. |
+| Tests added or updated | Added ordered and controlled-snapshot repository coverage; exact safe-shape, malformed/unknown evidence, text/JSON parity, claimed-null, additive-v1, observation failure, and same-session identity unit coverage; CLI v1-envelope e2e coverage; and a real-SQLite twelve-over-three success/failure/cancellation refill proof. The runnable three-over-two example verifies active redacted facts, completion, and distinct logs. |
+| Validated revision/tree state and evidence | Final manager gate passed at `3022dc7`: `make validate-pr` completed Ruff, Pyright (0 errors), default harness (2,057 passed), config-extra harness (128 passed, 3 skipped), and `uv build`. Fresh `build/test-summary.md`: package 112, unit 1,448, contract 267, integration 182, e2e 48, and config-extra 128 passed (2,185 total; zero failures/errors; three skips). |
+| Validation-relevant changes after evidence | This documentation-only validation record update; no source, test, dependency, build, or validation configuration changed after `3022dc7`. |
 | Blocker correction (inclusive budget) | Closed the accepted operator-proof cluster (1/3): text status now renders the fixed owner/session and slot facts present in JSON; parity/redaction coverage exercises the shared model; controlled SQLite snapshot coverage holds a read on one side of a claim; the real SQLite queue/coordination proof drives twelve items through three slots and success/failure/cancellation refill barriers; and the example reconciles all three commands, verifies distinct stdout logs, and prints final status. Narrow validation passed: `uv run pytest tests/integration/queue/test_sqlite_repository.py tests/integration/queue/test_managed_local_controller.py tests/unit/loom/queue/test_queue_status.py tests/e2e/test_queue_cli.py` (30 passed), targeted Ruff, and the managed-local example. |
 | Manager correction (inclusive budget) | Closed the remaining accepted status/example/docs cluster (2/3): same-session observation now also matches the durable claim owner; exact nested shapes, malformed/unknown evidence, observation failure, and owner mismatch have focused coverage; the SQLite proof explicitly preserves the queued FIFO head at capacity; the example uses the existing foreground drain rather than a bounded timing loop and prints redacted active slot/log facts; queue docs cover schema v1/v2, static config, deferral, renewal/crash limits, logs, and opt-in downstream accelerator binding. Full gates require a fresh manager rerun. |
 | PR, review, and merge | pending |
