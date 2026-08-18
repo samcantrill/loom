@@ -25,7 +25,7 @@ from .models import (
     RunIntent,
     validate_queue_id,
 )
-from .repository import QueueRepository
+from .repository import QueuePoolSnapshot, QueueRepository
 from ._sqlite import SQLiteQueueRepository
 
 
@@ -243,6 +243,13 @@ class QueueService:
     def read_item(self, queue_item_id: str) -> QueueItem | None:
         self._ensure_running()
         return self.repository.read_item(queue_item_id)
+
+    def read_pool_snapshot(self, pool_name: str) -> QueuePoolSnapshot:
+        """Return one selected-pool repository snapshot for operator status."""
+
+        self._ensure_running()
+        self._require_pool(pool_name)
+        return self.repository.read_pool_snapshot(pool_name)
 
     def recovery_items(self) -> tuple[QueueItem, ...]:
         self._ensure_running()

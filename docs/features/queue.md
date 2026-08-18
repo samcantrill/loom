@@ -129,6 +129,64 @@ Queue preflight can report whether a config contains managed pools. Python
 callers that supply a public coordination store and workspace id can also run
 read-only authority limit reconciliation.
 
+Schema-v1 queue configuration remains compatible and keeps one controller-local
+active item with no concrete assignment provider. Opt into bounded concurrency
+and static assignments with schema v2:
+
+```yaml
+queue:
+  schema_version: 2
+  service:
+    db_path: .loom/queue.sqlite
+  controller:
+    max_active_items: 2
+  pools:
+    - pool_name: local-pool
+      mode: managed
+      resources:
+        accelerator: 2
+  queues:
+    - queue_name: local
+      pool_name: local-pool
+  adapters:
+    local:
+      assignments:
+        local-pool:
+          accelerator:
+            provider: static-slots
+            slots:
+              - id: slot-a
+                coordination_key: accelerator-slot-a
+                value: a
+                label: slot-a
+              - id: slot-b
+                coordination_key: accelerator-slot-b
+                value: b
+                label: slot-b
+            binding:
+              type: environment-list
+              name: LOOM_ASSIGNED_SLOTS
+              separator: ","
+```
+
+Authority limits for the logical resource and every slot coordination key must
+already exist; queue preflight reads and validates them but never provisions or
+changes them. Capacity exhaustion defers the FIFO head without incrementing its
+attempt. A live controller session renews scalar and assignment leases and
+fails the process closed on ownership loss or a missed renewal deadline. This
+is not a crash-time guarantee: controller death and process reattachment still
+require explicit recovery.
+
+Each attempt writes distinct stdout and stderr files beneath queue-owned state.
+The [managed-local operations example](../../examples/operations/managed-local-queue/README.md)
+shows public Python construction, two generic slots, refill, redacted status,
+and queue-relative log paths.
+
+A downstream deployment may author the same generic binding with a conventional
+name such as `CUDA_VISIBLE_DEVICES`; Loom treats that as trusted configuration,
+not accelerator discovery or vendor semantics. Real accelerator checks remain
+manual/opt-in and are not part of `make validate-pr`.
+
 ## Delegated SLURM Pools
 
 Delegated SLURM pools use the existing fakeable SLURM command-runner boundary.
@@ -157,6 +215,7 @@ loom queue preflight queue.yaml
 loom queue start queue.yaml
 loom queue status queue.yaml
 loom queue status queue.yaml --item run-001
+loom queue status queue.yaml --pool gpu-pool --format json
 loom queue cancel queue.yaml run-001 --reason operator-requested
 loom queue drain-foreground queue.yaml --max-items 1
 ```
@@ -189,3 +248,13 @@ limits, or requires a real SLURM cluster.
 Queue status output includes explicit ownership wording so operators can see
 which facts come from queue state, authority state, or delegated scheduler
 evidence.
+
+`--pool` adds a redacted selected-pool mapping to the existing status result.
+It reports controller-local active-limit configuration, lifecycle counts, and
+active attempt facts from one SQLite snapshot. Managed-local rows expose only
+persisted owner/session, PID/PGID, safe slot labels and lease expiry, and
+queue-relative stdout/stderr paths. Missing, malformed, unknown-version, or
+legacy evidence is marked unavailable; status never emits raw handle evidence,
+commands, working directories, environment bindings, fencing tokens, or
+provider-private data. Persisted acquisition evidence is not a liveness claim;
+same-session observation is labeled separately.

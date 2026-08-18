@@ -58,6 +58,7 @@ PYTHON_API_EXAMPLES = {
     "execution.local",
     "execution.python-run-options",
     "operations.captured-logs",
+    "operations.managed-local-queue",
     "operations.resource-leases",
 }
 USER_FACING_V10_EXAMPLES = {

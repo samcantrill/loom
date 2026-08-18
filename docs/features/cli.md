@@ -21,6 +21,10 @@ V11 adds a narrow queue operations group: `loom queue preflight`,
 Python queue service and configured repository; enqueue remains Python-first.
 See [queue.md](queue.md) for the queue service ownership model and examples.
 
+V23 adds `loom queue status CONFIG --pool POOL`, which renders a safe selected
+pool summary through the existing queue-status envelope. CLI formatting does
+not inspect dispatch evidence or make scheduling decisions.
+
 V12 adds portable run exchange commands under the existing `loom runs` group:
 `loom runs export`, `loom runs inspect`, and `loom runs import`. These commands
 are thin wrappers over public `loom.runs` bundle APIs. They do not parse archive

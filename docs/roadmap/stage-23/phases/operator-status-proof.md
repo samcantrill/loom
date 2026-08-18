@@ -2,21 +2,23 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: v23 Phase 3
 - Manifest: `docs/roadmap/stage-23/implementation-plan.md`
 - Branch: `agent/stage-23-p3-operator-status-proof`
 - Worktree root and path:
   `/home/can134/work/active/loom-worktrees/stage-23-p3-operator-status-proof`
-- Base revision: current `origin/develop` after Phase 2 merges; record the exact
-  revision before branch creation
+- Base revision: `246fb29a4e16ec3130fac1e0ea726dd5d11fa0de`
 - PR target: `develop`
 - PR title: `Managed Local Concurrency - Phase 3: Operator Status and Proof`
+- PR: `#211`
 - Dependencies: Phases 1 and 2 remotely merged with their cycle, evidence,
   config, ownership, and local lifecycle contracts intact
 - Workflow path: expanded because status serialization/redaction, CLI envelope
   compatibility, and causal concurrency end-to-end evidence have durable impact
-- Blockers: Phase 2 must merge before this phase is selected
+- Blockers: none; Phase 2 merged through PR `#210` as `7187829`, its merge
+  metadata is on `develop` at the recorded base, and the phase worktree is
+  isolated
 
 ## Objective And Context
 
@@ -101,16 +103,43 @@ Assumptions:
 
 - Observable behavior: counts and active rows describe the same repository
   snapshot; terminal counts are separate; active equals claimed plus
-  dispatched; active limit is explicitly labeled controller-local. Text and
+  dispatched; active limit is explicitly labeled controller-local. Lifecycle
+  status and counts always come from persistence; optional live inspection may
+  enrich safe attempt facts but cannot rewrite those persisted facts. Text and
   JSON expose equivalent facts.
-- Public or durable shapes: repository/service exposes the selected-pool
-  snapshot needed by status without promising a general query API. The pool
-  read model's `to_dict()` uses named count fields and active rows, never
-  arbitrary evidence. CLI adds only `--pool`; scheduling remains Python-first.
-- Trust and failure boundaries: malformed or broad legacy evidence is treated
-  as unavailable safe assignment data, not passed through. Live observation
-  failure does not corrupt persisted status and is labeled as observation
-  uncertainty.
+- Public or durable shapes: repository/service exposes only the selected-pool
+  snapshot needed by status, not a general query API. The additive `pool`
+  mapping in `QueueOperationalStatus.to_dict()` has exactly `pool_name`,
+  `controller_max_active_items`, `counts`, and `active_attempts`. `counts` has
+  exactly `queued`, `claimed`, `dispatched`, `active`, `succeeded`, `failed`,
+  `cancelled`, and `unknown`; `active == claimed + dispatched`.
+- Each `active_attempts` row has exactly `queue_item_id`, `status`, `owner_id`,
+  `session_id`, `evidence_source`, `live_observation`, `process`, `assignment`,
+  and `logs`. `evidence_source` is `persisted`, `same_session_live`, or
+  `unavailable`; `live_observation` is `not_requested`, `same_session`, or
+  `unavailable`. The nullable subdocuments are limited to `process` with
+  `pid`/`pgid`, `assignment` with `provider_name` and `slots`, and `logs` with
+  queue-relative `stdout_path`/`stderr_path`. A slot has only
+  `resource_name`, `slot_id`, nullable `label`, `lease_id`, and `expires_at`.
+  Claimed work may expose its persisted claim owner but has null session,
+  process, assignment, and logs rather than fabricated handle facts.
+- Trust and failure boundaries: the read model recognizes only the fixed,
+  schema-v1 `managed_local` projection already persisted by Phase 2 and copies
+  only the fields named above. Other `DispatchHandle.evidence`, unknown legacy
+  keys, fencing/binding values, command/cwd, and environment names/values are
+  never traversed into the pool model. Missing, malformed, or unsupported
+  evidence yields null safe subdocuments and `evidence_source=unavailable`.
+  A supplied adapter contributes live facts only after matching the persisted
+  owner, session, and handle; mismatch or inspection failure retains any safe
+  persisted facts and sets `live_observation=unavailable`.
+- CLI compatibility: `loom queue status CONFIG` and `--item` retain their
+  current result fields and `loom.cli.queue.status.v1` envelope. `--pool` adds
+  only the `pool` mapping inside that same result and obtains any refreshed
+  facts through the safe pool model rather than the broad legacy
+  `active_items` serialization. The envelope remains the existing
+  `schema_version`/`ok`/`warnings`/`result` shape. Only a necessary removal,
+  rename, or retype may advance that same envelope constant to v2; no nested
+  pool-status schema version or second envelope is introduced.
 - Cross-phase contracts: no modification to Phase 1 mutation guards or Phase 2
   evidence allowlist/lifecycle ordering. The example uses public construction
   and the built-in static provider.
@@ -119,8 +148,28 @@ Assumptions:
   `slot-a`/`slot-b`; one clearly marked downstream-style snippet may use
   `CUDA_VISIBLE_DEVICES` as ordinary authored config.
 - Private choices the executor may simplify: exact read-query grouping, text
-  whitespace, example command content, and whether counts are a nested record
-  or direct typed fields, provided `to_dict()` is stable and explicit.
+  whitespace, example command content, Python class/helper layout, and nullable
+  field representation before `to_dict()`; the serialized names and allowed
+  values above are fixed.
+
+Acceptance for the expanded-path risks:
+
+- One selected-pool read returns every status count and the `CLAIMED` and
+  `DISPATCHED` rows from one SQLite snapshot in `(enqueued_at, queue_item_id)`
+  order; rows and counts cannot represent opposite sides of one transition.
+- JSON and text for the same model contain the same selected pool, limit,
+  counts, attempt identities, source labels, and safe facts. Existing no-pool
+  and item invocations retain their current v1 contract.
+- Current, broad legacy, malformed, and unknown-version evidence serialize to
+  the exact allowlist above, and secret sentinel keys and values appear in
+  neither JSON nor text. Observation failure remains distinguishable from the
+  absence of persisted safe evidence.
+- The real-SQLite proof starts items 1-3 on three unique slots, observes item 4
+  still queued while capacity is full, and then proves in order that a success,
+  a non-zero exit, and a cancellation each releases capacity before exactly one
+  FIFO replacement starts. The run never exceeds three active items or gives
+  one live slot to two items; all twelve finish as ten succeeded, one failed,
+  and one cancelled, with zero unknown.
 
 ## Proportionality
 
@@ -162,9 +211,9 @@ Assumptions:
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | required | Public status/read models and import boundaries. | Intentional exports import cheaply; queue import has no vendor/CLI side effect. |
-| Unit | required | Count/read model, allowlist, source labels, and formatter parity. | Every status count; malformed/legacy evidence omitted; no forbidden values. |
-| Contract | required | Pool snapshot and stable status JSON/envelope. | Selected-pool counts/order, exact safe keys, and text/JSON fact parity. |
-| Integration | required | Twelve-over-three and repository snapshot behavior. | Exactly three active/unique slots; one replacement; failed/cancelled capacity returned; eventual terminal states. |
+| Unit | required | Count/read model, allowlist, source labels, and formatter parity. | Exact pool/count/row key sets; claimed null facts; current/legacy/malformed/unknown-version projections; nested forbidden-key and forbidden-value sentinels absent from both renderings; live identity match, mismatch, and inspection failure labels. |
+| Contract | required | Additive pool status and existing CLI envelope. | No-pool and `--item` retain the v1 envelope/result; `--pool` adds only the fixed pool mapping; exact safe keys and text/JSON fact parity; no second or nested status version. |
+| Integration | required | One-snapshot read and causal twelve-over-three behavior. | A second SQLite connection crosses a controlled read/transition barrier without producing mixed rows/counts. With real SQLite queue and coordination stores, controlled process gates prove 1-3 active, item 4 queued unchanged at capacity, then success->4, non-zero->5, cancellation->6 refills; active and simultaneous slot ownership peak at three; final counts are 10/1/1/0 for succeeded/failed/cancelled/unknown. |
 | E2E / opt-in | default dependency-free e2e required; hardware profile deferred/manual | Public Python/CLI example, separate logs, visible assignments. | Three commands over two generic slots; manual accelerator snippet is never collected by default. |
 
 Targeted commands:
@@ -184,12 +233,20 @@ Final commands:
 - Main risks: snapshot-inconsistent counts, accidental raw-evidence passthrough,
   overstating live status, flaky timing/process tests, or documentation implying
   distributed-limit or crash-safety guarantees.
-- Review focus: SQL snapshot queries, exact JSON/redaction contract,
-  persisted/live wording, deterministic fake-clock/process synchronization,
-  example metadata, and absence of scheduling in CLI.
-- Stop if: stable counts require queue DDL not justified by measured evidence;
-  Phase 2 did not persist enough safe data for the accepted status; or the e2e
-  requires sleeps/external hardware rather than deterministic synchronization.
+- Review focus: one SQLite snapshot boundary; the exact pool/count/attempt key
+  sets; allowlist construction rather than recursive evidence filtering;
+  forbidden-value as well as forbidden-key coverage; same-session live proof and
+  observation-failure labels; unchanged no-pool/item v1 envelopes; controlled
+  success/failure/cancellation release-before-refill barriers; example metadata;
+  and absence of scheduling policy in CLI.
+- Stop if: stable counts require queue DDL without measured evidence; the fixed
+  pool mapping cannot be added while preserving existing no-pool/item v1
+  fields; safe attempt facts require a migration, raw/unknown evidence, or
+  provider-private recovery data beyond Phase 2's `managed_local` projection;
+  same-session ownership cannot be established without widening a public
+  adapter contract; or the causal proof requires fixed sleeps, timing-only peak
+  sampling, external hardware, or a new orchestration abstraction instead of
+  deterministic process/SQLite barriers.
 - Accepted debt and revisit trigger: no general queue query API until a second
   consumer or measured scale needs filters/indexes; real hardware remains
   opt-in until a portable acceptance environment exists.
@@ -210,22 +267,42 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete in Stage 23 planning
-- Expanded planning: required after Phase 2 merge; pass unused
-- Implementation: not started
-- Refiner: optional for a qualified implementation/test blocker; unused
-- Pre-submit gate: not run
-- Independent review: required after implementation; unused
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation: complete on 2026-08-18 against `246fb29`; manifest and
+  phase-plan consistency, predecessor merge, repository identity, current
+  source/test seams, and worktree isolation verified
+- Expanded planning: completed on 2026-08-18 against `13f8512`; durable status
+  redaction, additive CLI envelope compatibility, and the causally interacting
+  twelve-over-three proof have fixed acceptance and stop conditions
+- Implementation: complete on 2026-08-18; final review corrections and their
+  focused coverage passed the fresh manager pre-submit gate
+- Refiner: completed on 2026-08-18 for the incomplete operator-proof cluster;
+  text/JSON parity, controlled snapshot behavior, deterministic twelve-over-three
+  refill, and the completing example now have focused coverage
+- Pre-submit gate: complete on 2026-08-18 at `648d095`; `make validate-pr`
+  passed Ruff, Pyright, 2,058 default tests, 128 config-extra tests with three
+  expected skips, and package build. A fresh `make test-summary` receipt passed
+  2,186 tests with zero failures/errors and three skips
+- Independent review: completed on 2026-08-18; it found terminal adapter
+  observations mislabeled as live and an example whose declared validation did
+  not execute its real managed-local workflow. Both findings have focused
+  regression coverage in the final correction
+- Blocker corrections: 3/3; one refiner pass closed the incomplete operator
+  proof, one manager-local pass completed identity/evidence/docs coverage, and
+  the final manager-local pass requires a nonterminal dispatched observation
+  before using live labels and makes the Python API example isolated,
+  rerunnable, cataloged, and exercised by the default queue e2e profile
+- PR and merge: PR `#211` is open against `develop`; required CI is pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added selected-pool SQLite snapshots, allowlisted pool/attempt status models, `status --pool`, shared text rendering, and the managed-local operations example in `src/loom/queue/{repository.py,_sqlite.py,service.py,status.py,__init__.py}`, `src/loom/cli/{queue.py,formatting.py}`, `examples/operations/managed-local-queue/`, its inventory, and Phase 3 feature documentation. |
+| Tests added or updated | Added ordered and controlled-snapshot repository coverage; exact safe-shape, malformed/unknown evidence, text/JSON parity, claimed-null, additive-v1, observation failure, and same-session identity unit coverage; CLI v1-envelope e2e coverage; and a real-SQLite twelve-over-three success/failure/cancellation refill proof. The runnable three-over-two example verifies active redacted facts, completion, and distinct logs. |
+| Validated revision/tree state and evidence | Final manager gate passed at `648d095`: `make validate-pr` completed Ruff, Pyright (0 errors), default harness (2,058 passed), config-extra harness (128 passed, 3 skipped), and `uv build`. Fresh `build/test-summary.md`: package 112, unit 1,448, contract 267, integration 182, e2e 49, and config-extra 128 passed (2,186 total; zero failures/errors; three skips). |
+| Validation-relevant changes after evidence | This documentation-only validation record update; no source, test, dependency, build, or validation configuration changed after `648d095`. |
+| Blocker correction (inclusive budget) | Closed the accepted operator-proof cluster (1/3): text status now renders the fixed owner/session and slot facts present in JSON; parity/redaction coverage exercises the shared model; controlled SQLite snapshot coverage holds a read on one side of a claim; the real SQLite queue/coordination proof drives twelve items through three slots and success/failure/cancellation refill barriers; and the example reconciles all three commands, verifies distinct stdout logs, and prints final status. Narrow validation passed: `uv run pytest tests/integration/queue/test_sqlite_repository.py tests/integration/queue/test_managed_local_controller.py tests/unit/loom/queue/test_queue_status.py tests/e2e/test_queue_cli.py` (30 passed), targeted Ruff, and the managed-local example. |
+| Manager correction (inclusive budget) | Closed the remaining accepted status/example/docs cluster (2/3): same-session observation now also matches the durable claim owner; exact nested shapes, malformed/unknown evidence, observation failure, and owner mismatch have focused coverage; the SQLite proof explicitly preserves the queued FIFO head at capacity; the example uses the existing foreground drain rather than a bounded timing loop and prints redacted active slot/log facts; queue docs cover schema v1/v2, static config, deferral, renewal/crash limits, logs, and opt-in downstream accelerator binding. |
+| Final review correction (inclusive budget) | Closed both independent-review findings (3/3): a matching terminal inspection now retains persisted evidence and reports live observation unavailable; a focused regression covers that case. The managed-local script now allocates one isolated run directory per invocation, its manifest and operations catalog identify the public Python surface and real default e2e validation, and the e2e executes it twice against one output base while checking active assignments, completion, and six distinct logs per run. Targeted Ruff and 40 focused unit/e2e/catalog tests passed. |
+| PR, review, and merge | Independent review findings are closed; PR `#211` is open against `develop` and awaits required CI. |
+| Residual risk and cleanup | No known Phase 3 blocker. Accepted controller-local limit, crash-time/re-attachment, persisted-acquisition-versus-live-observation, and static-inventory risks remain. Worktree/branch/PR cleanup are manager-owned. |

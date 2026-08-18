@@ -22,7 +22,7 @@ from .models import (
     QueueRecoveryRecord,
     validate_queue_id,
 )
-from .repository import QueueClaimResult
+from .repository import QueueClaimResult, QueuePoolSnapshot
 
 QUEUE_DB_SCHEMA_VERSION = 1
 _BUSY_TIMEOUT_MS = 5000
@@ -94,6 +94,30 @@ class SQLiteQueueRepository:
         if row is None:
             return None
         return _item_from_json(cast(str, row["item_json"]))
+
+    def read_pool_snapshot(self, pool_name: str) -> QueuePoolSnapshot:
+        """Read all selected-pool rows from one SQLite snapshot.
+
+        Counts are deliberately derived by the status read model from these
+        same rows, avoiding a separately-raced aggregate query.
+        """
+
+        pool_name = validate_queue_id(pool_name, "pool_name")
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            rows = conn.execute(
+                """
+                SELECT item_json
+                FROM queue_items
+                WHERE pool_name = ?
+                ORDER BY enqueued_at, queue_item_id
+                """,
+                (pool_name,),
+            ).fetchall()
+        return QueuePoolSnapshot(
+            pool_name=pool_name,
+            items=tuple(_item_from_json(cast(str, row["item_json"])) for row in rows),
+        )
 
     def claim_next(
         self,

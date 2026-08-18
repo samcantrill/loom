@@ -560,6 +560,63 @@ def format_queue_status_text(result: object) -> str:
             adapter_inspection = getattr(active, "adapter_inspection")
             if adapter_inspection is not None:
                 lines.append(f"    adapter: {getattr(adapter_inspection, 'reason')}")
+    pool_status = getattr(result, "pool_status", None)
+    if pool_status is not None:
+        pool = pool_status.to_dict()
+        counts = cast(Mapping[str, object], pool["counts"])
+        lines.append(f"pool: {pool['pool_name']}")
+        lines.append(
+            "controller_max_active_items: "
+            f"{pool['controller_max_active_items']} (controller-local)"
+        )
+        lines.append(
+            "counts: "
+            + ", ".join(
+                f"{name}={counts[name]}"
+                for name in (
+                    "queued",
+                    "claimed",
+                    "dispatched",
+                    "active",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "unknown",
+                )
+            )
+        )
+        attempts = cast(Sequence[Mapping[str, object]], pool["active_attempts"])
+        for attempt in attempts:
+            lines.append(
+                f"attempt {attempt['queue_item_id']}: {attempt['status']} "
+                f"owner={attempt['owner_id']} session={attempt['session_id']} "
+                f"source={attempt['evidence_source']} "
+                f"live={attempt['live_observation']}"
+            )
+            process = attempt["process"]
+            assignment = attempt["assignment"]
+            logs = attempt["logs"]
+            if isinstance(process, Mapping):
+                lines.append(f"  process: pid={process['pid']} pgid={process['pgid']}")
+            if isinstance(assignment, Mapping):
+                lines.append(f"  assignment: {assignment['provider_name']}")
+                slots = assignment.get("slots")
+                if isinstance(slots, Sequence) and not isinstance(slots, str):
+                    for slot in slots:
+                        if not isinstance(slot, Mapping):
+                            continue
+                        lines.append(
+                            "    slot: "
+                            f"resource_name={slot.get('resource_name')} "
+                            f"slot_id={slot.get('slot_id')} "
+                            f"label={slot.get('label')} "
+                            f"lease_id={slot.get('lease_id')} "
+                            f"expires_at={slot.get('expires_at')}"
+                        )
+            if isinstance(logs, Mapping):
+                lines.append(
+                    f"  logs: stdout={logs['stdout_path']} stderr={logs['stderr_path']}"
+                )
     lines.extend(_queue_ownership_lines(getattr(result, "to_dict")()))
     return "\n".join(lines)
 

@@ -32,6 +32,7 @@ from loom.queue.assignments import (
     StaticSlotAssignmentProvider,
 )
 from loom.queue.status import inspect_managed_queue_status
+from loom.queue.status import build_queue_pool_status
 from loom.serialization import thaw_plain_data
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
 
@@ -459,6 +460,121 @@ def test_renewal_outage_stops_fill_then_releases_and_refills_after_exit(
     assert first_item.status is QueueItemStatus.FAILED
     assert second_item.status is QueueItemStatus.DISPATCHED
     assert _active_amount(store, "gpu") == 1
+
+
+def test_sqlite_managed_local_three_slots_refill_after_each_terminal_path(
+    tmp_path: Path,
+) -> None:
+    """Prove FIFO refill across success, failure, and cancellation barriers."""
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    for key in ("gpu", "gpu-0", "gpu-1", "gpu-2"):
+        store.set_resource_limit("workspace-1", key, limit=3 if key == "gpu" else 1)
+    service = _started_service(tmp_path, clock=_clock("2020-01-01T00:00:00Z"), max_active_items=3, gpu_capacity=3)
+    for index in range(1, 13):
+        service.enqueue(_request(f"item-{index:02d}"))
+    processes = [_FakeProcess(pid=300 + index, pgid=300 + index) for index in range(12)]
+    runner = _FakeRunner(processes)
+    provider = StaticSlotAssignmentProvider(
+        store,
+        workspace_id="workspace-1",
+        slots=tuple(
+            StaticSlot("gpu", f"slot-{index}", f"gpu-{index}", str(index))
+            for index in range(3)
+        ),
+    )
+    adapter = LocalQueueDispatchAdapter(
+        workspace_id="workspace-1",
+        coordination_store=store,
+        owner_id="controller-1",
+        process_runner=runner,
+        current_drift_inputs={"config": "expected"},
+        assignment_provider=provider,
+    )
+    controller = QueueController(service, adapters={"local": adapter})
+
+    first = controller.run_cycle(pool_name="local-pool")
+    assert [step.item.queue_item_id for step in first.dispatch_steps if step.item] == [
+        "item-01",
+        "item-02",
+        "item-03",
+    ]
+    _assert_three_slot_peak(service, expected_active=3)
+    assert build_queue_pool_status(service, pool_name="local-pool").counts.queued == 9
+    head_before = service.read_item("item-04")
+    assert head_before is not None and head_before.status is QueueItemStatus.QUEUED
+    blocked = controller.run_cycle(pool_name="local-pool")
+    head = service.read_item("item-04")
+    assert blocked.dispatch_steps == ()
+    assert head is not None and head.status is QueueItemStatus.QUEUED
+    assert head.dispatch_attempt == head_before.dispatch_attempt
+    assert head.enqueued_at == head_before.enqueued_at
+
+    runner.started[0].returncode = 0
+    success_refill = controller.run_cycle(pool_name="local-pool")
+    assert [
+        step.item.queue_item_id for step in success_refill.dispatch_steps if step.item
+    ] == ["item-04"]
+    _assert_three_slot_peak(service, expected_active=3)
+
+    runner.started[1].returncode = 7
+    failed_refill = controller.run_cycle(pool_name="local-pool")
+    assert [
+        step.item.queue_item_id for step in failed_refill.dispatch_steps if step.item
+    ] == ["item-05"]
+    _assert_three_slot_peak(service, expected_active=3)
+
+    cancelled = controller.cancel_item(
+        "item-03", requested_by="operator", reason="stop"
+    )
+    assert (
+        cancelled.item is not None
+        and cancelled.item.status is QueueItemStatus.CANCELLED
+    )
+    cancellation_refill = controller.run_cycle(pool_name="local-pool")
+    assert [
+        step.item.queue_item_id
+        for step in cancellation_refill.dispatch_steps
+        if step.item
+    ] == ["item-06"]
+    _assert_three_slot_peak(service, expected_active=3)
+
+    while build_queue_pool_status(service, pool_name="local-pool").counts.active:
+        for process in runner.started:
+            if process.returncode is None:
+                process.returncode = 0
+        controller.run_cycle(pool_name="local-pool")
+        _assert_three_slot_peak(service)
+
+    counts = build_queue_pool_status(service, pool_name="local-pool").counts
+    assert (counts.succeeded, counts.failed, counts.cancelled, counts.unknown) == (
+        10,
+        1,
+        1,
+        0,
+    )
+
+
+def _assert_three_slot_peak(
+    service: QueueService, *, expected_active: int | None = None
+) -> None:
+    pool = build_queue_pool_status(service, pool_name="local-pool")
+    attempts = pool.active_attempts
+    assert pool.counts.active <= 3
+    if expected_active is not None:
+        assert pool.counts.active == expected_active
+    slots: set[str] = set()
+    for attempt in attempts:
+        assignment = attempt.assignment
+        assert assignment is not None
+        assignment_slots = assignment["slots"]
+        assert isinstance(assignment_slots, list) and assignment_slots
+        slot = assignment_slots[0]
+        assert isinstance(slot, Mapping)
+        slot_id = slot["slot_id"]
+        assert isinstance(slot_id, str)
+        slots.add(slot_id)
+    assert len(slots) == len(attempts)
 
 
 @dataclass(slots=True)

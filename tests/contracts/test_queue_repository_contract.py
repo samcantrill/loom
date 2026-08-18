@@ -68,6 +68,19 @@ def test_queue_repository_deferral_preserves_fifo_identity(tmp_path: Path) -> No
     ]
 
 
+def test_queue_repository_pool_snapshot_is_ordered_and_protocol_visible(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteQueueRepository(tmp_path / "queue.sqlite")
+    repository.enqueue(_item("item-2", "2020-01-01T00:00:02Z"))
+    repository.enqueue(_item("item-1", "2020-01-01T00:00:01Z"))
+
+    snapshot = repository.read_pool_snapshot("gpu-pool")
+
+    assert snapshot.pool_name == "gpu-pool"
+    assert [item.queue_item_id for item in snapshot.items] == ["item-1", "item-2"]
+
+
 def _item(item_id: str, enqueued_at: str) -> QueueItem:
     run_uri = f"file:///runs/{item_id}"
     return QueueItem(
