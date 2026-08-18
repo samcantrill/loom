@@ -1,13 +1,12 @@
 # Roadmap Stage 23 Implementation Plan: Managed Local Concurrency And Resource Assignment
 
-Status: ready; plan quality gate passed
+Status: complete; all phases merged
 Roadmap stage: `v23`
 Planning document: `docs/roadmap/stage-23/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 3 PR open
-Blockers: none; Phase 2 merged through PR `#210` and Phase 3 is isolated from
-current `origin/develop`
+Current phase: complete
+Blockers: none; all three phases are remotely merged into `develop`
 
 ## Summary
 
@@ -108,7 +107,7 @@ current `origin/develop`
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `safe-pool-cycles` | merged | `docs/roadmap/stage-23/phases/safe-pool-cycles.md` | `agent/stage-23-p1-safe-pool-cycles` | `#209` | Queue controller/repository, typed coordination/admission, and scalar local-process safety | Atomically reconcile/fill one pool with deferral, scalar renewal, terminal-before-release, and post-start compensation. |
 | 2 | `managed-local-assignments` | merged | `docs/roadmap/stage-23/phases/managed-local-assignments.md` | `agent/stage-23-p2-managed-local-assignments` | `#210` | Queue-local assignment/config/preflight and integration with the established local lifecycle | Exclusively bind and renew static slots, apply safe bindings, capture logs, and preserve Phase 1 compensation. |
-| 3 | `operator-status-proof` | pr_open | `docs/roadmap/stage-23/phases/operator-status-proof.md` | `agent/stage-23-p3-operator-status-proof` | `#211` | Repository read model, status/CLI rendering, docs, examples, and end-to-end proof | Expose redacted pool summaries and prove twelve items over three generic slots. |
+| 3 | `operator-status-proof` | merged | `docs/roadmap/stage-23/phases/operator-status-proof.md` | `agent/stage-23-p3-operator-status-proof` | `#211` | Repository read model, status/CLI rendering, docs, examples, and end-to-end proof | Expose redacted pool summaries and prove twelve items over three generic slots. |
 
 The phases are vertical rather than module-only. Phase 1 includes scalar lease
 renewal, local termination-before-release, session ownership, and post-start
@@ -132,9 +131,9 @@ adds the operator contract and public proof without scheduling in CLI.
   claim identities are non-reusable; workflow statuses/refiner wording and the
   Phase 3 read surface were narrowed. Provider and maintenance contracts were
   made explicit.
-- Ready for implementation: yes; Phases 1 and 2 are merged and Phase 3 is
-  eligible to begin from current `origin/develop` through the normal phase
-  workflow.
+- Implementation complete: yes; Phases 1 through 3 are remotely merged into
+  `develop`, their validation and review gates passed, and their worktrees and
+  branches are cleaned up.
 - Accepted risks: exact item-count enforcement does not span controllers;
   controller death and an unkillable process can outlive a lease; acquisition
   evidence is not refreshed durably on every renewal; static authored inventory
@@ -150,4 +149,4 @@ adds the operator contract and public proof without scheduling in CLI.
 | --- | --- | --- | --- | --- |
 | 1 | PR `#209` squash-merged as `e099b58` | Implementation, 94-test phase matrix, `make validate-pr`, test summary, CI, and fresh manager review passed | No known blocker; accepted controller-death, unkillable-process, controller-local-limit, and non-durable-renewal risks remain | Worktree and local/remote phase branch removed |
 | 2 | PR `#210` squash-merged as `7187829` after required CI passed | Implementation, focused mixed-release regression, `make validate-pr`, 2,173-test receipt, manager verification, and CI passed | No known blocker; accepted crash-time, reattachment, static-inventory, and non-durable-renewal risks remain | Worktree and local/remote phase branch removed |
-| 3 | PR `#211` open against `develop`; CI pending | Implementation, independent review corrections, `make validate-pr`, and the 2,186-test receipt passed | No known blocker; accepted controller-local-limit, crash-time, reattachment, static-inventory, and persisted-evidence risks remain | Worktree and branch cleanup pending merge |
+| 3 | PR `#211` squash-merged as `738df05` after required CI passed | Implementation, independent review corrections, `make validate-pr`, 2,186-test receipt, manager verification, and CI passed | No known blocker; accepted controller-local-limit, crash-time, reattachment, static-inventory, and persisted-evidence risks remain | Worktree and local/remote phase branch removed |
