@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, cast
 
+from loom._validation import require_schema_version
 from loom.errors import FingerprintError, ResourceError, ValidationError
 from loom.fingerprints import validate_digest
 from loom.ids import Checksum, CodecKey, ResourceType
@@ -31,13 +32,18 @@ class ResourceRef:
             raise ResourceRefError("uri must be a non-empty string")
         if not isinstance(self.resource_type, str) or not self.resource_type:
             raise ResourceRefError("resource_type must be a non-empty string")
-        if self.codec_key is not None and (not isinstance(self.codec_key, str) or not self.codec_key):
+        if self.codec_key is not None and (
+            not isinstance(self.codec_key, str) or not self.codec_key
+        ):
             raise ResourceRefError("codec_key must be None or a non-empty string")
-        if not isinstance(self.schema_version, int) or self.schema_version <= 0:
-            raise ResourceRefError("schema_version must be a positive integer")
+        object.__setattr__(
+            self, "schema_version", _require_schema_version(self.schema_version)
+        )
         if self.checksum is not None:
             object.__setattr__(self, "checksum", _ensure_digest(self.checksum))
-        object.__setattr__(self, "metadata", freeze_plain_data(self.metadata, path="metadata"))
+        object.__setattr__(
+            self, "metadata", freeze_plain_data(self.metadata, path="metadata")
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,10 +63,14 @@ class ResourceRef:
         allowed = required | {"codec_key", "schema_version", "checksum", "metadata"}
         unknown = set(data) - allowed
         if unknown:
-            raise ResourceRefError(f"ResourceRef.from_dict received unknown fields: {', '.join(sorted(unknown))}")
+            raise ResourceRefError(
+                f"ResourceRef.from_dict received unknown fields: {', '.join(sorted(unknown))}"
+            )
         missing = required - set(data)
         if missing:
-            raise ResourceRefError(f"ResourceRef.from_dict missing required field(s): {', '.join(sorted(missing))}")
+            raise ResourceRefError(
+                f"ResourceRef.from_dict missing required field(s): {', '.join(sorted(missing))}"
+            )
 
         return cls(
             uri=_require_str(data.get("uri"), "uri"),
@@ -91,9 +101,7 @@ def _ensure_codec_key(value: Any) -> str | None:
 
 
 def _require_schema_version(value: Any) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise ResourceRefError("schema_version must be a positive integer")
-    return value
+    return require_schema_version(value, error_type=ResourceRefError)
 
 
 def _ensure_digest(value: Any) -> str | None:

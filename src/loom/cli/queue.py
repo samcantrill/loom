@@ -82,6 +82,12 @@ def register_subparser(
         help="queue item id to inspect",
     )
     status.add_argument(
+        "--pool",
+        dest="pool_name",
+        metavar="POOL",
+        help="selected pool summary with redacted active-attempt facts",
+    )
+    status.add_argument(
         "--refresh-adapters",
         action="store_true",
         help="ask known delegated adapters for active status evidence",
@@ -176,6 +182,7 @@ def handle_status(namespace: argparse.Namespace) -> int:
     result = build_queue_status_result(
         namespace.config,
         queue_item_id=namespace.queue_item_id,
+        pool_name=namespace.pool_name,
         refresh_adapters=bool(namespace.refresh_adapters),
     )
     return _emit_status_result(result, namespace)
@@ -256,6 +263,7 @@ def build_queue_status_result(
     config_path: str | Path,
     *,
     queue_item_id: str | None = None,
+    pool_name: str | None = None,
     refresh_adapters: bool = False,
 ) -> "QueueOperationalStatus":
     """Build queue service or item status."""
@@ -265,6 +273,7 @@ def build_queue_status_result(
     return build_queue_operational_status(
         service,
         queue_item_id=queue_item_id,
+        pool_name=pool_name,
         adapters=adapters,
     )
 

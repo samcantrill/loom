@@ -5,8 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol, cast
+from uuid import uuid4
 
+from loom._validation import require_schema_version
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.pipeline.context import StageContext
 from loom.pipeline.event_sinks import EventSinkRegistry
@@ -28,7 +31,13 @@ from loom.pipeline.runtime import (
 from loom.pipeline.specs import PipelineSpec, StageSpec
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.serialization import PlainData, ensure_plain_data, load_versioned_document
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    freeze_plain_data,
+    load_versioned_document,
+    thaw_plain_data,
+)
 from loom.serialization.errors import PlainDataError
 from loom.serialization.errors import SchemaVersionError
 from .errors import RunRequestError
@@ -113,6 +122,7 @@ class RunRequest:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
     event_sink_registry: EventSinkRegistry | None = None
     event_persistence: str = "durable"
+    idempotency_key: str | None = None
 
     def __post_init__(self) -> None:
         if self.config is None and self.pipeline is None:
@@ -184,6 +194,12 @@ class RunRequest:
                 registry=cast(EventSinkRegistry | None, self.event_sink_registry),
             ),
         )
+        idempotency_key = self.idempotency_key
+        if idempotency_key is None:
+            idempotency_key = uuid4().hex
+        if not isinstance(idempotency_key, str) or not idempotency_key:
+            raise RunRequestError("RunRequest.idempotency_key must be a non-empty string")
+        object.__setattr__(self, "idempotency_key", idempotency_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,8 +222,12 @@ class ExecutionFailure:
     details: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != EXECUTION_FAILURE_SCHEMA_VERSION:
-            raise RunRequestError("ExecutionFailure.schema_version must be 1")
+        require_schema_version(
+            self.schema_version,
+            field="ExecutionFailure.schema_version",
+            current=EXECUTION_FAILURE_SCHEMA_VERSION,
+            error_type=RunRequestError,
+        )
         if not isinstance(self.run_uri, str) or not self.run_uri:
             raise RunRequestError("ExecutionFailure.run_uri must be a non-empty string")
         if not isinstance(self.stage_name, str) or not self.stage_name:
@@ -286,8 +306,10 @@ class ExecutionFailure:
             "stderr_path": self.stderr_path,
             "exit_code": self.exit_code,
             "signal": self.signal,
-            "executor_metadata": dict(self.executor_metadata),
-            "details": dict(self.details),
+            "executor_metadata": thaw_plain_data(
+                self.executor_metadata, path="executor_metadata"
+            ),
+            "details": thaw_plain_data(self.details, path="details"),
         }
 
     @classmethod
@@ -367,8 +389,12 @@ class StageWorkerRequest:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != STAGE_WORKER_REQUEST_SCHEMA_VERSION:
-            raise RunRequestError("StageWorkerRequest.schema_version must be 1")
+        require_schema_version(
+            self.schema_version,
+            field="StageWorkerRequest.schema_version",
+            current=STAGE_WORKER_REQUEST_SCHEMA_VERSION,
+            error_type=RunRequestError,
+        )
         if not isinstance(self.run_uri, str) or not self.run_uri:
             raise RunRequestError(
                 "StageWorkerRequest.run_uri must be a non-empty string"
@@ -435,9 +461,13 @@ class StageWorkerRequest:
             "stderr_path": self.stderr_path,
             "traceback_path": self.traceback_path,
             "result_path": self.result_path,
-            "resolved_runtime": dict(self.resolved_runtime),
-            "executor_metadata": dict(self.executor_metadata),
-            "metadata": dict(self.metadata),
+            "resolved_runtime": thaw_plain_data(
+                self.resolved_runtime, path="resolved_runtime"
+            ),
+            "executor_metadata": thaw_plain_data(
+                self.executor_metadata, path="executor_metadata"
+            ),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -518,8 +548,12 @@ class StageWorkerResult:
     executor_metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != STAGE_WORKER_RESULT_SCHEMA_VERSION:
-            raise RunRequestError("StageWorkerResult.schema_version must be 1")
+        require_schema_version(
+            self.schema_version,
+            field="StageWorkerResult.schema_version",
+            current=STAGE_WORKER_RESULT_SCHEMA_VERSION,
+            error_type=RunRequestError,
+        )
         if not isinstance(self.run_uri, str) or not self.run_uri:
             raise RunRequestError(
                 "StageWorkerResult.run_uri must be a non-empty string"
@@ -588,7 +622,9 @@ class StageWorkerResult:
         if self.status == StageStatus.FAILED and failure is None:
             raise RunRequestError("StageWorkerResult.failure is required for FAILED")
         if self.status == StageStatus.CANCELLED and failure is not None:
-            raise RunRequestError("StageWorkerResult.failure must be null for CANCELLED")
+            raise RunRequestError(
+                "StageWorkerResult.failure must be null for CANCELLED"
+            )
         if failure is not None:
             if failure.run_uri != self.run_uri:
                 raise RunRequestError("StageWorkerResult.failure.run_uri mismatch")
@@ -627,7 +663,9 @@ class StageWorkerResult:
             "traceback_path": self.traceback_path,
             "exit_code": self.exit_code,
             "signal": self.signal,
-            "executor_metadata": dict(self.executor_metadata),
+            "executor_metadata": thaw_plain_data(
+                self.executor_metadata, path="executor_metadata"
+            ),
         }
 
     @classmethod
@@ -706,6 +744,7 @@ class StageExecutionRequest:
     traceback_path: Path
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
     resolved_runtime: ResolvedStageRuntimeOptions | Mapping[str, object] | None = None
+    worker_authority_cli_args: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.run_uri, str) or not self.run_uri:
@@ -741,6 +780,13 @@ class StageExecutionRequest:
         object.__setattr__(self, "stderr_path", Path(self.stderr_path))
         object.__setattr__(self, "traceback_path", Path(self.traceback_path))
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+        if not isinstance(self.worker_authority_cli_args, tuple) or not all(
+            isinstance(argument, str) and argument
+            for argument in self.worker_authority_cli_args
+        ):
+            raise RunRequestError(
+                "StageExecutionRequest.worker_authority_cli_args must be a tuple of non-empty strings"
+            )
         object.__setattr__(
             self,
             "resolved_runtime",
@@ -808,14 +854,16 @@ class StageExecutionResult:
         if not isinstance(self.outputs, Mapping):
             raise RunRequestError("StageExecutionResult.outputs must be a mapping")
         if self.status == StageStatus.CANCELLED and self.outputs:
-            raise RunRequestError("StageExecutionResult CANCELLED must not include outputs")
+            raise RunRequestError(
+                "StageExecutionResult CANCELLED must not include outputs"
+            )
         for name in ("stdout_path", "stderr_path", "traceback_path"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, str):
                 raise RunRequestError(
                     f"StageExecutionResult.{name} must be a string when set"
                 )
-        object.__setattr__(self, "outputs", dict(self.outputs))
+        object.__setattr__(self, "outputs", MappingProxyType(dict(self.outputs)))
         object.__setattr__(
             self,
             "executor_metadata",
@@ -905,7 +953,7 @@ class RunResult:
             raise RunRequestError("RunResult.failed_stage must be a string when set")
         if self.failure is not None and not isinstance(self.failure, ExecutionFailure):
             raise RunRequestError("RunResult.failure must be ExecutionFailure when set")
-        object.__setattr__(self, "stage_results", normalized_results)
+        object.__setattr__(self, "stage_results", MappingProxyType(normalized_results))
         object.__setattr__(
             self,
             "artifact_index",
@@ -1055,9 +1103,7 @@ def _coerce_event_sink_registry(value: object) -> EventSinkRegistry | None:
         return None
     if isinstance(value, EventSinkRegistry):
         return value
-    raise RunRequestError(
-        "event_sink_registry must be EventSinkRegistry when supplied"
-    )
+    raise RunRequestError("event_sink_registry must be EventSinkRegistry when supplied")
 
 
 def _coerce_event_persistence(
@@ -1088,19 +1134,21 @@ def _is_composed_config(value: object) -> bool:
     )
 
 
-def _plain_mapping(value: Mapping[str, PlainData], path: str) -> dict[str, PlainData]:
+def _plain_mapping(
+    value: Mapping[str, PlainData], path: str
+) -> Mapping[str, PlainData]:
     try:
-        normalized = ensure_plain_data(dict(value), path=path)
+        normalized = freeze_plain_data(value, path=path)
     except PlainDataError as exc:
         raise RunRequestError(f"{path} must be plain-data-compatible: {exc}") from exc
-    if not isinstance(normalized, dict):
+    if not isinstance(normalized, Mapping):
         raise RunRequestError(f"{path} must be a mapping")
-    return cast(dict[str, PlainData], normalized)
+    return cast(Mapping[str, PlainData], normalized)
 
 
 def _artifact_ref_mapping(
     value: Mapping[str, ArtifactRef | object], path: str
-) -> dict[str, ArtifactRef]:
+) -> Mapping[str, ArtifactRef]:
     if not isinstance(value, Mapping):
         raise RunRequestError(f"{path} must be a mapping")
     output: dict[str, ArtifactRef] = {}
@@ -1114,7 +1162,7 @@ def _artifact_ref_mapping(
             output[key] = ArtifactRef.from_dict(ref)
         except ArtifactValidationError as exc:
             raise RunRequestError(f"{path}[{key!r}] must be ArtifactRef") from exc
-    return output
+    return MappingProxyType(output)
 
 
 def _coerce_fingerprint_record(

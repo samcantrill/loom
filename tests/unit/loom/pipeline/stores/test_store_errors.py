@@ -20,6 +20,8 @@ def test_store_error_inheritance() -> None:
     )
     assert issubclass(stores.AtomicWriteError, stores.StoreError)
     assert issubclass(stores.RunAlreadyExistsError, stores.RunStoreError)
+    assert issubclass(stores.RunProjectionError, stores.RunStoreError)
+    assert issubclass(stores.OrphanedLocalRunError, stores.RunProjectionError)
     assert issubclass(stores.RunLockError, stores.RunStoreError)
     assert issubclass(stores.RunLockConflictError, stores.RunLockError)
     assert issubclass(stores.RunLockReleaseError, stores.RunLockError)
@@ -225,6 +227,7 @@ def test_store_error_exports() -> None:
         "WorkspaceCoordinationStore",
         "ServiceWorkspaceCoordinationStore",
         "CoordinationStoreError",
+        "CoordinationFailureKind",
         "TrialState",
         "WorkspaceIdentity",
         "SweepIdentity",
@@ -266,6 +269,7 @@ def test_store_error_exports() -> None:
         "RunReliabilityStore",
         "RunSubmittedOperationStore",
         "StageStateStore",
+        "StageWorkerResultStore",
         "StageLogStore",
         "StageWorkspaceStore",
         "LocalRunStorePaths",
@@ -296,6 +300,8 @@ def test_store_error_exports() -> None:
         "ArtifactChecksumMismatchError",
         "ArtifactChecksumUnsupportedError",
         "RunAlreadyExistsError",
+        "RunProjectionError",
+        "OrphanedLocalRunError",
         "RunNotFoundError",
         "MissingStoreDocumentError",
         "CorruptStoreDocumentError",

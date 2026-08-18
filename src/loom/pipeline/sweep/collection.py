@@ -6,7 +6,14 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from loom.serialization import PlainData, PlainDataError, ensure_plain_data
+from loom._validation import require_schema_version
+from loom.serialization import (
+    PlainData,
+    PlainDataError,
+    ensure_plain_data,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 from loom.timestamps import utc_timestamp
 
 from .errors import SweepProtocolError
@@ -40,7 +47,9 @@ def _reject_unknown(
     unknown = set(mapping) - allowed
     if unknown:
         fields = ", ".join(sorted(unknown))
-        raise SweepProtocolError(f"{object_name} payload has unknown field(s): {fields}")
+        raise SweepProtocolError(
+            f"{object_name} payload has unknown field(s): {fields}"
+        )
 
 
 def _text(value: object, field_name: str) -> str:
@@ -67,18 +76,18 @@ def _schema_version(value: object, field_name: str) -> int:
     return value
 
 
-def _plain_mapping(value: object, field_name: str) -> dict[str, PlainData]:
+def _plain_mapping(value: object, field_name: str) -> Mapping[str, PlainData]:
     if value is None:
         return {}
     if not isinstance(value, Mapping):
         raise SweepProtocolError(f"{field_name} must be a mapping")
     try:
-        normalized = ensure_plain_data(value, path=field_name)
+        normalized = freeze_plain_data(value, path=field_name)
     except (PlainDataError, TypeError) as exc:
         raise SweepProtocolError(f"{field_name} must contain plain data") from exc
-    if not isinstance(normalized, dict):
+    if not isinstance(normalized, Mapping):
         raise SweepProtocolError(f"{field_name} must be a mapping")
-    return dict(normalized)
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,13 +110,15 @@ class SweepCollectionDiagnostic:
             "code": self.code,
             "message": self.message,
             "trial_id": self.trial_id,
-            "detail": dict(self.detail),
+            "detail": thaw_plain_data(self.detail, path="detail"),
         }
 
     @classmethod
     def from_dict(cls, data: object) -> "SweepCollectionDiagnostic":
         if not isinstance(data, Mapping):
-            raise SweepProtocolError("SweepCollectionDiagnostic payload must be a mapping")
+            raise SweepProtocolError(
+                "SweepCollectionDiagnostic payload must be a mapping"
+            )
         _reject_unknown(
             data,
             {"code", "message", "trial_id", "detail"},
@@ -143,7 +154,9 @@ class SweepCollectedArtifact:
         object.__setattr__(
             self, "artifact_type", _text(self.artifact_type, "artifact_type")
         )
-        object.__setattr__(self, "codec_key", _optional_text(self.codec_key, "codec_key"))
+        object.__setattr__(
+            self, "codec_key", _optional_text(self.codec_key, "codec_key")
+        )
         object.__setattr__(self, "checksum", _optional_text(self.checksum, "checksum"))
         object.__setattr__(
             self, "fingerprint", _optional_text(self.fingerprint, "fingerprint")
@@ -169,7 +182,7 @@ class SweepCollectedArtifact:
             "fingerprint": self.fingerprint,
             "producer_stage": self.producer_stage,
             "created_at": self.created_at,
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -200,9 +213,7 @@ class SweepCollectedArtifact:
             codec_key=_optional_text(data.get("codec_key"), "codec_key"),
             checksum=_optional_text(data.get("checksum"), "checksum"),
             fingerprint=_optional_text(data.get("fingerprint"), "fingerprint"),
-            producer_stage=_optional_text(
-                data.get("producer_stage"), "producer_stage"
-            ),
+            producer_stage=_optional_text(data.get("producer_stage"), "producer_stage"),
             created_at=_optional_text(data.get("created_at"), "created_at"),
             metadata=_plain_mapping(data.get("metadata", {}), "metadata"),
         )
@@ -276,8 +287,12 @@ class SweepCollectedTrial:
             "trial_index": self.trial_index,
             "run_uri": self.run_uri,
             "provider_trial_id": self.provider_trial_id,
-            "proposal_overrides": dict(self.proposal_overrides),
-            "trial_metadata": dict(self.trial_metadata),
+            "proposal_overrides": thaw_plain_data(
+                self.proposal_overrides, path="proposal_overrides"
+            ),
+            "trial_metadata": thaw_plain_data(
+                self.trial_metadata, path="trial_metadata"
+            ),
             "status": self.status.to_dict(),
             "artifact_count": self.artifact_count,
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
@@ -355,7 +370,9 @@ class SweepCollectedTrial:
                     "status.coordination_state",
                 ),
                 early_stopped=bool(status_data.get("early_stopped", False)),
-                metadata=_plain_mapping(status_data.get("metadata", {}), "status.metadata"),
+                metadata=_plain_mapping(
+                    status_data.get("metadata", {}), "status.metadata"
+                ),
             ),
             artifacts=_collected_artifacts(
                 list(data.get("artifacts", ())), "artifacts"
@@ -380,8 +397,11 @@ class SweepCollectionResult:
     diagnostics: Sequence[SweepCollectionDiagnostic] = ()
 
     def __post_init__(self) -> None:
-        if self.schema_version != SWEEP_COLLECTION_SCHEMA_VERSION:
-            raise SweepProtocolError("SweepCollectionResult.schema_version must be 1")
+        require_schema_version(
+            self.schema_version,
+            current=SWEEP_COLLECTION_SCHEMA_VERSION,
+            error_type=SweepProtocolError,
+        )
         object.__setattr__(self, "sweep_id", _text(self.sweep_id, "sweep_id"))
         object.__setattr__(
             self, "collected_at", _text(self.collected_at, "collected_at")
@@ -529,7 +549,9 @@ def _read_trial_artifacts(
                 code="artifact_collection_failed",
                 message=str(exc) or type(exc).__name__,
                 trial_id=trial.trial_id,
-                detail={"exception_type": f"{type(exc).__module__}.{type(exc).__name__}"},
+                detail={
+                    "exception_type": f"{type(exc).__module__}.{type(exc).__name__}"
+                },
             )
         )
         return ()

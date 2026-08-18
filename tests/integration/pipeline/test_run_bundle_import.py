@@ -96,6 +96,11 @@ def _export_completed_bundle(tmp_path: Path) -> ExportedBundle:
     store.transition_run(
         run_uri,
         from_status=RunStatus.CREATED,
+        to_status=RunStatus.RUNNING,
+    )
+    store.transition_run(
+        run_uri,
+        from_status=RunStatus.RUNNING,
         to_status=RunStatus.SUCCEEDED,
     )
     bundle_path = tmp_path / "bundle.tar"

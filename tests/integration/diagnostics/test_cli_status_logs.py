@@ -198,6 +198,15 @@ def test_status_reports_persisted_submitted_state_without_scheduler_access(
         run_uri,
         RunStatusRecord(
             run_uri=run_uri,
+            status=RunStatus.RUNNING,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
             status=RunStatus.SUBMITTED,
             created_at="2020-01-01T00:00:00Z",
             updated_at="2020-01-01T00:00:01Z",
@@ -270,6 +279,15 @@ def test_status_without_jobs_never_builds_scheduler_runner(
         authority_config=authority_config,
     )
     store.create_run(run_uri)
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
+            status=RunStatus.RUNNING,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
     store.write_run_status(
         run_uri,
         RunStatusRecord(

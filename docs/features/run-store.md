@@ -4,6 +4,10 @@
 
 The run store is the persistent state layer for `loom` pipeline runs.
 
+Queue item and managed-local dispatch evidence remain queue-repository state,
+not run-store records. Pool status projects only its fixed safe allowlist and
+does not copy provider-private recovery data into a run record.
+
 It exists to make runs inspectable, resumable, debuggable, and safe under
 interruption. It should define the run directory layout, stage state files,
 status transitions, input and output records, fingerprints, logs, execution

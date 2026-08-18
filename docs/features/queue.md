@@ -115,8 +115,10 @@ Foreground drain is a compatibility mode:
 client.drain_foreground(max_items=1)
 ```
 
-Daemon or service style controllers should call `run_once()` repeatedly from a
-long-running process and keep adapter instances alive.
+For managed-local pools, use the long-lived `ManagedLocalQueueRuntime` described
+below so adapter state and maintenance timing have one owner. Direct
+`run_once()` loops remain a low-level seam for other custom adapters; they are
+not the recommended managed-local construction pattern.
 
 ## Managed Local Pools
 
@@ -128,6 +130,105 @@ terminal outcome.
 Queue preflight can report whether a config contains managed pools. Python
 callers that supply a public coordination store and workspace id can also run
 read-only authority limit reconciliation.
+
+Schema-v1 queue configuration remains compatible and keeps one controller-local
+active item with no concrete assignment provider. Opt into bounded concurrency
+and static assignments with schema v2:
+
+```yaml
+queue:
+  schema_version: 2
+  service:
+    db_path: .loom/queue.sqlite
+  controller:
+    max_active_items: 2
+  pools:
+    - pool_name: local-pool
+      mode: managed
+      resources:
+        accelerator: 2
+  queues:
+    - queue_name: local
+      pool_name: local-pool
+  adapters:
+    local:
+      assignments:
+        local-pool:
+          accelerator:
+            provider: static-slots
+            slots:
+              - id: slot-a
+                coordination_key: accelerator-slot-a
+                value: a
+                label: slot-a
+              - id: slot-b
+                coordination_key: accelerator-slot-b
+                value: b
+                label: slot-b
+            binding:
+              type: environment-list
+              name: LOOM_ASSIGNED_SLOTS
+              separator: ","
+```
+
+Authority limits for the logical resource and every slot coordination key must
+already exist; queue preflight reads and validates them but never provisions or
+changes them. Capacity exhaustion defers the FIFO head without incrementing its
+attempt. A live controller session renews scalar and assignment leases and
+fails the process closed on ownership loss or a missed renewal deadline. This
+is not a crash-time guarantee: controller death and process reattachment still
+require explicit recovery.
+
+Each attempt writes distinct stdout and stderr files beneath queue-owned state.
+For a managed-local pool, construct one
+[`ManagedLocalQueueRuntime`](../../examples/operations/managed-local-queue/README.md)
+with `ManagedLocalQueueRuntime.from_spec(...)`; it derives its single owner from
+`controller.owner_id`, constructs the service/controller/local adapter/static
+provider together, and owns maintenance timing. `import loom.queue.managed_local`
+is the explicit operational import path. Do not manually construct those parts
+with independent owners or duplicate the controller timing loop.
+
+The recommended long-lived path passes a `threading.Event` (usually set by a
+SIGINT/SIGTERM handler) to `runtime.serve(...)`. `start()` and `run_cycle()` are
+narrow advanced/test seams. The runtime is process-local and has these states:
+`READY`, `DEGRADED`, `RECOVERY_REQUIRED`, `DRAINING`, `CANCELLING`, and
+`STOPPED`. A normal stop drains: it stops new claims while reconciliation and
+renewal continue. `shutdown_mode="cancel"` cancels current-session work. A
+timeout reports remaining work and never force-releases a lease.
+
+Status must be read by observation scope. Queue records, assignment evidence,
+and log paths are persisted facts; `same_session_live` is an in-process
+observation for an owner/session match; hardware health and current lease
+liveness are not observed. In particular, persisted lease expiry evidence is
+not current hardware availability.
+
+On restart, selected-pool work from another session puts the runtime in
+`RECOVERY_REQUIRED`. First use an external supervisor/operator to contain the
+previous process group. Only then may an operator call
+`resolve_recovery_unknown(item_id, previous_processes_confirmed_stopped=True,
+requested_by=..., reason=...)` for one exact item. That boolean is an operator
+attestation; Loom neither verifies prior processes, reattaches, kills by PID,
+nor renews/releases foreign leases. For the POSIX built-in runner, a small
+systemd deployment can use `KillMode=control-group` and a stop timeout. This is
+an operational pattern, not a Loom daemon or a required default test service.
+
+For independent devices, request the ordinary generic amount:
+
+```python
+resources={"accelerator": 2}
+```
+
+The two authored slots bind an environment list such as
+`LOOM_ASSIGNED_ACCELERATORS`; `CUDA_VISIBLE_DEVICES` is only a downstream
+naming variant, not vendor behavior. When a placement is genuinely indivisible,
+keep a project-owned provider that acquires, renews, releases, and rolls back
+the same physical member coordination keys used by individual allocation. The
+[paired example provider](../../examples/operations/managed-local-queue/paired_assignment_provider.py)
+is a copyable pattern, not a supported core import or a synthetic bundle-key
+scheme. The controller active limit is one-runtime-local policy, not a
+distributed quota. Candidate selection remains Stage 24 work; generic
+scheduling, reattachment, resource observation, and notification policy remain
+Stage 25 work.
 
 ## Delegated SLURM Pools
 
@@ -157,6 +258,7 @@ loom queue preflight queue.yaml
 loom queue start queue.yaml
 loom queue status queue.yaml
 loom queue status queue.yaml --item run-001
+loom queue status queue.yaml --pool gpu-pool --format json
 loom queue cancel queue.yaml run-001 --reason operator-requested
 loom queue drain-foreground queue.yaml --max-items 1
 ```
@@ -189,3 +291,13 @@ limits, or requires a real SLURM cluster.
 Queue status output includes explicit ownership wording so operators can see
 which facts come from queue state, authority state, or delegated scheduler
 evidence.
+
+`--pool` adds a redacted selected-pool mapping to the existing status result.
+It reports controller-local active-limit configuration, lifecycle counts, and
+active attempt facts from one SQLite snapshot. Managed-local rows expose only
+persisted owner/session, PID/PGID, safe slot labels and lease expiry, and
+queue-relative stdout/stderr paths. Missing, malformed, unknown-version, or
+legacy evidence is marked unavailable; status never emits raw handle evidence,
+commands, working directories, environment bindings, fencing tokens, or
+provider-private data. Persisted acquisition evidence is not a liveness claim;
+same-session observation is labeled separately.

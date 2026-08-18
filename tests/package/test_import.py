@@ -66,9 +66,21 @@ def test_import_loom_queue_public_api() -> None:
     assert "QueueService" in loom.queue.__all__
     assert "QueueClient" in loom.queue.__all__
     assert "QueueController" in loom.queue.__all__
+    assert "QueueCycleResult" in loom.queue.__all__
+    assert "QueueDispatchDisposition" in loom.queue.__all__
+    assert "ResourceAssignmentProvider" in loom.queue.__all__
+    assert "StaticSlotAssignmentProvider" in loom.queue.__all__
     assert "load_queue_spec" in loom.queue.__all__
     assert "SQLiteQueueRepository" in loom.queue.__all__
     assert "validate_one_queue_per_pool" in loom.queue.__all__
+
+
+def test_import_managed_local_queue_runtime_is_explicit() -> None:
+    import loom.queue
+    from loom.queue.managed_local import ManagedLocalQueueRuntime
+
+    assert ManagedLocalQueueRuntime
+    assert "ManagedLocalQueueRuntime" not in loom.queue.__all__
 
 
 def test_package_includes_typing_marker() -> None:

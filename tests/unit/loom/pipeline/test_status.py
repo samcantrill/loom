@@ -1,6 +1,7 @@
 """Unit tests for status models and serialization helpers."""
 
 from datetime import datetime, timezone
+from typing import Any, cast
 
 import pytest
 
@@ -45,6 +46,25 @@ def test_run_status_round_trip() -> None:
     payload = record.to_dict()
     assert payload["status"] == "RUNNING"
     assert RunStatusRecord.from_dict(payload) == record
+
+
+def test_status_plain_data_is_frozen_and_serialization_is_independent() -> None:
+    created, updated = _common_ts()
+    source: Any = {"nested": {"items": ["original"]}}
+    record = RunStatusRecord(
+        run_uri="run-1",
+        status=RunStatus.RUNNING,
+        created_at=created,
+        updated_at=updated,
+        metadata=source,
+    )
+
+    source["nested"]["items"].append("changed")
+    assert record.metadata == {"nested": {"items": ("original",)}}
+    payload = cast(Any, record.to_dict())
+    payload["metadata"]["nested"]["items"].append("serialized")
+    assert record.to_dict()["metadata"] == {"nested": {"items": ["original"]}}
+    assert RunStatusRecord.from_dict(record.to_dict()) == record
 
 
 def test_stage_status_round_trip_and_owner_metadata() -> None:

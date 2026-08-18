@@ -68,9 +68,29 @@ def _store_with_stage(tmp_path: Path) -> tuple[LocalRunStore, str]:
         run_uri,
         RunStatusRecord(
             run_uri=run_uri,
+            status=RunStatus.RUNNING,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
             status=RunStatus.SUCCEEDED,
             created_at="2020-01-01T00:00:00Z",
             updated_at="2020-01-01T00:00:02Z",
+        ),
+    )
+    store.write_stage_status(
+        run_uri,
+        "build",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="build",
+            status=StageStatus.RUNNING,
+            attempt=1,
+            updated_at="2020-01-01T00:00:01Z",
         ),
     )
     store.write_stage_status(
@@ -98,9 +118,29 @@ def _authority_store_with_stage(tmp_path: Path) -> tuple[Any, str]:
         run_uri,
         RunStatusRecord(
             run_uri=run_uri,
+            status=RunStatus.RUNNING,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
             status=RunStatus.SUCCEEDED,
             created_at="2020-01-01T00:00:00Z",
             updated_at="2020-01-01T00:00:02Z",
+        ),
+    )
+    store.write_stage_status(
+        run_uri,
+        "build",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="build",
+            status=StageStatus.RUNNING,
+            attempt=1,
+            updated_at="2020-01-01T00:00:01Z",
         ),
     )
     store.write_stage_status(

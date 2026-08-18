@@ -10,6 +10,7 @@ from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.offline_evidence import OfflineEvidenceManifest
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
     AuthorityProtocolErrorCategory,
     AuthorityProtocolMetadata,
@@ -30,7 +31,9 @@ from loom.pipeline.stores import (
     StageAttempt,
     SweepIdentity,
     ConcurrencyCounter,
+    CoordinationFailureKind,
     CoordinationRecoveryRecord,
+    CoordinationStoreError,
     ResourceLeaseRecord,
     TrialLeaseRecord,
     TrialReference,
@@ -286,6 +289,11 @@ class AuthorityMutationService:
                 metadata,
                 _offline_import_rejection(exc, request_detail=_request_detail(payload)),
             )
+        except CoordinationStoreError as exc:
+            return rejected_authority_response(
+                metadata,
+                _coordination_rejection(exc, request_detail=_request_detail(payload)),
+            )
         except (AuthorityMutationValidationError, TypeError) as exc:
             return rejected_authority_response(
                 metadata,
@@ -400,6 +408,7 @@ class AuthorityMutationService:
             _required_run_uri(request),
             status=RunStatus(_body_value(request, "status", RunStatus.CREATED.value)),
             metadata=_optional_body_mapping(request, "metadata"),
+            idempotency_key=request.metadata.idempotency_key,
         )
         return _result(revision=revision, service_generation=self._service_generation)
 
@@ -419,6 +428,9 @@ class AuthorityMutationService:
             from_status=RunStatus(_required_body_value(request, "from_status")),
             to_status=RunStatus(_required_body_value(request, "to_status")),
             expected_revision=request.expected_revision,
+            intent=TransitionIntent(
+                cast(str, request.body.get("intent", TransitionIntent.NORMAL.value))
+            ),
             reason=_optional_reason(request),
         )
         return _result(
@@ -541,6 +553,9 @@ class AuthorityMutationService:
             else StageStatus(cast(str, from_status_value)),
             to_status=StageStatus(_required_body_value(request, "to_status")),
             expected_revision=request.expected_revision,
+            intent=TransitionIntent(
+                cast(str, request.body.get("intent", TransitionIntent.NORMAL.value))
+            ),
             reason=_optional_reason(request),
         )
         return _result(
@@ -1243,6 +1258,32 @@ def _value_error_rejection(
         category=category,
         code=code,
         message=message,
+        detail=request_detail,
+    )
+
+
+def _coordination_rejection(
+    exc: CoordinationStoreError,
+    *,
+    request_detail: Mapping[str, PlainData],
+) -> AuthorityProtocolRejection:
+    category = {
+        CoordinationFailureKind.CAPACITY: AuthorityProtocolErrorCategory.CONFLICT,
+        CoordinationFailureKind.INVALID_OR_UNSUPPORTED: (
+            AuthorityProtocolErrorCategory.VALIDATION
+        ),
+        CoordinationFailureKind.UNAVAILABLE: (
+            AuthorityProtocolErrorCategory.UNAVAILABLE_SERVICE
+        ),
+        CoordinationFailureKind.OWNERSHIP_LOST: (
+            AuthorityProtocolErrorCategory.STALE_FENCING
+        ),
+        CoordinationFailureKind.INTERNAL: AuthorityProtocolErrorCategory.INTERNAL_ERROR,
+    }[exc.kind]
+    return AuthorityProtocolRejection(
+        category=category,
+        code=f"coordination_{exc.kind.value}",
+        message=str(exc),
         detail=request_detail,
     )
 

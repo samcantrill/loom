@@ -13,6 +13,7 @@ from urllib import error, request
 from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization.errors import PlainDataError
@@ -221,6 +222,7 @@ class AuthorityClient:
         status: RunStatus = RunStatus.CREATED,
         metadata: Mapping[str, PlainData] | None = None,
         request_id: str | None = None,
+        idempotency_key: str | None = None,
         service_generation: str | None = None,
         workspace_id: str | None = None,
     ) -> AuthorityProtocolResponse:
@@ -237,6 +239,7 @@ class AuthorityClient:
                 metadata=_metadata(
                     AuthorityProtocolOperationKind.RUN_LIFECYCLE,
                     request_id=request_id,
+                    idempotency_key=idempotency_key,
                     service_generation=service_generation,
                     workspace_id=workspace_id,
                 ),
@@ -309,6 +312,7 @@ class AuthorityClient:
         from_status: RunStatus,
         to_status: RunStatus,
         expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
         reason: LifecycleReason | None = None,
         request_id: str | None = None,
         service_generation: str | None = None,
@@ -330,6 +334,7 @@ class AuthorityClient:
                 body={
                     "from_status": RunStatus(from_status).value,
                     "to_status": RunStatus(to_status).value,
+                    "intent": TransitionIntent(intent).value,
                     "reason": None if reason is None else reason.to_dict(),
                 },
             ),
@@ -456,6 +461,7 @@ class AuthorityClient:
         from_status: StageStatus | None,
         to_status: StageStatus,
         expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
         reason: LifecycleReason | None = None,
         request_id: str | None = None,
         service_generation: str | None = None,
@@ -480,6 +486,7 @@ class AuthorityClient:
                     if from_status is None
                     else StageStatus(from_status).value,
                     "to_status": StageStatus(to_status).value,
+                    "intent": TransitionIntent(intent).value,
                     "reason": None if reason is None else reason.to_dict(),
                 },
             ),
@@ -1239,6 +1246,7 @@ def _metadata(
     operation_kind: AuthorityProtocolOperationKind,
     *,
     request_id: str | None,
+    idempotency_key: str | None = None,
     service_generation: str | None,
     workspace_id: str | None,
 ) -> AuthorityProtocolMetadata:
@@ -1247,6 +1255,7 @@ def _metadata(
         operation_kind=operation_kind,
         service_generation=service_generation,
         workspace_id=workspace_id,
+        idempotency_key=idempotency_key,
     )
 
 

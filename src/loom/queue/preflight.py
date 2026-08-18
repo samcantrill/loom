@@ -154,6 +154,11 @@ def run_queue_preflight(
             workspace_id=workspace_id,
         )
     )
+    checks.append(
+        _static_assignment_authority_check(
+            spec, coordination_store=coordination_store, workspace_id=workspace_id
+        )
+    )
     checks.append(_slurm_command_check(spec, slurm_command_checker))
     checks.append(_delegated_workspace_check(spec))
     status = _overall_status(checks)
@@ -302,9 +307,7 @@ def _managed_pool_limit_check(
         )
     return QueuePreflightCheck(
         check_id="queue.managed_pool_limits",
-        status=QueuePreflightStatus.PASS
-        if report.ok
-        else QueuePreflightStatus.FAIL,
+        status=QueuePreflightStatus.PASS if report.ok else QueuePreflightStatus.FAIL,
         severity=QueuePreflightSeverity.INFO
         if report.ok
         else QueuePreflightSeverity.ERROR,
@@ -312,6 +315,86 @@ def _managed_pool_limit_check(
         if report.ok
         else "managed pool limits do not match authority",
         details=report.to_dict(),
+    )
+
+
+def _static_assignment_authority_check(
+    spec: QueueServiceSpec,
+    *,
+    coordination_store: "WorkspaceCoordinationStore | None",
+    workspace_id: str | None,
+) -> QueuePreflightCheck:
+    """Read static-slot limits only; queues never provision authority state."""
+
+    configured = [
+        (pool_name, assignment)
+        for pool_name, resources in spec.local_assignments.items()
+        for assignment in resources.values()
+    ]
+    if not configured:
+        return QueuePreflightCheck(
+            check_id="queue.static_assignments",
+            status=QueuePreflightStatus.SKIP,
+            severity=QueuePreflightSeverity.INFO,
+            message="no static local assignments are configured",
+        )
+    if coordination_store is None or not workspace_id:
+        return QueuePreflightCheck(
+            check_id="queue.static_assignments",
+            status=QueuePreflightStatus.SKIP,
+            severity=QueuePreflightSeverity.INFO,
+            message="static assignment authority limits were not checked",
+            details={"reason": "coordination store and workspace id are required"},
+        )
+    expected = {
+        slot.coordination_key: 1
+        for _pool_name, assignment in configured
+        for slot in assignment.slots
+    }
+    try:
+        from loom.pipeline.stores import coordination_requirement_diagnostics
+
+        diagnostics = coordination_requirement_diagnostics(
+            coordination_store.capabilities(), require_resource_leases=True
+        )
+        if diagnostics:
+            return QueuePreflightCheck(
+                check_id="queue.static_assignments",
+                status=QueuePreflightStatus.FAIL,
+                severity=QueuePreflightSeverity.ERROR,
+                message="static assignments require resource-lease capabilities",
+                details={
+                    "diagnostics": [diagnostic.to_dict() for diagnostic in diagnostics]
+                },
+            )
+        results = []
+        for resource_key, desired_limit in expected.items():
+            counter = coordination_store.read_resource_limit(workspace_id, resource_key)
+            results.append(
+                {
+                    "resource_key": resource_key,
+                    "expected_limit": desired_limit,
+                    "actual_limit": None if counter is None else counter.limit,
+                    "ok": counter is not None and counter.limit == desired_limit,
+                }
+            )
+    except Exception as exc:  # noqa: BLE001
+        return QueuePreflightCheck(
+            check_id="queue.static_assignments",
+            status=QueuePreflightStatus.FAIL,
+            severity=QueuePreflightSeverity.ERROR,
+            message="static assignment authority check failed",
+            details={"error_type": type(exc).__name__, "error": str(exc)},
+        )
+    ok = all(result["ok"] for result in results)
+    return QueuePreflightCheck(
+        check_id="queue.static_assignments",
+        status=QueuePreflightStatus.PASS if ok else QueuePreflightStatus.FAIL,
+        severity=QueuePreflightSeverity.INFO if ok else QueuePreflightSeverity.ERROR,
+        message="static assignment slot limits match authority"
+        if ok
+        else "static assignment slot limits do not match authority",
+        details={"slots": results},
     )
 
 

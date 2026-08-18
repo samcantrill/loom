@@ -179,6 +179,7 @@ from .config import (
 )
 from .coordination import (
     ConcurrencyCounter,
+    CoordinationFailureKind,
     CoordinationRecoveryRecord,
     CoordinationStoreError,
     ResourceLeaseRecord,
@@ -219,6 +220,8 @@ from .errors import (
     MissingStoreDocumentError,
     PreparedRunStorePayloadError,
     RunAlreadyExistsError,
+    RunProjectionError,
+    OrphanedLocalRunError,
     RunLockConflictError,
     RunLockError,
     RunLockReleaseError,
@@ -321,6 +324,7 @@ from .run_store import (
     RunSubmittedOperationStore,
     StageLogStore,
     StageStateStore,
+    StageWorkerResultStore,
     StageWorkspaceStore,
 )
 from .schema_policy import (
@@ -528,6 +532,7 @@ __all__ = [
     "WorkspaceCoordinationStore",
     "ServiceWorkspaceCoordinationStore",
     "CoordinationStoreError",
+    "CoordinationFailureKind",
     "TrialState",
     "WorkspaceIdentity",
     "SweepIdentity",
@@ -569,6 +574,7 @@ __all__ = [
     "RunReliabilityStore",
     "RunSubmittedOperationStore",
     "StageStateStore",
+    "StageWorkerResultStore",
     "StageLogStore",
     "StageWorkspaceStore",
     "LocalRunStorePaths",
@@ -599,6 +605,8 @@ __all__ = [
     "ArtifactChecksumMismatchError",
     "ArtifactChecksumUnsupportedError",
     "RunAlreadyExistsError",
+    "RunProjectionError",
+    "OrphanedLocalRunError",
     "RunNotFoundError",
     "MissingStoreDocumentError",
     "CorruptStoreDocumentError",

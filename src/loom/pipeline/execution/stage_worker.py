@@ -266,7 +266,6 @@ def reconstruct_stage_execution_request(
             "resolved_runtime": dict(worker_request.resolved_runtime),
             "worker_request": True,
         },
-        run_store=run_store,
         artifact_store=artifact_store,
         output_specs=stage.outputs,
     )

@@ -47,6 +47,16 @@ def test_run_catalog_scan_current_extracts_metadata_summary(tmp_path: Path) -> N
         run_uri,
         RunStatusRecord(
             run_uri=run_uri,
+            status=RunStatus.RUNNING,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:01Z",
+            started_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
             status=RunStatus.SUCCEEDED,
             created_at="2020-01-01T00:00:00Z",
             updated_at="2020-01-01T00:00:05Z",
@@ -62,6 +72,18 @@ def test_run_catalog_scan_current_extracts_metadata_summary(tmp_path: Path) -> N
     )
     store.write_provenance_document(run_uri, "git", {"commit": "abc123"})
     store.write_artifact_index(run_uri, {"build.out": artifact})
+    store.write_stage_status(
+        run_uri,
+        "build",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="build",
+            status=StageStatus.RUNNING,
+            attempt=1,
+            updated_at="2020-01-01T00:00:02Z",
+            started_at="2020-01-01T00:00:02Z",
+        ),
+    )
     store.write_stage_status(
         run_uri,
         "build",

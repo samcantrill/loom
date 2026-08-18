@@ -156,7 +156,7 @@ def test_stage_exception_persists_failure_before_failed_status(tmp_path: Path) -
     }
     assert status.status == StageStatus.FAILED
     assert blocked_status.status == StageStatus.BLOCKED
-    assert blocked_status.metadata["blocked_by"] == ["build"]
+    assert blocked_status.metadata["blocked_by"] == ("build",)
     assert blocked_status.metadata["reason_code"] == "upstream_failed"
     blocked_dir = tmp_path / "runs" / "run1" / "stages" / "report"
     assert sorted(path.name for path in blocked_dir.iterdir()) == ["status.json"]

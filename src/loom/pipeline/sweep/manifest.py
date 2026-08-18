@@ -8,7 +8,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
-from loom.serialization import PlainData, PlainDataError, ensure_plain_data
+from loom._validation import require_positive_int, require_schema_version
+from loom.serialization import (
+    PlainData,
+    PlainDataError,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 
 from .errors import (
     SweepManifestCompatibilityDiagnostic,
@@ -30,11 +36,15 @@ def _required(mapping: Mapping[str, object], field_name: str) -> object:
     return mapping[field_name]
 
 
-def _reject_unknown(mapping: Mapping[str, object], allowed: set[str], *, object_name: str) -> None:
+def _reject_unknown(
+    mapping: Mapping[str, object], allowed: set[str], *, object_name: str
+) -> None:
     unknown = set(mapping) - allowed
     if unknown:
         fields = ", ".join(sorted(unknown))
-        raise SweepManifestError(f"{object_name} payload has unknown field(s): {fields}")
+        raise SweepManifestError(
+            f"{object_name} payload has unknown field(s): {fields}"
+        )
 
 
 def _non_empty_text(value: object, field_name: str) -> str:
@@ -61,26 +71,26 @@ def _non_negative_int(value: object, field_name: str) -> int | None:
     return value
 
 
-def _plain_mapping(value: object, field_name: str) -> dict[str, PlainData]:
+def _plain_mapping(value: object, field_name: str) -> Mapping[str, PlainData]:
     if value is None:
         return {}
     if not isinstance(value, Mapping):
         raise SweepManifestError(f"{field_name} must be a mapping")
     try:
-        normalized = ensure_plain_data(value, path=field_name)
+        normalized = freeze_plain_data(value, path=field_name)
     except (PlainDataError, TypeError) as exc:
         raise SweepManifestError(f"{field_name} must contain plain data") from exc
-    if not isinstance(normalized, dict):
+    if not isinstance(normalized, Mapping):
         raise SweepManifestError(f"{field_name} must be a mapping")
-    return dict(normalized)
+    return normalized
 
 
 def _schema_version(value: object, *, object_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise SweepManifestError(f"{object_name} schema_version must be an integer")
-    if value <= 0:
-        raise SweepManifestError(f"{object_name} schema_version must be positive")
-    return value
+    return require_positive_int(
+        value,
+        f"{object_name} schema_version",
+        error_type=SweepManifestError,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,22 +107,29 @@ class SweepManifest:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != SWEEP_MANIFEST_SCHEMA_VERSION:
-            raise SweepManifestError("SweepManifest schema_version mismatch")
+        require_schema_version(
+            self.schema_version,
+            current=SWEEP_MANIFEST_SCHEMA_VERSION,
+            error_type=SweepManifestError,
+        )
         object.__setattr__(self, "sweep_id", _non_empty_text(self.sweep_id, "sweep_id"))
-        object.__setattr__(self, "created_at", _non_empty_text(self.created_at, "created_at"))
+        object.__setattr__(
+            self, "created_at", _non_empty_text(self.created_at, "created_at")
+        )
         object.__setattr__(
             self, "sweep_name", _optional_text(self.sweep_name, "sweep_name")
         )
-        object.__setattr__(self, "trial_count", _non_negative_int(self.trial_count, "trial_count"))
+        object.__setattr__(
+            self, "trial_count", _non_negative_int(self.trial_count, "trial_count")
+        )
         if not isinstance(self.provider, SweepProviderIdentity):
             raise SweepManifestError("provider must be a SweepProviderIdentity")
         object.__setattr__(
-            self, "trials_manifest", _non_empty_text(self.trials_manifest, "trials_manifest")
+            self,
+            "trials_manifest",
+            _non_empty_text(self.trials_manifest, "trials_manifest"),
         )
-        object.__setattr__(
-            self, "metadata", _plain_mapping(self.metadata, "metadata")
-        )
+        object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -123,7 +140,7 @@ class SweepManifest:
             "created_at": self.created_at,
             "trial_count": self.trial_count,
             "trials_manifest": self.trials_manifest,
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -144,9 +161,13 @@ class SweepManifest:
             },
             object_name="SweepManifest",
         )
-        schema = _schema_version(_required(data, "schema_version"), object_name="SweepManifest")
+        schema = _schema_version(
+            _required(data, "schema_version"), object_name="SweepManifest"
+        )
         if schema != SWEEP_MANIFEST_SCHEMA_VERSION:
-            raise SweepManifestError(f"unsupported SweepManifest schema_version {schema}")
+            raise SweepManifestError(
+                f"unsupported SweepManifest schema_version {schema}"
+            )
         provider = data.get("provider")
         if not isinstance(provider, Mapping):
             raise SweepManifestError("provider must be a mapping")
@@ -176,8 +197,11 @@ class TrialsManifest:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != TRIALS_MANIFEST_SCHEMA_VERSION:
-            raise SweepManifestError("TrialsManifest schema_version mismatch")
+        require_schema_version(
+            self.schema_version,
+            current=TRIALS_MANIFEST_SCHEMA_VERSION,
+            error_type=SweepManifestError,
+        )
         object.__setattr__(self, "sweep_id", _non_empty_text(self.sweep_id, "sweep_id"))
         object.__setattr__(
             self,
@@ -197,7 +221,7 @@ class TrialsManifest:
             "sweep_id": self.sweep_id,
             "trials": [trial.to_dict() for trial in self.trials],
             "generated_at": self.generated_at,
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -215,9 +239,13 @@ class TrialsManifest:
             },
             object_name="TrialsManifest",
         )
-        schema = _schema_version(_required(data, "schema_version"), object_name="TrialsManifest")
+        schema = _schema_version(
+            _required(data, "schema_version"), object_name="TrialsManifest"
+        )
         if schema != TRIALS_MANIFEST_SCHEMA_VERSION:
-            raise SweepManifestError(f"unsupported TrialsManifest schema_version {schema}")
+            raise SweepManifestError(
+                f"unsupported TrialsManifest schema_version {schema}"
+            )
         trials_data = _required(data, "trials")
         if not isinstance(trials_data, list) and not isinstance(trials_data, tuple):
             raise SweepManifestError("trials must be an array")
@@ -244,7 +272,10 @@ class TrialsManifest:
 
 
 def _coerce_trials(
-    values: tuple[SweepTrialRecord, ...] | list[SweepTrialRecord | Mapping[str, object]] | tuple[object, ...] | list[object],
+    values: tuple[SweepTrialRecord, ...]
+    | list[SweepTrialRecord | Mapping[str, object]]
+    | tuple[object, ...]
+    | list[object],
     field: str,
 ) -> tuple[SweepTrialRecord, ...]:
     normalized: list[SweepTrialRecord] = []
@@ -253,7 +284,9 @@ def _coerce_trials(
             normalized.append(value)
             continue
         if not isinstance(value, Mapping):
-            raise SweepManifestError(f"{field} must be SweepTrialRecord values or mappings")
+            raise SweepManifestError(
+                f"{field} must be SweepTrialRecord values or mappings"
+            )
         normalized.append(SweepTrialRecord.from_dict(value))
     return tuple(normalized)
 
@@ -305,7 +338,9 @@ def _check_schema_version(
             ),
         )
     try:
-        version = _schema_version(raw_version, object_name=f"{manifest_type} schema_version")
+        version = _schema_version(
+            raw_version, object_name=f"{manifest_type} schema_version"
+        )
     except SweepManifestError as exc:
         raw_sweep_id = payload.get("sweep_id")
         sweep_id: str | None = raw_sweep_id if isinstance(raw_sweep_id, str) else None
@@ -315,7 +350,9 @@ def _check_schema_version(
                 manifest_name,
                 f"unsupported_{manifest_type}_schema_version",
                 str(exc),
-                schema_version=cast(int, raw_version) if isinstance(raw_version, int) else None,
+                schema_version=cast(int, raw_version)
+                if isinstance(raw_version, int)
+                else None,
                 sweep_id=sweep_id,
             ),
         )
@@ -410,15 +447,15 @@ def check_trials_manifest_payload(
                     sweep_dir,
                     TRIALS_MANIFEST_FILE_NAME,
                     "sweep_id_mismatch",
-                (
-                    f"trials manifest sweep_id {manifest.sweep_id!r} does not "
-                    f"match expected {sweep_id!r}"
+                    (
+                        f"trials manifest sweep_id {manifest.sweep_id!r} does not "
+                        f"match expected {sweep_id!r}"
+                    ),
+                    schema_version=version,
+                    sweep_id=sweep_id,
                 ),
-                schema_version=version,
-                sweep_id=sweep_id,
             ),
-        ),
-    )
+        )
     return manifest, ()
 
 
@@ -435,7 +472,9 @@ def read_sweep_manifest(path: str | Path) -> SweepManifest:
     return manifest
 
 
-def read_trials_manifest(path: str | Path, *, sweep_id: str | None = None) -> TrialsManifest:
+def read_trials_manifest(
+    path: str | Path, *, sweep_id: str | None = None
+) -> TrialsManifest:
     payload = _read_json_payload(path)
     manifest, diagnostics = check_trials_manifest_payload(
         payload, sweep_dir=str(Path(path).parent), sweep_id=sweep_id

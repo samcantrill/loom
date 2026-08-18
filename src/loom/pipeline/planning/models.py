@@ -10,7 +10,14 @@ from typing import cast
 
 from loom import __version__ as _LOOM_VERSION
 from loom.artifacts import ArtifactRef, ArtifactValidationError
-from loom.serialization import PlainData, ensure_plain_data
+from loom.errors import FingerprintError
+from loom.fingerprints import hash_mapping, validate_digest
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 from loom.serialization.errors import PlainDataError
 
 from .errors import PlanSerializationError, PlanningValidationError
@@ -102,7 +109,7 @@ class PlanReason:
             "upstream_stage": self.upstream_stage,
             "input_name": self.input_name,
             "output_name": self.output_name,
-            "details": dict(self.details),
+            "details": thaw_plain_data(self.details, path="details"),
         }
 
     @classmethod
@@ -242,9 +249,9 @@ class FingerprintContext:
         return {
             "python_version": self.resolved_python_version(),
             "loom_version": self.resolved_loom_version(),
-            "git": dict(self.git),
-            "dependencies": dict(self.dependencies),
-            "extra": dict(self.extra),
+            "git": thaw_plain_data(self.git, path="git"),
+            "dependencies": thaw_plain_data(self.dependencies, path="dependencies"),
+            "extra": thaw_plain_data(self.extra, path="extra"),
             "algorithm": self.algorithm,
             "policy_name": self.policy_name,
             "policy_version": self.policy_version,
@@ -471,21 +478,23 @@ class StageFingerprintPayload:
             "policy_version": self.policy_version,
             "stage_name": self.stage_name,
             "factory_target": self.factory_target,
-            "factory_init": dict(self.factory_init),
-            "stage_config": dict(self.stage_config),
-            "fingerprint_fields": dict(self.fingerprint_fields),
-            "declared_inputs": dict(self.declared_inputs),
-            "bound_inputs": {
-                key: dict(value) for key, value in self.bound_inputs.items()
-            },
-            "declared_outputs": {
-                key: dict(value) for key, value in self.declared_outputs.items()
-            },
+            "factory_init": thaw_plain_data(self.factory_init, path="factory_init"),
+            "stage_config": thaw_plain_data(self.stage_config, path="stage_config"),
+            "fingerprint_fields": thaw_plain_data(
+                self.fingerprint_fields, path="fingerprint_fields"
+            ),
+            "declared_inputs": thaw_plain_data(
+                self.declared_inputs, path="declared_inputs"
+            ),
+            "bound_inputs": thaw_plain_data(self.bound_inputs, path="bound_inputs"),
+            "declared_outputs": thaw_plain_data(
+                self.declared_outputs, path="declared_outputs"
+            ),
             "python_version": self.python_version,
             "loom_version": self.loom_version,
-            "git": dict(self.git),
-            "dependencies": dict(self.dependencies),
-            "extra": dict(self.extra),
+            "git": thaw_plain_data(self.git, path="git"),
+            "dependencies": thaw_plain_data(self.dependencies, path="dependencies"),
+            "extra": thaw_plain_data(self.extra, path="extra"),
         }
 
     @classmethod
@@ -568,6 +577,30 @@ class StageFingerprintRecord:
     payload: StageFingerprintPayload
     inputs_summary: Mapping[str, PlainData]
 
+    @classmethod
+    def create(
+        cls,
+        *,
+        payload: StageFingerprintPayload,
+        algorithm: str,
+        inputs_summary: Mapping[str, PlainData],
+    ) -> "StageFingerprintRecord":
+        """Create a record whose digest is derived from its payload."""
+
+        normalized_payload = fingerprint_payload(payload, "payload")
+        normalized_algorithm = require_str(algorithm, "algorithm")
+        return cls(
+            schema_version=normalized_payload.schema_version,
+            algorithm=normalized_algorithm,
+            policy_name=normalized_payload.policy_name,
+            policy_version=normalized_payload.policy_version,
+            fingerprint=hash_mapping(
+                normalized_payload.to_hash_input(), algorithm=normalized_algorithm
+            ),
+            payload=normalized_payload,
+            inputs_summary=inputs_summary,
+        )
+
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "schema_version", positive_int(self.schema_version, "schema_version")
@@ -588,6 +621,39 @@ class StageFingerprintRecord:
         object.__setattr__(
             self, "inputs_summary", plain_mapping(self.inputs_summary, "inputs_summary")
         )
+        if self.schema_version != self.payload.schema_version:
+            raise PlanSerializationError(
+                "StageFingerprintRecord.schema_version does not match its payload"
+            )
+        if self.policy_name != self.payload.policy_name:
+            raise PlanSerializationError(
+                "StageFingerprintRecord.policy_name does not match its payload"
+            )
+        if self.policy_version != self.payload.policy_version:
+            raise PlanSerializationError(
+                "StageFingerprintRecord.policy_version does not match its payload"
+            )
+        self.verify()
+
+    def verify(self) -> None:
+        """Reject a malformed or mismatched persisted fingerprint."""
+
+        try:
+            fingerprint = validate_digest(
+                self.fingerprint, algorithms={self.algorithm.lower()}
+            )
+            expected = hash_mapping(
+                self.payload.to_hash_input(), algorithm=self.algorithm
+            )
+        except FingerprintError as exc:
+            raise PlanSerializationError(
+                f"StageFingerprintRecord fingerprint is invalid: {exc}"
+            ) from exc
+        if fingerprint != expected:
+            raise PlanSerializationError(
+                "StageFingerprintRecord fingerprint does not match its payload"
+            )
+        object.__setattr__(self, "fingerprint", fingerprint)
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -597,7 +663,9 @@ class StageFingerprintRecord:
             "policy_version": self.policy_version,
             "fingerprint": self.fingerprint,
             "payload": self.payload.to_dict(),
-            "inputs_summary": dict(self.inputs_summary),
+            "inputs_summary": thaw_plain_data(
+                self.inputs_summary, path="inputs_summary"
+            ),
         }
 
     @classmethod
@@ -814,9 +882,9 @@ class StagePlan:
             "reusable_outputs": {
                 name: ref.to_dict() for name, ref in self.reusable_outputs.items()
             },
-            "declared_outputs": {
-                name: dict(value) for name, value in self.declared_outputs.items()
-            },
+            "declared_outputs": thaw_plain_data(
+                self.declared_outputs, path="declared_outputs"
+            ),
             "upstream_stages": list(self.upstream_stages),
             "downstream_stages": list(self.downstream_stages),
             "selected_by": [code.value for code in self.selected_by],
@@ -1061,7 +1129,7 @@ def str_tuple(value: object, field: str) -> tuple[str, ...]:
     return tuple(require_str(item, f"{field} item") for item in value)
 
 
-def plain_mapping(value: object, field: str) -> dict[str, PlainData]:
+def plain_mapping(value: object, field: str) -> Mapping[str, PlainData]:
     try:
         plain = ensure_plain_data(value, path=field)
     except PlainDataError as exc:
@@ -1070,28 +1138,33 @@ def plain_mapping(value: object, field: str) -> dict[str, PlainData]:
         ) from exc
     if not isinstance(plain, dict):
         raise PlanningValidationError(f"{field} must be a mapping")
-    return cast(dict[str, PlainData], dict(plain))
+    return cast(Mapping[str, PlainData], freeze_plain_data(plain, path=field))
 
 
-def str_mapping(value: object, field: str) -> dict[str, str]:
+def str_mapping(value: object, field: str) -> Mapping[str, str]:
     mapping = require_mapping(value, field)
-    return {
+    normalized = {
         require_str(key, f"{field} key"): require_str(item, f"{field}[{key!r}]")
         for key, item in mapping.items()
     }
+    return cast(Mapping[str, str], freeze_plain_data(normalized, path=field))
 
 
 def nested_plain_mapping(
     value: object, field: str
-) -> dict[str, Mapping[str, PlainData]]:
+) -> Mapping[str, Mapping[str, PlainData]]:
     mapping = require_mapping(value, field)
-    return {
+    normalized = {
         require_str(key, f"{field} key"): plain_mapping(item, f"{field}[{key!r}]")
         for key, item in mapping.items()
     }
+    return cast(
+        Mapping[str, Mapping[str, PlainData]],
+        freeze_plain_data(normalized, path=field),
+    )
 
 
-def int_mapping(value: object, field: str) -> dict[str, int]:
+def int_mapping(value: object, field: str) -> Mapping[str, int]:
     mapping = require_mapping(value, field)
     result: dict[str, int] = {}
     for key, item in mapping.items():
@@ -1101,7 +1174,7 @@ def int_mapping(value: object, field: str) -> dict[str, int]:
                 f"{field}[{key_text!r}] must be a non-negative integer"
             )
         result[key_text] = item
-    return result
+    return cast(Mapping[str, int], freeze_plain_data(result, path=field))
 
 
 def artifact_ref(value: object, field: str) -> ArtifactRef:

@@ -1,32 +1,15 @@
-# Plan Review Report
-
-## Metadata
-
-- Reviewed plan:
-- Reviewer:
-- Review date:
-- Gate: plan quality
-- Budget status after this review: used
+# Optional Plan Review
 
 ## Findings
 
-List findings first, ordered by severity. Use `None` if there are no findings.
-
-| Severity | Location | Finding | Required remedy |
+| Classification | Finding | Reachable path, contract, consequence, evidence | Smallest remedy |
 | --- | --- | --- | --- |
-|  |  |  |  |
+| blocker / simplification / concern / optional hardening |  |  |  |
 
-## Open Questions Or Assumptions
+## Readiness
 
-- TBD
-
-## Readiness Decision
-
-- Ready for phase implementation:
-- Blocking findings remaining:
-- Accepted risks and revisit triggers:
-
-## Handoff
-
-- If blocked, manager should run the single allowed plan refinement pass or escalate.
-- If ready, manager may proceed to the next pending phase.
+- Complexity to remove or defer:
+- Manifest/phase consistency:
+- Ready for implementation:
+- Blocking findings:
+- Residual risk:

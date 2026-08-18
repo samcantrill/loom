@@ -53,6 +53,24 @@ def test_local_artifact_save_load_json_text_and_bytes(tmp_path: Path) -> None:
     assert store.load(bytes_ref, expected_type="bin") == b"abc"
 
 
+def test_local_artifact_load_accepts_frozen_nested_metadata(tmp_path: Path) -> None:
+    store = LocalArtifactStore(root=tmp_path / "run")
+
+    ref = store.save(
+        {"ok": True},
+        stage_name="stage",
+        name="out",
+        artifact_type="json",
+        codec_key="json.v1",
+        metadata={"nested": {"labels": ["raw", "processed"]}},
+    )
+
+    assert store.load(ref, expected_type="json") == {"ok": True}
+    assert ref.to_dict()["metadata"] == {
+        "nested": {"labels": ["raw", "processed"]}
+    }
+
+
 def test_local_artifact_load_requires_codec(tmp_path: Path) -> None:
     store = LocalArtifactStore(root=tmp_path / "run")
     artifact_path = tmp_path / "run" / "stage" / "out.txt"

@@ -26,7 +26,9 @@ def is_plain_data(value: Any) -> bool:
     if isinstance(value, tuple):
         return all(is_plain_data(item) for item in value)
     if isinstance(value, dict):
-        return all(isinstance(key, str) and is_plain_data(val) for key, val in value.items())
+        return all(
+            isinstance(key, str) and is_plain_data(val) for key, val in value.items()
+        )
     return False
 
 
@@ -100,20 +102,26 @@ def _to_plain(value: Any, path: str) -> PlainData:
         return value
     if isinstance(value, float):
         return _coerce_float(value, path)
+    if isinstance(value, Mapping):
+        return _convert_mapping(value, path)
     if isinstance(value, list):
         return [_to_plain(item, f"{path}[{index}]") for index, item in enumerate(value)]
     if isinstance(value, tuple):
         return [_to_plain(item, f"{path}[{index}]") for index, item in enumerate(value)]
-    if isinstance(value, dict):
-        return _convert_mapping(value, path)
     if isinstance(value, set | frozenset):
-        raise PlainDataError(f"Invalid plain data at {path}: set-like values are not supported")
+        raise PlainDataError(
+            f"Invalid plain data at {path}: set-like values are not supported"
+        )
     if isinstance(value, (bytes, bytearray, memoryview)):
         raise PlainDataError(f"Invalid plain data at {path}: bytes are not supported")
-    if isinstance(value, (datetime, Path, MappingProxyType)):
-        raise PlainDataError(f"Invalid plain data at {path}: {type(value).__name__} is not supported")
+    if isinstance(value, (datetime, Path)):
+        raise PlainDataError(
+            f"Invalid plain data at {path}: {type(value).__name__} is not supported"
+        )
     if callable(value):
-        raise PlainDataError(f"Invalid plain data at {path}: callables are not supported")
+        raise PlainDataError(
+            f"Invalid plain data at {path}: callables are not supported"
+        )
     if not is_plain_data(value):
         raise _value_error(path, value)
     return value
@@ -145,21 +153,27 @@ def _takes_no_args(func: Callable[..., object]) -> bool:
 
 def _freeze_plain_data(value: Any) -> Any:
     if isinstance(value, dict):
-        return MappingProxyType({key: _freeze_plain_data(item) for key, item in value.items()})
+        return MappingProxyType(
+            {key: _freeze_plain_data(item) for key, item in value.items()}
+        )
     if isinstance(value, list):
         return tuple(_freeze_plain_data(item) for item in value)
     return value
 
 
 def _thaw_plain_data(value: Any, path: str) -> PlainData:
-    if isinstance(value, MappingProxyType):
-        return _thaw_mapping(value, path)
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return _thaw_mapping(value, path)
     if isinstance(value, list):
-        return [_thaw_plain_data(item, f"{path}[{index}]") for index, item in enumerate(value)]
+        return [
+            _thaw_plain_data(item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
     if isinstance(value, tuple):
-        return [_thaw_plain_data(item, f"{path}[{index}]") for index, item in enumerate(value)]
+        return [
+            _thaw_plain_data(item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
     return _to_plain(value, path)
 
 

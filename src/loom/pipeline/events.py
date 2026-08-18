@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -249,6 +250,7 @@ class PipelineEvent:
     event_type: str
     payload: Mapping[str, PlainData] = field(default_factory=dict)
     timestamp: str | None = None
+    event_id: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.scope, EventScope):
@@ -266,6 +268,14 @@ class PipelineEvent:
             "timestamp",
             _optional_timestamp(self.timestamp, field="timestamp"),
         )
+        object.__setattr__(
+            self,
+            "event_id",
+            _require_non_empty_string(
+                uuid.uuid4().hex if self.event_id is None else self.event_id,
+                field="event_id",
+            ),
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -273,6 +283,7 @@ class PipelineEvent:
             "event_type": self.event_type,
             "payload": thaw_plain_data(self.payload, path="payload"),
             "timestamp": self.timestamp,
+            "event_id": self.event_id,
         }
 
 

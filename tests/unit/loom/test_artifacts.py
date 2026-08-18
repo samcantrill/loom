@@ -71,6 +71,22 @@ def test_artifact_ref_preserves_positive_schema_version_compatibility() -> None:
     assert ref.schema_version == 2
 
 
+@pytest.mark.parametrize("schema_version", [True, 0, "1"])
+def test_artifact_ref_schema_version_constructor_and_deserializer_agree(
+    schema_version: object,
+) -> None:
+    common: dict[str, Any] = {
+        "artifact_id": "model:best",
+        "uri": "file:///a",
+        "artifact_type": "checkpoint",
+    }
+
+    with pytest.raises(ArtifactValidationError, match="schema_version"):
+        ArtifactRef(schema_version=cast(Any, schema_version), **common)
+    with pytest.raises(ArtifactValidationError, match="schema_version"):
+        ArtifactRef.from_dict({**common, "schema_version": schema_version})
+
+
 def test_artifact_ref_checks_checksum_and_fingerprint_distinct() -> None:
     ref = ArtifactRef(
         artifact_id="artifact:1",

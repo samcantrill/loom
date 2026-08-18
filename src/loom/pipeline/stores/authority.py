@@ -18,6 +18,7 @@ from loom.pipeline.reliability import (
 )
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData
 
@@ -217,6 +218,7 @@ class PerRunAuthorityStore(Protocol):
         *,
         status: RunStatus = RunStatus.CREATED,
         metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> BackendRevision: ...
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot: ...
@@ -227,6 +229,8 @@ class PerRunAuthorityStore(Protocol):
         *,
         from_status: RunStatus,
         to_status: RunStatus,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
         reason: LifecycleReason | None = None,
     ) -> StatusTransition: ...
 
@@ -237,6 +241,8 @@ class PerRunAuthorityStore(Protocol):
         *,
         from_status: StageStatus | None,
         to_status: StageStatus,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
         reason: LifecycleReason | None = None,
     ) -> StatusTransition: ...
 
@@ -524,6 +530,7 @@ class RunStore(Protocol):
         *,
         status: RunStatus = RunStatus.CREATED,
         metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> BackendRevision: ...
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot: ...
@@ -534,6 +541,8 @@ class RunStore(Protocol):
         *,
         from_status: RunStatus,
         to_status: RunStatus,
+        expected_revision: BackendRevision | None = None,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
         reason: LifecycleReason | None = None,
     ) -> StatusTransition: ...
 

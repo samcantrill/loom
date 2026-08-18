@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
+from typing import Mapping
 
 from loom.ids import StageID
 
@@ -34,12 +36,18 @@ class StageEdge:
 
 @dataclass(frozen=True, slots=True)
 class StageGraph:
-    nodes: dict[StageID, StageNode]
+    nodes: Mapping[StageID, StageNode]
     edges: frozenset[StageEdge]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "nodes", MappingProxyType(dict(self.nodes)))
 
 
 def build_stage_graph(spec: PipelineSpec) -> StageGraph:
-    nodes = {stage.name: StageNode(stage_id=stage.name, order=index) for index, stage in enumerate(spec.stages)}
+    nodes = {
+        stage.name: StageNode(stage_id=stage.name, order=index)
+        for index, stage in enumerate(spec.stages)
+    }
     edges: set[StageEdge] = set()
     input_bindings = resolve_input_bindings(spec)
     for stage in spec.stages:
@@ -58,7 +66,9 @@ def build_stage_graph(spec: PipelineSpec) -> StageGraph:
             if dependency == stage.name:
                 raise PipelineGraphError(f"stage '{stage.name}' has a self dependency")
             if dependency not in nodes:
-                raise PipelineGraphError(f"stage '{stage.name}' depends on unknown stage '{dependency}'")
+                raise PipelineGraphError(
+                    f"stage '{stage.name}' depends on unknown stage '{dependency}'"
+                )
             edges.add(
                 StageEdge(
                     upstream_stage_id=dependency,
@@ -90,7 +100,9 @@ def downstream_of(graph: StageGraph, stage_id: StageID) -> set[StageID]:
     return downstream
 
 
-def _transitive_helper(graph: StageGraph, start: StageID, *, upstream: bool) -> set[StageID]:
+def _transitive_helper(
+    graph: StageGraph, start: StageID, *, upstream: bool
+) -> set[StageID]:
     neighbor_fn = upstream_of if upstream else downstream_of
     result: set[StageID] = set()
     stack = list(neighbor_fn(graph, start))
@@ -117,9 +129,14 @@ def detect_cycles(graph: StageGraph) -> list[list[StageID]]:
     if not graph.nodes:
         return []
 
-    adjacency: dict[StageID, set[StageID]] = {stage_id: set() for stage_id in graph.nodes}
+    adjacency: dict[StageID, set[StageID]] = {
+        stage_id: set() for stage_id in graph.nodes
+    }
     for edge in graph.edges:
-        if edge.upstream_stage_id not in adjacency or edge.downstream_stage_id not in adjacency:
+        if (
+            edge.upstream_stage_id not in adjacency
+            or edge.downstream_stage_id not in adjacency
+        ):
             continue
         adjacency[edge.upstream_stage_id].add(edge.downstream_stage_id)
 
@@ -141,7 +158,9 @@ def detect_cycles(graph: StageGraph) -> list[list[StageID]]:
         visited.add(stage_id)
         visiting.add(stage_id)
         stack.append(stage_id)
-        for next_id in sorted(adjacency[stage_id], key=lambda value: (graph.nodes[value].order, value)):
+        for next_id in sorted(
+            adjacency[stage_id], key=lambda value: (graph.nodes[value].order, value)
+        ):
             visit(next_id)
         stack.pop()
         visiting.remove(stage_id)
@@ -158,10 +177,15 @@ def topological_sort(graph: StageGraph) -> list[StageID]:
         raise PipelineCycleError(cycles)
 
     indegree = {stage_id: 0 for stage_id in graph.nodes}
-    downstream: dict[StageID, set[StageID]] = {stage_id: set() for stage_id in graph.nodes}
+    downstream: dict[StageID, set[StageID]] = {
+        stage_id: set() for stage_id in graph.nodes
+    }
     seen_edges: set[tuple[StageID, StageID]] = set()
     for edge in graph.edges:
-        if edge.upstream_stage_id not in indegree or edge.downstream_stage_id not in indegree:
+        if (
+            edge.upstream_stage_id not in indegree
+            or edge.downstream_stage_id not in indegree
+        ):
             continue
         pair = (edge.upstream_stage_id, edge.downstream_stage_id)
         if pair in seen_edges:
@@ -170,20 +194,27 @@ def topological_sort(graph: StageGraph) -> list[StageID]:
         indegree[edge.downstream_stage_id] += 1
         downstream[edge.upstream_stage_id].add(edge.downstream_stage_id)
 
-    ready: list[StageID] = [stage_id for stage_id, degree in indegree.items() if degree == 0]
+    ready: list[StageID] = [
+        stage_id for stage_id, degree in indegree.items() if degree == 0
+    ]
     result: list[StageID] = []
 
     while ready:
         ready.sort(key=lambda stage_id: (graph.nodes[stage_id].order, stage_id))
         current = ready.pop(0)
         result.append(current)
-        for downstream_id in sorted(downstream[current], key=lambda stage_id: (graph.nodes[stage_id].order, stage_id)):
+        for downstream_id in sorted(
+            downstream[current],
+            key=lambda stage_id: (graph.nodes[stage_id].order, stage_id),
+        ):
             indegree[downstream_id] -= 1
             if indegree[downstream_id] == 0:
                 ready.append(downstream_id)
 
     if len(result) != len(graph.nodes):
-        raise PipelineGraphError("topological sort failed: graph is incomplete or cyclic")
+        raise PipelineGraphError(
+            "topological sort failed: graph is incomplete or cyclic"
+        )
     return result
 
 

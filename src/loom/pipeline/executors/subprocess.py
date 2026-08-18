@@ -18,7 +18,7 @@ from loom.pipeline.execution.models import (
 )
 from loom.pipeline.reliability import TimeoutOutcome, TimeoutSupportLevel
 from loom.pipeline.status import StageStatus
-from loom.pipeline.stores import LegacyRunStore as RunStore
+from loom.pipeline.stores import LegacyRunStore as RunStore, StageWorkerResultStore
 from loom.pipeline.stores.config import AuthorityConfig, authority_config_to_cli_args
 from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
@@ -71,13 +71,22 @@ class SubprocessExecutor:
     def __init__(
         self,
         *,
-        run_store: RunStore,
+        worker_results: StageWorkerResultStore | None = None,
+        run_store: RunStore | None = None,
         python_executable: str | None = None,
         process_runner: ProcessRunner | None = None,
         clock: Clock = utc_timestamp,
     ) -> None:
-        if not isinstance(run_store, RunStore):
-            raise ExecutorError("SubprocessExecutor requires RunStore")
+        if worker_results is None:
+            if not isinstance(run_store, RunStore):
+                raise ExecutorError("SubprocessExecutor requires worker_results")
+            worker_results = run_store
+        elif not isinstance(worker_results, StageWorkerResultStore):
+            raise ExecutorError(
+                "SubprocessExecutor.worker_results must satisfy StageWorkerResultStore"
+            )
+        if run_store is not None and not isinstance(run_store, RunStore):
+            raise ExecutorError("SubprocessExecutor.run_store must satisfy RunStore")
         if python_executable is not None and (
             not isinstance(python_executable, str) or not python_executable
         ):
@@ -88,7 +97,7 @@ class SubprocessExecutor:
             raise ExecutorError("SubprocessExecutor.process_runner must be callable")
         if not callable(clock):
             raise ExecutorError("SubprocessExecutor.clock must be callable")
-        self.run_store = run_store
+        self.worker_results = worker_results
         self.python_executable = python_executable or sys.executable
         self.process_runner = process_runner or _run_subprocess
         self.clock = clock
@@ -104,7 +113,7 @@ class SubprocessExecutor:
             run_uri=request.run_uri,
             stage_name=request.stage.name,
             attempt=request.attempt,
-            authority_config=_authority_config(self.run_store),
+            authority_cli_args=request.worker_authority_cli_args,
         )
         policy = timeout_policy_from_request(request)
         timeout_seconds = None if policy is None else policy.duration_seconds
@@ -203,7 +212,7 @@ class SubprocessExecutor:
         )
         process_exit_code, process_signal = _process_failure_fields(process.returncode)
         worker_result = _read_worker_result(
-            run_store=self.run_store,
+            worker_results=self.worker_results,
             request=request,
             process_metadata=metadata,
             process_exit_code=process_exit_code,
@@ -295,6 +304,7 @@ def build_stage_worker_command(
     stage_name: str,
     attempt: int,
     authority_config: AuthorityConfig | None = None,
+    authority_cli_args: Sequence[str] = (),
 ) -> tuple[str, ...]:
     """Return the command used to invoke the durable stage worker."""
 
@@ -319,21 +329,18 @@ def build_stage_worker_command(
         "--attempt",
         str(attempt),
     ]
-    if authority_config is not None:
+    if authority_cli_args:
+        if authority_config is not None:
+            raise ExecutorError(
+                "authority_config and authority_cli_args cannot both be supplied"
+            )
+        if not all(isinstance(argument, str) and argument for argument in authority_cli_args):
+            raise ExecutorError("authority_cli_args must contain non-empty strings")
+        command.extend(authority_cli_args)
+    elif authority_config is not None:
         command.extend(authority_config_to_cli_args(authority_config))
     command.extend(("--format", "json"))
     return tuple(command)
-
-
-def _authority_config(run_store: RunStore) -> AuthorityConfig | None:
-    raw_config = getattr(run_store, "authority_config", None)
-    if isinstance(raw_config, AuthorityConfig):
-        return raw_config
-    if callable(raw_config):
-        value = raw_config()
-        if isinstance(value, AuthorityConfig):
-            return value
-    return None
 
 
 def _run_subprocess(
@@ -357,7 +364,7 @@ def _run_subprocess(
 
 def _read_worker_result(
     *,
-    run_store: RunStore,
+    worker_results: StageWorkerResultStore,
     request: StageExecutionRequest,
     process_metadata: dict[str, PlainData],
     process_exit_code: int | None,
@@ -365,7 +372,7 @@ def _read_worker_result(
     finished_at: str,
 ) -> StageWorkerResult | ExecutionFailure:
     try:
-        raw_result = run_store.read_stage_worker_result(
+        raw_result = worker_results.read_stage_worker_result(
             request.run_uri,
             request.stage.name,
             attempt=request.attempt,

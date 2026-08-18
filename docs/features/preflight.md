@@ -19,6 +19,9 @@ readiness, SLURM command availability for delegated pools, and the delegated
 shared-workspace assumptions without submitting work or mutating authority
 resource limits.
 
+Pool status is a read-only operation and likewise does not refresh durable lease
+acquisition evidence or turn a preflight result into live process proof.
+
 ## Scope
 
 Preflight owns:

@@ -80,8 +80,8 @@ def test_prepare_stage_attempt_writes_durable_request_without_running_stage(
     assert request.stage_name == "build"
     assert request.attempt == 1
     assert request.executor_metadata == {
-        "command": ["python", "[redacted]"],
-        "environment": {"key_count": 2, "keys": ["PATH", "TOKEN"]},
+        "command": ("python", "[redacted]"),
+        "environment": {"key_count": 2, "keys": ("PATH", "TOKEN")},
     }
     assert (
         store.read_stage_worker_request(run_uri, "build", attempt=1)

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+from loom.serialization import PlainData
 
 from .models import (
     CancellationRecord,
@@ -22,6 +25,14 @@ class QueueClaimResult:
     item: QueueItem
 
 
+@dataclass(frozen=True, slots=True)
+class QueuePoolSnapshot:
+    """One deterministic repository read of every item in a selected pool."""
+
+    pool_name: str
+    items: tuple[QueueItem, ...]
+
+
 @runtime_checkable
 class QueueRepository(Protocol):
     """Repository operations required by the first queue persistence phase."""
@@ -29,6 +40,8 @@ class QueueRepository(Protocol):
     def enqueue(self, item: QueueItem) -> QueueItem: ...
 
     def read_item(self, queue_item_id: str) -> QueueItem | None: ...
+
+    def read_pool_snapshot(self, pool_name: str) -> QueuePoolSnapshot: ...
 
     def claim_next(
         self,
@@ -42,6 +55,8 @@ class QueueRepository(Protocol):
         self,
         queue_item_id: str,
         handle: DispatchHandle,
+        *,
+        expected: QueueItem,
     ) -> QueueItem: ...
 
     def complete_item(
@@ -50,12 +65,24 @@ class QueueRepository(Protocol):
         *,
         status: QueueItemStatus,
         reason: str,
+        expected: QueueItem,
+        evidence: Mapping[str, PlainData] | None = None,
     ) -> QueueItem: ...
 
     def request_cancellation(
         self,
         queue_item_id: str,
         cancellation: CancellationRecord,
+        *,
+        expected: QueueItem | None = None,
+    ) -> QueueItem: ...
+
+    def defer_item(
+        self,
+        queue_item_id: str,
+        *,
+        reason_code: str,
+        expected: QueueItem,
     ) -> QueueItem: ...
 
     def scan_recovery(self) -> tuple[QueueRecoveryRecord, ...]: ...
@@ -65,5 +92,6 @@ class QueueRepository(Protocol):
 
 __all__ = [
     "QueueClaimResult",
+    "QueuePoolSnapshot",
     "QueueRepository",
 ]

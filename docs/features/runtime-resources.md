@@ -15,6 +15,9 @@ much of that request they can enforce.
 V11 queue managed pools use authority-owned resource limits and leases at
 dispatch time, but they do not provision or mutate those limits. Queue config
 reconciliation is read-only and is described in [queue.md](queue.md).
+The queue pool-status active limit is controller-local, not a distributed
+semaphore; authority-backed scalar and static-slot leases remain the safety
+boundary for managed-local work.
 
 ## Scope
 

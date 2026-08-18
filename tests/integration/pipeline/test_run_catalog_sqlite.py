@@ -109,6 +109,15 @@ def _create_run(root: Path, run_path: Path) -> str:
         run_uri,
         RunStatusRecord(
             run_uri=run_uri,
+            status=RunStatus.RUNNING,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
             status=RunStatus.SUCCEEDED,
             created_at="2020-01-01T00:00:00Z",
             updated_at="2020-01-01T00:00:01Z",

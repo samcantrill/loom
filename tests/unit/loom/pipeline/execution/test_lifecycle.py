@@ -102,7 +102,7 @@ def test_write_stage_blocked_writes_status_only(tmp_path: Path) -> None:
     assert record.finished_at is None
     assert record.owner == {}
     assert record.metadata == {
-        "blocked_by": ["upstream"],
+        "blocked_by": ("upstream",),
         "reason_code": "upstream_failed",
         "reason_details": {"exit_code": 2},
     }
@@ -349,9 +349,12 @@ def test_reliability_timeout_outcome_records_against_latest_transaction(
     assert outcome.outcome is TimeoutOutcome.TIMED_OUT
     assert outcome.support_level is TimeoutSupportLevel.ENFORCED
     assert outcome.timed_out is True
-    assert outcome.transaction_id == store.list_stage_attempt_transactions(
-        run_uri, stage_name="build"
-    )[0].transaction_id
+    assert (
+        outcome.transaction_id
+        == store.list_stage_attempt_transactions(run_uri, stage_name="build")[
+            0
+        ].transaction_id
+    )
     persisted = store.list_timeout_outcomes(run_uri, stage_name="build")
     assert persisted == (outcome,)
 

@@ -1,5 +1,7 @@
 """Unit tests for planning model serialization."""
 
+from typing import Any, cast
+
 import pytest
 
 from loom.artifacts import ArtifactRef
@@ -56,12 +58,8 @@ def _fingerprint() -> StageFingerprintRecord:
         dependencies={},
         extra={},
     )
-    return StageFingerprintRecord(
-        schema_version=2,
+    return StageFingerprintRecord.create(
         algorithm="sha256",
-        policy_name="loom.stage.semantic",
-        policy_version=2,
-        fingerprint="sha256:" + "2" * 64,
         payload=payload,
         inputs_summary={"stage_name": "build"},
     )
@@ -151,3 +149,67 @@ def test_model_parsers_reject_unknown_fields_and_invalid_enums() -> None:
                 "invalidated_by": [],
             }
         )
+
+
+def test_fingerprint_record_is_derived_verified_and_serialized_independently() -> None:
+    config: Any = {"nested": {"labels": ["raw", "processed"]}}
+    summary: Any = {"input_artifacts": {"data": {"labels": ["raw"]}}}
+    payload = StageFingerprintPayload(
+        schema_version=2,
+        policy_name="loom.stage.semantic",
+        policy_version=2,
+        stage_name="build",
+        factory_target="project.Build",
+        factory_init={},
+        stage_config=config,
+        fingerprint_fields={},
+        declared_inputs={},
+        bound_inputs={},
+        declared_outputs={},
+        python_version="3.12.0",
+        loom_version="0.1.0",
+        git={},
+        dependencies={},
+        extra={},
+    )
+    record = StageFingerprintRecord.create(
+        payload=payload, algorithm="sha256", inputs_summary=summary
+    )
+
+    config["nested"]["labels"].append("changed")
+    summary["input_artifacts"]["data"]["labels"].append("changed")
+    serialized = cast(Any, record.to_dict())
+    serialized["payload"]["stage_config"]["nested"]["labels"].append("snapshot")
+    serialized["inputs_summary"]["input_artifacts"]["data"]["labels"].append("snapshot")
+
+    assert record.payload.stage_config == {"nested": {"labels": ("raw", "processed")}}
+    assert record.inputs_summary == {"input_artifacts": {"data": {"labels": ("raw",)}}}
+    assert cast(Any, record.to_dict())["payload"]["stage_config"] == {
+        "nested": {"labels": ["raw", "processed"]}
+    }
+    assert record.to_dict()["inputs_summary"] == {
+        "input_artifacts": {"data": {"labels": ["raw"]}}
+    }
+
+    corrupted = cast(Any, record.to_dict())
+    corrupted["fingerprint"] = "sha256:" + "0" * 64
+    with pytest.raises(PlanSerializationError, match="does not match its payload"):
+        StageFingerprintRecord.from_dict(corrupted)
+    with pytest.raises(PlanSerializationError, match="does not match its payload"):
+        StageFingerprintRecord(
+            schema_version=record.schema_version,
+            algorithm=record.algorithm,
+            policy_name=record.policy_name,
+            policy_version=record.policy_version,
+            fingerprint="sha256:" + "0" * 64,
+            payload=record.payload,
+            inputs_summary=record.inputs_summary,
+        )
+
+    mismatched_policy = cast(Any, record.to_dict())
+    mismatched_policy["policy_name"] = "different-policy"
+    with pytest.raises(
+        PlanSerializationError,
+        match="policy_name does not match its payload",
+    ):
+        StageFingerprintRecord.from_dict(mismatched_policy)

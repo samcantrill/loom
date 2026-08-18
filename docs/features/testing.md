@@ -9,6 +9,11 @@ organized, which behaviors each test layer owns, how synthetic pipelines replace
 domain workflows, how extension-point contracts are tested, and how local checks
 should be run before implementation work is considered complete.
 
+Queue pool-status coverage verifies a single SQLite snapshot, fixed lifecycle
+counts, allowlisted evidence redaction, and text/JSON parity. Managed-local
+concurrency evidence uses controlled process or SQLite barriers rather than
+fixed sleeps when proving capacity release and refill.
+
 The testing strategy should answer:
 
 ```text

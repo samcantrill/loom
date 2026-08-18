@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import cast
 
+from loom._validation import require_schema_version
 from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.reliability import (
@@ -19,7 +20,7 @@ from loom.pipeline.reliability import (
 )
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp
 
@@ -132,7 +133,7 @@ class LifecycleReason:
         return {
             "code": self.code,
             "message": self.message,
-            "detail": dict(self.detail),
+            "detail": thaw_plain_data(self.detail, path="detail"),
         }
 
     @classmethod
@@ -500,7 +501,7 @@ class MaterializedRef:
             "uri": self.uri,
             "exists": self.exists,
             "checksum": self.checksum,
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -697,6 +698,11 @@ class RecoveryRecord:
             "attempt_id": self.attempt_id,
         }
 
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        """Serialize recovery results through their durable plain-data shape."""
+
+        return (RecoveryRecord.from_dict, (self.to_dict(),))
+
     @classmethod
     def from_dict(cls, data: object) -> "RecoveryRecord":
         mapping = _mapping(data, "RecoveryRecord")
@@ -809,7 +815,7 @@ class ReadModelWarning:
         return {
             "code": self.code.value,
             "message": self.message,
-            "detail": dict(self.detail),
+            "detail": thaw_plain_data(self.detail, path="detail"),
             "revision": None if self.revision is None else self.revision.to_dict(),
         }
 
@@ -857,14 +863,12 @@ class ReliabilityPolicyFact:
                 self, "stage_name", _non_empty_string(self.stage_name, "stage_name")
             )
         if self.attempt is not None:
-            object.__setattr__(
-                self, "attempt", _positive_int(self.attempt, "attempt")
-            )
-        if self.schema_version != RELIABILITY_POLICY_SCHEMA_VERSION:
-            raise AuthorityModelError(
-                "schema_version must match reliability policy schema version "
-                f"{RELIABILITY_POLICY_SCHEMA_VERSION}"
-            )
+            object.__setattr__(self, "attempt", _positive_int(self.attempt, "attempt"))
+        require_schema_version(
+            self.schema_version,
+            current=RELIABILITY_POLICY_SCHEMA_VERSION,
+            error_type=AuthorityModelError,
+        )
         if self.scope is ReliabilityPolicyScope.RUN:
             if self.stage_name is not None or self.attempt is not None:
                 raise AuthorityModelError(
@@ -1036,8 +1040,7 @@ class StageLifecycleSnapshot:
                 detail.to_dict() for detail in self.reliability_status_details
             ],
             "reliability_transactions": [
-                transaction.to_dict()
-                for transaction in self.reliability_transactions
+                transaction.to_dict() for transaction in self.reliability_transactions
             ],
             "retry_decisions": [
                 decision.to_dict() for decision in self.retry_decisions
@@ -1213,7 +1216,7 @@ class AuthoritativeRunSnapshot:
             "status": self.status.value,
             "schema_version": self.schema_version,
             "revision": self.revision.to_dict(),
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
             "stages": [stage.to_dict() for stage in self.stages],
             "submitted_operations": [
                 operation.to_dict() for operation in self.submitted_operations
@@ -1229,6 +1232,11 @@ class AuthoritativeRunSnapshot:
             ],
             "warnings": [warning.to_dict() for warning in self.warnings],
         }
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        """Serialize service snapshots through their durable plain-data shape."""
+
+        return (AuthoritativeRunSnapshot.from_dict, (self.to_dict(),))
 
     @classmethod
     def from_dict(cls, data: object) -> "AuthoritativeRunSnapshot":
@@ -1362,7 +1370,7 @@ def _timestamp(value: object, field: str) -> str:
 
 def _plain_mapping(value: object, field: str) -> Mapping[str, PlainData]:
     try:
-        normalized = ensure_plain_data(value, path=field)
+        normalized = freeze_plain_data(value, path=field)
     except PlainDataError as exc:
         raise AuthorityModelError(
             f"{field} must be plain-data-compatible: {exc}"

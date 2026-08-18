@@ -151,6 +151,8 @@ written.
 | v20 | Runtime events and event sinks | Audit-ready runtime event grammar plus observe-only event sink contracts over committed runtime facts. |
 | v21 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
 | v22 | Examples and validation refinement | Robust example coverage, integration/e2e validation behavior, example harness hardening, and documentation refinement over the implemented surface. |
+| v23 | Managed local concurrency and resource assignment | Pool-scoped managed-local reconcile/fill cycles, structured capacity deferral, exclusive static-slot assignment, lease-safe local process lifecycle, and redacted operational status. |
+| v24 | Resource-aware whole-run queue selection | Default-compatible FIFO selection plus a bounded queue-local policy seam for safe downstream choice of fitting managed-pool candidates. |
 | v25 | Downstream operations design | Design and documentation for stage-author guidance, resource validation and usage observation, generic scheduling, notifications, resume policy, queues, and environment acceptance profiles. |
 
 ## v0 - Local Runtime Kernel
@@ -1786,6 +1788,229 @@ Implementation plan:
 
 - `docs/roadmap/stage-22/implementation-plan.md`
 
+## v23 - Managed Local Concurrency And Resource Assignment
+
+Status:
+
+- Stage 23 implementation is complete. The narrowly scoped operational follow-up
+  is tracked in the [Stage 23-post implementation plan](roadmap/stage-23-post/implementation-plan.md);
+  it adds the managed-local runtime/recovery proof without reopening the
+  completed Stage 23 plans.
+
+Goal:
+
+- Let one long-lived managed-local queue controller keep several whole-run
+  items active in one selected pool, bounded by an opt-in controller limit,
+  authority-backed scalar resource admission, and exclusive concrete resource
+  assignments.
+- Keep logical resource requests scheduler-neutral while giving local execution
+  a generic, dependency-free way to bind authored concrete slots.
+
+Implement:
+
+- A pool-scoped controller cycle that reconciles every active item before
+  filling available capacity, returns per-item outcomes, stops at explicit
+  active and per-cycle budgets, and preserves the existing one-step
+  `run_once()` behavior and effective default limit of one.
+- Explicit started, synchronously completed, and deferred-before-start dispatch
+  outcomes. Only typed temporary capacity exhaustion may defer; authority
+  uncertainty and fencing loss fail closed rather than becoming queue retry
+  policy.
+- An atomic SQLite FIFO claim and guarded claim release, handle commit,
+  completion, and cancellation transitions so stale controllers cannot mutate
+  newer attempts. Deferral preserves enqueue order and dispatch attempt,
+  clears the claim, records a safe reason code, and stops that FIFO for the
+  current cycle.
+- Stable structured coordination/admission failure kinds across in-memory,
+  SQLite, and authority-service paths, replacing queue-side exception-message
+  parsing.
+- A narrow queue-local structural assignment-provider protocol with immutable
+  requests and discriminated results. Core supplies no-op assignment and an
+  ordered static-slot provider; downstream projects may inject discovery or
+  site-placement implementations without moving scheduling correctness out of
+  Loom.
+- Static slots coordinated through existing named authority leases provisioned
+  at limit one. Selection is deterministic, multi-slot requests use distinct
+  slots, partial acquisition is compensated, and queue code never creates or
+  mutates authority limits.
+- Managed-local composition in the order drift validation, command
+  normalization, scalar admission, concrete assignment, deterministic
+  environment-list binding, process-group start, and durable safe evidence.
+  Every failure and terminal path unwinds owned resources exactly once, and an
+  unpersisted started process is terminated and observed before its resources
+  can be reused.
+- Live-owner lease renewal with a bounded safety deadline. Definitive ownership
+  loss or an unresolved outage at the deadline stops filling and terminates the
+  process group; resources are released only after exit is observed. A unique
+  adapter-session identity prevents restarted or foreign controllers from
+  treating unavailable in-memory process state as their own.
+- Deterministic queue-owned stdout and stderr paths per item and attempt, plus
+  one consistent repository pool snapshot and a redacted status model for text
+  and JSON. Persisted output is limited to safe assignment labels, process
+  facts, lease identifiers/timing, owner/session identity, and queue-relative
+  log paths.
+- Backward-compatible queue configuration with an explicit positive managed
+  active limit, local static-assignment inventory, and environment-list binding
+  configuration. Preflight validates inventory uniqueness, authority limits
+  and capabilities, impossible requests, and binding conflicts without
+  provisioning resources.
+- Python-first construction and dependency-free fake/static integration and
+  end-to-end coverage. Scheduling logic remains outside the CLI.
+
+Exit criteria:
+
+- Twelve queued commands over three generic static slots peak at exactly three
+  active items under one controller, use unique slots, leave excess work
+  queued, and refill one slot after success, failure, or cancellation.
+- Concurrent SQLite controllers cannot claim one item twice or use a stale
+  claim/handle to defer, complete, or cancel a newer attempt.
+- Capacity shortage never becomes `FAILED` or `UNKNOWN`; invalid configuration
+  fails before launch, and uncertain authority or ownership state prevents new
+  work from starting.
+- CPU-only, fake, synchronous, custom, and delegated SLURM adapters retain
+  their existing behavior. `LaunchContract.resources` and queue items contain
+  no concrete-resource or vendor-specific fields.
+- Text and JSON status derive from the same read model and never reveal fencing
+  tokens, command/cwd details, environment names or values, or provider-private
+  payloads.
+- Phase-targeted suites, `make validate-pr`, and `make test-summary` pass; a
+  real accelerator profile remains manual and opt-in.
+
+Defer:
+
+- Dynamic inventory, vendor libraries, device health, topology, free-memory or
+  utilization placement, and multi-host resource-instance coordination.
+- Exact distributed enforcement of `max_active_items`. Atomic claims and
+  authority resource leases are hard multi-controller safety boundaries; the
+  item count is a single-controller policy in v23.
+- Priorities, fairness, preemption, backfilling, starvation policy, multi-pool
+  balancing, fine-grained stage scheduling, and general scheduler-policy
+  plugins.
+- Automatic retry, worker daemons, process watchdogs, controller heartbeats,
+  process reattachment after controller death, and unconditional crash-time
+  process termination guarantees.
+- Provider registries, public provider recovery hooks, configurable external
+  log paths, arbitrary launch rewriting, mounts, device nodes, and shell
+  templating.
+- Bulk submission CLI, a managed-local worker command, and downstream
+  experiment, cache, artifact, metric, or report behavior.
+
+Primary feature docs:
+
+- `queue.md`
+- `runtime-resources.md`
+- `run-store.md`
+- `cli.md`
+- `testing.md`
+
+Planning notes:
+
+- `docs/roadmap/stage-23/planning.md`
+
+Implementation plan:
+
+- `docs/roadmap/stage-23/implementation-plan.md`
+
+Phase execution plans:
+
+- `docs/roadmap/stage-23/phases/safe-pool-cycles.md`
+- `docs/roadmap/stage-23/phases/managed-local-assignments.md`
+- `docs/roadmap/stage-23/phases/operator-status-proof.md`
+
+## v24 - Resource-Aware Whole-Run Queue Selection
+
+Status:
+
+- Planning is confirmed. Expanded design-safety review and the implementation-
+  plan quality gate passed; both phases remain pending. Phase 1 must not start
+  until Stage 23 is merged and its final contracts are refreshed.
+
+Goal:
+
+- Let a managed whole-run queue use a caller-provided candidate-selection
+  policy so temporarily unusable FIFO-head work need not leave compatible
+  capacity idle.
+- Preserve strict FIFO as the default and keep queue mutation, resource
+  authority, concrete assignment, and process lifecycle safety inside Loom.
+
+Implement:
+
+- A bounded, deterministic queued-candidate view containing only selection-safe
+  identity, enqueue ordering, dispatch attempt, and scheduler-neutral logical
+  resource amounts.
+- A small queue-local structural selection-policy protocol that chooses one
+  supplied candidate or stops with a safe reason code. Python constructor
+  injection is the required extension path; missing injection uses the existing
+  Stage 23 atomic FIFO path without a new policy object.
+- Controller-local advisory logical availability and current-cycle attempt/
+  deferral facts for resource-aware policies. Every selected item still passes
+  authoritative scalar admission and Stage 23 concrete assignment before work
+  starts.
+- Atomic exact-candidate claims, bounded refresh after selection races, and
+  policy-output validation. Project policy code never runs inside a SQLite
+  transaction and cannot bypass active, dispatch, claim, lease, assignment, or
+  process-safety guards.
+- Policy-controlled bounded continuation after typed pre-start capacity
+  deferral. FIFO retains Stage 23's stop behavior; an injected policy may try a
+  different, previously unattempted candidate in the same cycle.
+- Safe cycle and audit evidence containing the policy ID, selected item, and
+  reason code without persisting full capacity snapshots or arbitrary
+  policy-private state.
+- A dependency-free downstream first-fit example and real SQLite queue/
+  coordination tests for the two-unit FIFO head, one-unit later item, and one
+  available unit scenario.
+
+Exit criteria:
+
+- Existing callers and delegated pools retain FIFO behavior without config or
+  record migration.
+- A Python caller can inject a managed-pool policy that starts the later
+  one-unit item while the older two-unit item remains queued.
+- Two controllers selecting the same candidate cannot both claim or launch it,
+  and stale capacity observations cannot over-allocate authority or concrete
+  slots.
+- Candidate evaluation, claim refresh, deferral, and dispatch remain bounded,
+  and one candidate is attempted at most once per cycle.
+- Policy input and evidence contain no commands, environments, fencing tokens,
+  concrete assignment state, or provider-private payloads.
+- Phase-targeted tests, `make validate-pr`, and `make test-summary` pass.
+
+Defer:
+
+- A built-in non-FIFO fairness policy, starvation guarantee, durable aging or
+  bypass counters, reservations, runtime estimates, priorities, and preemption.
+- Multiple queues per pool, cross-pool fairness or balancing, distributed
+  active-item quotas, automatic retry, and policy hot reload.
+- Dynamic policy discovery, entry-point registration, and authored arbitrary
+  class loading; custom policy composition remains Python-first.
+- Concrete slot selection, vendor/device observation, and resource mutation by
+  policy code. Stage 23 providers and authority leases retain those roles.
+- Delegated scheduler ordering changes, universal workflow scheduling, and
+  fine-grained pipeline-stage scheduling.
+
+Primary feature docs:
+
+- `queue.md`
+- `runtime-resources.md`
+- `testing.md`
+
+Design guide:
+
+- `docs/roadmap/stage-24/design-guide.md`
+
+Planning notes:
+
+- `docs/roadmap/stage-24/planning.md`
+
+Implementation plan:
+
+- `docs/roadmap/stage-24/implementation-plan.md`
+
+Phase execution plans:
+
+- `docs/roadmap/stage-24/phases/safe-resource-aware-selection.md`
+- `docs/roadmap/stage-24/phases/bounded-head-bypass-proof.md`
+
 ## v25 - Downstream Operations Design
 
 Goal:
@@ -1821,13 +2046,15 @@ Implement:
   diagnostics, and policy for warnings or failures when usage evidence is
   missing or mismatched.
 - Generic scheduling policy design. V10 reserves scheduler-ready request and
-  decision records and v11 adds a narrow whole-run FIFO queue. This stage should
-  decide whether to introduce a generic scheduler interface over authority
-  snapshots, resource leases, queue items, ready stage plans, and submitted
-  operations. The same policy vocabulary should be adaptable to coarse
-  whole-run scheduling and fine stage scheduling, but it must not replace the
-  pipeline planner, authority store, executor contracts, or queue audit
-  records.
+  decision records, v11 adds a narrow whole-run FIFO queue, v23 adds bounded
+  managed-local reconciliation and concrete assignment, and v24 adds only a
+  queue-local whole-run candidate-selection seam. This stage should decide
+  whether to introduce a broader scheduler interface over authority snapshots,
+  resource leases, queue items, ready stage plans, and submitted operations.
+  The same policy vocabulary should be adaptable to coarse whole-run scheduling
+  and fine stage scheduling, but it must not replace the pipeline planner,
+  authority store, executor contracts, queue audit records, v23 assignment
+  lifecycle, or v24 queue-selection safety boundary.
 - Public-interface compatibility review for scheduling and resources. Before
   implementation, review whether public `RunOptions`, `ExecutionPlan`,
   `StageExecutionRequest`, `ResourceRequest`, queue records, and authority lease
@@ -1879,9 +2106,10 @@ Exit criteria:
 
 Defer:
 
-- Implementing a new scheduler, new notification adapter, new resource usage
-  sampler, new queue policy, or new resume semantics until this design stage has
-  produced a reviewed implementation plan.
+- Implementing a generic scheduler, cross-pool queue policy, new notification
+  adapter, new resource usage sampler, or new resume semantics until this design
+  stage has produced a reviewed implementation plan. The bounded managed-local
+  lifecycle assigned to v23 is not part of this deferral.
 - Making real clusters, GPUs, containers, network services, or notification
   credentials required for default validation.
 - Parsing domain metrics, checkpoints, or artifact payloads in core Loom.
@@ -1926,11 +2154,11 @@ future roadmap candidates, not as implicit scope for the versions above.
   V11 owns Loom's dependency-light whole-run queue. Optional adapters for
   Prefect, Ray, Kubernetes, cloud batch systems, or other orchestrators should
   remain separate integrations over Loom queue/run contracts.
-- Worker-daemon prefetch and advanced health-check orchestration beyond v11.
+- Worker-daemon prefetch and advanced health-check orchestration beyond v23.
   Future controllers may pre-submit infrastructure before scheduled start time,
   heartbeat executor availability, refresh submitted-job status in richer ways,
   or add more advanced cancellation reconciliation, but those should not expand
-  the first queue version.
+  the bounded managed-local lifecycle stage.
 - MLflow-backed and DVC-backed artifact stores. These should be optional
   plugin backends after the v15 remote-store capability model exists. They must
   advertise read/write/list/checksum/delete and transaction semantics like any
@@ -1985,24 +2213,25 @@ Before turning any roadmap version into a full implementation plan:
 | `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots. |
 | `io.md` | v0, v1, v14, v15, v16 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v14; remote hooks and operations in v15/v16. |
 | `artifacts.md` | v0, v3, v9, v9-post, v10, v12, v15, v16, v21 | Local artifact refs/stores in v0; inspection in v3; commit/concurrency semantics in v9; authority-backed commit use is mandatory after v9; v10 adds durable service/offline import evidence; bundles/exporters in v12; external/remote interface, multi-location refs, and immutable reuse semantics in v15; payload materialization operations in v16; retention in v21. |
-| `config.md` | v0, v1, v2, v13, v14 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v13; recipe plugins in v14. |
+| `config.md` | v0, v1, v2, v13, v14, v23 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v13; recipe plugins in v14; v23 compatibly extends queue controller and local-assignment configuration. |
 | `pipeline.md` | v0, v2, v9, v13 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later. |
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
-| `runtime-resources.md` | v4, v6, v7, v11, v17, v18 | Shared runtime/resource objects arrive before executor-specific mapping; v11 adds queue pool reconciliation over authority resource leases. |
-| `execution.md` | v0, v4, v5, v6, v7, v9, v9-post, v10, v11, v17, v18, v19 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; concurrency foundations in v9; v9-post removes local-only mutation entrypoints; v10 makes service connection/start policy explicit and durable; v11 adds whole-run queue dispatch; reliability in v19. |
-| `run-store.md` | v0, v3, v5, v8, v9, v9-post, v10, v11, v12, v19, v20, v21 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence contracts; v9-post deprecates `LocalRunStore` as a runtime entrypoint; v10 adds DB-backed authority service and offline import; v11 links queue state to authority facts; bundles/reliability/events/cleanup build later. |
-| `state.md` | v0, v5, v7, v9, v9-post, v10, v11, v19 | Basic statuses in v0; attempts/failures, scheduler state, concurrent lifecycle semantics, mandatory authority-backed lifecycle use, durable service state, queue status, and reliability records mature later. |
+| `runtime-resources.md` | v4, v6, v7, v11, v17, v18, v23 | Shared runtime/resource objects arrive before executor-specific mapping; v11 adds queue pool reconciliation over authority resource leases; v23 adds concrete local assignment without changing portable resource requests. |
+| `execution.md` | v0, v4, v5, v6, v7, v9, v9-post, v10, v11, v17, v18, v19, v23 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; concurrency foundations in v9; v9-post removes local-only mutation entrypoints; v10 makes service connection/start policy explicit and durable; v11 adds whole-run queue dispatch; reliability in v19; v23 adds bounded concurrent managed-local process lifecycle. |
+| `run-store.md` | v0, v3, v5, v8, v9, v9-post, v10, v11, v12, v19, v20, v21, v23 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence contracts; v9-post deprecates `LocalRunStore` as a runtime entrypoint; v10 adds DB-backed authority service/offline import; v11 links queue and authority facts; v23 adds queue-owned local attempt logs and safe dispatch evidence; bundles/reliability/events/cleanup build on the shared contracts. |
+| `state.md` | v0, v5, v7, v9, v9-post, v10, v11, v19, v23 | Basic statuses in v0; attempts/failures, scheduler state, concurrent lifecycle semantics, mandatory authority-backed lifecycle use, durable service state, queue status, and reliability records mature later; v23 adds explicit deferred dispatch and pool-cycle outcomes. |
 | `provenance.md` | v0, v1, v6, v7, v10, v11, v14, v17, v18, v20 | Generic provenance in v0; config composition provenance in v1; submission, offline import evidence, queue dispatch facts, plugin, container, event, and event-sink facts added with those capabilities. |
 | `resume.md` | v0, v2, v3, v9, v9-post, v10, v13, v19 | Same-run-directory resume in v0; CLI/preflight expose it; v9 clarifies interrupted attempts and leases; v9-post authority-backs continuation entrypoints; v10 adds offline import/equivalence policy; sweeps and retry policies build later. |
-| `preflight.md` | v3, v4, v5, v6, v7, v9, v10, v11, v14, v15, v16, v17, v18, v19, v20, v21 | Core check runner in v3; new checks arrive with each operational feature. |
+| `preflight.md` | v3, v4, v5, v6, v7, v9, v10, v11, v14, v15, v16, v17, v18, v19, v20, v21, v23 | Core check runner in v3; new checks arrive with each operational feature, including managed-local assignment consistency and capability checks in v23. |
 | `run-catalog.md` | v8, v9, v9-post, v10, v12, v13, v15, v16, v21 | Catalog/comparison in v8; active-query guarantees and projections in v9; v9-post clarifies authority-backed behavior reads versus artifact-only local directory access; v10 service registry/offline import updates run visibility; bundles and exporters in v12; sweeps integrate in v13; metadata-only external/remote refs and immutable lookup in v15; explicit payload materialization in v16; cleanup later. |
 | `sweeps.md` | v9, v9-post, v10, v11, v13 | V9 defines coordination primitives for large sweeps; v9-post shapes workspace authority and service-backed coordination; v10 service-backs workspace coordination; v11 provides whole-run queue dispatch that later sweeps can use; v13 implements deterministic sweeps as many ordinary runs. |
 | `slurm.md` | v6, v7, v9-post, v10, v11, v18 | Script/dry-run support first; live operations second; v9-post removes local-only submitted-state mutation; v10 clarifies allocation-scoped service supervision and connection policy; v11 adds delegated queue dispatch; container composition after both are stable. |
 | `container-executors.md` | v17, v18 | Docker first; Apptainer and SLURM-container composition second. |
 | `remote-stores.md` | v9, v9-post, v10, v15, v16 | V9 shapes backend capability expectations; v9-post plans service/database authority for multi-host state; v10 delivers durable service supervision; external/remote interface contract, fake handlers, multi-location refs, and bundle ref semantics first; payload operations and optional real backends second. |
-| `reliability.md` | v5, v9, v9-post, v10, v11, v19, v20, v21 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; v9-post makes those foundations mandatory across entrypoints; v10 adds service durability and offline import rejection/acceptance evidence; v11 requires accurate queue cancellation/status reporting; retry and timeout land in v19, runtime events and event sinks in v20, and cleanup in v21. |
+| `reliability.md` | v5, v9, v9-post, v10, v11, v19, v20, v21, v23 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; v9-post makes those foundations mandatory across entrypoints; v10 adds service durability and offline import rejection/acceptance evidence; v11 requires accurate queue cancellation/status reporting; retry and timeout land in v19, events in v20, cleanup in v21, and v23 adds lease-renewal and exact resource-release safety for managed-local work. |
 | `plugins.md` | v14, v15, v16, v20 | Explicit discovery in v14; remote backend, exporter, and event sink integration later. |
-| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations. |
+| `queue.md` | v11, v23 | V11 establishes the durable whole-run queue and local/SLURM adapters; v23 adds safe pool cycles, static concrete assignment, deterministic local logs, and redacted pool summaries. |
+| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21, v23 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations; v23 extends queue status without placing scheduling logic in the CLI. |
 | `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
 | `examples/` and `*-example-coverage.md` | v22 | Cross-roadmap example inventory, runnable/manual status, validation tiers, integration/e2e behavior, and documentation refinement are consolidated after the runtime surface through v21 exists. |
 

@@ -4,23 +4,28 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from loom.serialization import PlainData, PlainDataError, ensure_plain_data
+from loom.serialization import (
+    PlainData,
+    PlainDataError,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 
 from .errors import SweepProtocolError
 
 
-def _plain_mapping(value: object, *, field: str) -> dict[str, PlainData]:
+def _plain_mapping(value: object, *, field: str) -> Mapping[str, PlainData]:
     if value is None:
         return {}
     if not isinstance(value, Mapping):
         raise SweepProtocolError(f"{field} must be a mapping")
     try:
-        normalized = ensure_plain_data(value, path=field)
+        normalized = freeze_plain_data(value, path=field)
     except (PlainDataError, TypeError) as exc:
         raise SweepProtocolError(f"{field} must contain plain data") from exc
-    if not isinstance(normalized, dict):
+    if not isinstance(normalized, Mapping):
         raise SweepProtocolError(f"{field} must be a mapping")
-    return dict(normalized)
+    return normalized
 
 
 def _text(value: object, *, field: str) -> str:
@@ -60,7 +65,9 @@ class SweepTrialRecord:
     def __post_init__(self) -> None:
         object.__setattr__(self, "trial_id", _text(self.trial_id, field="trial_id"))
         object.__setattr__(
-            self, "trial_index", _non_negative_int(self.trial_index, field="trial_index")
+            self,
+            "trial_index",
+            _non_negative_int(self.trial_index, field="trial_index"),
         )
         object.__setattr__(self, "sweep_id", _text(self.sweep_id, field="sweep_id"))
         object.__setattr__(
@@ -89,8 +96,10 @@ class SweepTrialRecord:
             "sweep_id": self.sweep_id,
             "run_uri": self.run_uri,
             "provider_trial_id": self.provider_trial_id,
-            "proposal_overrides": dict(self.proposal_overrides),
-            "metadata": dict(self.metadata),
+            "proposal_overrides": thaw_plain_data(
+                self.proposal_overrides, path="proposal_overrides"
+            ),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -114,7 +123,9 @@ class SweepTrialRecord:
             )
         return cls(
             trial_id=_text(_required(data, "trial_id"), field="trial_id"),
-            trial_index=_non_negative_int(_required(data, "trial_index"), field="trial_index"),
+            trial_index=_non_negative_int(
+                _required(data, "trial_index"), field="trial_index"
+            ),
             sweep_id=_text(_required(data, "sweep_id"), field="sweep_id"),
             run_uri=_optional_text(data.get("run_uri"), field="run_uri"),
             provider_trial_id=_optional_text(

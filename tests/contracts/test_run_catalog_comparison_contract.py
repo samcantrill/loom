@@ -47,6 +47,16 @@ def _create_run(root: Path, run_path: Path, status: RunStatus) -> str:
     )
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri)
+    if status is RunStatus.SUCCEEDED:
+        store.write_run_status(
+            run_uri,
+            RunStatusRecord(
+                run_uri=run_uri,
+                status=RunStatus.RUNNING,
+                created_at="2020-01-01T00:00:00Z",
+                updated_at="2020-01-01T00:00:00Z",
+            ),
+        )
     store.write_run_status(
         run_uri,
         RunStatusRecord(

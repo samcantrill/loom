@@ -32,10 +32,15 @@ from loom.pipeline.stores import (
     AUTHORITY_COORDINATION_TRIAL_RECORD_PATH,
     AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH,
     AuthorityClient,
+    AuthorityProtocolErrorCategory,
+    AuthorityProtocolMetadata,
+    AuthorityProtocolOperationKind,
+    AuthorityProtocolRejection,
     BackendCapability,
     BackendRevision,
     CapabilityScope,
     ConcurrencyCounter,
+    CoordinationFailureKind,
     CoordinationRecoveryRecord,
     CoordinationStoreError,
     LeaseKind,
@@ -50,6 +55,7 @@ from loom.pipeline.stores import (
     WorkspaceCoordinationStore,
     WorkspaceIdentity,
     coordination_requirement_diagnostics,
+    rejected_authority_response,
 )
 from loom.serialization import PlainData
 from loom.pipeline.stores.sqlite_coordination import SQLiteWorkspaceCoordinationStore
@@ -298,13 +304,14 @@ def test_workspace_coordination_contract_fences_leases_and_counters(
             owner_id="worker-2",
             lease_ttl_seconds=10,
         )
-    with pytest.raises(ValueError, match="stale or foreign lease token"):
+    with pytest.raises(CoordinationStoreError, match="stale or foreign lease token") as stale:
         store.renew_lease(
             trial_lease.lease.lease_id,
             owner_id="worker-2",
             fencing_token=trial_lease.lease.fencing_token,
             lease_ttl_seconds=10,
         )
+    assert stale.value.kind is CoordinationFailureKind.OWNERSHIP_LOST
 
     renewed = store.renew_lease(
         trial_lease.lease.lease_id,
@@ -350,7 +357,7 @@ def test_workspace_coordination_contract_fences_leases_and_counters(
         assert active_limit is not None
         assert active_limit.value == 2
         assert active_limit.limit == 2
-        with pytest.raises(ValueError, match="resource limit"):
+        with pytest.raises(CoordinationStoreError, match="resource limit") as capacity:
             store.acquire_resource_lease(
                 "workspace-1",
                 "gpu",
@@ -358,6 +365,7 @@ def test_workspace_coordination_contract_fences_leases_and_counters(
                 amount=1,
                 lease_ttl_seconds=10,
             )
+        assert capacity.value.kind is CoordinationFailureKind.CAPACITY
         _advance(coordination_case, 2)
         recovered_resource = store.acquire_resource_lease(
             "workspace-1",
@@ -407,6 +415,58 @@ def test_workspace_coordination_contract_reports_local_safety_limits(
         "unsafe_remote_coordination",
     ]
     assert all(diagnostic.severity.value == "error" for diagnostic in diagnostics)
+
+
+@pytest.mark.parametrize(
+    ("category", "expected"),
+    [
+        (
+            AuthorityProtocolErrorCategory.VALIDATION,
+            CoordinationFailureKind.INVALID_OR_UNSUPPORTED,
+        ),
+        (
+            AuthorityProtocolErrorCategory.UNAVAILABLE_SERVICE,
+            CoordinationFailureKind.UNAVAILABLE,
+        ),
+        (
+            AuthorityProtocolErrorCategory.INTERNAL_ERROR,
+            CoordinationFailureKind.INTERNAL,
+        ),
+    ],
+)
+def test_service_coordination_maps_protocol_failure_categories_without_messages(
+    category: AuthorityProtocolErrorCategory,
+    expected: CoordinationFailureKind,
+) -> None:
+    response = rejected_authority_response(
+        AuthorityProtocolMetadata(
+            request_id="classification-test",
+            operation_kind=AuthorityProtocolOperationKind.WORKSPACE_COORDINATION,
+        ),
+        AuthorityProtocolRejection(
+            category=category,
+            code="opaque-test-code",
+            message="message text must not affect classification",
+        ),
+    )
+
+    def transport(
+        _url: str,
+        _payload: Mapping[str, PlainData],
+        _timeout_seconds: float | None,
+    ) -> Mapping[str, object]:
+        return response.to_dict()
+
+    store = ServiceWorkspaceCoordinationStore(
+        AuthorityClient("http://authority.test", transport=transport),
+        workspace_id="workspace-1",
+        service_generation="generation-1",
+    )
+
+    with pytest.raises(CoordinationStoreError) as raised:
+        store.read_resource_limit("workspace-1", "gpu")
+
+    assert raised.value.kind is expected
 
 
 def _seed_workspace(store: WorkspaceCoordinationStore) -> None:

@@ -6,7 +6,12 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast, runtime_checkable
 
-from loom.serialization import PlainData, PlainDataError, ensure_plain_data
+from loom.serialization import (
+    PlainData,
+    PlainDataError,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 
 from .errors import SweepProtocolError
 
@@ -17,7 +22,9 @@ def _required(mapping: Mapping[str, Any], field_name: str) -> object:
     return mapping[field_name]
 
 
-def _reject_unknown(mapping: Mapping[str, object], allowed: set[str], *, object_name: str) -> None:
+def _reject_unknown(
+    mapping: Mapping[str, object], allowed: set[str], *, object_name: str
+) -> None:
     unknown = set(mapping) - allowed
     if unknown:
         fields = ", ".join(sorted(unknown))
@@ -42,20 +49,18 @@ def _optional_non_empty_text(value: object, field_name: str) -> str | None:
     return value
 
 
-def _plain_mapping(value: object, field_name: str) -> dict[str, PlainData]:
+def _plain_mapping(value: object, field_name: str) -> Mapping[str, PlainData]:
     if value is None:
         return {}
     if not isinstance(value, Mapping):
         raise SweepProtocolError(f"{field_name} must be a mapping")
     try:
-        normalized = ensure_plain_data(value, path=field_name)
+        normalized = freeze_plain_data(value, path=field_name)
     except (PlainDataError, TypeError) as exc:
-        raise SweepProtocolError(
-            f"{field_name} must contain plain data"
-        ) from exc
-    if not isinstance(normalized, dict):
+        raise SweepProtocolError(f"{field_name} must contain plain data") from exc
+    if not isinstance(normalized, Mapping):
         raise SweepProtocolError(f"{field_name} must be a mapping")
-    return dict(normalized)
+    return normalized
 
 
 def _non_negative_int(value: object, field_name: str) -> int | None:
@@ -76,9 +81,15 @@ class SweepProviderIdentity:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "provider_name", _non_empty_text(self.provider_name, "provider_name"))
-        object.__setattr__(self, "provider_type", _non_empty_text(self.provider_type, "provider_type"))
-        object.__setattr__(self, "version", _optional_non_empty_text(self.version, "version"))
+        object.__setattr__(
+            self, "provider_name", _non_empty_text(self.provider_name, "provider_name")
+        )
+        object.__setattr__(
+            self, "provider_type", _non_empty_text(self.provider_type, "provider_type")
+        )
+        object.__setattr__(
+            self, "version", _optional_non_empty_text(self.version, "version")
+        )
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
 
     def to_dict(self) -> dict[str, Any]:
@@ -86,7 +97,7 @@ class SweepProviderIdentity:
             "provider_name": self.provider_name,
             "provider_type": self.provider_type,
             "version": self.version,
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -99,8 +110,12 @@ class SweepProviderIdentity:
             object_name="SweepProviderIdentity",
         )
         return cls(
-            provider_name=_non_empty_text(_required(data, "provider_name"), "provider_name"),
-            provider_type=_non_empty_text(_required(data, "provider_type"), "provider_type"),
+            provider_name=_non_empty_text(
+                _required(data, "provider_name"), "provider_name"
+            ),
+            provider_type=_non_empty_text(
+                _required(data, "provider_type"), "provider_type"
+            ),
             version=_optional_non_empty_text(data.get("version"), "version"),
             metadata=_plain_mapping(data.get("metadata", {}), "metadata"),
         )
@@ -127,7 +142,7 @@ class SweepProviderContext:
         return {
             "sweep_id": self.sweep_id,
             "sweep_name": self.sweep_name,
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -151,19 +166,16 @@ class SweepProposalProvider(Protocol):
     """Contextful provider contract for deterministic trial proposals."""
 
     @property
-    def identity(self) -> SweepProviderIdentity:
-        ...
+    def identity(self) -> SweepProviderIdentity: ...
 
-    def proposals(self, context: SweepProviderContext) -> Iterable["TrialProposal"]:
-        ...
+    def proposals(self, context: SweepProviderContext) -> Iterable["TrialProposal"]: ...
 
 
 @runtime_checkable
 class FiniteSweepProposalProvider(SweepProposalProvider, Protocol):
     """Optional finite-provider capability."""
 
-    def __len__(self) -> int:
-        ...
+    def __len__(self) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,15 +196,17 @@ class TrialProposal:
         object.__setattr__(
             self, "trial_index", _non_negative_int(self.trial_index, "trial_index")
         )
-        object.__setattr__(self, "overrides", _plain_mapping(self.overrides, "overrides"))
+        object.__setattr__(
+            self, "overrides", _plain_mapping(self.overrides, "overrides")
+        )
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "provider_trial_id": self.provider_trial_id,
             "trial_index": self.trial_index,
-            "overrides": dict(self.overrides),
-            "metadata": dict(self.metadata),
+            "overrides": thaw_plain_data(self.overrides, path="overrides"),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod

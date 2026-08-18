@@ -49,6 +49,7 @@ if TYPE_CHECKING:
         is_offline_evidence_run_store,
     )
     from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
+    from loom.pipeline.execution.services import RuntimeServices
     from loom.pipeline.execution.resource_admission import (
         ResourceAdmissionDecision,
         ResourceAdmissionError,
@@ -98,6 +99,7 @@ def __getattr__(name: str) -> object:
         "RunRequest",
         "RunRequestError",
         "RunResult",
+        "RuntimeServices",
         "ResourceAdmissionDecision",
         "ResourceAdmissionError",
         "ResourceAdmissionRequest",
@@ -179,6 +181,7 @@ def __getattr__(name: str) -> object:
             PreparedRunRecord,
         )
         from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
+        from loom.pipeline.execution.services import RuntimeServices
         from loom.pipeline.execution.resource_admission import (
             ResourceAdmissionDecision,
             ResourceAdmissionError,
@@ -226,6 +229,7 @@ def __getattr__(name: str) -> object:
             "RunRequest": RunRequest,
             "RunRequestError": RunRequestError,
             "RunResult": RunResult,
+            "RuntimeServices": RuntimeServices,
             "ResourceAdmissionDecision": ResourceAdmissionDecision,
             "ResourceAdmissionError": ResourceAdmissionError,
             "ResourceAdmissionRequest": ResourceAdmissionRequest,
@@ -288,6 +292,7 @@ __all__ = [
     "RunRequest",
     "RunRequestError",
     "RunResult",
+    "RuntimeServices",
     "ResourceAdmissionDecision",
     "ResourceAdmissionError",
     "ResourceAdmissionRequest",

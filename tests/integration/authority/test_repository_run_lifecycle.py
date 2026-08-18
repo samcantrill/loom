@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from loom.pipeline.events import EventScope, PipelineEvent
-from loom.pipeline.status import RunStatus
+from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores.read_models import (
     CleanupCandidateKind,
     LifecycleReason,
@@ -88,6 +89,118 @@ def test_run_lifecycle_records_persist_across_repository_handles(tmp_path) -> No
     assert snapshot.cleanup_candidates == (cleanup,)
     assert reopened.list_audit_events(RUN_URI) == (event,)
     assert reopened.list_recovery_records(RUN_URI) == (recovery,)
+
+
+def test_repository_enforces_transition_policy_before_persisting(tmp_path) -> None:
+    repository = initialize_authority_repository(tmp_path)
+    initial = repository.admit_run(RUN_URI)
+    running = repository.transition_run(
+        RUN_URI,
+        from_status=RunStatus.CREATED,
+        to_status=RunStatus.RUNNING,
+        expected_revision=initial,
+    )
+    succeeded = repository.transition_run(
+        RUN_URI,
+        from_status=RunStatus.RUNNING,
+        to_status=RunStatus.SUCCEEDED,
+        expected_revision=running.revision,
+    )
+    with pytest.raises(AuthorityRepositoryError):
+        repository.transition_run(
+            RUN_URI,
+            from_status=RunStatus.SUCCEEDED,
+            to_status=RunStatus.RUNNING,
+            expected_revision=succeeded.revision,
+        )
+    resumed = repository.transition_run(
+        RUN_URI,
+        from_status=RunStatus.SUCCEEDED,
+        to_status=RunStatus.RUNNING,
+        expected_revision=succeeded.revision,
+        intent=TransitionIntent.RESUME,
+    )
+    pending = repository.transition_stage(
+        RUN_URI,
+        "build",
+        from_status=None,
+        to_status=StageStatus.PENDING,
+        expected_revision=resumed.revision,
+    )
+    stage_running = repository.transition_stage(
+        RUN_URI,
+        "build",
+        from_status=StageStatus.PENDING,
+        to_status=StageStatus.RUNNING,
+        expected_revision=pending.revision,
+    )
+    stage_succeeded = repository.transition_stage(
+        RUN_URI,
+        "build",
+        from_status=StageStatus.RUNNING,
+        to_status=StageStatus.SUCCEEDED,
+        expected_revision=stage_running.revision,
+    )
+    with pytest.raises(AuthorityRepositoryError):
+        repository.transition_stage(
+            RUN_URI,
+            "build",
+            from_status=StageStatus.SUCCEEDED,
+            to_status=StageStatus.PENDING,
+            expected_revision=stage_succeeded.revision,
+        )
+    repository.transition_stage(
+        RUN_URI,
+        "build",
+        from_status=StageStatus.SUCCEEDED,
+        to_status=StageStatus.PENDING,
+        expected_revision=stage_succeeded.revision,
+        intent=TransitionIntent.RESUME,
+    )
+
+
+def test_repository_event_retry_precedes_stale_revision_rejection(tmp_path) -> None:
+    repository = initialize_authority_repository(tmp_path)
+    initial = repository.admit_run(RUN_URI)
+    event = PipelineEvent(
+        event_id="event-1",
+        scope=EventScope.run(),
+        event_type="run.started",
+    )
+
+    first = repository.append_audit_event(
+        RUN_URI,
+        event,
+        expected_revision=initial,
+    )
+    assert (
+        repository.append_audit_event(
+            RUN_URI,
+            event,
+            expected_revision=initial,
+        )
+        == first
+    )
+    with pytest.raises(AuthorityRepositoryError, match="conflicts"):
+        repository.append_audit_event(
+            RUN_URI,
+            PipelineEvent(
+                event_id="event-1",
+                scope=EventScope.run(),
+                event_type="run.failed",
+            ),
+            expected_revision=initial,
+        )
+    with pytest.raises(AuthorityRepositoryError, match="stale run revision"):
+        repository.append_audit_event(
+            RUN_URI,
+            PipelineEvent(
+                event_id="event-2",
+                scope=EventScope.run(),
+                event_type="run.completed",
+            ),
+            expected_revision=initial,
+        )
 
 
 def test_legacy_audit_table_accepts_per_run_event_sequences(tmp_path) -> None:

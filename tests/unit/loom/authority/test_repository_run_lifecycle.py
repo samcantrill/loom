@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from loom.pipeline.status import RunStatus
+from loom.pipeline.events import EventScope, PipelineEvent
 from loom.pipeline.stores.read_models import BackendRevision, LeaseState
 from loom.authority._repository import (
     AUTHORITY_REPOSITORY_SCHEMA_VERSION,
@@ -75,6 +76,48 @@ def test_transition_run_rejects_stale_status_and_revision(tmp_path) -> None:
             from_status=RunStatus.RUNNING,
             to_status=RunStatus.SUCCEEDED,
             expected_revision=BackendRevision(sequence=999, token="missing"),
+        )
+
+
+def test_append_event_retries_by_id_before_revision_validation(tmp_path) -> None:
+    repository = initialize_authority_repository(
+        tmp_path, service_generation="generation-1"
+    )
+    initial = repository.admit_run(RUN_URI)
+    event = PipelineEvent(
+        event_id="event-1",
+        scope=EventScope.run(),
+        event_type="run.started",
+        timestamp="2020-01-01T00:00:00Z",
+    )
+
+    record = repository.append_audit_event(
+        RUN_URI, event, expected_revision=initial
+    )
+    assert repository.append_audit_event(
+        RUN_URI, event, expected_revision=initial
+    ) == record
+    with pytest.raises(AuthorityRepositoryError, match="conflicts"):
+        repository.append_audit_event(
+            RUN_URI,
+            PipelineEvent(
+                event_id="event-1",
+                scope=EventScope.run(),
+                event_type="run.failed",
+                timestamp="2020-01-01T00:00:00Z",
+            ),
+            expected_revision=initial,
+        )
+    with pytest.raises(AuthorityRepositoryError, match="stale run revision"):
+        repository.append_audit_event(
+            RUN_URI,
+            PipelineEvent(
+                event_id="event-2",
+                scope=EventScope.run(),
+                event_type="run.finished",
+                timestamp="2020-01-01T00:00:00Z",
+            ),
+            expected_revision=initial,
         )
 
 

@@ -17,7 +17,6 @@ from loom.serialization import (
 
 
 @pytest.mark.unit
-
 def test_to_plain_data_with_mappings_and_lists() -> None:
     data = {"x": [1, {"y": "z"}]}
     assert is_plain_data(data)
@@ -93,3 +92,14 @@ def test_freeze_then_thaw_returns_mutable_data() -> None:
     value = {"nested": [{"a": 1}, 2, (3.5, "x")]}
     thawed = thaw_plain_data(freeze_plain_data(value))
     assert thawed == {"nested": [{"a": 1}, 2, [3.5, "x"]]}
+
+
+def test_freeze_plain_data_accepts_already_frozen_nested_values() -> None:
+    frozen = freeze_plain_data({"nested": [{"labels": ["a", "b"]}]})
+
+    refrozen = freeze_plain_data(frozen)
+    thawed = cast(dict[str, Any], thaw_plain_data(refrozen))
+    thawed["nested"][0]["labels"].append("changed")
+
+    assert thawed == {"nested": [{"labels": ["a", "b", "changed"]}]}
+    assert thaw_plain_data(frozen) == {"nested": [{"labels": ["a", "b"]}]}

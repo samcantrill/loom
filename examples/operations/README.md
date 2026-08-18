@@ -27,6 +27,7 @@ workflows.
 | --- | --- |
 | `operations.captured-logs` | Captured local stdout/stderr inspected with `loom logs`. |
 | `operations.resource-leases` | Public authority-backed resource-limit and resource-lease coordination through the Python API. |
+| `operations.managed-local-queue` | Three local commands over two generic static slots with redacted pool status and separate logs. |
 
 ## Representative End-to-End Evidence
 
@@ -44,6 +45,7 @@ uv run python examples/operations/captured-logs/run_captured_logs.py
 uv run python examples/operations/resource-preflight/run_resource_preflight.py
 uv run python examples/operations/resource-leases/run_resource_leases.py
 uv run python examples/operations/offline-import-rejections/run_offline_import_rejections.py
+uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
 ```
 
 Set `LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to redirect generated
@@ -63,6 +65,8 @@ The following `validation: full` examples are supported by focused integration t
   `tests/integration/examples/test_example_workflows.py::test_example_resource_leases_coordinate_blocked_then_released_state`
 - `operations.offline-import-rejections`:
   `tests/integration/examples/test_example_workflows.py::test_example_offline_import_rejections_report_rejection_codes_and_acceptance`
+- `operations.managed-local-queue`:
+  `tests/e2e/test_queue_cli.py::test_managed_local_queue_example_is_rerunnable`
 
 ## Internal Demos
 

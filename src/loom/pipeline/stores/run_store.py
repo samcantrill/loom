@@ -155,7 +155,11 @@ def _validate_timestamp(value: object, field: str) -> None:
 @runtime_checkable
 class RunLifecycleStore(Protocol):
     def create_run(
-        self, run_uri: str, *, metadata: Mapping[str, PlainData] | None = None
+        self,
+        run_uri: str,
+        *,
+        metadata: Mapping[str, PlainData] | None = None,
+        idempotency_key: str | None = None,
     ) -> None: ...
 
     def open_run(self, run_uri: str) -> None: ...
@@ -478,6 +482,15 @@ class StageStateStore(Protocol):
         *,
         attempt: int,
     ) -> None: ...
+
+
+@runtime_checkable
+class StageWorkerResultStore(Protocol):
+    """Read-only result handoff consumed by launch-only executors."""
+
+    def read_stage_worker_result(
+        self, run_uri: str, stage_name: str, *, attempt: int
+    ) -> dict[str, PlainData] | None: ...
 
 
 @runtime_checkable
