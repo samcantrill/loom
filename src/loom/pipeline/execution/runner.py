@@ -17,6 +17,7 @@ from loom.pipeline.planning import (
     ExecutionPlan,
     PlanAction,
     PlanReason,
+    PlanReasonCode,
     StageFingerprintRecord,
     StagePlan,
     build_stage_fingerprint,
@@ -216,13 +217,13 @@ class PipelineRunner:
             if run_store is None:
                 raise PipelineExecutionError("PipelineRunner requires services")
             if offline_execution:
-                services = RuntimeServices.from_legacy(
-                    cast(Any, run_store).local_store
-                )
+                services = RuntimeServices.from_legacy(cast(Any, run_store).local_store)
             else:
                 services = RuntimeServices.from_legacy(cast(LegacyRunStore, run_store))
         elif run_store is not None:
-            raise PipelineExecutionError("PipelineRunner accepts either services or run_store")
+            raise PipelineExecutionError(
+                "PipelineRunner accepts either services or run_store"
+            )
         execution_store = (
             run_store
             if is_offline_evidence_run_store(run_store)
@@ -637,6 +638,7 @@ class PipelineRunner:
                 fingerprint_context=request.fingerprint_context,
                 persist=True,
             )
+            self._prepare_checksum_repair_branch(run_uri=run_uri, plan=plan)
         except Exception as exc:
             self._record_preparation_failure(
                 run_uri=run_uri,
@@ -724,6 +726,7 @@ class PipelineRunner:
                 run_started_at=started_at,
             )
 
+        self._raise_controller_lease_renewal_error()
         finished_at = self.clock()
         if outcome.failure is None and outcome.cancellation_reason is None:
             write_run_status(
@@ -1081,6 +1084,7 @@ class PipelineRunner:
         created_at: str,
         run_started_at: str,
     ) -> StageRunResult:
+        self._raise_controller_lease_renewal_error()
         if stage_plan.action == PlanAction.REUSE:
             return self._reuse_stage(
                 run_uri, stage_plan, created_at=created_at, started_at=run_started_at
@@ -1409,11 +1413,13 @@ class PipelineRunner:
                 run_started_at=run_started_at,
             )
 
-        if any(reason.code.value == "ARTIFACT_CHECKSUM_MISMATCH" for reason in stage_plan.reasons):
-            prepare_repair = getattr(self.run_store, "prepare_checksum_repair", None)
-            if callable(prepare_repair):
-                prepare_repair(run_uri, stage.name)
         attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
+        self._authorize_checksum_repair_attempt(
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            plan=plan,
+        )
         record_resolved_reliability_policy_fact(
             self.run_store,
             run_uri=run_uri,
@@ -1598,6 +1604,12 @@ class PipelineRunner:
                 clock=self.clock,
             )
             attempt = prepared.attempt
+            self._authorize_checksum_repair_attempt(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=attempt,
+                plan=plan,
+            )
             record_resolved_reliability_policy_fact(
                 self.run_store,
                 run_uri=run_uri,
@@ -1734,6 +1746,40 @@ class PipelineRunner:
             if resource_admission is not None:
                 self._release_stage_resource_admission(resource_admission)
 
+    def _prepare_checksum_repair_branch(
+        self, *, run_uri: str, plan: ExecutionPlan
+    ) -> None:
+        prepare = getattr(self.run_store, "prepare_checksum_repair", None)
+        if not callable(prepare):
+            return
+        repair_stages = _checksum_repair_stage_names(plan)
+        for stage_plan in plan.ordered_stage_plans:
+            stage_name = stage_plan.stage_name
+            if (
+                stage_name not in repair_stages
+                or stage_plan.action is not PlanAction.RUN
+            ):
+                continue
+            if self.run_store.read_stage_outputs(run_uri, stage_name) is None:
+                continue
+            prepare(run_uri, stage_name)
+
+    def _authorize_checksum_repair_attempt(
+        self,
+        *,
+        run_uri: str,
+        stage_name: str,
+        attempt: int,
+        plan: ExecutionPlan,
+    ) -> None:
+        if stage_name not in _checksum_repair_stage_names(plan):
+            return
+        if self.run_store.read_stage_outputs(run_uri, stage_name) is None:
+            return
+        authorize = getattr(self.run_store, "authorize_checksum_repair_output", None)
+        if callable(authorize):
+            authorize(run_uri, stage_name, attempt=attempt)
+
     def _commit_stage_execution_result(
         self,
         *,
@@ -1749,7 +1795,7 @@ class PipelineRunner:
         execution_result: StageExecutionResult,
     ) -> StageRunResult:
         self._raise_controller_lease_renewal_error()
-        return commit_stage_execution_result(
+        result = commit_stage_execution_result(
             self.run_store,
             run_uri=run_uri,
             stage=stage,
@@ -1766,6 +1812,8 @@ class PipelineRunner:
             event_dispatcher=self._event_dispatcher,
             finalize_run_on_failure=False,
         )
+        self._raise_controller_lease_renewal_error()
+        return result
 
     def _execute_stage_request_with_lease_renewal(
         self,
@@ -2826,6 +2874,19 @@ def _failure_requires_global_stop(failure: ExecutionFailure) -> bool:
         return False
     exception_type = failure.exception_type or ""
     return exception_type.rsplit(".", 1)[-1].startswith("Authority")
+
+
+def _checksum_repair_stage_names(plan: ExecutionPlan) -> frozenset[str]:
+    repair_stages: set[str] = set()
+    for stage_plan in plan.ordered_stage_plans:
+        if not any(
+            reason.code is PlanReasonCode.ARTIFACT_CHECKSUM_MISMATCH
+            for reason in stage_plan.reasons
+        ):
+            continue
+        repair_stages.add(stage_plan.stage_name)
+        repair_stages.update(stage_plan.downstream_stages)
+    return frozenset(repair_stages)
 
 
 def _is_composed_config(value: object) -> bool:

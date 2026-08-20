@@ -64,7 +64,7 @@ from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
 
-AUTHORITY_REPOSITORY_SCHEMA_VERSION = 3
+AUTHORITY_REPOSITORY_SCHEMA_VERSION = 4
 AUTHORITY_REPOSITORY_DB_NAME = "authority.sqlite3"
 AUTHORITY_REPOSITORY_COORDINATION_DB_NAME = "coordination.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
@@ -182,6 +182,7 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "revision_sequence",
             "output_names_json",
             "materialized_refs_json",
+            "supersedes_commit_id",
         }
     ),
     "artifact_facts": frozenset(
@@ -209,6 +210,7 @@ _ATTEMPT_ALLOCATABLE_STAGE_STATUSES = frozenset(
         StageStatus.PENDING,
         StageStatus.RUNNING,
         StageStatus.SUBMITTED,
+        StageStatus.STALE,
     }
 )
 _ATTEMPT_TERMINAL_STATUSES = frozenset(
@@ -359,6 +361,9 @@ class AuthorityRepository:
             with self._connection(create_parent=True) as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
+                    _migrate_v3_output_commits(
+                        conn, current_version=self.schema_version
+                    )
                     _initialize_schema(
                         conn,
                         schema_version=self.schema_version,
@@ -412,9 +417,7 @@ class AuthorityRepository:
                 existing_metadata = _plain_mapping(
                     _json_loads(cast(str, existing["metadata_json"])), "metadata"
                 )
-                if _admission_matches(
-                    existing_metadata, run_metadata, idempotency_key
-                ):
+                if _admission_matches(existing_metadata, run_metadata, idempotency_key):
                     return _current_run_revision(conn, run_uri)
                 raise AuthorityRepositoryError(f"run already exists: {run_uri}")
             revision = self._next_revision(conn)
@@ -589,8 +592,6 @@ class AuthorityRepository:
                 """,
                 (run_uri, stage_name),
             ).fetchone()
-            if existing_commit is not None:
-                raise AuthorityRepositoryError("stage already has an output commit")
             stage_row = conn.execute(
                 """
                 SELECT status
@@ -603,6 +604,17 @@ class AuthorityRepository:
                 stage_status = StageStatus(cast(str, stage_row["status"]))
                 if stage_status not in _ATTEMPT_ALLOCATABLE_STAGE_STATUSES:
                     raise AuthorityRepositoryError("stage is already terminal")
+                if (
+                    existing_commit is not None
+                    and stage_status is not StageStatus.STALE
+                ):
+                    raise AuthorityRepositoryError(
+                        "stage with an output commit must be stale before repair"
+                    )
+            elif existing_commit is not None:
+                raise AuthorityRepositoryError(
+                    "stage with an output commit must be stale before repair"
+                )
             attempt_number = _next_attempt_number(conn, run_uri, stage_name)
             revision = self._next_revision(conn)
             attempt_id = f"{stage_name}-{attempt_number}"
@@ -861,6 +873,7 @@ class AuthorityRepository:
         owner_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         expected_revision: BackendRevision | None = None,
         service_generation: str | None = None,
         reason: LifecycleReason | None = None,
@@ -872,11 +885,17 @@ class AuthorityRepository:
         attempt_id = _non_empty(attempt_id, "attempt_id")
         owner_id = _non_empty(owner_id, "owner_id")
         fencing_token = _non_empty(fencing_token, "fencing_token")
+        if supersedes_commit_id is not None:
+            supersedes_commit_id = _non_empty(
+                supersedes_commit_id, "supersedes_commit_id"
+            )
         artifacts = tuple((name, artifact) for name, artifact in outputs.items())
         for name, artifact in artifacts:
             _non_empty(name, "output_name")
             if not isinstance(artifact, ArtifactRef):
-                raise AuthorityRepositoryError("outputs must contain ArtifactRef values")
+                raise AuthorityRepositoryError(
+                    "outputs must contain ArtifactRef values"
+                )
         if reason is not None and not isinstance(reason, LifecycleReason):
             raise AuthorityRepositoryError("reason must be a LifecycleReason or None")
         with self.transaction() as conn:
@@ -919,14 +938,30 @@ class AuthorityRepository:
                 raise AuthorityRepositoryError("stage is not running")
             existing_commit = conn.execute(
                 """
-                SELECT 1
+                SELECT commit_id
                 FROM output_commits
                 WHERE run_uri = ? AND stage_name = ?
+                ORDER BY revision_sequence DESC
+                LIMIT 1
                 """,
                 (run_uri, stage_name),
             ).fetchone()
-            if existing_commit is not None:
-                raise AuthorityRepositoryError("stage already has an output commit")
+            current_commit_id = (
+                None
+                if existing_commit is None
+                else cast(str, existing_commit["commit_id"])
+            )
+            if current_commit_id is None and supersedes_commit_id is not None:
+                raise AuthorityRepositoryError(
+                    "initial output commit cannot supersede another commit"
+                )
+            if current_commit_id is not None:
+                if supersedes_commit_id is None:
+                    raise AuthorityRepositoryError(
+                        "replacement output commit must name its predecessor"
+                    )
+                if supersedes_commit_id != current_commit_id:
+                    raise AuthorityRepositoryError("stale output commit predecessor")
             revision = self._next_revision(conn)
             commit_id = f"{stage_name}-{attempt_id}-commit-{revision.sequence}"
             output_names = tuple(name for name, _artifact in artifacts)
@@ -934,9 +969,10 @@ class AuthorityRepository:
                 """
                 INSERT INTO output_commits (
                     commit_id, run_uri, stage_name, attempt_id, committed_at,
-                    revision_sequence, output_names_json, materialized_refs_json
+                    revision_sequence, output_names_json, materialized_refs_json,
+                    supersedes_commit_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     commit_id,
@@ -947,6 +983,7 @@ class AuthorityRepository:
                     revision.sequence,
                     _json_dumps(list(output_names)),
                     _json_dumps([]),
+                    supersedes_commit_id,
                 ),
             )
             for name, artifact in artifacts:
@@ -1011,6 +1048,7 @@ class AuthorityRepository:
                 committed_at=now,
                 revision=revision,
                 output_names=output_names,
+                supersedes_commit_id=supersedes_commit_id,
             )
             facts = tuple(
                 ArtifactFactRecord(
@@ -1022,6 +1060,42 @@ class AuthorityRepository:
                 for name, artifact in artifacts
             )
             return OutputCommit(commit=commit, artifact_facts=facts)
+
+    def list_output_commits(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[OutputCommit, ...]:
+        """Return append-only output commits with their own artifact facts."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        if stage_name is not None:
+            stage_name = _non_empty(stage_name, "stage_name")
+        with self._read_connection() as conn:
+            _require_run_row(conn, run_uri)
+            query = "SELECT * FROM output_commits WHERE run_uri = ?"
+            values: tuple[object, ...] = (run_uri,)
+            if stage_name is not None:
+                query += " AND stage_name = ?"
+                values = (run_uri, stage_name)
+            rows = conn.execute(
+                query + " ORDER BY revision_sequence", values
+            ).fetchall()
+            return tuple(
+                OutputCommit(
+                    commit=_commit_from_row(row, conn=conn),
+                    artifact_facts=tuple(
+                        _artifact_fact_from_row(fact, conn=conn)
+                        for fact in conn.execute(
+                            """
+                            SELECT * FROM artifact_facts
+                            WHERE commit_id = ?
+                            ORDER BY artifact_name
+                            """,
+                            (row["commit_id"],),
+                        )
+                    ),
+                )
+                for row in rows
+            )
 
     def acquire_controller_lease(
         self,
@@ -1166,9 +1240,7 @@ class AuthorityRepository:
 
         run_uri = _non_empty(run_uri, "run_uri")
         if not isinstance(record, SubmittedOperationRecord):
-            raise AuthorityRepositoryError(
-                "record must be a SubmittedOperationRecord"
-            )
+            raise AuthorityRepositoryError("record must be a SubmittedOperationRecord")
         with self.transaction() as conn:
             current = _current_run_revision(conn, run_uri)
             _require_expected_revision(current, expected_revision)
@@ -1453,14 +1525,17 @@ class AuthorityRepository:
         output_refs = _offline_import_output_refs(stage)
         if output_refs:
             revision = self._next_revision(conn)
-            commit_id = f"{stage.stage_name}-{attempt_id}-offline-import-{revision.sequence}"
+            commit_id = (
+                f"{stage.stage_name}-{attempt_id}-offline-import-{revision.sequence}"
+            )
             conn.execute(
                 """
                 INSERT INTO output_commits (
                     commit_id, run_uri, stage_name, attempt_id, committed_at,
-                    revision_sequence, output_names_json, materialized_refs_json
+                    revision_sequence, output_names_json, materialized_refs_json,
+                    supersedes_commit_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
                     commit_id,
@@ -1516,7 +1591,9 @@ class AuthorityRepository:
             _require_expected_revision(current, expected_revision)
             revision = self._next_revision(conn)
             recorded_at = self._now()
-            resolved_id = candidate_id or f"cleanup-{revision.sequence}-{uuid.uuid4().hex[:12]}"
+            resolved_id = (
+                candidate_id or f"cleanup-{revision.sequence}-{uuid.uuid4().hex[:12]}"
+            )
             resolved_id = _non_empty(resolved_id, "candidate_id")
             conn.execute(
                 """
@@ -1546,9 +1623,7 @@ class AuthorityRepository:
                 revision=revision,
             )
 
-    def list_cleanup_candidates(
-        self, run_uri: str
-    ) -> tuple[CleanupCandidate, ...]:
+    def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]:
         """List persisted cleanup candidates for one run."""
 
         run_uri = _non_empty(run_uri, "run_uri")
@@ -1710,7 +1785,9 @@ class AuthorityRepository:
             _require_expected_revision(current, expected_revision)
             revision = self._next_revision(conn)
             detected_at = self._now()
-            resolved_id = recovery_id or f"recovery-{revision.sequence}-{uuid.uuid4().hex[:12]}"
+            resolved_id = (
+                recovery_id or f"recovery-{revision.sequence}-{uuid.uuid4().hex[:12]}"
+            )
             resolved_id = _non_empty(resolved_id, "recovery_id")
             conn.execute(
                 """
@@ -1999,13 +2076,16 @@ class AuthorityRepository:
                     StageStatus.SUBMITTED.value,
                 ),
             ):
-                if _active_attempt_lease_row(
-                    conn,
-                    run_uri=run_uri,
-                    stage_name=cast(str, row["stage_name"]),
-                    attempt_id=cast(str, row["attempt_id"]),
-                    now=now,
-                ) is not None:
+                if (
+                    _active_attempt_lease_row(
+                        conn,
+                        run_uri=run_uri,
+                        stage_name=cast(str, row["stage_name"]),
+                        attempt_id=cast(str, row["attempt_id"]),
+                        now=now,
+                    )
+                    is not None
+                ):
                     continue
                 attempt_id = cast(str, row["attempt_id"])
                 records.append(
@@ -2243,6 +2323,111 @@ def generate_service_generation() -> str:
     return f"authority-generation-{uuid.uuid4().hex}"
 
 
+def _migrate_v3_output_commits(
+    conn: sqlite3.Connection, *, current_version: int
+) -> None:
+    """Atomically migrate one known-complete v3 repository to v4."""
+
+    if current_version != AUTHORITY_REPOSITORY_SCHEMA_VERSION:
+        return
+    tables = {
+        cast(str, row["name"])
+        for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
+    }
+    if _METADATA_TABLE not in tables:
+        return
+    metadata_columns = {
+        cast(str, row["name"])
+        for row in conn.execute(f"PRAGMA table_info({_METADATA_TABLE})")
+    }
+    if not _REQUIRED_SCHEMA_COLUMNS[_METADATA_TABLE].issubset(metadata_columns):
+        return
+    row = conn.execute(
+        f"SELECT value FROM {_METADATA_TABLE} WHERE key = 'schema_version'"
+    ).fetchone()
+    if row is None:
+        return
+    try:
+        version = int(cast(str, row["value"]))
+    except (TypeError, ValueError):
+        return
+    if version != 3:
+        return
+
+    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - tables
+    if missing_tables:
+        raise AuthorityRepositoryCompatibilityError(
+            _corrupt_failure(
+                "authority repository v3 schema is incomplete",
+                current_version=current_version,
+            )
+        )
+    for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        v3_columns = (
+            expected_columns - {"supersedes_commit_id"}
+            if table_name == "output_commits"
+            else expected_columns
+        )
+        actual_columns = {
+            cast(str, info["name"])
+            for info in conn.execute(f"PRAGMA table_info({table_name})")
+        }
+        if not v3_columns.issubset(actual_columns):
+            raise AuthorityRepositoryCompatibilityError(
+                _corrupt_failure(
+                    "authority repository v3 schema is incomplete",
+                    current_version=current_version,
+                )
+            )
+    metadata = {
+        cast(str, item["key"]): cast(str, item["value"])
+        for item in conn.execute(f"SELECT key, value FROM {_METADATA_TABLE}")
+    }
+    if not _REQUIRED_METADATA_KEYS.issubset(metadata):
+        raise AuthorityRepositoryCompatibilityError(
+            _corrupt_failure(
+                "authority repository v3 metadata is incomplete",
+                current_version=current_version,
+            )
+        )
+
+    conn.execute("DROP INDEX IF EXISTS idx_output_commits_stage")
+    conn.execute("ALTER TABLE output_commits RENAME TO output_commits_v3")
+    conn.execute(
+        """
+        CREATE TABLE output_commits (
+            commit_id TEXT PRIMARY KEY,
+            run_uri TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            committed_at TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            output_names_json TEXT NOT NULL,
+            materialized_refs_json TEXT NOT NULL,
+            supersedes_commit_id TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO output_commits (
+            commit_id, run_uri, stage_name, attempt_id, committed_at,
+            revision_sequence, output_names_json, materialized_refs_json,
+            supersedes_commit_id
+        )
+        SELECT commit_id, run_uri, stage_name, attempt_id, committed_at,
+               revision_sequence, output_names_json, materialized_refs_json,
+               NULL
+        FROM output_commits_v3
+        """
+    )
+    conn.execute("DROP TABLE output_commits_v3")
+    conn.execute(
+        f"UPDATE {_METADATA_TABLE} SET value = ? WHERE key = 'schema_version'",
+        (str(current_version),),
+    )
+
+
 def _initialize_schema(
     conn: sqlite3.Connection,
     *,
@@ -2404,7 +2589,7 @@ def _initialize_schema(
             revision_sequence INTEGER NOT NULL,
             output_names_json TEXT NOT NULL,
             materialized_refs_json TEXT NOT NULL,
-            UNIQUE (run_uri, stage_name)
+            supersedes_commit_id TEXT
         )
         """,
         """
@@ -2488,9 +2673,7 @@ def _initialize_schema(
     )
 
 
-def _insert_metadata_if_missing(
-    conn: sqlite3.Connection, key: str, value: str
-) -> None:
+def _insert_metadata_if_missing(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.execute(
         """
         INSERT INTO repository_metadata(key, value)
@@ -2617,9 +2800,7 @@ def _read_metadata(
     try:
         return {
             cast(str, row["key"]): cast(str, row["value"])
-            for row in conn.execute(
-                "SELECT key, value FROM repository_metadata"
-            )
+            for row in conn.execute("SELECT key, value FROM repository_metadata")
         }
     except sqlite3.DatabaseError:
         return _corrupt_failure(
@@ -2727,10 +2908,9 @@ def _admission_matches(
 ) -> bool:
     if idempotency_key is None:
         return False
-    return (
-        existing.get(_ADMISSION_IDEMPOTENCY_METADATA_KEY) == idempotency_key
-        and _public_run_metadata(existing) == dict(metadata)
-    )
+    return existing.get(
+        _ADMISSION_IDEMPOTENCY_METADATA_KEY
+    ) == idempotency_key and _public_run_metadata(existing) == dict(metadata)
 
 
 def _public_run_metadata(metadata: Mapping[str, PlainData]) -> dict[str, PlainData]:
@@ -2880,9 +3060,7 @@ def _require_run_row(conn: sqlite3.Connection, run_uri: str) -> sqlite3.Row:
     )
 
 
-def _current_run_revision(
-    conn: sqlite3.Connection, run_uri: str
-) -> BackendRevision:
+def _current_run_revision(conn: sqlite3.Connection, run_uri: str) -> BackendRevision:
     row = _require_run_row(conn, run_uri)
     return _revision_for(conn, cast(int, row["updated_revision_sequence"]))
 
@@ -2938,9 +3116,7 @@ def _require_service_generation(
     if expected_generation is None:
         return
     expected_generation = _non_empty(expected_generation, "service_generation")
-    metadata = _read_metadata(
-        conn, current_version=AUTHORITY_REPOSITORY_SCHEMA_VERSION
-    )
+    metadata = _read_metadata(conn, current_version=AUTHORITY_REPOSITORY_SCHEMA_VERSION)
     if isinstance(metadata, AuthorityRepositoryCompatibilityFailure):
         raise AuthorityRepositoryCompatibilityError(metadata)
     if metadata["service_generation"] != expected_generation:
@@ -3260,10 +3436,10 @@ def _stage_snapshot(
             """
             SELECT *
             FROM artifact_facts
-            WHERE run_uri = ? AND stage_name = ?
+            WHERE commit_id = ?
             ORDER BY artifact_name
             """,
-            (run_uri, stage_name),
+            (None if commit_row is None else commit_row["commit_id"],),
         )
     )
     return StageLifecycleSnapshot(
@@ -3278,9 +3454,7 @@ def _stage_snapshot(
     )
 
 
-def _attempt_from_row(
-    row: sqlite3.Row, *, conn: sqlite3.Connection
-) -> StageAttempt:
+def _attempt_from_row(row: sqlite3.Row, *, conn: sqlite3.Connection) -> StageAttempt:
     return StageAttempt(
         run_uri=cast(str, row["run_uri"]),
         stage_name=cast(str, row["stage_name"]),
@@ -3307,6 +3481,7 @@ def _commit_from_row(
         output_names=tuple(
             cast(str, name) for name in _json_loads(cast(str, row["output_names_json"]))
         ),
+        supersedes_commit_id=cast(str | None, row["supersedes_commit_id"]),
     )
 
 
@@ -3599,9 +3774,7 @@ def _recovery_records(
     )
 
 
-def _audit_event_from_row(
-    row: sqlite3.Row, *, run_uri: str
-) -> PipelineEventRecord:
+def _audit_event_from_row(row: sqlite3.Row, *, run_uri: str) -> PipelineEventRecord:
     if "event_json" in row.keys() and row["event_json"] is not None:
         return PipelineEventRecord.from_dict(_json_loads(cast(str, row["event_json"])))
     payload = _json_loads(cast(str, row["payload_json"]))
@@ -3725,9 +3898,7 @@ def _corrupt_failure(
     )
 
 
-def _coerce_kind(
-    value: object, field: str
-) -> AuthorityRepositoryCompatibilityKind:
+def _coerce_kind(value: object, field: str) -> AuthorityRepositoryCompatibilityKind:
     if isinstance(value, AuthorityRepositoryCompatibilityKind):
         return value
     if not isinstance(value, str):

@@ -78,8 +78,10 @@ class CommitFailingAuthority(SQLitePerRunAuthorityStore):
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
     ) -> OutputCommit:
+        _ = supersedes_commit_id
         raise AuthorityStoreError("backend output commit failed")
 
 
@@ -197,7 +199,6 @@ def test_authority_backed_store_fails_closed_without_authority(
 ) -> None:
     with pytest.raises(AuthorityFactoryError, match="online mutation mode requires"):
         create_authority_backed_serial_run_store(tmp_path / "runs")
-
 
 
 def test_authority_backed_store_rejects_removed_transitional_sqlite_config(
@@ -769,9 +770,7 @@ def test_authority_admission_precedes_local_projection_and_retry_repairs_it(
 ) -> None:
     authority = InMemoryPerRunAuthorityStore()
     local = LocalRunStore(tmp_path / "runs")
-    store = AuthorityBackedSerialRunStore(
-        local_store=local, authority_store=authority
-    )
+    store = AuthorityBackedSerialRunStore(local_store=local, authority_store=authority)
     run_uri = _run_uri(tmp_path)
     original_ensure = local.ensure_run
     calls = 0
@@ -799,9 +798,7 @@ def test_authority_failure_and_local_orphan_do_not_create_authority_state(
 ) -> None:
     authority = InMemoryPerRunAuthorityStore()
     local = LocalRunStore(tmp_path / "runs")
-    store = AuthorityBackedSerialRunStore(
-        local_store=local, authority_store=authority
-    )
+    store = AuthorityBackedSerialRunStore(local_store=local, authority_store=authority)
     run_uri = _run_uri(tmp_path)
     local.create_run(run_uri, metadata={"owner": "unit"})
 
@@ -830,9 +827,7 @@ def test_existing_local_projection_propagates_authority_unavailability(
     local = LocalRunStore(tmp_path / "runs")
     run_uri = _run_uri(tmp_path)
     local.create_run(run_uri, metadata={"owner": "unit"})
-    store = AuthorityBackedSerialRunStore(
-        local_store=local, authority_store=authority
-    )
+    store = AuthorityBackedSerialRunStore(local_store=local, authority_store=authority)
 
     with pytest.raises(AuthorityStoreError, match="authority unavailable"):
         store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
@@ -845,9 +840,7 @@ def test_admission_retry_accepts_projection_metadata_added_after_admission(
 ) -> None:
     authority = InMemoryPerRunAuthorityStore()
     local = LocalRunStore(tmp_path / "runs")
-    store = AuthorityBackedSerialRunStore(
-        local_store=local, authority_store=authority
-    )
+    store = AuthorityBackedSerialRunStore(local_store=local, authority_store=authority)
     run_uri = _run_uri(tmp_path)
     store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
     local.write_run_user_metadata(
@@ -862,7 +855,9 @@ def test_admission_retry_accepts_projection_metadata_added_after_admission(
     }
 
 
-def test_authority_admission_failure_creates_no_local_projection(tmp_path: Path) -> None:
+def test_authority_admission_failure_creates_no_local_projection(
+    tmp_path: Path,
+) -> None:
     class FailingAuthority(InMemoryPerRunAuthorityStore):
         def create_run(self, *args: object, **kwargs: object):
             raise AuthorityStoreError("authority unavailable")
@@ -883,9 +878,7 @@ def test_admission_conflicts_and_event_projection_retries_are_idempotent(
 ) -> None:
     authority = InMemoryPerRunAuthorityStore()
     local = LocalRunStore(tmp_path / "runs")
-    store = AuthorityBackedSerialRunStore(
-        local_store=local, authority_store=authority
-    )
+    store = AuthorityBackedSerialRunStore(local_store=local, authority_store=authority)
     run_uri = _run_uri(tmp_path)
     store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
     store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")

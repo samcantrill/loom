@@ -7,6 +7,7 @@ from typing import cast
 
 import pytest
 
+from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup import (
     CleanupReport,
     CleanupReportEntry,
@@ -37,6 +38,8 @@ from loom.pipeline.stores.authority_client import (
     AUTHORITY_MUTATION_CONTROLLER_LEASE_ACQUIRE_PATH,
     AUTHORITY_MUTATION_CLEANUP_REPORT_APPEND_PATH,
     AUTHORITY_MUTATION_CLEANUP_REPORT_LIST_PATH,
+    AUTHORITY_MUTATION_LIST_OUTPUT_COMMITS_PATH,
+    AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH,
     AUTHORITY_MUTATION_STAGE_LEASE_RENEW_PATH,
     AUTHORITY_MUTATION_SUBMITTED_WRITE_PATH,
 )
@@ -102,7 +105,10 @@ def test_authority_client_maps_timeout_to_protocol_rejection() -> None:
 
     assert response.accepted is False
     assert response.rejection is not None
-    assert response.rejection.category is AuthorityProtocolErrorCategory.UNAVAILABLE_SERVICE
+    assert (
+        response.rejection.category
+        is AuthorityProtocolErrorCategory.UNAVAILABLE_SERVICE
+    )
     assert response.rejection.code == "authority_client_timeout"
     assert response.metadata.request_id == "request-1"
 
@@ -248,6 +254,46 @@ def test_authority_client_sends_cleanup_report_payloads() -> None:
     first_body = cast(Mapping[str, PlainData], first_payload["body"])
     assert first_body["report"] == report.to_dict()
     assert captured[1][0].endswith(AUTHORITY_MUTATION_CLEANUP_REPORT_LIST_PATH)
+
+
+def test_authority_client_sends_output_supersession_and_history_payloads() -> None:
+    captured: list[tuple[str, Mapping[str, PlainData]]] = []
+
+    def transport(
+        url: str,
+        payload: Mapping[str, PlainData],
+        _timeout_seconds: float | None,
+    ) -> Mapping[str, object]:
+        captured.append((url, payload))
+        metadata = AuthorityProtocolMetadata.from_dict(payload["metadata"])
+        return accepted_authority_response(
+            metadata,
+            AuthorityProtocolResult(service_generation="generation-1"),
+        ).to_dict()
+
+    client = AuthorityClient("http://authority.example", transport=transport)
+    client.record_output_commit(
+        "file:///runs/r1",
+        "build",
+        attempt_id="build-2",
+        owner_id="worker-1",
+        fencing_token="fence-2",
+        outputs={
+            "out": ArtifactRef(
+                artifact_id="build/out",
+                uri="file:///runs/r1/artifacts/build/out.json",
+                artifact_type="json",
+            )
+        },
+        supersedes_commit_id="build-1-commit",
+    )
+    client.list_output_commits("file:///runs/r1", stage_name="build")
+
+    assert captured[0][0].endswith(AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH)
+    commit_body = cast(Mapping[str, PlainData], captured[0][1]["body"])
+    assert commit_body["supersedes_commit_id"] == "build-1-commit"
+    assert captured[1][0].endswith(AUTHORITY_MUTATION_LIST_OUTPUT_COMMITS_PATH)
+    assert captured[1][1]["stage_name"] == "build"
 
 
 def test_authority_client_sends_workspace_coordination_payloads() -> None:

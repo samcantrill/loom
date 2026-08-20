@@ -49,8 +49,10 @@ class CommitFailingAuthority(SQLitePerRunAuthorityStore):
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
     ) -> OutputCommit:
+        _ = supersedes_commit_id
         raise AuthorityStoreError("backend output commit failed")
 
 

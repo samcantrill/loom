@@ -100,9 +100,7 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "reason_json",
         }
     ),
-    "trial_leases": frozenset(
-        {"lease_id", "workspace_id", "sweep_id", "trial_id"}
-    ),
+    "trial_leases": frozenset({"lease_id", "workspace_id", "sweep_id", "trial_id"}),
     "resource_leases": frozenset(
         {"lease_id", "workspace_id", "resource_key", "amount"}
     ),
@@ -663,6 +661,7 @@ class SQLiteWorkspaceCoordinationStore:
         with self._connection(initialize=initialize) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                _migrate_schema(conn)
                 _raise_for_schema(conn)
                 yield conn
             except Exception:
@@ -774,12 +773,14 @@ class SQLiteWorkspaceCoordinationStore:
         ).fetchone()
         if row is None:
             raise CoordinationStoreError(
-                f"unknown lease: {lease_id}", kind=CoordinationFailureKind.OWNERSHIP_LOST
+                f"unknown lease: {lease_id}",
+                kind=CoordinationFailureKind.OWNERSHIP_LOST,
             )
         lease = _lease_from_row(row, conn=conn)
         if lease.owner_id != owner_id or lease.fencing_token != fencing_token:
             raise CoordinationStoreError(
-                "stale or foreign lease token", kind=CoordinationFailureKind.OWNERSHIP_LOST
+                "stale or foreign lease token",
+                kind=CoordinationFailureKind.OWNERSHIP_LOST,
             )
         if lease.state is not LeaseState.ACTIVE:
             raise CoordinationStoreError(
@@ -1097,6 +1098,33 @@ def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
     )
 
 
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Atomically advance one known-complete v1 coordination database."""
+
+    try:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'schema_version'"
+        ).fetchone()
+    except sqlite3.DatabaseError:
+        return
+    if row is None:
+        return
+    try:
+        version = int(cast(str, row["value"]))
+    except (TypeError, ValueError):
+        return
+    if version != 1:
+        return
+    if _schema_shape_failure(conn) is not None:
+        raise AuthoritySchemaError(
+            "SQLite coordination v1 schema is incomplete or invalid"
+        )
+    conn.execute(
+        "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
+        (str(AUTHORITY_SCHEMA_VERSION),),
+    )
+
+
 def _missing_schema_check() -> AuthoritySchemaCheck:
     return AuthoritySchemaCheck(
         current_version=AUTHORITY_SCHEMA_VERSION,
@@ -1147,9 +1175,7 @@ def _raise_for_schema(conn: sqlite3.Connection) -> None:
         raise AuthoritySchemaError(check.failure.message)
 
 
-def _workspace_row(
-    conn: sqlite3.Connection, workspace_id: str
-) -> sqlite3.Row | None:
+def _workspace_row(conn: sqlite3.Connection, workspace_id: str) -> sqlite3.Row | None:
     return cast(
         sqlite3.Row | None,
         conn.execute(
@@ -1212,9 +1238,7 @@ def _trial_from_row(row: sqlite3.Row) -> TrialReference:
     )
 
 
-def _lease_from_row(
-    row: sqlite3.Row, *, conn: sqlite3.Connection
-) -> LeaseRecord:
+def _lease_from_row(row: sqlite3.Row, *, conn: sqlite3.Connection) -> LeaseRecord:
     return LeaseRecord(
         lease_id=cast(str, row["lease_id"]),
         kind=LeaseKind(cast(str, row["kind"])),

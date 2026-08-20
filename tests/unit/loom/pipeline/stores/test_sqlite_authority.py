@@ -167,9 +167,15 @@ def test_complete_v1_database_migrates_output_commit_without_losing_facts(
     )
     assert allocation.lease is not None
     committed = store.record_output_commit(
-        run_uri, "build", attempt_id=allocation.attempt.attempt_id,
+        run_uri,
+        "build",
+        attempt_id=allocation.attempt.attempt_id,
         fencing_token=allocation.lease.fencing_token,
-        outputs={"out": ArtifactRef(artifact_id="build/out", uri=f"{run_uri}/out", artifact_type="json")},
+        outputs={
+            "out": ArtifactRef(
+                artifact_id="build/out", uri=f"{run_uri}/out", artifact_type="json"
+            )
+        },
     )
     database_path = _authority_database_path(run_uri)
     with sqlite3.connect(database_path) as conn:
@@ -191,6 +197,35 @@ def test_complete_v1_database_migrates_output_commit_without_losing_facts(
     history = store.list_output_commits(run_uri)
     assert history == (committed,)
     assert store.check_schema(run_uri).supported
+
+
+def test_incomplete_v1_database_rejects_migration_without_partial_changes(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    database_path = _authority_database_path(run_uri)
+    with sqlite3.connect(database_path) as conn:
+        conn.execute("DROP TABLE artifact_facts")
+        conn.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
+
+    with pytest.raises(AuthoritySchemaError, match="v1 schema is incomplete"):
+        store.list_output_commits(run_uri)
+
+    with sqlite3.connect(database_path) as conn:
+        version = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'schema_version'"
+        ).fetchone()
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table'"
+            )
+        }
+    assert version == ("1",)
+    assert "commits" in tables
+    assert "commits_v1" not in tables
 
 
 def test_capabilities_are_honest_about_phase_2_limits() -> None:
@@ -269,9 +304,7 @@ def test_sqlite_reliability_facts_are_snapshot_backed_and_immutable(
 
     assert same_revision == transaction_revision
     assert transaction_revision.sequence > policy_revision.sequence
-    assert store.list_reliability_policy_facts(run_uri, stage_name="build") == (
-        policy,
-    )
+    assert store.list_reliability_policy_facts(run_uri, stage_name="build") == (policy,)
     assert store.read_transaction_chain(run_uri, "tx-1") == (transaction,)
     snapshot = store.snapshot(run_uri)
     stage = snapshot.stages[0]
@@ -450,10 +483,13 @@ def test_output_commit_requires_active_stage_fence(tmp_path: Path) -> None:
     assert snapshot.stages[0].status is StageStatus.SUCCEEDED
     assert snapshot.stages[0].latest_commit == committed.commit
     assert snapshot.stages[0].active_lease is None
-    assert SQLitePerRunAuthorityStore(
-        run_uri,
-        clock=lambda: "2020-01-01T00:01:00Z",
-    ).scan_recovery(run_uri) == ()
+    assert (
+        SQLitePerRunAuthorityStore(
+            run_uri,
+            clock=lambda: "2020-01-01T00:01:00Z",
+        ).scan_recovery(run_uri)
+        == ()
+    )
 
 
 def test_attempt_allocation_after_output_commit_is_rejected(

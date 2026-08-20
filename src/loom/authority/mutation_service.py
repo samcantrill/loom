@@ -27,6 +27,7 @@ from loom.pipeline.stores import (
     CleanupResultFact,
     LeaseRecord,
     LifecycleReason,
+    OutputCommit,
     OutputCommitRecord,
     StageAttempt,
     SweepIdentity,
@@ -81,6 +82,7 @@ class AuthorityMutationOperation(StrEnum):
     FAIL_STAGE_LEASE = "fail_stage_lease"
     FINISH_STAGE_ATTEMPT = "finish_stage_attempt"
     RECORD_OUTPUT_COMMIT = "record_output_commit"
+    LIST_OUTPUT_COMMITS = "list_output_commits"
     CREATE_WORKSPACE = "create_workspace"
     CREATE_SWEEP = "create_sweep"
     RECORD_TRIAL = "record_trial"
@@ -159,6 +161,9 @@ _OPERATION_KIND_BY_MUTATION: Mapping[
         AuthorityProtocolOperationKind.STAGE_ATTEMPT
     ),
     AuthorityMutationOperation.RECORD_OUTPUT_COMMIT: (
+        AuthorityProtocolOperationKind.OUTPUT_COMMIT
+    ),
+    AuthorityMutationOperation.LIST_OUTPUT_COMMITS: (
         AuthorityProtocolOperationKind.OUTPUT_COMMIT
     ),
     AuthorityMutationOperation.CREATE_WORKSPACE: (
@@ -368,6 +373,8 @@ class AuthorityMutationService:
                 return self._finish_stage_attempt(request)
             case AuthorityMutationOperation.RECORD_OUTPUT_COMMIT:
                 return self._record_output_commit(request)
+            case AuthorityMutationOperation.LIST_OUTPUT_COMMITS:
+                return self._list_output_commits(request)
             case AuthorityMutationOperation.CREATE_WORKSPACE:
                 return self._create_workspace(request)
             case AuthorityMutationOperation.CREATE_SWEEP:
@@ -508,7 +515,9 @@ class AuthorityMutationService:
     def _write_submitted_operation(
         self, request: AuthorityProtocolRequest
     ) -> AuthorityProtocolResult:
-        record = SubmittedOperationRecord.from_dict(_required_body_value(request, "record"))
+        record = SubmittedOperationRecord.from_dict(
+            _required_body_value(request, "record")
+        )
         revision = self._repository.write_submitted_operation(
             _required_run_uri(request),
             record,
@@ -533,7 +542,9 @@ class AuthorityMutationService:
     def _list_submitted_operations(
         self, request: AuthorityProtocolRequest
     ) -> AuthorityProtocolResult:
-        operations = self._repository.list_submitted_operations(_required_run_uri(request))
+        operations = self._repository.list_submitted_operations(
+            _required_run_uri(request)
+        )
         snapshot = self._repository.open_run(_required_run_uri(request))
         return _result(
             revision=snapshot.revision,
@@ -662,6 +673,7 @@ class AuthorityMutationService:
             owner_id=_required_owner_id(request),
             fencing_token=_required_fencing_token(request),
             outputs=_outputs(request),
+            supersedes_commit_id=_optional_body_string(request, "supersedes_commit_id"),
             expected_revision=request.expected_revision,
             service_generation=request.metadata.service_generation,
             reason=_optional_reason(request),
@@ -672,6 +684,19 @@ class AuthorityMutationService:
             output_commit=commit.commit,
             artifact_facts=commit.artifact_facts,
             cleanup_candidates=commit.cleanup_candidates,
+        )
+
+    def _list_output_commits(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        commits = self._repository.list_output_commits(
+            _required_run_uri(request), stage_name=request.stage_name
+        )
+        snapshot = self._repository.open_run(_required_run_uri(request))
+        return _result(
+            revision=snapshot.revision,
+            service_generation=self._service_generation,
+            output_commits=commits,
         )
 
     def _append_cleanup_report(
@@ -723,7 +748,9 @@ class AuthorityMutationService:
     def _create_workspace(
         self, request: AuthorityProtocolRequest
     ) -> AuthorityProtocolResult:
-        workspace = WorkspaceIdentity.from_dict(_required_body_value(request, "workspace"))
+        workspace = WorkspaceIdentity.from_dict(
+            _required_body_value(request, "workspace")
+        )
         revision = self._repository.create_workspace(workspace)
         return _result(
             revision=revision,
@@ -731,7 +758,9 @@ class AuthorityMutationService:
             workspace=workspace,
         )
 
-    def _create_sweep(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
+    def _create_sweep(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
         sweep = SweepIdentity.from_dict(_required_body_value(request, "sweep"))
         revision = self._repository.create_sweep(sweep)
         return _result(
@@ -740,7 +769,9 @@ class AuthorityMutationService:
             sweep=sweep,
         )
 
-    def _record_trial(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
+    def _record_trial(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
         trial = TrialReference.from_dict(_required_body_value(request, "trial"))
         revision = self._repository.record_trial(trial)
         return _result(
@@ -766,8 +797,12 @@ class AuthorityMutationService:
             body={"offline_import": result.to_dict()},
         )
 
-    def _list_trials(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
-        trials = self._repository.list_trials(_required_body_string(request, "sweep_id"))
+    def _list_trials(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        trials = self._repository.list_trials(
+            _required_body_string(request, "sweep_id")
+        )
         return _result(service_generation=self._service_generation, trials=trials)
 
     def _acquire_trial_lease(
@@ -914,7 +949,9 @@ class AuthorityMutationService:
             counter=counter,
         )
 
-    def _read_counter(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
+    def _read_counter(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
         counter = self._repository.read_counter(
             _required_body_string(request, "workspace_id"),
             _required_body_string(request, "counter_name"),
@@ -931,6 +968,7 @@ class AuthorityMutationService:
             service_generation=self._service_generation,
             coordination_recovery_records=records,
         )
+
 
 def unsupported_mutation_response(
     operation: AuthorityMutationOperation,
@@ -974,6 +1012,7 @@ def _result(
     snapshot: AuthoritativeRunSnapshot | None = None,
     stage_attempt: StageAttempt | None = None,
     output_commit: OutputCommitRecord | None = None,
+    output_commits: tuple[OutputCommit, ...] = (),
     submitted_operation: SubmittedOperationRecord | None = None,
     workspace: WorkspaceIdentity | None = None,
     sweep: SweepIdentity | None = None,
@@ -997,6 +1036,7 @@ def _result(
         snapshot=snapshot,
         stage_attempt=stage_attempt,
         output_commit=output_commit,
+        output_commits=output_commits,
         submitted_operation=submitted_operation,
         workspace=workspace,
         sweep=sweep,
@@ -1075,10 +1115,17 @@ def _required_body_string(request: AuthorityProtocolRequest, field: str) -> str:
     return value
 
 
-def _body_string(
-    request: AuthorityProtocolRequest, field: str, default: str
-) -> str:
+def _body_string(request: AuthorityProtocolRequest, field: str, default: str) -> str:
     value = request.body.get(field, default)
+    if not isinstance(value, str) or not value:
+        raise AuthorityMutationValidationError(f"{field} must be a non-empty string")
+    return value
+
+
+def _optional_body_string(request: AuthorityProtocolRequest, field: str) -> str | None:
+    value = request.body.get(field)
+    if value is None:
+        return None
     if not isinstance(value, str) or not value:
         raise AuthorityMutationValidationError(f"{field} must be a non-empty string")
     return value
@@ -1235,9 +1282,7 @@ def _offline_import_rejection(
         message=str(exc),
         detail={
             **dict(request_detail),
-            "diagnostics": [
-                diagnostic.to_dict() for diagnostic in exc.diagnostics
-            ],
+            "diagnostics": [diagnostic.to_dict() for diagnostic in exc.diagnostics],
         },
     )
 
@@ -1339,7 +1384,9 @@ def _request_detail(payload: Mapping[str, object]) -> Mapping[str, PlainData]:
         detail["lease_id"] = lease_id
     expected_revision = payload.get("expected_revision")
     if isinstance(expected_revision, Mapping):
-        detail["expected_revision"] = dict(cast(Mapping[str, PlainData], expected_revision))
+        detail["expected_revision"] = dict(
+            cast(Mapping[str, PlainData], expected_revision)
+        )
     return detail
 
 

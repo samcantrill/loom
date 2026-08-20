@@ -316,24 +316,34 @@ Final commands:
 - Expanded planning: manager correction complete after the demonstrated durable
   conflict; append-only attempt-specific supersession was approved by the
   maintainer on 2026-08-20
-- Implementation: partial executor recovery work retained; correction 1 adds
-  fenced append-only output-commit supersession, current-only projection, and
-  SQLite v1-to-v2 migration. The remaining real hard-loss/service-loss and
-  branch-shaped operational proofs remain pending.
-- Refiner: required once; this is correction 1/3
-- Pre-submit gate: pending
+- Implementation: complete pending gates. The executor recovery work is joined
+  to fenced append-only supersession across local, service, and HTTP authority;
+  current-only projections; atomic known-version migrations; attempt-scoped
+  corruption-branch authorization; and the real hard-loss, service-loss,
+  renewal, and branch-shaped operational proofs.
+- Refiner: used once for correction 1; manager correction 2 completed the public
+  adapters, migrations, runtime-facade wiring, renewal race handling, and
+  operational tests
+- Pre-submit gate: passed on 2026-08-20. `make validate-pr` completed with
+  Ruff clean, Pyright at zero errors, 2,153 default tests passed, 132 config-
+  extra tests passed, three environment-dependent container tests skipped, and
+  both distributions built successfully. `make test-summary` recorded 2,285
+  passes with no failures or errors.
 - Independent review: required because the phase now changes a durable authority
   contract and migration
-- Blocker corrections: 1/3 in progress
+- Blocker corrections: 3/3 used. The final scoped correction updated six stale
+  schema-version and public-export expectations exposed by the full gate; their
+  focused rerun passed before the complete gate passed. No production behavior
+  failed in that correction.
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Retains executor recovery/renewal work and adds attempt-specific `supersedes_commit_id`, immutable commit history, atomic current-head/fence validation, current-only snapshot facts, service parity, and SQLite v1-to-v2 migration. The runner privately authorizes replacement only for a planner-confirmed checksum mismatch; ordinary changed-config reruns remain fail-closed. |
-| Tests added or updated | Adds cross-backend successor/current-history/stale-head coverage and a complete-v1 SQLite migration preservation test, alongside the existing renewal, recovery, service lease, and local-resume coverage. |
-| Validated revision/tree state and evidence | Focused SQLite/service authority, authority-adapter, authority contract, local-resume, and local pipeline e2e suites pass after the correction; full gate remains pending. |
-| Validation-relevant changes after evidence | The corrected durable contract and focused tests are newer than the prior blocker evidence. The remaining required real hard-loss/service-loss and branch-shaped public operational proofs have not yet been implemented, so do not submit this phase. |
+| Implementation and changed paths | Retains executor recovery/renewal work and adds attempt-specific `supersedes_commit_id`, immutable commit history, atomic current-head/fence validation, current-only snapshot facts, service/HTTP parity, authority protocol v2, local authority v1-to-v2 and repository v3-to-v4 migrations, plus coordination v1 metadata migration. The runner privately authorizes replacement only for the planner-confirmed corruption branch and exact attempt; ordinary changed-config reruns remain fail-closed. |
+| Tests added or updated | Adds cross-backend successor/current-history/stale-head coverage; lossless and rollback-safe migration tests; deterministic controller renewal success/failure; real controller/worker hard loss with live-owner refusal and expiry recovery; real authority service loss before commit; and a public branch-shaped checksum-corruption repair with attempts, lineage, payload, planner reason, reuse, and index assertions. |
+| Validated revision/tree state and evidence | A 150-test focused authority/protocol/repository/adapter/renewal/resume/parallel/e2e group passed in 27.39 seconds; the new service-loss and hard-loss cases also passed independently. On the final tree, `make validate-pr` passed Ruff, Pyright with zero errors, 2,153 default tests, 132 config-extra tests, three environment-dependent skips, and the package build. `make test-summary` passed all package, unit, contract, integration, e2e, and config-extra groups: 2,285 passed, zero failed/errors, and three skipped. |
+| Validation-relevant changes after evidence | Only this execution-plan evidence record was updated after the successful gates; no source, test, dependency, build, validation configuration, or tested canonical feature documentation changed. The receipt remains current. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | The durable decision is resolved: append an attempt-specific successor after atomic fence/current-head validation, retain predecessor history, and project successor facts as current. Implementation, expanded review, PR, merge, and cleanup remain pending. |
+| Residual risk and cleanup | Full-suite compatibility is proven. Remaining risk is concentrated in the required independent review of the durable migration/current-projection contract; PR, merge, metadata, and cleanup remain pending. |

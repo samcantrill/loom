@@ -48,6 +48,30 @@ def test_schema_policy_reports_missing_supported_and_newer(tmp_path: Path) -> No
     assert newer.failure.kind is AuthoritySchemaFailureKind.UNSUPPORTED_NEWER
 
 
+def test_complete_v1_coordination_database_migrates_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "coordination.sqlite3"
+    store = SQLiteWorkspaceCoordinationStore(database_path, clock=FrozenClock())
+    first = WorkspaceIdentity(workspace_id="workspace-1")
+    second = WorkspaceIdentity(workspace_id="workspace-2")
+    store.create_workspace(first)
+    with sqlite3.connect(database_path) as conn:
+        conn.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
+
+    store.create_workspace(second)
+
+    assert store.check_schema().supported
+    with sqlite3.connect(database_path) as conn:
+        workspaces = tuple(
+            row[0]
+            for row in conn.execute(
+                "SELECT workspace_id FROM workspaces ORDER BY workspace_id"
+            )
+        )
+    assert workspaces == ("workspace-1", "workspace-2")
+
+
 def test_capabilities_are_explicit_about_local_coordination_limits(
     tmp_path: Path,
 ) -> None:

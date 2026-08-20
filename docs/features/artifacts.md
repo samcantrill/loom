@@ -99,6 +99,19 @@ caller explicitly opts in and supplies a payload handler. Metadata-only bundle,
 catalog, inspect, import, and preflight paths stay credential-free and do not
 download or upload payloads implicitly.
 
+Authority output commits are append-only attempt facts. A successful first
+attempt creates a commit with no predecessor. A checksum-repair attempt creates
+a new commit whose `supersedes_commit_id` names the current commit. Authority
+atomically validates the active attempt fence and expected current head before
+appending the successor; it never rewrites the predecessor.
+
+Snapshots and the run artifact index expose only facts belonging to the current
+commit. `list_output_commits(run_uri, stage_name=...)` exposes current and prior
+commit/fact composites in revision order for inspection. This distinction keeps
+resume inputs truthful while retaining diagnostic history. Known older local
+schemas migrate transactionally without losing commits or artifact facts;
+invalid and unknown versions fail loudly without partial migration.
+
 ---
 
 ## 3. Package Boundary

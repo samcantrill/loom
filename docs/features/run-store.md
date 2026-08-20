@@ -61,6 +61,13 @@ older path-shaped aggregate in `loom.pipeline.stores.run_store` is named
 files remain useful for materialization and projections, but they must not
 satisfy the public authority `RunStore` contract.
 
+The output-commit history is available through the backend-neutral
+`list_output_commits` read as commit/fact composites in revision order. Local
+authority schema v1 migrates atomically to v2, and the authority-service
+repository migrates its known v3 output table to v4. Complete older stores keep
+their commit and artifact facts; invalid or unknown layouts fail without a
+partial table replacement.
+
 V9-post also splits local file/materialization access behind
 `RunArtifactStore` and `StageArtifactStore`. These surfaces expose paths,
 config snapshots, provenance documents, logs, worker handoff files, generated

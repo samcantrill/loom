@@ -18,7 +18,12 @@ from loom.pipeline.reliability import (
     StageAttemptTransaction,
     TimeoutOutcomeRecord,
 )
-from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
+from loom.pipeline.status import (
+    RunStatus,
+    RunStatusRecord,
+    StageStatus,
+    StageStatusRecord,
+)
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
     AttemptAllocation,
@@ -546,6 +551,7 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
     ) -> OutputCommit:
         owner_id = self._owner_for_stage_lease(run_uri, stage_name, fencing_token)
@@ -557,6 +563,7 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
                 owner_id=owner_id,
                 fencing_token=fencing_token,
                 outputs=outputs,
+                supersedes_commit_id=supersedes_commit_id,
                 reason=reason,
                 service_generation=self._service_generation,
                 workspace_id=self._workspace_id,
@@ -572,6 +579,20 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
             artifact_facts=result.artifact_facts,
             cleanup_candidates=result.cleanup_candidates,
         )
+
+    def list_output_commits(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[OutputCommit, ...]:
+        result = self._result(
+            self._client.list_output_commits(
+                run_uri,
+                stage_name=stage_name,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="list output commits",
+        )
+        return result.output_commits
 
     def append_audit_event(
         self, run_uri: str, event: PipelineEvent
@@ -785,7 +806,7 @@ class AuthorityBackedSerialRunStore:
         if not owner_id:
             raise ValueError("owner_id must be non-empty")
         self.local_store = local_store
-        self._checksum_repair_heads: dict[tuple[str, str], str] = {}
+        self._checksum_repair_heads: dict[tuple[str, str, int], str] = {}
         self.authority_store = authority_store
         self.workspace_coordination_store = workspace_coordination_store
         self._authority_config = authority_config or _config_from_authority_store(
@@ -873,9 +894,13 @@ class AuthorityBackedSerialRunStore:
             snapshot = self.authority_store.snapshot(run_uri)
         except Exception:
             return local_status
-        created_at = _created_at(self.local_store, run_uri, snapshot.revision.created_at)
+        created_at = _created_at(
+            self.local_store, run_uri, snapshot.revision.created_at
+        )
         updated_at = snapshot.revision.created_at or created_at
-        local_matches = local_status is not None and local_status.status is snapshot.status
+        local_matches = (
+            local_status is not None and local_status.status is snapshot.status
+        )
         local_projection = local_status if local_matches else None
         return RunStatusRecord(
             run_uri=run_uri,
@@ -887,7 +912,9 @@ class AuthorityBackedSerialRunStore:
             started_at=(
                 local_projection.started_at
                 if local_projection is not None
-                else created_at if snapshot.status not in {RunStatus.CREATED} else None
+                else created_at
+                if snapshot.status not in {RunStatus.CREATED}
+                else None
             ),
             finished_at=(
                 local_projection.finished_at
@@ -902,7 +929,9 @@ class AuthorityBackedSerialRunStore:
         )
 
     def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:
-        self.write_run_status_with_intent(run_uri, status, intent=TransitionIntent.NORMAL)
+        self.write_run_status_with_intent(
+            run_uri, status, intent=TransitionIntent.NORMAL
+        )
 
     def write_run_status_with_intent(
         self,
@@ -918,7 +947,6 @@ class AuthorityBackedSerialRunStore:
                 run_uri,
                 from_status=current,
                 to_status=status.status,
-                expected_revision=snapshot.revision,
                 intent=intent,
                 reason=_reason(
                     f"run_{status.status.value.lower()}",
@@ -1072,9 +1100,7 @@ class AuthorityBackedSerialRunStore:
             stage_name=stage_name,
         )
 
-    def write_retry_decision(
-        self, run_uri: str, decision: RetryDecisionRecord
-    ) -> None:
+    def write_retry_decision(self, run_uri: str, decision: RetryDecisionRecord) -> None:
         try:
             self.authority_store.write_retry_decision(run_uri, decision)
         except AuthorityStoreError as exc:
@@ -1146,9 +1172,7 @@ class AuthorityBackedSerialRunStore:
     def write_config_snapshot(self, run_uri: str, name: str, content: str) -> None:
         self.local_store.write_config_snapshot(run_uri, name, content)
 
-    def read_composition_manifest(
-        self, run_uri: str
-    ) -> dict[str, PlainData] | None:
+    def read_composition_manifest(self, run_uri: str) -> dict[str, PlainData] | None:
         return self.local_store.read_composition_manifest(run_uri)
 
     def write_composition_manifest(
@@ -1243,7 +1267,9 @@ class AuthorityBackedSerialRunStore:
             lease_ttl_seconds=_CONTROLLER_LEASE_TTL_SECONDS,
         )
         token = _lease_token(lease)
-        self._controller_leases[token] = _ControllerLease(owner_id=owner_id, lease=lease)
+        self._controller_leases[token] = _ControllerLease(
+            owner_id=owner_id, lease=lease
+        )
         return RunLockRecord(
             run_uri=run_uri,
             token=token,
@@ -1295,7 +1321,9 @@ class AuthorityBackedSerialRunStore:
         )
 
     def list_run_stages(self, run_uri: str) -> tuple[str, ...]:
-        return tuple(stage.stage_name for stage in self.authority_store.snapshot(run_uri).stages)
+        return tuple(
+            stage.stage_name for stage in self.authority_store.snapshot(run_uri).stages
+        )
 
     def inspect_run_state(self, run_uri: str) -> RunStateInspection:
         return self.local_store.inspect_run_state(run_uri)
@@ -1372,18 +1400,15 @@ class AuthorityBackedSerialRunStore:
             self._ensure_stage_attempt(run_uri, stage_name, status.attempt)
         run_snapshot = self.authority_store.snapshot(run_uri)
         current_stage = next(
-            (
-                stage
-                for stage in run_snapshot.stages
-                if stage.stage_name == stage_name
-            ),
+            (stage for stage in run_snapshot.stages if stage.stage_name == stage_name),
             None,
         )
         current = None if current_stage is None else current_stage.status
         if current is not status.status:
             resolved_intent = intent or (
                 TransitionIntent.RESUME
-                if current in {
+                if current
+                in {
                     StageStatus.SUCCEEDED,
                     StageStatus.FAILED,
                     StageStatus.BLOCKED,
@@ -1398,7 +1423,6 @@ class AuthorityBackedSerialRunStore:
                 stage_name,
                 from_status=current,
                 to_status=status.status,
-                expected_revision=run_snapshot.revision,
                 intent=resolved_intent,
                 reason=_reason(
                     f"stage_{status.status.value.lower()}",
@@ -1424,7 +1448,9 @@ class AuthorityBackedSerialRunStore:
         attempt: int,
     ) -> None:
         self._ensure_stage_attempt(run_uri, stage_name, attempt)
-        self.local_store.write_stage_inputs(run_uri, stage_name, inputs, attempt=attempt)
+        self.local_store.write_stage_inputs(
+            run_uri, stage_name, inputs, attempt=attempt
+        )
 
     def read_stage_outputs(
         self, run_uri: str, stage_name: str
@@ -1446,35 +1472,36 @@ class AuthorityBackedSerialRunStore:
             run_uri, stage_name, outputs, attempt=attempt
         )
         active = self._require_stage_lease(run_uri, stage_name, attempt)
-        supersedes_commit_id = self._checksum_repair_heads.pop((run_uri, stage_name), None)
+        supersedes_commit_id = self._checksum_repair_heads.pop(
+            (run_uri, stage_name, attempt), None
+        )
         try:
-            commit_kwargs: dict[str, object] = {
-                "attempt_id": active.attempt.attempt_id,
-                "fencing_token": active.lease.fencing_token,
-                "outputs": outputs,
-                "reason": LifecycleReason(code="stage_outputs_committed"),
-            }
-            if supersedes_commit_id is not None:
-                commit_kwargs["supersedes_commit_id"] = supersedes_commit_id
             self.authority_store.record_output_commit(
                 run_uri,
                 stage_name,
-                **commit_kwargs,
+                attempt_id=active.attempt.attempt_id,
+                fencing_token=active.lease.fencing_token,
+                outputs=outputs,
+                supersedes_commit_id=supersedes_commit_id,
+                reason=LifecycleReason(code="stage_outputs_committed"),
             )
         except Exception:
             self._fail_stage_lease_by_record(active)
             raise
 
-    def authorize_checksum_repair_output(self, run_uri: str, stage_name: str) -> None:
+    def authorize_checksum_repair_output(
+        self, run_uri: str, stage_name: str, *, attempt: int
+    ) -> None:
         """Privately fence the one approved checksum-repair replacement path."""
         stage = self._stage_snapshot(run_uri, stage_name)
         if stage is None or stage.latest_commit is None:
             raise AuthorityStoreError("checksum repair has no current output commit")
-        self._checksum_repair_heads[(run_uri, stage_name)] = stage.latest_commit.commit_id
+        self._checksum_repair_heads[(run_uri, stage_name, attempt)] = (
+            stage.latest_commit.commit_id
+        )
 
     def prepare_checksum_repair(self, run_uri: str, stage_name: str) -> None:
         """Make an explicitly planned checksum repair eligible for one new attempt."""
-        self.authorize_checksum_repair_output(run_uri, stage_name)
         stage = self._stage_snapshot(run_uri, stage_name)
         if stage is not None and stage.status is StageStatus.SUCCEEDED:
             self.authority_store.transition_stage(
@@ -1718,9 +1745,7 @@ class AuthorityBackedSerialRunStore:
     def local_provenance_path(self, run_uri: str, name: str) -> Path:
         return self.local_store.local_provenance_path(run_uri, name)
 
-    def local_stage_log_path(
-        self, run_uri: str, stage_name: str, stream: str
-    ) -> Path:
+    def local_stage_log_path(self, run_uri: str, stage_name: str, stream: str) -> Path:
         return self.local_store.local_stage_log_path(run_uri, stage_name, stream)
 
     def local_stage_worker_request_path(self, run_uri: str, stage_name: str) -> Path:
@@ -1756,13 +1781,16 @@ class AuthorityBackedSerialRunStore:
             self._attempt_leases[key] = from_snapshot
             return from_snapshot
         stage = self._stage_snapshot(run_uri, stage_name)
-        if stage is not None and stage.status is StageStatus.STALE:
+        if (
+            stage is not None
+            and stage.status is StageStatus.STALE
+            and stage.latest_commit is None
+        ):
             self.authority_store.transition_stage(
                 run_uri,
                 stage_name,
                 from_status=StageStatus.STALE,
                 to_status=StageStatus.PENDING,
-                expected_revision=self.authority_store.snapshot(run_uri).revision,
                 intent=TransitionIntent.RESUME,
                 reason=LifecycleReason(code="resume_stale_stage"),
             )
@@ -1985,7 +2013,9 @@ def _authority_store_from_config(
         AuthorityBackendKind.MANAGED_SERVICE,
         AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
     }:
-        from loom.pipeline.stores.service_authority import create_service_authority_store
+        from loom.pipeline.stores.service_authority import (
+            create_service_authority_store,
+        )
 
         return create_service_authority_store(config)
     raise AuthorityStoreError(
@@ -1999,7 +2029,9 @@ def _coordination_store_from_config(
     *,
     readiness: AuthorityProtocolReadiness | None,
 ) -> WorkspaceCoordinationStore | None:
-    if config.endpoint is None or not config.endpoint.startswith(("http://", "https://")):
+    if config.endpoint is None or not config.endpoint.startswith(
+        ("http://", "https://")
+    ):
         return None
     return ServiceWorkspaceCoordinationStore(
         create_authority_client(config),
@@ -2051,9 +2083,7 @@ def _authority_handoff_metadata(config: AuthorityConfig) -> dict[str, PlainData]
     }
 
 
-def _created_at(
-    local_store: LocalRunStore, run_uri: str, fallback: str | None
-) -> str:
+def _created_at(local_store: LocalRunStore, run_uri: str, fallback: str | None) -> str:
     try:
         document = local_store.read_run_document(run_uri)
     except Exception:
@@ -2139,7 +2169,9 @@ def _authority_attempt_metadata(
 ) -> dict[str, str]:
     raw = metadata.get(_AUTHORITY_METADATA_KEY)
     if not isinstance(raw, Mapping):
-        raise AuthorityStoreError("worker request is missing authority_attempt metadata")
+        raise AuthorityStoreError(
+            "worker request is missing authority_attempt metadata"
+        )
     payload = _plain_mapping(raw, f"metadata.{_AUTHORITY_METADATA_KEY}")
     required = ("attempt_id", "lease_id", "owner_id", "fencing_token")
     values: dict[str, str] = {}
@@ -2169,10 +2201,9 @@ def _is_http_reliability_write_gap(
     authority_store: PerRunAuthorityStore,
     exc: AuthorityStoreError,
 ) -> bool:
-    return (
-        isinstance(authority_store, AuthorityClientBackedPerRunAuthorityStore)
-        and _HTTP_RELIABILITY_WRITE_GAP in str(exc)
-    )
+    return isinstance(
+        authority_store, AuthorityClientBackedPerRunAuthorityStore
+    ) and _HTTP_RELIABILITY_WRITE_GAP in str(exc)
 
 
 __all__ = [

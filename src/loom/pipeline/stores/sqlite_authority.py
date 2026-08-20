@@ -406,9 +406,7 @@ class SQLitePerRunAuthorityStore:
                 existing_metadata = _plain_mapping(
                     _json_loads(cast(str, existing["metadata_json"])), "metadata"
                 )
-                if _admission_matches(
-                    existing_metadata, run_metadata, idempotency_key
-                ):
+                if _admission_matches(existing_metadata, run_metadata, idempotency_key):
                     return _current_run_revision(conn)
                 raise AuthorityStoreError(f"run already exists: {run_uri}")
             revision = self._next_revision(conn)
@@ -566,9 +564,13 @@ class SQLitePerRunAuthorityStore:
             ).fetchone()
             if stage_row is not None:
                 stage_status = StageStatus(cast(str, stage_row["status"]))
-                if stage_status is not StageStatus.STALE and conn.execute(
-                    "SELECT 1 FROM commits WHERE stage_name = ?", (stage_name,)
-                ).fetchone() is not None:
+                if (
+                    stage_status is not StageStatus.STALE
+                    and conn.execute(
+                        "SELECT 1 FROM commits WHERE stage_name = ?", (stage_name,)
+                    ).fetchone()
+                    is not None
+                ):
                     raise AuthorityStoreError("stage already has an output commit")
                 if stage_status not in _ATTEMPT_ALLOCATABLE_STAGE_STATUSES:
                     raise AuthorityStoreError("stage is already terminal")
@@ -850,7 +852,9 @@ class SQLitePerRunAuthorityStore:
                     (stage_name,),
                 ).fetchall()
             return tuple(
-                ReliabilityPolicyFact.from_dict(_json_loads(cast(str, row["fact_json"])))
+                ReliabilityPolicyFact.from_dict(
+                    _json_loads(cast(str, row["fact_json"]))
+                )
                 for row in rows
             )
 
@@ -1122,7 +1126,9 @@ class SQLitePerRunAuthorityStore:
             ).fetchone()
             if existing_commit is None:
                 if supersedes_commit_id is not None:
-                    raise AuthorityStoreError("output commit has no current predecessor")
+                    raise AuthorityStoreError(
+                        "output commit has no current predecessor"
+                    )
             elif supersedes_commit_id != cast(str, existing_commit["commit_id"]):
                 raise AuthorityStoreError("stale or missing output commit current head")
             revision = self._next_revision(conn)
@@ -1231,13 +1237,22 @@ class SQLitePerRunAuthorityStore:
             if stage_name is not None:
                 query += " WHERE stage_name = ?"
                 values = (stage_name,)
-            rows = conn.execute(query + " ORDER BY revision_sequence", values).fetchall()
-            return tuple(OutputCommit(
-                commit=_commit_from_row(row, run_uri=run_uri, conn=conn),
-                artifact_facts=tuple(_artifact_fact_from_row(fact, conn=conn) for fact in conn.execute(
-                    "SELECT * FROM artifact_facts WHERE commit_id = ? ORDER BY artifact_name", (row["commit_id"],)
-                )),
-            ) for row in rows)
+            rows = conn.execute(
+                query + " ORDER BY revision_sequence", values
+            ).fetchall()
+            return tuple(
+                OutputCommit(
+                    commit=_commit_from_row(row, run_uri=run_uri, conn=conn),
+                    artifact_facts=tuple(
+                        _artifact_fact_from_row(fact, conn=conn)
+                        for fact in conn.execute(
+                            "SELECT * FROM artifact_facts WHERE commit_id = ? ORDER BY artifact_name",
+                            (row["commit_id"],),
+                        )
+                    ),
+                )
+                for row in rows
+            )
 
     def append_audit_event(
         self, run_uri: str, event: PipelineEvent
@@ -1778,7 +1793,11 @@ class SQLitePerRunAuthorityStore:
         if not database_path.exists():
             raise AuthoritySchemaError("SQLite authority database is missing")
         with self._connect(database_path) as conn:
-            _migrate_schema(conn)
+            needs_migration = _stored_schema_version(conn) == 1
+        if needs_migration:
+            with self._write_connection(database_path, initialize=False) as conn:
+                _migrate_schema(conn)
+        with self._connect(database_path) as conn:
             yield conn
 
     @contextmanager
@@ -2114,7 +2133,9 @@ def _ensure_audit_event_json_column(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
-    row = conn.execute("SELECT value FROM metadata WHERE key = 'schema_version'").fetchone()
+    row = conn.execute(
+        "SELECT value FROM metadata WHERE key = 'schema_version'"
+    ).fetchone()
     if row is None:
         return
     try:
@@ -2123,10 +2144,28 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         return
     if version != 1:
         return
-    if conn.execute(
-        "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'commits'"
-    ).fetchone() is None:
-        return
+    tables = {
+        cast(str, table["name"])
+        for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
+    }
+    if set(_REQUIRED_SCHEMA_COLUMNS) - tables:
+        raise AuthoritySchemaError(
+            "SQLite authority v1 schema is incomplete or invalid"
+        )
+    for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        v1_columns = (
+            expected_columns - {"supersedes_commit_id"}
+            if table_name == "commits"
+            else expected_columns
+        )
+        actual_columns = {
+            cast(str, info["name"])
+            for info in conn.execute(f"PRAGMA table_info({table_name})")
+        }
+        if not v1_columns.issubset(actual_columns):
+            raise AuthoritySchemaError(
+                "SQLite authority v1 schema is incomplete or invalid"
+            )
     conn.execute("ALTER TABLE commits RENAME TO commits_v1")
     conn.execute("""
         CREATE TABLE commits (
@@ -2144,7 +2183,25 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
                  output_names_json, materialized_refs_json, NULL FROM commits_v1
     """)
     conn.execute("DROP TABLE commits_v1")
-    conn.execute("UPDATE metadata SET value = ? WHERE key = 'schema_version'", (str(AUTHORITY_SCHEMA_VERSION),))
+    conn.execute(
+        "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
+        (str(AUTHORITY_SCHEMA_VERSION),),
+    )
+
+
+def _stored_schema_version(conn: sqlite3.Connection) -> int | None:
+    try:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'schema_version'"
+        ).fetchone()
+    except sqlite3.DatabaseError:
+        return None
+    if row is None:
+        return None
+    try:
+        return int(cast(str, row["value"]))
+    except (TypeError, ValueError):
+        return None
 
 
 def _next_audit_event_sequence(conn: sqlite3.Connection) -> int:
@@ -2154,9 +2211,7 @@ def _next_audit_event_sequence(conn: sqlite3.Connection) -> int:
     return cast(int, row[0])
 
 
-def _audit_event_from_row(
-    row: sqlite3.Row, *, run_uri: str
-) -> PipelineEventRecord:
+def _audit_event_from_row(row: sqlite3.Row, *, run_uri: str) -> PipelineEventRecord:
     event_json = row["event_json"]
     if event_json is not None:
         return PipelineEventRecord.from_dict(_json_loads(cast(str, event_json)))
@@ -2166,7 +2221,9 @@ def _audit_event_from_row(
         timestamp=cast(str, row["timestamp"]),
         scope=EventScope.from_dict(_json_loads(cast(str, row["scope_json"]))),
         event_type=cast(str, row["event_type"]),
-        payload=cast(Mapping[str, PlainData], _json_loads(cast(str, row["payload_json"]))),
+        payload=cast(
+            Mapping[str, PlainData], _json_loads(cast(str, row["payload_json"]))
+        ),
     )
 
 
@@ -2222,7 +2279,9 @@ def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
         try:
             tables = {
                 cast(str, row["name"])
-                for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_schema WHERE type = 'table'"
+                )
             }
         except sqlite3.DatabaseError:
             tables = set()
@@ -2642,9 +2701,7 @@ def _cleanup_candidates(conn: sqlite3.Connection) -> tuple[CleanupCandidate, ...
     )
 
 
-def _cleanup_report_fact(
-    conn: sqlite3.Connection, report_id: str
-) -> CleanupReportFact:
+def _cleanup_report_fact(conn: sqlite3.Connection, report_id: str) -> CleanupReportFact:
     row = _require_row(
         conn.execute(
             "SELECT * FROM cleanup_reports WHERE report_id = ?", (report_id,)
@@ -2673,9 +2730,7 @@ def _cleanup_report_fact_from_row(
     )
 
 
-def _cleanup_result_fact(
-    conn: sqlite3.Connection, result_id: str
-) -> CleanupResultFact:
+def _cleanup_result_fact(conn: sqlite3.Connection, result_id: str) -> CleanupResultFact:
     row = _require_row(
         conn.execute(
             "SELECT * FROM cleanup_results WHERE result_id = ?", (result_id,)
@@ -2957,15 +3012,11 @@ def _admission_matches(
 ) -> bool:
     if idempotency_key is None:
         return False
-    return (
-        existing.get(_ADMISSION_IDEMPOTENCY_METADATA_KEY) == idempotency_key
-        and {
-            key: value
-            for key, value in existing.items()
-            if key != _ADMISSION_IDEMPOTENCY_METADATA_KEY
-        }
-        == dict(metadata)
-    )
+    return existing.get(_ADMISSION_IDEMPOTENCY_METADATA_KEY) == idempotency_key and {
+        key: value
+        for key, value in existing.items()
+        if key != _ADMISSION_IDEMPOTENCY_METADATA_KEY
+    } == dict(metadata)
 
 
 def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
