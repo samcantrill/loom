@@ -39,7 +39,7 @@ from loom.pipeline.runtime import (
 from loom.pipeline.specs import PipelineSpec, StageSpec, parse_pipeline_config
 from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.stage import Stage
-from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.status import RunStatus, StageStatus, StageStatusRecord
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
     AuthorityStoreError,
@@ -117,6 +117,7 @@ from .stage_attempts import prepare_stage_attempt
 ArtifactStoreFactory = Callable[[Path], ArtifactStore]
 RunnerRunStore = LegacyRunStore | OfflineEvidenceRunStore
 _STAGE_LEASE_RENEWAL_INTERVAL_SECONDS = 60.0
+_CONTROLLER_LEASE_RENEWAL_INTERVAL_SECONDS = 60.0
 _REQUIRED_PARALLEL_CAPABILITIES = (
     BackendCapability.ATOMIC_TRANSITIONS,
     BackendCapability.ATTEMPT_ALLOCATION,
@@ -140,6 +141,13 @@ class _ExecutionOutcome:
     cancelled_stage: str | None = None
     cancellation_reason: LifecycleReason | None = None
     interruption: KeyboardInterrupt | None = None
+
+
+@dataclass(slots=True)
+class _ControllerLeaseRenewal:
+    stop_event: Event
+    thread: Thread
+    errors: list[BaseException]
 
 
 class _StageInterrupted(Exception):
@@ -247,6 +255,10 @@ class PipelineRunner:
         self._stage_lease_renewal_interval_seconds = (
             _STAGE_LEASE_RENEWAL_INTERVAL_SECONDS
         )
+        self._controller_lease_renewal_interval_seconds = (
+            _CONTROLLER_LEASE_RENEWAL_INTERVAL_SECONDS
+        )
+        self._controller_lease_renewal: _ControllerLeaseRenewal | None = None
         self._event_dispatcher: RuntimeEventDispatcher | None = None
 
     def run(self, request: RunRequest) -> RunResult:
@@ -287,7 +299,14 @@ class PipelineRunner:
                     executor=str(getattr(self.executor, "name", "unknown")),
                 ),
             )
+            renewal = self._start_controller_lease_renewal(run_uri, lock.token)
             try:
+                self._raise_controller_lease_renewal_error()
+                self._recover_abandoned_run_if_needed(
+                    request=request,
+                    run_uri=run_uri,
+                    prior_status=self._run_status_before_preparation(run_uri),
+                )
                 self._emit_run_event(
                     run_uri,
                     "run.opened" if request.open_existing else "run.created",
@@ -305,6 +324,7 @@ class PipelineRunner:
                     started_at=started_at,
                 )
             finally:
+                self._stop_controller_lease_renewal(renewal)
                 release_run_lock(self.run_store, lock)
         finally:
             self._event_dispatcher = previous_event_dispatcher
@@ -441,6 +461,140 @@ class PipelineRunner:
             },
             diagnostics=tuple(error.to_dict() for error in admission.errors),
         )
+
+    def _start_controller_lease_renewal(
+        self, run_uri: str, token: str
+    ) -> _ControllerLeaseRenewal | None:
+        renew = getattr(self.run_store, "renew_run_lock", None)
+        if not callable(renew):
+            return None
+        stop_event = Event()
+        errors: list[BaseException] = []
+        interval_seconds = max(
+            0.001, float(self._controller_lease_renewal_interval_seconds)
+        )
+
+        def renew_until_released() -> None:
+            while not stop_event.wait(interval_seconds):
+                try:
+                    renew(run_uri, token)
+                except BaseException as exc:
+                    errors.append(exc)
+                    stop_event.set()
+                    return
+
+        renewal = _ControllerLeaseRenewal(
+            stop_event=stop_event,
+            thread=Thread(
+                target=renew_until_released,
+                name="loom-controller-lease",
+                daemon=True,
+            ),
+            errors=errors,
+        )
+        self._controller_lease_renewal = renewal
+        renewal.thread.start()
+        return renewal
+
+    def _stop_controller_lease_renewal(
+        self, renewal: _ControllerLeaseRenewal | None
+    ) -> None:
+        if renewal is None:
+            return
+        renewal.stop_event.set()
+        renewal.thread.join()
+        if self._controller_lease_renewal is renewal:
+            self._controller_lease_renewal = None
+
+    def _raise_controller_lease_renewal_error(self) -> None:
+        renewal = self._controller_lease_renewal
+        if renewal is None or not renewal.errors:
+            return
+        error = renewal.errors[0]
+        if isinstance(error, Exception):
+            raise error
+        raise PipelineExecutionError(
+            f"controller lease renewal failed: {type(error).__name__}"
+        ) from error
+
+    def _recover_abandoned_run_if_needed(
+        self,
+        *,
+        request: RunRequest,
+        run_uri: str,
+        prior_status: RunStatus,
+    ) -> None:
+        if not request.open_existing or prior_status not in {
+            RunStatus.RUNNING,
+            RunStatus.SUBMITTED,
+        }:
+            return
+        authority_store = self.services.authority_store
+        if authority_store is None:
+            raise AuthorityStoreError("recovery requires an authoritative backend")
+        snapshot = authority_store.snapshot(run_uri)
+        recovery = authority_store.scan_recovery(run_uri)
+        active_stages = tuple(
+            stage
+            for stage in snapshot.stages
+            if stage.status in {StageStatus.RUNNING, StageStatus.SUBMITTED}
+        )
+        controller_recovered = any(record.stage_name is None for record in recovery)
+        recovered_attempt_ids = {
+            record.attempt_id for record in recovery if record.attempt_id is not None
+        }
+        if not controller_recovered or any(
+            not stage.attempts
+            or stage.attempts[-1].attempt_id not in recovered_attempt_ids
+            for stage in active_stages
+        ):
+            raise AuthorityStoreError(
+                "recovery requires expired controller and incomplete attempt evidence"
+            )
+        reason = LifecycleReason(code="recovered_after_authority_expiry")
+        write_run_status(
+            self.run_store,
+            run_uri=run_uri,
+            status=RunStatus.INTERRUPTED,
+            created_at=self._created_at(run_uri, self.clock()),
+            updated_at=self.clock(),
+            intent=TransitionIntent.RECOVERY,
+            metadata={"reason_code": reason.code},
+        )
+        self._emit_run_event(
+            run_uri,
+            "run.interrupted",
+            timestamp=self.clock(),
+            payload={"reason": reason.to_dict()},
+        )
+        write_stage_status_with_intent = getattr(
+            self.run_store, "write_stage_status_with_intent", None
+        )
+        if not callable(write_stage_status_with_intent):
+            raise AuthorityStoreError("recovery requires transition-aware stage state")
+        for stage in active_stages:
+            attempt = stage.attempts[-1].attempt
+            write_stage_status_with_intent(
+                run_uri,
+                stage.stage_name,
+                StageStatusRecord(
+                    run_uri=run_uri,
+                    stage_name=stage.stage_name,
+                    status=StageStatus.STALE,
+                    attempt=attempt,
+                    updated_at=self.clock(),
+                    message="recovered after controller lease expiry",
+                    metadata={"reason_code": reason.code},
+                ),
+                intent=TransitionIntent.RECOVERY,
+            )
+            self._emit_stage_event(
+                run_uri,
+                stage.stage_name,
+                "stage.stale",
+                timestamp=self.clock(),
+                payload={"attempt": attempt, "reason": reason.to_dict()},
+            )
 
     def _run_locked(
         self,
@@ -1590,6 +1744,7 @@ class PipelineRunner:
         run_started_at: str,
         execution_result: StageExecutionResult,
     ) -> StageRunResult:
+        self._raise_controller_lease_renewal_error()
         return commit_stage_execution_result(
             self.run_store,
             run_uri=run_uri,

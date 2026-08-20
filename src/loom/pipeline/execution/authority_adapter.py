@@ -1276,6 +1276,23 @@ class AuthorityBackedSerialRunStore:
             reason=LifecycleReason(code="controller_released"),
         )
 
+    def renew_run_lock(self, run_uri: str, token: str) -> None:
+        """Renew an execution-held controller lease without extending RunLockStore."""
+
+        active = self._controller_leases.get(token)
+        if active is None or active.lease.run_uri != run_uri:
+            raise AuthorityStoreError("unknown or stale controller lease")
+        renewed = self.authority_store.renew_lease(
+            active.lease.lease_id,
+            owner_id=active.owner_id,
+            fencing_token=active.lease.fencing_token,
+            lease_ttl_seconds=_CONTROLLER_LEASE_TTL_SECONDS,
+        )
+        self._controller_leases[token] = _ControllerLease(
+            owner_id=active.owner_id,
+            lease=renewed,
+        )
+
     def list_run_stages(self, run_uri: str) -> tuple[str, ...]:
         return tuple(stage.stage_name for stage in self.authority_store.snapshot(run_uri).stages)
 
@@ -1710,6 +1727,17 @@ class AuthorityBackedSerialRunStore:
         if from_snapshot is not None:
             self._attempt_leases[key] = from_snapshot
             return from_snapshot
+        stage = self._stage_snapshot(run_uri, stage_name)
+        if stage is not None and stage.status is StageStatus.STALE:
+            self.authority_store.transition_stage(
+                run_uri,
+                stage_name,
+                from_status=StageStatus.STALE,
+                to_status=StageStatus.PENDING,
+                expected_revision=self.authority_store.snapshot(run_uri).revision,
+                intent=TransitionIntent.RESUME,
+                reason=LifecycleReason(code="resume_stale_stage"),
+            )
         allocation = self.authority_store.allocate_stage_attempt(
             run_uri,
             stage_name,

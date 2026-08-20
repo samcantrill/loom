@@ -447,6 +447,47 @@ def test_authority_backed_run_lock_uses_controller_lease(
         run_store.release_run_lock(run_uri, lock.token)
 
 
+def test_expired_controller_and_attempt_are_classified_before_resume(
+    tmp_path: Path,
+) -> None:
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    authority = SQLitePerRunAuthorityStore(clock=clock)
+    run_store = _store(tmp_path, authority)
+    run_uri = _run_uri(tmp_path)
+    run_store.create_run(run_uri)
+    authority.transition_run(
+        run_uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING
+    )
+    allocation = authority.allocate_stage_attempt(
+        run_uri, "build", owner_id="worker", lease_ttl_seconds=1
+    )
+    assert allocation.lease is not None
+    authority.acquire_controller_lease(
+        run_uri, owner_id="old-controller", lease_ttl_seconds=1
+    )
+    clock.value = "2020-01-01T00:00:02Z"
+    lock = run_store.acquire_run_lock(run_uri, owner={"component": "resume"})
+    runner = PipelineRunner(run_store=run_store, clock=clock)
+    try:
+        runner._recover_abandoned_run_if_needed(
+            request=RunRequest(config={}, run_uri=run_uri, open_existing=True),
+            run_uri=run_uri,
+            prior_status=RunStatus.RUNNING,
+        )
+    finally:
+        run_store.release_run_lock(run_uri, lock.token)
+
+    snapshot = authority.snapshot(run_uri)
+    assert snapshot.status is RunStatus.INTERRUPTED
+    assert snapshot.stages[0].status is StageStatus.STALE
+    events = run_store.read_events(run_uri)
+    assert [event.event_type for event in events] == [
+        "run.interrupted",
+        "stage.stale",
+    ]
+    assert snapshot.stages[0].attempts == (allocation.attempt,)
+
+
 def test_authority_backed_submitted_operations_ignore_conflicting_local_registry(
     tmp_path: Path,
 ) -> None:

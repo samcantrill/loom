@@ -8,9 +8,11 @@ from loom.pipeline.stores import (
     AuthorityBackendKind,
     AuthorityConfig,
     AuthorityFactoryError,
+    AuthorityStoreError,
     BackendCapability,
     CapabilityScope,
     create_run_store,
+    path_to_run_uri,
 )
 from loom.pipeline.stores.service_authority import (
     AuthorityServiceUnavailable,
@@ -89,3 +91,29 @@ def test_service_health_reports_revision_and_run_count(tmp_path) -> None:
         assert health["ok"] is True
         assert health["runs"] == 1
         assert health["revision"] == 1
+
+
+def test_service_controller_lease_matches_sqlite_exclusion_and_expiry(tmp_path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "runs" / "r1")
+    with LocalAuthorityService.start() as service:
+        store = create_service_authority_store(service.config())
+        store.create_run(run_uri)
+        first = store.acquire_controller_lease(
+            run_uri, owner_id="controller-1", lease_ttl_seconds=1
+        )
+
+        with pytest.raises(AuthorityStoreError, match="active controller lease"):
+            store.acquire_controller_lease(
+                run_uri, owner_id="controller-2", lease_ttl_seconds=1
+            )
+
+        store.advance_time(1)
+        second = store.acquire_controller_lease(
+            run_uri, owner_id="controller-2", lease_ttl_seconds=1
+        )
+        recovery = store.scan_recovery(run_uri)
+
+    assert second.lease_id != first.lease_id
+    assert [record.recovery_id for record in recovery] == [
+        f"expired-{first.lease_id}"
+    ]

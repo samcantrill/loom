@@ -281,7 +281,10 @@ Final commands:
   remote Phase 1 base
 - Expanded planning: not needed on current accepted design; reassess only if a
   stop condition exposes a novel durable or trust-boundary decision
-- Implementation: pending one `loom_phase_executor`
+- Implementation: blocked after partial implementation: checksum-corruption resume
+  correctly plans a rerun but both supported authority stores reject the required
+  second stage output commit as an existing durable commit. No new invalidation
+  or replacement-commit contract was introduced.
 - Refiner: not needed unless the executor returns a qualified blocker
 - Pre-submit gate: pending
 - Independent review: not needed on current fast path; require the optional
@@ -293,9 +296,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Private controller-lock renewal and fail-closed propagation in `execution/runner.py` and `authority_adapter.py`; local-service controller lease exclusion in `service_authority.py`; recovery transitions from expired controller/stage evidence through attempt 2. The checksum-corruption branch workflow was attempted but not retained because the existing immutable output-commit behavior blocks required repair. |
+| Tests added or updated | Added local-service controller lease exclusion/expiry, expired controller/attempt recovery-event ordering, and explicit resume attempt-2 coverage in the focused unit/integration suites. |
+| Validated revision/tree state and evidence | Focused authority adapter, service-authority, authority-store contract, and local resume tests passed before this record. The public branch checksum-resume proof reached `PlanAction.RUN` and then failed at authority output commit with `stage already has an output commit`; this is the blocking evidence. |
+| Validation-relevant changes after evidence | No changes after the recorded blocker evidence except removal of the non-retainable failing checksum-resume test. Full validation and `make test-summary` are not run because the phase has not met its fixed artifact-trust contract. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Blocked: durable output commits are immutable across attempts in both supported authority stores, preventing the required payload/index repair after checksum mismatch. A manager decision on the existing commit/invalidation contract is required; no cleanup performed. |

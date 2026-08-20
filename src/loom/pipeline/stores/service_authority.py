@@ -1019,6 +1019,13 @@ class _ServiceAuthorityCore:
     ) -> LeaseRecord:
         with self._lock:
             state = self._require_run(run_uri)
+            if any(
+                lease.kind is LeaseKind.CONTROLLER
+                and lease.state is LeaseState.ACTIVE
+                and not self._lease_expired(lease)
+                for lease in state.leases.values()
+            ):
+                raise AuthorityStoreError("run already has an active controller lease")
             return self._new_lease(
                 state,
                 kind=LeaseKind.CONTROLLER,
