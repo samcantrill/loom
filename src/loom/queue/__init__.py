@@ -71,6 +71,13 @@ from .service import (
     QueueServiceState,
     QueueServiceStatus,
 )
+from .selection import (
+    QueueSelectionCandidate,
+    QueueSelectionContext,
+    QueueSelectionDecision,
+    QueueSelectionDisposition,
+    QueueSelectionPolicy,
+)
 
 __all__ = [
     "QUEUE_CONFIG_SCHEMA_VERSION",
@@ -123,6 +130,11 @@ __all__ = [
     "QueueServiceState",
     "QueueServiceStateError",
     "QueueServiceStatus",
+    "QueueSelectionCandidate",
+    "QueueSelectionContext",
+    "QueueSelectionDecision",
+    "QueueSelectionDisposition",
+    "QueueSelectionPolicy",
     "QueueStorageError",
     "QueueValidationError",
     "RunIntent",
