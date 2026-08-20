@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: approved
+- Status: merged
 - Roadmap stage and phase: v25 Phase 1
 - Manifest: `docs/roadmap/stage-25/implementation-plan.md`
 - Branch: `agent/stage-25-p1-safe-resource-aware-selection`
@@ -212,10 +212,10 @@ Final commands:
 - Independent review: passed at `8398254` with no blocker, localized correction,
   optional hardening, future-capability finding, or workflow issue
 - Blocker corrections: 0/3
-- PR and merge: [#218](https://github.com/samcantrill/loom/pull/218) is approved,
-  non-draft, mergeable, and correctly targets `develop`; required CI passed at
-  reviewed revision `8398254`, with the metadata-only final check and merge
-  pending
+- PR and merge: [#218](https://github.com/samcantrill/loom/pull/218)
+  squash-merged to `develop` as `ff2b7ee`; it was non-draft, mergeable, and
+  correctly targeted `develop`, with required CI passing at final PR revision
+  `a52aaaa`
 
 ## Completion Record
 
@@ -225,5 +225,5 @@ Final commands:
 | Tests added or updated | Covered immutable public records, safe projection/default/custom selection, invalid policy behavior, managed entrypoint parity, B-two/A-one head bypass, policy mapping validation, bounded candidate ordering, and concurrent exact ownership. Focused queue suites: 69 passed. |
 | Validated revision/tree state and evidence | Implementation revision `03546a9c17e8b4646925144d1a9750d8adbb0257` had a clean tree. `make validate-pr` passed; `make test-summary` passed (2,300 passed, 0 failed, 0 errors; receipt `build/test-summary.md`). The manager reran the six targeted files at `8398254` with 61 passes, and required CI passed. |
 | Validation-relevant changes after evidence | Completion and approval metadata only; no source, test, dependency, build, or validation-configuration change. |
-| PR, review, and merge | [#218](https://github.com/samcantrill/loom/pull/218) targets `develop`, is non-draft and mergeable, and passed manager plus required independent review with no findings. Initial required CI passed at `8398254`; final metadata-only CI and squash merge remain pending. |
-| Residual risk and cleanup | No blocker. Accepted bounded-lookahead/advisory-capacity limitations, Phase 1 stop-after-deferral behavior, and the private local CAS remain intentionally deferred to Phase 2 or Stage 29; merge and branch/worktree cleanup remain pending. |
+| PR, review, and merge | [#218](https://github.com/samcantrill/loom/pull/218) passed manager and required independent review with no findings, passed required CI at final revision `a52aaaa`, and squash-merged to `develop` as `ff2b7ee`. |
+| Residual risk and cleanup | No blocker. Accepted bounded-lookahead/advisory-capacity limitations, Phase 1 stop-after-deferral behavior, and the private local CAS remain intentionally deferred to Phase 2 or Stage 29. The Phase 1 worktree, local branch, and remote branch were removed; the dirty control checkout was preserved. |
