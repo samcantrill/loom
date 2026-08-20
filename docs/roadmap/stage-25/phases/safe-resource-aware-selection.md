@@ -2,21 +2,21 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: v25 Phase 1
 - Manifest: `docs/roadmap/stage-25/implementation-plan.md`
 - Branch: `agent/stage-25-p1-safe-resource-aware-selection`
 - Worktree root and path:
   `/home/can134/work/active/loom-worktrees/stage-25-p1-safe-resource-aware-selection`
-- Base revision: current `origin/develop` after Stage 24 remotely merges; record
-  the exact revision before branch creation
+- Base revision: `616e43aa8ca284dee4586c345d25e5bf7ce3b266`
 - PR target: `develop`
 - PR title: `Whole-Run Queue Selection - Phase 1: Safe Resource-Aware Selection`
-- Dependencies: Stage 24 merged; completed Stage 23/23-post cycle, deferral,
-  guarded claim, ownership, runtime, and managed-resource contracts intact
+- Dependencies: Stage 24 merged through #216 and #217, with completion metadata
+  at `616e43a`; completed Stage 23/23-post cycle, deferral, guarded claim,
+  ownership, runtime, and managed-resource contracts intact
 - Workflow path: expanded because this phase adds a public protocol, changes
   the managed default, and adds SQLite exact-selection concurrency
-- Blockers: Stage 24 merge only; no Stage 25 design blocker
+- Blockers: none
 
 ## Objective And Context
 
@@ -33,12 +33,20 @@
 
 ## Current Source And Harness
 
-- Relevant seams: `_scheduler.py` FIFO ordering; public repository/service
-  `claim_next`; `QueueController.run_cycle()` and `run_once()`; managed active
-  reads; launch logical resources; SQLite update fencing; queue audit.
-- Existing tests cover FIFO, repository/SQLite recovery, controller dispatch,
-  managed admission/coordination, and Stage 23 lifecycle. Refresh exact merged
-  shapes after Stage 24.
+- Relevant seams at `616e43a`: `_scheduler.py` owns private FIFO ordering;
+  `QueueRepository` and `QueueService` expose `claim_next()` plus the all-row,
+  FIFO-ordered `read_pool_snapshot()`; `QueueController.run_cycle()` and
+  `run_once()` each call `claim_next()` directly; `recovery_items()` supplies
+  active lifecycle reconciliation; `LaunchContract.resources` carries logical
+  requests; and SQLite uses `BEGIN IMMEDIATE`, expected-item JSON fencing, and
+  queue audit details that can carry selection evidence without DDL.
+- Current harnesses cover FIFO in `tests/unit/loom/queue/test_scheduler.py`,
+  controller behavior in `tests/unit/loom/queue/test_controller.py`, repository
+  contracts and SQLite races in `tests/contracts/test_queue_repository_contract.py`
+  and `tests/integration/queue/test_sqlite_repository.py`, package/API imports in
+  `tests/package/test_import.py` and
+  `tests/contracts/test_queue_python_api_contract.py`, and managed admission in
+  `tests/integration/queue/test_managed_local_controller.py`.
 - Import constraints: selection stays under `loom.queue`, remains import-light,
   and imports no routes, CLI, authority implementation, concrete provider,
   adapter, agent, vendor, or optional dependency.
@@ -191,7 +199,8 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete; refresh after Stage 24 merge
+- Manager preparation: complete at base `616e43a`; current source and harness
+  seams refreshed
 - Expanded planning: revised design approved; no additional spawned pass
 - Implementation: not started
 - Refiner: optional only for a qualified blocker; unused
