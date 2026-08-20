@@ -1,8 +1,8 @@
-# Phase 1 Execution Plan: Stage-Author Correctness And Logging
+# Phase 1 Execution Plan: Stage-Author Correctness And Lifecycle Guidance
 
 ## Metadata
 
-- Status: planned
+- Status: pending
 - Roadmap stage and phase: Stage 26, Phase 1
 - Manifest: `docs/roadmap/stage-26/implementation-plan.md`
 - Branch: `agent/stage-26-p1-stage-author-correctness-and-logging`
@@ -10,9 +10,9 @@
   `<worktree-root>/stage-26-p1-stage-author-correctness-and-logging`
 - Base revision: current `origin/develop` after Stage 25 remotely merges
 - PR target: `develop`
-- PR title: `Stage 26 phase 1: clarify stage authoring and logging`
-- Dependencies: Stage 25 remotely merged; planning `FR-1` through `FR-3`,
-  `FR-8` through `FR-10`; `FQ-1`, `FQ-2`, `FQ-8`; `DQ-1`, `DQ-2`, `DQ-8`
+- PR title: `Stage 26 phase 1: clarify stage operations and lifecycle facts`
+- Dependencies: Stage 25 remotely merged; planning `FR-1` through `FR-5`,
+  `FQ-1` through `FQ-5`, and `DQ-1` through `DQ-4`
 - Workflow path: fast unless the source audit demonstrates a new public or
   durable contract decision
 - Blockers: Stage 25 remote merge; no planning blocker
@@ -22,12 +22,14 @@
 - Vertical outcome: a downstream author can copy one small guide and examples
   to read inputs, write managed or file-backed outputs, use temporary workspace,
   return artifacts, emit or write logs deliberately, and inspect the correct
-  logs for the chosen executor.
+  logs for the chosen executor, while lifecycle documentation and preparation-
+  failure observation match committed state.
 - Earlier dependency: existing StageContext/store/executor/SLURM/queue behavior
   and Stage 24-25 lifecycle boundaries remain authoritative.
-- Later work explicitly out of scope: Phase 2 notifications; any scheduler,
-  resource-usage sampler, new resume policy, service adapter, acceptance
-  profile, or validation-gate change.
+- Later work explicitly out of scope: Stage 28 event subscriptions and plugin
+  activation; any notification abstraction or provider adapter; scheduler,
+  resource-usage sampler, new resume policy, acceptance profile, or validation-
+  gate change.
 
 ## Current Source And Harness
 
@@ -45,7 +47,9 @@
   - queue-managed attempts have queue-owned per-attempt logs, separate from a
     run's stage log path.
   - lifecycle emitters include `run.cancelled`, `stage.cancelled`, and
-    `run.preparation_failed`; older event prose does not list all current names.
+    `run.preparation_failed`; older event prose does not list all current names;
+    and fresh-run preparation failure currently emits before committing
+    `FAILED`, contrary to the existing post-commit event contract.
 - Existing tests and seams:
   - context/artifact contracts validate output names, store availability, and
     `ArtifactRef` returns;
@@ -95,9 +99,13 @@ In scope:
   path claims, log path claims, and public examples. Correct canonical docs and
   the smallest authoritative source/test issue only when a reachable mismatch
   is demonstrated.
+- In `_record_preparation_failure`, commit `FAILED` before emitting
+  `run.preparation_failed` for a fresh run. Preserve the current rule that an
+  already-terminal opened run is not reset or rewritten.
 - Update roadmap and feature-doc cross-references so scheduling, resource-usage
-  observation, resume changes, and new gate/profile work are no longer assigned
-  to Stage 26.
+  observation, resume changes, notification extension mechanics, and new gate/
+  profile work are assigned to their authoritative later stages or explicitly
+  deferred.
 - Add the guide to appropriate README/doc routing without making it a package
   import or generated artifact.
 
@@ -111,7 +119,9 @@ Out of scope:
 - Rewriting completed historical phase plans solely to change their Stage 26
   wording. Update current canonical docs and active adjacent planning only
   where the cross-reference is material.
-- Phase 2 notification values, policy, notifier, registration, or examples.
+- Notification severity/message/notifier values, registration adapters,
+  provider examples, event subscriptions, or plugin activation. Direct project
+  event sinks remain existing behavior; Stage 28 owns new generic mechanics.
 - New external acceptance suites, environment profiles, Make targets, or CI
   requirements.
 
@@ -133,18 +143,20 @@ Assumptions:
   - `loom logs` examples identify stage streams and do not imply it reads every
     project file or SLURM wrapper log; and
   - lifecycle-event documentation matches emitted names and states that the
-    corresponding committed fact precedes observation.
+    corresponding committed fact precedes observation; and
+  - fresh-run preparation failure persists `FAILED` before observers run,
+    while an already-terminal opened run retains its terminal state.
 - Public or durable shapes: none added. Existing context, artifact, log,
   event, failure, queue, SLURM manifest, and store formats remain authoritative.
 - Trust and failure boundaries:
   - project code owns its logging configuration, file paths, domain schemas,
     and checkpoint compatibility;
   - Loom owns only paths/capture/evidence it explicitly creates; and
-  - docs do not treat stdout/stderr, workspace files, or log contents as safe
-    notification payloads.
-- Cross-phase contracts: Phase 1 settles the event catalog and simple
-  operational language consumed by Phase 2. It does not define notification
-  message selection or severity.
+  - docs do not treat stdout/stderr, workspace files, or log contents as
+    audience-safe notification payloads.
+- Cross-stage contracts: this phase settles the event catalog and committed-
+  fact language consumed by Stage 28. It does not define notification message
+  selection, severity, subscriptions, or activation.
 - Reproducibility and compatibility: examples use temporary/unique run roots,
   no network, and supported public imports. Existing executor defaults do not
   change merely to make a table uniform.
@@ -159,8 +171,8 @@ Assumptions:
   executor request log paths, `loom logs`, SLURM manifests, queue attempt facts,
   lifecycle event tests, and the example harness.
 - Material additions and current justification: one guide and a small example
-  close demonstrated user-facing gaps; event/doc corrections prevent incorrect
-  notification design in Phase 2.
+  close demonstrated user-facing gaps; the event/source correction prevents
+  observers from seeing a fact that contradicts authoritative state.
 - Optional hardening and future capability deferred: logging facade, structured
   log events, log shipping, remote path abstraction, docs generation, full
   executor matrix, and environment-dependent acceptance.
@@ -173,7 +185,8 @@ Assumptions:
 | Workspace is not artifact publication | StageContext/artifact store boundary | guide/example | resume/export assumes an unregistered file | exact example/output assertions |
 | Stream paths are owner-specific | executor/store/SLURM/queue | unified prose | operator inspects the wrong path | logging table review plus focused tests |
 | Local capture limits are truthful | local executor/runner admission | docs imply process-level or parallel-safe capture | missing/misattributed logs | local capture/pass-through and parallel rejection tests |
-| Lifecycle catalog matches source | runner/lifecycle/events | stale feature prose | notifications omit or misclassify outcomes | exact emitted-name audit/integration sequence |
+| Lifecycle catalog matches source | runner/lifecycle/events | stale feature prose | observers and operators misclassify outcomes | exact emitted-name audit/integration sequence |
+| Preparation failure is post-commit | runner preparation-failure path | fresh-run ordering | observer sees stale `CREATED` state | callback reads `FAILED`; terminal open-existing regression |
 | Domain content remains downstream | project code | convenience example names/types | Loom gains domain schema/log semantics | docs and import review |
 
 ## Implementation Slices
@@ -185,8 +198,8 @@ Assumptions:
    workspace, input, logging, and inspection snippets.
 3. Strengthen the smallest existing examples/tests for file-backed output and
    logging distinctions; keep them dependency-free.
-4. Correct demonstrated source/docs/tests at the authoritative owner without
-   adding public machinery.
+4. Correct demonstrated source/docs/tests at the authoritative owner, including
+   fresh-run preparation-failure ordering, without adding public machinery.
 5. Update README/feature/roadmap routing and run targeted validation followed by
    the final phase gates.
 
@@ -197,14 +210,15 @@ Assumptions:
 | Package | required if imports/routing change | public API remains unchanged | no unintended exports or heavyweight imports |
 | Unit | required for any source correction | helper/executor truth | only the behavior touched by a demonstrated mismatch |
 | Contract | required | stage output/context/log contracts | declared refs, explicit registration, existing stream/path surfaces |
-| Integration | required | runner/executor/event coordination | captured/pass-through logs and exact post-commit event names as needed |
+| Integration | required | runner/executor/event coordination | captured/pass-through logs, exact event names, and fresh preparation failure observed after `FAILED` |
 | E2E / opt-in | one hermetic example required; external deferred | copyable downstream journey | unique run, artifact contents/refs, stream inspection, no network/runtime dependency |
 
 Targeted commands:
 
     uv run pytest -q tests/contracts/test_stage_contract.py tests/unit/loom/pipeline/test_context.py
     uv run pytest -q tests/integration/pipeline/test_local_execution.py tests/integration/diagnostics/test_cli_status_logs.py
-    uv run pytest -q tests/e2e/test_examples_e2e.py tests/unit/loom/cli/test_status_logs.py
+    uv run pytest -q tests/unit/loom/pipeline/execution/test_runner.py
+    uv run pytest -q tests/integration/examples/test_example_workflows.py tests/unit/loom/cli/test_status_logs.py
 
 The executor should adjust exact paths to current test ownership rather than
 creating placeholder test modules.
@@ -235,16 +249,16 @@ Final commands:
 
 ## Executor Handoff
 
-- Read section range: this plan plus planning `FR-1` through `FR-3`, `FR-8`
-  through `FR-10`, `FQ-1`, `FQ-2`, `FQ-8`, `DQ-1`, `DQ-2`, and `DQ-8`.
+- Read section range: this plan plus planning `FR-1` through `FR-5`,
+  `Functionality Agreement`, `Minimum Design`, and `Phase Shaping`.
 - Safe implementation slices: the five numbered slices; inventory before edits
   and prefer documentation/example corrections over source changes.
 - Decisions not to revisit: no new public surface, logger, remote writer, gate,
   profile, scheduler, sampler, resume semantics, or notification feature in
   this phase.
 - Conditions requiring manager action: any stop condition, event-name/commit
-  ambiguity that changes Phase 2 design, or overlapping user changes that
-  cannot be preserved.
+  ambiguity that changes Stage 28's observer boundary, or overlapping user
+  changes that cannot be preserved.
 
 ## Workflow State
 

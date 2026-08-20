@@ -1,423 +1,337 @@
-# Roadmap Stage 26 Planning: Operational Correctness And Notifications
+# Roadmap Stage 26 Planning: Operational Correctness And Lifecycle Guidance
 
-Status: draft; expanded design-safety review complete with minimum-design
-corrections; cross-artifact reconciliation and manager gate pending
+Status: confirmed; removal-first cross-stage correction and manager quality gate passed
 Roadmap stage: v26
-Evidence tree: `/home/can134/work/active/loom` on `develop` at
-`314e418192c3d46635b7f4754ea29ef736809f7d`; relevant pre-existing dirty
-paths: `docs/roadmap.md`, `docs/roadmap/stage-27/`,
-`docs/roadmap/stage-28/`, and `docs/roadmap/stage-29/`
-Planning route: expanded because the one new feature is a public notification
-contract that crosses the committed-event and external-side-effect boundary
-Current gate: removal-first design review passed; reconcile the manifest and
-linked phase plans, then run the manager quality gate
-Blockers: none
+Evidence tree: `/home/can134/work/active/loom` at
+`2c05906c15791a025ff2cae90633d77efdc89aac`; unrelated concurrent Stage 25 and
+Stage 29 roadmap edits are preserved
+Planning route: lean cross-stage correction because the maintainer removed a
+not-yet-implemented public notification layer; the earlier expanded review is
+retained as evidence but no new public or durable decision was added
+Current gate: ready for Phase 1 after Stage 25 remotely merges
+Blockers: Stage 25 remote merge only
 
-Stage 26 makes existing Loom behavior easier to use correctly. It consolidates
-stage-author, artifact, logging, lifecycle-event, and operational guidance,
-corrects demonstrated mismatches between docs and implemented behavior, and
-adds one feature: generic lifecycle notifications over the existing event-sink
-path.
-
-It does not add scheduling, resource-usage measurement, new resume semantics,
-new validation gates, or service-specific notification clients.
+Stage 26 makes existing Loom behavior easier to use correctly. It gives stage
+authors one clear guide for artifacts, workspace, logs, and lifecycle facts and
+fixes demonstrated mismatches between documented and implemented behavior. It
+does not add a notification abstraction, provider client, event subscription,
+plugin activation path, scheduler, resource sampler, resume semantics, or new
+validation gate.
 
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
-| Evidence | Stage context, artifact helpers, executor logs, lifecycle events, event sinks, examples, tests, and adjacent plans were inspected at the stated tree. | None. | Preserve existing owners and durable formats. |
-| Functionality | The maintainer narrowed the stage to correctness/documentation/logging plus generic notifications; every other former Stage 26 feature is deferred. | None. | Hold the accepted scope. |
-| Design | Notifications reuse lifecycle events, `EventSinkRegistry`, failure facts, and observer links. The public addition is limited to severity/message/notifier values plus one registration helper; custom severity-map state stays private to the registered sink. | None. Removal-first review removed the public policy wrapper and generic facts bag, and bounded non-durable and evidence behavior. | Reconcile the linked manifest and phase plan with the reviewed surface. |
-| Validation | Hermetic unit, contract, integration, and runnable-example coverage is sufficient. Existing external suites remain opt-in and no PR-gate policy changes. | None. | Keep causal coverage focused on commit, selection, bounded projection, failure, and evidence. |
-| Detailed plan / approval | Two vertical phases are shaped. The maintainer approved the narrowed product scope in this planning request. | The pre-review manifest and Phase 2 plan still describe the removed policy wrapper/facts bag and add an unjustified notification-specific error type. | Reconcile linked artifacts, then run the manager quality gate. |
+| Evidence | `StageContext`, executors, logs, lifecycle emitters, event sinks, examples, tests, and adjacent plans were inspected at the evidence revision. | Refresh after Stage 25 merges. | Preserve existing owners and durable formats. |
+| Functionality | The stage is limited to operational guidance and demonstrated compatibility corrections. | None. | Implement one vertical phase. |
+| Design | Existing context, artifact, log, lifecycle, event, and observer contracts remain authoritative; no public type is added. | None. | Keep documentation and corrections at their current owners. |
+| Validation | Hermetic unit, contract, integration, and runnable-example coverage is sufficient. | None. | Use existing gates. |
+| Approval | The maintainer approved removal of the overlapping notification phase and assigned generic observer filtering/activation to Stage 28. | Stage 25 sequencing only. | Advance after predecessor merge. |
 
 ## Evidence And Scope
 
 | Source or area | Current finding | Used for | Related IDs |
 | --- | --- | --- | --- |
-| `StageContext`, artifact specs, and store boundaries | Stages already receive `ArtifactRef` inputs and narrow load/save/register/path helpers. Direct mutable stores are intentionally hidden. | Preferred stage-author path and domain boundary. | FR-1, FR-3 |
-| Local, subprocess, Docker, Apptainer, and SLURM execution | Stream paths and capture exist, but behavior differs: local capture is opt-in and incompatible with parallel execution, process executors capture child streams, and SLURM may have wrapper and Loom-stage logs. | Logging truth table and corrections. | FR-2, FR-3 |
-| Runtime event model and runner/lifecycle emitters | Lifecycle events normally follow the corresponding durable lifecycle write. `run.preparation_failed` is a demonstrated exception at the evidence revision: a fresh run emits before its `FAILED` write, even though the feature spec says corresponding state changes precede events. Current emitted names also include cancellation and preparation failure that older prose omits. | Lifecycle catalog, Phase 1 ordering correction, and notification source. | FR-3 through FR-7 |
-| `EventSinkRegistry`, `RuntimeEventDispatcher`, and observer facts | Explicit sinks run synchronously after event append/reference creation. The registry isolates callback failures and attempts to persist failure evidence; a successful callback may record an observer link, whose write can itself fail after the external effect. | Reuse instead of a second notification dispatcher or delivery log, without overstating evidence guarantees. | FR-4 through FR-7 |
-| Plugin and Stage 28 plans | Event sinks are registry-ready; Stage 28 owns explicit CLI/plugin activation and exact registry subscriptions. | Keep Stage 26 Python-first and avoid conflicting filter ownership. | FR-5, FR-7, FR-10 |
-| Examples and test harness | Captured-log and synthetic pipeline examples are hermetic and runnable; external container/SLURM suites already remain opt-in. | Simple code snippets, executable proof, and unchanged gates. | FR-8, FR-9 |
-| Adjacent roadmap work | Stage 25 is queue-local; Stage 27 is GPU setup; Stage 28 is extension activation; Stage 29 is daemon/agent design. | Explicit deferrals and non-overlap. | FR-10 |
+| `StageContext`, artifacts, and stores | Narrow load/save/register/path helpers already support the intended stage-author path. Workspace files are not outputs until explicitly registered and returned. | Downstream operations guide. | FR-1, FR-3 |
+| Local, subprocess, container, SLURM, and managed queue execution | Stream capture and log ownership differ deliberately by executor and process owner. | Truthful logging table and examples. | FR-2, FR-3 |
+| Runtime events and lifecycle emitters | Current event names exceed older prose. A fresh `run.preparation_failed` is emitted before the run reads as `FAILED`, contrary to the existing post-commit event contract. | Event catalog and smallest source correction. | FR-3, FR-4 |
+| `EventSinkRegistry` and `RuntimeEventDispatcher` | Ordered, synchronous, best-effort observation, failure capture, observer links, and append-before-dispatch already exist. | Document the observer boundary without a second notification layer. | FR-4 |
+| Stage 28 plans | Exact subscriptions, sink registration values, plugin/CLI activation, provenance, and lifecycle-owner reconstruction form one coherent later extension path. | Cross-stage ownership. | FR-4, FR-5 |
 
-- User-visible outcome: a stage author can answer, from one short guide, where
-  to write outputs and temporary files, how to return artifacts, what Loom does
-  with stdout/stderr and Python logging, where logs are found, which lifecycle
-  facts are authoritative, and how to attach a small notification adapter.
-- Existing end-to-end path: stage returns `ArtifactRef` values -> executor
-  captures supported streams -> runner commits lifecycle status/artifacts ->
-  runner appends a lifecycle event -> event registry invokes explicit
-  observe-only sinks -> failure or external-link evidence is attempted.
-- Included scope: one downstream-operations guide with high-level examples;
-  focused source/docs/test corrections for demonstrated current behavior;
-  an authoritative lifecycle-event table; a service-neutral notification
-  message, severity mapping, notifier protocol, and registration helper; one
-  dependency-free runnable example; and proportional local validation.
-- Non-goals and deferrals: generic or stage scheduling, cross-pool policy,
-  resource-usage observation or sampling, resource recommendations, process
-  reattachment, new resume/reuse semantics, validation-gate changes, new
-  external acceptance profiles, service-specific adapters, asynchronous
-  delivery, retries, cursors, outboxes, deduplication, guaranteed delivery,
-  mutable/fatal hooks, and domain payload parsing.
-- Current consumers, boundaries, or demonstrated failures: stage authors have
-  working primitives but guidance is scattered; lifecycle-event prose omits
-  currently emitted cancellation/preparation events; users can implement a raw
-  event sink but must currently invent selection, severity, a bounded message
-  shape, and observer-link handling themselves.
-- Public or durable surfaces affected: one import-light
-  `loom.pipeline.notifications` module plus a reusable module-level
-  `loom.pipeline.events.validate_event_type` export. Neither is re-exported
-  from the root `loom` facade. Event, event-reference, sink-failure,
-  observer-link, run, stage, artifact, queue, resource, and resume schemas
-  remain unchanged.
+- User-visible outcome: a stage author can answer where to read inputs, place
+  temporary files, publish managed or file-backed outputs, find the logs owned
+  by each executor, and interpret committed lifecycle facts.
+- Existing end-to-end path: stage code uses `StageContext`; executors capture
+  the streams they own; the runner validates and commits artifacts/status; the
+  event path records the corresponding fact; explicit sinks may observe it.
+- Included scope: one downstream operations guide, small examples, corrected
+  artifact/log/event documentation, and the smallest source/test correction for
+  the demonstrated preparation-failure ordering mismatch.
+- Non-goals and deferrals: notification values or policy, service adapters,
+  event subscriptions, plugin activation, async delivery, scheduling, resource
+  sampling, resume/reuse changes, new external profiles, and validation policy.
+- Public or durable surfaces affected: none. Existing context, artifact, log,
+  event, observer, run, and stage shapes remain unchanged.
 
 ## Minimum Useful Change
 
-- Smallest useful behavior: document and prove the existing operational
-  path, then let a Python caller register a notifier that receives small,
-  bounded lifecycle messages for selected exact event types.
-- Closest existing capability and reuse decision: `EventSinkRegistry` remains
-  the dispatcher, `PipelineEventRecord` remains the source fact,
-  `EventSinkFailureRecord` remains failure evidence, and
-  `EventObserverLinkRecord` remains the optional successful external link. No
-  parallel notification registry, event type, or store is added.
-- Why a new surface is required: a raw event sink is intentionally generic. A
-  notification consumer still needs one shared default event-to-severity map,
-  bounded projection, a service-neutral message, and correct failure/link
-  integration. The helper snapshots an optional caller mapping; no separate
-  public policy object is needed. Repeating the adapter rules in every
-  Slack/email/webhook plugin would produce inconsistent lifecycle behavior.
-- Explicitly deferred behavior: all provider SDKs and delivery guarantees.
-  Project or plugin code owns credentials, network clients, provider payloads,
-  and provider-specific response parsing.
+- Smallest useful behavior: publish one copyable, evidence-backed operational
+  path and ensure every documented lifecycle event follows its corresponding
+  committed fact where such a fact exists.
+- Closest existing capability and reuse decision: use `StageContext`, executor
+  log paths, current status writers, runtime event helpers, and existing
+  examples rather than creating facades or new records.
+- Why source work is required: fresh preparation failure is a reachable
+  exception to the already documented post-commit observation rule.
+- Explicitly deferred behavior: a raw event sink is already sufficient for
+  downstream notification code. Stage 28 will add generic exact filtering and
+  explicit activation; common message/severity projection waits for repeated
+  real provider consumers.
 
 ## Functional Requirements
 
 | ID | Required behavior | Scope and non-goals | Dependencies | Validation | Status |
 | --- | --- | --- | --- | --- | --- |
-| FR-1 | One guide shows managed object save, local file registration, temporary workspace use, input loading, and direct `ArtifactRef` returns. | No mutable store exposure, implicit outputs, remote writer API, or domain schemas. | Existing `StageContext` and artifact stores. | Runnable snippets and focused context contracts. | locked |
-| FR-2 | Logging guidance distinguishes executor stdout/stderr, stage-owned file logging, tracebacks, queue-attempt logs, and SLURM wrapper logs across supported modes. | No log aggregation, remote streaming, structured logging framework, or new log path API. | Existing executors, CLI logs, stores, and examples. | Truth-table review plus local/subprocess examples and existing adapter tests. | locked |
-| FR-3 | Canonical docs and examples match implemented public behavior; any reachable mismatch is fixed at its authoritative owner with the smallest compatible change. Fresh-run preparation failure must commit `FAILED` before emitting `run.preparation_failed`, restoring the existing feature-spec ordering rule without changing terminal open-existing status. | Documentation review cannot invent new behavior or broaden preparation-failure state semantics. | Source, tests, feature specs, glossary. | Targeted regression for each source change, including preparation ordering; link/snippet checks for docs. | locked |
-| FR-4 | Add immutable, import-light notification severity/message values and a structural notifier protocol. | In-process handoff, not a policy model, durable message schema, or service client. | Pipeline events and plain-data vocabulary. | Package, validation, immutability, and plain projection tests. | locked |
-| FR-5 | The helper's default severity map selects significant terminal/failure events and maps them to `info`, `warning`, or `error`; callers may supply another exact event-to-severity mapping, which the helper validates and snapshots. | No public policy wrapper, predicates, payload expressions, priorities, rate limits, or mutable routing. An empty supplied map is a valid no-op. Stage 28 still owns registry subscription filtering. | One event-name validator owned by `pipeline.events`. | Default/custom/empty/ignored/invalid cases. | locked |
-| FR-6 | Notification messages have a closed field set and derive human-readable text only from an event-specific allowlist; they never copy arbitrary event payloads, exception/reason text, reason detail, config, commands, environment, log content, or artifact payloads. | There is no extensible `facts` bag. `EventReference` and optional stage identity include `run_uri`/project identifiers, so the message is bounded rather than audience-redacted; adapters own any further suppression. | Current event reference/record/resource shapes. | Exact `to_dict()` field-set and text tests with secret-like excluded payload values. | locked |
-| FR-7 | A registration helper adapts a notifier into one named event sink. It delivers after the corresponding lifecycle commit when one exists, lets the registry isolate exceptions without failing the run, and attempts an observer link when the notifier returns an external reference. | Synchronous best-effort observation only; failure/link persistence can fail and no replay or delivery guarantee is claimed. | Registry, dispatcher, sink context, observer records. | Committed-state read, reference-only input, failure-continues, link identity, and no-run-mutation integration tests. | locked |
-| FR-8 | Documentation and one dependency-free example explain notification setup with small Python snippets and show where service-specific code belongs. | No first-party Slack, Discord, email, webhook, or tracking adapter. | Example harness and public Python runner. | Runnable example asserts selected messages and failure isolation. | locked |
-| FR-9 | Validation stays hermetic and uses existing package/unit/contract/integration/e2e layers. Existing external runtime suites remain opt-in and `make validate-pr`/`make test-summary` keep their current meanings. | No new PR gates, environment profiles, credentials, network, container, GPU, or cluster requirement. | Current harness. | Targeted commands followed by the unchanged repository gates during implementation. | locked |
-| FR-10 | Scheduling, resources, resume, queue, plugin activation, and lifecycle ownership remain compatible and outside Stage 26 except for correcting inaccurate cross-references. | No hidden policy or schema expansion. | Adjacent accepted plans. | Public import/diff scope review and existing regression suites. | locked |
+| FR-1 | Show managed save, local-file registration, workspace use, input loading, and direct `ArtifactRef` returns. | No mutable store exposure, implicit output, remote writer, or domain schema. | Existing `StageContext` and artifact stores. | Runnable snippets and context contracts. | locked |
+| FR-2 | Explain stdout/stderr, project file logging, tracebacks, queue-attempt logs, stage logs, and SLURM wrapper logs by executor. | No aggregation, streaming, structured logging framework, or new log-path API. | Existing executors, stores, CLI, and examples. | Truth-table review plus focused execution tests. | locked |
+| FR-3 | Align canonical docs/examples with implemented public behavior and fix only demonstrated mismatches at their authoritative owner. | Documentation symmetry cannot justify new behavior. | Source, tests, feature docs, glossary. | One focused regression for each source correction. | locked |
+| FR-4 | Publish the exact lifecycle-event catalog and commit-before-observe rule; fresh preparation failure commits `FAILED` before `run.preparation_failed`, while an already-terminal opened run remains unchanged. | No new event, sink, subscription, message, notifier, or provider contract. | Runner/lifecycle/store/event owners. | Exact event sequence and observer reads committed `FAILED`. | locked |
+| FR-5 | Keep validation hermetic and preserve scheduling, resources, resume, queue, plugin activation, and adjacent-stage ownership. | No new Make/CI/profile/network/runtime requirement. | Existing harness and Stage 25/27/28 plans. | Diff/import review and existing final gates. | locked |
 
 ## Functionality Agreement
 
 | ID | Requirement IDs | Decision | Recommendation and evidence | Tradeoff | State |
 | --- | --- | --- | --- | --- | --- |
-| FQ-1 | FR-1 through FR-3 | Stage purpose | Treat correctness as alignment of existing behavior, tests, examples, and docs—not a bucket for new operational features. | Some attractive improvements remain deferred. | locked |
-| FQ-2 | FR-2 | Log ownership | Loom owns executor-captured streams and their paths; project code owns its logging configuration and any separate files. A file that must be a durable pipeline output is declared and registered as an artifact. | Loom does not automatically discover arbitrary log files. | locked |
-| FQ-3 | FR-4 through FR-7 | Notification base | Build on lifecycle events emitted after corresponding commits when they exist, and on observe-only sinks. | Delivery is synchronous and may add caller-visible latency. | locked |
-| FQ-4 | FR-5 | Default signal | Notify run completion/failure/cancellation/preparation failure and stage failure/cancellation. Leave routine stage completion opt-in to avoid noise. | Some users will customize the map. | locked |
-| FQ-5 | FR-6 | Message boundary | Use a closed message shape and finite allowlist, not generic recursive redaction or an extensible facts mapping. Treat run/stage identity as potentially audience-sensitive. | Messages contain less diagnostic detail; users follow the permitted identity to Loom logs and status, and adapters suppress identity for less-trusted audiences. | locked |
-| FQ-6 | FR-7 | Failure policy | Existing best-effort sink behavior remains authoritative: construct a failure result, attempt its durable write, continue later observers, and never change run correctness. | No alert-delivery or failure-evidence guarantee. | locked |
-| FQ-7 | FR-7, FR-8 | Activation | Stage 26 is Python-first. Stage 28 separately owns exact plugin/CLI activation and registry subscriptions. | CLI notification selection arrives only through the accepted Stage 28 path. | locked |
-| FQ-8 | FR-9, FR-10 | Deferred former scope | Remove usage sampling; defer scheduler, reuse, acceptance-profile/gate, and other former Stage 26 topics without replacement machinery. | The roadmap no longer assigns those capabilities to Stage 26. | locked |
+| FQ-1 | FR-1 through FR-3 | Stage purpose | Treat correctness as alignment of existing behavior, examples, tests, and docs rather than a bucket for new operational features. | Attractive conveniences remain deferred. | locked |
+| FQ-2 | FR-2 | Log ownership | Loom owns executor-captured streams and paths; project code owns its logger configuration and separate files. | Loom does not discover or aggregate arbitrary files. | locked |
+| FQ-3 | FR-3, FR-4 | Lifecycle truth | Commit authoritative state before publishing the corresponding observer fact. | The correction is deliberately limited to the demonstrated fresh-run path. | locked |
+| FQ-4 | FR-4 | Notification boundary | Do not add `NotificationMessage`, `NotificationSeverity`, `Notifier`, or `register_lifecycle_notifier`. Direct event sinks remain available; Stage 28 owns generic filtering and activation. | Initial providers format their own small messages. | locked |
+| FQ-5 | FR-5 | Adjacent ownership | Stage 25 owns queue selection, Stage 27 GPU setup, Stage 28 extensions, and Stage 29 daemon/agent work. | Stage 26 remains intentionally narrow. | locked |
 
 ## Behavior Baseline
 
-- Included and default behavior: no notifier means no notification work or
-  discovery. Registering one notifier uses the default exact event/severity map
-  unless the caller supplies another mapping, which is copied at registration.
-  An explicitly empty mapping performs no calls. `run.completed` is `info`;
-  `run.cancelled` and `stage.cancelled` are `warning`; preparation, run, and
-  stage failures are `error`.
-- Input-shape behavior: durable `PipelineEventRecord` inputs may contribute
-  finite allowlisted detail and stage identity. A non-durable `EventReference`
-  produces an identity-only message with no reconstructed stage or payload
-  detail; the adapter never reaches through the sink context to query stores.
-- Failure and unsupported behavior: malformed custom maps, messages, or
-  provider results fail validation. Callback exceptions produce a registry
-  failure result and a best-effort persisted sink-failure fact. Other sinks and
-  the run continue. Provider retries, async queues, authentication, timeouts,
-  and network policy are adapter responsibilities.
-- Reproducibility and durable behavior: notification mappings and messages are
-  in-process values. The triggering event stays durable by default; sink
-  failures and returned external references reuse existing durable observer
-  facts when their writes succeed. A notification can be sent and the process
-  can die or a link write can fail before recording its external reference, so
-  exactly-once or at-least-once delivery is not claimed.
-- Explicit deferrals: no generic scheduler, resource sampler, new resume mode,
-  PR-gate/profile change, service adapter, notification replay, or payload
-  predicate.
+- Included and default behavior: existing stage and executor behavior remains
+  unchanged except that a fresh preparation failure records `FAILED` before its
+  event becomes observable.
+- Failure and unsupported behavior: already-terminal opened runs are not
+  rewritten; unprovable documentation claims are narrowed rather than made true
+  through speculative APIs.
+- Reproducibility and durable behavior: examples use supported public imports
+  and temporary run roots. No schema, fingerprint, provenance, or import-cost
+  change is introduced.
+- Explicit deferrals: common notification presentation, severity policy,
+  provider clients, event filtering/activation, delivery guarantees, mutable
+  hooks, scheduling, sampling, and new resume behavior.
 
 ## Minimum Design
 
-- Modules and ownership:
-  - `loom.pipeline.notifications` owns notification values, event projection,
-    the private default severity map, notifier protocol, and notifier
-    registration.
-  - `loom.pipeline.events` continues to own event identity and validation.
-  - `loom.pipeline.event_sinks` continues to own dispatch order, callback
-    failure capture, registry identity, and observer-link context.
-  - runner/lifecycle/store code continues to own authoritative state commits
-    and event emission. Notification code never writes lifecycle state.
-  - project/plugins own service clients, credentials, provider formatting, and
-    provider response semantics.
-- Fixed public, durable, trust-boundary, and cross-phase contracts:
-  - `NotificationSeverity` is a `StrEnum` with `INFO = "info"`,
-    `WARNING = "warning"`, and `ERROR = "error"`.
-  - `NotificationMessage` is a frozen, slotted in-process value with
-    `event_reference`, `severity`, `title`, `body`, and optional `stage_name`.
-    `to_dict()` provides exactly those adapter-ready plain fields; there is no
-    generic facts mapping, schema version, or `from_dict()` because Loom does
-    not persist or reconstruct messages. Title/body are presentation text, not
-    machine-readable policy inputs.
-  - `validate_event_type(value: object) -> str` is the events module's single
-    dotted-name validator for event construction, notification-map
-    normalization, and later Stage 28 subscriptions. It is intentional in
-    `loom.pipeline.events.__all__` but not a root convenience export.
-  - There is no notification-specific error hierarchy. Event-name failures use
-    the authoritative event validation error; ordinary type/value failures at
-    message, notifier, and result boundaries use normal `TypeError` or
-    `ValueError` behavior.
-  - `Notifier` is a structural protocol with
-    `notify(message: NotificationMessage) -> EventObserverExternalRef | None`.
-    Returning a reference asks Loom to append the existing observer-link fact;
-    `None` means the provider supplied no durable external identity.
-  - `register_lifecycle_notifier(registry, *, name, notifier,
-    severities: Mapping[str, NotificationSeverity] | None = None) -> None`
-    validates once, snapshots the supplied mapping (or uses the private six-
-    event default), and registers one ordinary event sink under `name`.
-    Event-name syntax delegates to `validate_event_type`; notification code
-    does not clone its regex. The helper requires a callable `notifier.notify`,
-    accepts only `None` or an `EventObserverExternalRef` result, and owns the
-    same name used for any observer link, avoiding a second caller-supplied
-    identity. It does not mutate global state.
-  - Event, failure, observer-link, run, stage, config, and plugin activation
-    schemas do not change. Stage 28 registry subscriptions remain a dispatch
-    optimization/activation contract; Stage 26 severity mapping decides which
-    events become notification messages even when an observe-all registry
-    invokes it.
-- Data and control flow:
-  1. Runner/lifecycle commits the corresponding status, outputs, or failure
-     when that event represents a state change; Phase 1 restores this order for
-     fresh-run preparation failure.
-  2. Existing dispatcher appends or references the event.
-  3. Existing registry calls the registered notification sink.
-  4. The captured severity map either ignores the exact event type or selects a
-     severity.
-  5. Projector builds a small message from event identity/resource. For a full
-     record it may use only: the primary stage resource; `failed_stage` for
-     `run.failed`; `cancelled_stage` for `run.cancelled`; `failure_type` for
-     run/stage failure; `error_type` for preparation failure; `attempt` for
-     stage failure/cancellation; and nested reason `code` for cancellation.
-     These values may form title/body or optional `stage_name` but are never
-     exposed as a generic mapping. Missing or wrong-shaped optional values are
-     omitted rather than recursively copied. Custom-selected event types get
-     generic event-identity text unless explicitly listed above. Reference-
-     only events stay identity-only.
-  6. Notifier performs its external side effect.
-  7. A returned external reference is validated and the helper attempts an
-     observer link. An exception becomes a registry failure and a best-effort
-     sink-failure write; neither changes the run.
-- Private implementation discretion: exact projector helper names, title/body
-  wording, internal immutable mapping construction, clock injection for tests,
-  and whether the registered sink is a closure or private class.
-- Extension and compatibility seams: existing user-written `EventSink`
-  implementations continue to work. A Stage 28 plugin can construct/register
-  the notification sink through its accepted activation path without changing
-  notification message semantics.
-- Import and dependency direction: notifications may import event and event-
-  sink contracts plus serialization/timestamp primitives. Event, sink, runner,
-  store, CLI, and root modules do not import a provider SDK. No dependency is
-  added.
+- Modules and ownership: `StageContext` owns stage-facing artifact/workspace
+  helpers; executors/store/SLURM/queue owners define their log paths;
+  runner/lifecycle/store code owns status commits; event code owns event facts;
+  Stage 28 owns new observer extension mechanics.
+- Data and control flow: stage returns declared refs -> executor captures owned
+  streams -> runner commits status/artifacts -> event helper appends the fact ->
+  any explicitly supplied observer runs.
+- Fixed contracts: no new public or durable shape. Preparation failure changes
+  ordering only, not status/event schemas or already-terminal behavior.
+- Private discretion: guide organization, exact concise wording, whether a
+  small example extends an existing workflow, and helper/test names.
+- Import direction: documentation/examples may import public Loom APIs; core
+  Loom never imports project/provider packages.
 
 ## Complexity Delta
 
 | Addition | Current necessity | Simpler alternative | Decision |
 | --- | --- | --- | --- |
-| One downstream-operations guide | Current stage-author/logging questions span many specs. | Add more scattered paragraphs. | keep one canonical guide |
-| `NotificationMessage` | Provider adapters need one bounded, service-neutral handoff. | Pass raw event records to every provider. | keep; in-process only |
-| Severity enum and exact mapping | Current requirement includes severity with useful defaults and Python customization. | Hard-code every event or let adapters disagree. | keep the enum; normalize one mapping privately in the helper |
-| Public policy value | The helper only needs a validated snapshot at registration; no independent consumer persists, composes, or passes policy objects. | Accept a normal mapping and close over an immutable copy. | remove |
-| Notification-specific error type | No caller needs to distinguish notification validation from the existing event/type/value boundaries. | Reuse the authoritative event error and normal type/value errors. | remove |
-| `Notifier` protocol | Separates Loom projection/lifecycle from provider delivery. | Require every provider to implement full `EventSink`. | keep structural method only |
-| Registration helper | Must bind registry name to failure/link evidence correctly. | Ask callers to duplicate names in a custom sink. | keep one helper |
-| Extensible message `facts` mapping | No current provider or durable consumer needs a second semi-structured payload, and it weakens the allowlist boundary. | Put finite bounded context in human-readable title/body and optional stage identity. | remove |
-| Notification delivery/result schema | Existing failure/link facts already cover available evidence. | Add receipt/outbox records. | remove |
-| Generic redactor/template engine | Allowlisted lifecycle fields meet the current safety need. | Support arbitrary payload templates. | remove |
-| Built-in service adapter | No selected provider or dependency reason. | Choose Slack/webhook now. | defer |
-| Usage sampler/scheduler/resume/gate work | Maintainer explicitly removed it from this stage. | Retain roadmap placeholders. | remove/defer |
+| Downstream operations guide | Scattered current behavior causes incorrect usage. | Keep relying on several feature specs. | keep |
+| Preparation-failure ordering correction | Reachable observer sees stale state. | Document the exception. | keep smallest source fix |
+| Logging facade or uniform capture | No demonstrated generic owner. | Document actual executor differences. | defer |
+| Generic notification values/protocol/helper | No source or real provider consumer; overlaps Stage 28 filtering/registration. | Direct downstream event sink and provider-owned formatting. | remove/defer |
+| Public event-name validator | Stage 26 has no remaining caller. | Add it with Stage 28 subscriptions. | defer to Stage 28 |
+| Provider SDK, outbox, retry, delivery record | No accepted reliability requirement. | Downstream adapter or external relay. | defer |
 
 ## Design Agreement
 
 | ID | Requirement IDs | Decision | Recommendation and evidence | Tradeoff | State |
 | --- | --- | --- | --- | --- | --- |
-| DQ-1 | FR-1 through FR-3 | Documentation owner | New downstream guide owns the simple journey; feature specs retain detailed contracts and link to it. | One additional top-level doc. | locked |
-| DQ-2 | FR-2 | Logging correction rule | Test/fix only reachable mismatches; document executor differences rather than normalizing them behind new APIs. | Backend behavior remains intentionally different. | locked |
-| DQ-3 | FR-4, FR-7 | Architecture | Notifications are an adapter over the event registry, not a dispatcher/store subsystem. | Inherits synchronous best-effort semantics. | locked |
-| DQ-4 | FR-4, FR-6 | Message durability | Message is immutable/plain-projectable but not durable or reconstructable, and carries no extensible facts bag. | Re-delivery must rebuild from a durable event in later work. | locked |
-| DQ-5 | FR-5 | Filtering owner | The helper's captured severity map owns notification semantics; Stage 28 event registry owns whether a callback is invoked for an exact subscription. | The notifier sink may receive-and-ignore events before Stage 28. | locked |
-| DQ-6 | FR-6 | Projection boundary | Form text only from finite event-specific fields. Never accept a facts bag, payload template, raw-payload passthrough, or audience-safety claim in Stage 26. | Less custom content; identity may still require adapter-side suppression. | locked |
-| DQ-7 | FR-7 | Observer evidence | Reuse best-effort sink-failure and optional external-ref writes; do not promise a delivery receipt when a provider returns none or evidence persistence fails. | Successful delivery may have no durable success link, and a failure fact may itself be unavailable. | locked with accepted risk |
-| DQ-8 | FR-8 through FR-10 | Delivery and validation scope | Python-first, dependency-free proof; no network adapter or gate change. | Provider integration is demonstrated as project code rather than tested live. | locked |
+| DQ-1 | FR-1, FR-2 | Reuse current stage/executor surfaces. | Each invariant already has an implementation owner. | Documentation remains backend-specific where behavior differs. | locked |
+| DQ-2 | FR-3, FR-4 | Correct only reachable mismatches. | The preparation path violates the existing event-order rule; other source work requires comparable evidence. | Some prose may be narrowed instead of code changed. | locked |
+| DQ-3 | FR-4 | Keep event observation generic. | Current `EventSinkRegistry` already supports Python notification side effects; Stage 28 supplies the missing generic selection/activation layer. | Core supplies no default severity or message text. | locked |
+| DQ-4 | FR-5 | Preserve adjacent-stage contracts. | This correction removes cross-stage machinery rather than moving it earlier. | Common notification projection may arrive later. | locked |
 
-## Expanded Design Review
+## Prior Expanded Review Disposition
 
-| Finding | Related IDs | Evidence and consequence | Required action | Status |
-| --- | --- | --- | --- | --- |
-| EDR-1: extra public value/error surfaces are not justified | FR-4 through FR-6; DQ-4 through DQ-6 | No current consumer persists, composes, or independently exchanges a policy object; no selected provider needs a second semi-structured payload; and the linked Phase 2 draft adds a notification error class with no distinct recovery path. These additions enlarge compatibility and disclosure surfaces beyond the required Python registration path. | Accept and snapshot a normal exact event-to-severity mapping in the helper. Remove `LifecycleNotificationPolicy`, `NotificationMessage.facts`, and a dedicated `NotificationError`; keep finite context in title/body and optional stage identity, with existing event/type/value errors. | resolved: removed |
-| EDR-2: preparation failure violates the claimed commit ordering | FR-3, FR-7; DQ-3 | At revision `314e418`, `_record_preparation_failure` emits `run.preparation_failed` before a fresh run's `FAILED` write, contrary to the existing execution-spec rule. A notifier could observe stale `CREATED` state. | Phase 1 must write the fresh-run `FAILED` state before emitting the event while preserving the current rule that a terminal open-existing run is not reset. Phase 2 claims a preceding lifecycle commit only where a corresponding state change exists. | resolved in minimum design; implementation required in Phase 1 |
-| EDR-3: the sink contract also supplies reference-only events | FR-6, FR-7 | `event_persistence="non_durable"` dispatches `EventReference`, which has no resource scope or payload. Requiring stage/failure facts would invent data or force a store read through an intentionally narrow context. | Support reference-only messages with event identity, severity, and generic text; leave `stage_name` absent and do not reconstruct payload detail. Add focused coverage instead of changing event schemas. | resolved |
-| EDR-4: "safe/redacted" and durable-evidence wording overclaims | FR-6, FR-7; FQ-5, FQ-6 | `EventReference` includes `run_uri`, stage identifiers can be project-sensitive, external-ref identifiers are adapter-authored, and the registry swallows failure-recorder errors to preserve run correctness. | Describe messages as closed/bounded, require adapters to suppress identity and return only safe external identifiers for their audience, and describe failure/link persistence as best-effort. | resolved |
-| EDR-5: event-name validation must have one owner | FR-5; DQ-5 | The evidence revision keeps event-name validation private in `pipeline.events`; cloning the dotted-name regex in notifications would duplicate an invariant that Stage 28 subscriptions also need. | Make the events module's validator reusable and call it from notification-map normalization. Do not add a second notification grammar or a root-level convenience export. | resolved |
-| EDR-6: remaining adapter surface is proportionate | FR-4 through FR-7; DQ-3 through DQ-8 | Severity/message values, one structural notifier method, and the registration helper each have a current role in the selected Python path. They remain domain-neutral, import-light, in-process, and compose with the existing registry/failure/link owners. | Keep only those surfaces; retain all delivery, provider, scheduling, sampling, resume, gate/profile, and service-adapter deferrals. | pass |
+The earlier expanded design review evaluated the now-removed public
+notification boundary. Its findings that remain relevant are retained: fix
+fresh preparation-failure ordering, treat event/observer evidence as
+best-effort, avoid provider dependencies, and keep event validation with the
+event owner. Removing the message/severity/notifier/helper surface eliminates
+the external-side-effect public-contract risk and requires no second spawned
+review. The manager verified the corrected Stage 26 and Stage 28 artifacts
+together.
 
 ## Examples And Validation
 
-Preferred managed-object output:
+### Stage-Author Journey
+
+The downstream guide presents one operational path rather than another API
+reference. The intended mental model is:
+
+```text
+load declared input -> use private workspace -> save or register output
+                    -> return declared ArtifactRef values
+```
+
+`save_artifact()` is the managed-object path: Loom serializes the value through
+the named codec and returns its reference. `local_output_path()` plus
+`register_local_artifact()` is the file-backed path: project code writes the
+file, then explicitly publishes it. `local_workspace_path()` allocates private
+intermediate space; neither creating a workspace file nor leaving it on disk
+makes it an output. Local path helpers may be unavailable with non-local store
+implementations, and the guide must describe that boundary rather than imply a
+remote writer API.
+
+This representative snippet records the accepted usage and distinction. The
+implementation may shorten names or split it across examples, but it must keep
+the same public calls and explicit returned-output contract.
 
 ```python
-def run(self, context, inputs):
-    summary = {"count": len(inputs)}
-    return {
-        "summary": context.save_artifact(
+from collections.abc import Mapping
+
+from loom.artifacts import ArtifactRef
+from loom.pipeline import StageContext
+
+
+class BuildReportStage:
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        _ = inputs
+        records = context.load_input("records", expected_type="json")
+        if not isinstance(records, list):
+            raise ValueError("records artifact must decode to a list")
+
+        scratch = context.local_workspace_path("tmp", "draft.txt")
+        scratch.write_text(f"Processed {len(records)} records\n")
+
+        report_path = context.local_output_path("report", suffix=".txt")
+        report_path.write_text(scratch.read_text())
+        report_ref = context.register_local_artifact(
+            "report",
+            report_path,
+            artifact_type="text",
+            codec_key="text.v1",
+        )
+
+        summary_ref = context.save_artifact(
             "summary",
-            summary,
+            {"count": len(records)},
             artifact_type="json",
             codec_key="json.v1",
         )
-    }
+        return {"report": report_ref, "summary": summary_ref}
 ```
 
-Preferred local-file output and temporary workspace:
+Project code remains responsible for the meaning and compatibility of
+`records`, reports, checkpoints, and other domain content. Loom owns only the
+declared artifact contract, serialization/registration boundary, and returned
+references.
+
+### Logging Mental Model
+
+The guide includes one source-backed table because there is no single logging
+owner to normalize. It distinguishes what Loom captures from what project code
+writes:
+
+| Execution path | Planned guidance |
+| --- | --- |
+| Local, capture disabled | Python stdout/stderr pass through to the current process and terminal by default. |
+| Local, capture enabled | Loom redirects Python streams to stage log paths; this is not a promise to capture native file descriptors, and bounded parallel local execution rejects this mode. |
+| Subprocess, Docker, and Apptainer | Child stdout/stderr are written to the stage request paths, with failure/result evidence retaining those paths. |
+| SLURM | Scheduler-wrapper stdout/stderr may be separate from the Loom stage streams and must be identified separately. |
+| Managed queue | Queue-owned attempt logs are separate from the run's ordinary stage log paths. |
+| Project `FileHandler` or direct file write | The file is owned by project configuration, is not automatically read by `loom logs`, and becomes an artifact only when explicitly registered and returned. |
+
+`loom logs RUN_URI STAGE` is therefore documented as an inspection path for
+Loom-owned stage streams, not arbitrary project files, queue-attempt logs, or
+SLURM wrapper logs. Handlers configured before a captured in-process stage may
+retain their original stream; handlers created inside the captured process
+normally follow that process's redirected Python streams. Tests cover the
+existing capture/pass-through and path behavior without adding a cross-backend
+normalization contract.
+
+### Lifecycle Catalog And Ordering
+
+At the evidence revision, the lifecycle catalog to refresh against source and
+publish consists of:
+
+```text
+run.created              stage.planned
+run.opened               stage.started
+run.planned              stage.completed
+run.started              stage.failed
+run.completed            stage.cancelled
+run.failed               stage.skipped
+run.cancelled            stage.reused
+run.preparation_failed   stage.blocked
+```
+
+The catalog is descriptive rather than a new event-name API. Implementation
+must refresh it after Stage 25 merges and document the exact names actually
+emitted at that source revision.
+
+The one accepted runtime correction is an ordering change in the fresh-run
+preparation-failure path. The current mismatch is approximately:
 
 ```python
-def run(self, context, inputs):
-    scratch = context.local_workspace_path("parts", "part-0001.tmp")
-    build_part(scratch)  # temporary/intermediate unless explicitly registered
-
-    model_path = context.local_output_path("model", suffix=".bin")
-    build_model(model_path)
-    return {
-        "model": context.register_local_artifact(
-            "model", model_path, artifact_type="model"
-        )
-    }
+emit("run.preparation_failed")
+if prior_status is RunStatus.CREATED:
+    write_status(RunStatus.FAILED)
 ```
 
-Notification setup remains ordinary explicit Python composition:
+The corrected order is:
 
 ```python
-class ProjectNotifier:
-    def __init__(self, client):
-        self.client = client
-
-    def notify(self, message):
-        response = self.client.send(message.to_dict())
-        return EventObserverExternalRef(
-            kind="project_notification",
-            identifiers={"message_id": response.message_id},
-        )
-
-registry = EventSinkRegistry()
-register_lifecycle_notifier(
-    registry,
-    name="notifications.project",
-    notifier=ProjectNotifier(client),
-)
-
-result = runner.run(
-    RunRequest(
-        config=composed,
-        run_uri=run_uri,
-        event_sink_registry=registry,
-    )
-)
+if prior_status is RunStatus.CREATED:
+    write_status(RunStatus.FAILED)
+emit("run.preparation_failed")
 ```
+
+This ensures that an observer reacting to `run.preparation_failed` reads
+`FAILED`, not stale `CREATED`. It does not change event/status schemas or reset
+an already-terminal opened run. Event observation remains synchronous and
+best-effort, so an observer failure must not replace the original preparation
+error or alter run correctness.
 
 | Example or invariant | Behavior or risk | Authoritative owner and boundary | Minimal coverage | Status |
 | --- | --- | --- | --- | --- |
-| Managed save versus file registration | Returned output is a declared `ArtifactRef`; workspace files are not implicit outputs. | `StageContext`/artifact store. | Contract plus runnable stage snippet. | planned |
-| Stream/log truth | Local pass-through/capture, subprocess/container child streams, Python handlers, queue logs, and SLURM wrapper/stage logs are described without overclaim. | Executor/store/SLURM manifest. | Existing tests plus focused local/subprocess example assertions. | planned |
-| Lifecycle catalog | Docs include every currently emitted run/stage lifecycle name and commit ordering. | Runner/lifecycle/events. | Focused source audit and integration event sequence. | planned |
-| Default notification selection | Routine events and `stage.completed` do not notify; the six default significant events do. | Notification severity map. | Exact unit table. | planned |
-| Bounded message | Secret-like arbitrary payload values never enter message fields or text; identity exposure is explicit. | Notification projector and downstream adapter trust boundary. | Exact `to_dict()` field-set/text unit tests. | planned |
-| Committed observation | Notifier handling `stage.failed`/`run.completed`, and fresh-run `run.preparation_failed` after Phase 1, can read matching committed state. | Runner/store then dispatcher. | One integration case per causally distinct stage/run/preparation boundary. | planned |
-| Reference-only observation | Non-durable `EventReference` produces a useful generic message without invented stage/payload detail. | Dispatcher then notification projector. | Focused unit or existing non-durable integration extension. | planned |
-| Failure isolation | Raising notifier creates a failure result and best-effort failure fact, later sink runs, and final run result is unchanged. | Existing registry. | Reuse/extend event-sink integration test. | planned |
-| External link | Returned provider reference records one link with matching sink/event identity. | Registration helper/context/store. | Integration round trip. | planned |
-| No provider | Dependency-free fake notifier proves the public path; no network is used. | Example harness. | Runnable e2e/example test. | planned |
+| Managed and file-backed outputs | Workspace confused with publication. | `StageContext` and artifact store. | Copyable snippets plus existing contracts. | planned |
+| Executor logging table | Uniform wording hides different owners. | Executor/store/SLURM/queue. | Source-backed table and focused tests. | planned |
+| Fresh preparation failure | Observer reads `CREATED`. | Runner status writer then event dispatcher. | Callback reads `FAILED`; terminal-run regression. | planned |
+| Lifecycle catalog | Docs omit emitted names. | Event/lifecycle source. | Exact documented/source sequence. | planned |
 
-Causal interactions requiring combined coverage:
-
-- committed lifecycle state + notification projection + callback observation;
-- durable record versus reference-only input + bounded projection;
-- notifier exception + failure persistence + later observer/run success; and
-- returned external reference + helper-owned sink identity + observer-link
-  persistence.
-
-Everything else stays in focused unit, package, docs, or existing executor
-tests rather than a backend Cartesian matrix.
+Causal interactions requiring combined coverage are limited to fresh
+preparation failure plus committed-state observation. Other documentation and
+example cases remain focused.
 
 ## Phase Shaping
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Stage-author correctness and logging | One simple downstream guide, corrected stage/artifact/log/event documentation, small runnable snippets, and only demonstrated compatibility fixes. | Docs/examples plus current authoritative owners; no notification API, new log API, scheduler, resource sampler, resume, or gate work. | Current `develop`; preserve Stage 27-29 dirty work. | Stage output/workspace and logging examples are truthful; lifecycle catalog matches source; fresh preparation failure is committed before observation; targeted tests and docs checks pass. | pending |
-| 2. Generic lifecycle notifications | Public notification severity/message/protocol/helper, private captured severity mapping, observer failure/link integration, dependency-free example, and final docs. | `loom.pipeline.notifications` over existing events/sinks; no public policy object, facts bag, provider SDK, plugin activation change, outbox/retry, or new durable schema. | Phase 1 merged so source/docs event truth is settled; Stage 28 exact-filter ownership unchanged. | Selected events produce bounded messages for record/reference inputs; ignored events do nothing; failures do not alter runs; external refs link correctly when persistence succeeds; full gate passes. | pending |
+| 1. Stage-author correctness and logging | One downstream guide plus truthful artifact/log/event behavior and the demonstrated preparation-order correction. | Context/docs/examples/runner tests only; no notification, subscription, plugin, scheduler, sampler, resume, or gate API. | Stage 25 merged. | Copyable guide, exact log/event claims, `FAILED` visible before event, full gates. | pending |
 
-Two phases keep correction work from being hidden inside a feature PR. Phase 1
-is independently useful to every stage author. Phase 2 adds exactly one feature
-over the corrected and documented lifecycle path.
+One phase is sufficient because the removed notification feature was the only
+independent second vertical outcome.
 
 ## Quality Gate
 
 | Check | Evidence | Result |
 | --- | --- | --- |
-| Behavior and agreements locked | Maintainer narrowed scope; FR/FQ rows cover outputs, logs, correctness, notifications, and explicit deferrals. | pass |
-| Minimum design justified | Existing event/sink/failure/link path is reused; public policy/facts abstractions and parallel dispatcher/store/provider code are absent. | pass |
-| Complexity delta proportionate | Policy object, facts bag, delivery schema, templates, redactor engine, provider adapter, scheduler, sampler, resume, and gate machinery are removed/deferred. | pass |
-| Contracts and private discretion clear | Public in-process shapes, reference-only behavior, trust boundary, and ownership are fixed; presentation wording/helpers remain private. | pass |
-| Invariant ownership and validation proportionate | Four causal interactions; event-name validation has one owner; no backend matrix or external environment requirement. | pass |
-| Phases vertical and reviewable | Correction/guidance first, one notification feature second. | pass |
-| No unresolved blocker | No product blocker remains; linked artifacts require mechanical reconciliation with the reviewed design. | pass |
+| Behavior and agreements locked | FR-1 through FR-5 and FQ-1 through FQ-5 reflect the maintainer-approved split. | pass |
+| Minimum design justified | Existing public surfaces and one ordering fix suffice. | pass |
+| Complexity delta proportionate | Four proposed notification contracts and their phase were removed. | pass |
+| Contracts and private discretion clear | No public/durable addition; exact ordering behavior fixed. | pass |
+| Invariant ownership and validation proportionate | Only preparation failure needs combined state/event proof. | pass |
+| Phases vertical and reviewable | One independently useful phase remains. | pass |
+| No unresolved blocker | Stage 25 is sequencing, not a design blocker. | pass |
 
-Gate result: expanded design review passed with the corrections in EDR-1
-through EDR-5 and no blocker. Planning is not ready for implementation until
-the linked manifest/phase plan are reconciled and the manager quality gate
-passes.
+Gate result: ready for Phase 1 after Stage 25 remotely merges. Maintainer
+approval for the cross-stage correction was recorded on 2026-08-20.
 
-Accepted risks and revisit triggers:
-
-- Synchronous notifiers can add latency. Revisit only with measured impact and
-  an accepted async delivery requirement.
-- A provider can deliver successfully and fail before returning/recording its
-  external reference. Revisit only with an accepted at-least-once/idempotency
-  contract; do not infer delivery from absence of failure.
-- A notifier exception message and returned external-reference identifiers are
-  adapter-authored inputs to existing durable observer facts. Project adapters
-  must avoid credentials or sensitive payloads in both; Stage 26 adds no
-  generic scrubber.
-- `run_uri` can contain a local path. It remains the canonical run identity;
-  adapters that send to a less trusted audience may replace its presentation,
-  but Loom does not add a second run identifier here.
-- Stage 28 activation is sequenced separately. Stage 26 Python usage remains
-  useful without it.
+Accepted risks and revisit triggers: executor logging remains heterogeneous.
+Add a common notification projection only after at least two concrete provider
+consumers or another accepted requirement demonstrates stable shared semantics.
 
 ## Decisions And Deferrals
 
 | Item | Decision or deferral | Rationale | Revisit trigger |
 | --- | --- | --- | --- |
-| Stage theme | Operational correctness, simple guidance, logging truth, and generic notifications only. | Direct maintainer decision. | New stage proposal, not Stage 26 scope growth. |
-| Artifacts/workspace | Use current `StageContext` facade and explicit returned refs. | Existing invariant owner is sufficient. | A non-local writer consumer needs a public boundary. |
-| Logging | Document existing executor differences; separate project file logging from captured streams. | A uniform logging framework is not required. | Demonstrated cross-executor correctness failure. |
-| Notification transport | Project/plugin notifier behind a structural protocol. | Keeps Loom service-neutral and dependency-light. | A provider is explicitly selected for first-party support. |
-| Filtering | Exact event-to-severity mapping is captured by the helper; Stage 28 retains registry subscription ownership. | Avoid a public policy wrapper and conflicting dispatcher contracts. | Stage 28 contract changes before implementation. |
-| Delivery guarantee | Synchronous best-effort with attempted failure/link facts. | Matches existing observe-only contract and requires no durable machinery. | Accepted at-least-once requirement with idempotency design. |
-| Generic scheduling | Deferred beyond Stage 26. | No current Stage 26 consumer; separate ownership decisions required. | Dedicated planning request. |
-| Resume/reuse semantics | Existing behavior remains; new semantics deferred beyond Stage 26. | Maintainer explicitly removed it. | Dedicated accepted requirement. |
-| Resource usage | Sampler/observation records and allocation-versus-usage policy removed from the roadmap stage. | No current sampler consumer and maintainer explicitly removed it. | Dedicated evidence-backed stage. |
-| Acceptance profiles and PR gates | No new profiles or gate changes. Existing opt-in suites remain documented as current behavior. | External environments are not reliable default prerequisites. | Dedicated validation-stage decision. |
-| Service adapters | Slack, Discord, email, webhook, and tracking adapters remain downstream/plugins. | Avoid credentials, SDKs, and provider policy in core. | Selected adapter with an explicit dependency/design reason. |
-| Domain content | No metrics/checkpoints/artifact/log payload parsing in core. | Loom remains domain-neutral. | Never without a new generic contract and consumer. |
+| Artifacts/workspace | Use current `StageContext`; outputs remain explicit refs. | Existing facade is sufficient. | Demonstrated non-local writer need. |
+| Logging | Document executor differences. | No common runtime owner exists. | Demonstrated correctness failure requiring one. |
+| Lifecycle events | Correct catalog and commit ordering. | Observers require authoritative facts. | New reachable mismatch. |
+| Notification API | Removed from Stage 26. | No real core consumer and it duplicated Stage 28 selection/registration. | Two concrete providers need one stable projection. |
+| Event subscriptions/activation | Stage 28. | They are generic extension mechanics. | Implement under Stage 28 Phase 3. |
+| Provider delivery | Project/plugin code. | Credentials, payloads, and network policy are destination-specific. | Explicit first-party provider decision. |
+| Scheduling/sampling/resume/gates | Deferred. | No accepted Stage 26 consumer. | Dedicated planning request. |

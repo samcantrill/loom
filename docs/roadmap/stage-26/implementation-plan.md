@@ -1,117 +1,94 @@
-# Roadmap Stage 26 Implementation Plan: Operational Correctness And Notifications
+# Roadmap Stage 26 Implementation Plan: Operational Correctness And Lifecycle Guidance
 
-Status: draft; expanded design review pending
+Status: ready; removal-first cross-stage correction and manager quality gate passed
 Roadmap stage: `v26`
 Planning document: `docs/roadmap/stage-26/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
 Current phase: Phase 1 pending
-Blockers: expanded design review and final manager quality gate
+Blockers: Stage 25 remote merge before Phase 1 starts
 
 ## Summary
 
-- Goal: make existing stage authoring, artifacts, logs, and lifecycle behavior
-  easy to use correctly, then add one service-neutral lifecycle-notification
-  feature over committed events.
-- Approved behavior and requirement IDs: planning `FR-1` through `FR-10` cover
-  the stage-author path, executor-specific logging truth, evidence-backed
-  correctness fixes, generic notification values/policy/protocol/registration,
-  safe message projection, explicit Python setup, and unchanged validation
-  gates.
-- Key design constraints and decision IDs: `FQ-1` through `FQ-8` and `DQ-1`
-  through `DQ-8` retain current artifact, lifecycle, event, sink, observer,
-  plugin-activation, and test-harness owners.
-- Minimum useful change: one simple downstream-operations guide plus a small
-  `loom.pipeline.notifications` adapter that selects significant lifecycle
-  events, produces allowlisted messages, calls a project notifier, and reuses
-  existing sink failure/link evidence.
-- Complexity deliberately excluded: a notification dispatcher/store/receipt
-  schema, arbitrary templates or payload predicates, provider SDKs, async
-  queues, retry/deduplication/delivery guarantees, generic scheduling,
-  resource-usage sampling, new resume policy, and validation-gate/profile work.
+- Goal: make current stage authoring, artifacts, logs, and lifecycle facts easy
+  to use correctly through one evidence-backed downstream guide.
+- Approved behavior and requirement IDs: planning `FR-1` through `FR-5` cover
+  context/artifact usage, executor-specific logging truth, demonstrated
+  compatibility corrections, the lifecycle catalog and post-commit ordering,
+  and unchanged validation/adjacent-stage ownership.
+- Key design constraints and decision IDs: planning `FQ-1` through `FQ-5` and
+  `DQ-1` through `DQ-4` add no public or durable shape and leave exact event
+  subscriptions and plugin activation to Stage 28.
+- Minimum useful change: one copyable guide plus the smallest correction that
+  makes a fresh `run.preparation_failed` observable only after `FAILED` is
+  committed.
+- Complexity deliberately excluded: notification message/severity/notifier
+  contracts, registration adapters, service clients, event subscriptions,
+  plugin activation, delivery machinery, logging facades, scheduling,
+  sampling, resume changes, and new validation gates.
 - Validation and phase-shaping source: planning `Examples And Validation` and
-  `Phase Shaping`; combined tests are limited to commit/observation,
-  failure/continuation, and external-reference/link identity.
-- Out of scope: every planning deferral, Stage 25 queue policy, Stage 27 GPU
-  setup, Stage 28 plugin activation/subscriptions, Stage 29 daemon/agent work,
-  and domain-specific payload meaning.
+  `Phase Shaping`; only preparation failure and committed observation require
+  combined coverage.
+- Out of scope: every planning deferral plus Stage 25, 27, 28, and 29 policy or
+  authority work.
 
 ## Shared Constraints
 
 - Architecture and dependency direction:
-  - stage code uses the `StageContext` facade and returns `ArtifactRef` values;
-    it never receives a public mutable store handle;
-  - runner/lifecycle/store commits remain authoritative and precede events;
-  - event registry remains the only callback dispatcher and owns callback
-    ordering/failure capture;
-  - `loom.pipeline.notifications` may consume import-light event/sink/plain-data
-    contracts, but event/store/runner modules do not import provider code; and
-  - provider clients, credentials, formatting, and network behavior remain in
-    trusted project code or optional plugins.
+  - current context, artifact, executor, store, lifecycle, event, and observer
+    owners remain authoritative;
+  - project examples depend on public Loom APIs; core Loom never imports a
+    project, provider, or service SDK; and
+  - docs route to detailed feature owners instead of inventing a facade.
 - Shared public and durable contracts:
-  - no event, observer, lifecycle, artifact, queue, resource, resume, or plugin
-    schema changes;
-  - notification severity/message/policy and notifier protocol are immutable
-    in-process values; only `NotificationMessage.to_dict()` exposes a plain
-    adapter projection;
-  - `register_lifecycle_notifier(...)` registers one ordinary named event sink
-    and uses that same name for optional observer-link evidence; and
-  - notification selection does not replace Stage 28 exact registry
-    subscriptions. Before or without Stage 28, the sink may receive and ignore
-    unselected events.
+  - no new public type, registry, message, record, schema, or store capability;
+  - stage outputs remain declared `ArtifactRef` values; workspace files remain
+    private until registered and returned; and
+  - fresh preparation failure changes ordering only: commit `FAILED`, then emit
+    `run.preparation_failed`; an already-terminal opened run is unchanged.
 - Shared reproducibility, compatibility, and import constraints:
-  - no notifier registration means zero notification discovery or work;
-  - defaults select only the six planning-approved significant event types;
-  - arbitrary event payloads, exception/reason text, config, commands,
-    environment, logs, and artifact contents never enter default messages;
-  - existing sinks, executors, log paths, CLI output, and validation commands
-    remain compatible; and
-  - no runtime dependency is added.
+  - examples are dependency-free and hermetic;
+  - backend-specific log behavior remains explicit; and
+  - existing package imports, defaults, and validation gates remain unchanged.
 - Shared invariant ownership:
-  - feature specs/source own behavior; the downstream guide owns the simple
-    user journey;
-  - executor/store/SLURM manifests own captured stream paths;
-  - project code owns separate file handlers and domain log content;
-  - notification policy/projector owns selection, severity, and safe fields;
-  - notifier owns delivery; event registry owns failure isolation; sink context
-    and store own observer-link recording.
-- Decisions no phase may reopen: only notifications are a Stage 26 feature; no
-  generic scheduler, resource sampler, new resume policy, new PR gate/profile,
-  provider adapter, outbox/retry/delivery guarantee, mutable callback, generic
-  redactor/template engine, or durable notification schema.
+  - `StageContext` owns stage-facing paths and artifact helpers;
+  - each executor/store/scheduler layer owns its streams and log paths; and
+  - runner/store owns lifecycle state before event code publishes the fact.
+- Decisions no phase may reopen: no notification abstraction, subscription,
+  service adapter, logger facade, implicit output, mutable store access,
+  scheduler, sampler, resume semantics, or validation-policy work.
 
 ## Phase Index
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `stage-author-correctness-and-logging` | pending | `docs/roadmap/stage-26/phases/stage-author-correctness-and-logging.md` | `agent/stage-26-p1-stage-author-correctness-and-logging` | pending | Downstream guide, artifact/log/event docs, examples, demonstrated compatibility corrections | Give stage authors one truthful operational path before adding notification behavior. |
-| 2 | `generic-lifecycle-notifications` | pending | `docs/roadmap/stage-26/phases/generic-lifecycle-notifications.md` | `agent/stage-26-p2-generic-lifecycle-notifications` | pending | Notification public surface, event projection/registration, observer evidence, example/docs/tests | Deliver safe, explicit, service-neutral lifecycle notifications without changing run correctness. |
+| 1 | `stage-author-correctness-and-logging` | pending | `docs/roadmap/stage-26/phases/stage-author-correctness-and-logging.md` | `agent/stage-26-p1-stage-author-correctness-and-logging` | pending | Downstream guide, artifact/log/event truth, preparation-failure ordering, examples/tests | Give stage authors one truthful operational path and ensure observers see committed lifecycle state. |
 
-Phase 1 is independently useful and contains no new feature family. Phase 2
-adds the stage's single feature over the corrected lifecycle documentation and
-existing post-commit event path.
+The former generic-lifecycle-notifications phase is no longer accepted. It was
+removed because the proposed message/severity/helper surface had no concrete
+core consumer and duplicated the generic subscription/registration path owned
+by Stage 28.
 
 ## Quality Gate
 
-- Planning gate: maintainer narrowed Stage 26 to correctness, documentation,
-  logging, and generic notifications; all former scheduler, resume, usage, and
-  gate/profile work is explicitly deferred.
-- Manager review: pending expanded design result and final cross-artifact check.
-- Optional independent review: not yet needed; use only if the corrected
-  manifest/phase plans retain a material public-contract risk.
-- Correction: pending the single expanded design-safety result if it produces
-  concrete findings.
-- Ready for implementation: no; design review and final manager gate pending.
-- Accepted risks: synchronous notifier latency; delivery may occur before a
-  process dies without recording an external link; run URIs may expose path-
-  shaped identity; CLI/plugin activation is sequenced separately in Stage 28.
-- Revisit triggers: measured latency plus accepted async requirement; accepted
-  at-least-once/idempotency contract; selected first-party provider; non-local
-  artifact-writer need; or Stage 28 event-subscription contract drift.
+- Planning gate: the removal-first cross-stage correction is confirmed; no
+  behavior or public contract remains unresolved.
+- Manager review: planning, this manifest, the sole phase plan, roadmap entry,
+  and Stage 28 ownership are consistent.
+- Optional independent review: not rerun; the correction removes the prior
+  external-side-effect contract rather than adding a novel decision.
+- Correction: the Stage 26 notification phase and all dependencies on its
+  proposed public types were removed; Stage 28 now owns generic observer
+  mechanics and direct provider examples.
+- Ready for implementation: yes, after Stage 25 remotely merges.
+- Accepted risks: executor logging remains intentionally heterogeneous and the
+  source audit may narrow prose rather than change behavior.
+- Revisit triggers: a demonstrated public artifact/log gap, a new lifecycle
+  ordering mismatch, or at least two real provider integrations needing one
+  shared notification projection.
 
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | pending | pending | pending | pending |
-| 2 | pending | pending | pending | pending |
