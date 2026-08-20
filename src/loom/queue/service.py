@@ -25,7 +25,7 @@ from .models import (
     RunIntent,
     validate_queue_id,
 )
-from .repository import QueuePoolSnapshot, QueueRepository
+from .repository import QueueClaimResult, QueuePoolSnapshot, QueueRepository
 from ._sqlite import SQLiteQueueRepository
 
 
@@ -324,7 +324,7 @@ class QueueService:
         claim_id: str,
         preference_id: str,
         reason_code: str,
-    ):
+    ) -> QueueClaimResult | None:
         """Use the built-in repository's exact managed ownership transition."""
 
         self._ensure_running()
@@ -334,7 +334,7 @@ class QueueService:
             raise QueueServiceError(
                 "repository does not support managed resource-aware selection"
             )
-        return claimer(
+        result = claimer(
             queue_item_id,
             pool_name=pool_name,
             expected_dispatch_attempt=expected_dispatch_attempt,
@@ -343,6 +343,9 @@ class QueueService:
             preference_id=preference_id,
             reason_code=reason_code,
         )
+        if result is not None and not isinstance(result, QueueClaimResult):
+            raise QueueServiceError("repository returned invalid selection claim")
+        return result
 
     def record_dispatch_handle(
         self,

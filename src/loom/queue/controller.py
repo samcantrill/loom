@@ -14,8 +14,23 @@ from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_timestamp
 
 from .errors import QueueServiceError
-from .models import DispatchHandle, QueueItem, QueueItemStatus, QueueRecoveryRecord
+from .models import (
+    DispatchHandle,
+    QueueItem,
+    QueueItemStatus,
+    QueuePool,
+    QueuePoolMode,
+    QueueRecoveryRecord,
+)
+from .selection import (
+    QueueSelectionDisposition,
+    QueueSelectionPolicy,
+    _evaluate_selection,
+    _validate_selection_policy,
+)
 from .service import QueueService
+
+_SELECTION_LIMIT = 32
 
 
 class QueueDispatchDisposition(StrEnum):
@@ -287,6 +302,7 @@ class QueueController:
         service: QueueService,
         *,
         adapters: Mapping[str, QueueDispatchAdapter] | None = None,
+        selection_policies: Mapping[str, QueueSelectionPolicy] | None = None,
         owner_id: str | None = None,
         clock: Callable[[], str] = utc_timestamp,
     ) -> None:
@@ -301,6 +317,9 @@ class QueueController:
         self._session_id = uuid4().hex
         self._owned_handle_ids: set[str] = set()
         self._pending_start_compensations: dict[str, QueueItem] = {}
+        self._selection_policies = self._selection_policies_by_pool(selection_policies)
+        self._last_selection_capacity_blocked = False
+        self._last_selection_steps = 0
 
     def run_cycle(self, *, pool_name: str) -> QueueCycleResult:
         """Reconcile one pool then fill it within its controller-local budgets."""
@@ -313,11 +332,14 @@ class QueueController:
         if not degraded:
             limit = self._service.spec.controller.max_active_items
             budget = self._service.spec.controller.max_dispatches_per_cycle or limit
+            selection_steps_remaining = _SELECTION_LIMIT
             while active_count < limit and len(dispatch_steps) < budget:
-                claim = self._service.claim_next(
-                    pool_name, owner_id=self._owner_id, claim_id=self._next_claim_id()
+                claim = self._claim_next_for_pool(
+                    pool_name, selection_limit=selection_steps_remaining
                 )
+                selection_steps_remaining -= self._last_selection_steps
                 if claim is None:
+                    capacity_blocked = self._last_selection_capacity_blocked
                     break
                 item = claim.item
                 result = self._safe_dispatch(item)
@@ -411,11 +433,7 @@ class QueueController:
         else:
             handoff = None
         for candidate_pool in self._candidate_pools(pool_name):
-            claim = self._service.claim_next(
-                candidate_pool,
-                owner_id=self._owner_id,
-                claim_id=self._next_claim_id(),
-            )
+            claim = self._claim_next_for_pool(candidate_pool)
             if claim is None:
                 continue
             item = claim.item
@@ -585,6 +603,105 @@ class QueueController:
         if self._service.spec.controller.default_pool_name is not None:
             return (self._service.spec.controller.default_pool_name,)
         return self._service.spec.pool_names
+
+    def _selection_policies_by_pool(
+        self, policies: Mapping[str, QueueSelectionPolicy] | None
+    ) -> Mapping[str, QueueSelectionPolicy]:
+        if policies is None:
+            return {}
+        if not isinstance(policies, Mapping):
+            raise QueueServiceError("selection_policies must be a mapping")
+        validated: dict[str, QueueSelectionPolicy] = {}
+        pools_by_name = {pool.pool_name: pool for pool in self._service.spec.pools}
+        for pool_name, policy in policies.items():
+            if not isinstance(pool_name, str) or pool_name not in pools_by_name:
+                raise QueueServiceError(f"unknown selection policy pool: {pool_name}")
+            if pools_by_name[pool_name].mode is not QueuePoolMode.MANAGED:
+                raise QueueServiceError(
+                    f"selection policy pool is not managed: {pool_name}"
+                )
+            try:
+                validated[pool_name] = _validate_selection_policy(policy)
+            except Exception as exc:
+                raise QueueServiceError(
+                    f"invalid selection policy for pool: {pool_name}"
+                ) from exc
+        return validated
+
+    def _claim_next_for_pool(
+        self, pool_name: str, *, selection_limit: int = _SELECTION_LIMIT
+    ):
+        pool = self._pool(pool_name)
+        self._last_selection_capacity_blocked = False
+        self._last_selection_steps = 0
+        if pool.mode is QueuePoolMode.DELEGATED:
+            return self._service.claim_next(
+                pool_name,
+                owner_id=self._owner_id,
+                claim_id=self._next_claim_id(),
+            )
+        return self._claim_next_managed(pool, selection_limit=selection_limit)
+
+    def _claim_next_managed(self, pool: QueuePool, *, selection_limit: int):
+        policy = self._selection_policies.get(pool.pool_name)
+        for _ in range(selection_limit):
+            self._last_selection_steps += 1
+            candidates = self._service._read_selection_candidates(
+                pool.pool_name, limit=_SELECTION_LIMIT
+            )
+            evaluation = _evaluate_selection(
+                candidates,
+                pool_name=pool.pool_name,
+                advisory_available_resources=self._advisory_available_resources(pool),
+                policy=policy,
+            )
+            decision = evaluation.decision
+            if decision.disposition is QueueSelectionDisposition.STOPPED:
+                self._last_selection_capacity_blocked = (
+                    evaluation.source_had_candidates
+                    and not evaluation.has_eligible_candidates
+                )
+                return None
+            queue_item_id = decision.queue_item_id
+            if queue_item_id is None:
+                raise QueueServiceError("selected queue decision lost its queue_item_id")
+            candidate = next(
+                candidate
+                for candidate in candidates
+                if candidate.queue_item_id == queue_item_id
+            )
+            claim = self._service._claim_selection_candidate(
+                queue_item_id,
+                pool_name=pool.pool_name,
+                expected_dispatch_attempt=candidate.dispatch_attempt,
+                owner_id=self._owner_id,
+                claim_id=self._next_claim_id(),
+                preference_id=evaluation.preference_id,
+                reason_code=decision.reason_code,
+            )
+            if claim is not None:
+                return claim
+        return None
+
+    def _advisory_available_resources(self, pool: QueuePool) -> Mapping[str, int]:
+        available = dict(pool.resources)
+        for item in self._service.recovery_items():
+            if item.pool_name != pool.pool_name or QueueItemStatus(item.status) not in {
+                QueueItemStatus.CLAIMED,
+                QueueItemStatus.DISPATCHED,
+            }:
+                continue
+            for resource_name, amount in item.launch_contract.resources.items():
+                available[resource_name] = max(
+                    0, available.get(resource_name, 0) - amount
+                )
+        return available
+
+    def _pool(self, pool_name: str) -> QueuePool:
+        for pool in self._service.spec.pools:
+            if pool.pool_name == pool_name:
+                return pool
+        raise QueueServiceError(f"unknown pool: {pool_name}")
 
     def _dispatch(self, item: QueueItem) -> QueueDispatchResult:
         adapter = self._adapters.get(item.launch_contract.adapter)
