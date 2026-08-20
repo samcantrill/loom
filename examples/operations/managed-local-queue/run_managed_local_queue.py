@@ -55,13 +55,15 @@ def main() -> None:
         selection_policies={"local-pool": _SmallestEligibleRequestPolicy()},
     )
     runtime.start()
-    release_first_item = run_root / "release-item-1"
+    release_selected_items = run_root / "release-selected-items"
     for item_id, amount in (("item-1", 2), ("item-2", 1), ("item-3", 1)):
         runtime.service.enqueue(
             _request(
                 item_id,
                 amount,
-                release_path=release_first_item if item_id == "item-1" else None,
+                release_path=(
+                    release_selected_items if item_id in {"item-2", "item-3"} else None
+                ),
             )
         )
 
@@ -73,9 +75,10 @@ def main() -> None:
     try:
         _assert_active_smallest_requests(active_status)
     finally:
-        # The first child waits on this bounded, filesystem-visible signal so
-        # live-status observation does not depend on scheduler timing.
-        release_first_item.touch()
+        # The selected one-slot children wait on this bounded,
+        # filesystem-visible signal so live-status observation does not depend
+        # on process or scheduler timing.
+        release_selected_items.touch()
     _serve_until_example_completes(runtime)
     status = runtime.status().to_dict()
     _assert_completed_example(status, run_root)
