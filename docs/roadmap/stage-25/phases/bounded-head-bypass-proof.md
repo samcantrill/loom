@@ -2,22 +2,22 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: v25 Phase 2
 - Manifest: `docs/roadmap/stage-25/implementation-plan.md`
 - Branch: `agent/stage-25-p2-bounded-head-bypass-proof`
 - Worktree root and path:
   `/home/can134/work/active/loom-worktrees/stage-25-p2-bounded-head-bypass-proof`
-- Base revision: current `origin/develop` after Phase 1 merges; record exact
-  revision before branch creation
+- Base revision: `9af2198fb1f33bf77b59ee06b739e4a819cba6f9`
 - PR target: `develop`
 - PR title: `Whole-Run Queue Selection - Phase 2: Bounded Head-Bypass Proof`
-- Dependencies: Phase 1 merged with one eligibility/default/custom engine,
-  exact local ownership, managed entrypoint parity, and advisory opportunity
-  contracts unchanged
+- Dependencies: Phase 1 merged through [#218](https://github.com/samcantrill/loom/pull/218)
+  as `ff2b7ee`, with lifecycle metadata at `9af2198`; its one
+  eligibility/default/custom engine, exact local ownership, managed entrypoint
+  parity, and advisory opportunity contracts remain unchanged
 - Workflow path: expanded because typed deferral, repeated evaluation, bounds,
   evidence, and concurrency interact
-- Blockers: Phase 1 merge only
+- Blockers: none
 
 ## Objective And Context
 
@@ -35,13 +35,23 @@
 
 ## Current Source And Harness
 
-- Relevant merged seams after Phase 1: selection evaluator, local opportunity
-  construction, exact ownership service, `QueueController.run_cycle`, Stage 23
-  deferred disposition/guarded requeue, cycle result, admission/provider,
-  queue audit and safe status evidence.
-- Harnesses include Phase 1 parity/claim tests, Stage 23 cycle integration,
-  fake process/clock/coordination seams, status contracts, and operations
-  example conventions.
+- Relevant seams at `9af2198`: `loom.queue.selection._evaluate_selection()` and
+  `QueueController._claim_next_managed()` own shared evaluation and exact
+  ownership; `run_cycle()` already tracks one private remaining-step count but
+  currently breaks after the first `QueueDispatchDisposition.DEFERRED`;
+  `QueueCycleResult` exposes the existing plain-data cycle evidence shape.
+- `LocalQueueDispatchAdapter.dispatch()` returns typed `DEFERRED` before process
+  start for scalar-capacity failure, or after `_cleanup_pre_start()` reports no
+  pending release for assignment deferral. `SQLiteQueueRepository.defer_item()`
+  uses an expected snapshot, accepts only `CLAIMED`, returns the item to
+  `QUEUED`, clears claim/handle, and preserves enqueue order and attempt.
+- Current harnesses are `tests/unit/loom/queue/test_{controller,scheduler}.py`,
+  `tests/contracts/test_queue_{python_api,repository}_contract.py`,
+  `tests/integration/queue/test_{sqlite_repository,managed_local_controller}.py`,
+  and `tests/e2e/test_queue_cli.py`. The existing dependency-free operations
+  example lives under `examples/operations/managed-local-queue/`, with its
+  durable example entry in `example.yaml` and queue documentation in
+  `docs/features/queue.md`.
 - The example uses only public selection values. CLI/config gain no loader and
   default tests require no external service, hardware, or network.
 
@@ -192,7 +202,8 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete; refresh after Phase 1 merge
+- Manager preparation: complete at base `9af2198`; Phase 1 selection,
+  compensation, evidence, example, and harness seams refreshed
 - Expanded planning: revised design approved; no additional spawned pass
 - Implementation: not started
 - Refiner: optional only for a qualified blocker; unused
