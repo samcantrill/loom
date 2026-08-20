@@ -2,20 +2,25 @@
 
 ## Metadata
 
-- Status: pending
+- Status: blocked
 - Roadmap stage and phase: Stage 24, Phase 2
 - Manifest: `docs/roadmap/stage-24/implementation-plan.md`
 - Branch: `agent/stage-24-p2-crash-recovery-and-artifact-trust`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees` and
   `/home/can134/work/active/loom-worktrees/stage-24-p2-crash-recovery-and-artifact-trust`
-- Base revision: current `origin/develop` after Phase 1 is remotely merged
+- Base revision: `a7afd44153860ba131db7ee26c186cc0188b1497`, current
+  `origin/develop` after the Phase 1 merge record
 - PR target: `develop`
 - PR title: `Operational Lifecycle Validation - Phase 2: Crash Recovery And Artifact Trust`
 - Dependencies: Stage 24 Phase 1 remotely merged with its cancellation,
   subprocess cleanup, and process-test support contracts intact
-- Workflow path: fast; refine only for a qualified authority/recovery or durable-
-  commit blocker
-- Blockers: Phase 1 not yet merged
+- Workflow path: expanded after a qualified durable-commit blocker; one
+  `loom_phase_refiner` correction and one independent review are required
+- Blockers: independent review demonstrated that the supported HTTP authority
+  adapter returns no run-recovery facts, so an expired managed-service run
+  cannot satisfy the approved recovery proof and resume. The phase has used its
+  three permitted correction passes. Renewal coverage also needs one
+  deterministic assertion beyond the original controller TTL.
 
 ## Objective And Context
 
@@ -50,6 +55,10 @@
     stage-attempt leases already have private renewal during execution.
   - Resume planning already rejects reuse of old `RUNNING` stages and uses
     checksum mismatch to produce an explanatory rerun action.
+  - The Phase 2 executor demonstrated that both authority backends then reject
+    attempt 2 because the durable model permits only one output commit per
+    stage. SQLite enforces this with `UNIQUE(stage_name)` and the service stores
+    one commit/fact set per stage.
   - Artifact stores and run-store output/index writers already own payload,
     checksum, outputs, and commit consistency.
 - Existing tests and seams:
@@ -100,6 +109,13 @@ In scope:
   artifact payload without changing valid metadata, resume, and assert checksum
   mismatch, producer/consumer rerun, independent-branch reuse, attempt counts,
   repaired payload, outputs, and run artifact index.
+- Add the minimum truthful commit-replacement contract for that path: immutable
+  attempt-specific commits, an explicit predecessor/current-head identifier,
+  atomic latest-attempt/fence/head validation, retained predecessor history,
+  and current-only snapshot/artifact projection with SQLite/service parity and
+  a versioned SQLite migration. Add one backend-neutral
+  `list_output_commits` read returning retained commit/fact composites in
+  revision order so the history is inspectable rather than merely stored.
 - Reconcile execution, state, reliability, resume, artifacts, run-store,
   testing, and roadmap documentation with the implemented behavior and the
   Stage 26 external-acceptance boundary.
@@ -109,8 +125,8 @@ Out of scope:
 - Killing or adopting foreign processes by stored PID; proving cleanup after
   total machine loss; reattaching to a surviving child; daemon/service-manager
   implementation; automatic lease stealing; silent state repair; a new
-  `loom recover`/`repair-state` command; new status, attempt, audit, or schema
-  shape.
+  `loom recover`/`repair-state` command; new status or attempt shape, or schema
+  work beyond append-only output-commit supersession.
 - Retrying ambiguous authority writes, simulating every network fault, testing
   database corruption, changing automatic retry policy, or treating malformed
   serialized state like a checksum mismatch.
@@ -124,9 +140,10 @@ Assumptions:
   still stops if an incomplete stage retains a live/ambiguous lease.
 - Controller renewal can use a private runner/adapter helper and test-only
   timing controls. If safe renewal requires a public protocol or schema, stop.
-- Existing transition/audit surfaces can retain the interruption/stale fact
-  before resume advances the same run. If a new durable schema is unavoidable,
-  stop rather than silently adding it.
+- Existing transition/audit surfaces retain the interruption/stale fact before
+  resume advances the same run. The demonstrated output-commit conflict is the
+  sole approved durable expansion; any broader schema or history API still
+  requires manager action.
 - The public resume path already treats a locally readable checksum mismatch as
   rerunnable stale work. Structurally corrupt JSON continues to fail clearly and
   is not broadened into automatic repair.
@@ -154,10 +171,17 @@ Assumptions:
   - Authority loss before commit cannot be represented as authoritative success
     even if the project stage returned or wrote local scratch bytes.
   - Valid metadata plus payload checksum mismatch reruns the affected branch and
-    preserves reusable independent work; malformed durable state still errors.
-- Public or durable shapes: no new shape. Use current statuses, recovery
-  transitions, attempts, audit/events, failure/diagnostic facts, output records,
-  checksums, artifact index, and planner reason codes.
+    preserves reusable independent work; each repaired stage appends a commit
+    tied to its new attempt and expected predecessor; malformed durable state
+    still errors.
+- Public or durable shapes: preserve current statuses and snapshot purpose, but
+  extend the output-commit record/protocol with explicit supersession and
+  migrate SQLite so a stage can retain multiple immutable commits. Current
+  snapshots and artifact indexes expose only the newest authoritative commit's
+  facts; `list_output_commits` exposes immutable current and prior composites in
+  revision order. The known complete prior SQLite version migrates atomically
+  without losing its existing commit/facts; invalid or unknown versions still
+  fail loudly.
 - Trust and failure boundaries: authority/lock owns recovery permission;
   coordinator cannot infer ownership from PID; output commit owns success;
   artifact store owns byte validation; planner owns dependency invalidation.
@@ -180,7 +204,9 @@ Assumptions:
 - Material additions and current justification: private controller renewal
   preserves live ownership; local-service exclusion gives backend parity; a
   small runner/adapter recovery path connects existing transitions/scans to
-  resume; real process/service orchestration and one branch e2e connect owners.
+  resume; append-only fenced commit supersession resolves the demonstrated
+  corruption-repair conflict without rewriting history; real process/service
+  orchestration and one branch e2e connect owners.
 - Optional hardening and future capability deferred: public recovery command,
   auto-repair, crash hook, daemon, reattachment, orphan scan, network-partition
   matrix, database corruption recovery, external-runtime execution, and
@@ -196,6 +222,7 @@ Assumptions:
 | Attempt 2 cannot reuse attempt 1's incomplete artifacts. | Planner, attempt allocation, output commit | Scratch/output files survive crash. | Corrupt or partial data accepted. | Attempt/output/index assertions after resume. |
 | Authority loss fails closed at commit. | Service authority mutation boundary | Service stops after stage return/start. | Local files imply success without authority. | Real service-loss barrier and no dependent start/index commit. |
 | Checksum mismatch invalidates exactly the affected dependency branch. | Artifact store plus planner | Payload bytes changed behind valid ref/index. | Corrupt reuse or unnecessary whole-run recomputation. | Producer/consumer rerun, independent reuse, reason/payload/index proof. |
+| A repair commit cannot rewrite history or race the current head. | Authority output commit | Two attempts target the same prior commit, or a rerun publishes after its fence is lost. | Misattributed output, lost provenance, or split-brain replacement. | Cross-backend first/successor/current-history contracts, stale fence/head rejection, and migration proof. |
 | Hard-loss fixture affects only owned processes. | Test support | Broad group/PID cleanup. | Host/CI process damage. | Validated ownership and `finally` cleanup inherited from Phase 1. |
 
 ## Implementation Slices
@@ -208,9 +235,14 @@ Assumptions:
    `INTERRUPTED`/`STALE` evidence before attempt-2 success.
 3. Add the real local authority service-loss barrier at the output-commit
    boundary and preserve fail-closed diagnostics/compatibility.
-4. Add the public corrupt-artifact branch workflow with planner reason, attempt,
-   dependency, payload, outputs, and artifact-index assertions.
-5. Update canonical lifecycle/testing/resume/artifact documentation, run the
+4. Add append-only output-commit supersession across models/protocol, the single
+   history-list read, atomic known-version SQLite migration/current projection,
+   service authority, adapter/runner authorization, and backend contracts.
+   Preserve fail-closed changed-config behavior and loud failure for invalid or
+   unknown schema versions.
+5. Add the public corrupt-artifact branch workflow with planner reason, commit
+   lineage, attempt, dependency, payload, outputs, and artifact-index assertions.
+6. Update canonical lifecycle/testing/resume/artifact documentation, run the
    targeted suites, then complete the full repository validation and summary.
 
 ## Test And Validation Plan
@@ -219,9 +251,9 @@ Assumptions:
 | --- | --- | --- | --- |
 | Package | required if imports change; otherwise existing gate | Recovery helpers stay private and imports cheap. | No new public surface or optional dependency. |
 | Unit | required | Controller renewal/failure, live-owner refusal, recovery ordering, existing transition/attempt behavior. | Deterministic lease timing and exact status/event order without duplicating e2e. |
-| Contract | required | SQLite and local-service controller lease exclusion/expiry agree. | Second live controller rejected; expired controller remains recoverable and replacement is fenced. |
+| Contract | required | SQLite and local-service controller lease exclusion/expiry and output-commit supersession agree. | Second live controller rejected; expired controller remains recoverable; first/successor commits are returned in revision order while only successor facts are current; stale fence/head and unauthorized replacement fail; a complete prior SQLite database migrates losslessly and invalid/unknown versions fail. |
 | Integration | required | Hard loss and recovery; real local service-authority loss. | Ownership, transitions, attempts, output/index absence, diagnostics, dependent blocking. |
-| E2E / opt-in | required default local e2e | Public corrupt-artifact resume and, if most coherent, the process-tree resume path. | Reason/action/attempt/payload/index/branch assertions. External runtimes deferred. |
+| E2E / opt-in | required default local e2e | Public corrupt-artifact resume and, if most coherent, the process-tree resume path. | Reason/action/attempt/commit-lineage/payload/index/branch assertions. External runtimes deferred. |
 
 Targeted commands:
 
@@ -246,15 +278,19 @@ Final commands:
 - Main risks: renewal thread lifecycle/error loss; treating dead PID or new
   lease alone as recovery proof; backend divergence; losing recovery events;
   allocating attempt 2 early; late output indexing; flaky service loss;
-  corrupting metadata; broadening structural-corruption behavior.
+  corrupting metadata; stale-head races; migration loss; mixing historical facts
+  into the current projection; broadening structural-corruption behavior.
 - Review focus: renewal lifetime/fail-closed propagation, service/SQLite parity,
   matching recovery facts under the new controller, event ordering, attempt and
   output commit, live-owner refusal, PID containment, service loss, branch
-  invalidation, and no new public/durable machinery.
-- Stop if: renewal needs a public protocol or cannot surface loss before commit;
-  recovery requires PID guessing/lease stealing; stores cannot retain recovery
-  evidence without migration; resume overwrites attempt facts; service loss is
-  not deterministic; or checksum semantics conflict across supported stores.
+  invalidation, append-only commit lineage/current projection, migration, and no
+  durable machinery beyond the approved supersession contract.
+- Stop if: renewal needs a public run-lock protocol or cannot surface loss before
+  commit; recovery requires PID guessing/lease stealing; supersession cannot
+  retain predecessor commits or atomically reject stale fence/head; migration
+  cannot preserve existing commits; resume overwrites attempt facts; service
+  loss is not deterministic; or checksum semantics conflict across supported
+  stores.
 - Accepted debt and revisit trigger: no reattachment, automatic repair,
   machine-loss cleanup, database corruption recovery, or external runtime
   execution. Revisit only with an accepted owner/consumer in Stage 26 or later.
@@ -267,32 +303,53 @@ Final commands:
   Phase 1's merged process-test helpers and lifecycle behavior.
 - Decisions not to revisit: exclusive authority plus matching scan facts—not PID
   or lease acquisition alone—permit recovery; recovery events/transitions
-  precede attempt 2; checksum corruption reruns one branch; malformed state
-  fails; no new public recovery surface or external profile.
+  precede attempt 2; checksum corruption reruns one branch through a fenced,
+  append-only attempt-specific commit which names the expected predecessor;
+  prior commits remain immutable, current projections use only the successor,
+  ordinary changed-config replacement stays fail-closed, malformed state fails,
+  and there is no new recovery command or external profile.
 - Conditions requiring manager action: any stop condition, unavoidable schema
   or public API, inability to preserve prior attempt evidence, or a demonstrated
   backend-specific semantic conflict.
 
 ## Workflow State
 
-- Manager preparation: complete; refresh after Phase 1 merge
-- Expanded planning: not needed on current accepted design; reassess only if a
-  stop condition exposes a novel durable or trust-boundary decision
-- Implementation: pending one `loom_phase_executor`
-- Refiner: not needed unless the executor returns a qualified blocker
-- Pre-submit gate: pending
-- Independent review: not needed on current fast path; require the optional
-  reviewer if a material residual authority/recovery risk remains
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation: refreshed and complete on 2026-08-20 from the recorded
+  remote Phase 1 base
+- Expanded planning: manager correction complete after the demonstrated durable
+  conflict; append-only attempt-specific supersession was approved by the
+  maintainer on 2026-08-20
+- Implementation: complete pending gates. The executor recovery work is joined
+  to fenced append-only supersession across local, service, and HTTP authority;
+  current-only projections; atomic known-version migrations; attempt-scoped
+  corruption-branch authorization; and the real hard-loss, service-loss,
+  renewal, and branch-shaped operational proofs.
+- Refiner: used once for correction 1; manager correction 2 completed the public
+  adapters, migrations, runtime-facade wiring, renewal race handling, and
+  operational tests
+- Pre-submit gate: passed on 2026-08-20. `make validate-pr` completed with
+  Ruff clean, Pyright at zero errors, 2,153 default tests passed, 132 config-
+  extra tests passed, three environment-dependent container tests skipped, and
+  both distributions built successfully. `make test-summary` recorded 2,285
+  passes with no failures or errors.
+- Independent review: completed on 2026-08-20 and blocked publication. The
+  reviewer reproduced controller and attempt recovery facts in the repository
+  while the HTTP-backed adapter returned none. It also found that renewal is
+  invoked but is not tested after advancing authority time beyond the original
+  lease expiry.
+- Blocker corrections: 3/3 used. The final scoped correction updated six stale
+  schema-version and public-export expectations exposed by the full gate; their
+  focused rerun passed before the complete gate passed. No production behavior
+  failed in that correction.
+- PR and merge: blocked; no PR was opened
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Retains executor recovery/renewal work and adds attempt-specific `supersedes_commit_id`, immutable commit history, atomic current-head/fence validation, current-only snapshot facts, service/HTTP parity, authority protocol v2, local authority v1-to-v2 and repository v3-to-v4 migrations, plus coordination v1 metadata migration. The runner privately authorizes replacement only for the planner-confirmed corruption branch and exact attempt; ordinary changed-config reruns remain fail-closed. |
+| Tests added or updated | Adds cross-backend successor/current-history/stale-head coverage; lossless and rollback-safe migration tests; deterministic controller renewal success/failure; real controller/worker hard loss with live-owner refusal and expiry recovery; real authority service loss before commit; and a public branch-shaped checksum-corruption repair with attempts, lineage, payload, planner reason, reuse, and index assertions. |
+| Validated revision/tree state and evidence | A 150-test focused authority/protocol/repository/adapter/renewal/resume/parallel/e2e group passed in 27.39 seconds; the new service-loss and hard-loss cases also passed independently. On the final tree, `make validate-pr` passed Ruff, Pyright with zero errors, 2,153 default tests, 132 config-extra tests, three environment-dependent skips, and the package build. `make test-summary` passed all package, unit, contract, integration, e2e, and config-extra groups: 2,285 passed, zero failed/errors, and three skipped. |
+| Validation-relevant changes after evidence | Only this execution-plan evidence record was updated after the successful gates; no source, test, dependency, build, validation configuration, or tested canonical feature documentation changed. The receipt remains current. |
+| PR, review, and merge | Independent review blocked publication: the HTTP authority adapter's `scan_recovery` path returns no facts even when the repository reports an expired controller and attempt. No PR was opened. |
+| Residual risk and cleanup | Add a protocol/client/route operation for the existing run-level recovery scan, delegate the HTTP adapter to it, and contract-test expired controller plus attempt facts through that adapter. Extend the deterministic renewal test by advancing authority time beyond the original expiry and proving a competing controller is still rejected. The phase correction budget is exhausted, so this requires maintainer-directed replanning rather than another unrecorded correction. |

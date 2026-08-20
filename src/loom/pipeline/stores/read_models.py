@@ -349,6 +349,7 @@ class OutputCommitRecord:
     revision: BackendRevision
     output_names: tuple[str, ...] = ()
     materialized_refs: tuple["MaterializedRef", ...] = ()
+    supersedes_commit_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -374,6 +375,12 @@ class OutputCommitRecord:
                 "materialized_refs must contain MaterializedRef values"
             )
         object.__setattr__(self, "materialized_refs", refs)
+        if self.supersedes_commit_id is not None:
+            object.__setattr__(
+                self,
+                "supersedes_commit_id",
+                _non_empty_string(self.supersedes_commit_id, "supersedes_commit_id"),
+            )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -385,6 +392,7 @@ class OutputCommitRecord:
             "revision": self.revision.to_dict(),
             "output_names": list(self.output_names),
             "materialized_refs": [ref.to_dict() for ref in self.materialized_refs],
+            "supersedes_commit_id": self.supersedes_commit_id,
         }
 
     @classmethod
@@ -401,6 +409,7 @@ class OutputCommitRecord:
                 "revision",
                 "output_names",
                 "materialized_refs",
+                "supersedes_commit_id",
             },
             "OutputCommitRecord",
         )
@@ -424,6 +433,9 @@ class OutputCommitRecord:
                 for ref in _sequence(
                     mapping.get("materialized_refs", ()), "materialized_refs"
                 )
+            ),
+            supersedes_commit_id=_optional_string(
+                mapping.get("supersedes_commit_id"), "supersedes_commit_id"
             ),
         )
 

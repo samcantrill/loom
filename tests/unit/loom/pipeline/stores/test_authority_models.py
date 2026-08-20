@@ -144,7 +144,9 @@ def test_authority_schema_policy_loudly_rejects_old_and_new_active_state() -> No
         {"schema_version": AUTHORITY_SCHEMA_VERSION}
     )
     older = check_authority_schema_version({"schema_version": 1}, current_version=2)
-    newer = check_authority_schema_version({"schema_version": 2})
+    newer = check_authority_schema_version(
+        {"schema_version": AUTHORITY_SCHEMA_VERSION + 1}
+    )
 
     assert current.supported
     assert older.failure is not None

@@ -62,6 +62,20 @@ For example, `loom` may decide that the `train` stage must run. The training
 stage may then decide to resume from `latest.ckpt` inside its stage directory.
 `loom` should not implement model-specific checkpoint loading.
 
+For an authority-backed run, a checksum mismatch is a recoverable invalidation,
+not permission to overwrite arbitrary successful state. The planner marks the
+producer `RUN` with `ARTIFACT_CHECKSUM_MISMATCH`, propagates
+`UPSTREAM_WILL_RUN` through its consumers, and leaves independent branches
+reusable. The runner may request output replacement only for that planned
+corruption branch. Ordinary fingerprint or config changes remain fail-closed
+when the stage already has an authoritative output commit.
+
+An interrupted active run is also conservative. A resume controller must first
+obtain the exclusive controller lease and find expired recovery evidence for
+the prior controller and every incomplete active attempt. It then records the
+run as `INTERRUPTED` and active stages as `STALE`, with matching events, before
+planning attempt 2. A live or ambiguous owner blocks resume.
+
 ### 1.1 Alignment With `loom.md`
 
 [loom.md](../loom.md) calls for fingerprints and resume logic, but v0 intentionally

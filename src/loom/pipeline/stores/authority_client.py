@@ -35,6 +35,9 @@ from .read_models import BackendRevision, LifecycleReason
 AUTHORITY_MUTATION_ROUTE_PREFIX = "/v1/authority"
 AUTHORITY_MUTATION_RUN_ADMIT_PATH = f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/admit"
 AUTHORITY_MUTATION_OPEN_RUN_PATH = f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/open"
+AUTHORITY_MUTATION_RUN_RECOVERY_SCAN_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/recovery/scan"
+)
 AUTHORITY_MUTATION_RUN_TRANSITION_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/transition"
 )
@@ -46,6 +49,9 @@ AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH = (
 )
 AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/stages/outputs/commit"
+)
+AUTHORITY_MUTATION_LIST_OUTPUT_COMMITS_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/stages/outputs/list"
 )
 AUTHORITY_MUTATION_CONTROLLER_LEASE_ACQUIRE_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/leases/acquire"
@@ -263,6 +269,29 @@ class AuthorityClient:
             AuthorityProtocolRequest(
                 metadata=_metadata(
                     AuthorityProtocolOperationKind.RUN_SNAPSHOT,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+            ),
+        )
+
+    def scan_run_recovery(
+        self,
+        run_uri: str,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Scan authoritative controller and attempt recovery facts for a run."""
+
+        return self.send(
+            AUTHORITY_MUTATION_RUN_RECOVERY_SCAN_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.RECOVERY_SCAN,
                     request_id=request_id,
                     service_generation=service_generation,
                     workspace_id=workspace_id,
@@ -616,6 +645,7 @@ class AuthorityClient:
         owner_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         expected_revision: BackendRevision | None = None,
         reason: LifecycleReason | None = None,
         request_id: str | None = None,
@@ -643,8 +673,34 @@ class AuthorityClient:
                     "outputs": {
                         name: artifact.to_dict() for name, artifact in outputs.items()
                     },
+                    "supersedes_commit_id": supersedes_commit_id,
                     "reason": None if reason is None else reason.to_dict(),
                 },
+            ),
+        )
+
+    def list_output_commits(
+        self,
+        run_uri: str,
+        *,
+        stage_name: str | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """List append-only output commit history through the service."""
+
+        return self.send(
+            AUTHORITY_MUTATION_LIST_OUTPUT_COMMITS_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.OUTPUT_COMMIT,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+                stage_name=stage_name,
             ),
         )
 
@@ -1317,10 +1373,12 @@ __all__ = [
     "AUTHORITY_MUTATION_ROUTE_PREFIX",
     "AUTHORITY_MUTATION_RUN_ADMIT_PATH",
     "AUTHORITY_MUTATION_OPEN_RUN_PATH",
+    "AUTHORITY_MUTATION_RUN_RECOVERY_SCAN_PATH",
     "AUTHORITY_MUTATION_RUN_TRANSITION_PATH",
     "AUTHORITY_MUTATION_STAGE_TRANSITION_PATH",
     "AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH",
     "AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH",
+    "AUTHORITY_MUTATION_LIST_OUTPUT_COMMITS_PATH",
     "AUTHORITY_MUTATION_CONTROLLER_LEASE_ACQUIRE_PATH",
     "AUTHORITY_MUTATION_CONTROLLER_LEASE_RENEW_PATH",
     "AUTHORITY_MUTATION_CONTROLLER_LEASE_RELEASE_PATH",

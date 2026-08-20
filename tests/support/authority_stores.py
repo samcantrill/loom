@@ -95,6 +95,7 @@ class _RunState:
     leases: dict[str, LeaseRecord] = field(default_factory=dict)
     submitted: dict[str, SubmittedOperationRecord] = field(default_factory=dict)
     commits: dict[str, OutputCommitRecord] = field(default_factory=dict)
+    output_commits: list[OutputCommit] = field(default_factory=list)
     facts: dict[str, list[ArtifactFactRecord]] = field(default_factory=dict)
     cleanup: list[CleanupCandidate] = field(default_factory=list)
     cleanup_reports: dict[str, CleanupReportFact] = field(default_factory=dict)
@@ -528,10 +529,17 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
     ) -> OutputCommit:
         state = self._require_run(run_uri)
         self._require_stage_fence(state, stage_name, attempt_id, fencing_token)
+        current = state.commits.get(stage_name)
+        if current is None:
+            if supersedes_commit_id is not None:
+                raise ValueError("output commit has no current predecessor")
+        elif supersedes_commit_id != current.commit_id:
+            raise ValueError("stale or missing output commit current head")
         revision = self._next_revision()
         commit = OutputCommitRecord(
             commit_id=f"{stage_name}-{attempt_id}-commit",
@@ -541,6 +549,7 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             committed_at=self._now(),
             revision=revision,
             output_names=tuple(outputs),
+            supersedes_commit_id=supersedes_commit_id,
         )
         facts = tuple(
             ArtifactFactRecord(
@@ -553,6 +562,14 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         )
         state.commits[stage_name] = commit
         state.facts[stage_name] = list(facts)
+        state.output_commits.append(OutputCommit(commit=commit, artifact_facts=facts))
+        lease = next(
+            lease for lease in state.leases.values()
+            if lease.attempt_id == attempt_id and lease.state is LeaseState.ACTIVE
+        )
+        self._replace_lease(
+            state, lease, revision=revision, state_value=LeaseState.RELEASED, reason=reason
+        )
         state.attempts[stage_name] = [
             StageAttempt(
                 run_uri=attempt.run_uri,
@@ -574,6 +591,14 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         state.stage_statuses[stage_name] = StageStatus.SUCCEEDED
         state.revision = revision
         return OutputCommit(commit=commit, artifact_facts=facts)
+
+    def list_output_commits(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[OutputCommit, ...]:
+        return tuple(
+            commit for commit in self._require_run(run_uri).output_commits
+            if stage_name is None or commit.commit.stage_name == stage_name
+        )
 
     def append_audit_event(
         self, run_uri: str, event: PipelineEvent

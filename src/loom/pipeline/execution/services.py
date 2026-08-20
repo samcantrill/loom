@@ -92,7 +92,9 @@ class RuntimeServices:
             ("local_paths", LocalRunStorePaths),
         ):
             if not isinstance(getattr(self, name), protocol):
-                raise TypeError(f"RuntimeServices.{name} must satisfy {protocol.__name__}")
+                raise TypeError(
+                    f"RuntimeServices.{name} must satisfy {protocol.__name__}"
+                )
         if self.authority_config is not None and not isinstance(
             self.authority_config, AuthorityConfig
         ):
@@ -109,7 +111,10 @@ class RuntimeServices:
             raise TypeError(
                 "RuntimeServices.coordination_store must satisfy WorkspaceCoordinationStore"
             )
-        for name, value in (("workspace_id", self.workspace_id), ("owner_id", self.owner_id)):
+        for name, value in (
+            ("workspace_id", self.workspace_id),
+            ("owner_id", self.owner_id),
+        ):
             if value is not None and (not isinstance(value, str) or not value):
                 raise TypeError(f"RuntimeServices.{name} must be a non-empty string")
 
@@ -191,6 +196,9 @@ for _field_name, _protocol in (
 # stores are still valid implementations.
 _RUNTIME_METHOD_FIELDS["write_run_status_with_intent"] = "run_status"
 _RUNTIME_METHOD_FIELDS["write_stage_status_with_intent"] = "stage_state"
+_RUNTIME_METHOD_FIELDS["renew_run_lock"] = "locks"
+_RUNTIME_METHOD_FIELDS["prepare_checksum_repair"] = "stage_state"
+_RUNTIME_METHOD_FIELDS["authorize_checksum_repair_output"] = "stage_state"
 
 
 class _RuntimeStoreFacade(LegacyRunStore, RunReliabilityStore, LocalRunStorePaths):

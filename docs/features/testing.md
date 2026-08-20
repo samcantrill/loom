@@ -41,7 +41,35 @@ The core rule is:
 Test loom as a generic workflow runtime, not as a domain application.
 ```
 
-### 1.1 Alignment With `loom.md`
+### 1.1 Operational lifecycle acceptance
+
+Lifecycle behavior needs a small number of real-process integration tests in
+addition to unit and store-contract coverage. These tests use only
+fixture-owned processes and deterministic authority time. They prove the
+observable sequence, not private helper calls:
+
+```text
+hard loss:
+  start a real controller and worker -> wait for authoritative RUNNING state
+  -> kill both without cleanup -> refuse resume while ownership is live
+  -> expire authority time -> resume as attempt 2 -> run downstream
+
+authority loss:
+  stop the real local authority while a stage is active -> let the stage finish
+  -> reject output commit -> exit nonzero -> publish no artifact index or dependent
+
+artifact corruption:
+  complete a branched run -> corrupt one checksummed payload -> public resume
+  -> rerun only producer and consumers -> reuse the independent branch
+```
+
+Each test should assert several independent oracles together: process exit,
+authority status and attempts, event order, output commits, payload bytes,
+artifact index, and downstream start. Timing belongs behind markers, lease
+expiry controls, or process identity checks; fixed sleeps are not an ownership
+or lifecycle oracle.
+
+### 1.2 Alignment With `loom.md`
 
 [loom.md](../loom.md) requires `loom` to remain useful and testable on its own. This
 document turns that into a test layout and strategy built around synthetic
