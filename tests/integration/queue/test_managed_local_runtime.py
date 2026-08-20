@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import errno
-import os
 from pathlib import Path
 import sys
 from threading import Event
@@ -24,6 +22,11 @@ from loom.queue.managed_local import (
     ManagedLocalQueueRuntime,
     ManagedLocalQueueRuntimeState,
     ManagedLocalShutdownTimeoutError,
+)
+from tests.support.processes import (
+    capture_owned_process_identity,
+    kill_owned_process,
+    owned_process_is_live,
 )
 
 
@@ -528,11 +531,35 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
             ],
             "queues": [{"queue_name": "local", "pool_name": "local"}],
             "controller": {"owner_id": "runtime-owner", "max_active_items": 1},
+            "adapters": {
+                "local": {
+                    "assignments": {
+                        "local": {
+                            "gpu": {
+                                "provider": "static-slots",
+                                "slots": [
+                                    {
+                                        "id": "gpu-0",
+                                        "coordination_key": "gpu-0",
+                                        "value": "0",
+                                    }
+                                ],
+                                "binding": {
+                                    "type": "environment-list",
+                                    "name": "VISIBLE_GPUS",
+                                    "separator": ",",
+                                },
+                            }
+                        }
+                    }
+                }
+            },
         }
     )
     store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
     store.create_workspace(WorkspaceIdentity("workspace-1"))
     store.set_resource_limit("workspace-1", "gpu", limit=1)
+    store.set_resource_limit("workspace-1", "gpu-0", limit=1)
     runtime = ManagedLocalQueueRuntime.from_spec(
         spec,
         workspace_id="workspace-1",
@@ -558,7 +585,9 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
     assert foreign is not None
     active = runtime.service.read_item("active")
     assert active is not None and active.dispatch_handle is not None
-    pid = int(active.dispatch_handle.evidence["managed_local"]["pid"])
+    identity = capture_owned_process_identity(
+        int(active.dispatch_handle.evidence["managed_local"]["pid"])
+    )
 
     stop = Event()
     stop.set()
@@ -570,19 +599,9 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
             wait=lambda _timeout: time.sleep(0.01),
         )
     finally:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            pass
-        else:
-            os.kill(pid, 9)
+        kill_owned_process(identity, 9)
 
-    try:
-        os.kill(pid, 0)
-    except OSError as exc:
-        assert exc.errno == errno.ESRCH
-    else:
-        pytest.fail("managed-local child is still live")
+    assert not owned_process_is_live(identity)
     cancelled = runtime.service.read_item("active")
     queued = runtime.service.read_item("queued")
     assert cancelled is not None and cancelled.status is QueueItemStatus.CANCELLED
@@ -591,6 +610,8 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
     assert status.state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
     counter = store.read_resource_limit("workspace-1", "gpu")
     assert counter is not None and counter.value == 0
+    member = store.read_resource_limit("workspace-1", "gpu-0")
+    assert member is not None and member.value == 0
 
 
 def test_runtime_recovery_rejects_a_current_session_item(tmp_path: Path) -> None:

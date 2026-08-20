@@ -149,9 +149,12 @@ class _StageInterrupted(Exception):
         self,
         result: StageRunResult,
         interruption: KeyboardInterrupt,
+        *,
+        cancelled_stage: str | None,
     ) -> None:
         self.result = result
         self.interruption = interruption
+        self.cancelled_stage = cancelled_stage
 
 
 @dataclass(frozen=True, slots=True)
@@ -729,8 +732,8 @@ class PipelineRunner:
                     outputs_by_stage=outputs_by_stage,
                     failed_stage=failed_stage,
                     failure=failure,
-                    cancelled_stage=stage.name,
-                    cancellation_reason=_stage_cancellation_reason(result),
+                    cancelled_stage=interrupted.cancelled_stage,
+                    cancellation_reason=_keyboard_interrupt_reason(),
                     interruption=interrupted.interruption,
                 )
             stage_results[stage.name] = result
@@ -826,8 +829,8 @@ class PipelineRunner:
                     except _StageInterrupted as exc:
                         result = exc.result
                         interruption = exc.interruption
-                        cancelled_stage = task.stage_name
-                        cancellation_reason = _stage_cancellation_reason(result)
+                        cancelled_stage = exc.cancelled_stage
+                        cancellation_reason = _keyboard_interrupt_reason()
                         stopped = True
                     stage_results[task.stage_name] = result
                     if result.status == StageStatus.SUCCEEDED:
@@ -871,8 +874,8 @@ class PipelineRunner:
                         result = exc.result
                         interruption = interruption or exc.interruption
                         if cancellation_reason is None:
-                            cancelled_stage = task.stage_name
-                            cancellation_reason = _stage_cancellation_reason(result)
+                            cancelled_stage = exc.cancelled_stage
+                            cancellation_reason = _keyboard_interrupt_reason()
                     stage_results[task.stage_name] = result
                     if result.status == StageStatus.SUCCEEDED:
                         outputs_by_stage[task.stage_name] = dict(result.outputs)
@@ -2327,6 +2330,27 @@ class PipelineRunner:
         started_at: str | None,
         interruption: KeyboardInterrupt,
     ) -> _StageInterrupted:
+        committed = self.run_store.read_stage_status(run_uri, stage.name)
+        if committed is not None and committed.status is StageStatus.SUCCEEDED:
+            outputs = self.run_store.read_stage_outputs(run_uri, stage.name)
+            if outputs is None:
+                raise PipelineExecutionError(
+                    "committed successful stage is missing durable outputs"
+                ) from interruption
+            return _StageInterrupted(
+                StageRunResult(
+                    stage_name=stage.name,
+                    action=PlanAction.RUN,
+                    status=StageStatus.SUCCEEDED,
+                    attempt=attempt,
+                    outputs=outputs,
+                    reasons=stage_plan.reasons,
+                    started_at=committed.started_at,
+                    finished_at=committed.finished_at,
+                ),
+                interruption,
+                cancelled_stage=None,
+            )
         cancelled_at = self.clock()
         reason = _keyboard_interrupt_reason()
         persist_stage_cancellation(
@@ -2353,6 +2377,7 @@ class PipelineRunner:
                 executor_metadata={"lifecycle_reason": reason.to_dict()},
             ),
             interruption,
+            cancelled_stage=stage.name,
         )
 
     def _write_failed_run(

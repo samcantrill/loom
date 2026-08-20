@@ -222,11 +222,16 @@ def test_subprocess_timeout_kills_the_real_worker_before_failed_result(
     tmp_path: Path,
 ) -> None:
     pid_marker = tmp_path / "worker.pid"
+    release_marker = tmp_path / "release"
     run_uri = path_to_run_uri(tmp_path / "runs" / "timeout")
     request = RunRequest(
         pipeline=_spec(
             target="tests.support.pipeline_execution_stages.SleepStage",
-            stage_config={"seconds": 30, "pid_marker": str(pid_marker)},
+            stage_config={
+                "seconds": 30,
+                "pid_marker": str(pid_marker),
+                "release_marker": str(release_marker),
+            },
         ),
         run_uri=run_uri,
         options={
@@ -266,8 +271,33 @@ def test_subprocess_timeout_kills_the_real_worker_before_failed_result(
 
         assert result.status is RunStatus.FAILED
         assert result.stage_results["build"].status is StageStatus.FAILED
-        assert result.stage_results["build"].failure is not None
-        timeout = result.stage_results["build"].failure.details["timeout"]
+        failure = result.stage_results["build"].failure
+        assert failure is not None
+        timeout = failure.details["timeout"]
         assert timeout["timed_out"] is True
+        assert failure.stdout_path is not None
+        assert failure.stderr_path is not None
         assert store.read_stage_outputs(run_uri, "build") is None
         assert store.read_artifact_index(run_uri) == {}
+
+        release_marker.write_text("release", encoding="utf-8")
+        resumed = PipelineRunner(
+            run_store=store,
+            executor=SubprocessExecutor(run_store=store),
+        ).run(
+            RunRequest(
+                pipeline=request.pipeline,
+                run_uri=run_uri,
+                open_existing=True,
+                options=request.options,
+                provenance_options=request.provenance_options,
+            )
+        )
+
+        assert resumed.status is RunStatus.SUCCEEDED
+        assert resumed.stage_results["build"].attempt == 2
+        outputs = store.read_stage_outputs(run_uri, "build")
+        assert outputs is not None
+        artifact_store = LocalArtifactStore(store.local_artifact_root(run_uri))
+        assert artifact_store.load(outputs["data"]) == {"slept": 0.0}
+        assert store.read_artifact_index(run_uri) == {"build.data": outputs["data"]}

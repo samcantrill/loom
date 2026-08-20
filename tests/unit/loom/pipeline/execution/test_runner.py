@@ -11,6 +11,8 @@ from loom.artifacts import ArtifactRef
 from loom.pipeline import OutputSpec, PipelineSpec, Stage, StageFactorySpec, StageSpec
 from loom.pipeline.context import StageContext
 from loom.pipeline.errors import StageContractError
+from loom.pipeline.event_sinks import EventSinkContext, EventSinkRegistry
+from loom.pipeline.events import EventReference, PipelineEventRecord
 from loom.pipeline.execution import (
     ConfigSnapshotInputs,
     ExecutionFailure,
@@ -147,6 +149,63 @@ def _authority_run_store_with_coordination(
 
 def _run_uri(tmp_path: Path) -> str:
     return path_to_run_uri(tmp_path / "runs" / "run1")
+
+
+def test_interrupt_after_committed_stage_success_preserves_outputs_and_cancels_run(
+    tmp_path: Path,
+) -> None:
+    run_store = _authority_run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+    registry = EventSinkRegistry()
+
+    def interrupt_after_commit(
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
+    ) -> None:
+        _ = context
+        if event.event_type == "stage.completed":
+            raise KeyboardInterrupt("interrupted after durable stage success")
+
+    registry.register("test.interrupt", interrupt_after_commit)
+    pipeline = PipelineSpec(
+        stages=(
+            StageSpec(
+                name="build",
+                factory=StageFactorySpec(
+                    target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                ),
+                outputs={
+                    "data": OutputSpec(artifact_type="json", codec_key="json.v1")
+                },
+            ),
+            StageSpec(
+                name="downstream",
+                factory=StageFactorySpec(
+                    target_path="tests.support.pipeline_execution_stages.TextConsumerStage"
+                ),
+                inputs={"data": "build.data"},
+                outputs={
+                    "text": OutputSpec(artifact_type="text", codec_key="text.v1")
+                },
+            ),
+        )
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="after durable stage success"):
+        PipelineRunner(run_store=run_store).run(
+            RunRequest(
+                pipeline=pipeline,
+                run_uri=run_uri,
+                event_sink_registry=registry,
+            )
+        )
+
+    assert run_store.read_run_status(run_uri).status is RunStatus.CANCELLED
+    assert run_store.read_stage_status(run_uri, "build").status is StageStatus.SUCCEEDED
+    assert run_store.read_stage_status(run_uri, "downstream").status is StageStatus.BLOCKED
+    outputs = run_store.read_stage_outputs(run_uri, "build")
+    assert outputs is not None and set(outputs) == {"data"}
+    assert run_store.read_artifact_index(run_uri) == {"build.data": outputs["data"]}
 
 
 def test_runner_accepts_explicit_runtime_services(tmp_path: Path) -> None:

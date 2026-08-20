@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import errno
-import os
 from pathlib import Path
 import signal
 import subprocess
@@ -20,6 +18,12 @@ from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
 from loom.pipeline.stores.service_authority import LocalAuthorityService
+from tests.support.processes import (
+    OwnedProcessIdentity,
+    capture_owned_process_identity,
+    kill_owned_process,
+    owned_process_is_live,
+)
 
 
 pytestmark = pytest.mark.e2e
@@ -31,18 +35,6 @@ def _wait_for_path(path: Path, *, timeout_seconds: float = 10) -> None:
         if time.monotonic() >= deadline:
             raise AssertionError(f"timed out waiting for {path}")
         time.sleep(0.01)
-
-
-def _pid_is_live(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError as exc:
-        if exc.errno == errno.ESRCH:
-            return False
-        raise
-    return True
 
 
 def _run_command(
@@ -135,22 +127,25 @@ def test_cli_sigint_cancels_active_stage_and_exits_130(
             authority_config_to_cli_args(service.config()),
             executor=executor,
         )
-        worker_pid: int | None = None
+        worker_identity: OwnedProcessIdentity | None = None
         try:
             _wait_for_path(started)
             _wait_for_path(pid_marker)
-            worker_pid = int(pid_marker.read_text(encoding="utf-8"))
+            worker_identity = capture_owned_process_identity(
+                int(pid_marker.read_text(encoding="utf-8"))
+            )
             process.send_signal(signal.SIGINT)
             _stdout, stderr = _finish_owned_process(process)
+            assert not owned_process_is_live(worker_identity)
         finally:
             if process.poll() is None:
                 process.kill()
                 process.communicate(timeout=10)
-            if worker_pid is not None and _pid_is_live(worker_pid):
-                os.kill(worker_pid, signal.SIGKILL)
+            if worker_identity is not None:
+                kill_owned_process(worker_identity, signal.SIGKILL)
 
         assert process.returncode == 130, stderr
-        assert worker_pid is not None and not _pid_is_live(worker_pid)
+        assert worker_identity is not None and not owned_process_is_live(worker_identity)
         assert store.read_run_status(run_uri).status is RunStatus.CANCELLED
         assert store.read_stage_status(run_uri, "active").status is StageStatus.CANCELLED
         assert store.read_stage_status(run_uri, "downstream").status is StageStatus.BLOCKED

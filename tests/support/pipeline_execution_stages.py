@@ -158,6 +158,9 @@ class SleepStage:
             if isinstance(raw_seconds, int | float | str)
             else 30.0
         )
+        release_marker = context.stage_config.get("release_marker")
+        if isinstance(release_marker, str) and Path(release_marker).exists():
+            seconds = 0.0
         marker_path = context.stage_config.get("started_marker")
         if isinstance(marker_path, str):
             Path(marker_path).write_text(context.stage_name, encoding="utf-8")
