@@ -202,9 +202,11 @@ Final commands:
 - Manager preparation: complete at base `616e43a`; current source and harness
   seams refreshed
 - Expanded planning: revised design approved; no additional spawned pass
-- Implementation: not started
+- Implementation: complete at `03546a9`; public selection values, private
+  SQLite ownership, and shared managed controller wiring landed in `f0634fa`,
+  `9e0b11e`, and `03546a9`
 - Refiner: optional only for a qualified blocker; unused
-- Pre-submit gate: not run
+- Pre-submit gate: passed at `03546a9` (`make validate-pr`; `make test-summary`)
 - Independent review: required after implementation due default/concurrency risk
 - Blocker corrections: 0/3
 - PR and merge: pending
@@ -213,9 +215,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
+| Implementation and changed paths | Added import-light `loom.queue.selection`, five facade exports, bounded SQLite candidate reads/exact claims with allowlisted selection audit evidence, and one managed controller selector for `run_cycle()`/`run_once()`. Updated `src/loom/queue/{__init__.py,_sqlite.py,controller.py,selection.py,service.py}` and the phase-scoped package, unit, contract, and SQLite integration tests. |
+| Tests added or updated | Covered immutable public records, safe projection/default/custom selection, invalid policy behavior, managed entrypoint parity, B-two/A-one head bypass, policy mapping validation, bounded candidate ordering, and concurrent exact ownership. Focused queue suites: 69 passed. |
+| Validated revision/tree state and evidence | Implementation revision `03546a9c17e8b4646925144d1a9750d8adbb0257` had a clean tree. `make validate-pr` passed; `make test-summary` passed (2,300 passed, 0 failed, 0 errors; receipt `build/test-summary.md`). |
+| Validation-relevant changes after evidence | This completion-record update only; it does not affect source, tests, dependencies, or validation configuration. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No blocker. Accepted bounded-lookahead/advisory-capacity limitations and the private local CAS remain intentionally deferred to the later Stage 29 assignment composition; manager-owned review, PR, merge, and cleanup remain pending. |
