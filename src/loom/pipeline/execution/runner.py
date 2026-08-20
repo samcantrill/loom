@@ -1409,6 +1409,10 @@ class PipelineRunner:
                 run_started_at=run_started_at,
             )
 
+        if any(reason.code.value == "ARTIFACT_CHECKSUM_MISMATCH" for reason in stage_plan.reasons):
+            prepare_repair = getattr(self.run_store, "prepare_checksum_repair", None)
+            if callable(prepare_repair):
+                prepare_repair(run_uri, stage.name)
         attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
         record_resolved_reliability_policy_fact(
             self.run_store,

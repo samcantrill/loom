@@ -316,8 +316,10 @@ Final commands:
 - Expanded planning: manager correction complete after the demonstrated durable
   conflict; append-only attempt-specific supersession was approved by the
   maintainer on 2026-08-20
-- Implementation: partial executor commit `b25ef13`; qualified refinement
-  pending for supersession and the remaining operational scenarios
+- Implementation: partial executor recovery work retained; correction 1 adds
+  fenced append-only output-commit supersession, current-only projection, and
+  SQLite v1-to-v2 migration. The remaining real hard-loss/service-loss and
+  branch-shaped operational proofs remain pending.
 - Refiner: required once; this is correction 1/3
 - Pre-submit gate: pending
 - Independent review: required because the phase now changes a durable authority
@@ -329,9 +331,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Partial executor result: private controller-lock renewal and fail-closed propagation in `execution/runner.py` and `authority_adapter.py`; local-service controller lease exclusion in `service_authority.py`; recovery transitions from expired controller/stage evidence through attempt 2. Refiner work is pending for the approved append-only supersession contract and remaining operational scenarios. |
-| Tests added or updated | Added local-service controller lease exclusion/expiry, expired controller/attempt recovery-event ordering, and explicit resume attempt-2 coverage in the focused unit/integration suites. |
-| Validated revision/tree state and evidence | Focused authority adapter, service-authority, authority-store contract, and local resume tests passed before this record. The public branch checksum-resume proof reached `PlanAction.RUN` and then failed at authority output commit with `stage already has an output commit`; this is the blocking evidence. |
-| Validation-relevant changes after evidence | No changes after the recorded blocker evidence except removal of the non-retainable failing checksum-resume test. Full validation and `make test-summary` are not run because the phase has not met its fixed artifact-trust contract. |
+| Implementation and changed paths | Retains executor recovery/renewal work and adds attempt-specific `supersedes_commit_id`, immutable commit history, atomic current-head/fence validation, current-only snapshot facts, service parity, and SQLite v1-to-v2 migration. The runner privately authorizes replacement only for a planner-confirmed checksum mismatch; ordinary changed-config reruns remain fail-closed. |
+| Tests added or updated | Adds cross-backend successor/current-history/stale-head coverage and a complete-v1 SQLite migration preservation test, alongside the existing renewal, recovery, service lease, and local-resume coverage. |
+| Validated revision/tree state and evidence | Focused SQLite/service authority, authority-adapter, authority contract, local-resume, and local pipeline e2e suites pass after the correction; full gate remains pending. |
+| Validation-relevant changes after evidence | The corrected durable contract and focused tests are newer than the prior blocker evidence. The remaining required real hard-loss/service-loss and branch-shaped public operational proofs have not yet been implemented, so do not submit this phase. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | The durable decision is resolved: append an attempt-specific successor after atomic fence/current-head validation, retain predecessor history, and project successor facts as current. Implementation, expanded review, PR, merge, and cleanup remain pending. |

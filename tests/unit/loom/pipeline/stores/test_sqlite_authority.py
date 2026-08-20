@@ -156,6 +156,43 @@ def test_create_run_fails_loudly_for_incomplete_existing_schema(
         store.create_run(run_uri)
 
 
+def test_complete_v1_database_migrates_output_commit_without_losing_facts(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    allocation = store.allocate_stage_attempt(
+        run_uri, "build", owner_id="one", lease_ttl_seconds=30
+    )
+    assert allocation.lease is not None
+    committed = store.record_output_commit(
+        run_uri, "build", attempt_id=allocation.attempt.attempt_id,
+        fencing_token=allocation.lease.fencing_token,
+        outputs={"out": ArtifactRef(artifact_id="build/out", uri=f"{run_uri}/out", artifact_type="json")},
+    )
+    database_path = _authority_database_path(run_uri)
+    with sqlite3.connect(database_path) as conn:
+        conn.execute("ALTER TABLE commits RENAME TO commits_v2")
+        conn.execute("""
+            CREATE TABLE commits (
+                commit_id TEXT PRIMARY KEY, stage_name TEXT NOT NULL UNIQUE,
+                attempt_id TEXT NOT NULL, committed_at TEXT NOT NULL,
+                revision_sequence INTEGER NOT NULL, output_names_json TEXT NOT NULL,
+                materialized_refs_json TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO commits SELECT commit_id, stage_name, attempt_id, committed_at,
+            revision_sequence, output_names_json, materialized_refs_json FROM commits_v2
+        """)
+        conn.execute("DROP TABLE commits_v2")
+        conn.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
+    history = store.list_output_commits(run_uri)
+    assert history == (committed,)
+    assert store.check_schema(run_uri).supported
+
+
 def test_capabilities_are_honest_about_phase_2_limits() -> None:
     capabilities = SQLitePerRunAuthorityStore().capabilities()
 

@@ -452,6 +452,10 @@ def commit_stage_execution_result(
         recorded_at=clock(),
     )
     try:
+        if any(reason.code.value == "ARTIFACT_CHECKSUM_MISMATCH" for reason in stage_plan.reasons):
+            authorize = getattr(run_store, "authorize_checksum_repair_output", None)
+            if callable(authorize):
+                authorize(run_uri, stage.name)
         run_store.write_stage_outputs(run_uri, stage.name, outputs, attempt=attempt)
         write_stage_artifact_index_refs(
             run_store,

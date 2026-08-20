@@ -785,6 +785,7 @@ class AuthorityBackedSerialRunStore:
         if not owner_id:
             raise ValueError("owner_id must be non-empty")
         self.local_store = local_store
+        self._checksum_repair_heads: dict[tuple[str, str], str] = {}
         self.authority_store = authority_store
         self.workspace_coordination_store = workspace_coordination_store
         self._authority_config = authority_config or _config_from_authority_store(
@@ -1445,18 +1446,45 @@ class AuthorityBackedSerialRunStore:
             run_uri, stage_name, outputs, attempt=attempt
         )
         active = self._require_stage_lease(run_uri, stage_name, attempt)
+        supersedes_commit_id = self._checksum_repair_heads.pop((run_uri, stage_name), None)
         try:
+            commit_kwargs: dict[str, object] = {
+                "attempt_id": active.attempt.attempt_id,
+                "fencing_token": active.lease.fencing_token,
+                "outputs": outputs,
+                "reason": LifecycleReason(code="stage_outputs_committed"),
+            }
+            if supersedes_commit_id is not None:
+                commit_kwargs["supersedes_commit_id"] = supersedes_commit_id
             self.authority_store.record_output_commit(
                 run_uri,
                 stage_name,
-                attempt_id=active.attempt.attempt_id,
-                fencing_token=active.lease.fencing_token,
-                outputs=outputs,
-                reason=LifecycleReason(code="stage_outputs_committed"),
+                **commit_kwargs,
             )
         except Exception:
             self._fail_stage_lease_by_record(active)
             raise
+
+    def authorize_checksum_repair_output(self, run_uri: str, stage_name: str) -> None:
+        """Privately fence the one approved checksum-repair replacement path."""
+        stage = self._stage_snapshot(run_uri, stage_name)
+        if stage is None or stage.latest_commit is None:
+            raise AuthorityStoreError("checksum repair has no current output commit")
+        self._checksum_repair_heads[(run_uri, stage_name)] = stage.latest_commit.commit_id
+
+    def prepare_checksum_repair(self, run_uri: str, stage_name: str) -> None:
+        """Make an explicitly planned checksum repair eligible for one new attempt."""
+        self.authorize_checksum_repair_output(run_uri, stage_name)
+        stage = self._stage_snapshot(run_uri, stage_name)
+        if stage is not None and stage.status is StageStatus.SUCCEEDED:
+            self.authority_store.transition_stage(
+                run_uri,
+                stage_name,
+                from_status=StageStatus.SUCCEEDED,
+                to_status=StageStatus.STALE,
+                intent=TransitionIntent.RESUME,
+                reason=LifecycleReason(code="artifact_checksum_mismatch"),
+            )
 
     def read_stage_fingerprint(
         self, run_uri: str, stage_name: str
