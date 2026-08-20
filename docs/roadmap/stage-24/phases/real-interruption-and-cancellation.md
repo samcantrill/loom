@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 24, Phase 1
 - Manifest: `docs/roadmap/stage-24/implementation-plan.md`
 - Branch: `agent/stage-24-p1-real-interruption-and-cancellation`
@@ -266,7 +266,8 @@ Final commands:
   post-commit event dispatch is interrupted, and make the owned subprocess
   worker exit observable before re-raising the interrupt; manager verification
   also made managed-local worker death observable before fallback cleanup
-- PR and merge: pending
+- PR and merge: PR [#216](https://github.com/samcantrill/loom/pull/216)
+  is open against `develop`; CI and merge are pending
 
 ## Completion Record
 
@@ -276,5 +277,5 @@ Final commands:
 | Tests added or updated | Updated the stage-raised parallel interrupt regression and added a post-commit event-dispatch interrupt regression. Real subprocess timeout coverage retains first-attempt timeout facts/logs and worker-death evidence, then proves a clean successful second attempt and artifact index. POSIX CLI SIGINT coverage observes worker death before fixture fallback cleanup; all new PID signalling validates the captured Linux process-start identity first. The real managed-local cancellation scenario now uses authored static assignment and proves release of both `gpu` and `gpu-0`, without disturbing queued or foreign work. |
 | Validated revision/tree state and evidence | Prepared revision `e8f2804` plus blocker correction 1 and manager verification amendments; the implementation tree was validated before this completion-record-only update and then rebased without content changes onto `origin/develop`. The combined targeted suites passed: 62 tests across runner, parallel, subprocess, managed-local, and lifecycle e2e. `make validate-pr` passed: Ruff, Pyright, 2,150 default tests, 128 config-extra tests with 3 expected skips, and package build. `make test-summary` passed: 2,278 passed, 3 skipped, 2,255 deselected; receipt `build/test-summary.md`. |
 | Validation-relevant changes after evidence | None; only this refreshed completion record was added after the successful validation receipt. |
-| PR, review, and merge | pending |
+| PR, review, and merge | PR [#216](https://github.com/samcantrill/loom/pull/216) is open against `develop`; manager review found no remaining blocker and CI is pending. |
 | Residual risk and cleanup | POSIX signal/process-group evidence is intentionally Linux-oriented; no broader signal policy, Python-thread preemption, reattachment, or crash recovery was added. The branch excludes the unrelated terminal-monitor work retained on local `develop`. |
