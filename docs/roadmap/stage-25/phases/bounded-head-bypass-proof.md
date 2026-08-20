@@ -205,9 +205,11 @@ Final commands:
 - Manager preparation: complete at base `9af2198`; Phase 1 selection,
   compensation, evidence, example, and harness seams refreshed
 - Expanded planning: revised design approved; no additional spawned pass
-- Implementation: not started
+- Implementation: complete at `6835a2c`; bounded bypass, safe cycle evidence,
+  dependency-free custom-policy example/docs, and phase-scoped proof coverage added
 - Refiner: optional only for a qualified blocker; unused
-- Pre-submit gate: not run
+- Pre-submit gate: `make validate-pr` passed at `6835a2c`; `make test-summary`
+  passed with receipt `build/test-summary.md`
 - Independent review: required after implementation due continuation risk
 - Blocker corrections: 0/3
 - PR and merge: pending
@@ -216,9 +218,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added controller-owned per-cycle attempted-ID filtering, bounded refresh/accounting, proven pre-start requeue verification, and allowlisted cycle stop evidence in `src/loom/queue/controller.py`. `ManagedLocalQueueRuntime.from_spec()` now forwards an existing controller policy mapping for the current example consumer. Updated the managed-local example, its manifest/readme, and queue feature documentation. |
+| Tests added or updated | Added unit coverage for one-time deferred-head bypass, safe policy stop/error evidence, and selection-limit exhaustion; SQLite/local-process integration coverage for stale authority capacity with compensated continuation; and E2E coverage proving the dependency-free smallest-eligible public-policy example. Targeted unit/integration/E2E run: 49 passed; targeted contracts: 8 passed. |
+| Validated revision/tree state and evidence | Implementation revision `6835a2cf966427f3558f90b0403683b5ade84be6` had a clean tree. `make validate-pr` passed. `make test-summary` passed with 2,306 passed, 0 failed, 0 errors (3 skipped); receipt `build/test-summary.md`. |
+| Validation-relevant changes after evidence | None. This completion/workflow metadata is recorded separately after the validated implementation revision. |
+| PR, review, and merge | Pending manager-local pre-submit handling and the required independent review. |
+| Residual risk and cleanup | No implementation blocker. Bounded lookahead/advisory capacity can still miss work or starve larger requests by accepted design; Stage 29 retains its assignment/offer ownership migration. |
