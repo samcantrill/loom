@@ -5,7 +5,7 @@ Roadmap stage: `v24`
 Planning document: `docs/roadmap/stage-24/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 1 PR open
+Current phase: Phase 2 pending
 Blockers: none
 
 ## Summary
@@ -93,7 +93,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `real-interruption-and-cancellation` | pr_open | `docs/roadmap/stage-24/phases/real-interruption-and-cancellation.md` | `agent/stage-24-p1-real-interruption-and-cancellation` | [#216](https://github.com/samcantrill/loom/pull/216) | Serial/prepared cancellation, parallel settlement, CLI propagation, subprocess cleanup/timeout, managed-local cancel, and process test support | Prove that graceful stops reach truthful durable state and owned children exit before release. |
+| 1 | `real-interruption-and-cancellation` | merged | `docs/roadmap/stage-24/phases/real-interruption-and-cancellation.md` | `agent/stage-24-p1-real-interruption-and-cancellation` | [#216](https://github.com/samcantrill/loom/pull/216) | Serial/prepared cancellation, parallel settlement, CLI propagation, subprocess cleanup/timeout, managed-local cancel, and process test support | Prove that graceful stops reach truthful durable state and owned children exit before release. |
 | 2 | `crash-recovery-and-artifact-trust` | pending | `docs/roadmap/stage-24/phases/crash-recovery-and-artifact-trust.md` | `agent/stage-24-p2-crash-recovery-and-artifact-trust` | pending | Controller renewal/parity, authority recovery/events, old-active resume, authority loss, artifact invalidation, and docs | Prove that unclean loss or corrupt output cannot become reusable success and explicit recovery produces a safe new attempt. |
 
 Phase 1 is independently useful: operators receive correct Ctrl-C/timeout/cancel
@@ -125,5 +125,5 @@ merged so crash recovery inherits one settled graceful lifecycle contract.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
+| 1 | [#216](https://github.com/samcantrill/loom/pull/216) squash-merged to `develop` as `8cc9bfa` | 62 focused tests, `make validate-pr`, `make test-summary` (2,267 passed, 3 skipped), manager review, and CI passed | Linux/POSIX signal proof and settled rather than preempted parallel threads remain accepted limits | Phase branch/worktree removed after the merge record; local control-checkout fast-forward deferred to preserve unrelated committed and uncommitted user work |
 | 2 | pending | pending | pending | pending |
