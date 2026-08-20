@@ -5,8 +5,10 @@ Roadmap stage: `v24`
 Planning document: `docs/roadmap/stage-24/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 2 in progress
-Blockers: none; the Phase 2 output-commit decision was approved on 2026-08-20
+Current phase: Phase 2 blocked
+Blockers: independent review demonstrated that HTTP-backed run recovery cannot
+return the repository's expired controller and attempt facts; the phase's three
+permitted correction passes are exhausted
 
 ## Summary
 
@@ -102,7 +104,7 @@ Blockers: none; the Phase 2 output-commit decision was approved on 2026-08-20
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `real-interruption-and-cancellation` | merged | `docs/roadmap/stage-24/phases/real-interruption-and-cancellation.md` | `agent/stage-24-p1-real-interruption-and-cancellation` | [#216](https://github.com/samcantrill/loom/pull/216) | Serial/prepared cancellation, parallel settlement, CLI propagation, subprocess cleanup/timeout, managed-local cancel, and process test support | Prove that graceful stops reach truthful durable state and owned children exit before release. |
-| 2 | `crash-recovery-and-artifact-trust` | in_progress | `docs/roadmap/stage-24/phases/crash-recovery-and-artifact-trust.md` | `agent/stage-24-p2-crash-recovery-and-artifact-trust` | pending | Controller renewal/parity, authority recovery/events, old-active resume, authority loss, artifact invalidation, and docs | Prove that unclean loss or corrupt output cannot become reusable success and explicit recovery produces a safe new attempt. |
+| 2 | `crash-recovery-and-artifact-trust` | blocked | `docs/roadmap/stage-24/phases/crash-recovery-and-artifact-trust.md` | `agent/stage-24-p2-crash-recovery-and-artifact-trust` | not opened | Controller renewal/parity, authority recovery/events, old-active resume, authority loss, artifact invalidation, and docs | Prove that unclean loss or corrupt output cannot become reusable success and explicit recovery produces a safe new attempt. |
 
 Phase 1 is independently useful: operators receive correct Ctrl-C/timeout/cancel
 semantics and real worker cleanup. Phase 2 starts only after Phase 1 is remotely
@@ -116,7 +118,10 @@ merged so crash recovery inherits one settled graceful lifecycle contract.
   boundaries, manifest, and linked phase plans are traceable and consistent.
 - Optional independent review: required for Phase 2 after implementation
   exposed the one-commit-per-stage conflict and the maintainer approved the
-  bounded append-only schema/protocol expansion on 2026-08-20.
+  bounded append-only schema/protocol expansion on 2026-08-20. Completed on
+  2026-08-20 with a publication blocker: repository recovery facts are not
+  exposed through the supported HTTP authority adapter. Renewal coverage also
+  does not yet advance beyond the original controller TTL.
 - Manager-local refresh correction: applied. Parallel interruption now preserves
   truthful in-flight results, and Phase 2 adds controller renewal and closes
   local-service lease parity before using recovery.
@@ -134,4 +139,4 @@ merged so crash recovery inherits one settled graceful lifecycle contract.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | [#216](https://github.com/samcantrill/loom/pull/216) squash-merged to `develop` as `8cc9bfa` | 62 focused tests, `make validate-pr`, `make test-summary` (2,267 passed, 3 skipped), manager review, and CI passed | Linux/POSIX signal proof and settled rather than preempted parallel threads remain accepted limits | Phase branch/worktree removed after the merge record; local control-checkout fast-forward deferred to preserve unrelated committed and uncommitted user work |
-| 2 | pending | pending | pending | pending |
+| 2 | No PR opened; independent review blocked publication | Implementation and full validation passed at `69d3c22` (`make validate-pr`; `make test-summary` with 2,285 passes), but the HTTP recovery path lacks repository recovery facts and the renewal test does not prove exclusivity beyond initial expiry | A managed-service crash cannot currently reach safe explicit recovery through the supported adapter | Worktree and branch retained for maintainer-directed replanning; three correction passes are exhausted |

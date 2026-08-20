@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: Stage 24, Phase 2
 - Manifest: `docs/roadmap/stage-24/implementation-plan.md`
 - Branch: `agent/stage-24-p2-crash-recovery-and-artifact-trust`
@@ -16,8 +16,11 @@
   subprocess cleanup, and process-test support contracts intact
 - Workflow path: expanded after a qualified durable-commit blocker; one
   `loom_phase_refiner` correction and one independent review are required
-- Blockers: none; the maintainer approved append-only, attempt-specific output-
-  commit supersession on 2026-08-20
+- Blockers: independent review demonstrated that the supported HTTP authority
+  adapter returns no run-recovery facts, so an expired managed-service run
+  cannot satisfy the approved recovery proof and resume. The phase has used its
+  three permitted correction passes. Renewal coverage also needs one
+  deterministic assertion beyond the original controller TTL.
 
 ## Objective And Context
 
@@ -329,13 +332,16 @@ Final commands:
   extra tests passed, three environment-dependent container tests skipped, and
   both distributions built successfully. `make test-summary` recorded 2,285
   passes with no failures or errors.
-- Independent review: required because the phase now changes a durable authority
-  contract and migration
+- Independent review: completed on 2026-08-20 and blocked publication. The
+  reviewer reproduced controller and attempt recovery facts in the repository
+  while the HTTP-backed adapter returned none. It also found that renewal is
+  invoked but is not tested after advancing authority time beyond the original
+  lease expiry.
 - Blocker corrections: 3/3 used. The final scoped correction updated six stale
   schema-version and public-export expectations exposed by the full gate; their
   focused rerun passed before the complete gate passed. No production behavior
   failed in that correction.
-- PR and merge: pending
+- PR and merge: blocked; no PR was opened
 
 ## Completion Record
 
@@ -345,5 +351,5 @@ Final commands:
 | Tests added or updated | Adds cross-backend successor/current-history/stale-head coverage; lossless and rollback-safe migration tests; deterministic controller renewal success/failure; real controller/worker hard loss with live-owner refusal and expiry recovery; real authority service loss before commit; and a public branch-shaped checksum-corruption repair with attempts, lineage, payload, planner reason, reuse, and index assertions. |
 | Validated revision/tree state and evidence | A 150-test focused authority/protocol/repository/adapter/renewal/resume/parallel/e2e group passed in 27.39 seconds; the new service-loss and hard-loss cases also passed independently. On the final tree, `make validate-pr` passed Ruff, Pyright with zero errors, 2,153 default tests, 132 config-extra tests, three environment-dependent skips, and the package build. `make test-summary` passed all package, unit, contract, integration, e2e, and config-extra groups: 2,285 passed, zero failed/errors, and three skipped. |
 | Validation-relevant changes after evidence | Only this execution-plan evidence record was updated after the successful gates; no source, test, dependency, build, validation configuration, or tested canonical feature documentation changed. The receipt remains current. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | Full-suite compatibility is proven. Remaining risk is concentrated in the required independent review of the durable migration/current-projection contract; PR, merge, metadata, and cleanup remain pending. |
+| PR, review, and merge | Independent review blocked publication: the HTTP authority adapter's `scan_recovery` path returns no facts even when the repository reports an expired controller and attempt. No PR was opened. |
+| Residual risk and cleanup | Add a protocol/client/route operation for the existing run-level recovery scan, delegate the HTTP adapter to it, and contract-test expired controller plus attempt facts through that adapter. Extend the deterministic renewal test by advancing authority time beyond the original expiry and proving a competing controller is still rejected. The phase correction budget is exhausted, so this requires maintainer-directed replanning rather than another unrecorded correction. |
