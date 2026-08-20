@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: approved
 - Roadmap stage and phase: v25 Phase 1
 - Manifest: `docs/roadmap/stage-25/implementation-plan.md`
 - Branch: `agent/stage-25-p1-safe-resource-aware-selection`
@@ -206,10 +206,16 @@ Final commands:
   SQLite ownership, and shared managed controller wiring landed in `f0634fa`,
   `9e0b11e`, and `03546a9`
 - Refiner: optional only for a qualified blocker; unused
-- Pre-submit gate: passed at `03546a9` (`make validate-pr`; `make test-summary`)
-- Independent review: required after implementation due default/concurrency risk
+- Pre-submit gate: manager passed at `8398254`; the implementation receipt from
+  `03546a9` passed `make validate-pr` and `make test-summary`, and the manager
+  reran all six targeted suites with 61 passes
+- Independent review: passed at `8398254` with no blocker, localized correction,
+  optional hardening, future-capability finding, or workflow issue
 - Blocker corrections: 0/3
-- PR and merge: pending
+- PR and merge: [#218](https://github.com/samcantrill/loom/pull/218) is approved,
+  non-draft, mergeable, and correctly targets `develop`; required CI passed at
+  reviewed revision `8398254`, with the metadata-only final check and merge
+  pending
 
 ## Completion Record
 
@@ -217,7 +223,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added import-light `loom.queue.selection`, five facade exports, bounded SQLite candidate reads/exact claims with allowlisted selection audit evidence, and one managed controller selector for `run_cycle()`/`run_once()`. Updated `src/loom/queue/{__init__.py,_sqlite.py,controller.py,selection.py,service.py}` and the phase-scoped package, unit, contract, and SQLite integration tests. |
 | Tests added or updated | Covered immutable public records, safe projection/default/custom selection, invalid policy behavior, managed entrypoint parity, B-two/A-one head bypass, policy mapping validation, bounded candidate ordering, and concurrent exact ownership. Focused queue suites: 69 passed. |
-| Validated revision/tree state and evidence | Implementation revision `03546a9c17e8b4646925144d1a9750d8adbb0257` had a clean tree. `make validate-pr` passed; `make test-summary` passed (2,300 passed, 0 failed, 0 errors; receipt `build/test-summary.md`). |
-| Validation-relevant changes after evidence | This completion-record update only; it does not affect source, tests, dependencies, or validation configuration. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | No blocker. Accepted bounded-lookahead/advisory-capacity limitations and the private local CAS remain intentionally deferred to the later Stage 29 assignment composition; manager-owned review, PR, merge, and cleanup remain pending. |
+| Validated revision/tree state and evidence | Implementation revision `03546a9c17e8b4646925144d1a9750d8adbb0257` had a clean tree. `make validate-pr` passed; `make test-summary` passed (2,300 passed, 0 failed, 0 errors; receipt `build/test-summary.md`). The manager reran the six targeted files at `8398254` with 61 passes, and required CI passed. |
+| Validation-relevant changes after evidence | Completion and approval metadata only; no source, test, dependency, build, or validation-configuration change. |
+| PR, review, and merge | [#218](https://github.com/samcantrill/loom/pull/218) targets `develop`, is non-draft and mergeable, and passed manager plus required independent review with no findings. Initial required CI passed at `8398254`; final metadata-only CI and squash merge remain pending. |
+| Residual risk and cleanup | No blocker. Accepted bounded-lookahead/advisory-capacity limitations, Phase 1 stop-after-deferral behavior, and the private local CAS remain intentionally deferred to Phase 2 or Stage 29; merge and branch/worktree cleanup remain pending. |
