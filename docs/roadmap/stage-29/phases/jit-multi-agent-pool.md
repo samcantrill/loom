@@ -11,198 +11,194 @@
 - Base revision: current `origin/develop` after Phase 1 remotely merges
 - PR target: `develop`
 - PR title: `Stage 29 phase 2: add JIT multi-agent pools`
-- Dependencies: Phase 1 merged; planning `FR-1` through `FR-13`, `FR-15`, all
-  `FQ` decisions, and `DQ-1` through `DQ-6`/`DQ-8`
-- Workflow path: expanded because authentication, expiring offer eligibility,
-  and the two-agent assignment race causally interact; use at most one phase-
-  planner refinement if Phase 1 evidence leaves a concrete unresolved boundary
-- Blockers: none after Phase 1 merge
+- Dependencies: Phase 1 merged with no managed direct scheduler remaining;
+  planning `FR-1` through `FR-17`, `FQ-1` through `FQ-10`, `FQ-12`, and
+  `DQ-1` through `DQ-9`
+- Workflow path: expanded because remote authentication, expiring-opportunity
+  eligibility, and two-agent assignment races interact
+- Blockers: maintainer confirmation of the topology/lifecycle refinement and
+  Phase 1 common-core/parity gate
 
 ## Objective And Context
 
 - Vertical outcome: two or more per-machine agents connect outbound to one
-  coordinator, contribute fresh resident-capable CPU/GPU capacity to a global
-  named pool, and pull compatible whole-run work just in time. A client may
-  submit from any coordinator-reachable machine, target one admitted agent, and
-  observe or cancel the assignment without contacting that agent directly.
-- Earlier dependency: Phase 1's wire values, private assignment repository,
-  generation/session fencing, full-offer cache, journalled agent runtime,
-  composed queue routes/client, resident profile, and endpoint job operations.
-- Later work explicitly out of scope: capacity/config reload controls, safe
-  shrink, active-work restart reconciliation beyond Phase 1's ambiguity gate,
-  partition-deadline completion, payload/artifact/log transfer, best-machine
-  ranking, soft affinity, fairness, preemption, cross-host gang resources, or
-  coordinator HA.
+  coordinator, contribute fresh resident-capable CPU/GPU opportunities to named
+  pools, and pull compatible whole-run work just in time through Phase 1's
+  unchanged coordinator-client, assignment, and agent-runtime path.
+- Clients may submit from any coordinator-reachable machine, hard-target an
+  admitted agent, inspect joined state, and cancel without contacting agents.
+- Earlier dependency: Phase 1 direct/HTTP client port, coordinator service,
+  Stage 25 selector, assignment storage, offer cache, common agent runtime/
+  journal, local adapter composition, status, daemon, and facade parity proof.
+- Later Phase 3 adds drain/reload, restart/partition recovery, and bounded
+  redispatch after verified containment/non-completion. Data transfer, best-
+  machine placement, fairness, timeout-only retry, reattachment, and HA remain
+  out.
 
 ## Current Source And Harness
 
-- Relevant files and symbols:
-  - Phase 1 coordinator/agent protocol, assignment repository, offer cache,
-    client/routes, journal/runtime, config, status, supervisor, and CLI paths;
-  - `src/loom/queue/_scheduler.py`, controller, and Stage 25 selection seams for
-    bounded candidate ordering without transferring admission ownership;
-  - queue pool/launch resource records, Stage 23 providers/admission, and Stage
-    27 local plan/provider composition for fit and safe contribution evidence;
-  - authority readiness/service-generation/client conventions for remote
-    startup and fencing; and
-  - testing acceptance-profile conventions in `tools/test_harness`, Makefile,
-    and `docs/features/testing.md`.
-- Existing tests and seams: Phase 1 protocol/cache/journal/SQLite fault tests;
-  Stage 25 candidate/exact-claim race tests; managed resource/provider tests;
-  fake clocks/transports/processes; authority service deployments; optional
-  container/SLURM acceptance-profile patterns.
-- Import, dependency, and harness constraints: agents initiate every network
-  connection; tests cannot assume inbound ports on agents; default CI uses
-  loopback/in-process agents and fixture credentials; real hostnames,
-  certificates, tokens, and project paths enter only an ignored opt-in receipt.
+- Relevant merged seams after Phase 1: coordinator service/store/routes/clients,
+  agent wire values/runtime/journal, assignment status/cancellation, revised
+  Stage 25 selector, role-conditional daemon readiness, and facade conformance.
+- Existing authority service generation, client/version/idempotency patterns,
+  pool/launch resources, admission/providers, Stage 27 plans, and test-harness
+  acceptance profiles remain the supporting boundaries.
+- Tests cannot assume inbound agent ports. Default CI uses in-process/loopback
+  agents and fixture credentials; real hostnames/certificates/tokens/paths enter
+  only an ignored opt-in receipt.
 
 ## Scope
 
 In scope:
 
-- coordinator admission configuration for stable `agent_id`, per-agent
-  credential scope, allowed workspace/pools/resident profiles, and safe known-
-  offline inspection without treating admission as liveness;
-- outbound register/re-register, unique current session, full versioned offer,
-  heartbeat renewal, expiry, bounded long-poll work request, reconnect/backoff,
-  and invalidation of stale session/generation mutations;
-- safe offer contributions keyed by `(agent_id, pool_name)` with declared and
-  allocatable integer resources, resident profile/capability fingerprints, and
-  namespaced safe slot labels; no raw local inventory or bindings;
-- coordinator pool aggregation/status from fresh offers and one-work-request-
-  per-free-slice behavior with no agent-side prefetch/backlog;
-- bounded eligibility over queue pool, exact hard target, resident profile,
-  capability, and single-agent resource fit, followed by existing FIFO/Stage 25
-  ordering and the Phase 1 atomic active-assignment transaction;
-- hard `target_agent_id` submission/status semantics: unknown admission rejects,
-  known offline stays queued with `BLOCKED_AGENT_OFFLINE`, and the constraint is
-  never relaxed;
-- remote assignment accept/report, queue completion, cancellation delivery,
-  joined agent/offer/assignment/run status, and safe CLI/Python agent/pool/item
-  inspection while retaining observation scope;
-- secure non-loopback deployment using verified TLS and distinct client versus
-  per-agent credentials, with negative version/workspace/role/replay/size tests;
-  and
-- one versioned opt-in two-host receipt running the actual resident Loom job
-  path through DNS/TCP/TLS, disconnect/reconnect, status, cancellation, terminal
-  report, and offer expiry. The receipt records safe facts only.
+- Coordinator admission config for stable `agent_id`, credential scope,
+  allowed workspace/pools/resident profiles, and safe known-offline inspection.
+- Outbound register/re-register, one current session, full versioned offer,
+  heartbeat renewal/expiry, bounded long-poll work request, reconnect/backoff,
+  and invalidation of stale session/generation mutations through Phase 1's HTTP
+  client implementation. Idempotent same-session registration succeeds; a
+  different session for a still-fresh `agent_id` is rejected with
+  `AGENT_SESSION_ALREADY_ACTIVE`. Graceful shutdown relinquishes the session;
+  crash replacement waits for expiry and reconciles at zero capacity.
+- Safe opportunity contributions keyed by `(agent_id, pool_name)` with declared
+  and currently allocatable integer resources, resident profile/capability
+  fingerprints, and namespaced safe slot labels; no raw inventory/bindings.
+- Pool aggregation/status from fresh offers and one outstanding work long poll
+  per free slice; no agent-side prefetch or backlog. A compatible submission
+  completes an already-open request immediately. An independent session/control
+  activity continues heartbeat and cancellation/control delivery while all
+  execution slices are busy.
+- Fixed coordinator eligibility over pool, hard target, resident profile,
+  capability, and current single-agent logical fit. Project only the eligible
+  tuple and exact requesting-agent availability into the revised Stage 25
+  evaluator; never pass aggregate pool capacity or agent identity to policy.
+- Reuse Phase 1 atomic assignment creation after selection. Revalidate exact
+  service generation, session, offer revision, candidate status/attempt,
+  target, and active-assignment absence in the authoritative transaction.
+- Hard target: unknown admission rejects; known offline remains queued with
+  `BLOCKED_AGENT_OFFLINE`; no spill to another agent.
+- Remote accept/report/cancel and joined safe agent/opportunity/assignment/
+  queue/run status through unchanged application state transitions.
+- Role-conditional readiness for coordinator-only, agent-only, and combined
+  daemons without treating absent local role as failure.
+- Verified TLS non-loopback startup and distinct client versus per-agent
+  credentials, with version/workspace/role/replay/size negatives.
+- Deployment configuration resolves coordinator URL/bind and certificate/
+  credential-file references from environment or supervisor input. Raw secrets
+  remain in protected files/providers. Committed examples and receipts use only
+  `machine-A`, `machine-B`, and abstract placeholders—never site hostnames,
+  addresses, secret values, or host paths.
+- One opt-in `machine-A`/`machine-B` receipt for the actual
+  resident path through DNS/TCP/TLS, reconnect, status, cancellation, terminal
+  report, and expiry.
 
 Out of scope:
 
-- agent-to-agent communication, coordinator-pushed work, more than one offered
-  assignment per work request, batch reservations, a daemon-local durable queue,
-  central physical-slot choice, or combining capacity across agents for one job;
-- a public placement-policy protocol/registry, global best-fit/locality/fairness
-  claims, durable offer history, dynamic service discovery, or automatic agent
-  admission;
-- accepting an offer as resource authority, reassigning on offer expiry,
-  converting assignment state into run lifecycle, or displaying a remote local
-  path as client-accessible; and
-- certificate issuance/rotation service, identity federation, arbitrary auth
-  plugins, internet exposure guidance, or mandatory network/GPU CI.
+- Any new scheduling engine, agent runtime, assignment lifecycle, local facade,
+  route-owned policy, topology flag, agent-to-agent traffic, inbound agent
+  server, coordinator push, more than one assignment per request, prefetch,
+  daemon-local queue, central slot selection, or cross-agent capacity for one job.
+- Public placement policy/registry, best-fit/locality/fairness, offer history,
+  dynamic discovery/admission, payload/artifact/log transfer, retry from
+  expiry/timeout alone, Phase 3 verified-loss redispatch, auth federation/
+  issuance, internet hosting, or mandatory network/GPU CI.
 
 Assumptions:
 
-- each remote agent is configured under the operator's account, can validate
-  the coordinator certificate, and has one distinct credential and stable
-  `agent_id` already admitted by coordinator config;
-- eligible resident profiles guarantee that the launch contract, project,
-  config, `run_uri`, and local artifact/run locations are meaningful on the
-  selected agent; and
-- one agent contributes at most one slice to a given global `pool_name`; several
-  local pools use distinct global names until a concrete same-agent multi-slice
-  consumer requires another identity.
+- Each remote agent is operator-configured, validates coordinator TLS, owns one
+  distinct credential/stable ID (`machine-A` or `machine-B` in examples), and
+  is admitted by coordinator config.
+- Resident profile makes launch contract, project/config/run paths meaningful
+  on the selected agent.
+- One agent contributes at most one opportunity per global pool until a current
+  same-agent multi-slice consumer requires more identity.
 
 ## Fixed Contracts And Private Discretion
 
-- Observable behavior: only a fresh exact offer may receive work. Agents ask
-  after capacity becomes free; coordinator never fills a speculative local
-  backlog. Untargeted placement is whichever compatible requester atomically
-  wins. Targeted work waits for the named agent. Offer expiry changes
-  schedulability/status only; accepted work remains running, unreachable, or
-  unknown based on separate evidence.
-- Public or durable shapes: registration/offer/work/assignment/status protocol
-  fields remain Phase 1 shapes. Admission persists stable agent identity and
-  authorization, not session/heartbeat/offer history. `target_agent_id` is a
-  durable immutable submission constraint. Assignment stores the exact agent,
-  session, offer revision, service generation, and dispatch attempt.
-- Trust and failure boundaries: coordinator authenticates before parsing a
-  mutation beyond bounded envelope checks, authorizes agent/workspace/pool/role,
-  and atomically revalidates the referenced offer. Agent treats assignments as
-  trusted coordinator instructions only after TLS/auth/version/fence validation
-  and still performs local profile/resource admission before start.
-- Cross-phase contracts: Phase 3 may publish zero capacity and rotate local
-  config fingerprints but cannot change offer expiry meaning, relax targets,
-  add work prefetch, or infer process death from loss.
-- Reproducibility and compatibility: default/local command paths remain inert
-  unless an endpoint/daemon profile is selected. Global pool capacity is an
-  operational observation, not a run fingerprint. Receipt configuration is
-  environment-local and its committed schema contains no secret or host path.
-- Private choices the executor may simplify: long-poll endpoint layout,
-  connection reuse, jitter/backoff formula, offer cache indexing, eligibility
-  query shape/window, TLS server wiring, and safe status presentation grouping.
+- Observable behavior: a fresh exact offer may receive work. Agent holds one
+  bounded request only when a slice is free; coordinator immediately completes
+  it when compatible work arrives and never pre-fills a local backlog.
+  Untargeted placement is the compatible requester whose assignment CAS wins.
+  Targeted work waits. Expiry changes schedulability, never process/run truth.
+  Busy-agent cancellation/control delivery does not depend on a free slice.
+- Topology parity: given equivalent full offer values, HTTP and direct clients
+  reach the same coordinator selection and assignment results. Remote additions
+  are authentication, liveness, reconnect, and deployment evidence only.
+- Public/durable shapes: retain Phase 1 protocol/assignment/status fields.
+  Admission persists stable identity/authorization, not session/offer history.
+  `target_agent_id` is immutable queue constraint. Assignment stores exact
+  agent/session/offer/generation/attempt and preference evidence.
+- Trust: authenticate bounded envelope, authorize role/workspace/pool, validate
+  exact offer, then mutate. Agent validates coordinator/fence and still performs
+  local admission before acceptance/start. Environment resolution validates
+  values without echoing endpoints, resolved paths, or secret contents through
+  errors/status.
+- Cross-phase: Phase 3 may publish zero capacity or change fingerprint only; it
+  cannot change expiry, target, prefetch, selection, or assignment meaning.
+- Compatibility: command/local/co-located direct compositions remain operational
+  and continue the same core. Global capacity is observation, not fingerprint.
+  Receipt config is local and contains no committed secret/path/site identity;
+  durable examples use only `machine-A` and `machine-B`.
+- Private choices: endpoint layout, connection reuse, backoff/jitter, cache
+  index, bounded eligibility query/window, TLS wiring, and status grouping.
 
 ## Proportionality
 
-- Existing seam reused: agent pull fixes the machine candidate; Stage 25 may
-  order compatible queue items; the assignment transaction claims; authority
-  and providers decide actual capacity/exclusivity.
-- Material additions and current justification: admitted remote identities,
-  scoped auth, expiring offers, long polling, target constraint, and joined
-  status are each required by a current multi-host user path or network trust
-  boundary.
-- Optional hardening and future capability deferred: load smoothing, health/
-  utilization scores, pagination beyond the accepted bounded window, token
-  rotation UI, certificate automation, rate-limit policy, metrics export,
-  multi-coordinator routing, and placement history.
+- Reuse Phase 1's entire core and add only remote admission/auth/liveness,
+  free-slice long polls, independent control delivery, several contributions,
+  targeting, environment deployment, and joined network status.
+- Agent pull fixes the machine opportunity; fixed eligibility plus Stage 25
+  chooses work; local admission/provider decides actual capacity/exclusivity.
+- Defer placement scoring, health/utilization ranking, pagination beyond bound,
+  token/certificate automation, metrics, multiple coordinators, and data plane.
 
 ## Invariant Ownership
 
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
-| Only an admitted credential may create the matching current session. | Coordinator auth/registration | stolen/mis-scoped credential or duplicate daemon | impersonation/stale control | role/identity negatives and concurrent register |
-| Work uses one unexpired exact offer revision and an eligible queue item. | Offer cache + coordinator transaction | expiry/config change between scan and claim | dispatch to stale capacity | fake-clock/CAS race |
-| Hard target is never relaxed. | Submission eligibility + transaction | untargeted requester races while target offline | wrong-machine execution | online/offline two-agent barrier |
-| One job's resource request fits wholly within one contribution. | Eligibility then local authority/provider | aggregation mistaken for gang capacity | overcommit/invalid execution | two one-GPU versus one two-GPU scenario |
-| Expiry/loss never proves accepted process death or authorizes requeue. | Joined status + assignment policy | heartbeat timeout | duplicate execution | expiry during real/fake running work |
-| Remote cancellation reaches terminal only after the assigned agent's fenced cleanup report. | Coordinator intent + agent lifecycle | retry, disconnect, natural-exit race | false cancelled/free state | disconnect/cancel/process race |
-| Offers/status expose only safe projections. | Agent offer builder + coordinator presenter | inventory/profile/error data | credential/path/resource leakage | exact allowlist/redaction tests |
+| Admitted credential creates only its matching session and cannot replace a different fresh session. | Registration service | mis-scoped credential/duplicate daemon | impersonation or two active daemons | role/identity/concurrent register/expiry |
+| Direct and HTTP clients invoke identical core semantics. | Client conformance contract | route adds selection/transition logic | topology drift | shared scenario traces |
+| Work uses one unexpired exact opportunity and eligible item. | Coordinator assignment transaction | expiry/config race | stale-capacity dispatch | fake clock/CAS race |
+| Policy sees requesting-agent availability, never aggregate/identity. | Coordinator eligibility/projection | global capacity or offer leakage | cross-host false fit/coupling | two-one-GPU field tests |
+| Hard target never relaxes. | Coordinator assignment transaction | untargeted race | wrong-machine run | online/offline barrier |
+| Actual fit/exclusivity holds wholly on agent. | Common AgentRuntime | advisory offer treated as authority | overcommit | provider integration |
+| Expiry/loss timeout alone never requeues accepted/possible-start work. | Coordinator assignment policy | heartbeat timeout | duplicate process | expiry-during-run tests |
+| A queued arrival completes an existing compatible work long poll without waiting for heartbeat, while busy-agent controls remain deliverable. | Coordinator client/agent loop contract | periodic polling or control coupled to capacity | avoidable latency or uncancellable job | barrier and busy-agent fake transport |
+| Remote cancel terminal follows fenced cleanup report. | Assignment transition | disconnect/natural-exit race | false terminal | process/cancel race |
+| Offer/status expose safe source-labelled projections only. | Offer/status builders | local secrets/paths/inference | leak/false truth | exact allowlists |
 
 ## Implementation Slices
 
-1. Add admitted-agent/scoped-credential configuration and remote registration,
-   session replacement, full-offer/heartbeat expiry, long-poll reconnect, and
-   safe status contracts.
-2. Implement contribution aggregation, bounded compatibility/target/fit
-   filtering, Stage 25 ordering, and exact offer/session/assignment transaction
-   revalidation without a placement-policy abstraction.
-3. Complete remote accept/report/cancel and joined item/agent/pool status,
-   including offline target and expiry-with-running-work behavior.
-4. Wire verified TLS non-loopback startup plus client/agent credential roles and
-   exhaustive auth/version/workspace/replay/size negative coverage.
-5. Add multi-agent loopback E2E, the opt-in two-host resident-product receipt,
-   operational docs, and repository-wide validation.
+1. Add remote admission/scoped credentials, idempotent registration with fresh-
+   session rejection/graceful relinquish/expiry replacement, full-offer
+   heartbeat/expiry, reconnect, and safe agent status.
+2. Add multi-agent contribution aggregation and fixed target/profile/capability/
+   fit eligibility before unchanged Stage 25 selection/assignment transaction.
+3. Complete immediate free-slice long polling, independent session/control
+   delivery, remote accept/report/cancel, and joined status, including offline
+   target and expiry-with-running behavior.
+4. Complete environment-resolved TLS non-loopback wiring and auth/version/
+   workspace/replay/size/redaction negatives; rerun direct/HTTP client
+   conformance unchanged.
+5. Add `machine-A`/`machine-B` loopback E2E, abstract environment/config
+   examples, the opt-in `machine-A`/`machine-B` resident receipt, and repository
+   validation.
 
 ## Test And Validation Plan
 
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
-| Package | required | remote support stays behind explicit modules/config | no eager transport/process/vendor imports |
-| Unit | required | admission/auth, offer expiry, eligibility/target/fit, long poll | exact safe fields, fake clock, bounded calls, structured rejects |
-| Contract | required | wire compatibility and status/receipt schemas | Phase 1 records unchanged; no secrets/paths; target durable |
-| Integration | required | two-agent races, stale offer, cancel disconnect | one assignment/process; no spill/requeue; source-labelled status |
-| E2E / opt-in | loopback required; two-host receipt required before phase completion | actual transport and resident execution | secure register, run, reconnect, cancel/terminal, expiry receipt |
+| Package | required | Remote support stays explicit. | No eager transport/process/vendor imports. |
+| Unit | required | Admission/auth, duplicate sessions, expiry, eligibility/target/fit, reconnect, environment resolution. | Safe fields, fake clock, bounded calls/rejections/redaction. |
+| Contract | required | Direct/HTTP client and wire/status compatibility. | Same normalized result; Phase 1 records unchanged; no secrets. |
+| Integration | required | `machine-A`/`machine-B` race, queued arrival into open poll, busy cancel/control, stale offer, one-agent fit. | Immediate response; one assignment/process; no spill/requeue/aggregate false fit. |
+| E2E / opt-in | abstract `machine-A`/`machine-B` loopback and remote product receipt required | Actual transport/resident execution. | Secure register/run/reconnect/cancel/terminal/expiry with no site facts committed. |
 
 Targeted commands:
 
     uv run pytest -q tests/unit/loom/queue tests/integration/queue tests/integration/authority
     uv run pytest -q tests/contracts/test_queue_* tests/e2e/test_queue_cli.py
     uv run python -m tools.test_harness --help
-
-Environment-gated receipt command: define the exact named profile during phase
-implementation using the existing test-harness conventions; it must require
-explicit coordinator/agent endpoints and credential/certificate paths and write
-one redacted versioned receipt under `build/`.
 
 Final commands:
 
@@ -211,45 +207,42 @@ Final commands:
 
 ## Risks, Review, And Stops
 
-- Main risks: using aggregated capacity as authority, a target check outside the
-  atomic mutation, stale-offer acceptance, long-poll retry duplicating work,
-  conflating auth identity with hostname, or leaking resident/local details.
-- Review focus: exact transactional guards, TTL semantics, TLS/credential role
-  checks, no agent inbound/peer calls, status observation scope, receipt
-  reproducibility and redaction.
-- Stop if: a real resident Loom job requires unstaged payload/artifact transfer;
-  certificate verification or per-agent auth cannot be configured without a new
-  dependency or secret persistence; Phase 1 assignment storage cannot express
-  the necessary target/fence atomically; or Stage 25 ordering would have to own
-  machine placement/admission.
-- Accepted debt and revisit trigger: first compatible requester can dominate
-  work and bounded candidate scanning can miss later fit. Revisit only with
-  observed scheduling harm after the pool is usable.
+- Main risks: HTTP-only policy branch, long poll implemented as slow periodic
+  polling, busy agents unable to receive control, stale offer accepted after selection,
+  aggregate capacity passed to Stage 25, target relaxation, duplicate assignment,
+  duplicate fresh session, expiry causing requeue, auth/config leakage, or
+  environment-timed receipt.
+- Review focus: unchanged coordinator/agent call graph; exact offer/target CAS;
+  policy context fields; direct/HTTP conformance; expiry versus assignment;
+  auth before mutation; source-labelled status; bounded deterministic tests.
+- Stop if remote support requires new scheduler/agent state machine, policy needs
+  machine facts, single-agent fit cannot be atomically revalidated, TLS needs a
+  new heavyweight dependency, or resident execution requires data transfer.
+- Accepted debt: one coordinator, first compatible requester, pre-staged
+  environment, agent-local data/logs, and no placement fairness/locality.
 
 ## Executor Handoff
 
-- Read section range: this phase plan; manifest `Shared Constraints`; planning
-  identity/offer/JIT baseline, `Expanded Design Review`, and validation rows for
-  competing delivery, expiry/targeting, fit/drain, and real network.
-- Safe implementation slices: execute the five slices in order; keep receipt
-  assets/config out of core runtime and secrets out of repository fixtures.
-- Decisions not to revisit: outbound pull, one work item, exact full-offer
-  reference, ephemeral presence, one contribution per agent/pool, hard target,
-  agent-local admission, resident profile, and one coordinator.
-- Conditions requiring manager action: any stop condition, an unavoidable
-  public record change beyond accepted fields, or inability to obtain an opt-in
-  two-host environment after all hermetic behavior passes. Environment absence
-  must be recorded; it does not authorize a synthetic substitute.
+- Read this plan, manifest Shared Constraints, planning topology/assignment
+  baseline, Phase 1 completion evidence, revised Stage 25 selection contracts,
+  and current authority client/service patterns.
+- Execute slices 1-5; do not duplicate or fork Phase 1 coordinator, selector,
+  assignment, journal, agent runtime, cancellation, or status logic.
+- Do not revisit outbound long polling, independent control delivery, exact
+  offer reference, hard targets, one-agent fit, direct/HTTP port, no prefetch,
+  resident mode, abstract examples, or no HA/data plane.
+- Return for any stop condition, Phase 1 contract drift, need for policy-visible
+  agent data, or inability to produce a redacted deterministic receipt.
 
 ## Workflow State
 
-- Manager preparation: pending Phase 1 merge refresh
-- Expanded planning: use at most one phase-planner only for a remaining concrete
-  auth/offer/assignment interaction
+- Manager preparation: complete; refresh after Phase 1 merge
+- Expanded planning: optional planner only if Phase 1 leaves concrete auth/
+  offer-CAS ambiguity
 - Implementation: pending
-- Refiner: not needed unless a qualified blocker is returned
+- Refiner: optional only for qualified blocker; unused
 - Pre-submit gate: pending
-- Independent review: pending risk classification after implementation
+- Independent review: required due network trust/race risk
 - Blocker corrections: 0/3
 - PR and merge: pending
 
@@ -260,6 +253,6 @@ Final commands:
 | Implementation and changed paths | pending |
 | Tests added or updated | pending |
 | Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / details |
+| Validation-relevant changes after evidence | none recorded |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
