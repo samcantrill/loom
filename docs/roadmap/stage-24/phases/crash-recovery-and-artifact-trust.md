@@ -102,7 +102,7 @@ In scope:
   repaired payload, outputs, and run artifact index.
 - Reconcile execution, state, reliability, resume, artifacts, run-store,
   testing, and roadmap documentation with the implemented behavior and the
-  Stage 26 external-acceptance boundary.
+  deferred external-acceptance boundary.
 
 Out of scope:
 
@@ -114,8 +114,9 @@ Out of scope:
 - Retrying ambiguous authority writes, simulating every network fault, testing
   database corruption, changing automatic retry policy, or treating malformed
   serialized state like a checksum mismatch.
-- Real Docker, Apptainer, SLURM, GPU, scheduler accounting, notification, remote
-  storage, or production deployment tests. Stage 26 retains those profiles.
+- Real Docker, Apptainer, SLURM, GPU, scheduler accounting, remote storage, or
+  production deployment tests. They remain opt-in or future dedicated
+  validation work; Stage 26 changes no profiles.
 
 Assumptions:
 
@@ -162,8 +163,9 @@ Assumptions:
   coordinator cannot infer ownership from PID; output commit owns success;
   artifact store owns byte validation; planner owns dependency invalidation.
 - Cross-phase contracts: completion establishes the Stage 24 lifecycle outcome
-  table and hermetic operational tests for Stage 25 to preserve. Stage 26 may
-  reuse the acceptance principles but owns external environment profiles.
+  table and hermetic operational tests for Stage 25 to preserve. Later
+  validation work may reuse the acceptance principles; Stage 26 does not own
+  external environment profiles.
 - Reproducibility and compatibility: successful resume remains reusable;
   ordinary failed/cancelled resume behavior remains; unaffected artifact
   branches retain exact reuse; no additional process or network requirement is
@@ -257,7 +259,7 @@ Final commands:
   not deterministic; or checksum semantics conflict across supported stores.
 - Accepted debt and revisit trigger: no reattachment, automatic repair,
   machine-loss cleanup, database corruption recovery, or external runtime
-  execution. Revisit only with an accepted owner/consumer in Stage 26 or later.
+  execution. Revisit only with an accepted owner/consumer in later work.
 
 ## Executor Handoff
 

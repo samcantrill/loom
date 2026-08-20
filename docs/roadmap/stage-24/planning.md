@@ -23,7 +23,7 @@ state, ownership, artifacts, and recovery agree.
 | Evidence | Runner, CLI, subprocess timeout, managed-local shutdown, authority, resume, artifact, test harness, and external acceptance paths were inspected after Stage 23-post. | None. | Preserve existing owners and test only real boundaries. |
 | Functionality | Graceful user stops cancel; ordinary failures/timeouts fail; unclean loss is classified during authoritative recovery; no incomplete output is reusable. | None. | Implement Phase 1 lifecycle alignment. |
 | Design | Reuse runner lifecycle writers, executor cleanup, queue process handling, authority recovery transitions, planner invalidation, and current test support. | None. | Keep new helpers test-private. |
-| Validation | Serial, subprocess, parallel, managed-local, hard-loss, authority-loss, and artifact-corruption boundaries need proportionate combined proof; external runtimes remain Stage 26 work. | None. | Execute the recorded obligations by phase. |
+| Validation | Serial, subprocess, parallel, managed-local, hard-loss, authority-loss, and artifact-corruption boundaries need proportionate combined proof; external runtimes remain future dedicated validation work. | None. | Execute the recorded obligations by phase. |
 | Detailed plan / approval | The user accepted the operational-testing recommendation and requested a new Stage 24 on 2026-08-18. The manifest and two linked phase plans are manager-reviewed. | None. | Begin Phase 1 from current `origin/develop`. |
 
 ## Evidence And Scope
@@ -64,7 +64,7 @@ state, ownership, artifacts, and recovery agree.
   exclusion contract and renew live controller leases privately; live or
   ambiguous ownership remains a conflict.
 - Prove checksum invalidation through one public branch-shaped workflow.
-- Leave environment-dependent acceptance to Stage 26.
+- Leave environment-dependent acceptance to a future dedicated validation stage.
 
 ## Functional Requirements
 
@@ -81,7 +81,7 @@ state, ownership, artifacts, and recovery agree.
 | FR-9 | Loss of the real local authority service while a stage is active fails closed before output commit, exposes diagnostics, starts no dependent work, and never steals a valid lease. | No automatic service restart or network partition matrix. | Service authority and commit boundary. | One bounded service-loss integration test. | locked |
 | FR-10 | Real-process tests use condition markers, monotonic deadlines, fixture-owned process groups/PIDs, and `finally` cleanup; no arbitrary sleep is the success oracle and no unvalidated PID is signalled. | Test-only support; no runtime dependency. | Existing test support. | Helper unit/use review and flake-free targeted runs. | locked |
 | FR-11 | Existing success, exception, early-stop, fake-process, fake-authority, commit-failure, delegated, and resume behavior remains compatible; add combined tests only for causal interactions. | No comprehensive executor-by-failure matrix. | Current suite. | Targeted regressions plus PR gate. | locked |
-| FR-12 | Default validation remains hermetic. Real Docker, Apptainer, SLURM, GPU, scheduler-accounting, queue-dispatch, notification, and remote-service profiles remain Stage 26 opt-in work. | No external service in `make validate-pr`. | Test markers/harness and roadmap. | Command/marker/docs audit. | locked |
+| FR-12 | Default validation remains hermetic. Real Docker, Apptainer, SLURM, GPU, scheduler-accounting, queue-dispatch, and remote-service profiles remain opt-in or future dedicated validation work; Stage 26 changes no gates. | No external service in `make validate-pr`. | Test markers/harness and roadmap. | Command/marker/docs audit. | locked |
 
 ## Functionality Agreement
 
@@ -93,7 +93,7 @@ state, ownership, artifacts, and recovery agree.
 | FQ-4 | FR-4 | Timeout | Keep typed timeout as failure, distinct from user cancellation. | No unified stopped status. | locked |
 | FQ-5 | FR-8 | Artifact corruption | Rerun the affected branch on byte/checksum mismatch; malformed state still fails. | May recompute identical logical output. | locked |
 | FQ-6 | FR-5, FR-10 | Process truth | Terminal state/release follows observed exit; fakes retain exhaustive ordering. | One slower POSIX proof. | locked |
-| FQ-7 | FR-9, FR-12 | Environment tiers | Local authority is hermetic; external sites remain Stage 26 profiles. | External failures are not all PR-gated. | locked |
+| FQ-7 | FR-9, FR-12 | Environment tiers | Local authority is hermetic; external sites remain opt-in or future dedicated validation work. | External failures are not all PR-gated. | locked |
 
 ## Behavior Baseline
 
@@ -143,7 +143,7 @@ state, ownership, artifacts, and recovery agree.
 | Controller continuity/recovery | Fixed TTL is not renewed and transitions lack workflow proof. | Treat TTL as lifetime. | private renewal plus existing recovery surfaces |
 | Corruption and service-loss workflows | Connect planner/commit owners across real boundaries. | More isolated units. | keep one each |
 | Supervisor, reattachment, full matrix | Not required by current ownership contracts. | Add future machinery now. | defer/remove |
-| External-runtime gate | Infrastructure is not reliably present. | Require Docker/cluster. | defer to Stage 26 |
+| External-runtime gate | Infrastructure is not reliably present. | Require Docker/cluster. | defer to a dedicated validation stage |
 
 ## Design Agreement
 
@@ -155,7 +155,7 @@ state, ownership, artifacts, and recovery agree.
 | DQ-4 | FR-6, FR-7 | Recovery truth | Privately renew live controller ownership; after loss, exclusive acquisition plus recovery facts decide abandonment. Use deterministic authority time, never PID or wall-clock waiting. | Renewal errors must fail closed; recovery waits for all relevant leases. | locked |
 | DQ-5 | FR-8 | Artifact oracle | Assert planner reason, attempt counts, payload content, outputs, and run index together. | More assertions in one causally combined e2e. | locked |
 | DQ-6 | FR-9 | Authority failure point | Stop the local authority after stage start and before commit; no new production failpoint. | Fixture orchestration is more involved than a fake. | locked |
-| DQ-7 | FR-11, FR-12 | Validation shape | PR-gate hermetic local behavior; retain environment-specific acceptance and receipts in Stage 26. | External-runtime regressions depend on scheduled/manual evidence. | locked |
+| DQ-7 | FR-11, FR-12 | Validation shape | PR-gate hermetic local behavior; retain environment-specific acceptance and receipts as opt-in or later dedicated work. | External-runtime regressions depend on scheduled/manual evidence. | locked |
 
 ## Examples And Validation
 
@@ -181,7 +181,7 @@ Causal interactions requiring combined coverage:
 - authority process loss + output-commit authorization + downstream blocking.
 
 All other categories remain focused tests rather than an executor/store matrix;
-Stage 26 owns external profiles.
+external profiles remain opt-in or future dedicated validation work.
 
 ## Phase Shaping
 
@@ -211,7 +211,7 @@ Gate result: lean planning, implementation manifest, phase plans, manager review
 and maintainer approval are complete. Stage 24 is ready for Phase 1 execution.
 
 Accepted risks: POSIX-only signals, settled rather than preempted parallel work,
-no reattachment/machine-loss cleanup, and Stage 26 external evidence.
+no reattachment/machine-loss cleanup, and external evidence that is not PR-gated.
 
 ## Decisions And Deferrals
 
@@ -220,4 +220,4 @@ no reattachment/machine-loss cleanup, and Stage 26 external evidence.
 | Ctrl-C | Serial/prepared work cancels; parallel stops new starts and settles in-flight truthfully; then re-raise for exit 130. | Matches explicit stop without claiming unsafe thread preemption. | Cooperative parallel cancellation is accepted. |
 | Unclean loss | Renew live controller leases; after loss require exclusive acquisition and recovery facts, then record `INTERRUPTED`/`STALE` evidence. | TTL alone must not misclassify a live runner; dead PID is not authority. | Reattachment owner is accepted. |
 | Timeout/corruption | Timeout fails; valid checksum mismatch reruns its branch; malformed state errors. | Preserves failure intent and conservative reuse. | Reliability/repair policy changes. |
-| Deferrals | No supervisor, repair API, new schema/status, broad matrix, or external-runtime PR gate. | Current private seams and Stage 26 own these concerns. | A current consumer requires one. |
+| Deferrals | No supervisor, repair API, new schema/status, broad matrix, or external-runtime PR gate. | Current private seams suffice; later work needs an accepted consumer and owner. | A current consumer requires one. |

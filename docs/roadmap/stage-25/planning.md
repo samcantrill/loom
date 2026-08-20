@@ -35,7 +35,7 @@ lifecycle safety.
 | SQLite repository, service, and controller | `claim_next()` selects FIFO inside persistence, so callers cannot choose another candidate without replacing the repository. | Required selection seam. | FR-2 through FR-7 |
 | Resource and coordination contracts | Requests are scheduler-neutral; scalar-use observations can race and only lease acquisition is authoritative. | Advisory fit boundary. | FR-4, FR-5, FR-8 |
 | Completed Stage 23 and Stage 23-post | They supply reconcile/fill cycles, atomic guarded claims, typed pre-start deferral, scalar/static-slot lifecycle, runtime recovery/shutdown, and a strict FIFO stop after head deferral. | Required implementation base and opt-in override point. | FR-1 through FR-9 |
-| Roadmap Stage 26 | Stage 26 considers generic policy across queue items, ready stages, authority snapshots, and submitted operations. | Prevent Stage 25 from claiming a universal workflow scheduler contract. | FR-10, FR-11 |
+| Roadmap boundary | Generic policy across queue items, ready stages, authority snapshots, and submitted operations is deferred beyond Stage 26. | Prevent Stage 25 from claiming a universal workflow scheduler contract. | FR-10, FR-11 |
 | Existing tests | FIFO helper, repository claims, controller dispatch, managed admission, and coordination backends have coverage; exact-candidate claim races and injected resource-aware ordering do not. | Validation scope. | all |
 
 - User-visible outcome: if the FIFO head requests two units while only one is
@@ -92,7 +92,7 @@ lifecycle safety.
 | FR-8 | After typed capacity deferral, FIFO stops; injection may continue without cycle-attempted IDs. One selection bound covers calls, reads, and lost claims; Stage 23 owns other bounds. | No reclaim loop, retry budget, or retry. | Stage 23 deferral. | Bypass and call counts. | locked |
 | FR-9 | Claim audit records policy/reason; cycle evidence records safe stop/error. In-process selection records have no codec or schema. | No skip events, policy state, snapshot, or decision log. | Existing audit/cycle. | Allowlist, serialization, volume. | locked |
 | FR-10 | Managed-local pools are the required resource-aware path. Delegated pools retain FIFO submission unless explicitly supported by later work; external schedulers continue to own post-handoff ordering. | No SLURM scheduling-policy change. | Existing pool modes. | Delegated compatibility tests. | locked |
-| FR-11 | Queue selection remains whole-run and queue-local. Stage 25 must not define priority, fairness, reservation, stage-ready, or universal scheduler vocabulary on Stage 26's behalf. | No general `WorkflowScheduler`. | Roadmap boundary. | Public import and scope review. | locked |
+| FR-11 | Queue selection remains whole-run and queue-local. Stage 25 must not define priority, fairness, reservation, stage-ready, or universal scheduler vocabulary for later work. | No general `WorkflowScheduler`. | Roadmap boundary. | Public import and scope review. | locked |
 
 ## Functionality Agreement
 
@@ -171,7 +171,7 @@ lifecycle safety.
 | DQ-3 | FR-4, FR-5 | Availability meaning | Derive controller-local logical availability and label it advisory; final acquisition decides truth. | External leases and races can make it stale. | locked |
 | DQ-4 | FR-8 | Continuation | Controller filters a private attempted-ID set and spends one selection bound. | No history; next cycle reconsiders. | locked |
 | DQ-5 | FR-9 | Persistence | Extend allowlisted claim/cycle evidence; no selection codecs, DDL, or private state. | No decision history/aging. | locked |
-| DQ-6 | FR-10, FR-11 | Roadmap boundary | Apply resource-aware customization to managed whole-run pools and leave generic scheduling design to Stage 26. | Queue and future workflow scheduling remain distinct concepts. | locked |
+| DQ-6 | FR-10, FR-11 | Roadmap boundary | Apply resource-aware customization to managed whole-run pools and defer generic scheduling design beyond Stage 26. | Queue and future workflow scheduling remain distinct concepts. | locked |
 
 ## Expanded Design Review
 
@@ -213,7 +213,7 @@ Other validation stays in focused unit or contract tests.
 | 2. Bounded head-bypass proof | Private attempt filtering, bounded continuation after unexpected capacity deferral, safe cycle stop/error evidence, downstream example, docs, and causal integration/e2e proof. | Managed whole-run pools; no priorities, fairness, reservations, config registry, SLURM policy, or stage scheduler. | Phase 1 merged. | Stale observations safely defer then consider another candidate; all bounds/redaction/compatibility checks pass. | pending |
 
 Two phases separate persistence/concurrency from head-bypass behavior. Neither
-may implement Stage 26's universal scheduler design.
+may implement a universal scheduler design.
 
 ## Quality Gate
 
@@ -249,11 +249,11 @@ Accepted risks and revisit triggers:
 | Item | Decision or deferral | Rationale | Revisit trigger |
 | --- | --- | --- | --- |
 | Stage placement | Stage 25 after operational-lifecycle Stage 24. | Sequential delivery preserves the inserted validation stage; the functional base remains Stage 23 deferral/claim safety. | Stage 24 or the completed Stage 23 contracts materially change before implementation. |
-| Public vocabulary | Queue-local selection policy, not universal scheduler. | Avoid conflating Loom queue ordering, SLURM scheduling, and pipeline-stage scheduling. | Stage 26 cross-contract design. |
+| Public vocabulary | Queue-local selection policy, not universal scheduler. | Avoid conflating Loom queue ordering, SLURM scheduling, and pipeline-stage scheduling. | Accepted later cross-contract design. |
 | Default | Stage 23 atomic FIFO/deferral; no public FIFO object. | Compatibility without the new seam. | Default intentionally changes. |
 | Custom behavior | Constructor-injected managed-pool policy with stable ID selects supplied candidates. | Extension plus safe evidence. | Non-Python discovery needed. |
 | Resource data | Advisory logical availability only. | Supports fit decisions without transferring authority or assignment ownership. | A demonstrated policy needs another safe, generic observation. |
 | Cycle state/bounds | Controller owns attempts and active/dispatch/selection bounds. | Avoid duplicate validation/coupling. | Accepted policy needs history. |
 | Fairness | No guarantee and no durable bypass state. | Correct fairness needs product policy not present in the motivating case. | Large jobs are observably starved. |
 | Persistence | Existing records and allowlisted claim/cycle evidence; no selection codec, private state, or DDL. | Current columns/evidence suffice. | Safe exact claim/evidence proves otherwise. |
-| Generic scheduling | Remains Stage 26 design work. | Queue-local whole-run selection is narrower than cross-stage scheduling. | Stage 26 planning begins. |
+| Generic scheduling | Deferred beyond Stage 26. | Queue-local whole-run selection is narrower than cross-stage scheduling. | Dedicated scheduling planning begins. |

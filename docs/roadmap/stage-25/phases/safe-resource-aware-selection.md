@@ -70,7 +70,7 @@ Out of scope:
 
 - FIFO policy objects, selection codecs, DDL, policy loading/state, skip events,
   post-deferral reselection, core non-FIFO policy, CLI/delegated changes, and
-  Stage 26 vocabulary.
+  generic scheduler vocabulary.
 
 Assumptions:
 

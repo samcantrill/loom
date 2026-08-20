@@ -96,7 +96,7 @@ Assumptions:
   continuation. Invalid request, authority uncertainty, fencing loss, process
   start, or repository failures retain Stage 23 terminal/fail-closed behavior.
 - Cross-phase contracts: this is the final Stage 25 phase. It must leave the
-  queue-local seam adaptable but must not implement Stage 26 vocabulary.
+  queue-local seam adaptable but must not implement generic scheduler vocabulary.
 - Reproducibility and compatibility: the example policy is deterministic over
   the supplied order and logical amounts. It is demonstrative downstream code,
   not a root export or default. Existing config, CLI, FIFO, SLURM, and queue
@@ -179,7 +179,7 @@ Final commands:
   evidence, and example/docs/test checkpoints.
 - Decisions not to revisit: private attempted state, one selection bound,
   capacity-only continuation, no public-shape change, no built-in policy,
-  fairness, config, registry, DDL, or Stage 26 scheduling.
+  fairness, config, registry, DDL, or generic scheduling.
 - Conditions requiring manager action: any stop condition, Phase 1 contract
   drift, need for policy history, or inability to prove compensation before
   reselection.

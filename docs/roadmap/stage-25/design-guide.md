@@ -475,7 +475,7 @@ cross-pool scheduling, distributed active-item quotas, pipeline-stage
 scheduling, policy discovery, concrete-slot selection, or changes to external
 scheduler ordering.
 
-Those features need separate product decisions. Stage 26 remains the place to
-consider broader scheduling vocabulary spanning queue items, ready pipeline
-stages, authority snapshots, and other operation types. Stage 25 stays narrowly
-focused on safe, replaceable preference among queued whole runs.
+Those features need separate product decisions in a future dedicated scheduling
+stage. Stage 26 no longer owns that broader vocabulary spanning queue items,
+ready pipeline stages, authority snapshots, and other operation types. Stage 25
+stays narrowly focused on safe, replaceable preference among queued whole runs.

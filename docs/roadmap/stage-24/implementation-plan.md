@@ -33,9 +33,9 @@ Blockers: none
   `Phase Shaping`. Phase 1 owns graceful termination while Loom is alive; Phase
   2 owns authoritative recovery and artifact trust after Loom or authority was
   unavailable.
-- Out of scope: real Docker, Apptainer, SLURM, GPU, scheduler-accounting,
-  notification, and remote-service profiles; Stage 26 owns those environment
-  gates and evidence contracts.
+- Out of scope: real Docker, Apptainer, SLURM, GPU, scheduler-accounting, and
+  remote-service profiles; they remain opt-in or future dedicated validation
+  work, and Stage 26 changes no environment gates or evidence contracts.
 
 ## Shared Constraints
 
@@ -115,11 +115,11 @@ merged so crash recovery inherits one settled graceful lifecycle contract.
 - Ready for implementation: yes.
 - Accepted risks: POSIX-specific process tests; parallel local work settles
   rather than being forcibly stopped; no reattachment/machine-loss cleanup;
-  external-runtime evidence stays scheduled/manual until Stage 26.
+  external-runtime evidence stays scheduled/manual.
 - Revisit triggers: an existing process seam cannot safely terminate/observe its
   owned child; recovery cannot distinguish live from abandoned authority; a new
-  durable field/schema becomes unavoidable; or Stage 26 makes a reliable
-  external runtime part of CI.
+  durable field/schema becomes unavoidable; or a later validation stage makes a
+  reliable external runtime part of CI.
 
 ## Completion
 

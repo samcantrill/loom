@@ -90,7 +90,7 @@ blocker
 - Decisions no phase may reopen: default FIFO does not route through a public
   policy; advisory availability cannot authorize launch; policy code never runs
   in a transaction; no selection codec/state/DDL; no core first-fit or fairness
-  claim; Stage 26 alone owns broader scheduler vocabulary.
+  claim; broader scheduler vocabulary remains deferred beyond Stage 26.
 
 Exact public selection shapes:
 
@@ -138,7 +138,7 @@ surprises without exposing controller history to policy code.
   constructor-only injection; bounded windows may miss a later fitting item.
 - Revisit triggers: a required starvation guarantee; measured futile-claim
   churn; a second policy bootstrap consumer; measured candidate-window/query
-  pressure; or Stage 26's cross-contract scheduling design.
+  pressure; or an accepted cross-contract scheduling design in a later stage.
 
 ## Completion
 

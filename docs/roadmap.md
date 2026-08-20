@@ -158,7 +158,9 @@ written.
 | v23 | Managed local concurrency and resource assignment | Pool-scoped managed-local reconcile/fill cycles, structured capacity deferral, exclusive static-slot assignment, lease-safe local process lifecycle, and redacted operational status. |
 | v24 | Operational lifecycle and recovery validation | Real-process proof for interruption, cancellation, timeout, shutdown, unclean process loss, authority loss, artifact integrity, and resume without false success or orphaned ownership. |
 | v25 | Resource-aware whole-run queue selection | Default-compatible FIFO selection plus a bounded queue-local policy seam for safe downstream choice of fitting managed-pool candidates. |
-| v26 | Downstream operations design | Design and documentation for stage-author guidance, resource validation and usage observation, generic scheduling, notifications, resume policy, queues, and environment acceptance profiles. |
+| v26 | Operational correctness and notifications | Truthful stage-author, artifact, logging, and lifecycle guidance plus generic observe-only notifications over committed events. |
+| v27 | Auto-configured local GPU pools | Python-first local GPU inventory, deterministic whole/share/group layouts, safe authority bootstrap, member-backed placement, and explicit NVIDIA discovery. |
+| v28 | Reconstructable runtime extensions and lifecycle hooks | Truthful extension readiness, downstream conformance checks, explicit custom executor/codec/resource activation across CLI and workers, and filtered observe-only lifecycle callbacks. |
 
 ## v0 - Local Runtime Kernel
 
@@ -2034,9 +2036,9 @@ Defer:
 - Graceful handling of every platform-specific signal, Windows process-control
   parity, scheduler preemption policy, automatic retry-policy changes, and a
   comprehensive backend-by-failure matrix.
-- Real Docker, Apptainer, SLURM, GPU, scheduler-accounting, notification, and
-  remote-service acceptance profiles. Stage 26 owns their environment gates,
-  commands, evidence, and any runtime-specific strengthening.
+- Real Docker, Apptainer, SLURM, GPU, scheduler-accounting, and remote-service
+  acceptance profiles. They remain opt-in or deferred for a future dedicated
+  validation stage; Stage 26 does not change their gates or evidence policy.
 
 Primary feature docs:
 
@@ -2156,133 +2158,310 @@ Phase execution plans:
 - `docs/roadmap/stage-25/phases/safe-resource-aware-selection.md`
 - `docs/roadmap/stage-25/phases/bounded-head-bypass-proof.md`
 
-## v26 - Downstream Operations Design
+## v26 - Operational Correctness And Notifications
+
+Status:
+
+- Expanded planning is recorded in
+  [`docs/roadmap/stage-26/planning.md`](roadmap/stage-26/planning.md); the
+  notification design-safety and final manager quality gates are pending.
 
 Goal:
 
-- Turn downstream-usage questions into explicit design artifacts and
-  roadmap-ready implementation choices without rewriting completed roadmap
-  stages.
+- Give downstream stage authors one simple, truthful operational path for
+  inputs, outputs, temporary workspace, artifact registration, stdout/stderr,
+  project logging, lifecycle facts, and log inspection.
+- Add one feature: generic lifecycle notifications over the existing committed,
+  observe-only event-sink path.
 
 Implement:
 
-- Stage-author guidance for the preferred artifact-directory workflow: use
-  `StageContext.local_output_path(...)` or
-  `StageContext.local_workspace_path(...)`, write outputs or temporary files
-  there, then return refs from `save_artifact(...)` or
-  `register_local_artifact(...)`. The guidance should make clear that stage
-  code receives artifact refs, not mutable store handles, and that project code
-  owns domain schemas.
-- Logging guidance that distinguishes stage-owned log files from
-  executor-captured stdout/stderr. It should document local, subprocess,
-  container, and SLURM behavior where available, explain SLURM wrapper log
-  paths, and describe what happens when project code configures Python logging
-  itself.
-- Queue and resource guidance that shows a managed local queue pool, a delegated
-  SLURM queue pool, resource preflight, authority-backed resource leases, and
-  the difference between scheduler-neutral resource requests and
-  executor-specific resource mapping.
-- Resource validation and usage-observation design. Loom already validates
-  scheduler-neutral resource request shape, executor capabilities, SLURM dry-run
-  mappings, queue managed-pool reconciliation, and authority-backed leases where
-  those features exist. This stage should define observed usage records
-  separately from requested allocation: scheduler accounting such as `sacct`,
-  container process facts, GPU observations, allocation-versus-usage
-  diagnostics, and policy for warnings or failures when usage evidence is
-  missing or mismatched.
-- Generic scheduling policy design. V10 reserves scheduler-ready request and
-  decision records, v11 adds a narrow whole-run FIFO queue, v23 adds bounded
-  managed-local reconciliation and concrete assignment, v24 proves operational
-  lifecycle and recovery boundaries, and v25 adds only a
-  queue-local whole-run candidate-selection seam. This stage should decide
-  whether to introduce a broader scheduler interface over authority snapshots,
-  resource leases, queue items, ready stage plans, and submitted operations.
-  The same policy vocabulary should be adaptable to coarse whole-run scheduling
-  and fine stage scheduling, but it must not replace the pipeline planner,
-  authority store, executor contracts, queue audit records, v23 assignment
-  lifecycle, or v25 queue-selection safety boundary.
-- Public-interface compatibility review for scheduling and resources. Before
-  implementation, review whether public `RunOptions`, `ExecutionPlan`,
-  `StageExecutionRequest`, `ResourceRequest`, queue records, and authority lease
-  APIs already carry enough information or need compatible additions.
-- Stage reuse policy design. The current resume contract reuses a successful
-  prior stage only when fingerprints and required artifacts remain valid, and
-  project stages own checkpoint-level resume. This stage should decide whether
-  to add a small planning policy such as `reuse_if_valid` by default,
-  `always_run` for stages that must never reuse old outputs, or an explicit
-  force/rerun policy surfaced through runtime options.
-- Generic lifecycle notification design over event sinks. Core Loom should
-  expose committed lifecycle events and observe-only sink contracts. This stage
-  should define service-neutral notification messages, lifecycle alert filters,
-  severity mapping, redaction rules, and a small notifier protocol, then define
-  how Slack, Discord, webhooks, email, or tracking services adapt to that
-  protocol through optional plugins.
-- Full stage-scheduler requirements. Current SLURM `afterok` maps a planned DAG
-  to submitted scheduler jobs, while v11 queues schedule whole runs. A future
-  fine-grained stage scheduler would need authoritative ready-stage snapshots,
-  per-stage resource admission, stage claim/fencing, submitted-operation
-  recovery, cancellation semantics, retry/resume interaction,
-  starvation/fairness policy, and evidence that local, subprocess, SLURM, and
-  container executors can honor the same lifecycle handoff.
-- Acceptance profiles with exact commands, environment gates, and receipts for
-  default local tests, real containers, real SLURM, and future GPU-server,
-  scheduler-accounting, queue-dispatch, and notification-plugin environments.
-  Existing Docker and Apptainer availability/build smokes should grow into real
-  Loom stage success/failure and artifact checks when those runtimes are
-  available. Live SLURM coverage should verify artifact contents, dependency-
-  failure behavior, and an actual scheduler-terminal cancellation rather than
-  accepting a raced completion. The docs should state which suites are required
-  by `make validate-pr`, which are summarized by `make test-summary`, and which
-  remain scheduled or manual opt-in evidence.
+- A high-level downstream operations guide with small code snippets for
+  `StageContext.load_input(...)`, `save_artifact(...)`,
+  `local_output_path(...)`, `register_local_artifact(...)`, and
+  `local_workspace_path(...)`. Stages return `ArtifactRef` values; project code
+  owns domain schemas and workspace files are not implicit outputs.
+- A logging guide that distinguishes project-created files from executor-
+  captured stdout/stderr, tracebacks, managed-queue attempt logs, Loom stage
+  logs, and SLURM wrapper logs. Document local pass-through/optional capture,
+  subprocess/container capture, Python logging-handler behavior, and the exact
+  scope of `loom logs`.
+- An evidence-backed correctness pass over the current stage-author, artifact,
+  log, lifecycle-event, example, and documentation paths. Fix only demonstrated
+  mismatches at their authoritative owner without adding unrelated machinery.
+- An import-light notification surface over existing lifecycle events and
+  `EventSinkRegistry`: immutable severity/message/policy values, a structural
+  notifier protocol, allowlisted safe lifecycle facts, and one helper that
+  registers a notifier under a stable sink name.
+- A quiet default notification policy for run completion, cancellation,
+  preparation failure, run failure, stage cancellation, and stage failure.
+  Callers may provide another exact event-to-severity mapping; routine events
+  and stage completion remain opt-in.
+- Existing best-effort observer behavior: notification exceptions become
+  event-sink failure facts and never change run correctness; a provider-returned
+  external reference becomes the existing observer-link evidence.
+- Dependency-free runnable examples and proportional local tests. Existing
+  `make validate-pr`, `make test-summary`, and external opt-in suites keep their
+  current meanings.
 
 Exit criteria:
 
-- Downstream users have a concrete answer for where stage code writes outputs,
-  how produced files are registered, how stdout/stderr and explicit logs are
-  captured, and what remains project-owned behavior.
-- Queue/resource documentation explains how queues are configured, what
-  resources are admitted or mapped in local, SLURM, Docker, and Apptainer
-  settings, and which resource checks are validation versus observed usage
-  evidence.
-- Scheduler planning distinguishes whole-run queue policy, submitted-executor
-  behavior, fine-grained stage scheduling, and authority truth.
-- Notification planning defines a generic observe-only protocol without making
-  Slack, Discord, webhooks, email, or tracking services core dependencies.
-- Resume planning either accepts the existing force/resume behavior or defines
-  a compatible first-class per-stage reuse policy with clear fingerprint and
-  artifact-payload boundaries.
-- Acceptance-suite documentation covers currently implemented suites and names
-  any future environment profiles without making them default PR gates. Any
-  available real-runtime proof executes Loom behavior and inspects lifecycle,
-  logs, and artifacts rather than checking only the external command version.
+- A stage author can identify the correct output/workspace helper, return
+  declared artifacts, and understand what is or is not durable.
+- Logging documentation and examples accurately distinguish every currently
+  supported log owner and capture boundary without promising aggregation or
+  uniform backend behavior.
+- Canonical lifecycle-event documentation matches current emitted behavior and
+  states that notifications observe committed facts.
+- A Python caller can register a service-neutral notifier, receive safe messages
+  for selected events, inspect failure/link evidence, and prove that notifier
+  failure cannot fail a run.
+- No service SDK, network credential, new durable notification schema, or
+  unrelated Stage 26 feature is added.
 
 Defer:
 
-- Implementing a generic scheduler, cross-pool queue policy, new notification
-  adapter, new resource usage sampler, or new resume semantics until this design
-  stage has produced a reviewed implementation plan. The bounded managed-local
-  lifecycle assigned to v23 is not part of this deferral.
-- Making real clusters, GPUs, containers, network services, or notification
-  credentials required for default validation.
-- Parsing domain metrics, checkpoints, or artifact payloads in core Loom.
+- Generic or stage scheduling, cross-pool policy, resource-usage sampling or
+  observation, resource recommendations, process reattachment, and new
+  resume/reuse semantics.
+- New external acceptance profiles, PR-gate/Make/CI policy, and mandatory real
+  clusters, GPUs, containers, services, networks, or credentials.
+- Slack, Discord, email, webhook, tracking-service, or other provider adapters;
+  asynchronous delivery, retry, cursors, outboxes, deduplication, replay, and
+  at-least/exactly-once guarantees.
+- Arbitrary notification payload templates or predicates, mutable/fatal hooks,
+  and parsing domain metrics, checkpoints, logs, or artifact payloads in core.
 
 Primary feature docs:
 
 - `pipeline.md`
 - `artifacts.md`
 - `execution.md`
-- `runtime-resources.md`
-- `queue.md`
 - `slurm.md`
 - `container-executors.md`
-- `resume.md`
 - `reliability.md`
 - `plugins.md`
 - `testing.md`
 
 Planning notes:
 
-- To be created when stage planning begins.
+- [`docs/roadmap/stage-26/planning.md`](roadmap/stage-26/planning.md)
+
+Implementation plan:
+
+- [`docs/roadmap/stage-26/implementation-plan.md`](roadmap/stage-26/implementation-plan.md)
+
+Phase execution plans:
+
+- [`docs/roadmap/stage-26/phases/stage-author-correctness-and-logging.md`](roadmap/stage-26/phases/stage-author-correctness-and-logging.md)
+- [`docs/roadmap/stage-26/phases/generic-lifecycle-notifications.md`](roadmap/stage-26/phases/generic-lifecycle-notifications.md)
+
+## v27 - Auto-Configured Local GPU Pools
+
+Status:
+
+- Planning is confirmed in
+  [`docs/roadmap/stage-27/planning.md`](roadmap/stage-27/planning.md); the
+  manager quality gate and maintainer approval passed, and Phase 1 follows the
+  normal roadmap predecessor gate.
+
+Goal:
+
+- Let a caller automatically prepare one managed-local GPU pool from supplied
+  or discovered device inventory without changing Loom's integer resource,
+  authority, assignment, or process-lifecycle contracts.
+- Support one GPU per scheduling unit, N logical shares per GPU, and N physical
+  GPUs per grouped unit while keeping each meaning explicit.
+
+Implement:
+
+- An explicit, import-light `loom.queue.gpu` Python surface for immutable local
+  device inventory, topology links, layouts, prepared plans, safe authority
+  provisioning, and managed-runtime composition.
+- Deterministic whole-GPU, interleaved share, explicit/ordered/topology-preferred
+  disjoint group layouts. Shares and groups remain integer logical resources;
+  Loom makes no hardware-isolation claim.
+- Member-backed grouped assignment that acquires, compensates, renews, and
+  releases every physical member key rather than relying on a synthetic group
+  key.
+- An atomic coordination-authority operation that creates missing resource
+  limits or accepts exact matches, rejects any mismatch without partial writes,
+  and is called only by explicit setup—not runtime or ordinary preflight.
+- A dependency-free, explicitly invoked NVIDIA `nvidia-smi` inventory/topology
+  adapter using stable UUID identity, fake command coverage, and an opt-in real
+  hardware profile.
+- Plain-language examples and documentation for the three layouts, the split
+  between planning/provisioning/runtime, redaction, and fractional limitations.
+
+Exit criteria:
+
+- Two manually supplied devices can run as two whole-GPU units or four
+  two-share units through the existing managed-local lifecycle, with exact
+  authority and member cleanup.
+- A four-device topology fixture produces deterministic disjoint two-GPU groups;
+  a group and an individual member cannot overlap, and partial group acquisition
+  leaks no capacity.
+- Provisioning is idempotent for an equal plan and atomic/no-op for a conflicting
+  plan across embedded SQLite and service-backed coordination.
+- Explicit NVIDIA discovery produces the same normalized plan path, fails
+  before mutation/launch on missing or malformed evidence, and never executes
+  during import or default checks.
+- Existing static/manual, CPU-only, delegated, schema-v1/v2, and custom-provider
+  behavior remains compatible; `make validate-pr` and `make test-summary` pass.
+
+Defer:
+
+- Floating queue amounts, compute/memory isolation, MIG/MPS administration,
+  utilization/health placement, hot inventory changes, multi-host resources,
+  overlapping-group packing, and simultaneous mixed layouts over one device
+  set.
+- Authored queue schema v3, automatic provider/plugin loading, an NVML Python
+  dependency, non-NVIDIA first-party adapters, and mandatory real-GPU CI.
+
+Primary feature docs:
+
+- `queue.md`
+- `runtime-resources.md`
+- `preflight.md`
+- `testing.md`
+
+Planning notes:
+
+- [`docs/roadmap/stage-27/planning.md`](roadmap/stage-27/planning.md)
+
+Implementation plan:
+
+- [`docs/roadmap/stage-27/implementation-plan.md`](roadmap/stage-27/implementation-plan.md)
+
+Phase execution plans:
+
+- [`docs/roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md`](roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md)
+- [`docs/roadmap/stage-27/phases/grouped-gpu-placement.md`](roadmap/stage-27/phases/grouped-gpu-placement.md)
+- [`docs/roadmap/stage-27/phases/nvidia-auto-discovery.md`](roadmap/stage-27/phases/nvidia-auto-discovery.md)
+
+## v28 - Reconstructable Runtime Extensions And Lifecycle Hooks
+
+Status:
+
+- Planning is confirmed. Expanded design-safety review, one bounded design
+  correction, independent plan review, and one bounded plan correction passed;
+  all three phases remain pending and Phase 1 follows Stage 27.
+
+Goal:
+
+- Let downstream projects extend Loom through honest, testable contracts that
+  work through the same user-visible path as built-ins, including the CLI and
+  fresh stage processes where reconstruction is applicable.
+- Make the limits of every extension point visible. A protocol alone must not
+  be described as CLI-selectable or worker-safe, and installed plugin metadata
+  must remain inert until an explicit trusted setup action selects it.
+- Preserve Loom's authority, lifecycle, planning, artifact, and event
+  invariants while project code supplies implementation behavior.
+
+Implement:
+
+- A capability-based readiness model covering contract definition, Python
+  injection, keyed registration, explicit plugin loading, CLI selection, and
+  fresh-process reconstruction. Each capability reports supported,
+  unsupported, or not applicable with evidence and a revisit trigger.
+- An opt-in, dependency-light `loom.testing` contract-check package for codecs,
+  resource validators, ordinary stage executors, and event sinks. Checks return
+  structured versioned reports and require no `pytest` runtime dependency.
+- An instance-local executor registration pairing one `ExecutorDescriptor`
+  with one factory. This replaces the CLI's private built-in-only factory branch
+  for ordinary stage executors while leaving SLURM whole-run continuation in its
+  specialized path.
+- Exact explicit runtime plugin activation by entry-point group and name for
+  executors, codecs, resource validators, and event sinks. Python callers retain
+  direct object/registry injection; CLI activation is opt-in, deterministic,
+  provenance-visible, and never triggered by help, listing, status, or
+  inspection.
+- A `loom.resource_validators` group and a small registration pairing one
+  validated resource kind with its validator. Thread the selected registry
+  through config/pipeline/runtime parsing, validation, planning, execution
+  reconstruction, and continuation rather than silently using built-ins.
+- Existing codec activation wired through the artifact-store factory in both
+  the parent and fresh workers that encode or decode project artifacts.
+- A versioned plain-data record of exact activated entry points. Persist group,
+  name, target, and available distribution evidence; never persist live
+  objects, callables, credentials, or plugin-private state. Workers verify the
+  record before importing project stage code.
+- Exact event-type subscriptions over `EventSinkRegistry`. Unfiltered
+  registration preserves observe-all behavior; filtered sinks receive only
+  selected committed events. Dispatch remains registration-ordered,
+  synchronous, observe-only, and best-effort.
+- Consistent activation for `loom validate`, `loom plan`, `loom preflight`, and
+  `loom run`, with propagation to `loom stage run` or `loom stage-job run` only
+  where that process owns a required extension.
+- Documentation classifying every existing downstream seam, its Python/CLI
+  reachability, fresh-process applicability, conformance support, and deferral
+  trigger, with small custom executor, codec, resource, and sink examples.
+
+Exit criteria:
+
+- Existing runs with no explicit activation preserve built-in behavior and do
+  not discover third-party packages.
+- A downstream package passes published contract checks, registers a custom
+  ordinary executor with matching capabilities, selects it from the CLI, and
+  executes a synthetic pipeline through the normal runner path.
+- A selected custom codec and resource validator work in-process and in a real
+  subprocess worker; missing or changed activation fails before stage code.
+- A selected sink subscribes to `stage.completed` without receiving unrelated
+  events, sees committed state, and cannot change run correctness when it
+  raises.
+- Help, plugin listing, read-only inspection, imported run data, and default
+  execution remain import-safe and never activate stored or installed project
+  code implicitly.
+- Targeted contract, package, CLI, subprocess, lifecycle, and import-boundary
+  tests pass, followed by `make validate-pr` and `make test-summary` during
+  implementation.
+
+Defer:
+
+- A universal component registry, service locator, global mutable registries,
+  arbitrary CLI command injection, automatic loading, dependency solving,
+  plugin sandboxing, and treating explicitly activated project plugins as
+  untrusted code.
+- Custom submitted-executor continuation, custom SLURM orchestration, queue
+  daemon reconstruction, hot reload, remote installation, and cross-host
+  distribution. Ordinary one-stage `Executor` implementations are the current
+  executable boundary.
+- Plugin registries for data sources, run exporters/importers, and sweep
+  providers. Sources lack a runtime selector, run exchange already supports
+  direct protocol use over portable records, and sweep discovery needs an
+  accepted custom spec boundary.
+- Wiring `FailureClassifier`, `RetryEvaluator`, or `TimeoutAdapter` merely
+  because their protocols exist. They remain contract-only until automatic
+  retry or another accepted consumer establishes one decision path. New
+  reuse-policy semantics remain deferred beyond Stage 26.
+- Mutable before/after hooks, plan/output replacement callbacks, strict callback
+  failure, payload predicates, service-specific adapters, durable cursors,
+  delivery outboxes, and at-least-once external delivery. Stage 26 owns higher-
+  level notification semantics.
+
+Primary feature docs:
+
+- `plugins.md`
+- `protocols.md`
+- `execution.md`
+- `runtime-resources.md`
+- `reliability.md`
+- `testing.md`
+- `cli.md`
+
+Planning notes:
+
+- [`docs/roadmap/stage-28/planning.md`](roadmap/stage-28/planning.md)
+
+Implementation plan:
+
+- [`docs/roadmap/stage-28/implementation-plan.md`](roadmap/stage-28/implementation-plan.md)
+
+Phase execution plans:
+
+- [`docs/roadmap/stage-28/phases/truthful-extension-contracts.md`](roadmap/stage-28/phases/truthful-extension-contracts.md)
+- [`docs/roadmap/stage-28/phases/reconstructable-runtime-extensions.md`](roadmap/stage-28/phases/reconstructable-runtime-extensions.md)
+- [`docs/roadmap/stage-28/phases/filtered-lifecycle-observers.md`](roadmap/stage-28/phases/filtered-lifecycle-observers.md)
 
 ## Deferred Integration Candidates
 
@@ -2359,31 +2538,31 @@ Before turning any roadmap version into a full implementation plan:
 | --- | --- | --- |
 | `core-model.md` | v0 | Foundational vocabulary for refs, records, manifests, filters, identifiers, timestamps, and hashing terminology. |
 | `timestamps.md` | v0 | UTC helpers are needed by status, stores, provenance, logs, and generated IDs. |
-| `protocols.md` | v0 | Tiny shared protocols and import-boundary rules come before subsystem contracts. |
+| `protocols.md` | v0, v28 | Tiny shared protocols and import-boundary rules come before subsystem contracts; v28 publishes bounded downstream conformance support without moving subsystem protocols to the package root. |
 | `errors.md` | v0, v1, v2, v3 | Shared roots land in v0; composition directive errors mature in v1; CLI formatting and local diagnostics mature in v2 and v3. |
 | `serialization.md` | v0, v1 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and composition manifests. |
 | `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots. |
-| `io.md` | v0, v1, v14, v15, v16 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v14; remote hooks and operations in v15/v16. |
+| `io.md` | v0, v1, v14, v15, v16, v28 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v14; remote hooks and operations in v15/v16; v28 carries explicitly selected codecs through applicable CLI and worker artifact-store factories. |
 | `artifacts.md` | v0, v3, v9, v9-post, v10, v12, v15, v16, v21 | Local artifact refs/stores in v0; inspection in v3; commit/concurrency semantics in v9; authority-backed commit use is mandatory after v9; v10 adds durable service/offline import evidence; bundles/exporters in v12; external/remote interface, multi-location refs, and immutable reuse semantics in v15; payload materialization operations in v16; retention in v21. |
 | `config.md` | v0, v1, v2, v13, v14, v23 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v13; recipe plugins in v14; v23 compatibly extends queue controller and local-assignment configuration. |
-| `pipeline.md` | v0, v2, v9, v13 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later. |
+| `pipeline.md` | v0, v2, v9, v13, v28 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later; v28 threads custom resource validation without changing authored stage-resource data. |
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
-| `runtime-resources.md` | v4, v6, v7, v11, v17, v18, v23 | Shared runtime/resource objects arrive before executor-specific mapping; v11 adds queue pool reconciliation over authority resource leases; v23 adds concrete local assignment without changing portable resource requests. |
-| `execution.md` | v0, v4, v5, v6, v7, v9, v9-post, v10, v11, v17, v18, v19, v23 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; concurrency foundations in v9; v9-post removes local-only mutation entrypoints; v10 makes service connection/start policy explicit and durable; v11 adds whole-run queue dispatch; reliability in v19; v23 adds bounded concurrent managed-local process lifecycle. |
+| `runtime-resources.md` | v4, v6, v7, v11, v17, v18, v23, v27, v28 | Shared runtime/resource objects arrive before executor-specific mapping; v11 adds queue pool reconciliation over authority resource leases; v23 adds concrete local assignment without changing portable resource requests; v27 documents integer GPU share/group meanings without changing portable numeric semantics; v28 makes caller-selected validators survive all applicable parse/reconstruction boundaries. |
+| `execution.md` | v0, v4, v5, v6, v7, v9, v9-post, v10, v11, v17, v18, v19, v23, v28 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; concurrency foundations in v9; v9-post removes local-only mutation entrypoints; v10 makes service connection/start policy explicit and durable; v11 adds whole-run queue dispatch; reliability in v19; v23 adds bounded concurrent managed-local process lifecycle; v28 pairs ordinary executor factories/descriptors and reconstructs applicable runtime extensions. |
 | `run-store.md` | v0, v3, v5, v8, v9, v9-post, v10, v11, v12, v19, v20, v21, v23 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence contracts; v9-post deprecates `LocalRunStore` as a runtime entrypoint; v10 adds DB-backed authority service/offline import; v11 links queue and authority facts; v23 adds queue-owned local attempt logs and safe dispatch evidence; bundles/reliability/events/cleanup build on the shared contracts. |
 | `state.md` | v0, v5, v7, v9, v9-post, v10, v11, v19, v23 | Basic statuses in v0; attempts/failures, scheduler state, concurrent lifecycle semantics, mandatory authority-backed lifecycle use, durable service state, queue status, and reliability records mature later; v23 adds explicit deferred dispatch and pool-cycle outcomes. |
-| `provenance.md` | v0, v1, v6, v7, v10, v11, v14, v17, v18, v20 | Generic provenance in v0; config composition provenance in v1; submission, offline import evidence, queue dispatch facts, plugin, container, event, and event-sink facts added with those capabilities. |
+| `provenance.md` | v0, v1, v6, v7, v10, v11, v14, v17, v18, v20, v28 | Generic provenance in v0; config composition provenance in v1; submission, offline import evidence, queue dispatch facts, plugin, container, event, and event-sink facts added with those capabilities; v28 records exact safe activation identity for reconstruction. |
 | `resume.md` | v0, v2, v3, v9, v9-post, v10, v13, v19 | Same-run-directory resume in v0; CLI/preflight expose it; v9 clarifies interrupted attempts and leases; v9-post authority-backs continuation entrypoints; v10 adds offline import/equivalence policy; sweeps and retry policies build later. |
-| `preflight.md` | v3, v4, v5, v6, v7, v9, v10, v11, v14, v15, v16, v17, v18, v19, v20, v21, v23 | Core check runner in v3; new checks arrive with each operational feature, including managed-local assignment consistency and capability checks in v23. |
+| `preflight.md` | v3, v4, v5, v6, v7, v9, v10, v11, v14, v15, v16, v17, v18, v19, v20, v21, v23, v27, v28 | Core check runner in v3; new checks arrive with each operational feature, including managed-local assignment consistency and capability checks in v23, explicit discovered-plan readiness in v27, and explicitly selected extension readiness in v28. |
 | `run-catalog.md` | v8, v9, v9-post, v10, v12, v13, v15, v16, v21 | Catalog/comparison in v8; active-query guarantees and projections in v9; v9-post clarifies authority-backed behavior reads versus artifact-only local directory access; v10 service registry/offline import updates run visibility; bundles and exporters in v12; sweeps integrate in v13; metadata-only external/remote refs and immutable lookup in v15; explicit payload materialization in v16; cleanup later. |
 | `sweeps.md` | v9, v9-post, v10, v11, v13 | V9 defines coordination primitives for large sweeps; v9-post shapes workspace authority and service-backed coordination; v10 service-backs workspace coordination; v11 provides whole-run queue dispatch that later sweeps can use; v13 implements deterministic sweeps as many ordinary runs. |
 | `slurm.md` | v6, v7, v9-post, v10, v11, v18 | Script/dry-run support first; live operations second; v9-post removes local-only submitted-state mutation; v10 clarifies allocation-scoped service supervision and connection policy; v11 adds delegated queue dispatch; container composition after both are stable. |
 | `container-executors.md` | v17, v18 | Docker first; Apptainer and SLURM-container composition second. |
 | `remote-stores.md` | v9, v9-post, v10, v15, v16 | V9 shapes backend capability expectations; v9-post plans service/database authority for multi-host state; v10 delivers durable service supervision; external/remote interface contract, fake handlers, multi-location refs, and bundle ref semantics first; payload operations and optional real backends second. |
-| `reliability.md` | v5, v9, v9-post, v10, v11, v19, v20, v21, v23 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; v9-post makes those foundations mandatory across entrypoints; v10 adds service durability and offline import rejection/acceptance evidence; v11 requires accurate queue cancellation/status reporting; retry and timeout land in v19, events in v20, cleanup in v21, and v23 adds lease-renewal and exact resource-release safety for managed-local work. |
-| `plugins.md` | v14, v15, v16, v20 | Explicit discovery in v14; remote backend, exporter, and event sink integration later. |
-| `queue.md` | v11, v23 | V11 establishes the durable whole-run queue and local/SLURM adapters; v23 adds safe pool cycles, static concrete assignment, deterministic local logs, and redacted pool summaries. |
-| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21, v23 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations; v23 extends queue status without placing scheduling logic in the CLI. |
+| `reliability.md` | v5, v9, v9-post, v10, v11, v19, v20, v21, v23, v28 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; v9-post makes those foundations mandatory across entrypoints; v10 adds service durability and offline import rejection/acceptance evidence; v11 requires accurate queue cancellation/status reporting; retry and timeout land in v19, events in v20, cleanup in v21, v23 adds lease-renewal and exact resource-release safety, and v28 adds exact observe-only event subscriptions. |
+| `plugins.md` | v14, v15, v16, v20, v28 | Explicit discovery in v14; remote backend, exporter, and event sink integration later; v28 makes readiness capability-specific and explicitly activates ordinary executors, codecs, validators, and filtered sinks through their applicable process roots. |
+| `queue.md` | v11, v23, v27 | V11 establishes the durable whole-run queue and local/SLURM adapters; v23 adds safe pool cycles, static concrete assignment, deterministic local logs, and redacted pool summaries; v27 adds Python-first planned local GPU pools over those contracts. |
+| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21, v23, v28 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations; v23 extends queue status; v28 adds exact command-scoped plugin activation without moving subsystem policy into CLI. |
 | `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
 | `examples/` and `*-example-coverage.md` | v22 | Cross-roadmap example inventory, runnable/manual status, validation tiers, integration/e2e behavior, and documentation refinement are consolidated after the runtime surface through v21 exists. |
 
