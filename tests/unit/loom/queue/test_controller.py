@@ -545,8 +545,8 @@ def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
     service = _started_service(
         tmp_path,
         clock=clock,
-        max_active_items=2,
-        max_dispatches_per_cycle=2,
+        max_active_items=3,
+        max_dispatches_per_cycle=3,
     )
     for item_id in ("deferred-head", "next-item"):
         service.enqueue(

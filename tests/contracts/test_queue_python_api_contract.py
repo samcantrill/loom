@@ -7,6 +7,7 @@ from pathlib import Path
 from loom.queue import (
     QueueClient,
     QueueController,
+    QueueCycleResult,
     QueueEnqueueRequest,
     QueueService,
     QueueServiceError,
@@ -98,6 +99,26 @@ def test_queue_selection_public_api_is_import_light_and_in_process_only() -> Non
     assert QueueSelectionPolicy
     assert context.candidates == (candidate,)
     assert decision.disposition is QueueSelectionDisposition.SELECTED
+
+
+def test_queue_cycle_selection_evidence_contract_is_narrow_plain_data() -> None:
+    result = QueueCycleResult(
+        reconciliation_steps=(),
+        dispatch_steps=(),
+        active_count=0,
+        capacity_blocked=True,
+        next_maintenance_at=None,
+        selection_stop_reason="queue_selection.policy_error",
+    )
+
+    assert result.to_dict() == {
+        "reconciliation_steps": [],
+        "dispatch_steps": [],
+        "active_count": 0,
+        "capacity_blocked": True,
+        "next_maintenance_at": None,
+        "selection_stop_reason": "queue_selection.policy_error",
+    }
 
 
 def _clock(*values: str):

@@ -351,7 +351,9 @@ class QueueController:
                 )
                 selection_steps_remaining -= self._last_selection_steps
                 if claim is None:
-                    capacity_blocked = self._last_selection_capacity_blocked
+                    capacity_blocked = (
+                        capacity_blocked or self._last_selection_capacity_blocked
+                    )
                     selection_stop_reason = self._last_selection_stop_reason
                     break
                 item = claim.item
