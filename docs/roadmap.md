@@ -2070,17 +2070,19 @@ Phase execution plans:
 
 Status:
 
-- Planning is confirmed. Expanded design-safety review and the implementation-
-  plan quality gate passed; both phases remain pending. Phase 1 follows Stage
-  24, while its functional queue/concurrency base remains completed Stage 23.
+- Complete. Safe resource-aware selection merged in
+  [#218](https://github.com/samcantrill/loom/pull/218), and bounded compensated
+  continuation plus its downstream policy proof merged in
+  [#219](https://github.com/samcantrill/loom/pull/219).
 
 Goal:
 
 - Let a managed whole-run queue use a caller-provided candidate-selection
   policy so temporarily unusable FIFO-head work need not leave compatible
   capacity idle.
-- Preserve strict FIFO as the default and keep queue mutation, resource
-  authority, concrete assignment, and process lifecycle safety inside Loom.
+- Preserve oldest-eligible source order as the managed default and keep queue
+  mutation, resource authority, concrete assignment, and process lifecycle
+  safety inside Loom.
 
 Implement:
 
@@ -2089,30 +2091,30 @@ Implement:
   resource amounts.
 - A small queue-local structural selection-policy protocol that chooses one
   supplied candidate or stops with a safe reason code. Python constructor
-  injection is the required extension path; missing injection uses the existing
-  Stage 23 atomic FIFO path without a new policy object.
-- Controller-local advisory logical availability and current-cycle attempt/
-  deferral facts for resource-aware policies. Every selected item still passes
+  injection is the extension path; missing injection uses the same evaluator's
+  internal oldest-eligible preference without a public default policy object.
+- Controller-local advisory logical availability and private current-cycle
+  attempted-item facts. Every selected item still passes
   authoritative scalar admission and Stage 23 concrete assignment before work
   starts.
 - Atomic exact-candidate claims, bounded refresh after selection races, and
   policy-output validation. Project policy code never runs inside a SQLite
   transaction and cannot bypass active, dispatch, claim, lease, assignment, or
   process-safety guards.
-- Policy-controlled bounded continuation after typed pre-start capacity
-  deferral. FIFO retains Stage 23's stop behavior; an injected policy may try a
-  different, previously unattempted candidate in the same cycle.
+- Bounded default/custom continuation after typed pre-start capacity deferral.
+  The controller may try a different, previously unattempted candidate in the
+  same cycle only after guarded compensation completes.
 - Safe cycle and audit evidence containing the policy ID, selected item, and
   reason code without persisting full capacity snapshots or arbitrary
   policy-private state.
-- A dependency-free downstream first-fit example and real SQLite queue/
+- A dependency-free downstream smallest-eligible example and real SQLite queue/
   coordination tests for the two-unit FIFO head, one-unit later item, and one
   available unit scenario.
 
 Exit criteria:
 
-- Existing callers and delegated pools retain FIFO behavior without config or
-  record migration.
+- Existing callers retain configuration and record compatibility; delegated
+  pools retain external FIFO handoff.
 - A Python caller can inject a managed-pool policy that starts the later
   one-unit item while the older two-unit item remains queued.
 - Two controllers selecting the same candidate cannot both claim or launch it,

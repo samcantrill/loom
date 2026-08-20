@@ -1,9 +1,9 @@
 # Stage 25 Design Guide: Resource-Aware Whole-Run Queue Selection
 
-Status: planned; unified-scheduling amendment approved; not implemented
+Status: complete; implemented through #218 and #219
 Roadmap stage: `v25`
-Depends on: Stage 23 managed-local concurrency, deferral, admission, and
-assignment contracts; execution follows Stage 24 validation
+Built on: Stage 23 managed-local concurrency, deferral, admission, and
+assignment contracts plus Stage 24 lifecycle validation
 Later composition: Stage 29 durable coordinator and multi-machine agents
 Formal sources: `docs/roadmap/stage-25/planning.md` and
 `docs/roadmap/stage-25/implementation-plan.md`
