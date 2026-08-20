@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 24, Phase 3
 - Manifest: `docs/roadmap/stage-24/implementation-plan.md`
 - Branch: `agent/stage-24-p3-http-recovery-parity-and-renewal-proof`
@@ -11,7 +11,7 @@
 - Base revision: `a7afd44153860ba131db7ee26c186cc0188b1497`, current
   `origin/develop`; the branch adopts the unpublished Phase 2 changes through
   blocked-state commit `5194d06fde20ac619c24f2a516c537a494e3b3a3`
-- PR target: `develop`
+- PR target: `develop`; [#217](https://github.com/samcantrill/loom/pull/217)
 - PR title: `Operational Lifecycle Validation - Phase 3: HTTP Recovery Parity`
 - Dependencies: Phase 1 merged; Phase 2 is explicitly blocked and opened no PR
 - Workflow path: narrow maintainer-directed replacement phase
@@ -145,7 +145,8 @@ Final gates:
   facts, and leaves the runner's complete-evidence requirement unchanged. The
   mutable-time test observes successful controller and stage renewal before it
   crosses the original expiry and owns cleanup in `finally`.
-- PR and merge: pending
+- PR and merge: PR #217 open, non-draft, mergeable, and verified against
+  `develop`; CI pending
 
 ## Completion Record
 
@@ -155,4 +156,4 @@ Final gates:
 | HTTP recovery parity | A real in-process FastAPI/client/adapter path returns no facts while leases are live, then exactly matches repository expired-controller and attempt facts after deterministic expiry. The runner consumes those HTTP facts and records `INTERRUPTED`/`STALE`. |
 | Renewal post-expiry proof | Mutable authority time advances renewal to one second before original expiry and observation is synchronized for both controller and active stage leases. After crossing the original expiry, a competing controller is rejected; after run completion, renewal stops and a new controller is admitted. |
 | Focused and full validation | Ruff and Pyright pass, 50 focused client/service/route/adapter/recovery/renewal tests pass, `make validate-pr` passes 2,157 default plus 132 config-extra tests with three environment skips and successful builds, and `make test-summary` records 2,289 passes with zero failures/errors. |
-| Review, PR, merge, metadata, cleanup | Manager review passed with both independent findings closed and no residual blocker. PR, CI, merge, metadata, and cleanup remain pending. |
+| Review, PR, merge, metadata, cleanup | Manager review passed with both independent findings closed and no residual blocker. PR [#217](https://github.com/samcantrill/loom/pull/217) is open, non-draft, mergeable, and correctly targets `develop`; CI, merge, final metadata, and cleanup remain pending. |

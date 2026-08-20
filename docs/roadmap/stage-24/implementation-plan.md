@@ -5,7 +5,7 @@ Roadmap stage: `v24`
 Planning document: `docs/roadmap/stage-24/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 3 in progress
+Current phase: Phase 3 PR open
 Blockers: none; the maintainer approved the narrow replacement phase on
 2026-08-20 after Phase 2 exhausted its correction budget
 
@@ -106,7 +106,7 @@ Blockers: none; the maintainer approved the narrow replacement phase on
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `real-interruption-and-cancellation` | merged | `docs/roadmap/stage-24/phases/real-interruption-and-cancellation.md` | `agent/stage-24-p1-real-interruption-and-cancellation` | [#216](https://github.com/samcantrill/loom/pull/216) | Serial/prepared cancellation, parallel settlement, CLI propagation, subprocess cleanup/timeout, managed-local cancel, and process test support | Prove that graceful stops reach truthful durable state and owned children exit before release. |
 | 2 | `crash-recovery-and-artifact-trust` | blocked | `docs/roadmap/stage-24/phases/crash-recovery-and-artifact-trust.md` | `agent/stage-24-p2-crash-recovery-and-artifact-trust` | not opened | Controller renewal/parity, authority recovery/events, old-active resume, authority loss, artifact invalidation, and docs | Prove that unclean loss or corrupt output cannot become reusable success and explicit recovery produces a safe new attempt. |
-| 3 | `http-recovery-parity-and-renewal-proof` | in_progress | `docs/roadmap/stage-24/phases/http-recovery-parity-and-renewal-proof.md` | `agent/stage-24-p3-http-recovery-parity-and-renewal-proof` | pending | Adopt Phase 2 implementation; expose repository run-recovery facts through HTTP; prove renewed ownership beyond original TTL | Publish the complete Stage 24 recovery behavior only after the supported HTTP authority path satisfies the same recovery contract as direct SQLite. |
+| 3 | `http-recovery-parity-and-renewal-proof` | pr_open | `docs/roadmap/stage-24/phases/http-recovery-parity-and-renewal-proof.md` | `agent/stage-24-p3-http-recovery-parity-and-renewal-proof` | [#217](https://github.com/samcantrill/loom/pull/217) | Adopt Phase 2 implementation; expose repository run-recovery facts through HTTP; prove renewed ownership beyond original TTL | Publish the complete Stage 24 recovery behavior only after the supported HTTP authority path satisfies the same recovery contract as direct SQLite. |
 
 Phase 1 is independently useful: operators receive correct Ctrl-C/timeout/cancel
 semantics and real worker cleanup. Phase 2 started only after Phase 1 was
@@ -153,4 +153,4 @@ PR rather than a stacked PR.
 | --- | --- | --- | --- | --- |
 | 1 | [#216](https://github.com/samcantrill/loom/pull/216) squash-merged to `develop` as `8cc9bfa` | 62 focused tests, `make validate-pr`, `make test-summary` (2,267 passed, 3 skipped), manager review, and CI passed | Linux/POSIX signal proof and settled rather than preempted parallel threads remain accepted limits | Phase branch/worktree removed after the merge record; local control-checkout fast-forward deferred to preserve unrelated committed and uncommitted user work |
 | 2 | No PR opened; independent review blocked publication | Implementation and full validation passed at `69d3c22` (`make validate-pr`; `make test-summary` with 2,285 passes), but the HTTP recovery path lacks repository recovery facts and the renewal test does not prove exclusivity beyond initial expiry | A managed-service crash cannot currently reach safe explicit recovery through the supported adapter | Worktree and branch retained for maintainer-directed replanning; three correction passes are exhausted |
-| 3 | pending | 50 focused tests; `make validate-pr`; `make test-summary` with 2,289 passes and three environment-dependent skips; manager review passed | External runtimes remain Stage 26 scope; no current correctness blocker | PR, CI, merge, metadata, and cleanup pending |
+| 3 | [#217](https://github.com/samcantrill/loom/pull/217) open against `develop` | 50 focused tests; `make validate-pr`; `make test-summary` with 2,289 passes and three environment-dependent skips; manager review passed | External runtimes remain Stage 26 scope; no current correctness blocker | CI, merge, final metadata, and cleanup pending |
