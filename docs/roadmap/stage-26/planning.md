@@ -199,7 +199,9 @@ new validation gates, or service-specific notification clients.
     events become notification messages even when an observe-all registry
     invokes it.
 - Data and control flow:
-  1. Runner/lifecycle commits the status, outputs, or failure.
+  1. Runner/lifecycle commits the corresponding status, outputs, or failure
+     when that event represents a state change; Phase 1 restores this order for
+     fresh-run preparation failure.
   2. Existing dispatcher appends or references the event.
   3. Existing registry calls the registered notification sink.
   4. The captured severity map either ignores the exact event type or selects a
