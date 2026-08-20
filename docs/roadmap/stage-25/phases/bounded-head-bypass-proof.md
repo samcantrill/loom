@@ -205,13 +205,15 @@ Final commands:
 - Manager preparation: complete at base `9af2198`; Phase 1 selection,
   compensation, evidence, example, and harness seams refreshed
 - Expanded planning: revised design approved; no additional spawned pass
-- Implementation: complete at `6835a2c`; bounded bypass, safe cycle evidence,
+- Implementation: complete through `1e43ce4`; bounded bypass, safe cycle evidence,
   dependency-free custom-policy example/docs, and phase-scoped proof coverage added
 - Refiner: optional only for a qualified blocker; unused
-- Pre-submit gate: `make validate-pr` passed at `6835a2c`; `make test-summary`
-  passed with receipt `build/test-summary.md`
+- Pre-submit gate: `make validate-pr` passed at `1e43ce4`; `make test-summary`
+  passed with 2,307 tests and receipt `build/test-summary.md`; manager targeted
+  queue coverage passed with 68 tests and the full E2E harness passed with 54
 - Independent review: required after implementation due continuation risk
-- Blocker corrections: 0/3
+- Blocker corrections: 2/3; preserved capacity-deferral evidence across a final
+  no-claim refresh and made the selected-work example synchronization deterministic
 - PR and merge: pending
 
 ## Completion Record
@@ -219,8 +221,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Added controller-owned per-cycle attempted-ID filtering, bounded refresh/accounting, proven pre-start requeue verification, and allowlisted cycle stop evidence in `src/loom/queue/controller.py`. `ManagedLocalQueueRuntime.from_spec()` now forwards an existing controller policy mapping for the current example consumer. Updated the managed-local example, its manifest/readme, and queue feature documentation. |
-| Tests added or updated | Added unit coverage for one-time deferred-head bypass, safe policy stop/error evidence, and selection-limit exhaustion; SQLite/local-process integration coverage for stale authority capacity with compensated continuation; and E2E coverage proving the dependency-free smallest-eligible public-policy example. Targeted unit/integration/E2E run: 49 passed; targeted contracts: 8 passed. |
-| Validated revision/tree state and evidence | Implementation revision `6835a2cf966427f3558f90b0403683b5ade84be6` had a clean tree. `make validate-pr` passed. `make test-summary` passed with 2,306 passed, 0 failed, 0 errors (3 skipped); receipt `build/test-summary.md`. |
-| Validation-relevant changes after evidence | None. This completion/workflow metadata is recorded separately after the validated implementation revision. |
+| Tests added or updated | Added unit coverage for one-time deferred-head bypass, safe policy stop/error evidence, selection-limit exhaustion, and evidence preservation after an empty refresh; contract coverage for the exact narrow cycle-evidence shape; SQLite/local-process integration coverage for stale authority capacity with compensated continuation; and E2E coverage proving the dependency-free smallest-eligible public-policy example. Manager targeted queue run: 68 passed; full E2E harness: 54 passed. |
+| Validated revision/tree state and evidence | Revision `1e43ce4f6d14b6c3ab2ab8c7dbf69edafc328eed` had a clean tree. `make validate-pr` passed. `make test-summary` passed with 2,307 passed, 0 failed, 0 errors (3 skipped); receipt `build/test-summary.md`. |
+| Validation-relevant changes after evidence | None. Subsequent phase-plan lifecycle metadata is documentation-only. |
 | PR, review, and merge | Pending manager-local pre-submit handling and the required independent review. |
-| Residual risk and cleanup | No implementation blocker. Bounded lookahead/advisory capacity can still miss work or starve larger requests by accepted design; Stage 29 retains its assignment/offer ownership migration. |
+| Residual risk and cleanup | Two scoped corrections used: capacity-blocked evidence remains monotonic across the cycle, and explicit filesystem synchronization holds the selected small work until live status is inspected. No implementation blocker. Bounded lookahead/advisory capacity can still miss work or starve larger requests by accepted design; Stage 29 retains its assignment/offer ownership migration. |
