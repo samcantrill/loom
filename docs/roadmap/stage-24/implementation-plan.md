@@ -6,7 +6,7 @@ Planning document: `docs/roadmap/stage-24/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
 Current phase: Phase 2 in progress
-Blockers: none
+Blockers: none; the Phase 2 output-commit decision was approved on 2026-08-20
 
 ## Summary
 
@@ -25,10 +25,11 @@ Blockers: none
   accepted cancellation contract, then add one real operational proof for each
   currently simulated boundary and the smallest production cleanup/recovery fix
   each proof demonstrates.
-- Complexity deliberately excluded: new public records or commands, new schema,
-  new dependency, process reattachment, a Loom daemon, silent repair, automatic
-  retry changes, a full backend/failure matrix, platform-wide signal support,
-  and external runtime requirements.
+- Complexity deliberately excluded: new commands, dependencies, process
+  reattachment, a Loom daemon, silent repair, automatic retry changes, a full
+  backend/failure matrix, platform-wide signal support, and external runtime
+  requirements. Phase 2 now includes the one demonstrated durable expansion:
+  versioned append-only output-commit supersession.
 - Validation and phase-shaping source: planning `Examples And Validation` and
   `Phase Shaping`. Phase 1 owns graceful termination while Loom is alive; Phase
   2 owns authoritative recovery and artifact trust after Loom or authority was
@@ -66,9 +67,15 @@ Blockers: none
   - Stage success and artifact reuse require validated output commit and index
     consistency. Incomplete, timed-out, cancelled, stale, corrupt, or
     interrupted outputs are not reusable.
+  - A checksum-repair rerun appends an attempt-specific commit naming the
+    expected current commit. Authority validates the active fence and current
+    head atomically, retains all earlier commits, and projects only the newest
+    commit and facts as current. One `list_output_commits` authority read exposes
+    retained commit/fact composites in revision order for inspection.
 - Shared reproducibility, compatibility, and import constraints:
-  - No status enum, public model, config shape, persisted schema, CLI command,
-    plugin, marker, or runtime dependency is added by default.
+  - No status enum, config shape, CLI command, plugin, marker, or runtime
+    dependency is added. The output-commit record/protocol and SQLite schema are
+    versioned only as required for explicit append-only supersession.
   - Existing normal success/failure, `stop_early()`, fake-process, fake-
     authority, delegated execution, retry, and valid-resume behavior stays
     compatible.
@@ -85,9 +92,10 @@ Blockers: none
     `finally`.
 - Decisions no phase may reopen: Ctrl-C cancels without pretending parallel
   threads were preempted; timeout is failure; hard loss is classified from
-  exclusive authority and recovery facts, not a dead PID; no automatic
-  reattachment/repair, fixed-sleep oracle, full matrix, or external Stage 24
-  runtime gate.
+  exclusive authority and recovery facts, not a dead PID; corruption repair
+  uses fenced append-only supersession rather than commit reuse or overwrite;
+  no automatic reattachment/repair command, fixed-sleep oracle, full matrix, or
+  external Stage 24 runtime gate.
 
 ## Phase Index
 
@@ -106,9 +114,9 @@ merged so crash recovery inherits one settled graceful lifecycle contract.
   new Stage 24 with the former Stages 24 and 25 pushed to 25 and 26.
 - Manager review: passed. Requirements, decisions, invariant owners, phase
   boundaries, manifest, and linked phase plans are traceable and consistent.
-- Optional independent review: not needed on the lean path. Existing public and
-  durable vocabulary is reused; no novel abstraction, schema, dependency, or
-  irreversible migration is planned.
+- Optional independent review: required for Phase 2 after implementation
+  exposed the one-commit-per-stage conflict and the maintainer approved the
+  bounded append-only schema/protocol expansion on 2026-08-20.
 - Manager-local refresh correction: applied. Parallel interruption now preserves
   truthful in-flight results, and Phase 2 adds controller renewal and closes
   local-service lease parity before using recovery.
@@ -117,9 +125,9 @@ merged so crash recovery inherits one settled graceful lifecycle contract.
   rather than being forcibly stopped; no reattachment/machine-loss cleanup;
   external-runtime evidence stays scheduled/manual until Stage 26.
 - Revisit triggers: an existing process seam cannot safely terminate/observe its
-  owned child; recovery cannot distinguish live from abandoned authority; a new
-  durable field/schema becomes unavoidable; or Stage 26 makes a reliable
-  external runtime part of CI.
+  owned child; recovery cannot distinguish live from abandoned authority;
+  commit supersession cannot preserve old history and atomic current-head
+  fencing; or Stage 26 makes a reliable external runtime part of CI.
 
 ## Completion
 
