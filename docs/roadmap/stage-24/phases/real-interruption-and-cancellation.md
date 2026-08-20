@@ -262,10 +262,11 @@ Final commands:
 - Pre-submit gate: passed
 - Independent review: not needed on current fast path; reconsider only for a
   material residual process-safety risk
-- Blocker corrections: 1/3 -- preserve a committed successful stage when a
+- Blocker corrections: 2/3 -- preserve a committed successful stage when a
   post-commit event dispatch is interrupted, and make the owned subprocess
   worker exit observable before re-raising the interrupt; manager verification
-  also made managed-local worker death observable before fallback cleanup
+  also made managed-local worker death observable before fallback cleanup and
+  aligned cancelled attempt-lease evidence with the cancellation outcome
 - PR and merge: PR [#216](https://github.com/samcantrill/loom/pull/216)
   is open against `develop`; CI and merge are pending
 
@@ -275,7 +276,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Separated `KeyboardInterrupt` from ordinary runner failures in serial, prepared-worker, and bounded-parallel flows; durable stage/run cancellation now precedes re-raise, parallel stops submissions while settling active results, and cancelled stages release their authority lease. Blocker correction 1 preserves a durably committed successful stage and its outputs when interruption arrives during `stage.completed` dispatch, while the run is cancelled and unresolved work is blocked. The private subprocess runner now terminates and boundedly observes its owned worker before propagating `KeyboardInterrupt`. Changed `src/loom/pipeline/execution/runner.py`, `src/loom/pipeline/execution/authority_adapter.py`, `src/loom/pipeline/executors/subprocess.py`, `tests/support/pipeline_execution_stages.py`, `tests/support/processes.py`, `tests/unit/loom/pipeline/execution/test_runner.py`, `tests/integration/pipeline/test_parallel_execution.py`, `tests/integration/pipeline/test_subprocess_executor_integration.py`, `tests/integration/queue/test_managed_local_runtime.py`, and `tests/e2e/test_execution_lifecycle.py`. |
 | Tests added or updated | Updated the stage-raised parallel interrupt regression and added a post-commit event-dispatch interrupt regression. Real subprocess timeout coverage retains first-attempt timeout facts/logs and worker-death evidence, then proves a clean successful second attempt and artifact index. POSIX CLI SIGINT coverage observes worker death before fixture fallback cleanup; all new PID signalling validates the captured Linux process-start identity first. The real managed-local cancellation scenario now uses authored static assignment and proves release of both `gpu` and `gpu-0`, without disturbing queued or foreign work. |
-| Validated revision/tree state and evidence | Prepared revision `e8f2804` plus blocker correction 1 and manager verification amendments; the implementation tree was validated before this completion-record-only update and then rebased without content changes onto `origin/develop`. The combined targeted suites passed: 62 tests across runner, parallel, subprocess, managed-local, and lifecycle e2e. `make validate-pr` passed: Ruff, Pyright, 2,150 default tests, 128 config-extra tests with 3 expected skips, and package build. `make test-summary` passed: 2,278 passed, 3 skipped, 2,255 deselected; receipt `build/test-summary.md`. |
+| Validated revision/tree state and evidence | Prepared revision `e8f2804` plus two blocker corrections and manager verification amendments; the final implementation tree was validated on the clean `origin/develop`-based PR branch before this completion-record-only update. The combined targeted suites passed: 62 tests across runner, parallel, subprocess, managed-local, and lifecycle e2e. `make validate-pr` passed: Ruff, Pyright, 2,139 default tests, 128 config-extra tests with 3 expected skips, and package build. `make test-summary` passed: 2,267 passed, 3 skipped, 2,244 deselected; receipt `build/test-summary.md`. |
 | Validation-relevant changes after evidence | None; only this refreshed completion record was added after the successful validation receipt. |
 | PR, review, and merge | PR [#216](https://github.com/samcantrill/loom/pull/216) is open against `develop`; manager review found no remaining blocker and CI is pending. |
 | Residual risk and cleanup | POSIX signal/process-group evidence is intentionally Linux-oriented; no broader signal policy, Python-thread preemption, reattachment, or crash recovery was added. The branch excludes the unrelated terminal-monitor work retained on local `develop`. |

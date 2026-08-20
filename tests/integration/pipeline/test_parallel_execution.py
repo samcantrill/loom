@@ -14,7 +14,13 @@ from loom.pipeline.execution.authority_adapter import (
 from loom.pipeline.planning import PlanSelectors
 from loom.pipeline.runtime import RunOptions
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import AttemptAllocation, AuthorityStoreError, LeaseRecord, path_to_run_uri
+from loom.pipeline.stores import (
+    AttemptAllocation,
+    AuthorityStoreError,
+    LeaseRecord,
+    LifecycleReason,
+    path_to_run_uri,
+)
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
 
@@ -59,6 +65,28 @@ class _FailingAllocationAuthority(SQLitePerRunAuthorityStore):
             stage_name,
             owner_id=owner_id,
             lease_ttl_seconds=lease_ttl_seconds,
+        )
+
+
+class _RecordingLeaseFailureAuthority(SQLitePerRunAuthorityStore):
+    def __init__(self) -> None:
+        super().__init__(clock=lambda: "2020-01-01T00:00:00Z")
+        self.failed_lease_reasons: list[LifecycleReason] = []
+
+    def fail_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+    ) -> LeaseRecord:
+        self.failed_lease_reasons.append(reason)
+        return super().fail_lease(
+            lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            reason=reason,
         )
 
 
@@ -184,7 +212,7 @@ def test_explicit_single_parallelism_keeps_serial_local_path(tmp_path: Path) -> 
 def test_parallel_stage_interruption_records_durable_cancellation_and_reraises(
     tmp_path: Path,
 ) -> None:
-    authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
+    authority = _RecordingLeaseFailureAuthority()
     run_store = create_authority_backed_serial_run_store(
         tmp_path / "runs",
         authority_store=authority,
@@ -222,6 +250,9 @@ def test_parallel_stage_interruption_records_durable_cancellation_and_reraises(
     assert snapshot.stages[0].status is StageStatus.CANCELLED
     assert snapshot.stages[0].active_lease is None
     assert snapshot.stages[0].latest_commit is None
+    assert [reason.code for reason in authority.failed_lease_reasons] == [
+        "stage_cancelled"
+    ]
 
 
 def test_default_parallel_failure_policy_stops_new_independent_work(
