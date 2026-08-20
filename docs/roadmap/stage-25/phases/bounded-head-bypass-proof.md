@@ -2,22 +2,22 @@
 
 ## Metadata
 
-- Status: pending
+- Status: approved
 - Roadmap stage and phase: v25 Phase 2
 - Manifest: `docs/roadmap/stage-25/implementation-plan.md`
 - Branch: `agent/stage-25-p2-bounded-head-bypass-proof`
 - Worktree root and path:
   `/home/can134/work/active/loom-worktrees/stage-25-p2-bounded-head-bypass-proof`
-- Base revision: current `origin/develop` after Phase 1 merges; record exact
-  revision before branch creation
+- Base revision: `9af2198fb1f33bf77b59ee06b739e4a819cba6f9`
 - PR target: `develop`
 - PR title: `Whole-Run Queue Selection - Phase 2: Bounded Head-Bypass Proof`
-- Dependencies: Phase 1 merged with one eligibility/default/custom engine,
-  exact local ownership, managed entrypoint parity, and advisory opportunity
-  contracts unchanged
+- Dependencies: Phase 1 merged through [#218](https://github.com/samcantrill/loom/pull/218)
+  as `ff2b7ee`, with lifecycle metadata at `9af2198`; its one
+  eligibility/default/custom engine, exact local ownership, managed entrypoint
+  parity, and advisory opportunity contracts remain unchanged
 - Workflow path: expanded because typed deferral, repeated evaluation, bounds,
   evidence, and concurrency interact
-- Blockers: Phase 1 merge only
+- Blockers: none
 
 ## Objective And Context
 
@@ -35,13 +35,23 @@
 
 ## Current Source And Harness
 
-- Relevant merged seams after Phase 1: selection evaluator, local opportunity
-  construction, exact ownership service, `QueueController.run_cycle`, Stage 23
-  deferred disposition/guarded requeue, cycle result, admission/provider,
-  queue audit and safe status evidence.
-- Harnesses include Phase 1 parity/claim tests, Stage 23 cycle integration,
-  fake process/clock/coordination seams, status contracts, and operations
-  example conventions.
+- Relevant seams at `9af2198`: `loom.queue.selection._evaluate_selection()` and
+  `QueueController._claim_next_managed()` own shared evaluation and exact
+  ownership; `run_cycle()` already tracks one private remaining-step count but
+  currently breaks after the first `QueueDispatchDisposition.DEFERRED`;
+  `QueueCycleResult` exposes the existing plain-data cycle evidence shape.
+- `LocalQueueDispatchAdapter.dispatch()` returns typed `DEFERRED` before process
+  start for scalar-capacity failure, or after `_cleanup_pre_start()` reports no
+  pending release for assignment deferral. `SQLiteQueueRepository.defer_item()`
+  uses an expected snapshot, accepts only `CLAIMED`, returns the item to
+  `QUEUED`, clears claim/handle, and preserves enqueue order and attempt.
+- Current harnesses are `tests/unit/loom/queue/test_{controller,scheduler}.py`,
+  `tests/contracts/test_queue_{python_api,repository}_contract.py`,
+  `tests/integration/queue/test_{sqlite_repository,managed_local_controller}.py`,
+  and `tests/e2e/test_queue_cli.py`. The existing dependency-free operations
+  example lives under `examples/operations/managed-local-queue/`, with its
+  durable example entry in `example.yaml` and queue documentation in
+  `docs/features/queue.md`.
 - The example uses only public selection values. CLI/config gain no loader and
   default tests require no external service, hardware, or network.
 
@@ -192,22 +202,28 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete; refresh after Phase 1 merge
+- Manager preparation: complete at base `9af2198`; Phase 1 selection,
+  compensation, evidence, example, and harness seams refreshed
 - Expanded planning: revised design approved; no additional spawned pass
-- Implementation: not started
+- Implementation: complete through `1e43ce4`; bounded bypass, safe cycle evidence,
+  dependency-free custom-policy example/docs, and phase-scoped proof coverage added
 - Refiner: optional only for a qualified blocker; unused
-- Pre-submit gate: not run
-- Independent review: required after implementation due continuation risk
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Pre-submit gate: `make validate-pr` passed at `1e43ce4`; `make test-summary`
+  passed with 2,307 tests and receipt `build/test-summary.md`; manager targeted
+  queue coverage passed with 68 tests and the full E2E harness passed with 54
+- Independent review: complete with no findings at PR revision `3d3ec98`
+- Blocker corrections: 2/3; preserved capacity-deferral evidence across a final
+  no-claim refresh and made the selected-work example synchronization deterministic
+- PR and merge: [#219](https://github.com/samcantrill/loom/pull/219) approved
+  against `develop`; final CI and automatic squash merge pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added controller-owned per-cycle attempted-ID filtering, bounded refresh/accounting, proven pre-start requeue verification, and allowlisted cycle stop evidence in `src/loom/queue/controller.py`. `ManagedLocalQueueRuntime.from_spec()` now forwards an existing controller policy mapping for the current example consumer. Updated the managed-local example, its manifest/readme, and queue feature documentation. |
+| Tests added or updated | Added unit coverage for one-time deferred-head bypass, safe policy stop/error evidence, selection-limit exhaustion, and evidence preservation after an empty refresh; contract coverage for the exact narrow cycle-evidence shape; SQLite/local-process integration coverage for stale authority capacity with compensated continuation; and E2E coverage proving the dependency-free smallest-eligible public-policy example. Manager targeted queue run: 68 passed; full E2E harness: 54 passed. |
+| Validated revision/tree state and evidence | Revision `1e43ce4f6d14b6c3ab2ab8c7dbf69edafc328eed` had a clean tree. `make validate-pr` passed. `make test-summary` passed with 2,307 passed, 0 failed, 0 errors (3 skipped); receipt `build/test-summary.md`. |
+| Validation-relevant changes after evidence | None. Subsequent phase-plan lifecycle metadata is documentation-only. |
+| PR, review, and merge | [#219](https://github.com/samcantrill/loom/pull/219) is approved against `develop`; manager pre-submit review and the required independent review passed with no findings. Final CI and automatic squash merge are pending. |
+| Residual risk and cleanup | Two scoped corrections used: capacity-blocked evidence remains monotonic across the cycle, and explicit filesystem synchronization holds the selected small work until live status is inspected. No implementation blocker. Bounded lookahead/advisory capacity can still miss work or starve larger requests by accepted design; Stage 29 retains its assignment/offer ownership migration. |

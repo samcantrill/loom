@@ -3,8 +3,10 @@
 This dependency-free example is the recommended starting point for one
 managed-local pool. It builds `ManagedLocalQueueRuntime.from_spec(...)` from a
 schema-v2 spec with one config-owned controller owner, two generic accelerator
-slots, queue-owned logs, and three short commands. The first command requests
-both slots; the later one-slot commands demonstrate refill.
+slots, queue-owned logs, and three short commands. Its injected Python policy
+prefers the smallest eligible logical request, so the later one-slot commands
+start ahead of the older two-slot command; the two-slot command refills after
+they finish.
 
 ```sh
 uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
@@ -43,6 +45,26 @@ runtime.serve(stop, shutdown_mode="drain", shutdown_timeout_seconds=120)
 advanced-control seams. `serve()` is the normal foreground operation. The
 example's finite harness only sets its event after all work completes; it does
 not implement its own maintenance loop.
+
+## Selection Policy
+
+The policy is ordinary downstream Python, injected by managed pool name at
+construction. It receives only `QueueSelectionContext` and returns a
+`QueueSelectionDecision`; it has no queue repository, process, slot, agent, or
+transport access. Loom first removes requests that are not eligible for the
+current advisory local opportunity. Without a policy it chooses the oldest
+eligible request; this example's `example.smallest_eligible_request` policy
+instead chooses the lowest total logical request and uses enqueue time and ID
+only as deterministic ties.
+
+The opportunity capacity is advisory. Exact local queue ownership is still a
+separate guarded transition, and authority/provider acquisition remains
+decisive. A capacity deferral can make this cycle try another eligible request,
+but it never immediately reacquires the deferred request. This bounded bypass
+can starve larger work, so it is not a fairness guarantee. Delegated SLURM
+pools remain owned by their external scheduler. Stage 29 keeps this evaluator
+behavior while moving managed ownership to durable assignments/offers rather
+than giving policies agent or transport facts.
 
 ## Ownership And Status Truth
 

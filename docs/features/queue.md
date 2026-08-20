@@ -131,6 +131,31 @@ Queue preflight can report whether a config contains managed pools. Python
 callers that supply a public coordination store and workspace id can also run
 read-only authority limit reconciliation.
 
+## Managed Selection
+
+Managed queues read a bounded deterministic FIFO window, remove requests that
+cannot fit the current advisory local opportunity, then use either the oldest
+eligible request or one Python `QueueSelectionPolicy` injected into
+`QueueController` (or `ManagedLocalQueueRuntime.from_spec`) by pool name. A
+policy receives only the immutable candidate ID, enqueue time, dispatch
+attempt, logical resource amounts, pool name, and advisory available amounts;
+it returns one supplied ID or stops. It cannot claim work, reserve capacity, or
+learn slot, process, agent, offer, or transport details.
+
+Advisory capacity is not authority. Loom acquires exact local queue ownership
+after evaluating a policy, then local authority/provider admission decides
+whether the request can start. If a typed pre-start capacity deferral is fully
+compensated, the controller may refresh and choose another eligible request in
+the same bounded opportunity without reacquiring the deferred ID. This enables
+head bypass but deliberately makes no fairness or starvation guarantee.
+
+Delegated SLURM pools retain external scheduler ownership and FIFO handoff;
+selection policy does not place delegated work. Stage 29 preserves the same
+eligibility/evaluator behavior but moves managed ownership into durable
+assignment/offer records. See the dependency-free
+[managed-local policy example](../../examples/operations/managed-local-queue/README.md)
+for Python construction.
+
 Schema-v1 queue configuration remains compatible and keeps one controller-local
 active item with no concrete assignment provider. Opt into bounded concurrency
 and static assignments with schema v2:

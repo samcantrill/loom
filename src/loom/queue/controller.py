@@ -31,6 +31,8 @@ from .selection import (
 from .service import QueueService
 
 _SELECTION_LIMIT = 32
+_POLICY_STOPPED_REASON_CODE = "queue_selection.policy_stopped"
+_SELECTION_LIMIT_EXHAUSTED_REASON_CODE = "queue_selection.selection_limit_exhausted"
 
 
 class QueueDispatchDisposition(StrEnum):
@@ -273,6 +275,7 @@ class QueueCycleResult:
     active_count: int
     capacity_blocked: bool
     next_maintenance_at: str | None
+    selection_stop_reason: str | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -283,6 +286,7 @@ class QueueCycleResult:
             "active_count": self.active_count,
             "capacity_blocked": self.capacity_blocked,
             "next_maintenance_at": self.next_maintenance_at,
+            "selection_stop_reason": self.selection_stop_reason,
         }
 
 
@@ -320,6 +324,7 @@ class QueueController:
         self._selection_policies = self._selection_policies_by_pool(selection_policies)
         self._last_selection_capacity_blocked = False
         self._last_selection_steps = 0
+        self._last_selection_stop_reason: str | None = None
 
     def run_cycle(self, *, pool_name: str) -> QueueCycleResult:
         """Reconcile one pool then fill it within its controller-local budgets."""
@@ -329,27 +334,39 @@ class QueueController:
         active_count = self._active_count(pool_name)
         dispatch_steps: list[QueueControllerStep] = []
         capacity_blocked = False
+        selection_stop_reason: str | None = None
+        attempted_item_ids: set[str] = set()
         if not degraded:
             limit = self._service.spec.controller.max_active_items
             budget = self._service.spec.controller.max_dispatches_per_cycle or limit
             selection_steps_remaining = _SELECTION_LIMIT
             while active_count < limit and len(dispatch_steps) < budget:
+                if selection_steps_remaining <= 0:
+                    selection_stop_reason = _SELECTION_LIMIT_EXHAUSTED_REASON_CODE
+                    break
                 claim = self._claim_next_for_pool(
-                    pool_name, selection_limit=selection_steps_remaining
+                    pool_name,
+                    selection_limit=selection_steps_remaining,
+                    attempted_item_ids=attempted_item_ids,
                 )
                 selection_steps_remaining -= self._last_selection_steps
                 if claim is None:
-                    capacity_blocked = self._last_selection_capacity_blocked
+                    capacity_blocked = (
+                        capacity_blocked or self._last_selection_capacity_blocked
+                    )
+                    selection_stop_reason = self._last_selection_stop_reason
                     break
                 item = claim.item
+                attempted_item_ids.add(item.queue_item_id)
                 result = self._safe_dispatch(item)
                 if result.disposition is QueueDispatchDisposition.DEFERRED:
                     deferred = self._service.defer_item(
                         item.queue_item_id, reason_code=result.reason, expected=item
                     )
+                    self._require_compensated_pre_start_deferral(item, deferred)
                     dispatch_steps.append(QueueControllerStep("deferred", deferred))
                     capacity_blocked = True
-                    break
+                    continue
                 handle = DispatchHandle(
                     adapter=item.launch_contract.adapter,
                     handle_id=cast(str, result.handle_id),
@@ -387,6 +404,7 @@ class QueueController:
             active_count=self._active_count(pool_name),
             capacity_blocked=capacity_blocked,
             next_maintenance_at=min(deadlines) if deadlines else None,
+            selection_stop_reason=selection_stop_reason,
         )
 
     def classify_recovery(self, *, pool_name: str) -> QueueRecoveryClassification:
@@ -629,25 +647,44 @@ class QueueController:
         return validated
 
     def _claim_next_for_pool(
-        self, pool_name: str, *, selection_limit: int = _SELECTION_LIMIT
+        self,
+        pool_name: str,
+        *,
+        selection_limit: int = _SELECTION_LIMIT,
+        attempted_item_ids: set[str] | None = None,
     ):
         pool = self._pool(pool_name)
         self._last_selection_capacity_blocked = False
         self._last_selection_steps = 0
+        self._last_selection_stop_reason = None
         if pool.mode is QueuePoolMode.DELEGATED:
             return self._service.claim_next(
                 pool_name,
                 owner_id=self._owner_id,
                 claim_id=self._next_claim_id(),
             )
-        return self._claim_next_managed(pool, selection_limit=selection_limit)
+        return self._claim_next_managed(
+            pool,
+            selection_limit=selection_limit,
+            attempted_item_ids=attempted_item_ids or set(),
+        )
 
-    def _claim_next_managed(self, pool: QueuePool, *, selection_limit: int):
+    def _claim_next_managed(
+        self,
+        pool: QueuePool,
+        *,
+        selection_limit: int,
+        attempted_item_ids: set[str],
+    ):
         policy = self._selection_policies.get(pool.pool_name)
         for _ in range(selection_limit):
             self._last_selection_steps += 1
-            candidates = self._service._read_selection_candidates(
-                pool.pool_name, limit=_SELECTION_LIMIT
+            candidates = tuple(
+                candidate
+                for candidate in self._service._read_selection_candidates(
+                    pool.pool_name, limit=_SELECTION_LIMIT
+                )
+                if candidate.queue_item_id not in attempted_item_ids
             )
             evaluation = _evaluate_selection(
                 candidates,
@@ -661,6 +698,16 @@ class QueueController:
                     evaluation.source_had_candidates
                     and not evaluation.has_eligible_candidates
                 )
+                if evaluation.has_eligible_candidates:
+                    self._last_selection_stop_reason = (
+                        decision.reason_code
+                        if decision.reason_code
+                        in {
+                            "queue_selection.invalid_decision",
+                            "queue_selection.policy_error",
+                        }
+                        else _POLICY_STOPPED_REASON_CODE
+                    )
                 return None
             queue_item_id = decision.queue_item_id
             if queue_item_id is None:
@@ -681,7 +728,25 @@ class QueueController:
             )
             if claim is not None:
                 return claim
+        self._last_selection_stop_reason = _SELECTION_LIMIT_EXHAUSTED_REASON_CODE
         return None
+
+    @staticmethod
+    def _require_compensated_pre_start_deferral(
+        claimed: QueueItem, deferred: QueueItem
+    ) -> None:
+        """Reject continuation unless the guarded pre-start requeue is complete."""
+
+        if (
+            QueueItemStatus(deferred.status) is not QueueItemStatus.QUEUED
+            or deferred.claim is not None
+            or deferred.dispatch_handle is not None
+            or deferred.dispatch_attempt != claimed.dispatch_attempt
+            or deferred.enqueued_at != claimed.enqueued_at
+        ):
+            raise QueueServiceError(
+                "managed selection cannot continue after an unproven pre-start deferral"
+            )
 
     def _advisory_available_resources(self, pool: QueuePool) -> Mapping[str, int]:
         available = dict(pool.resources)

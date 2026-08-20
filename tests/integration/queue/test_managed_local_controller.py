@@ -92,6 +92,47 @@ def test_managed_local_controller_dispatches_one_active_item_at_a_time(
     assert [process.pid for process in runner.started] == [201, 202]
 
 
+def test_managed_local_cycle_bypasses_stale_capacity_after_compensated_deferral(
+    tmp_path: Path,
+) -> None:
+    """Authority remains decisive when advisory local capacity is stale."""
+
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(12)])
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    service = _started_service(
+        tmp_path, clock=clock, max_active_items=2, gpu_capacity=2
+    )
+    service.enqueue(_request_with_resources("head-needs-two", {"gpu": 2}))
+    service.enqueue(_request_with_resources("next-needs-one", {"gpu": 1}))
+    runner = _FakeRunner([_FakeProcess(pid=210, pgid=210)])
+    adapter = LocalQueueDispatchAdapter(
+        workspace_id="workspace-1",
+        coordination_store=store,
+        owner_id="controller-1",
+        process_runner=runner,
+        current_drift_inputs={"config": "expected"},
+    )
+
+    cycle = QueueController(
+        service, adapters={"local": adapter}, clock=clock
+    ).run_cycle(pool_name="local-pool")
+
+    assert [step.outcome for step in cycle.dispatch_steps] == [
+        "deferred",
+        "dispatched",
+    ]
+    head = service.read_item("head-needs-two")
+    next_item = service.read_item("next-needs-one")
+    assert head is not None
+    assert head.status is QueueItemStatus.QUEUED
+    assert head.claim is None and head.dispatch_handle is None
+    assert head.dispatch_attempt == 1
+    assert next_item is not None and next_item.status is QueueItemStatus.DISPATCHED
+    assert [process.pid for process in runner.started] == [210]
+    assert _active_amount(store, "gpu") == 1
+
+
 def test_managed_local_cycle_uses_unique_static_slots_and_queue_relative_logs(
     tmp_path: Path,
 ) -> None:
@@ -628,6 +669,12 @@ class _UnavailableRenewalStore(InMemoryWorkspaceCoordinationStore):
 
 
 def _request(item_id: str) -> QueueEnqueueRequest:
+    return _request_with_resources(item_id, {"gpu": 1})
+
+
+def _request_with_resources(
+    item_id: str, resources: Mapping[str, int]
+) -> QueueEnqueueRequest:
     return QueueEnqueueRequest(
         queue_item_id=item_id,
         queue_name="local",
@@ -635,7 +682,7 @@ def _request(item_id: str) -> QueueEnqueueRequest:
         launch_contract=LaunchContract(
             adapter="local",
             entrypoint="argv",
-            resources={"gpu": 1},
+            resources=resources,
             snapshot={"argv": ["python", "-c", "print('ok')"]},
             drift_inputs={"config": "expected"},
         ),

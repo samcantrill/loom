@@ -6,7 +6,7 @@ Planning document: `docs/roadmap/stage-25/planning.md`
 Plain-language design guide: `docs/roadmap/stage-25/design-guide.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 2 pending
+Current phase: Phase 2 approved
 Blockers: none; Stage 24 remotely merged through #216 and #217
 
 ## Summary
@@ -130,7 +130,7 @@ limits remain independent.
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `safe-resource-aware-selection` | merged | `docs/roadmap/stage-25/phases/safe-resource-aware-selection.md` | `agent/stage-25-p1-safe-resource-aware-selection` | [#218](https://github.com/samcantrill/loom/pull/218) | Selection values/engine, local opportunity, built-in bounded read/exact CAS, controller integration | Use one safe oldest-eligible/custom selector across managed entrypoints. |
-| 2 | `bounded-head-bypass-proof` | pending | `docs/roadmap/stage-25/phases/bounded-head-bypass-proof.md` | `agent/stage-25-p2-bounded-head-bypass-proof` | pending | Compensated continuation, private exclusions/bounds, safe evidence, example/docs/causal proof | Reconsider safely after stale capacity without loops or policy-visible history. |
+| 2 | `bounded-head-bypass-proof` | approved | `docs/roadmap/stage-25/phases/bounded-head-bypass-proof.md` | `agent/stage-25-p2-bounded-head-bypass-proof` | [#219](https://github.com/samcantrill/loom/pull/219) | Compensated continuation, private exclusions/bounds, safe evidence, example/docs/causal proof | Reconsider safely after stale capacity without loops or policy-visible history. |
 
 Phase 1 is independently useful and establishes the stable engine Stage 29
 will compose. Phase 2 proves repeated selection after actual admission facts
