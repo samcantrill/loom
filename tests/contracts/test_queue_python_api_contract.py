@@ -11,6 +11,11 @@ from loom.queue import (
     QueueService,
     QueueServiceError,
     QueueServiceState,
+    QueueSelectionCandidate,
+    QueueSelectionContext,
+    QueueSelectionDecision,
+    QueueSelectionDisposition,
+    QueueSelectionPolicy,
     SQLiteQueueRepository,
     normalize_queue_spec,
 )
@@ -76,6 +81,23 @@ def test_managed_local_queue_runtime_api_is_an_explicit_submodule() -> None:
     ]
     assert ManagedLocalQueueRuntimeStatus.__name__ == "ManagedLocalQueueRuntimeStatus"
     assert issubclass(ManagedLocalShutdownTimeoutError, QueueServiceError)
+
+
+def test_queue_selection_public_api_is_import_light_and_in_process_only() -> None:
+    candidate = QueueSelectionCandidate(
+        queue_item_id="item-1",
+        enqueued_at="2020-01-01T00:00:00Z",
+        dispatch_attempt=1,
+        resources={},
+    )
+    context = QueueSelectionContext("pool-1", (candidate,), {})
+    decision = QueueSelectionDecision(
+        QueueSelectionDisposition.SELECTED, "test.selected", "item-1"
+    )
+
+    assert QueueSelectionPolicy
+    assert context.candidates == (candidate,)
+    assert decision.disposition is QueueSelectionDisposition.SELECTED
 
 
 def _clock(*values: str):

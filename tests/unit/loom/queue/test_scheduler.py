@@ -3,9 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import MappingProxyType
 
-from loom.queue import LaunchContract, QueueClaim, QueueItem, QueueItemStatus, RunIntent
+import pytest
+
+from loom.queue import (
+    LaunchContract,
+    QueueClaim,
+    QueueItem,
+    QueueItemStatus,
+    QueueSelectionCandidate,
+    QueueSelectionContext,
+    QueueSelectionDecision,
+    QueueSelectionDisposition,
+    RunIntent,
+)
 from loom.queue._scheduler import select_fifo_item
+from loom.queue.errors import QueueValidationError
+from loom.queue.selection import _evaluate_selection
 
 
 def test_select_fifo_item_returns_oldest_queued_item_for_pool() -> None:
@@ -28,6 +43,98 @@ def test_select_fifo_item_returns_oldest_queued_item_for_pool() -> None:
     assert select_fifo_item([claimed], pool_name="gpu") is None
 
 
+def test_selection_records_are_immutable_and_validate_the_public_boundary() -> None:
+    candidate = QueueSelectionCandidate(
+        queue_item_id="item-1",
+        enqueued_at="2020-01-01T00:00:00Z",
+        dispatch_attempt=1,
+        resources={"gpu": 1},
+    )
+    context = QueueSelectionContext(
+        pool_name="gpu",
+        candidates=(candidate,),
+        advisory_available_resources={"gpu": 1},
+    )
+
+    assert isinstance(candidate.resources, MappingProxyType)
+    assert isinstance(context.advisory_available_resources, MappingProxyType)
+    with pytest.raises(TypeError):
+        candidate.resources["gpu"] = 2  # type: ignore[index]
+    with pytest.raises(QueueValidationError, match="unique"):
+        QueueSelectionContext("gpu", (candidate, candidate), {"gpu": 1})
+    with pytest.raises(QueueValidationError, match="must not include"):
+        QueueSelectionDecision(QueueSelectionDisposition.STOPPED, "stopped", "item-1")
+
+
+def test_selection_evaluator_filters_before_default_or_custom_preference() -> None:
+    older_large = _item("b-needs-two", "gpu", "2020-01-01T00:00:00Z")
+    older_large = replace(
+        older_large,
+        launch_contract=LaunchContract(
+            adapter="local", entrypoint="entry", resources={"gpu": 2}
+        ),
+    )
+    younger_small = _item("a-needs-one", "gpu", "2020-01-01T00:00:01Z")
+    younger_small = replace(
+        younger_small,
+        launch_contract=LaunchContract(
+            adapter="local", entrypoint="entry", resources={"gpu": 1}
+        ),
+    )
+    policy = _ChoosingPolicy()
+
+    default = _evaluate_selection(
+        (older_large, younger_small),
+        pool_name="gpu",
+        advisory_available_resources={"gpu": 1},
+        policy=None,
+    )
+    custom = _evaluate_selection(
+        (older_large, younger_small),
+        pool_name="gpu",
+        advisory_available_resources={"gpu": 1},
+        policy=policy,
+    )
+
+    assert default.decision.queue_item_id == "a-needs-one"
+    assert default.preference_id == "queue_selection.default"
+    assert custom.decision.queue_item_id == "a-needs-one"
+    assert policy.context is not None
+    assert [candidate.queue_item_id for candidate in policy.context.candidates] == [
+        "a-needs-one"
+    ]
+    assert set(policy.context.candidates[0].__dataclass_fields__) == {
+        "queue_item_id",
+        "enqueued_at",
+        "dispatch_attempt",
+        "resources",
+    }
+
+
+def test_selection_evaluator_stops_safely_for_invalid_policy_output_or_error() -> None:
+    item = _item("item-1", "gpu", "2020-01-01T00:00:00Z")
+
+    invalid = _evaluate_selection(
+        (item,),
+        pool_name="gpu",
+        advisory_available_resources={},
+        policy=_InvalidPolicy(),
+    )
+    failed = _evaluate_selection(
+        (item,),
+        pool_name="gpu",
+        advisory_available_resources={},
+        policy=_FailingPolicy(),
+    )
+
+    assert invalid.decision == QueueSelectionDecision(
+        QueueSelectionDisposition.STOPPED, "queue_selection.invalid_decision"
+    )
+    assert failed.decision == QueueSelectionDecision(
+        QueueSelectionDisposition.STOPPED, "queue_selection.policy_error"
+    )
+
+
 def _item(item_id: str, pool_name: str, enqueued_at: str) -> QueueItem:
     run_uri = f"file:///runs/{item_id}"
     return QueueItem(
@@ -40,3 +147,34 @@ def _item(item_id: str, pool_name: str, enqueued_at: str) -> QueueItem:
         enqueued_at=enqueued_at,
         updated_at=enqueued_at,
     )
+
+
+class _ChoosingPolicy:
+    policy_id = "test.choosing"
+
+    def __init__(self) -> None:
+        self.context: QueueSelectionContext | None = None
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        self.context = context
+        return QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED,
+            "test.chosen",
+            context.candidates[-1].queue_item_id,
+        )
+
+
+class _InvalidPolicy:
+    policy_id = "test.invalid"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        return QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED, "test.invalid", "not-present"
+        )
+
+
+class _FailingPolicy:
+    policy_id = "test.failing"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        raise RuntimeError("private policy detail")
