@@ -1,128 +1,189 @@
 # Stage 25 Design Guide: Resource-Aware Whole-Run Queue Selection
 
-Status: planned; not yet implemented
+Status: planned; unified-scheduling amendment approved; not implemented
 Roadmap stage: `v25`
 Depends on: Stage 23 managed-local concurrency, deferral, admission, and
-assignment contracts; execution follows Stage 24 operational lifecycle
-validation
+assignment contracts; execution follows Stage 24 validation
+Later composition: Stage 29 durable coordinator and multi-machine agents
 Formal sources: `docs/roadmap/stage-25/planning.md` and
 `docs/roadmap/stage-25/implementation-plan.md`
 
+## Reader Orientation
+
+A **whole-run queue item** represents one pipeline run that Loom may launch. It
+is not an individual pipeline stage. A **managed pool** is a pool where Loom
+owns local admission, placement, and process lifecycle; a delegated pool such
+as SLURM hands scheduling responsibility to an external scheduler.
+
+An **execution opportunity** means the resources one managed caller can offer
+right now. In Stage 25 that is one managed-local pool. Stage 29 later supplies
+the same kind of opportunity for one requesting agent without changing the
+selection contract.
+
+The public type fields and observable examples in this guide are fixed planning
+contracts. Private helper names in conceptual snippets are illustrative and may
+change when Phase 1 refreshes the merged Stage 23/24 source.
+
 ## What Stage 25 Adds
 
-Stage 25 lets a Python caller influence **which queued whole run Loom tries
-next** when strict FIFO ordering would leave usable resource capacity idle.
+Stage 25 gives Loom one bounded answer to:
 
-Stage 23 remains responsible for running several managed-local items at once,
-limiting active work, admitting logical resource requests, assigning concrete
-exclusive slots, launching processes, observing them, and releasing resources.
-Stage 25 adds a smaller decision immediately before those operations: an
-optional policy may prefer one item from a bounded view of the queue.
+> Which queued whole run is eligible for this execution opportunity, and which
+> eligible run should we try next?
 
-The default does not change. With no injected policy, Loom continues to claim
-the oldest queued item using the Stage 23 FIFO path. Resource-aware selection is
-an explicit, managed-pool-only opt-in.
+The same selection engine serves the managed default and caller-provided
+policies. Loom owns eligibility; the default chooses the oldest eligible
+candidate; an optional policy may express another preference over exactly that
+eligible tuple.
+
+Selection is deliberately smaller than resource allocation. Existing authority
+admission, concrete assignment providers, process launch, observation,
+cancellation, and cleanup remain authoritative.
+
+Stage 29 later supplies agent-specific opportunities and durable assignments to
+this engine. It does not add a local scheduler, daemon scheduler, and remote
+scheduler.
 
 ## Why It Is Needed
 
-Consider a FIFO queue whose oldest item needs two resource units while a later
-item needs one:
+Consider:
 
 ```text
 front
   |
   v
 [B: needs 2 units] -> [A: needs 1 unit] -> [C: needs 1 unit]
+
+current opportunity: 1 unit available
 ```
 
-If only one unit is currently available, strict FIFO tries `B`. Stage 23 safely
-defers `B`, returns it to `QUEUED`, and stops filling that FIFO pool for the
-cycle. That behavior is correct, but it can leave one usable unit idle even
-though `A` or `C` could run.
-
-With an injected Stage 25 policy, the controller may consider a bounded FIFO-
-ordered window and choose `A`:
+Absolute-head FIFO tries B, safely defers it, and can leave a usable unit idle.
+Stage 25 instead filters by the current opportunity:
 
 ```text
-available: 1 unit
-
-B: needs 2  -> remains queued with its original position
-A: needs 1  -> selected, claimed, admitted, assigned, and started
-C: needs 1  -> remains queued
+B: needs 2 -> not eligible now; remains queued in place
+A: needs 1 -> oldest eligible; selected
+C: needs 1 -> eligible but younger; remains queued
 ```
 
-This is bounded head bypass, not a new queue order. `B` is not failed, removed,
-or assigned a new enqueue timestamp. A later controller cycle can reconsider
-it.
+This is FIFO among eligible work. It does not rewrite queue order: B retains its
+enqueue timestamp, position, status, and attempt and is reconsidered when an
+opportunity can run it.
 
-## The Core Design Decision
+The tradeoff is explicit: continually runnable small work can delay a large
+request. Stage 25 does not promise starvation freedom because that requires an
+accepted reservation, aging, or fairness policy.
 
-Loom should provide the safe selection seam, but it should not own every
-project's scheduling preference.
+## Current Behavior And The Change
 
-The seam belongs in Loom because only Loom can safely coordinate:
+Today, managed [`run_cycle()`](../../../src/loom/queue/controller.py) and
+compatibility `run_once()` both ask `QueueService.claim_next()` for work. The
+built-in SQLite operation selects the absolute FIFO head and claims it in the
+same transaction:
 
-- bounded reads from its queue repository;
-- an atomic claim of the exact selected item;
-- current claim and dispatch-attempt fencing;
-- scalar authority admission;
-- concrete resource assignment;
-- managed process launch and cleanup;
-- safe queue audit and cycle evidence.
+```python
+# Current behavior, simplified
+claim = service.claim_next(pool_name, owner_id=owner_id, claim_id=claim_id)
+if claim is not None:
+    result = dispatch(claim.item)
+```
 
-The preference belongs to the caller because different projects may reasonably
-prefer oldest-fit, shortest work first, submission grouping, cost policy, or a
-domain-specific ordering Loom should not understand.
+Combining FIFO choice and ownership is concurrency-safe, but it leaves no place
+to remove a currently non-fitting head item or ask a caller policy before the
+claim. Stage 25 separates those concerns without weakening ownership safety:
 
-The resulting responsibility split is:
+```python
+# Stage 25 behavior, conceptual
+window = queue.read_bounded_candidates(pool_name, limit=selection_limit)
+context = selector.eligible_context(window, opportunity)
+decision = selector.choose(context, policy=policy)
+owned = queue.try_claim_exact(decision.queue_item_id, expected_attempt=...)
+```
+
+The candidate read and policy evaluation happen outside SQLite. The exact claim
+then rechecks the selected item atomically before any admission or process
+work. Selection can therefore become resource-aware while ownership remains
+race-safe.
+
+## One Engine, Not Two Paths
+
+The earlier design preserved a direct `claim_next()` default path and added a
+separate custom-policy path. Stage 29 made the long-term problem clear: machine
+target, profile, and current fit must be checked before ordering, so the two
+paths would make different choices.
+
+The revised managed flow is always:
 
 ```text
-selection policy
-    chooses which supplied candidate Loom should try
-                    |
-                    v
-queue repository
-    atomically claims that exact item if it is still eligible
-                    |
-                    v
-resource admission
-    decides whether logical capacity can actually be acquired
-                    |
-                    v
-assignment provider
-    selects and leases concrete exclusive slots
-                    |
-                    v
-dispatch adapter
-    launches, observes, cancels, and releases the managed process
+bounded FIFO candidate read
+            |
+            v
+Loom-owned eligibility for the current opportunity
+            |
+            v
+oldest eligible OR injected policy preference
+            |
+            v
+decision validation
+            |
+            v
+atomic ownership transition
+            |
+            v
+authoritative admission, placement, and execution
 ```
 
-The policy advises. It never receives a repository, coordination store, lease,
-slot identity, process handle, command, environment, or mutation callback.
+There is no public FIFO policy object. The default is a small internal branch
+inside the shared evaluator, not another scheduling implementation.
 
-## Selection Is Not Resource Allocation
+## Implementation Ownership Map
 
-Stage 25 uses several deliberately separate concepts:
+Stage 25 keeps each responsibility with one narrow owner:
 
-- **Selection** answers, "Which queued item should Loom try next?"
-- **Claiming** atomically transfers temporary queue ownership to one controller.
-- **Admission** acquires the requested logical capacity from the authority.
-- **Assignment** chooses concrete exclusive resource instances.
-- **Dispatch** starts or hands off the work and manages its lifecycle.
+| Area | Stage 25 responsibility |
+| --- | --- |
+| `loom.queue.selection` | Own the five public immutable values, safe candidate projection, fixed eligibility, decision validation, and the pure default/custom evaluator. |
+| `loom.queue` facade | Export only the five intentional public selection types; keep evaluator and opportunity helpers private. |
+| `QueueController` | Build the advisory opportunity, apply selection and cycle bounds, inject one optional policy per managed pool, and use the same path from managed entrypoints. |
+| Built-in queue service and SQLite persistence | Read a bounded FIFO candidate window and atomically claim the exact selected item with safe audit evidence. |
+| Authority, assignment provider, and dispatch adapter | Continue to own authoritative admission, concrete placement, and process execution respectively. |
 
-A policy can select an item requesting `{"device": 1}`. It cannot select a
-specific slot such as `device-2`, and its decision cannot reserve even one
-logical unit. Stage 23 admission and assignment remain authoritative.
+No selection setting is added to queue config, and the public
+`QueueRepository` is not widened into a general scheduler API. The built-in
+bounded-read and exact-claim seam stays private or additive because Stage 29
+will replace local claims with durable assignment creation.
 
-This boundary keeps the policy generic across accelerators, license seats,
-ports, local partitions, or any other scheduler-neutral resource key.
+## Selection Is Not Placement
 
-## Planned Public Policy Contract
+The responsibilities remain separate:
 
-Stage 25 introduces five small, import-light public values under `loom.queue`.
-They are immutable in-process records rather than persisted queue schemas.
+```text
+eligibility
+    Loom decides which queued items can use this opportunity
 
-The candidate contains only the facts needed to express preference:
+preference
+    default or injected policy chooses among those items
+
+ownership
+    current coordinator atomically fences the chosen item
+
+admission
+    authority decides whether logical capacity can really be acquired
+
+placement
+    provider chooses and leases concrete local members
+
+execution
+    adapter starts, observes, cancels, and cleans up the process
+```
+
+A policy can prefer a request such as `{"gpu": 1}`. It cannot choose a GPU UUID,
+reserve capacity, acquire a lease, name a machine, start work, or mutate the
+queue.
+
+## Public Policy Contract
+
+Stage 25 adds five immutable import-light values under `loom.queue`.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -133,10 +194,8 @@ class QueueSelectionCandidate:
     resources: Mapping[str, int]
 ```
 
-Candidates remain ordered by Loom's deterministic source order:
-`(enqueued_at, queue_item_id)`.
-
-The context adds the selected pool and a logical capacity hint:
+Candidates are supplied in deterministic `(enqueued_at, queue_item_id)` order
+after Loom has removed ineligible work.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -146,7 +205,9 @@ class QueueSelectionContext:
     advisory_available_resources: Mapping[str, int]
 ```
 
-A policy returns exactly one of two decisions:
+The availability vector describes the exact execution opportunity. In Stage 25
+that is one managed-local pool. In Stage 29 it will be one requesting agent's
+offer, never an aggregate that combines capacity from different machines.
 
 ```python
 class QueueSelectionDisposition(StrEnum):
@@ -161,9 +222,7 @@ class QueueSelectionDecision:
     queue_item_id: str | None = None
 ```
 
-`SELECTED` requires the ID of a candidate present in the supplied context.
-`STOPPED` requires no item ID. A structural protocol keeps policies easy to
-implement and fake without inheritance:
+`SELECTED` requires a supplied candidate ID. `STOPPED` requires no ID.
 
 ```python
 class QueueSelectionPolicy(Protocol):
@@ -176,73 +235,95 @@ class QueueSelectionPolicy(Protocol):
         ...
 ```
 
-The records intentionally have no persistence codec, schema version, mutable
-policy state, or general scheduler object. They describe one in-process
-preference decision.
+Policies use structural typing: no inheritance or registry is required. These
+values have no persistence codec, schema version, repository reference,
+callback, mutable history, agent field, or transport field.
 
-## Example Caller-Owned First-Fit Policy
+## Default And Custom Preference
 
-The first end-to-end example will define a downstream-style policy rather than
-installing first-fit as Loom's default:
+The internal default is conceptually:
 
 ```python
-from loom.queue import (
-    QueueSelectionContext,
-    QueueSelectionDecision,
-    QueueSelectionDisposition,
-)
+def choose_default(context: QueueSelectionContext) -> QueueSelectionDecision:
+    candidate = context.candidates[0]
+    return QueueSelectionDecision(
+        disposition="selected",
+        queue_item_id=candidate.queue_item_id,
+        reason_code="candidate.oldest_eligible",
+    )
+```
 
+It is not exported as a policy class.
 
-class OldestFittingPolicy:
-    policy_id = "example.oldest_fitting"
+A caller can choose another ordering among already-eligible work. For example:
 
-    def select_next(
-        self,
-        context: QueueSelectionContext,
-    ) -> QueueSelectionDecision:
-        available = context.advisory_available_resources
+```python
+class SmallestEligiblePolicy:
+    policy_id = "example.smallest_eligible"
 
-        for candidate in context.candidates:
-            fits = all(
-                requested <= available.get(resource_key, 0)
-                for resource_key, requested in candidate.resources.items()
-            )
-            if fits:
-                return QueueSelectionDecision(
-                    disposition=QueueSelectionDisposition.SELECTED,
-                    queue_item_id=candidate.queue_item_id,
-                    reason_code="candidate.fits",
-                )
-
+    def select_next(self, context):
+        chosen = min(
+            context.candidates,
+            key=lambda candidate: (
+                sum(candidate.resources.values()),
+                candidate.enqueued_at,
+                candidate.queue_item_id,
+            ),
+        )
         return QueueSelectionDecision(
-            disposition=QueueSelectionDisposition.STOPPED,
-            queue_item_id=None,
-            reason_code="no_candidate.fits",
+            disposition="selected",
+            queue_item_id=chosen.queue_item_id,
+            reason_code="candidate.smallest",
         )
 ```
 
-The planned construction shape is a controller-injected mapping keyed by
-managed pool. The precise constructor parameter spelling will be confirmed
-against the merged Stage 23 controller during Phase 1:
+The planned Python composition remains pool-keyed:
 
 ```python
 controller = QueueController(
     service,
     adapters={"local": local_adapter},
     selection_policies={
-        "local-resources": OldestFittingPolicy(),
+        "local-resources": SmallestEligiblePolicy(),
     },
 )
 ```
 
-Loom will not load arbitrary policy classes from queue YAML, entry points, or a
-plugin registry in Stage 25. Python injection meets the known need with a small
-trust and compatibility surface. A mapping that names an unknown or delegated
-pool is rejected explicitly rather than silently ignored.
+The exact constructor spelling is confirmed against merged Stage 23/24 source
+during Phase 1. An unknown or delegated key is rejected rather than ignored.
+Stage 25 does not load policy classes from YAML or plugins.
+
+## Eligibility Is Loom-Owned
+
+Policies must not decide whether work is allowed to use an execution
+opportunity. Loom first applies fixed rules.
+
+In Stage 25 these include the selected managed pool and current logical fit:
+
+```python
+def locally_eligible(candidate, opportunity):
+    return all(
+        requested <= opportunity.available.get(resource_name, 0)
+        for resource_name, requested in candidate.resources.items()
+    )
+```
+
+Stage 29 later adds hard target, resident-profile, capability, and one-agent fit
+before constructing the same public context. The policy still sees none of
+those topology facts.
+
+This makes the invariant testable:
+
+```text
+same candidates + same opportunity + same policy
+    => same selection
+
+regardless of direct call, co-located daemon, or HTTP transport
+```
 
 ## Why Availability Is Advisory
 
-The controller calculates a simple logical view approximately as:
+The Stage 25 local opportunity is approximately:
 
 ```text
 advisory available
@@ -250,232 +331,175 @@ advisory available
     - logical requests of active CLAIMED and DISPATCHED items
 ```
 
-Each result is clamped at zero. This is useful for ranking candidates, but it
-is not a reservation or authoritative snapshot. It may be stale because:
+Amounts are clamped at zero. This is useful for scheduling but is not a lease or
+reservation. Another controller or external holder may acquire capacity after
+the view is built, and concrete slot availability can differ from the logical
+count.
 
-- another controller can claim or admit work concurrently;
-- an external holder may own a resource lease;
-- an active item or lease may change after the context is constructed;
-- concrete slot availability may differ from the logical count.
+Every selected item therefore still does:
 
-Consequently every selected item still passes through Stage 23 scalar admission
-and concrete assignment. A stale optimistic view can cause a safe deferral; it
-can never authorize over-allocation.
-
-## Controller Flow
-
-For an injected policy, one capacity-filling cycle follows this conceptual
-flow:
-
-```text
-reconcile all active items
-        |
-calculate advisory logical availability
-        |
-read a bounded FIFO-ordered candidate window
-        |
-ask the policy to select one supplied ID or stop
-        |
-validate the decision and safe reason code
-        |
-atomically try to claim the exact candidate
-        |
-perform Stage 23 admission and assignment
-        |
-dispatch it, complete it synchronously, or defer it safely
-        |
-repeat only while every controller bound permits
+```python
+decision = selector.choose(context)          # preference
+owned = queue.try_claim_exact(decision)      # current local fence
+lease = authority.try_acquire(owned.resources)
+placement = provider.try_assign(lease)
+process = adapter.start(placement)
 ```
 
-The default path does not perform these policy operations. It continues to use
-Stage 23's atomic `claim_next()` FIFO behavior directly. Legacy `run_once()`
-also retains its one-step FIFO compatibility meaning.
+The latter three operations remain decisive. A stale view can cause safe
+deferral; it cannot authorize over-allocation.
 
-## Exact Claim And Concurrency Safety
+## Current Ownership And Stage 29 Migration
 
-Policy code runs outside the SQLite transaction. After it selects an ID, the
-repository attempts an atomic exact-candidate claim guarded by:
+Stage 25 runs policy code outside SQLite and then atomically claims the exact
+selected local item, guarded by:
 
-- queue item ID;
-- pool name;
-- current `QUEUED` status;
-- expected dispatch attempt;
-- a newly created Stage 23 claim identity.
+- item ID;
+- pool;
+- `QUEUED` status;
+- expected dispatch attempt; and
+- a fresh claim identity.
 
-If two controllers see and select the same candidate, exactly one can satisfy
-those guards. The loser observes a claim miss and may refresh its candidate
-view only if its selection bound remains. It must never dispatch the stale
-selection.
+If two controllers select A, only one claim succeeds. The loser may refresh
+within the selection bound and never dispatches stale work.
 
-This keeps user policy code out of persistence locks and prevents slow or
-faulty policy code from extending a database transaction.
+This exact-claim mechanism is the current ownership adapter, not part of the
+meaning of `QueueSelectionDecision`. Stage 29 will instead do:
 
-## Deferral And Bounded Head Bypass
+```python
+decision = selector.choose(context)
+assignment = coordinator.try_offer_assignment(
+    queue_item_id=decision.queue_item_id,
+    expected_attempt=...,
+    agent_session=...,
+    offer_revision=...,
+    preference_evidence=...,
+)
+```
 
-Phase 1 permits selecting a later candidate before dispatch, but still stops
-after any typed dispatch deferral. Phase 2 adds safe continuation after a
-selected item unexpectedly fails to acquire capacity.
+Stage 29 then migrates all managed entrypoints to that assignment lifecycle.
+The policy API, eligibility-before-preference rule, bounds, and evidence remain
+the same.
 
-Continuation is allowed only after Stage 23 proves that:
+## Deferral And Bounded Continuation
 
-- no external process or delegated work started;
-- the current claim was atomically returned to `QUEUED`;
-- its enqueue position and attempt remain unchanged;
-- partial admission or assignments were released.
+Phase 1 stops after a typed dispatch deferral. Phase 2 permits another selection
+only after Stage 23 proves:
 
-The controller then excludes that attempted ID from later contexts in the same
-cycle. The attempted set is private controller state and disappears at the end
-of the cycle.
+- no process or delegated work started;
+- the item returned atomically to `QUEUED`;
+- its enqueue position and attempt are unchanged; and
+- partial admission/placement ownership was released.
 
-One private positive `selection_limit` bounds the entire custom-selection path.
-One step means one fresh bounded read followed by at most one policy call. A
-policy stop, lost exact-claim race, or later dispatch deferral still consumes
-that step; refreshing consumes another. Each query returns at most the same
-limit. Stage 23's active-item and dispatch limits remain separate and continue
-to apply.
+The local controller excludes that attempted ID from the same opportunity and
+rebuilds a fresh context. The attempted set is private and ends with the cycle.
 
-These rules prevent immediate reclaim loops and unbounded scans even when a
-policy repeatedly encounters stale information.
+One positive `selection_limit` bounds the path. A bounded read plus at most one
+policy call is one step. Default evaluation, policy stop, lost claim, and later
+deferral each consume a step; refreshing consumes another. Existing active and
+dispatch limits remain separate.
+
+In Stage 29 an offer/assignment record may provide the coordinator-owned
+evidence needed to avoid immediate reacquisition. The network agent does not
+send arbitrary exclusion lists and the policy still sees no history.
 
 ## Failure Behavior
 
-| Situation | Stage 25 behavior | Queue/resource safety |
+| Situation | Behavior | Safety result |
 | --- | --- | --- |
-| Policy selects a supplied item | Try an atomic exact claim. | Admission and assignment still decide whether it starts. |
-| Policy stops | Stop new selection for that pool cycle. | No item is mutated. |
-| Policy selects an absent or already-filtered ID | Record `queue_selection.invalid_decision` and stop. | No claim occurs. |
-| Policy raises an exception | Record `queue_selection.policy_error` and stop. | Raw exception type and text are not persisted. |
-| Another controller wins the selected claim | Spend another bounded step and refresh if permitted. | The stale controller cannot launch the item. |
-| Advisory capacity proves unavailable | Use typed Stage 23 deferral and compensation. | No over-allocation or terminal failure for ordinary occupancy. |
-| Authority becomes uncertain | Retain Stage 23 fail-closed behavior. | Do not reinterpret uncertainty as spare capacity. |
-| Selection limit is exhausted | Stop with `queue_selection.selection_limit_exhausted`. | The cycle cannot scan or retry indefinitely. |
+| No eligible candidate | Stop the current fill opportunity. | No mutation. |
+| Default/custom selects supplied candidate | Attempt exact ownership. | Admission/placement still decide start. |
+| Policy stops | Stop new selection for the opportunity. | No mutation. |
+| Policy selects absent or excluded ID | Record `queue_selection.invalid_decision`; stop. | No ownership transition. |
+| Policy raises | Record `queue_selection.policy_error`; stop. | Raw exception is not persisted. |
+| Another controller wins | Spend a bounded step and refresh if permitted. | No stale launch. |
+| Advisory fit loses at admission | Complete typed compensation, exclude locally, optionally continue. | No over-allocation. |
+| Authority is uncertain | Preserve fail-closed behavior. | Never interpret uncertainty as capacity. |
+| Bound exhausted | Record `queue_selection.selection_limit_exhausted`; stop. | No infinite scan/retry. |
 
-Only a typed, compensated, pre-start capacity deferral permits Phase 2 to try a
-different candidate. Invalid requests, authority uncertainty, process-start
-failures, repository failures, or other terminal outcomes do not become hidden
-scheduler retries.
+Only compensated pre-start capacity deferral permits continuation. Invalid
+requests, fencing loss, repository failure, possible start, or terminal failure
+do not become scheduler retries.
 
 ## Evidence And Data Exposure
 
-Successful custom claims record only the selected item identity, a stable
-`policy_id`, and a reason code in allowlisted audit evidence. Policy stop or
-error evidence uses the existing Stage 23 cycle result conventions.
+Successful ownership records only:
 
-Policy IDs and policy-provided reason codes must be 1-128 ASCII characters and
-match:
+```text
+queue item identity
+stable preference/policy identity
+safe reason code
+```
+
+IDs and caller-provided reasons use 1-128 ASCII characters matching:
 
 ```text
 ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
 ```
 
-Stage 25 does not persist:
+Loom does not persist candidate tuples, capacity views, raw exceptions,
+policy-private state, skipped-candidate events, agent facts, or transport data.
+Stage 29 stores the same preference evidence on assignment creation rather than
+inventing another scheduler event vocabulary.
 
-- complete candidate lists or contexts;
-- capacity snapshots;
-- raw exception types, messages, or tracebacks;
-- arbitrary policy-private state;
-- skip events for every item the policy did not select.
+## Compatibility And Scope
 
-This provides enough operational explanation without creating a new scheduler
-event schema or leaking project data.
+- Managed `run_cycle()` and managed compatibility operations share the engine.
+- Queue config and item schemas gain no selection setting or field.
+- Launch resources and fingerprints do not change.
+- Managed CPU/static-slot/GPU execution retains authority/provider safety.
+- Delegated SLURM keeps established FIFO handoff; its external scheduler owns
+  post-handoff ordering.
+- No optional accelerator, container, cluster, route, or agent package is
+  imported by selection.
 
-## Default And Delegated Compatibility
-
-Compatibility is an explicit part of the design:
-
-- no injected policy means unchanged Stage 23 FIFO behavior;
-- existing queue YAML needs no new setting or migration;
-- queue items and `LaunchContract.resources` gain no scheduler-specific fields;
-- `run_once()` remains a FIFO, at-most-one-new-item operation;
-- managed CPU-only and static-slot execution retain Stage 23 behavior;
-- delegated pools such as SLURM remain FIFO at Loom handoff, after which the
-  external scheduler owns ordering;
-- no optional accelerator, container, or cluster package is imported.
-
-Stage 25 is therefore an opt-in extension rather than a replacement scheduler.
-
-## Why Loom Does Not Provide A Built-In First-Fit Policy Yet
-
-First-fit improves utilization in the motivating example, but it can starve a
-large request if smaller fitting work keeps arriving:
-
-```text
-large item: needs 4 units, never fits today
-small items: need 1 unit, continuously arrive and run
-```
-
-A real starvation guarantee would require accepted semantics for durable aging,
-reservations, priorities, or fairness. Stage 25 deliberately does not choose
-those product policies. Its example proves the interface, while the caller owns
-the consequences of its preference algorithm.
-
-Loom should revisit this decision when users require a Loom-provided fairness
-guarantee, multiple bootstrap consumers require policy discovery, or measured
-candidate-window and futile-admission churn justify a richer core policy.
+Stage 25 deliberately does not create daemon, assignment, client, agent,
+placement-policy, resource-pool, or universal scheduler abstractions. Stage 29
+is the current consumer that justifies the first four and will compose them
+around this narrow engine.
 
 ## Delivery Phases
 
 ### Phase 1: Safe Resource-Aware Selection
 
-Phase 1 adds:
-
-- the five public selection types;
-- candidate and context validation;
-- immutable bounded candidate projection;
-- advisory logical availability;
-- managed-pool constructor injection;
-- atomic exact-candidate claims and claim evidence;
-- race, validation, import, and default-FIFO compatibility tests.
-
-It proves that a caller policy can select and start the later one-unit item in
-the two-versus-one example. It intentionally stops after a typed dispatch
-deferral; continuation belongs to Phase 2.
+Phase 1 adds the five public values, one eligibility/default/custom evaluator,
+advisory local opportunity, managed entrypoint integration, bounded candidates,
+exact local ownership, safe evidence, and parity/race tests. It proves
+B-two/A-one selects A by default.
 
 ### Phase 2: Bounded Head-Bypass Proof
 
-Phase 2 adds:
+Phase 2 adds compensated continuation, private opportunity exclusions, one
+selection bound, safe cycle evidence, a custom smallest-eligible example, docs,
+and causal SQLite/coordination/local-process proof.
 
-- private same-cycle attempted-ID filtering;
-- repeated policy selection only after safe compensated deferral;
-- the single selection-step bound and stop reasons;
-- redacted cycle evidence;
-- a dependency-free local first-fit example;
-- SQLite/coordination integration and local subprocess end-to-end proof.
-
-It proves stale advisory capacity, claim races, and concrete slot occupancy
-cannot cause duplicate claims, resource overlap, or infinite reselection.
-
-Stage 23 and Stage 23-post are complete. Phase 1 begins only after Stage 24
-merges and their queue contracts are refreshed. Phase 2 begins only after Phase
-1 merges.
+Stage 29 later migrates all managed ownership/execution composition to one
+coordinator-assignment-agent path. It must reuse rather than fork these
+selection contracts.
 
 ## Acceptance Examples
 
-The completed stage must demonstrate all of the following:
+The completed stage demonstrates:
 
-1. Without injection, FIFO order and stop-on-head-deferral are unchanged.
-2. With the example policy, `B:{device: 2}` can remain queued while the later
-   `A:{device: 1}` starts when advisory availability is `{device: 1}`.
-3. Two controllers selecting `A` cannot both claim or launch it.
-4. Capacity lost after selection causes safe deferral rather than
-   over-allocation or `UNKNOWN` for ordinary occupancy.
-5. A deferred candidate cannot be reclaimed in the same cycle.
-6. Invalid policy output and exceptions cause no queue-item mutation and expose
-   only fixed safe reason codes.
-7. Selection work remains bounded independently of the Stage 23 active and
-   dispatch limits.
-8. Delegated pools, legacy callers, records, config, and imports remain
-   compatible.
+1. Default and custom managed selection use the same bounded evaluator.
+2. `B:{device: 2}` remains queued while `A:{device: 1}` starts with one available unit.
+3. A custom policy can reorder only the eligible tuple.
+4. Managed `run_once()` and `run_cycle()` make the same first decision from the same facts.
+5. Two controllers cannot both own or launch the selected item.
+6. Stale availability safely defers rather than over-allocates.
+7. A deferred candidate is not immediately reacquired from unchanged local opportunity facts.
+8. Invalid policy behavior mutates nothing and exposes fixed safe codes only.
+9. Selection remains bounded and topology-free.
+10. Delegated pools, records, config, and imports remain compatible.
 
 ## Explicit Non-Goals
 
 Stage 25 does not add priorities, fairness guarantees, durable aging,
-reservations, runtime estimates, preemption, retry policy, multi-queue or
-cross-pool scheduling, distributed active-item quotas, pipeline-stage
-scheduling, policy discovery, concrete-slot selection, or changes to external
-scheduler ordering.
+reservations, estimates, preemption, retries, multiple queues per pool,
+cross-pool balancing, distributed quotas, stage scheduling, policy discovery,
+machine placement, concrete-slot selection, assignments, agents, daemons, or
+network transport.
 
-Those features need separate product decisions in a future dedicated scheduling
-stage. Stage 26 no longer owns that broader vocabulary spanning queue items,
-ready pipeline stages, authority snapshots, and other operation types. Stage 25
-stays narrowly focused on safe, replaceable preference among queued whole runs.
+Those features need their own accepted consumers. Stage 29 owns the unified
+managed coordinator/assignment/agent composition; Stage 25 stays the common
+queue-local selection kernel inside it.

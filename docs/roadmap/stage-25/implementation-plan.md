@@ -1,144 +1,162 @@
 # Roadmap Stage 25 Implementation Plan: Resource-Aware Whole-Run Queue Selection
 
-Status: ready; plan quality gate passed
+Status: ready; unified-scheduling amendment and quality gate passed
 Roadmap stage: `v25`
 Planning document: `docs/roadmap/stage-25/planning.md`
 Plain-language design guide: `docs/roadmap/stage-25/design-guide.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
 Current phase: Phase 1 pending
-Blockers: Stage 24 must be remotely merged before Phase 1 starts; no planning
+Blockers: Stage 24 must remotely merge before Phase 1 starts; no planning
 blocker
 
 ## Summary
 
-- Goal: let a managed whole-run controller use a caller-injected, resource-aware
-  candidate preference without surrendering queue, authority, assignment, or
-  process safety.
-- Approved behavior and requirement IDs: planning `FR-1` through `FR-11` retain
-  Stage 23 FIFO by default, add bounded candidate selection only when injected,
-  keep capacity advisory, use atomic exact claims, bound post-deferral head
-  bypass, preserve delegated behavior, and remain queue-local.
-- Key design constraints and decision IDs: `FQ-1` through `FQ-6` and `DQ-1`
-  through `DQ-6` separate preference, eligibility, claim, admission, placement,
-  process lifecycle, evidence, and future generic scheduling.
-- Minimum useful change: a Python caller supplies one managed-pool policy that
-  sees a bounded safe candidate view and advisory logical availability, selects
-  one candidate or stops, and can allow a later fitting item to start while an
-  older non-fitting item remains queued.
-- Complexity deliberately excluded: a public FIFO policy object, built-in
-  non-FIFO policy, persistent selector state or codecs, policy registry/config,
-  priorities, fairness, reservations, preemption, retries, multi-queue or
-  cross-pool scheduling, and stage-level scheduling.
-- Validation and phase-shaping source: planning `Examples And Validation` and
-  `Phase Shaping`; combined tests are limited to selection/claim races,
-  advisory-fit/admission races, and deferral/filter/continuation bounds.
-- Implementation-base refresh: original expanded planning used
-  `91e772e9e1874a2f44dcba47b19b165ab4602f17`; Stage 23 and Stage 23-post are
-  now complete. Phase 1 must refresh their merged queue/resource contracts and
-  start from current `origin/develop` only after Stage 24 merges.
-- Out of scope: every planning deferral, changes to Stage 23 assignment
-  lifecycle, authority resource mutation, downstream domain semantics, and
-  product code outside the selected phase.
+- Goal: give every managed whole-run entrypoint one bounded selection engine
+  that applies Loom-owned eligibility and then oldest-eligible or
+  caller-injected preference without surrendering claim, authority, placement,
+  or process safety.
+- Approved behavior: planning `FR-1` through `FR-12` and `FQ-1` through `FQ-6`
+  replace the former default/custom split. The default is FIFO among candidates
+  eligible for the current execution opportunity; custom policies receive that
+  same restricted tuple.
+- Key design constraints: `DQ-1` through `DQ-6` keep selection pure and
+  topology-neutral, keep current exact local ownership private/additive, and
+  reserve durable assignment/client/agent composition for Stage 29.
+- Minimum useful change: with B requesting two units, A requesting one, and one
+  advisory-available unit, the managed default selects A while B remains queued
+  unchanged. A custom policy may reorder other eligible candidates or stop.
+- Complexity excluded: a public default policy class, selection codecs/state,
+  agent or transport facts, durable assignments, policy registry/config,
+  priorities, fairness, reservations, preemption, retries, cross-pool or
+  stage-level scheduling.
+- Validation source: planning `Examples And Validation` and `Phase Shaping`;
+  combined coverage is limited to eligibility/order, selection/ownership races,
+  and advisory-fit/admission/continuation.
+- Implementation-base refresh: start Phase 1 from current `origin/develop`
+  only after Stage 24 merges and refresh Stage 23/23-post controller,
+  deferral, status-read, and resource contracts.
+- Out of scope: Stage 29 assignment/session/journal/HTTP records, changes to
+  authority or provider ownership, downstream domain semantics, and product
+  code outside the selected phase.
 
 ## Shared Constraints
 
-- Architecture and dependency direction: selection contracts live inside
-  `loom.queue`. Queue may consume import-light logical resource records and
-  Stage 23 cycle/read surfaces; pipeline planning, resources, authority,
-  coordination stores, and executors must not import queue. CLI owns no policy.
+- Architecture and dependency direction:
+  - import-light `loom.queue.selection` owns public values, validation, safe
+    projection, fixed eligibility composition, and one pure default/custom
+    evaluator;
+  - the current controller owns reconciliation, local opportunity construction,
+    active/dispatch/selection bounds, and Stage 23 execution composition;
+  - built-in queue persistence owns bounded reads and atomic exact local
+    ownership behind a private/additive scheduling capability; do not turn the
+    public `QueueRepository` into a daemon or universal scheduler interface;
+  - authority owns logical admission, providers own concrete placement, and
+    adapters own processes; and
+  - Stage 29 may call the same evaluator from its coordinator and attach the
+    outcome to a durable assignment. Selection does not import Stage 29.
 - Shared public and durable contracts:
   - `loom.queue.selection` and the import-light `loom.queue` facade expose
     `QueueSelectionCandidate`, `QueueSelectionContext`,
     `QueueSelectionDisposition`, `QueueSelectionDecision`, and
-    `QueueSelectionPolicy`. Their exact public shapes are fixed below; helper
-    constructors, validators, and controller loop types remain private.
-  - Selection records are immutable in-process values and add no `to_dict()`,
-    schema version, or persistence format.
-  - `QueueController` accepts a constructor-injected mapping from managed pool
-    name to selection policy. Missing injection, `run_once()`, delegated pools,
-    and existing callers retain Stage 23 FIFO behavior. No arbitrary policy is
-    loaded from queue config. A mapping key that names an unknown or delegated
-    pool is rejected with `QueueServiceError`; mappings are never silently
-    ignored.
-  - The repository adds a bounded candidate read and an exact claim guarded by
-    candidate ID, pool, `QUEUED` status, expected attempt, and Stage 23's fresh
-    claim identity. A successful custom claim audits `policy_id` and reason code
-    in the same transaction. Existing `claim_next()` remains the default path.
-  - Policy stop/error evidence uses the narrowest Stage 23 cycle evidence shape;
-    it never serializes candidate/context/decision objects or raw exceptions.
-    No queue or authority DDL is planned.
-  - `policy_id` and policy-supplied `reason_code` use the same bounded safe-code
-    contract: 1-128 ASCII characters matching
-    `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`. Invalid injected policy IDs fail
-    controller construction. Invalid decisions stop before claim with the
-    Loom-owned code `queue_selection.invalid_decision`; policy exceptions use
-    `queue_selection.policy_error` and never expose exception type or text.
-- Shared reproducibility, compatibility, and import constraints: source
-  candidate order remains `(enqueued_at, queue_item_id)`; custom ordering is
-  operational and records the successful preference reason. Queue items,
-  `LaunchContract.resources`, fingerprints, config schemas, delegated SLURM,
-  and Stage 23 status/assignment evidence remain unchanged. No dependency is
-  added.
+    `QueueSelectionPolicy`; helper/evaluator/opportunity/store types remain
+    private;
+  - selection records are frozen, slotted, immutable in-process values and add
+    no `to_dict()`, schema version, or persistence format;
+  - managed selection always uses the same evaluator. Missing injection uses
+    an internal oldest-eligible preference with stable evidence identity; no
+    default policy object is constructed;
+  - `QueueController` accepts a mapping from managed pool name to selection
+    policy. Unknown or delegated keys and invalid policy IDs raise
+    `QueueServiceError`; mappings are never silently ignored;
+  - candidate reads are bounded and ordered by `(enqueued_at, queue_item_id)`.
+    Exact local ownership revalidates ID, pool, `QUEUED`, expected attempt, and
+    fresh Stage 23 claim identity. Policy evaluation occurs before the
+    transaction;
+  - successful local ownership audits preference ID and reason in the same
+    transaction. Stage 29 may store those same facts on assignment creation;
+    and
+  - stop/error evidence uses the narrow Stage 23 cycle shape and never
+    serializes policy context, availability, or raw exceptions. No queue or
+    authority DDL is planned solely for selection.
+- Shared safe-code contract: preference IDs and policy reason codes are 1-128
+  ASCII characters matching `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`. Invalid
+  injected policy IDs fail construction. Invalid decisions stop with
+  `queue_selection.invalid_decision`; exceptions use
+  `queue_selection.policy_error`; exhaustion uses
+  `queue_selection.selection_limit_exhausted`.
+- Shared behavior and compatibility:
+  - candidate source order is deterministic; default chooses its first eligible
+    member and custom ordering is operational evidence only;
+  - managed `run_cycle()` and managed compatibility operations use the same
+    selector; delegated pools retain established external handoff;
+  - queue items, launch resources, fingerprints, config schemas, authority
+    state, concrete assignment evidence, and optional dependency behavior stay
+    unchanged; and
+  - for identical candidate/opportunity/policy input, evaluator output is
+    identical regardless of its caller. No topology flag enters the engine.
 - Shared invariant ownership:
-  - Repository owns bounded reads, atomic exact claims, and claim audit.
-  - Controller owns pool eligibility, private attempted IDs, selection and
-    Stage 23 budgets, policy validation, and continuation.
-  - Policy owns preference only.
-  - Authority admission owns scalar truth; assignment provider owns concrete
-    placement; local adapter owns process/resource lifecycle.
-- Decisions no phase may reopen: default FIFO does not route through a public
-  policy; advisory availability cannot authorize launch; policy code never runs
-  in a transaction; no selection codec/state/DDL; no core first-fit or fairness
-  claim; broader scheduler vocabulary remains deferred beyond Stage 26.
+  - selection owns fixed eligibility, safe projection, preference validation,
+    and deterministic default behavior;
+  - controller owns local opportunity facts, private attempted IDs, and all
+    cycle bounds;
+  - built-in scheduling persistence owns bounded reads, exact local CAS, and
+    ownership audit;
+  - policy owns preference only; and
+  - authority/provider/adapter own admission, placement, and process lifecycle.
+- Decisions no phase may reopen: one managed selection engine; oldest eligible
+  default; advisory opportunity capacity; no policy-visible topology/history;
+  no selection codec/state; no public FIFO object; no assignments/agents/
+  transport in Stage 25; no fairness claim; no broader scheduler vocabulary.
 
 Exact public selection shapes:
 
 | Public type | Fixed fields and behavior |
 | --- | --- |
-| `QueueSelectionCandidate` | Frozen, slotted dataclass with `queue_item_id: str`, `enqueued_at: str`, `dispatch_attempt: int`, and immutable normalized `resources: Mapping[str, int]`. Construction validates the existing queue-ID and ISO timestamp contracts, a positive attempt, and safe resource keys with non-negative integer amounts. |
-| `QueueSelectionContext` | Frozen, slotted dataclass with `pool_name: str`, `candidates: tuple[QueueSelectionCandidate, ...]`, and immutable normalized `advisory_available_resources: Mapping[str, int]`. Construction validates the pool ID, candidate types and unique IDs, and safe keys with non-negative integer amounts; an empty candidate tuple is valid but is not passed to a policy by the controller. |
+| `QueueSelectionCandidate` | Frozen, slotted dataclass with `queue_item_id: str`, `enqueued_at: str`, `dispatch_attempt: int`, and immutable normalized `resources: Mapping[str, int]`. It validates existing queue ID/timestamp/attempt and safe non-negative integer resource contracts. |
+| `QueueSelectionContext` | Frozen, slotted dataclass with `pool_name: str`, `candidates: tuple[QueueSelectionCandidate, ...]`, and immutable normalized `advisory_available_resources: Mapping[str, int]`. Candidates are already Loom-eligible for this opportunity; construction validates pool, unique candidate IDs, types, and resource amounts. An empty tuple is valid but is not passed to a policy. |
 | `QueueSelectionDisposition` | `StrEnum` with `SELECTED = "selected"` and `STOPPED = "stopped"`. |
-| `QueueSelectionDecision` | Frozen, slotted dataclass with normalized `disposition: QueueSelectionDisposition`, `reason_code: str`, and `queue_item_id: str | None = None`; construction accepts the enum or its canonical string, validates the safe reason code, requires a valid candidate ID for `SELECTED`, and requires `None` for `STOPPED`. Context membership is controller-validated. |
+| `QueueSelectionDecision` | Frozen, slotted dataclass with normalized `disposition`, safe `reason_code`, and `queue_item_id: str | None`. `SELECTED` requires an ID; `STOPPED` requires `None`; context membership is evaluator-validated. |
 | `QueueSelectionPolicy` | Structural `Protocol` with `policy_id: str` and `select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision`. |
 
-One private positive `selection_limit` supplies all custom-path bounds. A
-selection step is one fresh bounded candidate read followed by at most one
-policy call, and it consumes one unit whether the policy stops, the exact claim
-loses a race, or dispatch later defers. A refresh consumes another unit. Each
-candidate query returns at most `selection_limit` rows; examining that tuple in
-policy code consumes no extra units. There are no separate read, call, or race
-counters, while Stage 23's active and dispatch limits remain independent.
+One private positive `selection_limit` bounds the managed selection path. One
+step is one fresh bounded read, fixed eligibility/projection, and at most one
+custom policy call. Default preference uses the same step. Stop, lost exact
+ownership, or later compensated deferral consumes the step; refresh spends
+another. Each query returns at most the limit. Stage 23 active and dispatch
+limits remain independent.
 
 ## Phase Index
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `safe-resource-aware-selection` | pending | `docs/roadmap/stage-25/phases/safe-resource-aware-selection.md` | `agent/stage-25-p1-safe-resource-aware-selection` | pending | Queue selection contract, repository/service exact claims, and controller custom-selection entry | Safely select and claim a later fitting managed-pool candidate while retaining the untouched FIFO default. |
-| 2 | `bounded-head-bypass-proof` | pending | `docs/roadmap/stage-25/phases/bounded-head-bypass-proof.md` | `agent/stage-25-p2-bounded-head-bypass-proof` | pending | Controller deferral continuation, safe evidence, downstream example, docs, and causal proof | Continue safely after an unexpected capacity deferral and prove bounded head bypass end to end. |
+| 1 | `safe-resource-aware-selection` | pending | `docs/roadmap/stage-25/phases/safe-resource-aware-selection.md` | `agent/stage-25-p1-safe-resource-aware-selection` | pending | Selection values/engine, local opportunity, built-in bounded read/exact CAS, controller integration | Use one safe oldest-eligible/custom selector across managed entrypoints. |
+| 2 | `bounded-head-bypass-proof` | pending | `docs/roadmap/stage-25/phases/bounded-head-bypass-proof.md` | `agent/stage-25-p2-bounded-head-bypass-proof` | pending | Compensated continuation, private exclusions/bounds, safe evidence, example/docs/causal proof | Reconsider safely after stale capacity without loops or policy-visible history. |
 
-Phase 1 is independently useful: a policy can select the fitting item before
-claim or dispatch. Phase 2 handles stale observations and concrete-capacity
-surprises without exposing controller history to policy code.
+Phase 1 is independently useful and establishes the stable engine Stage 29
+will compose. Phase 2 proves repeated selection after actual admission facts
+change; it does not add durable scheduling state.
 
 ## Quality Gate
 
-- Planning gate: confirmed by the user's request to run the planning workflow
-  on 2026-08-17; the expanded design-safety review had already passed.
-- Manager review: manifest and linked phase plans are traceable and consistent.
-- Independent review: one `loom_plan_reviewer` pass completed. It required
-  approval traceability, exact public record shapes, bounded safe codes,
-  explicit invalid pool-mapping behavior, and unambiguous bound accounting.
-- Correction: one bounded correction fixed those findings without reopening
-  approved behavior; manager confirmation found no remaining plan blocker.
-- Ready for implementation: yes. Phase 1 remains execution-blocked until Stage
-  24 is remotely merged and the completed Stage 23/23-post contracts are
-  refreshed.
-- Accepted risks: custom policy starvation; stale advisory availability;
-  constructor-only injection; bounded windows may miss a later fitting item.
-- Revisit triggers: a required starvation guarantee; measured futile-claim
-  churn; a second policy bootstrap consumer; measured candidate-window/query
-  pressure; or an accepted cross-contract scheduling design in a later stage.
+- Planning gate: confirmed by the maintainer's 2026-08-20 approval of the
+  unified coordinator/agent direction and Stage 25 amendment.
+- Manager review: planning, design guide, manifest, phase plans, roadmap
+  summary, fixed shapes, requirement traceability, and deferrals are consistent.
+- Prior expanded review: the original design and plan reviews passed; the
+  concrete Stage 29 consumer later exposed a split default/custom path. The
+  maintainer accepted the bounded correction to one engine and oldest-eligible
+  default.
+- Correction: complete. It changes behavior and internal ownership wording but
+  adds no Stage 29 runtime records or new public selection types.
+- Ready for implementation: yes after Stage 24 remotely merges and the source
+  baseline is refreshed.
+- Accepted risks: oldest-eligible starvation, stale advisory capacity, bounded
+  window misses, and the later private managed-ownership migration to Stage 29
+  assignments.
+- Revisit triggers: required fairness, measured churn/query pressure, stock
+  daemon custom-policy bootstrap, or evidence that Stage 29 needs topology facts
+  inside policy context.
 
 ## Completion
 

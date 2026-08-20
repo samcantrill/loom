@@ -8,142 +8,149 @@
 - Branch: `agent/stage-25-p2-bounded-head-bypass-proof`
 - Worktree root and path:
   `/home/can134/work/active/loom-worktrees/stage-25-p2-bounded-head-bypass-proof`
-- Base revision: current `origin/develop` after Phase 1 merges; record the exact
+- Base revision: current `origin/develop` after Phase 1 merges; record exact
   revision before branch creation
 - PR target: `develop`
 - PR title: `Whole-Run Queue Selection - Phase 2: Bounded Head-Bypass Proof`
-- Dependencies: Stage 25 Phase 1 remotely merged with its selection protocol,
-  exact claim, default branch, and advisory-capacity contracts unchanged
-- Workflow path: expanded because it composes typed deferral, repeated policy
-  invocation, controller bounds, audit evidence, and concurrency e2e behavior
-- Blockers: Phase 1 must merge before selection
+- Dependencies: Phase 1 merged with one eligibility/default/custom engine,
+  exact local ownership, managed entrypoint parity, and advisory opportunity
+  contracts unchanged
+- Workflow path: expanded because typed deferral, repeated evaluation, bounds,
+  evidence, and concurrency interact
+- Blockers: Phase 1 merge only
 
 ## Objective And Context
 
-- Vertical outcome: after a chosen item unexpectedly defers, the same cycle may
-  omit it, ask again, and start another candidate within one hard bound. A
-  downstream first-fit example proves the journey without changing defaults.
-- Earlier dependency: Phase 1 supplies immutable policy inputs/results,
-  managed-pool injection, advisory availability, exact claim/requeue safety,
-  selected-claim audit, and the unchanged FIFO branch.
-- Later work excludes built-in first-fit, fairness, durable history, priorities,
-  reservations, discovery, and broader scheduling.
+- Vertical outcome: after a selected item unexpectedly defers before start, the
+  current managed opportunity may omit it, recompute safe facts, and select
+  another eligible item within one hard bound. A downstream custom-preference
+  example proves extension without adding another scheduler.
+- Earlier dependency: Phase 1 supplies immutable policy values, unified
+  eligibility/default/custom evaluation, advisory local opportunity, exact
+  local CAS, safe ownership evidence, and unchanged authority/provider safety.
+- Later work: Stage 29 represents execution opportunities with agent offers and
+  uses durable assignments plus the same selection engine. It may derive
+  exclusions from coordinator-owned offer/assignment facts rather than this
+  phase's local in-memory set.
 
 ## Current Source And Harness
 
-- Relevant files and symbols after Phase 1: selection contracts and controller
-  injection; Stage 23 `QueueController.run_cycle`, deferred disposition,
-  guarded requeue, cycle result, managed-local admission/assignment; queue audit
-  and safe status evidence. Refresh exact names from merged code.
-- Harnesses include Phase 1 policy/claim tests, Stage 23 cycle integration,
-  fake process/clock/coordination seams, queue status contracts, and operations
+- Relevant merged seams after Phase 1: selection evaluator, local opportunity
+  construction, exact ownership service, `QueueController.run_cycle`, Stage 23
+  deferred disposition/guarded requeue, cycle result, admission/provider,
+  queue audit and safe status evidence.
+- Harnesses include Phase 1 parity/claim tests, Stage 23 cycle integration,
+  fake process/clock/coordination seams, status contracts, and operations
   example conventions.
-- Import constraints: the example defines its policy through public Python
-  types; CLI/config gain no loader; default tests need no external system.
+- The example uses only public selection values. CLI/config gain no loader and
+  default tests require no external service, hardware, or network.
 
 ## Scope
 
 In scope:
 
-- A private attempted-ID set owned by one `run_cycle` invocation. The controller
-  excludes attempted IDs before constructing each fresh policy context; policy
-  never receives the set or previous decisions.
-- Policy re-entry after a Stage 23 `DEFERRED` result only. The repository first
-  completes Stage 23's guarded deferral and the adapter has proven no process
-  started and partial resources were released.
-- Use the manifest's one-counter rule: initialize `selection_steps_remaining`
-  from the private positive `selection_limit`; each fresh bounded read plus at
-  most one policy call spends one step. Claim-race or deferral refresh spends a
-  new step. Each read returns at most `selection_limit` candidates; policy
-  inspection spends no extra units. There are no separate selection counters.
-- Stop conditions for empty filtered candidates, policy `stopped`, invalid
-  output, policy exception, exhausted selection bound, Stage 23 active/dispatch
-  budget, authority degradation, repository error, or no queued item.
-- Allowlisted cycle evidence for policy stop/error and bound exhaustion. Policy
-  exceptions use only `queue_selection.policy_error`; invalid output uses
-  `queue_selection.invalid_decision`; exhaustion uses
-  `queue_selection.selection_limit_exhausted`. No exception type/text, message,
-  candidate dump, capacity snapshot, or policy-private state persists.
-- A dependency-free operations example whose local `FirstFitPolicy` selects the
-  oldest candidate whose logical request fits advisory availability.
-- Documentation of default/custom behavior, advisory capacity, atomic claim,
-  starvation risk, delegated boundary, and Python construction.
-- Causal integration/e2e coverage for head bypass, stale observation,
-  continuation, and bounded calls using SQLite plus short local processes.
+- One private attempted-ID set per local managed scheduling opportunity. The
+  controller excludes those IDs before each fresh evaluator call; policies
+  never receive the set or prior decisions.
+- Re-entry only after Stage 23 completes guarded `DEFERRED` compensation and
+  proves no process/delegated work started, the item returned unchanged to
+  `QUEUED`, and all partial admission/assignment ownership was released.
+- One-counter accounting: initialize remaining steps from positive
+  `selection_limit`; each bounded read plus eligibility/default/custom
+  evaluation spends one. Stop, lost claim, or dispatch deferral consumes that
+  step; refresh consumes another. Stage 23 active/dispatch bounds remain.
+- Stop for no eligible candidates, policy `STOPPED`, invalid output, policy
+  exception, exhausted selection bound, active/dispatch bound, degraded
+  authority, repository error, or no queue work.
+- Allowlisted cycle evidence for policy stop/error and limit exhaustion using
+  fixed codes. Never persist raw exception text/type, candidates, opportunity
+  capacity, policy state, or topology facts.
+- A dependency-free example policy that deliberately prefers the smallest
+  eligible logical request, demonstrating custom ordering beyond the default
+  oldest-eligible behavior.
+- Documentation of eligibility, default/custom ordering, advisory capacity,
+  exact local ownership, starvation risk, Stage 29 handoff, delegated boundary,
+  and Python construction.
+- Causal SQLite/coordination/local-process tests for default bypass, custom
+  ordering, stale observation, compensated continuation, races, and bounds.
 
 Out of scope:
 
-- Phase 1 public-record changes, another cycle type, DDL, skip audit, raw
-  exceptions, policy config, core non-FIFO behavior, durable counters,
-  pagination, retry, fairness, preemption, or delegated changes.
+- Phase 1 public shape changes; assignment/offer/session/agent/client/HTTP
+  records; durable attempted history; skip audit; policy config/discovery;
+  fairness, reservation, priority, retry, pagination, preemption; delegated or
+  Stage 29 implementation.
 
 Assumptions:
 
-- A candidate enters the attempted set after a successful exact claim, even if
-  dispatch defers. A lost claim spends one step but adds no attempted ID.
+- A candidate enters the local attempted set after successful exact ownership,
+  even if dispatch then defers. A lost ownership race spends a step but adds no
+  attempted ID.
+- Stage 29 may supersede the local representation, but must preserve the
+  observable rule: a declined/deferred candidate cannot be immediately
+  reacquired from unchanged opportunity facts.
 
 ## Fixed Contracts And Private Discretion
 
-- Observable behavior: FIFO without injection still stops on its first capacity
-  deferral. With injection, a deferred chosen candidate stays queued with order
-  and attempt unchanged while the controller may select a different candidate.
-  No ID is claimed twice in one cycle.
-- Public or durable shapes: Phase 1 protocol/types do not change. Stage 23 cycle
-  serialization gains only the narrow safe stop/error facts needed by planning
-  `FR-9`, fitted into its existing convention and bounded safe-code grammar.
-  Claim audit remains the only durable successful-selection fact.
-- Trust and failure boundaries: only typed pre-start capacity deferral permits
+- Observable behavior: oldest-eligible default and custom policies can continue
+  only after safe capacity deferral. The deferred candidate remains queued with
+  order and attempt unchanged; it is not selected twice in the same local
+  opportunity.
+- Public/durable shapes: Phase 1's five public types do not change. Stage 23
+  cycle serialization gains only narrow safe stop/error facts; ownership audit
+  remains the successful preference record in Stage 25.
+- Trust boundary: only typed compensated pre-start capacity deferral permits
   continuation. Invalid request, authority uncertainty, fencing loss, process
-  start, or repository failures retain Stage 23 terminal/fail-closed behavior.
-- Cross-phase contracts: this is the final Stage 25 phase. It must leave the
-  queue-local seam adaptable but must not implement generic scheduler vocabulary.
-- Reproducibility and compatibility: the example policy is deterministic over
-  the supplied order and logical amounts. It is demonstrative downstream code,
-  not a root export or default. Existing config, CLI, FIFO, SLURM, and queue
-  records remain compatible.
-- Private choices: attempted-set representation, positive bound value, loop
-  arrangement, example command, evidence placement, and synchronization.
+  start, repository failure, or terminal outcomes do not become retries.
+- Cross-stage: Stage 29 keeps evaluator behavior and evidence but moves managed
+  ownership to `OFFERED`/`ACCEPTED` assignments. Selection never learns
+  transport, agent, session, offer, journal, or slot facts.
+- Reproducibility/compatibility: source order and eligibility are deterministic
+  for supplied facts. Example policy is downstream code, not a root export or
+  default. Existing config, records, delegated SLURM, and imports stay compatible.
+- Private choices: attempted-set representation, loop arrangement, example
+  command, evidence placement, synchronization, and exact positive limit.
 
 ## Proportionality
 
-- Existing seam reused: Stage 23 deferral/compensation and cycle budgets, Phase
-  1 exact claims and policy context, queue audit, existing example harness.
-- Material additions: private filtering prevents reclaim loops; repeated
-  invocation handles stale/concrete capacity; one example proves the consumer.
-- Optional hardening and future capability deferred: history exposed to policy,
-  skip metrics, scheduling estimates, reservations, aging, pagination, and
-  generic scheduler adapters.
+- Reuse Stage 23 compensation and budgets, Phase 1 evaluator/exact ownership,
+  queue audit, and example harness.
+- Private filtering prevents immediate loops; repeated shared evaluation handles
+  stale capacity without exposing history.
+- Defer durable history, offer/session modeling, skip metrics, estimates,
+  reservations, aging, pagination, and generic scheduling.
 
 ## Invariant Ownership
 
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
-| A deferred ID is not selected again in the same cycle. | Controller filtering | Requeued FIFO head reappears immediately. | Busy loop/audit churn. | Fake policy and real repository exact call counts. |
-| Continuation follows only safe pre-start deferral. | Controller disposition handling | Failure/uncertainty is treated as spare capacity. | Unsafe retry or hidden failure. | Typed outcome matrix. |
-| All selection work is bounded without weakening Stage 23 budgets. | Controller | Repeated stop/race/defer refresh. | Unbounded cycle or starvation of reconciliation. | Bound exhaustion at each reachable edge. |
-| Evidence contains safe reasons only. | Controller/repository evidence builders | Policy exception or context is serialized raw. | Data disclosure/coupling. | Exact-key/value negative tests. |
-| Head bypass cannot over-allocate logical or concrete resources. | Authority/provider acquisition | Advisory view races or static slot is occupied. | Concurrent resource use. | Real SQLite coordination plus stale observation. |
+| A deferred ID is not selected again from the same opportunity. | Controller filtering | guarded requeue makes it visible again | busy loop/audit churn | fake evaluator and real repository counts |
+| Continuation follows only completed capacity compensation. | Controller disposition gate | failure/uncertainty treated as spare capacity | unsafe retry or hidden failure | typed outcome matrix |
+| Every repeat uses the same selection engine. | Controller/evaluator composition | fallback direct claim after deferral | branch drift | call-path and parity assertions |
+| All selection work is bounded independently of Stage 23 limits. | Controller | stop/race/defer refresh | unbounded cycle | exhaustion at reachable edges |
+| Evidence contains safe reasons only. | Evidence builder | policy exception/context leak | disclosure/coupling | exact allowlist negatives |
+| Bypass cannot over-allocate resources. | Authority/provider | stale advisory opportunity | concurrent use | real SQLite coordination race |
 
 ## Implementation Slices
 
-1. Add private attempted filtering and single-bound accounting around the Phase
-   1 custom-selection path while leaving FIFO and Stage 23 budgets untouched.
-2. Compose repeated selection only after completed guarded capacity deferral;
-   add all stop/error and typed-failure tests.
-3. Add allowlisted cycle evidence and contract/redaction coverage without a new
+1. Add private opportunity-attempt filtering and single-bound accounting around
+   the shared Phase 1 evaluator, leaving active/dispatch budgets untouched.
+2. Continue only after completed guarded capacity compensation; add all typed
+   stop/failure/race tests.
+3. Add allowlisted cycle evidence and redaction/contract coverage without a
    selection serialization layer.
-4. Add the local first-fit example, feature docs, and deterministic causal
-   integration/e2e scenarios.
+4. Add custom smallest-eligible example, feature/design docs, and deterministic
+   integration/E2E scenarios including Stage 29 handoff wording.
 
 ## Test And Validation Plan
 
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
-| Package | required | Phase 1 exports remain unchanged and cheap. | Example imports public facade; no new root policy implementation. |
-| Unit | required | Filtering, continuation, one-counter accounting, stop/error, and FIFO split. | Deferred ID absent; one read/call pair per step; fixed reason codes; FIFO never continues. |
-| Contract | required | Cycle and audit allowlists plus protocol stability. | No selection codec; no message/context leak; Phase 1 fields unchanged. |
-| Integration | required | Real queue/coordination head bypass and races. | B-two/A-one; stale acquisition; unique claims/slots; terminal release/refill. |
-| E2E / opt-in | dependency-free local e2e required; hardware/manual remains deferred | Public Python composition and observable completion order. | Local first-fit example runs without network/vendor tools; no default hardware profile. |
+| Package | required | Phase 1 exports unchanged and cheap. | Example imports public facade; no default policy/agent/route export. |
+| Unit | required | Filtering, continuation, one-counter accounting, evidence, shared evaluator. | Deferred ID absent; one evaluation per step; fixed codes; no direct-claim fallback. |
+| Contract | required | Cycle/ownership allowlists and protocol stability. | No codec/context/error leak; Phase 1 fields unchanged. |
+| Integration | required | Real queue/coordination bypass and races. | B-two/A-one; stale admission; unique ownership/slots; terminal release/refill. |
+| E2E / opt-in | dependency-free local required; hardware/network deferred | Public Python composition and completion order. | Local example runs without sleeps/network/vendor tools. |
 
 Targeted commands:
 
@@ -160,39 +167,37 @@ Final commands:
 ## Risks, Review, And Stops
 
 - Main risks: attempted-item reuse, continuation after non-capacity failure,
-  bypassed Stage 23 limits, evidence leaks, or timing-based e2e tests.
-- Review focus: exact disposition gate, deferral commit before reselection,
-  private filtering, one bound, unchanged public protocol, redaction, and
-  deterministic process/coordination synchronization.
-- Stop if: Stage 23 cannot prove compensation before returning deferred; cycle
-  evidence needs a parallel result schema; deterministic e2e requires sleeps;
-  or head bypass needs durable history/fairness semantics. Return to manager.
-- Accepted debt and revisit trigger: custom first-fit can starve large work and
-  bounded lookahead can miss a fit; revisit only with demonstrated operator need
-  for durable fairness or larger indexed candidate search.
+  hidden direct scheduling branch, bypassed bounds, evidence leak, or timing-
+  based tests.
+- Review focus: exact disposition gate, compensation before reselection, shared
+  evaluator invocation, private filtering, one bound, unchanged public API,
+  redaction, and deterministic synchronization.
+- Stop if Stage 23 cannot prove compensation, cycle evidence needs a parallel
+  schema, deterministic E2E requires sleeps, or correct continuation requires
+  durable history/fairness or Stage 29 records.
+- Accepted debt: eligible FIFO/custom preference can starve large work and the
+  bounded window can miss a fit. Revisit with demonstrated operator need.
 
 ## Executor Handoff
 
-- Read section range: this plan plus planning `FR-5`, `FR-8` through `FR-11`,
-  `FQ-3`, `FQ-5`, `FQ-6`, and `DQ-3` through `DQ-6`.
-- Safe implementation slices: execute slices 1-4 with separate controller,
-  evidence, and example/docs/test checkpoints.
-- Decisions not to revisit: private attempted state, one selection bound,
-  capacity-only continuation, no public-shape change, no built-in policy,
-  fairness, config, registry, DDL, or generic scheduling.
-- Conditions requiring manager action: any stop condition, Phase 1 contract
-  drift, need for policy history, or inability to prove compensation before
-  reselection.
+- Read this plan plus planning `FR-1`, `FR-5`, `FR-8` through `FR-12`, `FQ-1`,
+  `FQ-5`, `FQ-6`, and `DQ-1`, `DQ-3` through `DQ-6`.
+- Execute slices 1-4 with controller, evidence, example/docs, and causal-test
+  checkpoints.
+- Do not revisit one engine, oldest-eligible default, private attempt state,
+  one bound, capacity-only continuation, public shapes, no durable history,
+  no policy loader, and Stage 29 assignment ownership.
+- Return for any stop condition, Phase 1 drift, need for policy-visible history,
+  or inability to prove compensation before reselection.
 
 ## Workflow State
 
-- Manager preparation: complete in Stage 25 planning; refresh after Phase 1 merge
-- Expanded planning: required at phase selection for deferral/concurrency and
-  public-evidence integration; unused
+- Manager preparation: complete; refresh after Phase 1 merge
+- Expanded planning: revised design approved; no additional spawned pass
 - Implementation: not started
-- Refiner: optional only for a qualified implementation/test blocker; unused
+- Refiner: optional only for a qualified blocker; unused
 - Pre-submit gate: not run
-- Independent review: required after implementation; unused
+- Independent review: required after implementation due continuation risk
 - Blocker corrections: 0/3
 - PR and merge: pending
 

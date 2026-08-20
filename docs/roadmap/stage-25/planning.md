@@ -1,259 +1,252 @@
 # Roadmap v25 Planning: Resource-Aware Whole-Run Queue Selection
 
-Status: confirmed; implementation-plan quality gate passed
+Status: confirmed; unified-scheduling amendment and manager quality gate passed
 Roadmap stage: v25
-Evidence tree: original expanded planning used `/home/can134/work/active/loom`
-on `develop` at `91e772e9e1874a2f44dcba47b19b165ab4602f17`; Stage 23 and
-Stage 23-post are now complete, and the stage was renumbered from v24 to v25 at
-`f709731ef9ce023a3a403eb7ca257bd059f416d7`
-Planning route: expanded because this stage introduces a public policy
-extension point across queue selection, SQLite claim concurrency, resource
-observation, and Stage 23 deferral behavior
-Plain-language design guide: `docs/roadmap/stage-25/design-guide.md`
-Current gate: planning workflow complete; Phase 1 not started
+Evidence tree: `develop` at `2c05906c15791a025ff2cae90633d77efdc89aac`;
+source is unchanged since Stage 25 review
+Planning route: expanded because this stage introduces a public policy seam,
+changes SQLite claim concurrency, and now establishes the selection behavior
+that Stage 29 reuses across command-scoped, co-located, and remote-agent forms
+Current gate: revised planning and implementation-plan quality gates complete;
+Phase 1 not started
 Blockers: Stage 24 must remotely merge before Phase 1 starts; no planning blocker
 
-Stage 25 follows Stage 24 and builds on Stage 23's completed safe concurrent
-FIFO cycles by making candidate preference replaceable while Loom retains
-lifecycle safety.
+Stage 25 gives the whole-run queue one bounded engine. Loom filters candidates
+that cannot run in the current opportunity, then uses oldest-eligible ordering
+or one caller-injected policy.
+Selection remains separate from ownership, resource admission, concrete
+placement, and process execution. Stage 29 later composes this same engine with
+durable assignments and one agent runtime instead of creating another
+scheduler.
 
 ## Current State
 
-| Gate | Locked result | Open decisions or blockers | Next action |
-| --- | --- | --- | --- |
-| Evidence | Queue selection, SQLite claims, controller flow, resource counters, and adjacent roadmap contracts were inspected at the baseline. | None. | Preserve the queue/authority boundary. |
-| Functionality | Default FIFO remains; Python callers may inject one bounded pool-local policy. | None. | Preserve the confirmed behavior boundary. |
-| Design | Policy prefers; repository claims; authority admits; providers place; controller orchestrates. | None. | Preserve removal-first findings. |
-| Validation | Claim races, stale capacity, compatibility, and bounded bypass need causal coverage. | None. | Execute the recorded suite obligations by phase. |
-| Detailed plan / approval | The manifest and two phase plans passed one review and bounded correction; the user requested this workflow on 2026-08-17 and renumbered it on 2026-08-18. | Stage 24 must merge before execution. | Refresh Stage 23/23-post queue contracts after Stage 24. |
+Evidence, behavior, design, validation, the manifest, both phase plans, and the
+design guide are locked. The maintainer approved the unified model on
+2026-08-20. Execution remains pending only on Stage 24; Phase 1 must refresh the
+merged Stage 23/24 source before implementation.
 
 ## Evidence And Scope
 
 | Source or area | Current finding | Used for | Related IDs |
 | --- | --- | --- | --- |
-| Queue docs, Stage 11, and `_scheduler.py` | One FIFO queue exists per pool; its private helper orders by enqueue time and ID. | Compatibility and vocabulary. | FR-1, FR-3, FR-10 |
-| SQLite repository, service, and controller | `claim_next()` selects FIFO inside persistence, so callers cannot choose another candidate without replacing the repository. | Required selection seam. | FR-2 through FR-7 |
-| Resource and coordination contracts | Requests are scheduler-neutral; scalar-use observations can race and only lease acquisition is authoritative. | Advisory fit boundary. | FR-4, FR-5, FR-8 |
-| Completed Stage 23 and Stage 23-post | They supply reconcile/fill cycles, atomic guarded claims, typed pre-start deferral, scalar/static-slot lifecycle, runtime recovery/shutdown, and a strict FIFO stop after head deferral. | Required implementation base and opt-in override point. | FR-1 through FR-9 |
-| Roadmap boundary | Generic policy across queue items, ready stages, authority snapshots, and submitted operations is deferred beyond Stage 26. | Prevent Stage 25 from claiming a universal workflow scheduler contract. | FR-10, FR-11 |
-| Existing tests | FIFO helper, repository claims, controller dispatch, managed admission, and coordination backends have coverage; exact-candidate claim races and injected resource-aware ordering do not. | Validation scope. | all |
+| Queue controller/runtime | `run_cycle()` and `run_once()` claim and dispatch directly; a separate policy path would later diverge from daemon scheduling. | One managed selector. | FR-1 through FR-4, FR-12 |
+| SQLite service | `claim_next()` combines FIFO selection and claim; non-head choice needs a bounded read and exact CAS. | Ownership adapter. | FR-2, FR-7 |
+| Resource/coordination contracts | Availability can race; authority admission and provider acquisition remain decisive. | Eligibility boundary. | FR-4, FR-5, FR-8 |
+| Stage 23/23-post | Bounded cycles, typed deferral, guarded requeue, resource lifecycle, recovery, and shutdown already exist. | Execution base. | FR-1, FR-5, FR-8 through FR-10 |
+| Stage 29 design | One coordinator, assignment lifecycle, client port, and agent runtime serve every managed form. | Topology neutrality. | FR-7, FR-9, FR-12 |
+| Tests | FIFO/claims/dispatch/admission exist; unified eligibility parity and exact-selection races do not. | Validation gaps. | all |
 
-- User-visible outcome: if the FIFO head requests two units while only one is
-  currently available, an opt-in policy may start the oldest later item that
-  requests one unit. The blocked head remains queued and unchanged.
-- Existing path: SQLite FIFO claim -> service -> controller -> adapter ->
-  admission -> optional Stage 23 assignment -> process or delegated handoff.
-- Included scope: bounded candidate reads, an immutable queue-candidate view,
-  one structural selection-policy protocol, existing FIFO compatibility,
-  constructor injection,
-  advisory logical-capacity context, atomic claim-by-candidate, typed policy
-  decisions, bounded continuation after capacity deferral, and safe decision
-  evidence.
-- Non-goals and deferrals: priorities, fairness guarantees, durable aging,
-  reservations, runtime estimates, preemption, retries, multiple queues per
-  pool, cross-pool balancing, distributed active-item quotas, stage scheduling,
-  dynamic plugin discovery, concrete-slot choice, and external scheduler
-  replacement.
-- Demonstrated failure: a managed pool can have usable capacity while its oldest
-  request cannot fit, and downstream code cannot choose a later item without
-  taking over persistence.
-- Affected surfaces: queue candidate/context/decision records, structural
-  policy, controller injection, repository read/claim behavior, and evidence.
-  No queue-item or authority schema change is justified.
+- User-visible outcome: with `B:{device: 2}` ahead of `A:{device: 1}` and one
+  currently available unit, the default managed selector chooses the oldest
+  eligible item, `A`, while `B` remains queued in its original position.
+- Included: bounded reads, fixed eligibility, immutable policy views, one
+  default/custom engine, Python policy injection, advisory capacity, exact
+  local claim CAS, compensated continuation, and safe evidence.
+- Stage 29 keeps the selection API/behavior but replaces managed direct claim
+  and dispatch with one durable assignment/agent path.
+- Non-goals: priorities, fairness guarantees, durable aging, reservations,
+  preemption, retries, cross-pool balancing, distributed quotas, stage
+  scheduling, policy discovery, agent identity, concrete-slot choice, network
+  transport, or durable assignments in this stage.
+- Impact: five in-process selection types and allowlisted evidence. Existing
+  durable records and configs remain unchanged; selection values have no codec.
 
 ## Minimum Useful Change
 
-- Add one queue-local structural protocol that chooses one candidate or stops
-  from an immutable bounded context. Without injection, the existing Stage 23
-  FIFO claim and stop-on-head-deferral path remains unchanged.
-- Let Python callers inject policies by managed pool. Dynamic imports, entry
-  point discovery, and authored configuration for arbitrary project classes are
-  unnecessary for the current consumer.
-- Give it controller-filtered ordered candidates, logical requests, and
-  advisory availability—not controller history, repositories, stores, live
-  tokens, process handles, or mutation callbacks.
-- Add an atomic exact-candidate claim. The policy runs outside a database
-  transaction; the repository revalidates ID, pool, queued status, and expected
-  attempt. A lost race causes bounded refresh, not duplicate work.
-- Use a downstream first-fit example to prove the seam; defer a built-in
-  non-FIFO policy and starvation promises.
+- Add one queue-local selection engine that receives a bounded FIFO-ordered
+  candidate window and one advisory managed execution opportunity. It applies
+  fixed eligibility, then chooses the oldest eligible candidate or asks an
+  injected policy to choose among the same eligible candidates.
+- Use that engine for managed `run_cycle()` and managed compatibility
+  operations. Do not retain a direct `claim_next()` default branch beside a
+  custom selection branch.
+- Let Python callers inject one structural policy per managed pool. Policy code
+  receives restricted immutable facts and never receives stores, controllers,
+  agents, leases, slots, commands, or callbacks.
+- Keep selection pure and outside the SQLite transaction. The current built-in
+  coordinator uses a private/additive exact-claim capability; Stage 29 may
+  replace that ownership adapter with atomic assignment creation.
+- Reuse Stage 23 deferral and compensation, but keep attempted candidates and
+  selection bounds orchestration-private. No public or durable scheduler
+  history is introduced.
 
 ## Functional Requirements
 
 | ID | Required behavior | Scope and non-goals | Dependencies | Validation | Status |
 | --- | --- | --- | --- | --- | --- |
-| FR-1 | Without injection, use Stage 23's atomic FIFO claim and stop on capacity deferral. | No default-policy object or behavior change. | Stage 23 claim/cycle. | FIFO compatibility. | locked |
-| FR-2 | Read one pool's queued candidates in deterministic bounded order without claiming. | Advisory view, not a snapshot, general query, or full queue. | Queue index/item JSON. | Order and limit. | locked |
-| FR-3 | Inject one structural policy with a stable safe identifier per managed pool; otherwise use existing FIFO. | No public FIFO class, registry, ABC, or config import. | Controller construction. | Protocol, identifier, default. | locked |
-| FR-4 | Supply immutable candidate ID, enqueue time, attempt, logical amounts, and advisory logical availability; include only cycle-eligible candidates. | Exclude launch/private data, budgets, and attempt history. | Stage 23 reads/counters. | Projection and exclusions. | locked |
-| FR-5 | Capacity presented to policy is explicitly advisory. Every selected item still requires authoritative scalar admission and concrete assignment before launch. Stale observations may cause safe deferral but never over-allocation. | Policy cannot reserve, acquire, renew, or release resources. | Authority coordination and Stage 23 providers. | Stale observation and racing acquisition integration tests. | locked |
-| FR-6 | Select one supplied ID or stop with a safe reason code; validate membership/reason once. | No batch, mutation, or history revalidation. | Candidate context. | Invalid/stop/exception. | locked |
-| FR-7 | Atomically claim exact ID, pool, queued status, and expected attempt; refresh a lost race within the selection bound. | No policy in a transaction or reservation. | Stage 23 claim fencing. | Barrier/stale race. | locked |
-| FR-8 | After typed capacity deferral, FIFO stops; injection may continue without cycle-attempted IDs. One selection bound covers calls, reads, and lost claims; Stage 23 owns other bounds. | No reclaim loop, retry budget, or retry. | Stage 23 deferral. | Bypass and call counts. | locked |
-| FR-9 | Claim audit records policy/reason; cycle evidence records safe stop/error. In-process selection records have no codec or schema. | No skip events, policy state, snapshot, or decision log. | Existing audit/cycle. | Allowlist, serialization, volume. | locked |
-| FR-10 | Managed-local pools are the required resource-aware path. Delegated pools retain FIFO submission unless explicitly supported by later work; external schedulers continue to own post-handoff ordering. | No SLURM scheduling-policy change. | Existing pool modes. | Delegated compatibility tests. | locked |
-| FR-11 | Queue selection remains whole-run and queue-local. Stage 25 must not define priority, fairness, reservation, stage-ready, or universal scheduler vocabulary for later work. | No general `WorkflowScheduler`. | Roadmap boundary. | Public import and scope review. | locked |
+| FR-1 | All managed whole-run selection uses one bounded eligibility/preference engine. Without injection, choose the oldest currently eligible candidate. | No separate FIFO fast path or public FIFO policy class. Delegated handoff remains external. | Stage 23 cycles. | Default/custom and entrypoint parity. | locked |
+| FR-2 | Read one pool's queued candidates in deterministic bounded `(enqueued_at, queue_item_id)` order without mutation. | Not a full-queue snapshot, general query API, or unbounded scan. | SQLite queue index. | Order and limit. | locked |
+| FR-3 | Allow one structural policy with a stable safe identifier per managed pool; otherwise use the internal oldest-eligible preference. | No ABC, registry, YAML class loading, or policy object for the default. | Coordinator construction. | Protocol, mapping validation, default. | locked |
+| FR-4 | Loom filters hard/current opportunity eligibility before policy invocation. Policies see only candidate ID, enqueue time, attempt, logical amounts, pool, and advisory available amounts. | No agent, transport, target, profile, slot, controller history, or private queue fields. | Logical resource records. | Exact projection and exclusion. | locked |
+| FR-5 | Advisory availability describes the current execution opportunity, not global or authoritative capacity. Stage 25 derives it from declared local capacity minus active logical requests; final authority/provider acquisition decides truth. | Policy cannot reserve or mutate resources. | Stage 23 admission/providers. | Stale observation and acquisition race. | locked |
+| FR-6 | A policy selects one supplied ID or stops with a safe reason code. Loom validates shape, membership, and code once before mutation. | No batch choice or policy-visible history. | Selection context. | Invalid, stopped, exception. | locked |
+| FR-7 | Policy evaluation and the ownership transition are separate. Stage 25 atomically claims exact ID/pool/queued status/attempt through a private/additive built-in scheduling capability; a lost race refreshes within the bound. | Policy never runs in a transaction; selection does not promise that ownership is always a claim. | SQLite fencing. | Barrier/stale race. | locked |
+| FR-8 | Only completed typed pre-start capacity deferral permits another bounded selection. A candidate is not retried in the same local opportunity; Stage 29 may derive the same exclusion from offer/assignment facts. | No retry policy or durable aging. | Stage 23 compensation. | Deferral, filtering, exact call counts. | locked |
+| FR-9 | Successful ownership evidence records preference ID/reason/item; stop/error evidence uses fixed safe codes and no raw exception or context. | No selection event log, capacity snapshot, or codec. | Existing audit/cycle evidence. | Allowlist and redaction. | locked |
+| FR-10 | Managed pools are the required resource-aware path. Delegated SLURM retains established FIFO handoff and external scheduler ownership. | No SLURM placement-policy change. | Pool modes. | Delegated compatibility. | locked |
+| FR-11 | Selection remains queue-local and whole-run. It does not define pipeline-stage or universal scheduling vocabulary. | No general `WorkflowScheduler`. | Roadmap boundary. | Import/scope review. | locked |
+| FR-12 | For the same queue candidates, opportunity facts, and policy, selection is identical whether its caller is command-scoped, co-located, or remote. Topology and transport stay outside selection. | Stage 29 owns assignments, clients, agents, and network behavior. | Stage 29 cross-stage contract. | Pure-engine determinism and later topology conformance. | locked |
 
 ## Functionality Agreement
 
 | ID | Requirement IDs | Decision | Recommendation and evidence | Tradeoff | State |
 | --- | --- | --- | --- | --- | --- |
-| FQ-1 | FR-1, FR-3 | Default path | Keep Stage 23 atomic FIFO unless policy is injected. | One explicit custom branch. | locked |
-| FQ-2 | FR-2, FR-6, FR-7 | Selection versus claim | Select from a bounded read view, then atomically claim the chosen ID. Do not embed project code in SQLite or require a custom repository. | A selection can lose a race and require refresh. | locked |
-| FQ-3 | FR-4, FR-5, FR-8 | Inputs | Expose candidates/availability; controller owns eligibility/bounds and authority owns leases. | No removal history. | locked |
-| FQ-4 | FR-3, FR-11 | Extension | Constructor-inject one identifier-plus-method protocol; existing FIFO is not a policy type. | No YAML loading. | locked |
-| FQ-5 | FR-8, FR-11 | Starvation semantics | Permit bounded head bypass but make fairness the injected policy's responsibility. Do not claim starvation freedom without durable aging or reservations. | Poor custom policy can delay large work indefinitely. | locked with accepted risk |
-| FQ-6 | FR-9 | Evidence | Audit successful claim policy/reason; serialize cycle stop/error only. | Concise explanation. | locked |
+| FQ-1 | FR-1, FR-4 | Default | Use oldest eligible rather than the absolute FIFO head. This is FIFO within the work that can run now. | Large work can wait; no starvation promise. | locked |
+| FQ-2 | FR-4, FR-6 | Eligibility then preference | Loom applies pool/current-fit rules before default or custom preference. Policies cannot widen eligibility. | Custom policies receive fewer candidates. | locked |
+| FQ-3 | FR-2, FR-7 | Selection versus ownership | Select from a bounded immutable view, then atomically acquire ownership through the current coordinator adapter. | A race may require refresh. | locked |
+| FQ-4 | FR-3, FR-11 | Extension | Constructor-inject one ID-plus-method protocol; keep default internal and queue-local. | No declarative loading. | locked |
+| FQ-5 | FR-8 | Continuation | Retry selection only after proven pre-start compensation and never the same candidate in one opportunity. | No durable history or fairness. | locked |
+| FQ-6 | FR-9, FR-12 | Evidence and parity | Stable preference/reason evidence belongs to the ownership transition; transport details never affect it. | Stage 29 may store it on an assignment instead of a claim. | locked |
 
 ## Behavior Baseline
 
-- A managed pool may have one injected policy; otherwise the Stage 23 FIFO path
-  runs unchanged. Policies choose one item at a time from a bounded window.
-- Example: with candidates `B:{device: 2}` then `A:{device: 1}` and advisory
-  availability `{device: 1}`, FIFO chooses B and stops after deferral. A custom
-  first-fit policy may choose A; Loom atomically claims A and still requires
-  admission and assignment before starting it.
-- Invalid output or a policy exception stops new claims without failing an item.
-  Authority uncertainty fails closed; a claim race refreshes within budget.
-  Impossible requests remain a Stage 23 validation concern.
-- FIFO is deterministic. Custom ordering may depend on live capacity, so Loom
-  records policy, reason, and item identity without changing fingerprints.
+- Read one bounded FIFO window, remove current non-fitting candidates, then use
+  its first item or a custom preference. Thus `B:{device: 2}` followed by
+  `A:{device: 1}` with one available unit selects `A` without changing `B`.
+- A policy may choose only from the eligible tuple or stop; it cannot alter
+  capacity or placement. Invalid output/exceptions cause no mutation.
+- A lost exact-ownership race refreshes within the bound and never dispatches a
+  stale choice.
+- If authoritative admission disproves advisory fit, compensate completely,
+  exclude that candidate for this opportunity, and continue only within bounds.
+- Stage 29 supplies agent-specific opportunities to this engine and attaches
+  the result to an assignment rather than adding another selector.
 
 ## Minimum Design
 
-- Ownership: a queue-local module owns in-process selection records, protocol,
-  and validation; repository owns candidate reads and exact claims; controller
-  owns invocation and bounds; authority owns capacity truth; Stage 23 owns
-  placement.
-- Data and control flow: reconcile active items -> calculate controller-local
-  advisory availability -> read bounded FIFO candidates -> ask policy for one
-  ID or stop -> atomically try the exact claim -> dispatch -> record started,
-  completed, or deferred -> update current-cycle context -> repeat within all
-  bounds. Advisory availability subtracts active queue requests from declared
-  pool capacity; external leases and concurrent changes can make it stale.
-- Fixed contracts: immutable in-process candidate/context/decision records, one
-  `select_next(context)` method, select-or-stop discrimination, safe policy
-  identifier, and per-pool constructor injection. Selection records add no
-  codec; only claim/cycle evidence serializes.
-- Trust boundary: policy output is advice. Loom validates membership and
-  budgets; policy code never runs inside a transaction or mutates lifecycle
-  state.
-- Private discretion: exact names, capacity helpers, query grouping, default
-  window size, retry helpers, and cycle-step nesting.
-- Downstream policies use only logical resources and safe candidate facts. Stage
-  25 may later adapt this seam but must not make it stage- or executor-aware.
-- Import direction: `loom.queue` may consume import-light resource value records
-  and Stage 23 controller results. Resource, authority, planning, and executor
-  packages do not import queue selection. No new dependency is introduced.
+- Ownership: `loom.queue.selection` owns projection and pure choice; the
+  controller owns opportunity construction, bounds, and orchestration; private
+  built-in storage owns bounded reads/exact claim; authority admits, providers
+  place, and adapters run processes. Stage 29 moves orchestration and assignment
+  ownership into its common coordinator without moving selection policy.
+- Flow: reconcile -> construct advisory opportunity -> bounded candidate read
+  -> fixed eligibility -> default/custom preference -> validate -> atomic exact
+  ownership -> admit/place/dispatch -> complete or compensate -> repeat within
+  existing active/dispatch and one selection bound.
+- Fixed public shapes remain `QueueSelectionCandidate`,
+  `QueueSelectionContext`, `QueueSelectionDisposition`,
+  `QueueSelectionDecision`, and `QueueSelectionPolicy`. Candidate/context
+  mappings are immutable; records have no serializers.
+- Private opportunity facts may support eligibility, but policy sees exactly
+  the public context; Stage 29 may extend only the private side.
+- The internal default has a stable evidence identifier/reason but no public
+  policy object. One pure evaluator serves default and custom selection.
+- `selection_limit` is one positive private bound. Each bounded read and at most
+  one preference evaluation spends a step; Stage 23 bounds remain independent.
+- Import direction: selection stays import-light under `loom.queue`; it may
+  consume logical resource values but never controller, route, CLI, authority,
+  provider, adapter, agent, or vendor implementations. No dependency is added.
 
 ## Complexity Delta
 
 | Addition | Current necessity | Simpler alternative | Decision |
 | --- | --- | --- | --- |
-| Selection records | Policy needs a restricted typed view/decision. | Pass `QueueItem`. | keep in-process only |
-| Structural protocol | Selection plus stable evidence identity. | Anonymous callback. | keep identifier/method |
-| Bounded candidate read | Non-head selection requires seeing later items. | Load the whole queue. | keep bounded |
-| Atomic exact-candidate claim | Selection occurs outside persistence and can race. | Run policy inside SQLite transaction. | keep guarded claim |
-| Advisory availability | Needed for fit without authority access. | Expose store. | keep advisory |
-| Public FIFO object | Stage 23 claim is sufficient. | Route default through new seam. | remove |
-| Policy-visible cycle state | Controller filtering/bounds suffice. | Expose for future policies. | remove |
-| Separate selection budgets | One bound plus Stage 23 bounds closes loops. | Independent knobs. | consolidate |
-| Built-in non-FIFO policy | Core fairness semantics are not accepted. | Support first-fit in core. | defer; use example |
-| Durable bypass state | Needed only for a starvation guarantee. | Hide it in metadata/audit. | defer |
-| Registry or policy config | Python injection meets the need. | Add discovery now. | defer |
+| Immutable selection records | Safe caller policy needs a restricted view and decision. | Pass `QueueItem`. | keep in-process only |
+| One pure selection engine | Default/custom and later topologies otherwise duplicate behavior. | Separate direct FIFO and policy branches. | keep one engine |
+| Fixed eligibility before preference | Current opportunity constraints must not be policy-overridable. | Let policies decide fit. | keep core-owned |
+| Bounded candidate read | Non-head eligible selection cannot use `claim_next()`. | Load full pool snapshot. | keep bounded |
+| Atomic exact local ownership | Selection runs outside persistence and can race. | Run caller code in SQLite. | keep private/additive |
+| Advisory opportunity | Fit requires a safe logical hint. | Expose authority/provider. | keep advisory |
+| Public FIFO/first-fit class | No caller needs a default object. | Route through a class hierarchy. | remove |
+| Topology/agent fields in policy | Eligibility can project them away. | Expose placement facts. | remove |
+| Durable selection/attempt state | Stage 25 local bounds and Stage 29 assignments own current needs. | Add scheduler history. | defer |
+| Assignment/client/agent abstractions | Stage 29 is their first durable/network consumer. | Pull them into Stage 25. | defer to Stage 29 |
+| Policy registry/config | Python injection meets the consumer. | Add discovery now. | defer |
 
 ## Design Agreement
 
 | ID | Requirement IDs | Decision | Recommendation and evidence | Tradeoff | State |
 | --- | --- | --- | --- | --- | --- |
-| DQ-1 | FR-3 through FR-6 | Policy boundary | Stable identifier plus preference only; no admission, placement, mutation, or bounds. | Controller orchestrates. | locked |
-| DQ-2 | FR-1, FR-2, FR-7 | Selection paths | Default uses Stage 23 `claim_next`; injection uses bounded read/exact guarded claim. | Mechanics differ. | locked |
-| DQ-3 | FR-4, FR-5 | Availability meaning | Derive controller-local logical availability and label it advisory; final acquisition decides truth. | External leases and races can make it stale. | locked |
-| DQ-4 | FR-8 | Continuation | Controller filters a private attempted-ID set and spends one selection bound. | No history; next cycle reconsiders. | locked |
-| DQ-5 | FR-9 | Persistence | Extend allowlisted claim/cycle evidence; no selection codecs, DDL, or private state. | No decision history/aging. | locked |
-| DQ-6 | FR-10, FR-11 | Roadmap boundary | Apply resource-aware customization to managed whole-run pools and defer generic scheduling design beyond Stage 26. | Queue and future workflow scheduling remain distinct concepts. | locked |
+| DQ-1 | FR-1 through FR-6 | Selection boundary | One pure engine applies fixed eligibility then default/custom preference; policy owns preference only. | Default is no longer a direct `claim_next()` shortcut. | locked |
+| DQ-2 | FR-2, FR-7 | Ownership adapter | Keep bounded reads and exact local CAS private/additive and outside policy evaluation. Stage 29 may replace the CAS with assignment creation. | Internal persistence wiring changes later. | locked |
+| DQ-3 | FR-4, FR-5 | Opportunity meaning | Use current execution-opportunity availability, label it advisory, and keep final acquisition authoritative. | Observation can be stale. | locked |
+| DQ-4 | FR-8 | Continuation | Orchestration owns exclusions and one bound; policy never receives attempted history. | Later topology may derive exclusions differently. | locked |
+| DQ-5 | FR-9 | Persistence | Serialize allowlisted ownership/cycle evidence only; no selection codec, state, or DDL. | No decision history. | locked |
+| DQ-6 | FR-10 through FR-12 | Roadmap boundary | Establish topology-neutral whole-run selection now; Stage 29 owns the common assignment/agent runtime; broader scheduling remains separate. | One planned internal ownership migration. | locked |
 
 ## Expanded Design Review
 
 | Finding | Related IDs | Evidence and consequence | Required action | Status |
 | --- | --- | --- | --- | --- |
-| Default duplicated machinery. | FR-1, FR-3, FR-7 | Stage 23 atomic FIFO already works. | Keep it; use the seam only when injected. | resolved |
-| Policy saw controller state. | FR-4, FR-6, FR-8 | First-fit needs candidates/availability, not history/budgets. | Filter privately. | resolved |
-| Validation/budgets duplicated. | FR-6 through FR-8 | Filtered membership and one bound close reachable loops. | Validate once; consolidate. | resolved |
-| Public implied durable. | FR-4, FR-9 | Policy calls are in-process. | Serialize claim/cycle evidence only. | resolved |
-| Evidence identity was missing. | FR-3, FR-9 | Class names/bags are unstable. | Require one safe identifier. | resolved |
-| Exact-claim guards overlapped. | FR-7 | ID is identity; pool/status/attempt detect staleness. | Keep only those guards. | resolved |
+| Default/custom paths duplicated scheduling. | FR-1, FR-12 | A direct FIFO claim plus custom bounded selection would diverge when Stage 29 added eligibility and assignments. | Route all managed selection through one engine. | resolved by 2026-08-20 amendment |
+| Absolute-head FIFO was topology-dependent. | FR-1, FR-4 | A remote requester cannot run targeted/incompatible/non-fitting head work; preserving a separate local rule breaks parity. | Define default as oldest eligible for the exact opportunity. | resolved by maintainer decision |
+| Policy could become machine placement. | FR-4, FR-12 | Stage 29 needs agent facts for eligibility, but caller policy does not. | Filter privately and preserve the five-field public boundary. | resolved |
+| Claim semantics leaked into selection. | FR-7, FR-9 | Stage 29 needs assignment creation rather than direct local claim. | Keep selection pure and attach its evidence to the current ownership transition. | resolved |
+| Future assignment machinery could bloat Stage 25. | FR-7, FR-12 | No current Stage 25 consumer needs network handoff or journal state. | Keep exact local CAS private and defer assignment/client/agent records to Stage 29. | resolved |
 
 ## Examples And Validation
 
 | Example or invariant | Behavior or risk | Authoritative owner and boundary | Minimal coverage | Status |
 | --- | --- | --- | --- | --- |
-| Default compatibility | No policy injection produces Stage 23 FIFO selection and FIFO-head stop. | Stage 23 controller/repository. | Unit and integration comparison. | planned |
-| Two-versus-one fit | Head B requests two, later A requests one, one is advisory-available; injected first-fit selects and starts A while B remains queued. | Policy preference plus controller/admission. | Real SQLite queue/coordination integration. | planned |
-| Stale fit observation | A appears to fit but another owner wins capacity before acquisition. | Authority acquisition. | A defers safely; no process starts and no capacity overlaps. | planned |
-| Selected-claim race | Two controllers select A from the same window. | SQLite exact-claim CAS. | Exactly one claim succeeds; loser refreshes within budget. | planned |
-| Invalid policy | Policy selects an absent/already-attempted item or raises. | Controller decision validation. | No claim or item mutation; cycle reports structured stop/error. | planned |
-| Bounded bypass | Deferred candidates are not reclaimed in the same cycle and scanning cannot walk an unbounded queue. | Controller candidate/dispatch budgets. | Exact call counts and stop reasons. | planned |
-| Separation from placement | Policy never receives slot IDs, binding values, leases, commands, or environment. | In-process selection records. | Exact field-set and import tests. | planned |
-| Delegated compatibility | SLURM submission stays FIFO by default and external scheduling remains delegated. | Pool/controller boundary. | Existing delegated suite plus negative policy-scope test. | planned |
+| Default oldest eligible | B needs two, A needs one, one available; A starts and B is unchanged. | Selection engine plus admission. | Unit and real SQLite integration. | planned |
+| Custom eligible ordering | Two candidates fit; injected policy chooses the younger/smaller one from the supplied tuple. | Policy preference plus validation. | Public API integration. | planned |
+| Managed entrypoint parity | `run_once()` and `run_cycle()` with the same opportunity make the same first selection. | Shared selection engine. | Parameterized controller test. | planned |
+| Selected-ownership race | Two controllers choose A. | SQLite exact CAS. | Exactly one ownership success; loser bounded refresh. | planned |
+| Stale opportunity | A appears to fit but authority acquisition loses. | Authority/provider. | Safe deferral, release, then bounded reconsideration. | planned |
+| Invalid policy | Absent/excluded ID or exception. | Selection validation. | No mutation; fixed safe error. | planned |
+| Topology-safe projection | Policy receives no agent, target, offer, slot, lease, command, or environment. | Selection projection. | Exact fields/import tests. | planned |
+| Delegated compatibility | External scheduler handoff retains established behavior. | Pool/adapter boundary. | Existing delegated suite. | planned |
 
 Causal interactions requiring combined coverage:
 
-- candidate choice + exact-claim race;
-- advisory fit + admission loss + guarded deferral;
-- deferred head + later candidate start + cycle bounds.
+- eligibility plus default/custom ordering;
+- candidate choice plus exact-ownership race;
+- advisory fit plus authoritative admission loss plus compensated continuation.
 
-Other validation stays in focused unit or contract tests.
+Stage 29 later owns one conformance matrix proving that direct and HTTP clients
+produce the same normalized selection/assignment trace. Stage 25 tests the
+topology-neutral engine once rather than simulating future transport.
 
 ## Phase Shaping
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Safe resource-aware selection | Queue-local policy records/protocol, advisory logical availability, bounded candidate reads, atomic exact claims, controller injection, selected-claim evidence, and unchanged default FIFO. | Managed queue selection, repository, service, and controller; no post-deferral continuation or non-FIFO core policy. | Stage 24 merged; completed Stage 23/23-post contracts refreshed. | Injected first-fit fake starts A in the B-two/A-one case; claim races stay safe; default path is unchanged. | pending |
-| 2. Bounded head-bypass proof | Private attempt filtering, bounded continuation after unexpected capacity deferral, safe cycle stop/error evidence, downstream example, docs, and causal integration/e2e proof. | Managed whole-run pools; no priorities, fairness, reservations, config registry, SLURM policy, or stage scheduler. | Phase 1 merged. | Stale observations safely defer then consider another candidate; all bounds/redaction/compatibility checks pass. | pending |
+| 1. Safe resource-aware selection | Five public types, one eligibility/default/custom engine, advisory local opportunity, bounded candidates, exact local CAS, managed entrypoint integration, and safe ownership evidence. | Queue selection, built-in SQLite scheduling capability, service/controller; no post-deferral continuation, assignments, agents, or transport. | Stage 24 merged; Stage 23/23-post contracts refreshed. | Default B-two/A-one starts A; custom ordering and claim races are safe; entrypoints share the engine. | pending |
+| 2. Bounded head-bypass proof | Compensated continuation, private opportunity exclusions, one bound, safe stop/error evidence, downstream custom-policy example, docs, and causal integration/E2E proof. | Managed whole-run pools; no fairness, durable history, policy registry, assignment state, or generic scheduler. | Phase 1 merged. | Stale capacity safely defers then another eligible candidate may start; bounds/redaction/delegated checks pass. | pending |
 
-Two phases separate persistence/concurrency from head-bypass behavior. Neither
-may implement a universal scheduler design.
+Two phases still separate persistence/concurrency from repeated-deferral proof.
+Stage 29 later changes the managed ownership composition, not the selection API
+or behavior.
 
 ## Quality Gate
 
 | Check | Evidence | Result |
 | --- | --- | --- |
-| Behavior locked | FR/FQ rows cover default, opt-in, failures, and exclusions; the user confirmed progression on 2026-08-17. | pass |
-| Design justified | Reuse Stage 23 FIFO/cycles, counters, storage, and admission. | pass |
-| Complexity proportionate | FIFO object, policy cycle state, extra budgets/codecs, fairness, registry, config, and universal scheduling are removed/deferred. | pass |
-| Ownership clear | Policy prefers; controller filters/bounds; repository claims; authority admits; provider places. | pass |
-| Validation proportionate | Three causal combinations; validate each other invariant once. | pass |
-| Phases reviewable | Two vertical phases retain Stage 23 default. | pass |
-| Plan review | One independent review and one bounded correction fixed exact-shape, safe-code, pool-mapping, budget, and traceability findings. | pass |
-| No blocker | Stage 24 sequencing is an execution dependency, not a planning-quality blocker. | pass |
+| Behavior and agreements locked | FR/FQ rows cover one managed engine, eligible FIFO, custom preference, failures, and topology parity; maintainer approved on 2026-08-20. | pass |
+| Minimum design justified | Reuses Stage 23 cycles/admission/providers and current SQLite; adds only the selection boundary required now. | pass |
+| Complexity proportionate | No agent, assignment, transport, policy registry, scheduler hierarchy, durable history, or fairness machinery enters Stage 25. | pass |
+| Ownership clear | Selection filters/prefers; current controller orchestrates; store owns CAS; authority admits; provider places; Stage 29 later composes. | pass |
+| Validation proportionate | Three causal combinations plus focused projection, parity, and delegated tests. | pass |
+| Phases reviewable | Two vertical phases preserve current lifecycle while making the selector reusable. | pass |
+| Plan review | Original expanded reviews passed; the concrete Stage 29 consumer exposed and the maintainer resolved the remaining split-path issue. Manager consistency gate was refreshed across all artifacts. | pass |
+| No blocker | Stage 24 sequencing is an execution dependency only. | pass |
 
-Gate result: planning, expanded design-safety review, implementation planning,
-and plan-quality review are complete. Phase 1 remains pending until Stage 24 is
-merged and the completed Stage 23/23-post contracts are refreshed.
+Gate result: revised planning, design guide, manifest, and phase plans are
+coherent and maintainer-approved. Phase 1 remains pending Stage 24.
 
 Accepted risks and revisit triggers:
 
-- Custom policies may starve large items. Revisit when Loom must provide a
-  starvation guarantee, which requires explicit durable aging or reservation
-  semantics.
-- Revisit stale advisory availability only if futile claims cause measured
-  churn; acquisition remains authoritative.
-- Constructor-only injection remains until a second bootstrap consumer needs
-  declarative discovery.
-- The candidate window may hide a fitting item farther back. Revisit when real
-  queue depth demonstrates the need for pagination or indexed scheduling hints.
+- Oldest-eligible behavior can delay large work. Revisit only when Loom must
+  guarantee fairness, which requires accepted aging or reservation semantics.
+- Advisory capacity can cause futile ownership/admission attempts. Revisit on
+  measured churn; authority remains decisive.
+- The bounded window may hide a later eligible item. Revisit with measured
+  queue depth/query pressure.
+- Stage 29 intentionally migrates managed ownership from local exact claim to
+  durable assignment. The selection surface stays fixed; stop if that migration
+  would require agent/transport facts in policy context.
 
 ## Decisions And Deferrals
 
 | Item | Decision or deferral | Rationale | Revisit trigger |
 | --- | --- | --- | --- |
-| Stage placement | Stage 25 after operational-lifecycle Stage 24. | Sequential delivery preserves the inserted validation stage; the functional base remains Stage 23 deferral/claim safety. | Stage 24 or the completed Stage 23 contracts materially change before implementation. |
-| Public vocabulary | Queue-local selection policy, not universal scheduler. | Avoid conflating Loom queue ordering, SLURM scheduling, and pipeline-stage scheduling. | Accepted later cross-contract design. |
-| Default | Stage 23 atomic FIFO/deferral; no public FIFO object. | Compatibility without the new seam. | Default intentionally changes. |
-| Custom behavior | Constructor-injected managed-pool policy with stable ID selects supplied candidates. | Extension plus safe evidence. | Non-Python discovery needed. |
-| Resource data | Advisory logical availability only. | Supports fit decisions without transferring authority or assignment ownership. | A demonstrated policy needs another safe, generic observation. |
-| Cycle state/bounds | Controller owns attempts and active/dispatch/selection bounds. | Avoid duplicate validation/coupling. | Accepted policy needs history. |
-| Fairness | No guarantee and no durable bypass state. | Correct fairness needs product policy not present in the motivating case. | Large jobs are observably starved. |
-| Persistence | Existing records and allowlisted claim/cycle evidence; no selection codec, private state, or DDL. | Current columns/evidence suffice. | Safe exact claim/evidence proves otherwise. |
-| Generic scheduling | Deferred beyond Stage 26. | Queue-local whole-run selection is narrower than cross-stage scheduling. | Dedicated scheduling planning begins. |
+| Default | Oldest eligible candidate for the exact managed opportunity. | One useful behavior across local and later agent topologies. | Maintainer requests strict absolute-head blocking. |
+| Selection implementation | One pure default/custom engine. | Prevent branch drift. | Never; only private factoring may change. |
+| Policy surface | Five immutable queue-local types; no topology data. | Preference is narrower than placement. | A current safe policy needs another generic fact. |
+| Availability | Opportunity-scoped and advisory. | Supports fit without transferring resource authority. | Stronger observation contract is accepted. |
+| Ownership | Stage 25 exact local CAS is private/additive; Stage 29 assignment CAS supersedes it for managed execution. | Avoid premature network state while keeping selection stable. | Stage 29 implementation proves a public capability is required. |
+| Continuation | Private exclusions and one bound after compensated deferral. | Avoid loops without durable scheduler state. | Fairness/history becomes current. |
+| Policy bootstrap | Python injection only. | Current caller and trust boundary are in process. | Stock daemon custom-policy loading becomes accepted scope. |
+| Delegated pools | Established external handoff remains separate. | External scheduler owns post-handoff placement/order. | A delegated agent consumer is accepted. |
+| Broader scheduling | Deferred. | Whole-run queue preference is not pipeline-stage scheduling. | A concrete cross-contract scheduler consumer exists. |
