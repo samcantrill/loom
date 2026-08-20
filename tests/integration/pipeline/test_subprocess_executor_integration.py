@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import errno
 import os
 from pathlib import Path
@@ -274,6 +275,7 @@ def test_subprocess_timeout_kills_the_real_worker_before_failed_result(
         failure = result.stage_results["build"].failure
         assert failure is not None
         timeout = failure.details["timeout"]
+        assert isinstance(timeout, Mapping)
         assert timeout["timed_out"] is True
         assert failure.stdout_path is not None
         assert failure.stderr_path is not None

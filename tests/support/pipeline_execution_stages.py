@@ -193,7 +193,12 @@ class ReleaseStage:
             context.stage_name,
             encoding="utf-8",
         )
-        timeout_seconds = float(context.stage_config.get("timeout_seconds", 10))
+        raw_timeout_seconds = context.stage_config.get("timeout_seconds", 10)
+        timeout_seconds = (
+            float(raw_timeout_seconds)
+            if isinstance(raw_timeout_seconds, int | float | str)
+            else 10.0
+        )
         deadline = time.monotonic() + timeout_seconds
         release = marker_dir / "release"
         while not release.exists():

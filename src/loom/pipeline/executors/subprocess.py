@@ -363,6 +363,8 @@ def _run_subprocess(
     except subprocess.TimeoutExpired as exc:
         process.kill()
         stdout, stderr = process.communicate()
+        if timeout_seconds is None:
+            raise AssertionError("subprocess timeout requires a configured deadline")
         raise subprocess.TimeoutExpired(
             tuple(command),
             timeout_seconds,

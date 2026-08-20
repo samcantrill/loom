@@ -200,9 +200,13 @@ def test_interrupt_after_committed_stage_success_preserves_outputs_and_cancels_r
             )
         )
 
-    assert run_store.read_run_status(run_uri).status is RunStatus.CANCELLED
-    assert run_store.read_stage_status(run_uri, "build").status is StageStatus.SUCCEEDED
-    assert run_store.read_stage_status(run_uri, "downstream").status is StageStatus.BLOCKED
+    run_status = run_store.read_run_status(run_uri)
+    build_status = run_store.read_stage_status(run_uri, "build")
+    downstream_status = run_store.read_stage_status(run_uri, "downstream")
+    assert run_status is not None and run_status.status is RunStatus.CANCELLED
+    assert build_status is not None and build_status.status is StageStatus.SUCCEEDED
+    assert downstream_status is not None
+    assert downstream_status.status is StageStatus.BLOCKED
     outputs = run_store.read_stage_outputs(run_uri, "build")
     assert outputs is not None and set(outputs) == {"data"}
     assert run_store.read_artifact_index(run_uri) == {"build.data": outputs["data"]}

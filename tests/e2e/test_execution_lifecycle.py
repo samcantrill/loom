@@ -146,9 +146,13 @@ def test_cli_sigint_cancels_active_stage_and_exits_130(
 
         assert process.returncode == 130, stderr
         assert worker_identity is not None and not owned_process_is_live(worker_identity)
-        assert store.read_run_status(run_uri).status is RunStatus.CANCELLED
-        assert store.read_stage_status(run_uri, "active").status is StageStatus.CANCELLED
-        assert store.read_stage_status(run_uri, "downstream").status is StageStatus.BLOCKED
+        run_status = store.read_run_status(run_uri)
+        active_status = store.read_stage_status(run_uri, "active")
+        downstream_status = store.read_stage_status(run_uri, "downstream")
+        assert run_status is not None and run_status.status is RunStatus.CANCELLED
+        assert active_status is not None and active_status.status is StageStatus.CANCELLED
+        assert downstream_status is not None
+        assert downstream_status.status is StageStatus.BLOCKED
         assert store.read_stage_outputs(run_uri, "active") is None
         assert store.read_artifact_index(run_uri) == {}
 
@@ -203,7 +207,11 @@ def test_parallel_cli_sigint_settles_active_stages_without_starting_downstream(
                 process.communicate(timeout=10)
 
         assert process.returncode == 130, stderr
-        assert store.read_run_status(run_uri).status is RunStatus.CANCELLED
-        assert store.read_stage_status(run_uri, "left").status is StageStatus.SUCCEEDED
-        assert store.read_stage_status(run_uri, "right").status is StageStatus.SUCCEEDED
-        assert store.read_stage_status(run_uri, "later").status is StageStatus.BLOCKED
+        run_status = store.read_run_status(run_uri)
+        left_status = store.read_stage_status(run_uri, "left")
+        right_status = store.read_stage_status(run_uri, "right")
+        later_status = store.read_stage_status(run_uri, "later")
+        assert run_status is not None and run_status.status is RunStatus.CANCELLED
+        assert left_status is not None and left_status.status is StageStatus.SUCCEEDED
+        assert right_status is not None and right_status.status is StageStatus.SUCCEEDED
+        assert later_status is not None and later_status.status is StageStatus.BLOCKED

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 import sys
 from threading import Event
@@ -585,9 +586,11 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
     assert foreign is not None
     active = runtime.service.read_item("active")
     assert active is not None and active.dispatch_handle is not None
-    identity = capture_owned_process_identity(
-        int(active.dispatch_handle.evidence["managed_local"]["pid"])
-    )
+    managed = active.dispatch_handle.evidence["managed_local"]
+    assert isinstance(managed, Mapping)
+    pid = managed["pid"]
+    assert isinstance(pid, int) and not isinstance(pid, bool)
+    identity = capture_owned_process_identity(pid)
 
     stop = Event()
     stop.set()
@@ -598,6 +601,7 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
             shutdown_mode="cancel",
             wait=lambda _timeout: time.sleep(0.01),
         )
+        assert not owned_process_is_live(identity)
     finally:
         kill_owned_process(identity, 9)
 
