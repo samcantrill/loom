@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: v25 Phase 2
 - Manifest: `docs/roadmap/stage-25/implementation-plan.md`
 - Branch: `agent/stage-25-p2-bounded-head-bypass-proof`
@@ -214,7 +214,8 @@ Final commands:
 - Independent review: required after implementation due continuation risk
 - Blocker corrections: 2/3; preserved capacity-deferral evidence across a final
   no-claim refresh and made the selected-work example synchronization deterministic
-- PR and merge: pending
+- PR and merge: [#219](https://github.com/samcantrill/loom/pull/219) open
+  against `develop`; required independent review and CI pending
 
 ## Completion Record
 
@@ -224,5 +225,5 @@ Final commands:
 | Tests added or updated | Added unit coverage for one-time deferred-head bypass, safe policy stop/error evidence, selection-limit exhaustion, and evidence preservation after an empty refresh; contract coverage for the exact narrow cycle-evidence shape; SQLite/local-process integration coverage for stale authority capacity with compensated continuation; and E2E coverage proving the dependency-free smallest-eligible public-policy example. Manager targeted queue run: 68 passed; full E2E harness: 54 passed. |
 | Validated revision/tree state and evidence | Revision `1e43ce4f6d14b6c3ab2ab8c7dbf69edafc328eed` had a clean tree. `make validate-pr` passed. `make test-summary` passed with 2,307 passed, 0 failed, 0 errors (3 skipped); receipt `build/test-summary.md`. |
 | Validation-relevant changes after evidence | None. Subsequent phase-plan lifecycle metadata is documentation-only. |
-| PR, review, and merge | Pending manager-local pre-submit handling and the required independent review. |
+| PR, review, and merge | [#219](https://github.com/samcantrill/loom/pull/219) is open against `develop`; manager pre-submit review passed with no remaining finding. Required independent review and CI are pending. |
 | Residual risk and cleanup | Two scoped corrections used: capacity-blocked evidence remains monotonic across the cycle, and explicit filesystem synchronization holds the selected small work until live status is inspected. No implementation blocker. Bounded lookahead/advisory capacity can still miss work or starve larger requests by accepted design; Stage 29 retains its assignment/offer ownership migration. |
