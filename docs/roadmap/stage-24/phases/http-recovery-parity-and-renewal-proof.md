@@ -134,8 +134,17 @@ Final gates:
   coverage crosses the original controller and stage lease expiry, rejects a
   competing controller, and proves normal release afterward.
 - Corrections: 0/3
-- Pre-submit gate: pending
-- Review: manager-local, focused on closure of the two recorded findings
+- Pre-submit gate: passed on 2026-08-20. `make validate-pr` completed with
+  Ruff clean, Pyright at zero errors, 2,157 default tests passed, 132 config-
+  extra tests passed, three environment-dependent container tests skipped, and
+  both distributions built successfully. `make test-summary` independently
+  recorded 2,289 passes with no failures or errors.
+- Review: manager-local review passed. The new operation reuses the existing v2
+  `RECOVERY_SCAN` family and `recovery_records` result, preserves generation and
+  structured-rejection handling, delegates without interpreting repository
+  facts, and leaves the runner's complete-evidence requirement unchanged. The
+  mutable-time test observes successful controller and stage renewal before it
+  crosses the original expiry and owns cleanup in `finally`.
 - PR and merge: pending
 
 ## Completion Record
@@ -145,5 +154,5 @@ Final gates:
 | Adopted implementation | Phase 2 commits through `5194d06`; no Phase 2 PR was opened. |
 | HTTP recovery parity | A real in-process FastAPI/client/adapter path returns no facts while leases are live, then exactly matches repository expired-controller and attempt facts after deterministic expiry. The runner consumes those HTTP facts and records `INTERRUPTED`/`STALE`. |
 | Renewal post-expiry proof | Mutable authority time advances renewal to one second before original expiry and observation is synchronized for both controller and active stage leases. After crossing the original expiry, a competing controller is rejected; after run completion, renewal stops and a new controller is admitted. |
-| Focused and full validation | Ruff passes, Pyright reports zero errors, and 50 focused client/service/route/adapter/recovery/renewal tests pass. Full `make validate-pr` and `make test-summary` remain pending. |
-| Review, PR, merge, metadata, cleanup | pending |
+| Focused and full validation | Ruff and Pyright pass, 50 focused client/service/route/adapter/recovery/renewal tests pass, `make validate-pr` passes 2,157 default plus 132 config-extra tests with three environment skips and successful builds, and `make test-summary` records 2,289 passes with zero failures/errors. |
+| Review, PR, merge, metadata, cleanup | Manager review passed with both independent findings closed and no residual blocker. PR, CI, merge, metadata, and cleanup remain pending. |

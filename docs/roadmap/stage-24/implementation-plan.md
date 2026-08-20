@@ -131,6 +131,10 @@ PR rather than a stacked PR.
   runner's fail-closed proof, expose existing repository recovery facts through
   the v2 HTTP protocol, and add a deterministic post-original-TTL ownership
   assertion. Do not add schema/state/PID recovery machinery or weaken recovery.
+- Phase 3 manager gate: passed. The supported HTTP adapter now returns exact
+  repository recovery facts and drives the existing fail-closed runner recovery
+  sequence; deterministic renewal crosses the original TTL while retaining
+  controller exclusivity. Full validation and the durable receipt pass.
 - Manager-local refresh correction: applied. Parallel interruption now preserves
   truthful in-flight results, and Phase 2 adds controller renewal and closes
   local-service lease parity before using recovery.
@@ -149,4 +153,4 @@ PR rather than a stacked PR.
 | --- | --- | --- | --- | --- |
 | 1 | [#216](https://github.com/samcantrill/loom/pull/216) squash-merged to `develop` as `8cc9bfa` | 62 focused tests, `make validate-pr`, `make test-summary` (2,267 passed, 3 skipped), manager review, and CI passed | Linux/POSIX signal proof and settled rather than preempted parallel threads remain accepted limits | Phase branch/worktree removed after the merge record; local control-checkout fast-forward deferred to preserve unrelated committed and uncommitted user work |
 | 2 | No PR opened; independent review blocked publication | Implementation and full validation passed at `69d3c22` (`make validate-pr`; `make test-summary` with 2,285 passes), but the HTTP recovery path lacks repository recovery facts and the renewal test does not prove exclusivity beyond initial expiry | A managed-service crash cannot currently reach safe explicit recovery through the supported adapter | Worktree and branch retained for maintainer-directed replanning; three correction passes are exhausted |
-| 3 | pending | pending | pending | pending |
+| 3 | pending | 50 focused tests; `make validate-pr`; `make test-summary` with 2,289 passes and three environment-dependent skips; manager review passed | External runtimes remain Stage 26 scope; no current correctness blocker | PR, CI, merge, metadata, and cleanup pending |
