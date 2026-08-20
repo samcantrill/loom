@@ -262,7 +262,7 @@ The catalog is descriptive rather than a new event-name API. It records the
 exact names emitted at the merged source revision.
 
 The one accepted runtime correction is an ordering change in the fresh-run
-preparation-failure path. The current mismatch is approximately:
+preparation-failure path. The pre-#220 mismatch was approximately:
 
 ```python
 emit("run.preparation_failed")
@@ -270,7 +270,7 @@ if prior_status is RunStatus.CREATED:
     write_status(RunStatus.FAILED)
 ```
 
-The corrected order is:
+The merged order is:
 
 ```python
 if prior_status is RunStatus.CREATED:
