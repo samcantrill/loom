@@ -2,20 +2,22 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 24, Phase 2
 - Manifest: `docs/roadmap/stage-24/implementation-plan.md`
 - Branch: `agent/stage-24-p2-crash-recovery-and-artifact-trust`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees` and
   `/home/can134/work/active/loom-worktrees/stage-24-p2-crash-recovery-and-artifact-trust`
-- Base revision: current `origin/develop` after Phase 1 is remotely merged
+- Base revision: `a7afd44153860ba131db7ee26c186cc0188b1497`, current
+  `origin/develop` after the Phase 1 merge record
 - PR target: `develop`
 - PR title: `Operational Lifecycle Validation - Phase 2: Crash Recovery And Artifact Trust`
 - Dependencies: Stage 24 Phase 1 remotely merged with its cancellation,
   subprocess cleanup, and process-test support contracts intact
 - Workflow path: fast; refine only for a qualified authority/recovery or durable-
   commit blocker
-- Blockers: Phase 1 not yet merged
+- Blockers: none; Phase 1 is remotely merged and its branch/worktree cleanup is
+  complete
 
 ## Objective And Context
 
@@ -275,7 +277,8 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete; refresh after Phase 1 merge
+- Manager preparation: refreshed and complete on 2026-08-20 from the recorded
+  remote Phase 1 base
 - Expanded planning: not needed on current accepted design; reassess only if a
   stop condition exposes a novel durable or trust-boundary decision
 - Implementation: pending one `loom_phase_executor`
