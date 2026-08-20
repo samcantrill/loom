@@ -941,6 +941,10 @@ structure.md
   Source-tree layout, package boundaries, module ownership, dependency shape, and
   repository organization.
 
+downstream-operations.md
+  Short stage-author journey for explicit artifacts, workspace files, logs, and
+  lifecycle facts; route detailed contracts to the relevant feature specs.
+
 features/core-model.md
   Foundational public types: identifiers, resource refs, records, manifests,
   artifact refs, timestamps, and core validation.

@@ -33,10 +33,18 @@ def test_example_captured_logs_records_captured_output(
     fields = _summary_fields(output)
 
     assert fields["run_status"] == "SUCCEEDED"
+    assert fields["output_names"] == "data,report"
+    assert fields["outputs_are_refs"] == "True"
     assert fields["stdout_tail"] == "stdout line two"
     assert fields["stderr_path_available"] == "True"
     run_uri_path = _run_uri_path(fields["run_uri"])
     assert run_uri_path.exists()
+    assert (run_uri_path / "artifacts" / "noisy" / "report.txt").read_text(
+        encoding="utf-8"
+    ) == "registered report\n"
+    assert (
+        run_uri_path / "stages" / "noisy" / "workspace" / "notes" / "project.log"
+    ).read_text(encoding="utf-8") == "project-owned workspace file\n"
 
 
 def test_example_failing_run_reports_diagnostics_summary(

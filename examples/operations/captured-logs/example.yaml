@@ -1,6 +1,6 @@
 id: operations.captured-logs
 title: Captured Logs Diagnostics
-summary: Capture local stage stdout/stderr and inspect bounded logs through the CLI.
+summary: Capture local stage stdout/stderr, register a file-backed output, and inspect bounded logs through the CLI.
 capability: operations
 level: intermediate
 introduced_in: v3
@@ -11,6 +11,7 @@ public_surfaces:
   - python_api
 owner_docs:
   - examples/operations/README.md
+  - docs/downstream-operations.md
 owner_stages:
   - v3
 validation_path: tests/integration/examples/test_example_workflows.py::test_example_captured_logs_records_captured_output
@@ -20,5 +21,7 @@ entrypoints:
     description: Run with captured local logs and print CLI log summaries.
 tags:
   - logs
+  - artifacts
+  - workspace
   - local-executor
   - diagnostics

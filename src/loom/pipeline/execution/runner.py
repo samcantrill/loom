@@ -1999,6 +1999,19 @@ class PipelineRunner:
         exc: Exception,
     ) -> None:
         failed_at = self.clock()
+        if prior_status is RunStatus.CREATED:
+            write_run_status(
+                self.run_store,
+                run_uri=run_uri,
+                status=RunStatus.FAILED,
+                created_at=created_at,
+                updated_at=failed_at,
+                finished_at=failed_at,
+                metadata={
+                    "failure_phase": "preparation",
+                    "error_type": type(exc).__name__,
+                },
+            )
         try:
             self._emit_run_event(
                 run_uri,
@@ -2013,19 +2026,6 @@ class PipelineRunner:
         except Exception:
             # Failure recording must never hide the preparation error.
             pass
-        if prior_status is RunStatus.CREATED:
-            write_run_status(
-                self.run_store,
-                run_uri=run_uri,
-                status=RunStatus.FAILED,
-                created_at=created_at,
-                updated_at=failed_at,
-                finished_at=failed_at,
-                metadata={
-                    "failure_phase": "preparation",
-                    "error_type": type(exc).__name__,
-                },
-            )
 
     def _resolve_config_and_spec(
         self, request: RunRequest

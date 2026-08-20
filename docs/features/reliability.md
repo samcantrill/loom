@@ -409,12 +409,17 @@ run.planned
 run.started
 run.completed
 run.failed
+run.cancelled
+run.interrupted
+run.preparation_failed
 stage.planned
 stage.started
 stage.completed
 stage.failed
+stage.cancelled
 stage.skipped
 stage.reused
+stage.stale
 stage.blocked
 ```
 
