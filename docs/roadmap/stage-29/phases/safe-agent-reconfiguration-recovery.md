@@ -19,8 +19,7 @@
   and restart/partition ambiguity causally interact; use at most one phase-
   planner refinement if refreshed Stage 27/Phase 2 evidence leaves a concrete
   unresolved transition
-- Blockers: maintainer confirmation of the topology/lifecycle refinement, then
-  Phase 2 and Stage 27 merge
+- Blockers: Phase 2 and Stage 27 merge
 
 ## Objective And Context
 

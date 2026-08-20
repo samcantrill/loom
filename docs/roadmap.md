@@ -2466,9 +2466,9 @@ Phase execution plans:
 
 Status:
 
-- Expanded planning and reviews passed for the unified managed path. A
-  maintainer-requested pull topology, singleton/configuration, acknowledgement,
-  and verified-loss amendment is drafted for confirmation; all three phases
+- Expanded planning and reviews passed for the unified managed path. The
+  maintainer confirmed the pull topology, singleton/configuration,
+  acknowledgement, and conditional verified-loss amendment; all three phases
   remain pending and Phase 1 follows merged Stage 25 and Stage 28.
 
 Goal:

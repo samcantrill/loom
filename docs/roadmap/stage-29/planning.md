@@ -1,17 +1,15 @@
 # Roadmap v29 Planning: Durable Daemon And Multi-Machine Agent Pools
 
-Status: refinement drafted; topology/lifecycle amendment pending maintainer confirmation
+Status: confirmed; topology/lifecycle and conditional-loss amendment approved
 Roadmap stage: v29
 Evidence tree: `develop` at `2c05906c15791a025ff2cae90633d77efdc89aac`;
 source is unchanged since `314e418`
 Planning route: expanded for a network command-execution boundary, durable
 assignment identity, session fencing, cross-owner recovery, and migration of
 existing managed entrypoints onto one coordinator/agent implementation
-Current gate: unified model remains approved; pull topology, daemon lifecycle,
-deployment configuration, and verified-loss redispatch refinement await
-maintainer confirmation
-Blockers: confirm this refinement; revised Stage 25 and Stage 28 must merge
-before Phase 1
+Current gate: planning and detailed-plan gates complete; maintainer confirmed
+the conditional verified-loss policy on 2026-08-20
+Blockers: revised Stage 25 and Stage 28 must merge before Phase 1
 
 Stage 29 makes one managed model usable command-scoped, co-located, or across a
 coordinator and outbound agents. Each composes the same coordinator,
@@ -25,9 +23,9 @@ explicit topology, acknowledgement, singleton, configuration, and machine-loss
 behavior. This amendment keeps the coordinator-owned queue and outbound agent
 connections, explains that long polling is immediate coordinator-directed
 delivery rather than a daemon scheduler, and adds bounded redispatch only after
-non-completion and old-execution containment are both proven. Execution awaits
-confirmation of this amendment and merged Stages 25/28; Phase 1 then starts
-from refreshed source.
+non-completion and old-execution containment are both proven. The maintainer
+confirmed that redispatch must remain conditional. Execution awaits merged
+Stages 25/28; Phase 1 then starts from refreshed source.
 
 ## Evidence And Scope
 
@@ -86,15 +84,15 @@ from refreshed source.
 | FR-7 | One coordinator-client port covers register, full offer/heartbeat, work pull, accept/report, and bounded control. Direct and HTTP clients have identical application semantics; agents make no inbound/peer connections. | Client conformance/fake transport. | locked |
 | FR-8 | Non-loopback HTTP requires verified TLS and separate scoped client/agent credentials; validate version/workspace/role/size/idempotency before mutation. Direct composition still validates session/revision/transitions in core. | Auth/version/replay negatives. | locked |
 | FR-9 | One work request creates at most one fenced `OFFERED` assignment. Agent journals receipt, admits locally, declines before acceptance on failure, or journals acceptance/process identity and obtains acknowledgement before start. Retries never duplicate process. | Crash/race injection. | locked |
-| FR-10 | Cancellation is durable coordinator intent; agent terminates, observes exit, releases ownership, and reports terminal. Unreachable accepted work is never reassigned from timeout alone; verified stopped and incomplete work may enter the bounded loss-redispatch gate. | Cancel/loss races. | proposed refinement |
+| FR-10 | Cancellation is durable coordinator intent; agent terminates, observes exit, releases ownership, and reports terminal. Unreachable accepted work is never reassigned from timeout alone; verified stopped and incomplete work may enter the bounded loss-redispatch gate. | Cancel/loss races. | locked |
 | FR-11 | Hard `target_agent_id` never relaxes; unknown targets fail submission and known offline targets remain queued with a safe reason. | Target parity. | locked |
 | FR-12 | Queue item, assignment, and run-authority lifecycle stay separate joined views. `OFFERED` reserves without claiming execution; acceptance authorizes the dispatch attempt; running maps to existing dispatched evidence. | State/join contracts. | locked |
-| FR-13 | Service/agent restart and network loss fence stale sessions. Work may continue only while ownership safety can be maintained; otherwise the agent terminates fail-closed and reconciliation classifies authoritative completion, proven non-completion, or ambiguity. | Restart/partition. | proposed refinement |
+| FR-13 | Service/agent restart and network loss fence stale sessions. Work may continue only while ownership safety can be maintained; otherwise the agent terminates fail-closed and reconciliation classifies authoritative completion, proven non-completion, or ambiguity. | Restart/partition. | locked |
 | FR-14 | Config change publishes a new fingerprint/opportunity. Removal withdraws capacity then drains; force explicitly cancels. No mutation beneath live assignments. | Drain/reload. | locked |
-| FR-15 | Core tests are topology-free; direct/HTTP clients share a conformance suite; command, co-located, loopback-remote, and one opt-in `machine-A`/`machine-B` scenario prove the same normalized trace without a full Cartesian matrix. | Hermetic + receipt. | proposed refinement |
-| FR-16 | A free slice keeps one bounded work long poll outstanding, so the coordinator returns newly available work immediately. Presence/control delivery remains active independently while all slices are busy. Agents hold no queued backlog. | Timing/backpressure/cancel tests. | proposed refinement |
-| FR-17 | Daemon startup is single-active per local state root and stable `agent_id`; a second live agent session is rejected, graceful shutdown relinquishes it, and crash replacement waits for expiry/reconciliation. Coordinator/agent endpoints and secret-file references are supplied by the environment or supervisor, never committed examples. | Lock/register/config tests. | proposed refinement |
-| FR-18 | Whole-run infrastructure-loss redispatch is opt-in, finite, and captured durably when the queue item is submitted. It requires authoritative absence of committed run success plus positive proof that the old execution cannot continue. It increments `dispatch_attempt`, fences every old mutation, and never treats heartbeat/offer expiry as proof. Resume occurs only when the selected run/artifact stores are accessible and existing resume validation permits reuse; otherwise it is a fresh whole-run attempt. | Loss evidence/retry matrix. | proposed refinement |
+| FR-15 | Core tests are topology-free; direct/HTTP clients share a conformance suite; command, co-located, loopback-remote, and one opt-in `machine-A`/`machine-B` scenario prove the same normalized trace without a full Cartesian matrix. | Hermetic + receipt. | locked |
+| FR-16 | A free slice keeps one bounded work long poll outstanding, so the coordinator returns newly available work immediately. Presence/control delivery remains active independently while all slices are busy. Agents hold no queued backlog. | Timing/backpressure/cancel tests. | locked |
+| FR-17 | Daemon startup is single-active per local state root and stable `agent_id`; a second live agent session is rejected, graceful shutdown relinquishes it, and crash replacement waits for expiry/reconciliation. Coordinator/agent endpoints and secret-file references are supplied by the environment or supervisor, never committed examples. | Lock/register/config tests. | locked |
+| FR-18 | Whole-run infrastructure-loss redispatch is opt-in, finite, and captured durably when the queue item is submitted. It requires authoritative absence of committed run success plus positive proof that the old execution cannot continue. It increments `dispatch_attempt`, fences every old mutation, and never treats heartbeat/offer expiry as proof. Resume occurs only when the selected run/artifact stores are accessible and existing resume validation permits reuse; otherwise it is a fresh whole-run attempt. | Loss evidence/retry matrix. | locked |
 
 ## Functionality Agreement
 
@@ -104,14 +102,14 @@ from refreshed source.
 | FQ-2 | FR-1, FR-9 | Migrate managed direct dispatch to assignments. Existing classes/methods delegate through direct client rather than preserve another scheduler. | locked |
 | FQ-3 | FR-2, FR-6 | One durable coordinator queue; a free agent supplies the execution opportunity; fixed eligibility precedes Stage 25 preference. First compatible requester wins. | locked |
 | FQ-4 | FR-7, FR-8 | One client port with direct and outbound HTTP implementations; no broker, streaming RPC, or mandatory loopback socket. | locked |
-| FQ-5 | FR-9, FR-12, FR-18 | `OFFERED` is a durable reservation; pre-accept decline/expiry leaves item queued/attempt unchanged. Acceptance blocks ordinary reassignment; only the verified-loss gate may authorize a later attempt. | proposed refinement |
+| FQ-5 | FR-9, FR-12, FR-18 | `OFFERED` is a durable reservation; pre-accept decline/expiry leaves item queued/attempt unchanged. Acceptance blocks ordinary reassignment; only the verified-loss gate may authorize a later attempt. | locked |
 | FQ-6 | FR-11 | Hard target uses normal eligibility and queue audit. | locked |
 | FQ-7 | FR-3, FR-14 | Trusted local config owns inventory; remote intent is drain/resume/reload with preconditions. | locked |
-| FQ-8 | FR-10, FR-13, FR-18 | Heartbeat expiry never proves child death. Ambiguity fails closed; positive containment plus no committed success may permit bounded opt-in redispatch. | proposed refinement |
-| FQ-9 | FR-15 | Test core once, clients by one conformance suite, and representative compositions by normalized traces using only abstract machine labels. | proposed refinement |
-| FQ-10 | FR-7, FR-16 | Keep outbound pull. The coordinator still chooses and returns the job immediately through an already-open long poll; pull supplies current capacity/backpressure without requiring inbound agent reachability. | proposed refinement |
-| FQ-11 | FR-13, FR-18 | Separate completion evidence, execution-containment evidence, and retry policy. Only all required evidence in one coordinator transaction may create the next dispatch attempt. | proposed refinement |
-| FQ-12 | FR-8, FR-17 | Use local process locks plus coordinator session admission for singleton safety; keep endpoints and credential-file locations in process environment/supervisor configuration, with raw credentials in protected files or a secret provider. | proposed refinement |
+| FQ-8 | FR-10, FR-13, FR-18 | Heartbeat expiry never proves child death. Ambiguity fails closed; positive containment plus no committed success may permit bounded opt-in redispatch. | locked |
+| FQ-9 | FR-15 | Test core once, clients by one conformance suite, and representative compositions by normalized traces using only abstract machine labels. | locked |
+| FQ-10 | FR-7, FR-16 | Keep outbound pull. The coordinator still chooses and returns the job immediately through an already-open long poll; pull supplies current capacity/backpressure without requiring inbound agent reachability. | locked |
+| FQ-11 | FR-13, FR-18 | Separate completion evidence, execution-containment evidence, and retry policy. Only all required evidence in one coordinator transaction may create the next dispatch attempt. | locked |
+| FQ-12 | FR-8, FR-17 | Use local process locks plus coordinator session admission for singleton safety; keep endpoints and credential-file locations in process environment/supervisor configuration, with raw credentials in protected files or a secret provider. | locked |
 
 ## Behavior Baseline
 
@@ -546,13 +544,13 @@ secret values or local paths.
 | DQ-1 | FR-1 through FR-4 | Common core | One coordinator service and one agent runtime; entrypoints are compositions/facades. | Local internals change despite public compatibility. | locked |
 | DQ-2 | FR-5, FR-9, FR-12 | Durable state | Keep queue identity; persist assignment separately; map acceptance/running/terminal to existing queue lifecycle. | Adds versioned coordinator storage and journal. | locked |
 | DQ-3 | FR-6, FR-11 | Scheduling | Opportunity-specific fixed eligibility then Stage 25 ordering; agent admission decides truth. | No global best-machine optimization. | locked |
-| DQ-4 | FR-7, FR-8, FR-16 | Port/transport | Direct and HTTP clients implement one request/reply contract; remote free slices hold outbound long polls and control remains independently deliverable. | Two adapter conformance obligations and reconnect logic. | proposed refinement |
+| DQ-4 | FR-7, FR-8, FR-16 | Port/transport | Direct and HTTP clients implement one request/reply contract; remote free slices hold outbound long polls and control remains independently deliverable. | Two adapter conformance obligations and reconnect logic. | locked |
 | DQ-5 | FR-3, FR-14 | Local authority | Agent config owns inventory/offer/provider; coordinator receives safe facts and bounded intent results. | Central service cannot replace hardware config. | locked |
-| DQ-6 | FR-9, FR-10, FR-13, FR-18 | Fencing/recovery | Commit before every acknowledgement/start, fence every transition, fail closed, and allow another attempt only from authoritative non-success plus positive containment plus bounded policy. | Availability yields when execution remains ambiguous. | proposed refinement |
+| DQ-6 | FR-9, FR-10, FR-13, FR-18 | Fencing/recovery | Commit before every acknowledgement/start, fence every transition, fail closed, and allow another attempt only from authoritative non-success plus positive containment plus bounded policy. | Availability yields when execution remains ambiguous. | locked |
 | DQ-7 | FR-14 | Reconfiguration | Withdraw offer, drain, then swap immutable config fingerprint. | Shrink is not instantaneous. | locked |
-| DQ-8 | FR-15 | Validation | Core once, clients by conformance, representative topology E2Es, one abstract `machine-A`/`machine-B` product receipt. | Not every case runs in every topology. | proposed refinement |
-| DQ-9 | FR-17 | Activation/configuration | Use a per-state-root OS lock, exclusive coordinator activation, fresh-session rejection, graceful relinquish, and environment-resolved deployment values. | Crash replacement may wait for session expiry; separately configured coordinators remain independent. | proposed refinement |
-| DQ-10 | FR-18 | Loss continuation | Keep globally queued/unaccepted work mobile; make verified infrastructure-loss redispatch finite and opt-in; delegate output reuse to existing resume validation. | Immediate retry is unavailable without containment evidence or portable run state. | proposed refinement |
+| DQ-8 | FR-15 | Validation | Core once, clients by conformance, representative topology E2Es, one abstract `machine-A`/`machine-B` product receipt. | Not every case runs in every topology. | locked |
+| DQ-9 | FR-17 | Activation/configuration | Use a per-state-root OS lock, exclusive coordinator activation, fresh-session rejection, graceful relinquish, and environment-resolved deployment values. | Crash replacement may wait for session expiry; separately configured coordinators remain independent. | locked |
+| DQ-10 | FR-18 | Loss continuation | Keep globally queued/unaccepted work mobile; make verified infrastructure-loss redispatch finite and opt-in; delegate output reuse to existing resume validation. | Immediate retry is unavailable without containment evidence or portable run state. | locked |
 
 ## Expanded Design Review
 
@@ -564,9 +562,9 @@ secret values or local paths.
 | Queue identity rename had no consumer. | FR-5 | `queue_item_id` already identifies durable submission. | Retain it; keep run/assignment IDs separate. | resolved |
 | Presence/request facts were duplicated or over-persisted. | FR-6, FR-7, FR-13 | Offers expire and `WorkRequest` can reference one exact revision. | Keep full offers ephemeral; request repeats no capacity/profile/config. | resolved |
 | Public repository/daemon framework would broaden unrelated surfaces. | FR-1, FR-2, FR-7 | Built-in coordinator has the only current assignment/transport consumer. | Use private/additive storage and composition objects; no general hierarchy. | resolved |
-| Pull was described as if the agent scheduled from a periodic local queue. | FR-2, FR-7, FR-16 | A free slice can hold a long poll while coordinator selection remains authoritative; push would add inbound reachability without removing acknowledgements. | Specify immediate coordinator response, independent control delivery, and no agent backlog. | proposed amendment |
-| Loss handling treated every accepted disconnect as permanently ambiguous. | FR-10, FR-13, FR-18 | Globally queued work already remains mobile; accepted work can safely move only after both non-success and containment are authoritative. | Add one opt-in finite verified-loss gate; retain recovery-required for timeout-only ambiguity. | proposed amendment |
-| Daemon examples left activation and environment ownership implicit. | FR-8, FR-17 | Duplicate local processes/sessions and committed endpoint/secret values are reachable deployment failures. | Add local/store locks, fresh-session rejection, and environment/secret-file configuration using only abstract labels. | proposed amendment |
+| Pull was described as if the agent scheduled from a periodic local queue. | FR-2, FR-7, FR-16 | A free slice can hold a long poll while coordinator selection remains authoritative; push would add inbound reachability without removing acknowledgements. | Specify immediate coordinator response, independent control delivery, and no agent backlog. | resolved by 2026-08-20 refinement |
+| Loss handling treated every accepted disconnect as permanently ambiguous. | FR-10, FR-13, FR-18 | Globally queued work already remains mobile; accepted work can safely move only after both non-success and containment are authoritative. | Add one opt-in finite verified-loss gate; retain recovery-required for timeout-only ambiguity. | resolved by 2026-08-20 refinement |
+| Daemon examples left activation and environment ownership implicit. | FR-8, FR-17 | Duplicate local processes/sessions and committed endpoint/secret values are reachable deployment failures. | Add local/store locks, fresh-session rejection, and environment/secret-file configuration using only abstract labels. | resolved by 2026-08-20 refinement |
 
 ## Examples And Validation
 
@@ -612,18 +610,17 @@ operations and recovery.
 
 | Check | Evidence | Result |
 | --- | --- | --- |
-| Behavior and agreements locked | Original unified model remains approved; FR-10/13/15-18 and FQ-5/8-12 make the requested pull/lifecycle/loss refinement explicit. | pending maintainer confirmation |
+| Behavior and agreements locked | Original unified model remains approved; FR-10/13/15-18 and FQ-5/8-12 lock the confirmed pull/lifecycle/conditional-loss refinement. | pass |
 | Minimum design justified | Starts from Stage 25 selection, current queue/authority/local adapter and adds only durable/network ownership gaps. | pass |
 | Complexity proportionate | Long pull reuses one client port; singleton uses two narrow guards; loss continuation adds one bounded evidence gate rather than push infrastructure, general retry, a data plane, or HA. | pass |
 | Contracts/private discretion clear | Port, state machines, owner split, durable/ephemeral facts, acknowledgement order, lifecycle evidence, and configuration source separation are fixed; routes/tables/encodings remain private. | pass |
 | Invariants/validation proportionate | Nine causal interactions cover the new arrival, duplicate-daemon, and verified-loss races without a full Cartesian matrix. | pass |
 | Phases reviewable | Common local value first, remote extension second, destructive operations third. | pass |
-| Review correction | Prior removal-first/plan reviews passed; the current maintainer-requested refinement has been propagated to the manifest and phase contracts for confirmation. | pending confirmation |
-| No blocker | No implementation blocker beyond confirmation and Stage 25/28 sequencing. | pending confirmation |
+| Review correction | Prior removal-first/plan reviews passed; the maintainer-confirmed refinement is propagated to the manifest and phase contracts. | pass |
+| No blocker | No planning blocker; Stage 25/28 sequencing remains. | pass |
 
-Gate result: the refined planning contract is manager-coherent and awaits
-maintainer confirmation. Phase 1 remains pending that confirmation and merged
-Stages 25/28.
+Gate result: the refined planning contract is confirmed and coherent. Phase 1
+remains pending merged Stages 25/28.
 
 Accepted risks: oldest-eligible has no fairness guarantee; one coordinator is
 an availability boundary; a fresh duplicate agent waits for session expiry;

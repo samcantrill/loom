@@ -1,13 +1,12 @@
 # Roadmap Stage 29 Implementation Plan: Durable Daemon And Multi-Machine Agent Pools
 
-Status: refinement drafted; topology/lifecycle amendment pending confirmation
+Status: ready; topology/lifecycle and conditional-loss amendment confirmed
 Roadmap stage: `v29`
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
 Current phase: Phase 1 pending
-Blockers: maintainer confirmation; revised Stage 25 and Stage 28 must remotely
-merge before Phase 1
+Blockers: revised Stage 25 and Stage 28 must remotely merge before Phase 1
 
 ## Summary
 
@@ -19,7 +18,7 @@ merge before Phase 1
   retain one durable coordinator queue, agent-owned local opportunity/admission,
   oldest-eligible/custom ordering, immediate long-poll delivery, one assignment
   per free slice, hard targeting, singleton activation, and evidence-gated loss
-  continuation. The amendment awaits maintainer confirmation.
+  continuation. The maintainer confirmed that redispatch remains conditional.
 - Fixed design: `DQ-1` through `DQ-10` migrate existing managed entrypoints to a
   direct-client composition; HTTP is another client implementation, not another
   scheduler. Queue identity remains `queue_item_id`; offers are ephemeral;
@@ -157,8 +156,9 @@ local entrypoint still uses a separate claim-and-dispatch scheduler.
 ## Quality Gate
 
 - Planning gate: maintainer approved the common behavior/implementation across
-  local, daemon, and remote compositions on 2026-08-20; the subsequent pull,
-  lifecycle, configuration, and verified-loss amendment awaits confirmation.
+  local, daemon, and remote compositions and confirmed the subsequent pull,
+  lifecycle, configuration, and conditional verified-loss amendment on
+  2026-08-20.
 - Manager review: Stage 25 cross-contract, planning, manifest, three phase
   plans, roadmap summaries, state transitions, ownership, and tests agree after
   the refinement update.
@@ -166,12 +166,12 @@ local entrypoint still uses a separate claim-and-dispatch scheduler.
   bounded correction. The maintainer then made command-scoped cohesion an
   explicit requirement; this amendment resolves it without new public
   hierarchy or phase.
-- Current refinement: documents coordinator-directed long polling, independent
+- Confirmed refinement: documents coordinator-directed long polling, independent
   busy-agent controls, commit/ack order, singleton startup/session admission,
   environment/secret ownership, and one finite evidence-gated loss policy
   without adding push infrastructure, HA, a broker, or a general retry engine.
-- Ready for implementation: no; first obtain maintainer confirmation, then wait
-  for revised Stage 25 and Stage 28 to remotely merge and refresh source.
+- Ready for implementation: yes after revised Stage 25 and Stage 28 remotely
+  merge and source is refreshed.
 - Accepted risks: oldest-eligible starvation, one-coordinator availability,
   resident pre-staging/agent-local data, fail-closed termination after ownership
   loss, and no immediate redispatch when an unreachable execution lacks positive

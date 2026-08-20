@@ -16,8 +16,7 @@
   `DQ-1` through `DQ-9`
 - Workflow path: expanded because remote authentication, expiring-opportunity
   eligibility, and two-agent assignment races interact
-- Blockers: maintainer confirmation of the topology/lifecycle refinement and
-  Phase 1 common-core/parity gate
+- Blockers: Phase 1 common-core/parity gate
 
 ## Objective And Context
 

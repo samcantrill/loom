@@ -16,8 +16,7 @@
   and `DQ-1`, `DQ-2`, `DQ-4`, `DQ-6`, `DQ-8`, `DQ-9`
 - Workflow path: expanded because managed-path migration, first durable
   assignment/journal schema, and process-start crash ordering interact
-- Blockers: maintainer confirmation of the topology/lifecycle refinement, then
-  Stage 28/Stage 25 sequencing
+- Blockers: Stage 28/Stage 25 sequencing only
 
 ## Objective And Context
 
@@ -255,9 +254,9 @@ Final commands:
 ## Workflow State
 
 - Manager preparation: complete; refresh after Stage 28 and Stage 25 merge
-- Expanded planning: unified cross-stage design approved; current topology/
-  lifecycle refinement awaits confirmation. Use an optional planner only if
-  refreshed source leaves assignment/facade crash ordering unresolved.
+- Expanded planning: unified cross-stage design and topology/lifecycle
+  refinement approved. Use an optional planner only if refreshed source leaves
+  assignment/facade crash ordering unresolved.
 - Implementation: pending
 - Refiner: optional only for qualified blocker; unused
 - Pre-submit gate: pending
