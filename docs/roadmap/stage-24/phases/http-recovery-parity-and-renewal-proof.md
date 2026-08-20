@@ -128,7 +128,11 @@ Final gates:
 - Stop if the existing v2 result cannot carry records, the repository scan has
   backend-specific semantics, HTTP transport changes recovery meaning, or the
   TTL proof requires production timing hooks.
-- Implementation: in progress
+- Implementation: complete pending full gates. The v2 protocol now transports
+  repository-owned run recovery facts through the FastAPI route, client, and
+  HTTP authority adapter without changing durable state. Deterministic renewal
+  coverage crosses the original controller and stage lease expiry, rejects a
+  competing controller, and proves normal release afterward.
 - Corrections: 0/3
 - Pre-submit gate: pending
 - Review: manager-local, focused on closure of the two recorded findings
@@ -139,7 +143,7 @@ Final gates:
 | Item | Result |
 | --- | --- |
 | Adopted implementation | Phase 2 commits through `5194d06`; no Phase 2 PR was opened. |
-| HTTP recovery parity | pending |
-| Renewal post-expiry proof | pending |
-| Focused and full validation | pending |
+| HTTP recovery parity | A real in-process FastAPI/client/adapter path returns no facts while leases are live, then exactly matches repository expired-controller and attempt facts after deterministic expiry. The runner consumes those HTTP facts and records `INTERRUPTED`/`STALE`. |
+| Renewal post-expiry proof | Mutable authority time advances renewal to one second before original expiry and observation is synchronized for both controller and active stage leases. After crossing the original expiry, a competing controller is rejected; after run completion, renewal stops and a new controller is admitted. |
+| Focused and full validation | Ruff passes, Pyright reports zero errors, and 50 focused client/service/route/adapter/recovery/renewal tests pass. Full `make validate-pr` and `make test-summary` remain pending. |
 | Review, PR, merge, metadata, cleanup | pending |

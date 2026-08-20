@@ -37,6 +37,7 @@ from loom.pipeline.stores.authority_client import (
     AUTHORITY_MUTATION_CLEANUP_REPORT_LIST_PATH,
     AUTHORITY_MUTATION_CLEANUP_RESULT_APPEND_PATH,
     AUTHORITY_MUTATION_CLEANUP_RESULT_LIST_PATH,
+    AUTHORITY_MUTATION_RUN_RECOVERY_SCAN_PATH,
 )
 from loom.serialization import PlainData
 
@@ -95,6 +96,19 @@ def open_run(
     """Read a run snapshot through the configured mutation service."""
 
     return _handle(AuthorityMutationOperation.OPEN_RUN, payload, services)
+
+
+@router.post(
+    AUTHORITY_MUTATION_RUN_RECOVERY_SCAN_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
+    response_model=None,
+)
+def scan_run_recovery(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Scan authoritative controller and attempt recovery facts for a run."""
+
+    return _handle(AuthorityMutationOperation.SCAN_RUN_RECOVERY, payload, services)
 
 
 @router.post(

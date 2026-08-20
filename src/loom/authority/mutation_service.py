@@ -29,6 +29,7 @@ from loom.pipeline.stores import (
     LifecycleReason,
     OutputCommit,
     OutputCommitRecord,
+    RecoveryRecord,
     StageAttempt,
     SweepIdentity,
     ConcurrencyCounter,
@@ -63,6 +64,7 @@ class AuthorityMutationOperation(StrEnum):
 
     ADMIT_RUN = "admit_run"
     OPEN_RUN = "open_run"
+    SCAN_RUN_RECOVERY = "scan_run_recovery"
     TRANSITION_RUN = "transition_run"
     ACQUIRE_CONTROLLER_LEASE = "acquire_controller_lease"
     RENEW_CONTROLLER_LEASE = "renew_controller_lease"
@@ -112,6 +114,9 @@ _OPERATION_KIND_BY_MUTATION: Mapping[
 ] = {
     AuthorityMutationOperation.ADMIT_RUN: AuthorityProtocolOperationKind.RUN_LIFECYCLE,
     AuthorityMutationOperation.OPEN_RUN: AuthorityProtocolOperationKind.RUN_SNAPSHOT,
+    AuthorityMutationOperation.SCAN_RUN_RECOVERY: (
+        AuthorityProtocolOperationKind.RECOVERY_SCAN
+    ),
     AuthorityMutationOperation.TRANSITION_RUN: (
         AuthorityProtocolOperationKind.RUN_LIFECYCLE
     ),
@@ -335,6 +340,8 @@ class AuthorityMutationService:
                 return self._admit_run(request)
             case AuthorityMutationOperation.OPEN_RUN:
                 return self._open_run(request)
+            case AuthorityMutationOperation.SCAN_RUN_RECOVERY:
+                return self._scan_run_recovery(request)
             case AuthorityMutationOperation.TRANSITION_RUN:
                 return self._transition_run(request)
             case AuthorityMutationOperation.ACQUIRE_CONTROLLER_LEASE:
@@ -444,6 +451,16 @@ class AuthorityMutationService:
             revision=transition.revision,
             service_generation=self._service_generation,
             body={"transition": transition.to_dict()},
+        )
+
+    def _scan_run_recovery(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        run_uri = _required_run_uri(request)
+        records = self._repository.scan_recovery(run_uri)
+        return _result(
+            service_generation=self._service_generation,
+            recovery_records=records,
         )
 
     def _acquire_controller_lease(
@@ -1026,6 +1043,7 @@ def _result(
     cleanup_candidates: tuple[CleanupCandidate, ...] = (),
     cleanup_reports: tuple[CleanupReportFact, ...] = (),
     cleanup_results: tuple[CleanupResultFact, ...] = (),
+    recovery_records: tuple[RecoveryRecord, ...] = (),
     coordination_recovery_records: tuple[CoordinationRecoveryRecord, ...] = (),
     body: Mapping[str, PlainData] | None = None,
 ) -> AuthorityProtocolResult:
@@ -1050,6 +1068,7 @@ def _result(
         cleanup_candidates=cleanup_candidates,
         cleanup_reports=cleanup_reports,
         cleanup_results=cleanup_results,
+        recovery_records=recovery_records,
         coordination_recovery_records=coordination_recovery_records,
         body={} if body is None else body,
     )

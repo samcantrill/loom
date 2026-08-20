@@ -10,7 +10,10 @@ from fastapi.testclient import TestClient
 
 from loom.artifacts import ArtifactRef
 from loom.authority.app import create_authority_app
-from loom.authority._repository import initialize_authority_repository
+from loom.authority._repository import (
+    AuthorityRepository,
+    initialize_authority_repository,
+)
 from loom.authority.services import repository_authority_services
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
@@ -50,6 +53,12 @@ def _client_with_app(tmp_path) -> tuple[AuthorityClient, TestClient]:
         tmp_path,
         service_generation="generation-1",
     )
+    return _client_for_repository(repository)
+
+
+def _client_for_repository(
+    repository: AuthorityRepository,
+) -> tuple[AuthorityClient, TestClient]:
     app_client = TestClient(
         create_authority_app(
             services=repository_authority_services(
@@ -72,6 +81,14 @@ def _client_with_app(tmp_path) -> tuple[AuthorityClient, TestClient]:
         return parsed
 
     return AuthorityClient("http://authority.test", transport=transport), app_client
+
+
+class _MutableClock:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __call__(self) -> str:
+        return self.value
 
 
 def test_authority_client_mutates_repository_through_fastapi_routes(tmp_path) -> None:
@@ -149,6 +166,63 @@ def test_authority_client_mutates_repository_through_fastapi_routes(tmp_path) ->
     assert snapshot.result.snapshot is not None
     assert snapshot.result.snapshot.status is RunStatus.RUNNING
     assert snapshot.result.snapshot.stages[0].status is StageStatus.SUCCEEDED
+
+
+def test_run_recovery_scan_round_trips_repository_facts_through_http(tmp_path) -> None:
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    repository = AuthorityRepository(tmp_path, clock=clock)
+    repository.initialize(service_generation="generation-1")
+    client, _app_client = _client_for_repository(repository)
+    run_uri = "file:///runs/http-recovery-r1"
+
+    assert client.admit_run(
+        run_uri,
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    ).accepted
+    controller = client.acquire_controller_lease(
+        run_uri,
+        owner_id="controller-1",
+        lease_ttl_seconds=30,
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+    attempt = client.allocate_stage_attempt(
+        run_uri,
+        "build",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+    assert controller.accepted
+    assert attempt.accepted
+    assert attempt.result is not None
+    assert attempt.result.stage_attempt is not None
+
+    live = client.scan_run_recovery(
+        run_uri,
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+    assert live.accepted
+    assert live.result is not None
+    assert live.result.recovery_records == ()
+
+    clock.value = "2020-01-01T00:00:31Z"
+    expired = client.scan_run_recovery(
+        run_uri,
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+
+    assert expired.accepted
+    assert expired.result is not None
+    assert expired.result.recovery_records == repository.scan_recovery(run_uri)
+    assert any(record.stage_name is None for record in expired.result.recovery_records)
+    assert attempt.result.stage_attempt.attempt_id in {
+        record.attempt_id for record in expired.result.recovery_records
+    }
 
 
 def test_mutation_api_rejects_terminal_success_without_output_commit(tmp_path) -> None:

@@ -648,8 +648,15 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
         return self.open_run(run_uri)
 
     def scan_recovery(self, run_uri: str) -> tuple[RecoveryRecord, ...]:
-        _ = run_uri
-        return ()
+        result = self._result(
+            self._client.scan_run_recovery(
+                run_uri,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="scan run recovery",
+        )
+        return result.recovery_records
 
     def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]:
         return self.open_run(run_uri).cleanup_candidates

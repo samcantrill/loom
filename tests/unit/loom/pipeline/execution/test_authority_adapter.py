@@ -11,7 +11,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from loom.authority.app import create_authority_app
-from loom.authority._repository import initialize_authority_repository
+from loom.authority._repository import (
+    AuthorityRepository,
+    initialize_authority_repository,
+)
 from loom.authority.services import repository_authority_services
 from loom.artifacts import ArtifactRef
 from loom.pipeline import (
@@ -111,10 +114,13 @@ def _store(tmp_path: Path, authority: PerRunAuthorityStore):
     )
 
 
-def _http_authority_run_store(tmp_path: Path) -> AuthorityBackedSerialRunStore:
-    repository = initialize_authority_repository(
-        tmp_path / "authority",
-        service_generation="generation-1",
+def _http_authority_run_store(
+    tmp_path: Path,
+    *,
+    repository: AuthorityRepository | None = None,
+) -> AuthorityBackedSerialRunStore:
+    repository = repository or initialize_authority_repository(
+        tmp_path / "authority", service_generation="generation-1"
     )
     services = repository_authority_services(
         repository,
@@ -364,6 +370,31 @@ def test_authority_backed_serial_run_executes_through_http_authority_client(
     assert (run_uri_to_path(run_uri) / "status.json").is_file()
 
 
+def test_http_authority_adapter_preserves_run_recovery_facts(tmp_path: Path) -> None:
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    repository = AuthorityRepository(tmp_path / "authority", clock=clock)
+    repository.initialize(service_generation="generation-1")
+    run_store = _http_authority_run_store(tmp_path, repository=repository)
+    authority = run_store.authority_store
+    run_uri = _run_uri(tmp_path, "http-recovery")
+    authority.create_run(run_uri)
+    authority.acquire_controller_lease(
+        run_uri, owner_id="controller-1", lease_ttl_seconds=30
+    )
+    allocation = authority.allocate_stage_attempt(
+        run_uri, "build", owner_id="worker-1", lease_ttl_seconds=30
+    )
+
+    assert authority.scan_recovery(run_uri) == ()
+
+    clock.value = "2020-01-01T00:00:31Z"
+    records = authority.scan_recovery(run_uri)
+
+    assert records == repository.scan_recovery(run_uri)
+    assert any(record.stage_name is None for record in records)
+    assert allocation.attempt.attempt_id in {record.attempt_id for record in records}
+
+
 def test_authority_backed_reads_ignore_conflicting_local_live_state(
     tmp_path: Path,
 ) -> None:
@@ -486,6 +517,44 @@ def test_expired_controller_and_attempt_are_classified_before_resume(
         "run.interrupted",
         "stage.stale",
     ]
+    assert snapshot.stages[0].attempts == (allocation.attempt,)
+
+
+def test_http_expired_controller_and_attempt_are_classified_before_resume(
+    tmp_path: Path,
+) -> None:
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    repository = AuthorityRepository(tmp_path / "authority", clock=clock)
+    repository.initialize(service_generation="generation-1")
+    run_store = _http_authority_run_store(tmp_path, repository=repository)
+    authority = run_store.authority_store
+    run_uri = _run_uri(tmp_path, "http-resume")
+    run_store.create_run(run_uri)
+    authority.transition_run(
+        run_uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING
+    )
+    allocation = authority.allocate_stage_attempt(
+        run_uri, "build", owner_id="worker", lease_ttl_seconds=1
+    )
+    assert allocation.lease is not None
+    authority.acquire_controller_lease(
+        run_uri, owner_id="old-controller", lease_ttl_seconds=1
+    )
+    clock.value = "2020-01-01T00:00:02Z"
+    lock = run_store.acquire_run_lock(run_uri, owner={"component": "resume"})
+    runner = PipelineRunner(run_store=run_store, clock=clock)
+    try:
+        runner._recover_abandoned_run_if_needed(
+            request=RunRequest(config={}, run_uri=run_uri, open_existing=True),
+            run_uri=run_uri,
+            prior_status=RunStatus.RUNNING,
+        )
+    finally:
+        run_store.release_run_lock(run_uri, lock.token)
+
+    snapshot = authority.snapshot(run_uri)
+    assert snapshot.status is RunStatus.INTERRUPTED
+    assert snapshot.stages[0].status is StageStatus.STALE
     assert snapshot.stages[0].attempts == (allocation.attempt,)
 
 

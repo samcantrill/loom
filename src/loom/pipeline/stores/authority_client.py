@@ -35,6 +35,9 @@ from .read_models import BackendRevision, LifecycleReason
 AUTHORITY_MUTATION_ROUTE_PREFIX = "/v1/authority"
 AUTHORITY_MUTATION_RUN_ADMIT_PATH = f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/admit"
 AUTHORITY_MUTATION_OPEN_RUN_PATH = f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/open"
+AUTHORITY_MUTATION_RUN_RECOVERY_SCAN_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/recovery/scan"
+)
 AUTHORITY_MUTATION_RUN_TRANSITION_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/transition"
 )
@@ -266,6 +269,29 @@ class AuthorityClient:
             AuthorityProtocolRequest(
                 metadata=_metadata(
                     AuthorityProtocolOperationKind.RUN_SNAPSHOT,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+            ),
+        )
+
+    def scan_run_recovery(
+        self,
+        run_uri: str,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Scan authoritative controller and attempt recovery facts for a run."""
+
+        return self.send(
+            AUTHORITY_MUTATION_RUN_RECOVERY_SCAN_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.RECOVERY_SCAN,
                     request_id=request_id,
                     service_generation=service_generation,
                     workspace_id=workspace_id,
@@ -1347,6 +1373,7 @@ __all__ = [
     "AUTHORITY_MUTATION_ROUTE_PREFIX",
     "AUTHORITY_MUTATION_RUN_ADMIT_PATH",
     "AUTHORITY_MUTATION_OPEN_RUN_PATH",
+    "AUTHORITY_MUTATION_RUN_RECOVERY_SCAN_PATH",
     "AUTHORITY_MUTATION_RUN_TRANSITION_PATH",
     "AUTHORITY_MUTATION_STAGE_TRANSITION_PATH",
     "AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH",
