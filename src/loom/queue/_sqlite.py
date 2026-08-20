@@ -173,6 +173,103 @@ class SQLiteQueueRepository:
             conn.commit()
             return QueueClaimResult(item=claimed)
 
+    def _read_selection_candidates(
+        self, pool_name: str, *, limit: int
+    ) -> tuple[QueueItem, ...]:
+        """Read one bounded FIFO window for private managed selection."""
+
+        pool_name = validate_queue_id(pool_name, "pool_name")
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            raise QueueConflictError("selection limit must be a positive integer")
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            rows = conn.execute(
+                """
+                SELECT item_json
+                FROM queue_items
+                WHERE pool_name = ? AND status = ?
+                ORDER BY enqueued_at, queue_item_id
+                LIMIT ?
+                """,
+                (pool_name, QueueItemStatus.QUEUED.value, limit),
+            ).fetchall()
+        return tuple(_item_from_json(cast(str, row["item_json"])) for row in rows)
+
+    def _claim_selection_candidate(
+        self,
+        queue_item_id: str,
+        *,
+        pool_name: str,
+        expected_dispatch_attempt: int,
+        owner_id: str,
+        claim_id: str,
+        preference_id: str,
+        reason_code: str,
+    ) -> QueueClaimResult | None:
+        """Atomically claim exactly one previously selected queued item."""
+
+        queue_item_id = validate_queue_id(queue_item_id, "queue_item_id")
+        pool_name = validate_queue_id(pool_name, "pool_name")
+        owner_id = validate_queue_id(owner_id, "owner_id")
+        claim_id = validate_queue_id(claim_id, "claim_id")
+        if (
+            not isinstance(expected_dispatch_attempt, int)
+            or isinstance(expected_dispatch_attempt, bool)
+            or expected_dispatch_attempt <= 0
+        ):
+            raise QueueConflictError("expected_dispatch_attempt must be a positive integer")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT item_json
+                FROM queue_items
+                WHERE queue_item_id = ? AND pool_name = ? AND status = ?
+                    AND dispatch_attempt = ?
+                """,
+                (
+                    queue_item_id,
+                    pool_name,
+                    QueueItemStatus.QUEUED.value,
+                    expected_dispatch_attempt,
+                ),
+            ).fetchone()
+            if row is None:
+                return None
+            current = _item_from_json(cast(str, row["item_json"]))
+            now = self._clock()
+            claim = QueueClaim(
+                claim_id=claim_id,
+                owner_id=owner_id,
+                claimed_at=now,
+                dispatch_attempt=current.dispatch_attempt,
+            )
+            claimed = replace(
+                current,
+                status=QueueItemStatus.CLAIMED,
+                claim=claim,
+                updated_at=now,
+            )
+            if _update_item(conn, claimed, expected=current) != 1:
+                return None
+            _append_audit_event(
+                conn,
+                queue_item_id=claimed.queue_item_id,
+                event_type="queue.item.claimed",
+                timestamp=now,
+                detail={
+                    "claim_id": claim.claim_id,
+                    "owner_id": claim.owner_id,
+                    "dispatch_attempt": claim.dispatch_attempt,
+                    "selection": {
+                        "preference_id": preference_id,
+                        "reason_code": reason_code,
+                    },
+                },
+            )
+            conn.commit()
+            return QueueClaimResult(item=claimed)
+
     def record_dispatch_handle(
         self,
         queue_item_id: str,

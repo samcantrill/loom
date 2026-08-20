@@ -87,6 +87,51 @@ def test_sqlite_repository_concurrent_claim_has_one_winner(tmp_path: Path) -> No
     assert sum(result is not None for result in results) == 1
 
 
+def test_sqlite_selection_read_is_bounded_and_exact_claim_has_one_winner(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "queue.sqlite"
+    first = SQLiteQueueRepository(db_path)
+    second = SQLiteQueueRepository(db_path)
+    for item_id, enqueued_at in (
+        ("item-1", "2020-01-01T00:00:00Z"),
+        ("item-2", "2020-01-01T00:00:01Z"),
+        ("item-3", "2020-01-01T00:00:02Z"),
+    ):
+        first.enqueue(_item(item_id, "gpu-pool", enqueued_at))
+
+    candidates = first._read_selection_candidates("gpu-pool", limit=2)
+    assert [candidate.queue_item_id for candidate in candidates] == ["item-1", "item-2"]
+    barrier = Barrier(2)
+
+    def claim(repository: SQLiteQueueRepository, claim_id: str):
+        barrier.wait()
+        return repository._claim_selection_candidate(
+            "item-1",
+            pool_name="gpu-pool",
+            expected_dispatch_attempt=1,
+            owner_id="controller",
+            claim_id=claim_id,
+            preference_id="test.selection",
+            reason_code="test.reason",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(
+            executor.map(
+                lambda pair: claim(*pair),
+                ((first, "claim-1"), (second, "claim-2")),
+            )
+        )
+
+    assert sum(result is not None for result in results) == 1
+    events = first.list_audit_events("item-1")
+    assert events[-1].detail["selection"] == {
+        "preference_id": "test.selection",
+        "reason_code": "test.reason",
+    }
+
+
 def test_sqlite_pool_read_snapshot_does_not_mix_a_controlled_transition(
     tmp_path: Path,
 ) -> None:

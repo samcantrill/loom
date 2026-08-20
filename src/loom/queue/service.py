@@ -295,6 +295,55 @@ class QueueService:
             claim_id=claim_id,
         )
 
+    def _read_selection_candidates(
+        self, pool_name: str, *, limit: int
+    ) -> tuple[QueueItem, ...]:
+        """Use the built-in repository's bounded managed-selection capability."""
+
+        self._ensure_running()
+        self._require_pool(pool_name)
+        reader = getattr(self.repository, "_read_selection_candidates", None)
+        if not callable(reader):
+            raise QueueServiceError(
+                "repository does not support managed resource-aware selection"
+            )
+        candidates = reader(pool_name, limit=limit)
+        if not isinstance(candidates, tuple) or not all(
+            isinstance(candidate, QueueItem) for candidate in candidates
+        ):
+            raise QueueServiceError("repository returned invalid selection candidates")
+        return candidates
+
+    def _claim_selection_candidate(
+        self,
+        queue_item_id: str,
+        *,
+        pool_name: str,
+        expected_dispatch_attempt: int,
+        owner_id: str,
+        claim_id: str,
+        preference_id: str,
+        reason_code: str,
+    ):
+        """Use the built-in repository's exact managed ownership transition."""
+
+        self._ensure_running()
+        self._require_pool(pool_name)
+        claimer = getattr(self.repository, "_claim_selection_candidate", None)
+        if not callable(claimer):
+            raise QueueServiceError(
+                "repository does not support managed resource-aware selection"
+            )
+        return claimer(
+            queue_item_id,
+            pool_name=pool_name,
+            expected_dispatch_attempt=expected_dispatch_attempt,
+            owner_id=owner_id,
+            claim_id=claim_id,
+            preference_id=preference_id,
+            reason_code=reason_code,
+        )
+
     def record_dispatch_handle(
         self,
         queue_item_id: str,
