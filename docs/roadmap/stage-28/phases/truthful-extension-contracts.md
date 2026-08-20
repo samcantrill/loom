@@ -27,6 +27,13 @@
 - Later work explicitly out of scope: runtime activation, executor factories,
   resource/codec worker wiring, and sink filtering.
 
+Plain-language result: a maintainer can answer “does this extension merely have
+a Python interface, or can Loom also register, load, select, and reconstruct
+it?” without reading implementation code. A downstream package can then run a
+small public check over its own representative values instead of copying Loom's
+internal tests. This phase changes claims and test support only; it does not
+make any new runtime path executable.
+
 ## Current Source And Harness
 
 - Relevant files and symbols:

@@ -1,9 +1,10 @@
 # Roadmap v28 Planning: Reconstructable Runtime Extensions And Lifecycle Hooks
 
-Status: confirmed; implementation-plan quality gate passed
+Status: confirmed; implementation-plan and cross-stage correction quality gates passed
 Roadmap stage: v28
 Evidence tree: `/home/can134/work/active/loom` on `develop` at
-`314e418192c3d46635b7f4754ea29ef736809f7d`
+`2c05906c15791a025ff2cae90633d77efdc89aac`; unrelated concurrent roadmap edits
+are preserved
 Planning route: expanded because public plugin/executor registration, durable
 worker reconstruction, resource-validation threading, and callback contracts
 interact
@@ -11,9 +12,39 @@ Current gate: planning workflow complete; Phase 1 not started
 Blockers: none; Stage 27 is a sequencing dependency rather than a planning
 blocker
 
-Stage 28 makes a bounded set of existing extension promises true end to end. It
-does not turn every protocol into a plugin or introduce a universal component
-container.
+## Plain-Language Overview
+
+Stage 28 makes four existing extension promises true through the complete path
+that users actually run. A Python protocol or installed entry point is not, by
+itself, proof that Loom can select that implementation from the CLI or rebuild
+it in a fresh worker. The stage separates those capabilities, reports them
+honestly, and implements only the combinations with a current runtime consumer.
+
+The four in-scope extension types are:
+
+| Extension | What project code supplies | Process that constructs it |
+| --- | --- | --- |
+| Ordinary executor | How one stage request is executed | The dispatch owner, before it launches or calls the executor |
+| Codec | How a project artifact is encoded and decoded | Each parent or worker process that constructs the artifact store |
+| Resource validator | How a custom resource kind is checked | Each process that parses or reconstructs pipeline/runtime resources |
+| Event sink | What observe-only action follows a lifecycle event | Only the process that commits that event |
+
+The intended user journey is deliberately explicit:
+
+1. A downstream package implements one of the public contracts and checks it
+   with the opt-in `loom.testing` helpers.
+2. The package publishes a normal Python entry point for the owning subsystem.
+3. A Python composition root injects the object directly, or a CLI caller
+   selects the exact `GROUP:NAME` with `--plugin`.
+4. Loom records only safe entry-point identity and passes only the applicable
+   selectors to a fresh process.
+5. That process rediscovers and verifies the selected entry point before using
+   project stage code, configuration, artifacts, or callbacks.
+
+Nothing is loaded merely because it is installed or mentioned in stored run
+data. With no explicit activation, current built-in behavior and import cost
+remain unchanged. This is not a universal plugin container: each subsystem
+keeps its own registry and each process builds only the dependencies it consumes.
 
 ## Current State
 
@@ -44,11 +75,12 @@ The current path is evidenced by `pipeline/stage_factory.py`, `specs.py`,
 already protect cheap imports, explicit discovery, codec loading, descriptors,
 worker records, event dispatch, and future plugin-group listing.
 
-Stage 26 keeps notification severity and generic message policy. Generic
-scheduling, observed usage, and new reuse design remain deferred beyond Stage
-26. Stage 27 keeps GPU inventory/layout/provisioning. Stage 28 may add exact
-event-name filters and custom resource validation but must not take either
-stage's policy or authority ownership.
+Stage 26 settles the operational lifecycle catalog and corrects commit-before-
+observe ordering without adding notification policy. Generic scheduling,
+observed usage, and new reuse design remain deferred beyond Stage 26. Stage 27
+keeps GPU inventory/layout/provisioning. Stage 28 owns exact event-name filters
+and custom resource validation but must not take lifecycle or authority
+ownership from their existing subsystems.
 
 ## Minimum Useful Change
 
@@ -181,6 +213,15 @@ observe-all sinks or a small sink-registration value with a subscription.
 Dispatch remains synchronous, ordered, post-append, and best-effort. No payload
 predicate, mutable context, async guarantee, or fatal mode is introduced.
 
+Slack and Discord remain direct downstream event sinks: the subscription is the
+sole generic event filter, while project code owns message/severity projection,
+the webhook client, and the secret. Stage 28 explicitly activates that sink in
+the lifecycle-owning process, and credentials never enter activation metadata.
+A mutable hook is different because it may replace, veto, retry, or otherwise
+change an execution decision. Such hooks need separate ordering, failure,
+provenance, resume, and process-ownership contracts and remain deferred. Phase
+3 records both boundaries and provider recipes without a core notification API.
+
 ## Complexity Delta
 
 Added for current consumers: richer existing diagnostics; opt-in conformance
@@ -273,7 +314,8 @@ assembly, and callback behavior while each leaves a useful result.
 | Expanded design review | EDR-1 through EDR-8 recorded; one bounded correction resolved EDR-1 through EDR-5 and the manager verified all findings in place. | pass |
 | Manifest/phase consistency | The compact manifest links exactly three phase plans with matching slugs, branches, ownership, dependencies, shared contracts, and pending statuses. | pass |
 | Independent plan review | One review found two contract-identifier/derivation blockers, one removable lookup, and two ownership/traceability concerns; one bounded correction fixed all findings. | pass |
-| Maintainer approval | The maintainer explicitly requested and authorized this new roadmap-stage planning on 2026-08-20. | pass |
+| Cross-stage correction | Stage 26 notification values/helper were removed; Phase 3 now has one filter/registration path and direct provider sinks. | pass |
+| Maintainer approval | The maintainer explicitly approved the stage and the removal-first Stage 26/28 split on 2026-08-20. | pass |
 
 Gate result: planning, expanded design-safety review, implementation planning,
 independent plan review, one bounded design correction, and one bounded plan
@@ -285,7 +327,7 @@ correction are complete. Phase 1 remains pending until Stage 27 remotely merges.
 | --- | --- | --- |
 | Stages | Keep `factory._target_`; no stage plugin group. | A non-config discovery consumer appears. |
 | Stores/authority | Keep factories and `RuntimeServices`; clarify readiness only. | A second safe deployment bootstrap consumer. |
-| Events | Exact names only; observe-all default; no delivery state. | Accepted notification work later requires richer filters or at-least-once delivery. |
+| Events | Exact names only; observe-all default; no delivery state or core message/severity projection. | Two concrete providers need one stable shared projection, or accepted work requires richer filters/at-least-once delivery. |
 | Sweeps | No discovery while custom spec/mode is undefined. | Accepted custom sweep-spec contract. |
 | Run exchange | Document direct exporter/importer use; no registry. | Two name-based bootstrap consumers. |
 | Sources | Contract-only. | A runtime path needs source selection. |

@@ -12,11 +12,11 @@
 - PR target: `develop`
 - PR title: `Stage 28 phase 3: add filtered lifecycle observers`
 - Dependencies: Phase 2 merged; planning `FR-1` through `FR-3` and `FR-8`
-  through `FR-12`; `DQ-2`, `DQ-4`, `DQ-7`, `DQ-8`; `EDR-5` through `EDR-8`;
-  Stage 26 must not have assigned exact event-name filtering to a conflicting
-  owner
+  through `FR-12`; `DQ-2`, `DQ-4`, `DQ-7`, `DQ-8`; and `EDR-5` through
+  `EDR-8`. The base includes Stage 26's lifecycle catalog and commit-before-
+  observe correction, with no notification API or competing filter owner.
 - Workflow path: fast; filter semantics and ownership passed the expanded stage
-  review, with manager escalation only if Stage 26 changed that contract
+  review and the removal-first cross-stage correction
 - Blockers: none on the reviewed evidence base
 
 ## Objective And Context
@@ -27,9 +27,17 @@
 - Earlier dependency: Phase 2's exact activation manifest/process allowlists and
   existing Stage 20 event records, sink registry/loader, runner dispatcher,
   observer-link/failure stores, and continuation event helpers.
-- Later work explicitly out of scope: notification severity/message policy,
-  Slack/email/webhook adapters, payload predicates, mutation hooks, fatal mode,
-  async delivery, replay cursors, outboxes, retries, and delivery guarantees.
+- Later work explicitly out of scope: a common notification message/severity
+  API, first-party Slack/email/webhook adapters, payload predicates, mutation
+  hooks, fatal mode, async delivery, replay cursors, outboxes, retries, and
+  delivery guarantees.
+
+Plain-language result: a project can ask to be notified about exact committed
+facts such as `stage.completed` without receiving every event and without
+gaining power to change execution. The process that commits the fact invokes
+the sink; an ordinary worker that does not own that lifecycle transition does
+not construct it. Sink failure remains evidence about observation, never a new
+run failure.
 
 ## Current Source And Harness
 
@@ -66,7 +74,8 @@ In scope:
   append directly without a supplied registry;
 - readiness/conformance/doc updates and committed-state/failure proof; and
 - a complete documented table of current emitted event types and which process
-  owns each emission.
+  owns each emission, plus a downstream Slack/Discord recipe and a precise
+  explanation of why execution-mutating hooks remain a separate design.
 
 Out of scope:
 
@@ -146,6 +155,151 @@ Assumptions:
   async queues, strict/fatal observers, delivery receipts/cursors/outboxes,
   retry/idempotency protocols, and first-party service adapters.
 
+## Downstream Slack And Discord Recipe
+
+Slack or Discord messaging is a normal downstream event-sink integration, not
+a second Loom notification subsystem. The recommended separation is:
+
+1. `EventSinkSubscription` is the sole generic filter for exact committed event
+   names.
+2. Project code turns the supplied `PipelineEventRecord` or `EventReference`
+   into a small audience-appropriate message and owns severity, provider
+   formatting, HTTP behavior, timeouts, credentials, and response parsing.
+3. Stage 28 selects and reconstructs the sink only in the process that commits
+   the subscribed event.
+4. Existing sink-failure and observer-link facts provide best-effort evidence;
+   they do not claim guaranteed delivery.
+
+The same project sink works through direct Python registration:
+
+```python
+registry = EventSinkRegistry()
+registry.register(
+    "notifications.slack",
+    ProjectSlackEventSink.from_environment(),
+    subscription=EventSinkSubscription(
+        event_types=("run.failed", "run.cancelled"),
+    ),
+)
+```
+
+and through an explicitly selected plugin factory:
+
+```python
+def slack_event_sink():
+    return EventSinkRegistration(
+        sink=ProjectSlackEventSink.from_environment(),
+        subscription=EventSinkSubscription(
+            event_types=("run.failed", "run.cancelled"),
+        ),
+    )
+```
+
+```toml
+[project.entry-points."loom.event_sinks"]
+"notifications.slack" = "my_project.notifications:slack_event_sink"
+```
+
+```text
+loom run --plugin loom.event_sinks:notifications.slack ...
+```
+
+An illustrative project sink keeps projection deliberately local and bounded:
+
+```python
+class ProjectSlackEventSink:
+    def __init__(self, webhook_url, post_json):
+        self.webhook_url = webhook_url
+        self.post_json = post_json
+
+    def __call__(self, event, context):
+        reference = context.event_reference
+        text = f"Loom event {reference.event_type} for {reference.run_uri}"
+        self.post_json(
+            self.webhook_url,
+            {"text": text},
+            timeout_seconds=5,
+        )
+
+    @classmethod
+    def from_environment(cls):
+        return cls(os.environ["LOOM_SLACK_WEBHOOK_URL"], post_json)
+```
+
+This example uses only event identity. A project may include a finite allowlist
+of record fields, but it must not copy arbitrary payloads, configuration,
+commands, environment, logs, artifact metadata, or credentials into an external
+message. It may also suppress `run_uri` or stage identity for a less-trusted
+destination.
+
+Slack incoming webhooks accept a JSON `text` payload and treat the webhook URL
+as a secret. Discord incoming webhooks accept a JSON `content` payload; a
+project sink should normally disable unintentional mentions with
+`allowed_mentions` and may request `wait=true` when it needs the created message
+identity. Provider details should follow the official
+[Slack incoming-webhook guidance](https://api.slack.com/messaging/webhooks) and
+[Discord execute-webhook reference](https://docs.discord.com/developers/resources/webhook#execute-webhook).
+
+Webhook URLs come from the environment or a deployment secret provider in the
+lifecycle-owning process. They must not appear in authored pipeline data,
+`RunRequest.metadata`, `plugin_activations`, provenance, exception messages, or
+committed test fixtures. If a provider returns a stable external message
+identity, the sink may record an existing `EventObserverLinkRecord` through its
+narrow context; no notification-specific receipt is added.
+
+Downstream adapter tests should use a fake transport and assert payload
+projection, timeout use, secret exclusion, and provider-response handling. Core
+validation proves only generic filtering, callback failure recording, later-
+sink continuation, and lifecycle-owner activation and never contacts Slack or
+Discord. A deployment requiring retries, rate-limit handling, offline
+buffering, or at-least-once delivery needs a later outbox/delivery design or an
+external durable relay; synchronous Stage 28 sinks are insufficient.
+
+No core `NotificationMessage`, severity enum, notifier protocol, or notifier
+plugin kind is added. If at least two concrete provider sinks later demonstrate
+one stable shared projection, a focused follow-up may return an ordinary
+`EventSinkRegistration` and must reuse its subscription as the sole filter.
+
+## Mutable Execution Hooks: Deferred Boundary
+
+An observer receives a fact after Loom has committed it, and its return value is
+ignored. A mutable execution hook runs before or during an authoritative
+decision and can change what Loom will do. Illustrative future hooks might:
+
+- reject or replace a stage request before dispatch;
+- change resource or executor selection;
+- replace outputs before they are committed;
+- choose retry, skip, or fail after an execution error; or
+- require an external approval before a transition continues.
+
+A general mutable-hook API might appear simple:
+
+```python
+class BeforeStageHook(Protocol):
+    def prepare(self, request: StageExecutionRequest) -> HookDecision: ...
+
+
+decision = hook.prepare(request)
+request = decision.replacement_request
+```
+
+It is useful for organization-specific policy, routing, approval, and recovery,
+but it creates a second producer of execution state. Loom would have to define
+which process invokes it, ordering between multiple hooks, whether rejection is
+a failure, what happens when the hook raises, which validations rerun, how the
+decision affects run/artifact identity, what is persisted for provenance, and
+how resume reconstructs the same decision. In-place mutation would also make
+audit and rollback behavior ambiguous.
+
+Therefore Stage 28 adds no general hook bus and exposes no mutable run, store,
+plan, request, result, or lifecycle context. When a concrete consumer is
+accepted, the recommended design is one narrow hook at the existing decision
+owner, immutable input, and a small explicit result such as `Continue`,
+`Replace`, or `Reject`. Activation, ordering, failure policy, validation,
+durable evidence, resume behavior, and process ownership must be fixed for that
+specific decision before implementation. Messaging, audit, metrics, and
+external links do not need this power and remain event sinks.
+
 ## Invariant Ownership
 
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
@@ -168,7 +322,8 @@ Assumptions:
 4. Thread a dispatcher/registry through stage-job and prepared continuation
    lifecycle emissions so only their commit-owning process observes events.
 5. Add post-commit, exact-filter, failure-order, and activation-subset
-   integration/E2E proof; update lifecycle/plugin/reliability/CLI/testing docs.
+   integration/E2E proof; update lifecycle/plugin/reliability/CLI/testing docs
+   with the provider recipe and mutable-hook boundary above.
 
 ## Test And Validation Plan
 
@@ -178,7 +333,7 @@ Assumptions:
 | Unit | required | subscription/registry/plugin normalization | validation, exact match, observe-all, order, failures, registration factory forms |
 | Contract | required | sink/store/activation semantics | conformance report, failure/link references, applicable group allowlists |
 | Integration | required | commit-owner dispatch | runner and stage-job callback reads committed status; subprocess worker gets no sink |
-| E2E / opt-in | required local; external deferred | CLI user journey | explicitly selected synthetic sink sees only `stage.completed`; no service/network |
+| E2E / opt-in | required local; external deferred | CLI user journey | explicitly selected synthetic sink sees only `stage.completed`; provider recipe is documentation-only and no service/network is contacted |
 
 Targeted commands:
 
@@ -197,8 +352,8 @@ Final commands:
   factories, or accidental delivery guarantees in docs.
 - Review focus: `DQ-8`/`EDR-7`, exact activation subsets, all continuation emit
   call sites, post-commit evidence, and unchanged failure policy.
-- Stop if: Stage 26 assigns exact filter semantics to another owner; correct
-  continuation dispatch needs new durable cursor/outbox state; a callback must
+- Stop if: correct continuation dispatch needs new durable cursor/outbox state;
+  a callback must
   mutate runtime behavior; or avoiding duplicate sinks requires a new authority
   coordination protocol.
 - Accepted debt/revisit: synchronous sinks may add latency and crash before
@@ -213,13 +368,14 @@ Final commands:
   continuation plumbing.
 - Do not revisit: exact allowlists, observe-all default, post-commit sync order,
   best-effort failures, no direct-worker sinks, or no delivery machinery.
-- Manager action required for: a Stage 26 ownership conflict, new event/durable
-  schema, mutable/fatal callback request, or service/async dependency.
+- Manager action required for: a new event/durable schema, common notification
+  public API, mutable/fatal callback request, or service/async dependency.
 
 ## Workflow State
 
 - Manager preparation: complete
-- Expanded planning: not needed unless Stage 26 changed exact-filter ownership
+- Expanded planning: not needed; the cross-stage correction confirmed this
+  phase as the sole exact-filter owner
 - Implementation: pending one `loom_phase_executor`
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: pending

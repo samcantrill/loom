@@ -36,6 +36,92 @@ Blockers: Stage 27 must remotely merge before Phase 1 starts; no planning blocke
 - Out of scope: every planning deferral and Stage 25, 26, or 27 policy/authority
   decision.
 
+## Planned Downstream Journey
+
+The following snippets illustrate the planned public shapes. They are acceptance
+examples for implementation, not claims about APIs available before the
+corresponding phase merges.
+
+First, project code checks its implementation with dependency-light contract
+support. The report contains deterministic, versioned plain data and covers only
+the cases supplied by the caller:
+
+```python
+from loom.testing import check_codec_contract
+
+report = check_codec_contract(
+    ProjectArrayCodec(),
+    roundtrip_values=(small_array, empty_array),
+)
+report.raise_for_errors()
+```
+
+An ordinary executor is registered as one descriptor/factory pair so its
+capability claims and constructed behavior cannot drift independently:
+
+```python
+registration = ExecutorRegistration(
+    descriptor=project_executor_descriptor,
+    factory=lambda *, services, options: ProjectExecutor(
+        services=services,
+        options=options,
+    ),
+)
+```
+
+The downstream package exposes exact entry points using the registry owned by
+each subsystem:
+
+```toml
+[project.entry-points."loom.executors"]
+project-executor = "my_project.executors:registration"
+
+[project.entry-points."loom.codecs"]
+array-npy-v1 = "my_project.codecs:numpy_codec"
+
+[project.entry-points."loom.resource_validators"]
+"accelerator.tpu" = "my_project.resources:validate_tpu"
+
+[project.entry-points."loom.event_sinks"]
+project-audit = "my_project.audit:audit_sink"
+```
+
+Relevant commands activate only the explicitly named records. Repeated options
+compose the caller-owned registries without mutating a process-global default:
+
+```text
+loom run \
+  --plugin loom.executors:project-executor \
+  --plugin loom.codecs:array-npy-v1 \
+  --plugin loom.resource_validators:accelerator.tpu \
+  --plugin loom.event_sinks:project-audit \
+  ...
+```
+
+The parent records only versioned identity under `plugin_activations`; no
+callable, registry, credential, constructor arguments, or plugin-private state
+is durable. A fresh process receives its applicable current selectors,
+rediscovers them, and compares group/name/target plus available distribution
+evidence before it constructs project runtime behavior. Stored metadata alone
+never authorizes loading.
+
+Finally, an event sink may observe an exact set of committed event names while
+existing unfiltered sinks retain observe-all behavior:
+
+```python
+registry.register(
+    "project-audit",
+    ProjectAuditSink(),
+    subscription=EventSinkSubscription(
+        event_types=("stage.completed", "run.failed"),
+    ),
+)
+```
+
+The callback remains synchronous and best-effort. Its return value is ignored;
+failure is recorded without changing the run or preventing later matching
+sinks. This is an observer, not a mutable execution hook.
+
 ## Shared Constraints
 
 - Architecture and dependency direction:
@@ -97,6 +183,9 @@ Blockers: Stage 27 must remotely merge before Phase 1 starts; no planning blocke
 - Reproducibility, compatibility, and trust:
   - explicitly activated installed targets are trusted project code; discovery
     and stored metadata alone are inert;
+  - a downstream Slack, Discord, or similar integration keeps its webhook
+    credential, network client, message projection, and severity choices in
+    project/plugin construction and remains only an observe-only event sink;
   - `StageSpec.resources` and all existing durable config/artifact/event shapes
     remain unchanged; no callable or secret is persisted;
   - `PipelineRunner(executor=...)`, unfiltered sink registration, default
@@ -115,8 +204,8 @@ Blockers: Stage 27 must remotely merge before Phase 1 starts; no planning blocke
   - conformance checks own only bounded downstream test evidence.
 - Decisions no phase may reopen: no universal registry/context wrapper,
   validator registration wrapper, automatic loading, changed authored resource
-  shape, mutable hook, worker reconstruction of its dispatch executor, or
-  declarative registry for a protocol without a current consumer.
+  shape, mutable hook or general hook bus, worker reconstruction of its dispatch
+  executor, or declarative registry for a protocol without a current consumer.
 
 ## Phase Index
 
@@ -144,7 +233,9 @@ expand delivery semantics.
 - Correction: one bounded correction fixed the four v1 contract catalogs and
   ordering, total `registry-ready`/`listing-only` derivation, sole `resolve`
   lookup, collision rejection/inert stored metadata, and Phase 3 FR/DQ/EDR plus
-  sink-v2 traceability. Manager verification found no remaining blocker.
+  sink-v2 traceability. The later maintainer-approved cross-stage correction
+  removed Stage 26 notification types and made Phase 3's subscription the sole
+  generic provider filter. Manager verification found no remaining blocker.
 - Ready for implementation: yes; Phase 1 remains execution-blocked until Stage
   27 remotely merges.
 - Accepted risks: explicit plugin packages may be absent from worker
@@ -153,8 +244,8 @@ expand delivery semantics.
   ordinary executors cannot claim submitted-continuation support.
 - Revisit triggers: an accepted remote/submitted custom executor; two source or
   provider selection consumers; required configured plugin state; measured sink
-  latency/delivery requirements; or Stage 26 accepting richer notification
-  policy.
+  latency/delivery requirements; or at least two concrete provider sinks needing
+  one stable shared message projection.
 
 ## Completion
 

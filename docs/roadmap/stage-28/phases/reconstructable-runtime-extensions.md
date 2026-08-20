@@ -30,6 +30,12 @@
   submitted custom executors, service notifications, source/export/sweep
   discovery, queue/authority plugins, and reliability policy wiring.
 
+Plain-language result: a component that works in the CLI parent will not
+silently disappear when Loom crosses a serialization or process boundary. The
+dispatch owner builds the selected executor, while artifact/config consumers
+rebuild only codecs and validators. Exact recorded identity proves what was
+selected; the current explicit command remains the authority to load it.
+
 ## Current Source And Harness
 
 - Relevant files/symbols:
