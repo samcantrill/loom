@@ -20,7 +20,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from loom.pipeline.stores import WorkspaceIdentity
 from loom.pipeline.stores.sqlite_coordination import SQLiteWorkspaceCoordinationStore
-from loom.queue import LaunchContract, QueueEnqueueRequest, normalize_queue_spec
+from loom.queue import (
+    LaunchContract,
+    QueueEnqueueRequest,
+    QueueSelectionContext,
+    QueueSelectionDecision,
+    QueueSelectionDisposition,
+    normalize_queue_spec,
+)
 from loom.queue.managed_local import ManagedLocalQueueRuntime
 
 
@@ -45,6 +52,7 @@ def main() -> None:
         workspace_id=WORKSPACE_ID,
         coordination_store=store,
         log_directory=run_root / "queue-state" / "logs",
+        selection_policies={"local-pool": _SmallestEligibleRequestPolicy()},
     )
     runtime.start()
     release_first_item = run_root / "release-item-1"
@@ -57,12 +65,13 @@ def main() -> None:
             )
         )
 
-    # The first cycle starts the two-slot request.  The runtime's serve loop
-    # owns all later reconciliation, refill, renewal, and graceful shutdown.
+    # The injected policy sees only eligible public candidates and starts the
+    # two one-slot requests ahead of the older two-slot request. The runtime's
+    # serve loop owns all later reconciliation, refill, renewal, and shutdown.
     runtime.run_cycle()
     active_status = runtime.status().to_dict()
     try:
-        _assert_active_two_slot_item(active_status)
+        _assert_active_smallest_requests(active_status)
     finally:
         # The first child waits on this bounded, filesystem-visible signal so
         # live-status observation does not depend on scheduler timing.
@@ -200,26 +209,30 @@ def _serve_until_example_completes(runtime: ManagedLocalQueueRuntime) -> None:
     runtime.serve(stop_event, poll_interval_seconds=0.01, wait=wait)
 
 
-def _assert_active_two_slot_item(status: dict[str, object]) -> None:
+def _assert_active_smallest_requests(status: dict[str, object]) -> None:
     pool_status = status["pool_status"]
     assert isinstance(pool_status, dict)
     attempts = pool_status["active_attempts"]
-    assert isinstance(attempts, list) and len(attempts) == 1
-    attempt = attempts[0]
-    assert isinstance(attempt, dict)
-    assignment = attempt["assignment"]
-    assert isinstance(assignment, dict)
-    slots = assignment["slots"]
-    assert isinstance(slots, list)
-    slot_ids = [slot["slot_id"] for slot in slots if isinstance(slot, dict)]
-    if (
-        attempt["queue_item_id"] != "item-1"
-        or attempt["owner_id"] != OWNER_ID
-        or attempt["evidence_source"] != "same_session_live"
-        or len(slot_ids) != 2
-        or len(set(slot_ids)) != 2
-    ):
-        raise RuntimeError("example runtime did not expose one live two-slot item")
+    assert isinstance(attempts, list) and len(attempts) == 2
+    active: dict[str, list[str]] = {}
+    for attempt in attempts:
+        assert isinstance(attempt, dict)
+        assignment = attempt["assignment"]
+        assert isinstance(assignment, dict)
+        slots = assignment["slots"]
+        assert isinstance(slots, list)
+        item_id = attempt["queue_item_id"]
+        if (
+            not isinstance(item_id, str)
+            or attempt["owner_id"] != OWNER_ID
+            or attempt["evidence_source"] != "same_session_live"
+        ):
+            raise RuntimeError("example runtime did not expose same-session work")
+        active[item_id] = [
+            slot["slot_id"] for slot in slots if isinstance(slot, dict)
+        ]
+    if active != {"item-2": ["slot-a"], "item-3": ["slot-b"]}:
+        raise RuntimeError("example policy did not prefer the smallest requests")
 
 
 def _assert_completed_example(status: dict[str, object], run_root: Path) -> None:
@@ -239,6 +252,27 @@ def _assert_completed_example(status: dict[str, object], run_root: Path) -> None
         path.read_text(encoding="utf-8").strip() for path in stdout_logs
     } != {"item-1:a,b", "item-2:a", "item-3:b"}:
         raise RuntimeError("example queue did not produce distinct command logs")
+
+
+class _SmallestEligibleRequestPolicy:
+    """Example-only preference: lowest total logical request wins."""
+
+    policy_id = "example.smallest_eligible_request"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        candidate = min(
+            context.candidates,
+            key=lambda value: (
+                sum(value.resources.values()),
+                value.enqueued_at,
+                value.queue_item_id,
+            ),
+        )
+        return QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED,
+            "example.smallest_eligible_request",
+            candidate.queue_item_id,
+        )
 
 
 if __name__ == "__main__":

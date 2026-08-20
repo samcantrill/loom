@@ -41,6 +41,7 @@ from .models import (
 )
 from .repository import QueueRepository
 from .resources import require_managed_pool_limits
+from .selection import QueueSelectionPolicy
 from .service import QueueService, QueueServiceState
 from .status import QueuePoolStatus, build_queue_pool_status
 
@@ -155,6 +156,7 @@ class ManagedLocalQueueRuntime:
         lease_ttl_seconds: int = 60,
         wait_timeout_seconds: float = 0.0,
         assignment_provider: ResourceAssignmentProvider | None = None,
+        selection_policies: Mapping[str, QueueSelectionPolicy] | None = None,
         log_directory: str | Path | None = None,
         clock: Callable[[], str] = utc_timestamp,
     ) -> "ManagedLocalQueueRuntime":
@@ -199,6 +201,7 @@ class ManagedLocalQueueRuntime:
         controller = QueueController(
             service,
             adapters={adapter.adapter_name: adapter},
+            selection_policies=selection_policies,
             owner_id=owner_id,
             clock=clock,
         )

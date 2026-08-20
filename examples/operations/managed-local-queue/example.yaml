@@ -1,6 +1,6 @@
 id: operations.managed-local-queue
-title: Managed Local Queue Status
-summary: Run a two-slot item and refilled one-slot work through the managed-local runtime.
+title: Managed Local Queue Selection
+summary: Inject a smallest-eligible Python policy and refill a two-slot item through the managed-local runtime.
 capability: operations
 level: advanced
 introduced_in: v23
@@ -18,7 +18,7 @@ validation_path: tests/e2e/test_queue_cli.py::test_managed_local_queue_example_i
 entrypoints:
   - path: run_managed_local_queue.py
     kind: python
-    description: Start managed-local runtime work over two generic static slots and print live queue-status facts.
+    description: Start a managed-local runtime with a public Python selection policy and print live queue-status facts.
 tags:
   - queue
   - local

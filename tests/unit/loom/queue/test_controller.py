@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from loom.serialization import PlainData
+import loom.queue.controller as queue_controller
 from loom.queue import (
     FakeQueueDispatchAdapter,
     QueueController,
@@ -537,6 +538,118 @@ def test_cycle_defers_fifo_head_once_and_returns_serializable_capacity_result(
     assert result.to_dict()["next_maintenance_at"] is None
 
 
+def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(12)])
+    service = _started_service(
+        tmp_path,
+        clock=clock,
+        max_active_items=2,
+        max_dispatches_per_cycle=2,
+    )
+    for item_id in ("deferred-head", "next-item"):
+        service.enqueue(
+            QueueEnqueueRequest(
+                queue_item_id=item_id,
+                queue_name="gpu",
+                run_uri=f"file:///runs/{item_id}",
+                adapter="defer-first",
+            )
+        )
+    adapter = _DeferFirstAdapter()
+
+    result = QueueController(
+        service, adapters={adapter.adapter_name: adapter}, clock=clock
+    ).run_cycle(pool_name="gpu-pool")
+
+    assert [step.outcome for step in result.dispatch_steps] == [
+        "deferred",
+        "dispatched",
+    ]
+    assert adapter.dispatched == ["deferred-head", "next-item"]
+    deferred = service.read_item("deferred-head")
+    started = service.read_item("next-item")
+    assert deferred is not None
+    assert deferred.status is QueueItemStatus.QUEUED
+    assert deferred.dispatch_attempt == 1
+    assert deferred.claim is None and deferred.dispatch_handle is None
+    assert started is not None and started.status is QueueItemStatus.SUCCEEDED
+    assert result.capacity_blocked is True
+    assert result.selection_stop_reason is None
+
+
+@pytest.mark.parametrize(
+    ("policy_name", "expected_reason"),
+    [
+        ("stopping", "queue_selection.policy_stopped"),
+        ("failing", "queue_selection.policy_error"),
+        ("invalid", "queue_selection.invalid_decision"),
+    ],
+)
+def test_cycle_exposes_only_allowlisted_selection_stop_reasons(
+    tmp_path: Path,
+    policy_name: str,
+    expected_reason: str,
+) -> None:
+    service = _resource_service(
+        tmp_path,
+        clock=_clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)]),
+        capacity=1,
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+
+    policy = {
+        "stopping": _StoppingSelectionPolicy(),
+        "failing": _FailingSelectionPolicy(),
+        "invalid": _InvalidSelectionPolicy(),
+    }[policy_name]
+    result = QueueController(
+        service,
+        selection_policies={"gpu-pool": policy},
+    ).run_cycle(pool_name="gpu-pool")
+
+    assert result.dispatch_steps == ()
+    assert result.selection_stop_reason == expected_reason
+    assert result.to_dict()["selection_stop_reason"] == expected_reason
+    assert "private selection exception" not in str(result.to_dict())
+    assert "test.policy_requested_stop" not in str(result.to_dict())
+
+
+def test_cycle_records_selection_limit_exhaustion_after_lost_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _resource_service(
+        tmp_path,
+        clock=_clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)]),
+        capacity=1,
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+    monkeypatch.setattr(queue_controller, "_SELECTION_LIMIT", 2)
+    monkeypatch.setattr(service, "_claim_selection_candidate", lambda *args, **kwargs: None)
+
+    result = QueueController(service).run_cycle(pool_name="gpu-pool")
+
+    assert result.dispatch_steps == ()
+    assert result.selection_stop_reason == "queue_selection.selection_limit_exhausted"
+    item = service.read_item("item-1")
+    assert item is not None and item.status is QueueItemStatus.QUEUED
+
+
 def test_cycle_bounds_synchronous_completions_by_dispatch_budget(
     tmp_path: Path,
 ) -> None:
@@ -831,6 +944,27 @@ class _DeferredAdapter:
         )
 
 
+class _DeferFirstAdapter:
+    adapter_name = "defer-first"
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
+        self.dispatched.append(item.queue_item_id)
+        if item.queue_item_id == "deferred-head":
+            return QueueDispatchResult(
+                disposition="deferred",
+                status=QueueItemStatus.UNKNOWN,
+                reason="resource_admission.capacity_unavailable",
+            )
+        return QueueDispatchResult(
+            handle_id=f"defer-first:{item.queue_item_id}",
+            status=QueueItemStatus.SUCCEEDED,
+            reason="completed",
+        )
+
+
 class _DegradingAdapter:
     adapter_name = "degrading"
 
@@ -954,6 +1088,16 @@ class _FailingSelectionPolicy:
 
     def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
         raise RuntimeError("private selection exception")
+
+
+class _StoppingSelectionPolicy:
+    policy_id = "test.stopping"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        return QueueSelectionDecision(
+            QueueSelectionDisposition.STOPPED,
+            "test.policy_requested_stop",
+        )
 
 
 class _UnsafePolicy:
