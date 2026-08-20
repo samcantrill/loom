@@ -3,21 +3,21 @@
 ## Metadata
 
 - Status: pending
-- Roadmap stage and phase: v24 Phase 1
-- Manifest: `docs/roadmap/stage-24/implementation-plan.md`
-- Branch: `agent/stage-24-p1-safe-resource-aware-selection`
+- Roadmap stage and phase: v25 Phase 1
+- Manifest: `docs/roadmap/stage-25/implementation-plan.md`
+- Branch: `agent/stage-25-p1-safe-resource-aware-selection`
 - Worktree root and path:
-  `/home/can134/work/active/loom-worktrees/stage-24-p1-safe-resource-aware-selection`
-- Base revision: planning refresh used `origin/develop` at
-  `91e772e9e1874a2f44dcba47b19b165ab4602f17`; create the phase only from
-  current `origin/develop` after Stage 23 is remotely merged
+  `/home/can134/work/active/loom-worktrees/stage-25-p1-safe-resource-aware-selection`
+- Base revision: create the phase from current `origin/develop` only after Stage
+  24 is remotely merged; record the exact revision before branch creation
 - PR target: `develop`
 - PR title: `Whole-Run Queue Selection - Phase 1: Safe Resource-Aware Selection`
-- Dependencies: every Stage 23 phase merged with its cycle, deferral, guarded
-  claim, ownership, status-read, and managed-resource contracts intact
+- Dependencies: Stage 24 remotely merged; completed Stage 23/23-post cycle,
+  deferral, guarded claim, ownership, status-read, runtime, and managed-resource
+  contracts intact
 - Workflow path: expanded because this phase adds a public structural protocol
   and changes SQLite claim concurrency
-- Blockers: Stage 23 is not implemented or merged; no Stage 24 design blocker
+- Blockers: Stage 24 is not remotely merged; no Stage 25 design blocker
 
 ## Objective And Context
 
@@ -32,11 +32,11 @@
 
 ## Current Source And Harness
 
-- Current seams before Stage 23 are the private FIFO helper, repository/service
+- Current merged seams are the private FIFO helper, repository/service
   `claim_next`, controller reconciliation/claim flow, and logical launch
-  resources. Refresh their exact merged shape before implementation.
+  resources. Refresh their exact shape after Stage 24 before implementation.
 - Harnesses cover FIFO, repository/SQLite recovery, controllers, managed
-  admission, and coordination; Stage 23 adds cycle/deferral coverage.
+  admission, coordination, and Stage 23/23-post cycle/deferral/runtime behavior.
 - Import constraints: selection stays under `loom.queue`, consumes no concrete
   adapter/provider or optional dependency, and does not reverse imports.
 
@@ -70,7 +70,7 @@ Out of scope:
 
 - FIFO policy objects, selection codecs, DDL, policy loading/state, skip events,
   post-deferral reselection, core non-FIFO policy, CLI/delegated changes, and
-  Stage 25 vocabulary.
+  Stage 26 vocabulary.
 
 Assumptions:
 
@@ -182,7 +182,7 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete in Stage 24 planning; refresh after Stage 23 merge
+- Manager preparation: complete in Stage 25 planning; refresh after Stage 24 merge
 - Expanded planning: required at phase selection for merged Stage 23 public and
   concurrency seams; unused
 - Implementation: not started
