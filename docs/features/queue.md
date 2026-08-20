@@ -226,9 +226,13 @@ the same physical member coordination keys used by individual allocation. The
 [paired example provider](../../examples/operations/managed-local-queue/paired_assignment_provider.py)
 is a copyable pattern, not a supported core import or a synthetic bundle-key
 scheme. The controller active limit is one-runtime-local policy, not a
-distributed quota. Candidate selection remains Stage 25 work, and notification
-policy is Stage 26 work. Generic scheduling, reattachment, and resource
-observation remain deferred until a later stage has accepted requirements.
+distributed quota. Resource-aware candidate selection remains Stage 25 work;
+the approved [plain-language design guide](../roadmap/stage-25/design-guide.md)
+documents the current FIFO limitation, oldest-eligible default, caller policy
+boundary, exact ownership, bounded continuation, and Stage 29 reuse.
+Notification policy is Stage 26 work. Generic scheduling, reattachment, and
+resource observation remain deferred until a later stage has accepted
+requirements.
 
 ## Delegated SLURM Pools
 
