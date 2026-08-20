@@ -1,16 +1,18 @@
 # Roadmap v24 Planning: Operational Lifecycle And Recovery Validation
 
-Status: confirmed; ready for implementation
+Status: complete
 Roadmap stage: v24
-Evidence tree: `/home/can134/work/active/loom` on `develop` at
-`f709731ef9ce023a3a403eb7ca257bd059f416d7`; relevant dirty paths are the
-requested Stage 24/25 roadmap artifacts, `docs/roadmap.md`, and numbering-only
-references in adjacent feature, Stage 23, Stage 23-post, and example docs
+Evidence tree: merged `origin/develop` at
+`d9273bf5e16630f2bf9465d8ff8599769378c996`; the dirty control checkout was not
+rewritten during implementation or completion metadata work
 Planning route: expanded during Phase 2 after implementation proved that the
 accepted corruption-recovery behavior conflicts with the one-commit-per-stage
 schema; the maintainer approved append-only output-commit supersession on
-2026-08-20
-Current gate: Phase 1 merged; Phase 2 refinement approved and in progress
+2026-08-20. Independent review then found the HTTP recovery transport gap; the
+maintainer approved narrow replacement Phase 3, which closed that finding and
+the renewal-TTL evidence gap.
+Current gate: complete; Phase 1 merged in #216 and replacement Phase 3 merged
+the Phase 2 implementation and remediation in #217
 Blockers: none
 
 Stage 24 adds real boundary-level proof where fake processes, injected
@@ -22,10 +24,10 @@ state, ownership, artifacts, and recovery agree.
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
 | Evidence | Runner, CLI, subprocess timeout, managed-local shutdown, authority, resume, artifact, test harness, and external acceptance paths were inspected after Stage 23-post. | None. | Preserve existing owners and test only real boundaries. |
-| Functionality | Graceful user stops cancel; ordinary failures/timeouts fail; unclean loss is classified during authoritative recovery; no incomplete output is reusable. | None. | Implement Phase 1 lifecycle alignment. |
-| Design | Reuse runner lifecycle writers, executor cleanup, queue process handling, authority recovery transitions, planner invalidation, and current test support. | None. | Keep new helpers test-private. |
-| Validation | Serial, subprocess, parallel, managed-local, hard-loss, authority-loss, and artifact-corruption boundaries need proportionate combined proof; external runtimes remain Stage 26 work. | None. | Execute the recorded obligations by phase. |
-| Detailed plan / approval | The user accepted the operational-testing recommendation and requested a new Stage 24 on 2026-08-18. During Phase 2, both authority backends demonstrated that the one-commit-per-stage contract prevents the locked corruption-recovery behavior. The maintainer approved append-only, attempt-specific superseding commits on 2026-08-20. | None. | Complete the bounded Phase 2 refinement and expanded-path review. |
+| Functionality | Graceful user stops cancel; ordinary failures/timeouts fail; unclean loss is classified during authoritative recovery; no incomplete output is reusable. | None. | Preserve the merged lifecycle contract. |
+| Design | Runner lifecycle, executor cleanup, queue process handling, authority recovery, planner invalidation, and artifact commit owners remain explicit; repair history is append-only and fenced. | None. | Preserve these ownership boundaries in later stages. |
+| Validation | Serial, subprocess, parallel, managed-local, hard-loss, authority-loss, HTTP recovery, renewal-TTL, and artifact-corruption boundaries have proportionate combined proof; external runtimes remain Stage 26 work. | None. | Retain the hermetic PR gate and Stage 26 deferral. |
+| Detailed plan / approval | Phase 1 merged in #216. Independent review blocked unpublished Phase 2, the maintainer approved the narrow replacement, and Phase 3 merged the complete recovery/artifact implementation in #217 after local and CI gates passed. | None. | Stage complete. |
 
 ## Evidence And Scope
 
@@ -182,13 +184,13 @@ state, ownership, artifacts, and recovery agree.
 
 | Example or invariant | Behavior or risk | Authoritative owner and boundary | Minimal coverage | Status |
 | --- | --- | --- | --- | --- |
-| Local/subprocess CLI Ctrl-C | Signal, cancellation, cleanup, artifact/downstream absence, and exit 130 agree; subprocess leaves no worker. | Runner, executor, CLI. | One real-signal e2e per causal process owner. | planned |
-| Parallel local Ctrl-C | New scheduling stops while already-running stages settle without fictional cancellation or lost valid commits. | Parallel runner/CLI. | One bounded coordinator-signal case plus focused stage-raised interrupt. | planned |
-| Enforced timeout | Production timeout kills/observes worker and persists timeout failure. | Subprocess executor/reliability boundary. | One integration test; injected unit retained. | planned |
-| Managed-local cancel | Exit precedes item cancellation/lease release. | Runtime/adapter/authority. | One real child; deterministic fakes retained. | planned |
-| Hard coordinator loss | Controller renewal preserves live ownership; after loss, active leases block and exclusive recovery records interruption/stale evidence before attempt 2. | Authority, lock, planner, runner. | Renewal unit plus isolated loss/resume and lease-parity contract. | planned |
-| Authority service loss | Commit fails closed; dependants do not start. | Service authority mutation. | One bounded integration test. | planned |
-| Corrupt artifact resume | Mismatch invalidates one branch; fenced append-only supersession repairs bytes/current index without erasing the prior commit. | Artifact store, planner, authority commit. | Cross-backend supersession/migration contracts plus one public branch e2e. | planned |
+| Local/subprocess CLI Ctrl-C | Signal, cancellation, cleanup, artifact/downstream absence, and exit 130 agree; subprocess leaves no worker. | Runner, executor, CLI. | One real-signal e2e per causal process owner. | passed |
+| Parallel local Ctrl-C | New scheduling stops while already-running stages settle without fictional cancellation or lost valid commits. | Parallel runner/CLI. | One bounded coordinator-signal case plus focused stage-raised interrupt. | passed |
+| Enforced timeout | Production timeout kills/observes worker and persists timeout failure. | Subprocess executor/reliability boundary. | One integration test; injected unit retained. | passed |
+| Managed-local cancel | Exit precedes item cancellation/lease release. | Runtime/adapter/authority. | One real child; deterministic fakes retained. | passed |
+| Hard coordinator loss | Controller renewal preserves live ownership; after loss, active leases block and exclusive recovery records interruption/stale evidence before attempt 2. | Authority, lock, planner, runner. | Renewal unit plus isolated loss/resume, HTTP transport, and lease-parity contract. | passed |
+| Authority service loss | Commit fails closed; dependants do not start. | Service authority mutation. | One bounded integration test. | passed |
+| Corrupt artifact resume | Mismatch invalidates one branch; fenced append-only supersession repairs bytes/current index without erasing the prior commit. | Artifact store, planner, authority commit. | Cross-backend supersession/migration contracts plus one public branch e2e. | passed |
 
 Causal interactions requiring combined coverage:
 
@@ -209,13 +211,14 @@ Stage 26 owns external profiles.
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Real interruption and cancellation | A user can stop serial, subprocess, bounded-parallel, or managed-local work and Loom's exit, state, process liveness, artifacts, downstream work, and leases agree; actual subprocess timeout is proven. | Runner/CLI/executor/managed runtime and test support; no unclean recovery, corruption, external runtime, new status, or daemon. | Completed Stage 23-post. | Focused runner regression, three real Ctrl-C cases, real timeout, real managed cancel, full PR gate. | pending |
-| 2. Crash recovery and artifact trust | Unclean process/authority loss cannot create false success, explicit recovery/resume is conservative and inspectable, and corrupt checksummed output repairs only its affected branch through append-only commit supersession. | Authority/recovery/planner/artifact/runner, the versioned output-commit migration, and public workflow tests; no repair command, reattachment, cluster/container acceptance, or retry redesign. | Phase 1 merged. | Hard-loss recovery, live-owner refusal, real authority loss, commit migration/backend parity, corrupt-artifact resume, docs, full PR gate. | in progress |
+| 1. Real interruption and cancellation | A user can stop serial, subprocess, bounded-parallel, or managed-local work and Loom's exit, state, process liveness, artifacts, downstream work, and leases agree; actual subprocess timeout is proven. | Runner/CLI/executor/managed runtime and test support; no unclean recovery, corruption, external runtime, new status, or daemon. | Completed Stage 23-post. | Focused runner regression, three real Ctrl-C cases, real timeout, real managed cancel, full PR gate. | merged in #216 |
+| 2. Crash recovery and artifact trust | Unclean process/authority loss cannot create false success, explicit recovery/resume is conservative and inspectable, and corrupt checksummed output repairs only its affected branch through append-only commit supersession. | Authority/recovery/planner/artifact/runner, the versioned output-commit migration, and public workflow tests; no repair command, reattachment, cluster/container acceptance, or retry redesign. | Phase 1 merged. | Implementation and gates passed, but independent review found missing HTTP recovery transport and incomplete post-TTL renewal evidence. | blocked; adopted by Phase 3 |
+| 3. HTTP recovery parity and renewal proof | Publish the Phase 2 implementation only after the HTTP authority path transports repository recovery facts and renewal remains exclusive past original expiry. | Existing v2 protocol/client/service/adapter and deterministic authority time; no new durable model or weaker recovery. | Phase 2 explicitly blocked; maintainer approved replacement. | 50 focused tests, full gates, exact HTTP recovery parity, runner recovery, and post-TTL ownership proof. | merged in #217 |
 
-Two phases separate graceful cleanup—where Loom is alive and must complete
+Phase 1 separates graceful cleanup—where Loom is alive and must complete
 termination—from unclean recovery—where Loom cannot assume cleanup ran and must
-rely on authority and durable evidence. Each phase delivers a complete user-
-observable safety outcome.
+rely on authority and durable evidence. Phase 3 is the bounded replacement
+publication path for blocked Phase 2, not a new product surface.
 
 ## Quality Gate
 
@@ -226,13 +229,14 @@ observable safety outcome.
 | Complexity delta proportionate | The previously excluded schema change is now limited to the demonstrated current consumer: append-only attempt-specific commit supersession. No repair command, supervisor, reattachment, dependency, status, or broad matrix is added. | pass after maintainer approval |
 | Contracts and private discretion clear | Observable ordering and outcomes are fixed; helper names, process mechanics, and file placement remain private. | pass |
 | Invariant ownership and validation proportionate | Each real process, parallel scheduling, authority recovery, and artifact interaction is covered once; focused tests remain authoritative elsewhere. | pass |
-| Phases vertical and reviewable | Graceful lifecycle proof and unclean recovery/artifact trust are independently useful two-phase outcomes. | pass |
+| Phases vertical and reviewable | Graceful lifecycle proof and unclean recovery/artifact trust remain distinct; replacement Phase 3 contains only the independently demonstrated publication gaps. | pass |
 | No unresolved blocker | The user accepted the recommendation and requested this stage; repository evidence resolves placement and semantics. | pass |
 
-Gate result: original planning and Phase 1 are complete. Phase 2 moved to the
-expanded route after its executor demonstrated the durable conflict; the
-maintainer approved the bounded supersession design on 2026-08-20. One qualified
-refinement and one independent expanded-path review are required before merge.
+Gate result: complete. Phase 1 merged in #216. Phase 2 moved to the expanded
+route after its executor demonstrated the durable conflict; independent review
+then correctly blocked its HTTP recovery path. The maintainer approved the
+narrow replacement, and Phase 3 closed both findings before #217 passed local
+validation, manager review, CI, and squash merge.
 
 Accepted risks: POSIX-only signals, settled rather than preempted parallel work,
 no reattachment/machine-loss cleanup, and Stage 26 external evidence.

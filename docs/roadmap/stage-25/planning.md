@@ -11,7 +11,7 @@ extension point across queue selection, SQLite claim concurrency, resource
 observation, and Stage 23 deferral behavior
 Plain-language design guide: `docs/roadmap/stage-25/design-guide.md`
 Current gate: planning workflow complete; Phase 1 not started
-Blockers: Stage 24 must remotely merge before Phase 1 starts; no planning blocker
+Blockers: none; Stage 24 remotely merged through #216 and #217
 
 Stage 25 follows Stage 24 and builds on Stage 23's completed safe concurrent
 FIFO cycles by making candidate preference replaceable while Loom retains
@@ -25,7 +25,7 @@ lifecycle safety.
 | Functionality | Default FIFO remains; Python callers may inject one bounded pool-local policy. | None. | Preserve the confirmed behavior boundary. |
 | Design | Policy prefers; repository claims; authority admits; providers place; controller orchestrates. | None. | Preserve removal-first findings. |
 | Validation | Claim races, stale capacity, compatibility, and bounded bypass need causal coverage. | None. | Execute the recorded suite obligations by phase. |
-| Detailed plan / approval | The manifest and two phase plans passed one review and bounded correction; the user requested this workflow on 2026-08-17 and renumbered it on 2026-08-18. | Stage 24 must merge before execution. | Refresh Stage 23/23-post queue contracts after Stage 24. |
+| Detailed plan / approval | The manifest and two phase plans passed one review and bounded correction; the user requested this workflow on 2026-08-17 and renumbered it on 2026-08-18. Stage 24 is now merged. | None. | Refresh the merged Stage 23/23-post and Stage 24 contracts before Phase 1. |
 
 ## Evidence And Scope
 

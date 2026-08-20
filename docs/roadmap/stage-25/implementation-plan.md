@@ -7,8 +7,7 @@ Plain-language design guide: `docs/roadmap/stage-25/design-guide.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
 Current phase: Phase 1 pending
-Blockers: Stage 24 must be remotely merged before Phase 1 starts; no planning
-blocker
+Blockers: none; Stage 24 remotely merged through #216 and #217
 
 ## Summary
 
@@ -35,8 +34,9 @@ blocker
   advisory-fit/admission races, and deferral/filter/continuation bounds.
 - Implementation-base refresh: original expanded planning used
   `91e772e9e1874a2f44dcba47b19b165ab4602f17`; Stage 23 and Stage 23-post are
-  now complete. Phase 1 must refresh their merged queue/resource contracts and
-  start from current `origin/develop` only after Stage 24 merges.
+  now complete and Stage 24 has merged. Phase 1 must refresh those merged
+  queue/resource and lifecycle contracts and start from current
+  `origin/develop`.
 - Out of scope: every planning deferral, changes to Stage 23 assignment
   lifecycle, authority resource mutation, downstream domain semantics, and
   product code outside the selected phase.

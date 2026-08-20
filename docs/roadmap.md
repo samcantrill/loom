@@ -1926,9 +1926,12 @@ Phase execution plans:
 
 Status:
 
-- Planning is confirmed and the two-phase implementation plan is ready. This
-  stage follows the completed Stage 23-post managed-local runtime and precedes
-  resource-aware queue selection.
+- Complete. Phase 1 merged in [#216](https://github.com/samcantrill/loom/pull/216),
+  and the Phase 2 implementation plus its independently required HTTP-recovery
+  remediation merged through replacement Phase 3 in
+  [#217](https://github.com/samcantrill/loom/pull/217). This stage follows the
+  completed Stage 23-post managed-local runtime and precedes resource-aware
+  queue selection.
 
 Goal:
 
@@ -2061,6 +2064,7 @@ Phase execution plans:
 
 - `docs/roadmap/stage-24/phases/real-interruption-and-cancellation.md`
 - `docs/roadmap/stage-24/phases/crash-recovery-and-artifact-trust.md`
+- `docs/roadmap/stage-24/phases/http-recovery-parity-and-renewal-proof.md`
 
 ## v25 - Resource-Aware Whole-Run Queue Selection
 

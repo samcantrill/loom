@@ -1,13 +1,12 @@
 # Roadmap Stage 24 Implementation Plan: Operational Lifecycle And Recovery Validation
 
-Status: ready
+Status: complete
 Roadmap stage: `v24`
 Planning document: `docs/roadmap/stage-24/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 3 PR open
-Blockers: none; the maintainer approved the narrow replacement phase on
-2026-08-20 after Phase 2 exhausted its correction budget
+Current phase: complete
+Blockers: none
 
 ## Summary
 
@@ -106,7 +105,7 @@ Blockers: none; the maintainer approved the narrow replacement phase on
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `real-interruption-and-cancellation` | merged | `docs/roadmap/stage-24/phases/real-interruption-and-cancellation.md` | `agent/stage-24-p1-real-interruption-and-cancellation` | [#216](https://github.com/samcantrill/loom/pull/216) | Serial/prepared cancellation, parallel settlement, CLI propagation, subprocess cleanup/timeout, managed-local cancel, and process test support | Prove that graceful stops reach truthful durable state and owned children exit before release. |
 | 2 | `crash-recovery-and-artifact-trust` | blocked | `docs/roadmap/stage-24/phases/crash-recovery-and-artifact-trust.md` | `agent/stage-24-p2-crash-recovery-and-artifact-trust` | not opened | Controller renewal/parity, authority recovery/events, old-active resume, authority loss, artifact invalidation, and docs | Prove that unclean loss or corrupt output cannot become reusable success and explicit recovery produces a safe new attempt. |
-| 3 | `http-recovery-parity-and-renewal-proof` | pr_open | `docs/roadmap/stage-24/phases/http-recovery-parity-and-renewal-proof.md` | `agent/stage-24-p3-http-recovery-parity-and-renewal-proof` | [#217](https://github.com/samcantrill/loom/pull/217) | Adopt Phase 2 implementation; expose repository run-recovery facts through HTTP; prove renewed ownership beyond original TTL | Publish the complete Stage 24 recovery behavior only after the supported HTTP authority path satisfies the same recovery contract as direct SQLite. |
+| 3 | `http-recovery-parity-and-renewal-proof` | merged | `docs/roadmap/stage-24/phases/http-recovery-parity-and-renewal-proof.md` | `agent/stage-24-p3-http-recovery-parity-and-renewal-proof` | [#217](https://github.com/samcantrill/loom/pull/217) | Adopt Phase 2 implementation; expose repository run-recovery facts through HTTP; prove renewed ownership beyond original TTL | Publish the complete Stage 24 recovery behavior only after the supported HTTP authority path satisfies the same recovery contract as direct SQLite. |
 
 Phase 1 is independently useful: operators receive correct Ctrl-C/timeout/cancel
 semantics and real worker cleanup. Phase 2 started only after Phase 1 was
@@ -135,10 +134,12 @@ PR rather than a stacked PR.
   repository recovery facts and drives the existing fail-closed runner recovery
   sequence; deterministic renewal crosses the original TTL while retaining
   controller exclusivity. Full validation and the durable receipt pass.
+- Phase 3 CI and merge gate: passed. PR #217 was non-draft, mergeable, targeted
+  `develop`, passed the required `checks` job, and squash-merged as `d9273bf`.
 - Manager-local refresh correction: applied. Parallel interruption now preserves
   truthful in-flight results, and Phase 2 adds controller renewal and closes
   local-service lease parity before using recovery.
-- Ready for implementation: yes.
+- Ready for implementation: complete.
 - Accepted risks: POSIX-specific process tests; parallel local work settles
   rather than being forcibly stopped; no reattachment/machine-loss cleanup;
   external-runtime evidence stays scheduled/manual until Stage 26.
@@ -152,5 +153,16 @@ PR rather than a stacked PR.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | [#216](https://github.com/samcantrill/loom/pull/216) squash-merged to `develop` as `8cc9bfa` | 62 focused tests, `make validate-pr`, `make test-summary` (2,267 passed, 3 skipped), manager review, and CI passed | Linux/POSIX signal proof and settled rather than preempted parallel threads remain accepted limits | Phase branch/worktree removed after the merge record; local control-checkout fast-forward deferred to preserve unrelated committed and uncommitted user work |
-| 2 | No PR opened; independent review blocked publication | Implementation and full validation passed at `69d3c22` (`make validate-pr`; `make test-summary` with 2,285 passes), but the HTTP recovery path lacks repository recovery facts and the renewal test does not prove exclusivity beyond initial expiry | A managed-service crash cannot currently reach safe explicit recovery through the supported adapter | Worktree and branch retained for maintainer-directed replanning; three correction passes are exhausted |
-| 3 | [#217](https://github.com/samcantrill/loom/pull/217) open against `develop` | 50 focused tests; `make validate-pr`; `make test-summary` with 2,289 passes and three environment-dependent skips; manager review passed | External runtimes remain Stage 26 scope; no current correctness blocker | CI, merge, final metadata, and cleanup pending |
+| 2 | No PR opened; independent review blocked publication | Implementation and full validation passed at `69d3c22` (`make validate-pr`; `make test-summary` with 2,285 passes), but the HTTP recovery path lacked repository recovery facts and the renewal test did not prove exclusivity beyond initial expiry | Finding resolved by replacement Phase 3 without weakening recovery | Worktree and branch removed after Phase 3 adopted the complete implementation |
+| 3 | [#217](https://github.com/samcantrill/loom/pull/217) squash-merged to `develop` as `d9273bf` | 50 focused tests; `make validate-pr`; `make test-summary` with 2,289 passes and three environment-dependent skips; manager review and CI passed | External runtimes remain Stage 26 scope; no current correctness blocker | Phase 2 and Phase 3 worktrees and local branches removed; Phase 3 remote branch removed; dirty control checkout preserved |
+
+## Completion Audit
+
+| Accepted requirements | Final evidence | Result |
+| --- | --- | --- |
+| FR-1 through FR-5 | Phase 1 #216 proves truthful serial, parallel, subprocess, timeout, and managed-local cancellation with process exit and cleanup ordering. | pass |
+| FR-6, FR-7, and FR-9 | #217 proves hard loss, live-owner refusal, explicit interrupted/stale recovery before attempt 2, controller renewal and failure, local/service parity, HTTP recovery-fact transport, and authority-loss failure before commit. | pass |
+| FR-8 | #217 provides fenced append-only attempt-specific supersession, retained history, current-only projections, atomic known-version migrations, and a branch-shaped corruption/resume workflow. | pass |
+| FR-10 and FR-11 | Test-owned process containment, condition synchronization, compatibility suites, 50 focused remediation tests, full local gates, and CI pass. | pass |
+| FR-12 | Default validation remains hermetic; three real-container checks skip explicitly and external Docker/Apptainer/SLURM/GPU/remote profiles remain Stage 26 scope. | pass |
+| Stage completion | Both publication PRs are merged, no accepted requirement or current correctness blocker remains, metadata is current, and implementation worktrees/branches are removed. | pass |
