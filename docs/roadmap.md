@@ -61,6 +61,10 @@ splits oversized steps:
   cleanup/retention so the implemented surface can be demonstrated through
   robust runnable examples, integration tests, end-to-end tests, and updated
   documentation.
+- An operational lifecycle and recovery validation step is inserted after the
+  Stage 23 managed-local follow-up so real signals, child termination, timeout,
+  unclean loss, authority loss, artifact corruption, and resume are proven
+  before later queue-policy and downstream-operations work.
 - Trusted config authoring is supplied by the external `weave` dependency;
   Loom roadmap stages should focus on runtime adapters, execution, stores,
   artifacts, and operations rather than owning config-package implementation.
@@ -152,8 +156,9 @@ written.
 | v21 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
 | v22 | Examples and validation refinement | Robust example coverage, integration/e2e validation behavior, example harness hardening, and documentation refinement over the implemented surface. |
 | v23 | Managed local concurrency and resource assignment | Pool-scoped managed-local reconcile/fill cycles, structured capacity deferral, exclusive static-slot assignment, lease-safe local process lifecycle, and redacted operational status. |
-| v24 | Resource-aware whole-run queue selection | Default-compatible FIFO selection plus a bounded queue-local policy seam for safe downstream choice of fitting managed-pool candidates. |
-| v25 | Downstream operations design | Design and documentation for stage-author guidance, resource validation and usage observation, generic scheduling, notifications, resume policy, queues, and environment acceptance profiles. |
+| v24 | Operational lifecycle and recovery validation | Real-process proof for interruption, cancellation, timeout, shutdown, unclean process loss, authority loss, artifact integrity, and resume without false success or orphaned ownership. |
+| v25 | Resource-aware whole-run queue selection | Default-compatible FIFO selection plus a bounded queue-local policy seam for safe downstream choice of fitting managed-pool candidates. |
+| v26 | Downstream operations design | Design and documentation for stage-author guidance, resource validation and usage observation, generic scheduling, notifications, resume policy, queues, and environment acceptance profiles. |
 
 ## v0 - Local Runtime Kernel
 
@@ -1917,13 +1922,153 @@ Phase execution plans:
 - `docs/roadmap/stage-23/phases/managed-local-assignments.md`
 - `docs/roadmap/stage-23/phases/operator-status-proof.md`
 
-## v24 - Resource-Aware Whole-Run Queue Selection
+## v24 - Operational Lifecycle And Recovery Validation
+
+Status:
+
+- Planning is confirmed and the two-phase implementation plan is ready. This
+  stage follows the completed Stage 23-post managed-local runtime and precedes
+  resource-aware queue selection.
+
+Goal:
+
+- Prove through real operating-system processes that Loom's durable lifecycle
+  state agrees with what actually happened when work starts, stops, times out,
+  is cancelled, or loses its coordinator or authority.
+- Prove that interrupted or corrupt work never becomes a reusable success and
+  that explicit resume recovers conservatively without hiding the earlier
+  incomplete attempt.
+
+Implement:
+
+- One locked lifecycle outcome table across the runner, CLI, executors, queue,
+  state, and resume behavior. Authored early stop and explicit cancellation are
+  `CANCELLED`; caught keyboard interruption follows the serial/parallel rules
+  below before CLI exit 130; ordinary exception or enforced timeout is `FAILED`;
+  unclean loss becomes `INTERRUPTED` only when recovery authoritatively
+  classifies the old active run.
+- Runner-boundary keyboard-interrupt handling for serial, parallel, and
+  prepared-worker paths. Serial/prepared work cancels its uncommitted active
+  stage; parallel local execution stops new scheduling and settles already-
+  running non-preemptible stages truthfully. The runner then cancels the run,
+  unwinds owned resources, and preserves Python/CLI interruption behavior.
+- Hermetic serial-local, parallel-local, and subprocess CLI tests that start a
+  blocking domain-neutral stage, wait for a marker, deliver a real signal, and
+  inspect exit code,
+  authoritative run/stage state, reason evidence, process liveness, logs,
+  artifact indexes, downstream state, locks, and leases. Subprocess coverage
+  must prove the worker exits rather than only proving that Loom requested
+  termination.
+- A real enforced-timeout integration path using a sleeping stage and the
+  production subprocess runner. It verifies durable timeout facts, non-zero
+  execution outcome, worker exit, preserved logs, absent output commit, and a
+  clean later attempt. Existing injected `TimeoutExpired` unit coverage remains
+  the precise branch test.
+- A real managed-local cancellation path complementing Stage 23-post's
+  deterministic fake-process coverage. A blocking child must be observed dead
+  before the queue item becomes `CANCELLED` and before scalar/member leases are
+  released; queued and foreign-owner work must remain untouched.
+- An unclean-loss scenario that kills only a test-owned coordinator/worker
+  process tree after the stage-start marker. Before recovery, Loom must show no
+  success, output index, or downstream start and must reject conflicting work
+  while ownership is still live. After expiry, a newly exclusive controller
+  must match authority recovery facts, record durable `INTERRUPTED`/stale events
+  and transitions, and only then plan a new attempt that may publish outputs.
+- Cross-backend proof that SQLite and the local service authority both reject a
+  second unexpired controller lease, allow a fenced replacement after expiry,
+  and preserve expired ownership as recovery evidence.
+- Private controller-lease renewal while an authority-backed runner remains
+  alive, with fail-closed renewal errors and no public run-lock API change.
+- A service-authority loss scenario that stops the real local authority service
+  while a blocking stage is active. Commit must fail closed: Loom may retain
+  diagnostic files, but it cannot publish reusable success without authority,
+  silently steal a valid lease, or start dependent work.
+- A public resume scenario that corrupts the bytes of a successful local
+  artifact. Checksum mismatch must rerun the producer and its consumers, reuse
+  an unaffected branch, expose a stable reason, and restore agreement among
+  payload bytes, stage outputs, and the run artifact index.
+- Small reusable test-support helpers for marker creation, bounded condition
+  waits, test-owned PID/process-group cleanup, and process-liveness assertions.
+  They remain private to tests, add no runtime dependency, use no arbitrary
+  fixed sleep as an oracle, and never operate on an unvalidated foreign PID.
+- Lifecycle documentation that states the observable outcome and authoritative
+  owner for each tested boundary. Validation checks each invariant where its
+  dimensions causally interact instead of multiplying every executor, signal,
+  store, and artifact case into a Cartesian matrix.
+
+Exit criteria:
+
+- A real Ctrl-C during local execution and during subprocess execution leaves
+  the active stage and run `CANCELLED`, exits the CLI with 130, starts no
+  downstream work, publishes no output, releases owned coordination only after
+  cleanup, and leaves no worker process behind.
+- A bounded-parallel local Ctrl-C stops new scheduling, lets already-running
+  stages settle to their actual terminal state, blocks unresolved work, cancels
+  the run, and exits 130 without relabelling valid committed success.
+- A real subprocess timeout leaves the worker dead, the stage and run `FAILED`,
+  durable timeout/log evidence present, and no committed output.
+- Managed-local cancel is proven against a real child process: process exit
+  precedes terminal item state and resource release, pending work stays queued,
+  and foreign work is not mutated.
+- An uncatchable process-tree loss cannot produce false success or reusable
+  artifacts. Live ownership blocks conflict across both local authority
+  backends; exclusive recovery plus matching scan facts records the interrupted
+  run/stale attempt before a distinct successful attempt.
+- Artifact checksum corruption is detected through a public run/resume path;
+  the affected dependency branch reruns, the unrelated branch is reused, and
+  the repaired payload and index agree.
+- Real authority loss before commit fails closed and remains inspectable.
+- Phase-targeted tests, `make validate-pr`, and `make test-summary` pass without
+  requiring Docker, Apptainer, SLURM, external network access, or a new
+  dependency.
+
+Defer:
+
+- Automatic process reattachment, PID-based adoption, unconditional cleanup
+  after machine loss, a Loom daemon, worker pools, or a general process
+  supervisor. External service managers remain responsible for containment.
+- A public repair command, silent state repair, automatic lease stealing, or a
+  new stage lifecycle status. The existing authority recovery transitions,
+  attempt history, `STALE`, `CANCELLED`, and run-level `INTERRUPTED` vocabulary
+  are sufficient for this stage.
+- Graceful handling of every platform-specific signal, Windows process-control
+  parity, scheduler preemption policy, automatic retry-policy changes, and a
+  comprehensive backend-by-failure matrix.
+- Real Docker, Apptainer, SLURM, GPU, scheduler-accounting, notification, and
+  remote-service acceptance profiles. Stage 26 owns their environment gates,
+  commands, evidence, and any runtime-specific strengthening.
+
+Primary feature docs:
+
+- `testing.md`
+- `execution.md`
+- `state.md`
+- `reliability.md`
+- `resume.md`
+- `artifacts.md`
+- `queue.md`
+- `run-store.md`
+
+Planning notes:
+
+- `docs/roadmap/stage-24/planning.md`
+
+Implementation plan:
+
+- `docs/roadmap/stage-24/implementation-plan.md`
+
+Phase execution plans:
+
+- `docs/roadmap/stage-24/phases/real-interruption-and-cancellation.md`
+- `docs/roadmap/stage-24/phases/crash-recovery-and-artifact-trust.md`
+
+## v25 - Resource-Aware Whole-Run Queue Selection
 
 Status:
 
 - Planning is confirmed. Expanded design-safety review and the implementation-
-  plan quality gate passed; both phases remain pending. Phase 1 must not start
-  until Stage 23 is merged and its final contracts are refreshed.
+  plan quality gate passed; both phases remain pending. Phase 1 follows Stage
+  24, while its functional queue/concurrency base remains completed Stage 23.
 
 Goal:
 
@@ -1996,22 +2141,22 @@ Primary feature docs:
 
 Design guide:
 
-- `docs/roadmap/stage-24/design-guide.md`
+- `docs/roadmap/stage-25/design-guide.md`
 
 Planning notes:
 
-- `docs/roadmap/stage-24/planning.md`
+- `docs/roadmap/stage-25/planning.md`
 
 Implementation plan:
 
-- `docs/roadmap/stage-24/implementation-plan.md`
+- `docs/roadmap/stage-25/implementation-plan.md`
 
 Phase execution plans:
 
-- `docs/roadmap/stage-24/phases/safe-resource-aware-selection.md`
-- `docs/roadmap/stage-24/phases/bounded-head-bypass-proof.md`
+- `docs/roadmap/stage-25/phases/safe-resource-aware-selection.md`
+- `docs/roadmap/stage-25/phases/bounded-head-bypass-proof.md`
 
-## v25 - Downstream Operations Design
+## v26 - Downstream Operations Design
 
 Goal:
 
@@ -2047,14 +2192,15 @@ Implement:
   missing or mismatched.
 - Generic scheduling policy design. V10 reserves scheduler-ready request and
   decision records, v11 adds a narrow whole-run FIFO queue, v23 adds bounded
-  managed-local reconciliation and concrete assignment, and v24 adds only a
+  managed-local reconciliation and concrete assignment, v24 proves operational
+  lifecycle and recovery boundaries, and v25 adds only a
   queue-local whole-run candidate-selection seam. This stage should decide
   whether to introduce a broader scheduler interface over authority snapshots,
   resource leases, queue items, ready stage plans, and submitted operations.
   The same policy vocabulary should be adaptable to coarse whole-run scheduling
   and fine stage scheduling, but it must not replace the pipeline planner,
   authority store, executor contracts, queue audit records, v23 assignment
-  lifecycle, or v24 queue-selection safety boundary.
+  lifecycle, or v25 queue-selection safety boundary.
 - Public-interface compatibility review for scheduling and resources. Before
   implementation, review whether public `RunOptions`, `ExecutionPlan`,
   `StageExecutionRequest`, `ResourceRequest`, queue records, and authority lease
@@ -2078,12 +2224,16 @@ Implement:
   recovery, cancellation semantics, retry/resume interaction,
   starvation/fairness policy, and evidence that local, subprocess, SLURM, and
   container executors can honor the same lifecycle handoff.
-- Acceptance-suite documentation that gives exact commands and environment
-  gates for default local tests, real container smoke tests, real SLURM smoke
-  tests, and future GPU-server, scheduler-accounting, queue-dispatch, and
-  notification-plugin acceptance profiles. The docs should state which suites
-  are required by `make validate-pr`, which are summarized by
-  `make test-summary`, and which remain manual opt-in evidence.
+- Acceptance profiles with exact commands, environment gates, and receipts for
+  default local tests, real containers, real SLURM, and future GPU-server,
+  scheduler-accounting, queue-dispatch, and notification-plugin environments.
+  Existing Docker and Apptainer availability/build smokes should grow into real
+  Loom stage success/failure and artifact checks when those runtimes are
+  available. Live SLURM coverage should verify artifact contents, dependency-
+  failure behavior, and an actual scheduler-terminal cancellation rather than
+  accepting a raced completion. The docs should state which suites are required
+  by `make validate-pr`, which are summarized by `make test-summary`, and which
+  remain scheduled or manual opt-in evidence.
 
 Exit criteria:
 
@@ -2102,7 +2252,9 @@ Exit criteria:
   a compatible first-class per-stage reuse policy with clear fingerprint and
   artifact-payload boundaries.
 - Acceptance-suite documentation covers currently implemented suites and names
-  any future environment profiles without making them default PR gates.
+  any future environment profiles without making them default PR gates. Any
+  available real-runtime proof executes Loom behavior and inspects lifecycle,
+  logs, and artifacts rather than checking only the external command version.
 
 Defer:
 

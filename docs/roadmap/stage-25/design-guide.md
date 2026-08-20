@@ -1,21 +1,22 @@
-# Stage 24 Design Guide: Resource-Aware Whole-Run Queue Selection
+# Stage 25 Design Guide: Resource-Aware Whole-Run Queue Selection
 
 Status: planned; not yet implemented
-Roadmap stage: `v24`
+Roadmap stage: `v25`
 Depends on: Stage 23 managed-local concurrency, deferral, admission, and
-assignment contracts
-Formal sources: `docs/roadmap/stage-24/planning.md` and
-`docs/roadmap/stage-24/implementation-plan.md`
+assignment contracts; execution follows Stage 24 operational lifecycle
+validation
+Formal sources: `docs/roadmap/stage-25/planning.md` and
+`docs/roadmap/stage-25/implementation-plan.md`
 
-## What Stage 24 Adds
+## What Stage 25 Adds
 
-Stage 24 lets a Python caller influence **which queued whole run Loom tries
+Stage 25 lets a Python caller influence **which queued whole run Loom tries
 next** when strict FIFO ordering would leave usable resource capacity idle.
 
 Stage 23 remains responsible for running several managed-local items at once,
 limiting active work, admitting logical resource requests, assigning concrete
 exclusive slots, launching processes, observing them, and releasing resources.
-Stage 24 adds a smaller decision immediately before those operations: an
+Stage 25 adds a smaller decision immediately before those operations: an
 optional policy may prefer one item from a bounded view of the queue.
 
 The default does not change. With no injected policy, Loom continues to claim
@@ -39,7 +40,7 @@ defers `B`, returns it to `QUEUED`, and stops filling that FIFO pool for the
 cycle. That behavior is correct, but it can leave one usable unit idle even
 though `A` or `C` could run.
 
-With an injected Stage 24 policy, the controller may consider a bounded FIFO-
+With an injected Stage 25 policy, the controller may consider a bounded FIFO-
 ordered window and choose `A`:
 
 ```text
@@ -101,7 +102,7 @@ slot identity, process handle, command, environment, or mutation callback.
 
 ## Selection Is Not Resource Allocation
 
-Stage 24 uses several deliberately separate concepts:
+Stage 25 uses several deliberately separate concepts:
 
 - **Selection** answers, "Which queued item should Loom try next?"
 - **Claiming** atomically transfers temporary queue ownership to one controller.
@@ -118,7 +119,7 @@ ports, local partitions, or any other scheduler-neutral resource key.
 
 ## Planned Public Policy Contract
 
-Stage 24 introduces five small, import-light public values under `loom.queue`.
+Stage 25 introduces five small, import-light public values under `loom.queue`.
 They are immutable in-process records rather than persisted queue schemas.
 
 The candidate contains only the facts needed to express preference:
@@ -235,7 +236,7 @@ controller = QueueController(
 ```
 
 Loom will not load arbitrary policy classes from queue YAML, entry points, or a
-plugin registry in Stage 24. Python injection meets the known need with a small
+plugin registry in Stage 25. Python injection meets the known need with a small
 trust and compatibility surface. A mapping that names an unknown or delegated
 pool is rejected explicitly rather than silently ignored.
 
@@ -338,7 +339,7 @@ policy repeatedly encounters stale information.
 
 ## Failure Behavior
 
-| Situation | Stage 24 behavior | Queue/resource safety |
+| Situation | Stage 25 behavior | Queue/resource safety |
 | --- | --- | --- |
 | Policy selects a supplied item | Try an atomic exact claim. | Admission and assignment still decide whether it starts. |
 | Policy stops | Stop new selection for that pool cycle. | No item is mutated. |
@@ -367,7 +368,7 @@ match:
 ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
 ```
 
-Stage 24 does not persist:
+Stage 25 does not persist:
 
 - complete candidate lists or contexts;
 - capacity snapshots;
@@ -391,7 +392,7 @@ Compatibility is an explicit part of the design:
   external scheduler owns ordering;
 - no optional accelerator, container, or cluster package is imported.
 
-Stage 24 is therefore an opt-in extension rather than a replacement scheduler.
+Stage 25 is therefore an opt-in extension rather than a replacement scheduler.
 
 ## Why Loom Does Not Provide A Built-In First-Fit Policy Yet
 
@@ -404,7 +405,7 @@ small items: need 1 unit, continuously arrive and run
 ```
 
 A real starvation guarantee would require accepted semantics for durable aging,
-reservations, priorities, or fairness. Stage 24 deliberately does not choose
+reservations, priorities, or fairness. Stage 25 deliberately does not choose
 those product policies. Its example proves the interface, while the caller owns
 the consequences of its preference algorithm.
 
@@ -444,8 +445,9 @@ Phase 2 adds:
 It proves stale advisory capacity, claim races, and concrete slot occupancy
 cannot cause duplicate claims, resource overlap, or infinite reselection.
 
-Stage 23 must be merged before Phase 1 begins. Phase 2 begins only after Phase 1
-merges.
+Stage 23 and Stage 23-post are complete. Phase 1 begins only after Stage 24
+merges and their queue contracts are refreshed. Phase 2 begins only after Phase
+1 merges.
 
 ## Acceptance Examples
 
@@ -467,13 +469,13 @@ The completed stage must demonstrate all of the following:
 
 ## Explicit Non-Goals
 
-Stage 24 does not add priorities, fairness guarantees, durable aging,
+Stage 25 does not add priorities, fairness guarantees, durable aging,
 reservations, runtime estimates, preemption, retry policy, multi-queue or
 cross-pool scheduling, distributed active-item quotas, pipeline-stage
 scheduling, policy discovery, concrete-slot selection, or changes to external
 scheduler ordering.
 
-Those features need separate product decisions. Stage 25 remains the place to
+Those features need separate product decisions. Stage 26 remains the place to
 consider broader scheduling vocabulary spanning queue items, ready pipeline
-stages, authority snapshots, and other operation types. Stage 24 stays narrowly
+stages, authority snapshots, and other operation types. Stage 25 stays narrowly
 focused on safe, replaceable preference among queued whole runs.

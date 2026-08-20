@@ -1,258 +1,223 @@
-# Roadmap v24 Planning: Resource-Aware Whole-Run Queue Selection
+# Roadmap v24 Planning: Operational Lifecycle And Recovery Validation
 
-Status: confirmed; implementation-plan quality gate passed
+Status: confirmed; ready for implementation
 Roadmap stage: v24
 Evidence tree: `/home/can134/work/active/loom` on `develop` at
-`91e772e9e1874a2f44dcba47b19b165ab4602f17`; the source tree was clean before
-planning edits and reviewed queue/resource paths are unchanged from the
-original source review
-Planning route: expanded because this stage introduces a public policy
-extension point across queue selection, SQLite claim concurrency, resource
-observation, and Stage 23 deferral behavior
-Plain-language design guide: `docs/roadmap/stage-24/design-guide.md`
-Current gate: planning workflow complete; Phase 1 not started
-Blockers: Stage 23 merge is an execution dependency; no planning blocker
+`f709731ef9ce023a3a403eb7ca257bd059f416d7`; relevant dirty paths are the
+requested Stage 24/25 roadmap artifacts, `docs/roadmap.md`, and numbering-only
+references in adjacent feature, Stage 23, Stage 23-post, and example docs
+Planning route: lean because the stage exercises existing public and durable
+lifecycle, authority, artifact, and resume contracts; it adds no new public
+abstraction, schema, service, or dependency
+Current gate: planning workflow complete; Phase 1 pending
+Blockers: none
 
-Stage 24 builds on Stage 23's safe concurrent FIFO cycles by making candidate
-preference replaceable while Loom retains lifecycle safety.
+Stage 24 adds real boundary-level proof where fake processes, injected
+exceptions, and happy-path examples cannot show that process liveness, durable
+state, ownership, artifacts, and recovery agree.
 
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
-| Evidence | Queue selection, SQLite claims, controller flow, resource counters, and adjacent roadmap contracts were inspected at the baseline. | None. | Preserve the queue/authority boundary. |
-| Functionality | Default FIFO remains; Python callers may inject one bounded pool-local policy. | None. | Preserve the confirmed behavior boundary. |
-| Design | Policy prefers; repository claims; authority admits; providers place; controller orchestrates. | None. | Preserve removal-first findings. |
-| Validation | Claim races, stale capacity, compatibility, and bounded bypass need causal coverage. | None. | Execute the recorded suite obligations by phase. |
-| Detailed plan / approval | The manifest and two phase plans passed one review and bounded correction; the user requested this workflow on 2026-08-17. | Stage 23 must merge before execution. | Refresh its contracts at Phase 1 selection. |
+| Evidence | Runner, CLI, subprocess timeout, managed-local shutdown, authority, resume, artifact, test harness, and external acceptance paths were inspected after Stage 23-post. | None. | Preserve existing owners and test only real boundaries. |
+| Functionality | Graceful user stops cancel; ordinary failures/timeouts fail; unclean loss is classified during authoritative recovery; no incomplete output is reusable. | None. | Implement Phase 1 lifecycle alignment. |
+| Design | Reuse runner lifecycle writers, executor cleanup, queue process handling, authority recovery transitions, planner invalidation, and current test support. | None. | Keep new helpers test-private. |
+| Validation | Serial, subprocess, parallel, managed-local, hard-loss, authority-loss, and artifact-corruption boundaries need proportionate combined proof; external runtimes remain Stage 26 work. | None. | Execute the recorded obligations by phase. |
+| Detailed plan / approval | The user accepted the operational-testing recommendation and requested a new Stage 24 on 2026-08-18. The manifest and two linked phase plans are manager-reviewed. | None. | Begin Phase 1 from current `origin/develop`. |
 
 ## Evidence And Scope
 
 | Source or area | Current finding | Used for | Related IDs |
 | --- | --- | --- | --- |
-| Queue docs, Stage 11, and `_scheduler.py` | One FIFO queue exists per pool; its private helper orders by enqueue time and ID. | Compatibility and vocabulary. | FR-1, FR-3, FR-10 |
-| SQLite repository, service, and controller | `claim_next()` selects FIFO inside persistence, so callers cannot choose another candidate without replacing the repository. | Required selection seam. | FR-2 through FR-7 |
-| Resource and coordination contracts | Requests are scheduler-neutral; scalar-use observations can race and only lease acquisition is authoritative. | Advisory fit boundary. | FR-4, FR-5, FR-8 |
-| Stage 23 planning | Stage 23 adds reconcile/fill cycles, atomic guarded claims, typed pre-start deferral, scalar/static-slot lifecycle, and a strict FIFO stop after head deferral. | Required implementation base and opt-in override point. | FR-1 through FR-9 |
-| Roadmap Stage 25 | Stage 25 considers generic policy across queue items, ready stages, authority snapshots, and submitted operations. | Prevent Stage 24 from claiming a universal workflow scheduler contract. | FR-10, FR-11 |
-| Existing tests | FIFO helper, repository claims, controller dispatch, managed admission, and coordination backends have coverage; exact-candidate claim races and injected resource-aware ordering do not. | Validation scope. | all |
+| `execution/runner.py`, CLI error mapping, execution/state specs | The runner catches `KeyboardInterrupt` with ordinary exceptions and records failure, while the documented behavior is cancellation plus exit 130. Parallel local stages run in non-preemptible threads, so already-running work must settle truthfully. | Demonstrated lifecycle mismatch and parallel boundary. | FR-1 through FR-3 |
+| `SubprocessExecutor` and its tests | Production timeout handling exists, but the focused timeout test injects `TimeoutExpired`; successful and ordinary failure subprocess integration is already strong. | Real timeout and cleanup boundary. | FR-4, FR-11 |
+| Stage 23-post runtime and tests | Recovery, shutdown deadlines, cancellation ordering, ownership, and lease retention are well covered with fake process handles; the downstream example proves real-process success but not cancellation. | One complementary real managed-local cancel test. | FR-5, FR-11 |
+| Authority stores, transition policy, state/resume specs | Recovery transitions exist and SQLite rejects a second live controller, but the local service allows a conflict and the runner never renews its 24-hour controller lease despite an existing renew API. No e2e connects loss to safe resume. | Ownership continuity, parity, and recovery. | FR-6, FR-7, FR-9 |
+| Artifact and resume implementation/tests | Checksums, index consistency, and downstream invalidation have focused coverage; public CLI/e2e resume currently proves the valid reuse path rather than corrupted payload recovery. | Artifact-trust workflow. | FR-8 |
+| Test support and harness | `SleepStage`, `CoordinatedStage`, `EarlyStopStage`, and existing CLI/project helpers are reusable. Default suites exclude slow/external markers and have stable PR summary targets. | Hermetic test construction. | FR-2 through FR-12 |
+| Container and SLURM acceptance suites | Real container tests primarily check command availability/build; live SLURM cancellation accepts a completion race. These require site/runtime gates and are not needed to close local lifecycle correctness. | Stage boundary and deferral. | FR-12 |
 
-- User-visible outcome: if the FIFO head requests two units while only one is
-  currently available, an opt-in policy may start the oldest later item that
-  requests one unit. The blocked head remains queued and unchanged.
-- Existing path: SQLite FIFO claim -> service -> controller -> adapter ->
-  admission -> optional Stage 23 assignment -> process or delegated handoff.
-- Included scope: bounded candidate reads, an immutable queue-candidate view,
-  one structural selection-policy protocol, existing FIFO compatibility,
-  constructor injection,
-  advisory logical-capacity context, atomic claim-by-candidate, typed policy
-  decisions, bounded continuation after capacity deferral, and safe decision
-  evidence.
-- Non-goals and deferrals: priorities, fairness guarantees, durable aging,
-  reservations, runtime estimates, preemption, retries, multiple queues per
-  pool, cross-pool balancing, distributed active-item quotas, stage scheduling,
-  dynamic plugin discovery, concrete-slot choice, and external scheduler
-  replacement.
-- Demonstrated failure: a managed pool can have usable capacity while its oldest
-  request cannot fit, and downstream code cannot choose a later item without
-  taking over persistence.
-- Affected surfaces: queue candidate/context/decision records, structural
-  policy, controller injection, repository read/claim behavior, and evidence.
-  No queue-item or authority schema change is justified.
+- Outcome: stopping, timeout, crash, resume, or corrupt output cannot create
+  false success, orphaned work, or leaked ownership across the existing CLI/API
+  -> runner/executor/queue -> authority/commit -> inspection/resume path.
+- Included gaps: keyboard interrupt becomes failure; timeout and managed cancel
+  lack real-child proof; controller ownership expires without renewal and
+  differs by backend; crash recovery and corrupt-artifact resume lack e2e proof.
+- Excluded: reattachment, repair command, daemon, retry/status/schema changes,
+  cross-platform signal parity, external scheduling, containers, and clusters.
 
 ## Minimum Useful Change
 
-- Add one queue-local structural protocol that chooses one candidate or stops
-  from an immutable bounded context. Without injection, the existing Stage 23
-  FIFO claim and stop-on-head-deferral path remains unchanged.
-- Let Python callers inject policies by managed pool. Dynamic imports, entry
-  point discovery, and authored configuration for arbitrary project classes are
-  unnecessary for the current consumer.
-- Give it controller-filtered ordered candidates, logical requests, and
-  advisory availability—not controller history, repositories, stores, live
-  tokens, process handles, or mutation callbacks.
-- Add an atomic exact-candidate claim. The policy runs outside a database
-  transaction; the repository revalidates ID, pool, queued status, and expected
-  attempt. A lost race causes bounded refresh, not duplicate work.
-- Use a downstream first-fit example to prove the seam; defer a built-in
-  non-FIFO policy and starvation promises.
+- At serial and prepared-worker boundaries, persist an uncommitted active stage
+  and run as cancelled, clean up, and re-raise. Parallel execution stops new
+  scheduling, cancels an identifiable triggering stage, and settles other
+  already-running stages truthfully before re-raising. `stop_early()` still
+  returns a cancelled result; the CLI already owns exit 130.
+- Use existing local/subprocess and managed-local process paths. Add only test-
+  private markers, PID capture, bounded polling, and cleanup, plus the smallest
+  production fix a real test demonstrates.
+- During explicit resume, acquire an exclusive controller lease, require
+  authority recovery facts for the old controller and incomplete attempts,
+  then record `INTERRUPTED`/`STALE` transitions and audit events before planning
+  attempt 2. Bring the local service authority up to the existing SQLite lease-
+  exclusion contract and renew live controller leases privately; live or
+  ambiguous ownership remains a conflict.
+- Prove checksum invalidation through one public branch-shaped workflow.
+- Leave environment-dependent acceptance to Stage 26.
 
 ## Functional Requirements
 
 | ID | Required behavior | Scope and non-goals | Dependencies | Validation | Status |
 | --- | --- | --- | --- | --- | --- |
-| FR-1 | Without injection, use Stage 23's atomic FIFO claim and stop on capacity deferral. | No default-policy object or behavior change. | Stage 23 claim/cycle. | FIFO compatibility. | locked |
-| FR-2 | Read one pool's queued candidates in deterministic bounded order without claiming. | Advisory view, not a snapshot, general query, or full queue. | Queue index/item JSON. | Order and limit. | locked |
-| FR-3 | Inject one structural policy with a stable safe identifier per managed pool; otherwise use existing FIFO. | No public FIFO class, registry, ABC, or config import. | Controller construction. | Protocol, identifier, default. | locked |
-| FR-4 | Supply immutable candidate ID, enqueue time, attempt, logical amounts, and advisory logical availability; include only cycle-eligible candidates. | Exclude launch/private data, budgets, and attempt history. | Stage 23 reads/counters. | Projection and exclusions. | locked |
-| FR-5 | Capacity presented to policy is explicitly advisory. Every selected item still requires authoritative scalar admission and concrete assignment before launch. Stale observations may cause safe deferral but never over-allocation. | Policy cannot reserve, acquire, renew, or release resources. | Authority coordination and Stage 23 providers. | Stale observation and racing acquisition integration tests. | locked |
-| FR-6 | Select one supplied ID or stop with a safe reason code; validate membership/reason once. | No batch, mutation, or history revalidation. | Candidate context. | Invalid/stop/exception. | locked |
-| FR-7 | Atomically claim exact ID, pool, queued status, and expected attempt; refresh a lost race within the selection bound. | No policy in a transaction or reservation. | Stage 23 claim fencing. | Barrier/stale race. | locked |
-| FR-8 | After typed capacity deferral, FIFO stops; injection may continue without cycle-attempted IDs. One selection bound covers calls, reads, and lost claims; Stage 23 owns other bounds. | No reclaim loop, retry budget, or retry. | Stage 23 deferral. | Bypass and call counts. | locked |
-| FR-9 | Claim audit records policy/reason; cycle evidence records safe stop/error. In-process selection records have no codec or schema. | No skip events, policy state, snapshot, or decision log. | Existing audit/cycle. | Allowlist, serialization, volume. | locked |
-| FR-10 | Managed-local pools are the required resource-aware path. Delegated pools retain FIFO submission unless explicitly supported by later work; external schedulers continue to own post-handoff ordering. | No SLURM scheduling-policy change. | Existing pool modes. | Delegated compatibility tests. | locked |
-| FR-11 | Queue selection remains whole-run and queue-local. Stage 24 must not define priority, fairness, reservation, stage-ready, or universal scheduler vocabulary on Stage 25's behalf. | No general `WorkflowScheduler`. | Roadmap boundary. | Public import and scope review. | locked |
+| FR-1 | Apply one lifecycle outcome contract: authored/explicit stop and caught keyboard interrupt are cancellation; ordinary exceptions and enforced timeout are failure; unclean loss is interruption only when later recovery proves the prior active owner is abandoned. | Do not add statuses or reinterpret scheduler-specific cancellation. | Existing status/transition contracts. | Outcome-table unit/integration checks. | locked |
+| FR-2 | Serial/prepared interruption cancels the uncommitted active stage and run. Parallel interruption stops new starts, cancels the triggering stage when identifiable, settles already-running stages truthfully, blocks unresolved work, then re-raises; committed success is never relabelled. | `stop_early()` remains returned cancellation; in-process threads are not forcibly stopped. | Runner/lifecycle and authority adapter. | Focused serial/parallel tests. | locked |
+| FR-3 | Real serial local and subprocess CLI runs receiving `SIGINT` exit 130 after cancellation/cleanup, with no active-stage output or dependent start and no worker alive. A parallel local signal also exits 130 after in-flight stages settle and starts no later work. | POSIX/Linux PR gate; no Windows or preemptive thread-cancellation promise. | CLI, executors, test stages. | Three bounded signal scenarios. | locked |
+| FR-4 | A real subprocess worker that exceeds configured timeout is terminated and observed exited; stage/run are failed with timeout facts and logs, no output is indexed, and a later attempt is clean. | No in-process timeout or new timeout policy. | Existing reliability policy and subprocess executor. | Production-runner integration test. | locked |
+| FR-5 | Managed-local cancel against a real blocking child observes process exit before item cancellation and scalar/member lease release; pending and foreign-owner work are unchanged. | No crash-time reattachment or foreign PID action. | Stage 23-post runtime/controller. | One real-process integration/e2e scenario. | locked |
+| FR-6 | Killing a test-owned coordinator/worker tree after a start marker cannot produce success, committed outputs, downstream starts, or immediately stealable live ownership. | External supervisor performs containment; Loom does not promise to kill after its own death. | Run lock, authority lease, process fixture. | Hard-loss subprocess scenario. | locked |
+| FR-7 | A live runner renews its controller lease. Explicit resume obtains a new exclusive lease only after abandonment, verifies recovery facts for the old controller and incomplete attempt, then records interrupted/stale transitions/events before attempt 2. Live or ambiguous ownership blocks both authority backends. | No silent repair, public repair command, or new run-lock protocol. | Lease renewal/exclusion, recovery scan, transitions, planner, attempts. | Renewal unit, cross-backend contract, recovery e2e. | locked |
+| FR-8 | Corrupting a checksummed successful artifact through the local store causes public resume to rerun its producer and consumers, reuse an independent branch, expose checksum mismatch, and restore payload/index agreement. | Invalid serialized state may continue to fail clearly; this requirement is byte corruption with valid metadata. | Artifact store, planner, CLI resume. | Branch-shaped public e2e. | locked |
+| FR-9 | Loss of the real local authority service while a stage is active fails closed before output commit, exposes diagnostics, starts no dependent work, and never steals a valid lease. | No automatic service restart or network partition matrix. | Service authority and commit boundary. | One bounded service-loss integration test. | locked |
+| FR-10 | Real-process tests use condition markers, monotonic deadlines, fixture-owned process groups/PIDs, and `finally` cleanup; no arbitrary sleep is the success oracle and no unvalidated PID is signalled. | Test-only support; no runtime dependency. | Existing test support. | Helper unit/use review and flake-free targeted runs. | locked |
+| FR-11 | Existing success, exception, early-stop, fake-process, fake-authority, commit-failure, delegated, and resume behavior remains compatible; add combined tests only for causal interactions. | No comprehensive executor-by-failure matrix. | Current suite. | Targeted regressions plus PR gate. | locked |
+| FR-12 | Default validation remains hermetic. Real Docker, Apptainer, SLURM, GPU, scheduler-accounting, queue-dispatch, notification, and remote-service profiles remain Stage 26 opt-in work. | No external service in `make validate-pr`. | Test markers/harness and roadmap. | Command/marker/docs audit. | locked |
 
 ## Functionality Agreement
 
 | ID | Requirement IDs | Decision | Recommendation and evidence | Tradeoff | State |
 | --- | --- | --- | --- | --- | --- |
-| FQ-1 | FR-1, FR-3 | Default path | Keep Stage 23 atomic FIFO unless policy is injected. | One explicit custom branch. | locked |
-| FQ-2 | FR-2, FR-6, FR-7 | Selection versus claim | Select from a bounded read view, then atomically claim the chosen ID. Do not embed project code in SQLite or require a custom repository. | A selection can lose a race and require refresh. | locked |
-| FQ-3 | FR-4, FR-5, FR-8 | Inputs | Expose candidates/availability; controller owns eligibility/bounds and authority owns leases. | No removal history. | locked |
-| FQ-4 | FR-3, FR-11 | Extension | Constructor-inject one identifier-plus-method protocol; existing FIFO is not a policy type. | No YAML loading. | locked |
-| FQ-5 | FR-8, FR-11 | Starvation semantics | Permit bounded head bypass but make fairness the injected policy's responsibility. Do not claim starvation freedom without durable aging or reservations. | Poor custom policy can delay large work indefinitely. | locked with accepted risk |
-| FQ-6 | FR-9 | Evidence | Audit successful claim policy/reason; serialize cycle stop/error only. | Concise explanation. | locked |
+| FQ-1 | FR-1 through FR-3 | Graceful interrupt | Caught Ctrl-C is explicit cancellation; typed reason distinguishes it. | Status alone does not distinguish cancellation sources. | locked |
+| FQ-2 | FR-2, FR-3 | Python/CLI propagation | Persist cancellation/cleanup, re-raise, and let CLI map 130; parallel in-flight work settles truthfully because local threads are not safely preemptible. | Python callers receive the interrupt; parallel exit may wait for bounded in-flight work. | locked |
+| FQ-3 | FR-6, FR-7 | Unclean loss | Retain active evidence until authoritative recovery records `INTERRUPTED`/`STALE`. | Pre-recovery inspection may still show `RUNNING`. | locked |
+| FQ-4 | FR-4 | Timeout | Keep typed timeout as failure, distinct from user cancellation. | No unified stopped status. | locked |
+| FQ-5 | FR-8 | Artifact corruption | Rerun the affected branch on byte/checksum mismatch; malformed state still fails. | May recompute identical logical output. | locked |
+| FQ-6 | FR-5, FR-10 | Process truth | Terminal state/release follows observed exit; fakes retain exhaustive ordering. | One slower POSIX proof. | locked |
+| FQ-7 | FR-9, FR-12 | Environment tiers | Local authority is hermetic; external sites remain Stage 26 profiles. | External failures are not all PR-gated. | locked |
 
 ## Behavior Baseline
 
-- A managed pool may have one injected policy; otherwise the Stage 23 FIFO path
-  runs unchanged. Policies choose one item at a time from a bounded window.
-- Example: with candidates `B:{device: 2}` then `A:{device: 1}` and advisory
-  availability `{device: 1}`, FIFO chooses B and stops after deferral. A custom
-  first-fit policy may choose A; Loom atomically claims A and still requires
-  admission and assignment before starting it.
-- Invalid output or a policy exception stops new claims without failing an item.
-  Authority uncertainty fails closed; a claim race refreshes within budget.
-  Impossible requests remain a Stage 23 validation concern.
-- FIFO is deterministic. Custom ordering may depend on live capacity, so Loom
-  records policy, reason, and item identity without changing fingerprints.
+- Early/explicit stop is `CANCELLED`; Ctrl-C cleans up, cancels, re-raises, and
+  exits 130. Parallel interruption stops new work but preserves truthful results
+  and valid commits from stages already running.
+- Exceptions/timeouts are `FAILED`; timeout observes worker exit. Managed cancel
+  releases only after exit and does not mutate pending/foreign work.
+- Hard loss writes no fictional terminal state. Exclusive authority and matching
+  recovery facts precede `INTERRUPTED`/`STALE` evidence and attempt 2; authority
+  loss fails closed, while checksum mismatch reruns only the affected branch.
 
 ## Minimum Design
 
-- Ownership: a queue-local module owns in-process selection records, protocol,
-  and validation; repository owns candidate reads and exact claims; controller
-  owns invocation and bounds; authority owns capacity truth; Stage 23 owns
-  placement.
-- Data and control flow: reconcile active items -> calculate controller-local
-  advisory availability -> read bounded FIFO candidates -> ask policy for one
-  ID or stop -> atomically try the exact claim -> dispatch -> record started,
-  completed, or deferred -> update current-cycle context -> repeat within all
-  bounds. Advisory availability subtracts active queue requests from declared
-  pool capacity; external leases and concurrent changes can make it stale.
-- Fixed contracts: immutable in-process candidate/context/decision records, one
-  `select_next(context)` method, select-or-stop discrimination, safe policy
-  identifier, and per-pool constructor injection. Selection records add no
-  codec; only claim/cycle evidence serializes.
-- Trust boundary: policy output is advice. Loom validates membership and
-  budgets; policy code never runs inside a transaction or mutates lifecycle
-  state.
-- Private discretion: exact names, capacity helpers, query grouping, default
-  window size, retry helpers, and cycle-step nesting.
-- Downstream policies use only logical resources and safe candidate facts. Stage
-  25 may later adapt this seam but must not make it stage- or executor-aware.
-- Import direction: `loom.queue` may consume import-light resource value records
-  and Stage 23 controller results. Resource, authority, planning, and executor
-  packages do not import queue selection. No new dependency is introduced.
+- Modules and ownership: runner/lifecycle owns cancellation and recovery
+  decisions; executors and managed-local process handles own termination and
+  exit observation; authority owns active truth, transitions, attempts, and
+  leases; planner owns stale/reuse decisions; artifact store owns bytes and
+  checksum verification; CLI owns exit presentation; tests/support owns marker
+  and process-fixture mechanics.
+- Graceful serial/prepared flow: signal -> executor cleanup -> uncommitted active
+  stage and run cancellation -> downstream block -> owned release -> re-raised
+  `KeyboardInterrupt` -> CLI exit 130. Parallel flow stops submission, settles
+  in-flight stages without relabelling valid success, blocks unresolved work,
+  cancels the run, then re-raises.
+- Unclean-loss flow: a live runner renews its controller; after a supervised kill
+  no commit occurs and the last lease blocks resume until deterministic expiry.
+  A new exclusive controller scans matching abandonment facts, persists recovery
+  transitions/events, then may plan attempt 2.
+- Fixed contracts: lifecycle outcome table, CLI exit 130, success-after-output-
+  commit ordering, exit-before-resource-release ordering, no reuse of old
+  `RUNNING`/corrupt work, explicit recovery rather than silent rewrite, and
+  hermetic default validation.
+- Private discretion: helper names, exception nesting, process mechanics,
+  markers, polling, PID shape, fixtures, and test placement.
+- No public protocol, command, config, status, schema, marker, plugin, or
+  dependency. Preserve source import direction; tests consume public surfaces.
 
 ## Complexity Delta
 
 | Addition | Current necessity | Simpler alternative | Decision |
 | --- | --- | --- | --- |
-| Selection records | Policy needs a restricted typed view/decision. | Pass `QueueItem`. | keep in-process only |
-| Structural protocol | Selection plus stable evidence identity. | Anonymous callback. | keep identifier/method |
-| Bounded candidate read | Non-head selection requires seeing later items. | Load the whole queue. | keep bounded |
-| Atomic exact-candidate claim | Selection occurs outside persistence and can race. | Run policy inside SQLite transaction. | keep guarded claim |
-| Advisory availability | Needed for fit without authority access. | Expose store. | keep advisory |
-| Public FIFO object | Stage 23 claim is sufficient. | Route default through new seam. | remove |
-| Policy-visible cycle state | Controller filtering/bounds suffice. | Expose for future policies. | remove |
-| Separate selection budgets | One bound plus Stage 23 bounds closes loops. | Independent knobs. | consolidate |
-| Built-in non-FIFO policy | Core fairness semantics are not accepted. | Support first-fit in core. | defer; use example |
-| Durable bypass state | Needed only for a starvation guarantee. | Hide it in metadata/audit. | defer |
-| Registry or policy config | Python injection meets the need. | Add discovery now. | defer |
+| Interrupt lifecycle branch | Runner contradicts accepted cancellation semantics. | Retain failure. | keep smallest fix |
+| Parallel interrupt settlement | In-process workers cannot be safely preempted. | Pretend all active stages cancelled. | preserve truthful results; stop new starts |
+| Marker/PID fixture | Real signal and exit need safe synchronization/cleanup. | Sleeps/process search. | keep test-private |
+| Real timeout and managed cancel | Injected/fake paths cannot prove child exit ordering. | More mock assertions. | keep one proof each |
+| Controller continuity/recovery | Fixed TTL is not renewed and transitions lack workflow proof. | Treat TTL as lifetime. | private renewal plus existing recovery surfaces |
+| Corruption and service-loss workflows | Connect planner/commit owners across real boundaries. | More isolated units. | keep one each |
+| Supervisor, reattachment, full matrix | Not required by current ownership contracts. | Add future machinery now. | defer/remove |
+| External-runtime gate | Infrastructure is not reliably present. | Require Docker/cluster. | defer to Stage 26 |
 
 ## Design Agreement
 
 | ID | Requirement IDs | Decision | Recommendation and evidence | Tradeoff | State |
 | --- | --- | --- | --- | --- | --- |
-| DQ-1 | FR-3 through FR-6 | Policy boundary | Stable identifier plus preference only; no admission, placement, mutation, or bounds. | Controller orchestrates. | locked |
-| DQ-2 | FR-1, FR-2, FR-7 | Selection paths | Default uses Stage 23 `claim_next`; injection uses bounded read/exact guarded claim. | Mechanics differ. | locked |
-| DQ-3 | FR-4, FR-5 | Availability meaning | Derive controller-local logical availability and label it advisory; final acquisition decides truth. | External leases and races can make it stale. | locked |
-| DQ-4 | FR-8 | Continuation | Controller filters a private attempted-ID set and spends one selection bound. | No history; next cycle reconsiders. | locked |
-| DQ-5 | FR-9 | Persistence | Extend allowlisted claim/cycle evidence; no selection codecs, DDL, or private state. | No decision history/aging. | locked |
-| DQ-6 | FR-10, FR-11 | Roadmap boundary | Apply resource-aware customization to managed whole-run pools and leave generic scheduling design to Stage 25. | Queue and future workflow scheduling remain distinct concepts. | locked |
-
-## Expanded Design Review
-
-| Finding | Related IDs | Evidence and consequence | Required action | Status |
-| --- | --- | --- | --- | --- |
-| Default duplicated machinery. | FR-1, FR-3, FR-7 | Stage 23 atomic FIFO already works. | Keep it; use the seam only when injected. | resolved |
-| Policy saw controller state. | FR-4, FR-6, FR-8 | First-fit needs candidates/availability, not history/budgets. | Filter privately. | resolved |
-| Validation/budgets duplicated. | FR-6 through FR-8 | Filtered membership and one bound close reachable loops. | Validate once; consolidate. | resolved |
-| Public implied durable. | FR-4, FR-9 | Policy calls are in-process. | Serialize claim/cycle evidence only. | resolved |
-| Evidence identity was missing. | FR-3, FR-9 | Class names/bags are unstable. | Require one safe identifier. | resolved |
-| Exact-claim guards overlapped. | FR-7 | ID is identity; pool/status/attempt detect staleness. | Keep only those guards. | resolved |
+| DQ-1 | FR-1 through FR-3 | Interruption owner | Runner persists lifecycle; executor cleans its child; the parallel scheduler settles in-flight work; CLI only maps the propagated interrupt. | Parallel exit may wait for bounded in-flight stages. | locked |
+| DQ-2 | FR-3 through FR-6, FR-10 | Synchronization | Marker files and monotonic bounded polling establish readiness and exit. Never use a fixed sleep as the assertion. | Small test-support helper required. | locked |
+| DQ-3 | FR-4, FR-5 | Cleanup proof | Assert exact child/group non-liveness before terminal state and release, while deterministic fakes retain branch-level timing proof. | POSIX-specific process check in default Linux CI. | locked |
+| DQ-4 | FR-6, FR-7 | Recovery truth | Privately renew live controller ownership; after loss, exclusive acquisition plus recovery facts decide abandonment. Use deterministic authority time, never PID or wall-clock waiting. | Renewal errors must fail closed; recovery waits for all relevant leases. | locked |
+| DQ-5 | FR-8 | Artifact oracle | Assert planner reason, attempt counts, payload content, outputs, and run index together. | More assertions in one causally combined e2e. | locked |
+| DQ-6 | FR-9 | Authority failure point | Stop the local authority after stage start and before commit; no new production failpoint. | Fixture orchestration is more involved than a fake. | locked |
+| DQ-7 | FR-11, FR-12 | Validation shape | PR-gate hermetic local behavior; retain environment-specific acceptance and receipts in Stage 26. | External-runtime regressions depend on scheduled/manual evidence. | locked |
 
 ## Examples And Validation
 
 | Example or invariant | Behavior or risk | Authoritative owner and boundary | Minimal coverage | Status |
 | --- | --- | --- | --- | --- |
-| Default compatibility | No policy injection produces Stage 23 FIFO selection and FIFO-head stop. | Stage 23 controller/repository. | Unit and integration comparison. | planned |
-| Two-versus-one fit | Head B requests two, later A requests one, one is advisory-available; injected first-fit selects and starts A while B remains queued. | Policy preference plus controller/admission. | Real SQLite queue/coordination integration. | planned |
-| Stale fit observation | A appears to fit but another owner wins capacity before acquisition. | Authority acquisition. | A defers safely; no process starts and no capacity overlaps. | planned |
-| Selected-claim race | Two controllers select A from the same window. | SQLite exact-claim CAS. | Exactly one claim succeeds; loser refreshes within budget. | planned |
-| Invalid policy | Policy selects an absent/already-attempted item or raises. | Controller decision validation. | No claim or item mutation; cycle reports structured stop/error. | planned |
-| Bounded bypass | Deferred candidates are not reclaimed in the same cycle and scanning cannot walk an unbounded queue. | Controller candidate/dispatch budgets. | Exact call counts and stop reasons. | planned |
-| Separation from placement | Policy never receives slot IDs, binding values, leases, commands, or environment. | In-process selection records. | Exact field-set and import tests. | planned |
-| Delegated compatibility | SLURM submission stays FIFO by default and external scheduling remains delegated. | Pool/controller boundary. | Existing delegated suite plus negative policy-scope test. | planned |
+| Local/subprocess CLI Ctrl-C | Signal, cancellation, cleanup, artifact/downstream absence, and exit 130 agree; subprocess leaves no worker. | Runner, executor, CLI. | One real-signal e2e per causal process owner. | planned |
+| Parallel local Ctrl-C | New scheduling stops while already-running stages settle without fictional cancellation or lost valid commits. | Parallel runner/CLI. | One bounded coordinator-signal case plus focused stage-raised interrupt. | planned |
+| Enforced timeout | Production timeout kills/observes worker and persists timeout failure. | Subprocess executor/reliability boundary. | One integration test; injected unit retained. | planned |
+| Managed-local cancel | Exit precedes item cancellation/lease release. | Runtime/adapter/authority. | One real child; deterministic fakes retained. | planned |
+| Hard coordinator loss | Controller renewal preserves live ownership; after loss, active leases block and exclusive recovery records interruption/stale evidence before attempt 2. | Authority, lock, planner, runner. | Renewal unit plus isolated loss/resume and lease-parity contract. | planned |
+| Authority service loss | Commit fails closed; dependants do not start. | Service authority mutation. | One bounded integration test. | planned |
+| Corrupt artifact resume | Mismatch invalidates one branch and repairs bytes/index. | Artifact store, planner, commit. | One public branch e2e. | planned |
 
 Causal interactions requiring combined coverage:
 
-- candidate choice + exact-claim race;
-- advisory fit + admission loss + guarded deferral;
-- deferred head + later candidate start + cycle bounds.
+- real `SIGINT` + executor cleanup + durable cancellation + CLI exit;
+- parallel coordinator interruption + in-flight settlement + scheduling stop;
+- real managed-local child exit + queue terminal state + scalar/member lease
+  release;
+- unclean process loss + authority liveness/expiry + recovery transition + new
+  attempt;
+- checksum mismatch + DAG invalidation + artifact/index replacement;
+- authority process loss + output-commit authorization + downstream blocking.
 
-Other validation stays in focused unit or contract tests.
+All other categories remain focused tests rather than an executor/store matrix;
+Stage 26 owns external profiles.
 
 ## Phase Shaping
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Safe resource-aware selection | Queue-local policy records/protocol, advisory logical availability, bounded candidate reads, atomic exact claims, controller injection, selected-claim evidence, and unchanged default FIFO. | Managed queue selection, repository, service, and controller; no post-deferral continuation or non-FIFO core policy. | Stage 23 merged. | Injected first-fit fake starts A in the B-two/A-one case; claim races stay safe; default path is unchanged. | pending |
-| 2. Bounded head-bypass proof | Private attempt filtering, bounded continuation after unexpected capacity deferral, safe cycle stop/error evidence, downstream example, docs, and causal integration/e2e proof. | Managed whole-run pools; no priorities, fairness, reservations, config registry, SLURM policy, or stage scheduler. | Phase 1 merged. | Stale observations safely defer then consider another candidate; all bounds/redaction/compatibility checks pass. | pending |
+| 1. Real interruption and cancellation | A user can stop serial, subprocess, bounded-parallel, or managed-local work and Loom's exit, state, process liveness, artifacts, downstream work, and leases agree; actual subprocess timeout is proven. | Runner/CLI/executor/managed runtime and test support; no unclean recovery, corruption, external runtime, new status, or daemon. | Completed Stage 23-post. | Focused runner regression, three real Ctrl-C cases, real timeout, real managed cancel, full PR gate. | pending |
+| 2. Crash recovery and artifact trust | Unclean process/authority loss cannot create false success, explicit recovery/resume is conservative and inspectable, and corrupt checksummed output repairs only its affected branch. | Authority/recovery/planner/artifact/runner plus public workflow tests; no repair command, reattachment, cluster/container acceptance, or retry redesign. | Phase 1 merged. | Hard-loss recovery, live-owner refusal, real authority loss, corrupt-artifact resume, docs, full PR gate. | pending |
 
-Two phases separate persistence/concurrency from head-bypass behavior. Neither
-may implement Stage 25's universal scheduler design.
+Two phases separate graceful cleanup—where Loom is alive and must complete
+termination—from unclean recovery—where Loom cannot assume cleanup ran and must
+rely on authority and durable evidence. Each phase delivers a complete user-
+observable safety outcome.
 
 ## Quality Gate
 
 | Check | Evidence | Result |
 | --- | --- | --- |
-| Behavior locked | FR/FQ rows cover default, opt-in, failures, and exclusions; the user confirmed progression on 2026-08-17. | pass |
-| Design justified | Reuse Stage 23 FIFO/cycles, counters, storage, and admission. | pass |
-| Complexity proportionate | FIFO object, policy cycle state, extra budgets/codecs, fairness, registry, config, and universal scheduling are removed/deferred. | pass |
-| Ownership clear | Policy prefers; controller filters/bounds; repository claims; authority admits; provider places. | pass |
-| Validation proportionate | Three causal combinations; validate each other invariant once. | pass |
-| Phases reviewable | Two vertical phases retain Stage 23 default. | pass |
-| Plan review | One independent review and one bounded correction fixed exact-shape, safe-code, pool-mapping, budget, and traceability findings. | pass |
-| No blocker | Stage 23 merge is an execution dependency, not a planning-quality blocker. | pass |
+| Behavior and agreements locked | FR/FQ rows distinguish cooperative stop, caught signal, failure/timeout, unclean loss, authority loss, and corruption. | pass |
+| Minimum design justified | Existing lifecycle, transition, authority, planner, artifact, executor, and queue owners are reused. | pass |
+| Complexity delta proportionate | No public repair API, supervisor, reattachment, schema, dependency, status, or broad matrix. | pass |
+| Contracts and private discretion clear | Observable ordering and outcomes are fixed; helper names, process mechanics, and file placement remain private. | pass |
+| Invariant ownership and validation proportionate | Each real process, parallel scheduling, authority recovery, and artifact interaction is covered once; focused tests remain authoritative elsewhere. | pass |
+| Phases vertical and reviewable | Graceful lifecycle proof and unclean recovery/artifact trust are independently useful two-phase outcomes. | pass |
+| No unresolved blocker | The user accepted the recommendation and requested this stage; repository evidence resolves placement and semantics. | pass |
 
-Gate result: planning, expanded design-safety review, implementation planning,
-and plan-quality review are complete. Phase 1 remains pending until Stage 23 is
-merged and its concrete contracts are refreshed.
+Gate result: lean planning, implementation manifest, phase plans, manager review,
+and maintainer approval are complete. Stage 24 is ready for Phase 1 execution.
 
-Accepted risks and revisit triggers:
-
-- Custom policies may starve large items. Revisit when Loom must provide a
-  starvation guarantee, which requires explicit durable aging or reservation
-  semantics.
-- Revisit stale advisory availability only if futile claims cause measured
-  churn; acquisition remains authoritative.
-- Constructor-only injection remains until a second bootstrap consumer needs
-  declarative discovery.
-- The candidate window may hide a fitting item farther back. Revisit when real
-  queue depth demonstrates the need for pagination or indexed scheduling hints.
+Accepted risks: POSIX-only signals, settled rather than preempted parallel work,
+no reattachment/machine-loss cleanup, and Stage 26 external evidence.
 
 ## Decisions And Deferrals
 
 | Item | Decision or deferral | Rationale | Revisit trigger |
 | --- | --- | --- | --- |
-| Stage placement | New Stage 24 after Stage 23. | It depends on Stage 23 deferral/claim safety and should not rewrite the confirmed stage. | Stage 23 contracts materially change during implementation. |
-| Public vocabulary | Queue-local selection policy, not universal scheduler. | Avoid conflating Loom queue ordering, SLURM scheduling, and pipeline-stage scheduling. | Stage 25 cross-contract design. |
-| Default | Stage 23 atomic FIFO/deferral; no public FIFO object. | Compatibility without the new seam. | Default intentionally changes. |
-| Custom behavior | Constructor-injected managed-pool policy with stable ID selects supplied candidates. | Extension plus safe evidence. | Non-Python discovery needed. |
-| Resource data | Advisory logical availability only. | Supports fit decisions without transferring authority or assignment ownership. | A demonstrated policy needs another safe, generic observation. |
-| Cycle state/bounds | Controller owns attempts and active/dispatch/selection bounds. | Avoid duplicate validation/coupling. | Accepted policy needs history. |
-| Fairness | No guarantee and no durable bypass state. | Correct fairness needs product policy not present in the motivating case. | Large jobs are observably starved. |
-| Persistence | Existing records and allowlisted claim/cycle evidence; no selection codec, private state, or DDL. | Current columns/evidence suffice. | Safe exact claim/evidence proves otherwise. |
-| Generic scheduling | Remains Stage 25 design work. | Queue-local whole-run selection is narrower than cross-stage scheduling. | Stage 25 planning begins. |
+| Ctrl-C | Serial/prepared work cancels; parallel stops new starts and settles in-flight truthfully; then re-raise for exit 130. | Matches explicit stop without claiming unsafe thread preemption. | Cooperative parallel cancellation is accepted. |
+| Unclean loss | Renew live controller leases; after loss require exclusive acquisition and recovery facts, then record `INTERRUPTED`/`STALE` evidence. | TTL alone must not misclassify a live runner; dead PID is not authority. | Reattachment owner is accepted. |
+| Timeout/corruption | Timeout fails; valid checksum mismatch reruns its branch; malformed state errors. | Preserves failure intent and conservative reuse. | Reliability/repair policy changes. |
+| Deferrals | No supervisor, repair API, new schema/status, broad matrix, or external-runtime PR gate. | Current private seams and Stage 26 own these concerns. | A current consumer requires one. |

@@ -1388,7 +1388,7 @@ class AuthorityBackedSerialRunStore:
                     status.metadata,
                 ),
             )
-        if status.status is StageStatus.FAILED:
+        if status.status in {StageStatus.FAILED, StageStatus.CANCELLED}:
             self._fail_stage_lease(run_uri, stage_name, status.attempt, status)
         self.local_store.write_stage_status(run_uri, stage_name, status)
 
@@ -1766,7 +1766,13 @@ class AuthorityBackedSerialRunStore:
             return
         self._fail_stage_lease_by_record(
             active,
-            reason=_reason("stage_failed", status.message, status.metadata),
+            reason=_reason(
+                "stage_cancelled"
+                if status.status is StageStatus.CANCELLED
+                else "stage_failed",
+                status.message,
+                status.metadata,
+            ),
         )
 
     def _fail_stage_lease_by_record(

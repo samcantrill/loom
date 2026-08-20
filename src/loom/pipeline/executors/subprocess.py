@@ -32,6 +32,7 @@ from .errors import ExecutorError
 
 WORKER_MAIN_SNIPPET = "from loom.cli.main import main; raise SystemExit(main())"
 MAX_CAPTURE_SNIPPET_CHARS = 1000
+_INTERRUPT_CLEANUP_TIMEOUT_SECONDS = 5
 
 Clock = Callable[[], str]
 
@@ -348,18 +349,44 @@ def _run_subprocess(
     *,
     timeout_seconds: float | None = None,
 ) -> SubprocessRunResult:
-    completed = subprocess.run(
+    process = subprocess.Popen(
         tuple(command),
-        check=False,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout_seconds,
     )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except KeyboardInterrupt:
+        _terminate_and_observe(process)
+        raise
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        stdout, stderr = process.communicate()
+        if timeout_seconds is None:
+            raise AssertionError("subprocess timeout requires a configured deadline")
+        raise subprocess.TimeoutExpired(
+            tuple(command),
+            timeout_seconds,
+            output=stdout,
+            stderr=stderr,
+        ) from exc
     return SubprocessRunResult(
-        returncode=completed.returncode,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
     )
+
+
+def _terminate_and_observe(process: subprocess.Popen[str]) -> None:
+    """Terminate the owned worker and observe its exit before interrupt propagation."""
+
+    process.terminate()
+    try:
+        process.communicate(timeout=_INTERRUPT_CLEANUP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate(timeout=_INTERRUPT_CLEANUP_TIMEOUT_SECONDS)
 
 
 def _read_worker_result(
