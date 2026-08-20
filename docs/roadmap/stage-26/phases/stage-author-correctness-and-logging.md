@@ -265,7 +265,8 @@ Final commands:
 - Manager preparation: complete; Stage 25 merge, source seams, exact targeted
   test paths, branch, worktree, base, target, and title verified
 - Expanded planning: not needed unless a stop condition is reached
-- Implementation: pending one `loom_phase_executor` from prepared revision
+- Implementation: complete at `d4e8dc948d56a2a03631269b871b012d04bfb6cf`; manager
+  pre-submit, PR, review, and merge remain pending
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: pending
 - Independent review: manager-local fast path
@@ -276,9 +277,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added `docs/downstream-operations.md`; routed it from README/structure/examples; refreshed lifecycle catalogs and Stage 26 roadmap scope; extended the captured-logs example with an explicitly registered file output and workspace-only file; and changed `PipelineRunner._record_preparation_failure` to persist fresh-run `FAILED` before event observation. |
+| Tests added or updated | `tests/unit/loom/pipeline/execution/test_runner.py` now proves an event observer reads `FAILED`; `tests/unit/loom/pipeline/test_context.py` covers explicit local file registration; `tests/integration/examples/test_example_workflows.py` proves the hermetic example returns refs, publishes the registered file, and leaves the workspace file separate. |
+| Validated revision/tree state and evidence | At `d4e8dc948d56a2a03631269b871b012d04bfb6cf`, `git diff --check` and the tracked tree were clean. Targeted commands passed: 11 contract/context, 19 local-execution/CLI, 30 runner, and 10 example/CLI tests. `make validate-pr` passed. `make test-summary` produced `build/test-summary.md`: 2,307 passed, 0 failed, 0 errors, 3 skipped (2026-08-20T23:23:09Z). |
+| Validation-relevant changes after evidence | None. |
+| PR, review, and merge | Not started; reserved for the manager. |
+| Residual risk and cleanup | No blocker. Executor logging remains intentionally heterogeneous; the committed branch and dedicated worktree are retained for manager pre-submit/PR work. |
