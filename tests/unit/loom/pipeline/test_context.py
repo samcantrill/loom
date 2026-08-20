@@ -114,21 +114,35 @@ def test_context_helpers_save_and_register_declared_outputs(tmp_path: Path) -> N
         local_output_dir=run_store.local_stage_artifact_dir(run_uri, "build"),
         local_workspace_dir=run_store.local_stage_workspace_dir(run_uri, "build"),
         artifact_store=artifact_store,
-        output_specs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
+        output_specs={
+            "data": OutputSpec(artifact_type="json", codec_key="json.v1"),
+            "report": OutputSpec(artifact_type="text", codec_key="text.v1"),
+        },
     )
 
     assert context.local_output_path("data", suffix=".json").name == "data.json"
-    path = context.local_workspace_path("tmp", "work.txt")
-    assert path.name == "work.txt"
+    workspace_path = context.local_workspace_path("tmp", "work.txt")
+    workspace_path.write_text("workspace only", encoding="utf-8")
+    assert workspace_path.name == "work.txt"
     ref = context.save_artifact(
         "data",
         {"ok": True},
         artifact_type="json",
         codec_key="json.v1",
     )
+    report_path = context.local_output_path("report", suffix=".txt")
+    report_path.write_text("published", encoding="utf-8")
+    report_ref = context.register_local_artifact(
+        "report",
+        report_path,
+        artifact_type="text",
+        codec_key="text.v1",
+    )
 
     assert ref.producer_stage == "build"
     assert artifact_store.exists(ref)
+    assert report_ref.producer_stage == "build"
+    assert artifact_store.exists(report_ref)
 
 
 def test_context_helpers_reject_missing_runtime_services(tmp_path: Path) -> None:

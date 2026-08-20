@@ -1311,12 +1311,17 @@ run.planned
 run.started
 run.completed
 run.failed
+run.cancelled
+run.interrupted
+run.preparation_failed
 stage.planned
 stage.started
 stage.completed
 stage.failed
+stage.cancelled
 stage.skipped
 stage.reused
+stage.stale
 stage.blocked
 ```
 
@@ -1328,9 +1333,10 @@ when one exists. For example, `stage.started` follows persisted `RUNNING`,
 `stage.completed` follows output commit and persisted `SUCCEEDED`, and
 `stage.failed` follows failure metadata and persisted `FAILED`.
 
-Callbacks and plugin-discovered event sinks remain deferred. Future sinks are
+Explicit event sinks observe persisted records best-effort. They are
 observe-only and must not mutate plans, artifacts, stage results, status
-transitions, or run-store state.
+transitions, or run-store state. Generic event filtering and activation remain
+future extension work.
 
 ---
 

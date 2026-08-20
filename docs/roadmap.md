@@ -158,7 +158,7 @@ written.
 | v23 | Managed local concurrency and resource assignment | Pool-scoped managed-local reconcile/fill cycles, structured capacity deferral, exclusive static-slot assignment, lease-safe local process lifecycle, and redacted operational status. |
 | v24 | Operational lifecycle and recovery validation | Real-process proof for interruption, cancellation, timeout, shutdown, unclean process loss, authority loss, artifact integrity, and resume without false success or orphaned ownership. |
 | v25 | Resource-aware whole-run queue selection | Default-compatible FIFO selection plus a bounded queue-local policy seam for safe downstream choice of fitting managed-pool candidates. |
-| v26 | Downstream operations design | Design and documentation for stage-author guidance, resource validation and usage observation, generic scheduling, notifications, resume policy, queues, and environment acceptance profiles. |
+| v26 | Stage-author operations correctness | Truthful stage-author artifact/log/lifecycle guidance and one preparation-failure ordering correction; broader operations work remains deferred. |
 
 ## v0 - Local Runtime Kernel
 
@@ -2162,133 +2162,57 @@ Phase execution plans:
 - `docs/roadmap/stage-25/phases/safe-resource-aware-selection.md`
 - `docs/roadmap/stage-25/phases/bounded-head-bypass-proof.md`
 
-## v26 - Downstream Operations Design
+## v26 - Stage-Author Operations Correctness
 
-Goal:
+Status:
 
-- Turn downstream-usage questions into explicit design artifacts and
-  roadmap-ready implementation choices without rewriting completed roadmap
-  stages.
+- Phase 1 implements one evidence-backed downstream journey and the smallest
+  lifecycle ordering correction. It does not reopen the prior broad operations
+  design scope.
 
 Implement:
 
-- Stage-author guidance for the preferred artifact-directory workflow: use
-  `StageContext.local_output_path(...)` or
-  `StageContext.local_workspace_path(...)`, write outputs or temporary files
-  there, then return refs from `save_artifact(...)` or
-  `register_local_artifact(...)`. The guidance should make clear that stage
-  code receives artifact refs, not mutable store handles, and that project code
-  owns domain schemas.
-- Logging guidance that distinguishes stage-owned log files from
-  executor-captured stdout/stderr. It should document local, subprocess,
-  container, and SLURM behavior where available, explain SLURM wrapper log
-  paths, and describe what happens when project code configures Python logging
-  itself.
-- Queue and resource guidance that shows a managed local queue pool, a delegated
-  SLURM queue pool, resource preflight, authority-backed resource leases, and
-  the difference between scheduler-neutral resource requests and
-  executor-specific resource mapping.
-- Resource validation and usage-observation design. Loom already validates
-  scheduler-neutral resource request shape, executor capabilities, SLURM dry-run
-  mappings, queue managed-pool reconciliation, and authority-backed leases where
-  those features exist. This stage should define observed usage records
-  separately from requested allocation: scheduler accounting such as `sacct`,
-  container process facts, GPU observations, allocation-versus-usage
-  diagnostics, and policy for warnings or failures when usage evidence is
-  missing or mismatched.
-- Generic scheduling policy design. V10 reserves scheduler-ready request and
-  decision records, v11 adds a narrow whole-run FIFO queue, v23 adds bounded
-  managed-local reconciliation and concrete assignment, v24 proves operational
-  lifecycle and recovery boundaries, and v25 adds only a
-  queue-local whole-run candidate-selection seam. This stage should decide
-  whether to introduce a broader scheduler interface over authority snapshots,
-  resource leases, queue items, ready stage plans, and submitted operations.
-  The same policy vocabulary should be adaptable to coarse whole-run scheduling
-  and fine stage scheduling, but it must not replace the pipeline planner,
-  authority store, executor contracts, queue audit records, v23 assignment
-  lifecycle, or v25 queue-selection safety boundary.
-- Public-interface compatibility review for scheduling and resources. Before
-  implementation, review whether public `RunOptions`, `ExecutionPlan`,
-  `StageExecutionRequest`, `ResourceRequest`, queue records, and authority lease
-  APIs already carry enough information or need compatible additions.
-- Stage reuse policy design. The current resume contract reuses a successful
-  prior stage only when fingerprints and required artifacts remain valid, and
-  project stages own checkpoint-level resume. This stage should decide whether
-  to add a small planning policy such as `reuse_if_valid` by default,
-  `always_run` for stages that must never reuse old outputs, or an explicit
-  force/rerun policy surfaced through runtime options.
-- Generic lifecycle notification design over event sinks. Core Loom should
-  expose committed lifecycle events and observe-only sink contracts. This stage
-  should define service-neutral notification messages, lifecycle alert filters,
-  severity mapping, redaction rules, and a small notifier protocol, then define
-  how Slack, Discord, webhooks, email, or tracking services adapt to that
-  protocol through optional plugins.
-- Full stage-scheduler requirements. Current SLURM `afterok` maps a planned DAG
-  to submitted scheduler jobs, while v11 queues schedule whole runs. A future
-  fine-grained stage scheduler would need authoritative ready-stage snapshots,
-  per-stage resource admission, stage claim/fencing, submitted-operation
-  recovery, cancellation semantics, retry/resume interaction,
-  starvation/fairness policy, and evidence that local, subprocess, SLURM, and
-  container executors can honor the same lifecycle handoff.
-- Acceptance profiles with exact commands, environment gates, and receipts for
-  default local tests, real containers, real SLURM, and future GPU-server,
-  scheduler-accounting, queue-dispatch, and notification-plugin environments.
-  Existing Docker and Apptainer availability/build smokes should grow into real
-  Loom stage success/failure and artifact checks when those runtimes are
-  available. Live SLURM coverage should verify artifact contents, dependency-
-  failure behavior, and an actual scheduler-terminal cancellation rather than
-  accepting a raced completion. The docs should state which suites are required
-  by `make validate-pr`, which are summarized by `make test-summary`, and which
-  remain scheduled or manual opt-in evidence.
-
-Exit criteria:
-
-- Downstream users have a concrete answer for where stage code writes outputs,
-  how produced files are registered, how stdout/stderr and explicit logs are
-  captured, and what remains project-owned behavior.
-- Queue/resource documentation explains how queues are configured, what
-  resources are admitted or mapped in local, SLURM, Docker, and Apptainer
-  settings, and which resource checks are validation versus observed usage
-  evidence.
-- Scheduler planning distinguishes whole-run queue policy, submitted-executor
-  behavior, fine-grained stage scheduling, and authority truth.
-- Notification planning defines a generic observe-only protocol without making
-  Slack, Discord, webhooks, email, or tracking services core dependencies.
-- Resume planning either accepts the existing force/resume behavior or defines
-  a compatible first-class per-stage reuse policy with clear fingerprint and
-  artifact-payload boundaries.
-- Acceptance-suite documentation covers currently implemented suites and names
-  any future environment profiles without making them default PR gates. Any
-  available real-runtime proof executes Loom behavior and inspects lifecycle,
-  logs, and artifacts rather than checking only the external command version.
+- Document managed saves, explicit local-file registration, workspace-only
+  files, input loading, declared `ArtifactRef` returns, and project ownership
+  of domain schemas and checkpoint compatibility.
+- Document executor-owned streams and paths for local, subprocess, Docker,
+  Apptainer, SLURM, and managed queue paths, including the distinction between
+  `loom logs`, scheduler wrapper logs, queue-attempt logs, tracebacks, and
+  project-owned files.
+- Publish the exact emitted lifecycle names and commit-before-observe rule.
+  For a fresh preparation failure, persist `FAILED` before publishing
+  `run.preparation_failed`; an already-terminal opened run remains unchanged.
 
 Defer:
 
-- Implementing a generic scheduler, cross-pool queue policy, new notification
-  adapter, new resource usage sampler, or new resume semantics until this design
-  stage has produced a reviewed implementation plan. The bounded managed-local
-  lifecycle assigned to v23 is not part of this deferral.
-- Making real clusters, GPUs, containers, network services, or notification
-  credentials required for default validation.
-- Parsing domain metrics, checkpoints, or artifact payloads in core Loom.
+- Queue selection remains Stage 25 work. Generic scheduling, fine-grained
+  scheduling, resource usage observation, GPU setup, resume-policy changes,
+  and environment acceptance profiles require later accepted stage plans; they
+  are not inferred from this documentation phase.
+- Generic event filtering and activation belong to Stage 28. Notification
+  messages, severity, service adapters, and delivery remain outside core Loom
+  until a concrete shared consumer justifies their design.
+- Agent or daemon ownership belongs to Stage 29. No new queue, resource,
+  scheduler, resume, plugin, profile, or validation-gate API is introduced.
+- Real clusters, GPUs, containers, services, networks, or notification
+  credentials remain opt-in and are not required for default validation.
 
 Primary feature docs:
 
 - `pipeline.md`
 - `artifacts.md`
 - `execution.md`
+- `reliability.md`
 - `runtime-resources.md`
 - `queue.md`
-- `slurm.md`
-- `container-executors.md`
 - `resume.md`
-- `reliability.md`
 - `plugins.md`
 - `testing.md`
 
 Planning notes:
 
-- To be created when stage planning begins.
+- `docs/roadmap/stage-26/planning.md`
+- `docs/roadmap/stage-26/implementation-plan.md`
 
 ## Deferred Integration Candidates
 

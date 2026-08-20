@@ -1161,6 +1161,18 @@ def test_runner_marks_fresh_preparation_failure_without_created_reset(
     tmp_path: Path,
 ) -> None:
     run_store = _authority_run_store(tmp_path)
+    observed_statuses: list[RunStatus | None] = []
+    registry = EventSinkRegistry()
+
+    def observe_preparation_failure(
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
+    ) -> None:
+        if event.event_type == "run.preparation_failed":
+            status = run_store.read_run_status(context.run_uri)
+            observed_statuses.append(None if status is None else status.status)
+
+    registry.register("test.preparation_failure", observe_preparation_failure)
 
     def failing_artifact_store(_root: Path):
         raise RuntimeError("artifact setup failed")
@@ -1176,7 +1188,8 @@ def test_runner_marks_fresh_preparation_failure_without_created_reset(
                             target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
                         ),
                     )
-                )
+                ),
+                event_sink_registry=registry,
             )
         )
 
@@ -1195,6 +1208,7 @@ def test_runner_marks_fresh_preparation_failure_without_created_reset(
         "error_type": "RuntimeError",
         "message": "artifact setup failed",
     }
+    assert observed_statuses == [RunStatus.FAILED]
 
 
 def test_runner_preserves_terminal_status_when_existing_preparation_fails(

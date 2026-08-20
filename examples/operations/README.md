@@ -25,7 +25,7 @@ workflows.
 
 | Example | Demonstrates |
 | --- | --- |
-| `operations.captured-logs` | Captured local stdout/stderr inspected with `loom logs`. |
+| `operations.captured-logs` | Captured local stdout/stderr, explicit file-backed output registration, and a separate workspace file. |
 | `operations.resource-leases` | Public authority-backed resource-limit and resource-lease coordination through the Python API. |
 | `operations.managed-local-queue` | Three local commands over two generic static slots with redacted pool status and separate logs. |
 
@@ -50,6 +50,9 @@ uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
 
 Set `LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to redirect generated
 run directories.
+
+For the stage-author journey and executor-specific log ownership, see
+[`docs/downstream-operations.md`](../../docs/downstream-operations.md).
 
 ## Full Example Integration Evidence
 
