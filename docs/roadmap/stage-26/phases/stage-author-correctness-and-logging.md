@@ -265,8 +265,8 @@ Final commands:
 - Manager preparation: complete; Stage 25 merge, source seams, exact targeted
   test paths, branch, worktree, base, target, and title verified
 - Expanded planning: not needed unless a stop condition is reached
-- Implementation: complete at `d4e8dc948d56a2a03631269b871b012d04bfb6cf`; manager
-  pre-submit, PR, review, and merge remain pending
+- Implementation: complete at `d4e8dc948d56a2a03631269b871b012d04bfb6cf`;
+  manager pre-submit and review passed, PR is open, and merge remains pending
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: passed manager-locally; scope, fixed contracts, tests,
   validation freshness, domain neutrality, import direction, and proportionality
