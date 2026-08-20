@@ -28,7 +28,7 @@ Blockers: none
   weighted core slots, generic scheduling, and GPU-specific core behavior.
 - Validation and phase-shaping source: planning sections `Examples And
   Validation` and `Phase Shaping`.
-- Out of scope: Stage 24 candidate-policy implementation and the broader Stage
+- Out of scope: Stage 25 candidate-policy implementation and the broader Stage
   25 downstream-operations topics such as notifications, generic scheduling,
   resume policy, and resource-usage telemetry.
 
@@ -59,7 +59,7 @@ Blockers: none
     durable reattachment state.
   - Fake, delegated SLURM, CPU-only, direct-controller, and schema-v1 behavior
     remains unchanged.
-  - Stage 24 policy may influence candidate selection inside a cycle; the
+  - Stage 25 policy may influence candidate selection inside a cycle; the
     runtime neither selects candidates nor interprets policy decisions.
   - No new runtime dependency is allowed.
 - Shared invariant ownership:

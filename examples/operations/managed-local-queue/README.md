@@ -124,5 +124,5 @@ repositories/controller mutation.
 
 The controller's active limit is local to this runtime, not a distributed item
 quota. For broader candidate selection, generic scheduling, device health,
-reattachment, or resource-use telemetry, retain the later Stage 24/25 design
+reattachment, or resource-use telemetry, retain the later Stage 25/26 design
 boundaries rather than extending this example.

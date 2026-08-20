@@ -24,7 +24,7 @@
 - Earlier dependency: Phases 1 and 2 provide the complete public runtime,
   health/status, drain/cancel shutdown, and explicit unknown recovery surface.
 - Later work explicitly out of scope: generic scheduler/resource-observation
-  design from Stage 25, production GPU probing, a Loom daemon, reattachment,
+  design from Stage 26, production GPU probing, a Loom daemon, reattachment,
   weighted slot schema, and packaging the example bundle provider as a core
   implementation.
 
@@ -109,7 +109,7 @@ Out of scope:
   execution in `make validate-pr`.
 - CLI daemon/start changes, queue status-envelope changes, automatic recovery,
   retry/requeue, or process reattachment.
-- Stage 25 stage-author, notification, resume, generic scheduling, or
+- Stage 26 stage-author, notification, resume, generic scheduling, or
   resource-usage observation work.
 
 Assumptions:
@@ -151,7 +151,7 @@ Assumptions:
 - Cross-phase contracts:
   - Use the exact owner, state, serve/shutdown, status, and recovery behavior
     merged in Phases 1-2; do not create a second convenience wrapper.
-  - Preserve Stage 24's candidate-policy ownership and Stage 25's broader
+  - Preserve Stage 25's candidate-policy ownership and Stage 26's broader
     design boundary in docs.
 - Reproducibility and compatibility:
   - Example output root remains caller-selectable and each run uses a unique
@@ -257,7 +257,7 @@ Final commands:
   as docs variants, example-only bundle provider, physical member leases,
   no core schema/dependency, no daemon/reattachment claim.
 - Conditions requiring manager action: any stop condition, a public runtime
-  mismatch with prior phases, or a need to edit/rewrite unrelated Stage 24 or
+  mismatch with prior phases, or a need to edit/rewrite unrelated Stage 25 or
   user roadmap work.
 
 ## Workflow State

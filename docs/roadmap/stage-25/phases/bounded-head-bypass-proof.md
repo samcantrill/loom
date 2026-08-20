@@ -3,16 +3,16 @@
 ## Metadata
 
 - Status: pending
-- Roadmap stage and phase: v24 Phase 2
-- Manifest: `docs/roadmap/stage-24/implementation-plan.md`
-- Branch: `agent/stage-24-p2-bounded-head-bypass-proof`
+- Roadmap stage and phase: v25 Phase 2
+- Manifest: `docs/roadmap/stage-25/implementation-plan.md`
+- Branch: `agent/stage-25-p2-bounded-head-bypass-proof`
 - Worktree root and path:
-  `/home/can134/work/active/loom-worktrees/stage-24-p2-bounded-head-bypass-proof`
+  `/home/can134/work/active/loom-worktrees/stage-25-p2-bounded-head-bypass-proof`
 - Base revision: current `origin/develop` after Phase 1 merges; record the exact
   revision before branch creation
 - PR target: `develop`
 - PR title: `Whole-Run Queue Selection - Phase 2: Bounded Head-Bypass Proof`
-- Dependencies: Stage 24 Phase 1 remotely merged with its selection protocol,
+- Dependencies: Stage 25 Phase 1 remotely merged with its selection protocol,
   exact claim, default branch, and advisory-capacity contracts unchanged
 - Workflow path: expanded because it composes typed deferral, repeated policy
   invocation, controller bounds, audit evidence, and concurrency e2e behavior
@@ -95,8 +95,8 @@ Assumptions:
 - Trust and failure boundaries: only typed pre-start capacity deferral permits
   continuation. Invalid request, authority uncertainty, fencing loss, process
   start, or repository failures retain Stage 23 terminal/fail-closed behavior.
-- Cross-phase contracts: this is the final Stage 24 phase. It must leave the
-  queue-local seam adaptable but must not implement Stage 25 vocabulary.
+- Cross-phase contracts: this is the final Stage 25 phase. It must leave the
+  queue-local seam adaptable but must not implement Stage 26 vocabulary.
 - Reproducibility and compatibility: the example policy is deterministic over
   the supplied order and logical amounts. It is demonstrative downstream code,
   not a root export or default. Existing config, CLI, FIFO, SLURM, and queue
@@ -179,14 +179,14 @@ Final commands:
   evidence, and example/docs/test checkpoints.
 - Decisions not to revisit: private attempted state, one selection bound,
   capacity-only continuation, no public-shape change, no built-in policy,
-  fairness, config, registry, DDL, or Stage 25 scheduling.
+  fairness, config, registry, DDL, or Stage 26 scheduling.
 - Conditions requiring manager action: any stop condition, Phase 1 contract
   drift, need for policy history, or inability to prove compensation before
   reselection.
 
 ## Workflow State
 
-- Manager preparation: complete in Stage 24 planning; refresh after Phase 1 merge
+- Manager preparation: complete in Stage 25 planning; refresh after Phase 1 merge
 - Expanded planning: required at phase selection for deferral/concurrency and
   public-evidence integration; unused
 - Implementation: not started
