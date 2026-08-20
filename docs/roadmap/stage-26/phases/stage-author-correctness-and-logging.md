@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 26, Phase 1
 - Manifest: `docs/roadmap/stage-26/implementation-plan.md`
 - Branch: `agent/stage-26-p1-stage-author-correctness-and-logging`
@@ -268,10 +268,15 @@ Final commands:
 - Implementation: complete at `d4e8dc948d56a2a03631269b871b012d04bfb6cf`; manager
   pre-submit, PR, review, and merge remain pending
 - Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: pending
-- Independent review: manager-local fast path
+- Pre-submit gate: passed manager-locally; scope, fixed contracts, tests,
+  validation freshness, domain neutrality, import direction, and proportionality
+  matched the phase plan with no blocker
+- Independent review: manager-local fast-path review passed; no expanded-path
+  or residual-risk trigger required a spawned reviewer
 - Blocker corrections: 0/3
-- PR and merge: pending
+- PR and merge: [#220](https://github.com/samcantrill/loom/pull/220) is open,
+  non-draft, targets `develop`, has the planned title/head and matching diff,
+  and is mergeable; required CI is pending
 
 ## Completion Record
 
@@ -281,5 +286,5 @@ Final commands:
 | Tests added or updated | `tests/unit/loom/pipeline/execution/test_runner.py` now proves an event observer reads `FAILED`; `tests/unit/loom/pipeline/test_context.py` covers explicit local file registration; `tests/integration/examples/test_example_workflows.py` proves the hermetic example returns refs, publishes the registered file, and leaves the workspace file separate. |
 | Validated revision/tree state and evidence | At `d4e8dc948d56a2a03631269b871b012d04bfb6cf`, `git diff --check` and the tracked tree were clean. Targeted commands passed: 11 contract/context, 19 local-execution/CLI, 30 runner, and 10 example/CLI tests. `make validate-pr` passed. `make test-summary` produced `build/test-summary.md`: 2,307 passed, 0 failed, 0 errors, 3 skipped (2026-08-20T23:23:09Z). |
 | Validation-relevant changes after evidence | None. |
-| PR, review, and merge | Not started; reserved for the manager. |
+| PR, review, and merge | [#220](https://github.com/samcantrill/loom/pull/220) opened against `develop`; planned title/head and remote diff verified. Manager fast-path review passed with no blocker; required CI is pending. |
 | Residual risk and cleanup | No blocker. Executor logging remains intentionally heterogeneous; the committed branch and dedicated worktree are retained for manager pre-submit/PR work. |
