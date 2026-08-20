@@ -2166,9 +2166,9 @@ Phase execution plans:
 
 Status:
 
-- Phase 1 implements one evidence-backed downstream journey and the smallest
-  lifecycle ordering correction. It does not reopen the prior broad operations
-  design scope.
+- Complete. The stage-author guide, artifact/log/lifecycle proof, and
+  preparation-failure ordering correction merged in
+  [#220](https://github.com/samcantrill/loom/pull/220).
 
 Implement:
 
