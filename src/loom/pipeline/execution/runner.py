@@ -74,6 +74,7 @@ from .lifecycle import (
     bind_stage_inputs,
     commit_stage_execution_result,
     next_stage_attempt,
+    persist_stage_cancellation,
     persist_stage_failure,
     record_stage_failure_and_failed_run,
     write_stage_artifact_index_refs,
@@ -138,6 +139,19 @@ class _ExecutionOutcome:
     failure: ExecutionFailure | None
     cancelled_stage: str | None = None
     cancellation_reason: LifecycleReason | None = None
+    interruption: KeyboardInterrupt | None = None
+
+
+class _StageInterrupted(Exception):
+    """Private handoff for an interrupt after its stage cancellation is durable."""
+
+    def __init__(
+        self,
+        result: StageRunResult,
+        interruption: KeyboardInterrupt,
+    ) -> None:
+        self.result = result
+        self.interruption = interruption
 
 
 @dataclass(frozen=True, slots=True)
@@ -656,6 +670,8 @@ class PipelineRunner:
             metadata=result_metadata,
         )
         self._write_offline_evidence_manifest_if_needed(run_uri)
+        if outcome.interruption is not None:
+            raise outcome.interruption
         return result
 
     def _run_serial_plan(
@@ -688,22 +704,35 @@ class PipelineRunner:
                     blocked_by=failed_stage or cancelled_stage or "cancelled",
                 )
                 continue
-            result = self._run_controller_stage_action(
-                request=request,
-                run_uri=run_uri,
-                run_dir=run_dir,
-                local_run_store=local_run_store,
-                config_mapping=config_mapping,
-                spec=spec,
-                stage=stage,
-                stage_plan=stage_plan,
-                resolved_runtime=resolved_runtime[stage.name],
-                plan=plan,
-                artifact_store=artifact_store,
-                produced_outputs=outputs_by_stage,
-                created_at=created_at,
-                run_started_at=run_started_at,
-            )
+            try:
+                result = self._run_controller_stage_action(
+                    request=request,
+                    run_uri=run_uri,
+                    run_dir=run_dir,
+                    local_run_store=local_run_store,
+                    config_mapping=config_mapping,
+                    spec=spec,
+                    stage=stage,
+                    stage_plan=stage_plan,
+                    resolved_runtime=resolved_runtime[stage.name],
+                    plan=plan,
+                    artifact_store=artifact_store,
+                    produced_outputs=outputs_by_stage,
+                    created_at=created_at,
+                    run_started_at=run_started_at,
+                )
+            except _StageInterrupted as interrupted:
+                result = interrupted.result
+                stage_results[stage.name] = result
+                return _ExecutionOutcome(
+                    stage_results=stage_results,
+                    outputs_by_stage=outputs_by_stage,
+                    failed_stage=failed_stage,
+                    failure=failure,
+                    cancelled_stage=stage.name,
+                    cancellation_reason=_stage_cancellation_reason(result),
+                    interruption=interrupted.interruption,
+                )
             stage_results[stage.name] = result
             if result.status == StageStatus.SUCCEEDED:
                 outputs_by_stage[stage.name] = dict(result.outputs)
@@ -733,6 +762,7 @@ class PipelineRunner:
         failure: ExecutionFailure | None = None
         cancelled_stage: str | None = None
         cancellation_reason: LifecycleReason | None = None
+        interruption: KeyboardInterrupt | None = None
         active: dict[Future[StageRunResult], _ParallelTask] = {}
         with ThreadPoolExecutor(
             max_workers=context.policy.max_parallel_stages,
@@ -782,10 +812,23 @@ class PipelineRunner:
                             "parallel scheduler made no progress; static plan is not executable"
                         )
                     continue
-                done, _pending = wait(active, return_when=FIRST_COMPLETED)
+                try:
+                    done, _pending = wait(active, return_when=FIRST_COMPLETED)
+                except KeyboardInterrupt as exc:
+                    interruption = exc
+                    cancellation_reason = _keyboard_interrupt_reason()
+                    stopped = True
+                    continue
                 for future in done:
                     task = active.pop(future)
-                    result = future.result()
+                    try:
+                        result = future.result()
+                    except _StageInterrupted as exc:
+                        result = exc.result
+                        interruption = exc.interruption
+                        cancelled_stage = task.stage_name
+                        cancellation_reason = _stage_cancellation_reason(result)
+                        stopped = True
                     stage_results[task.stage_name] = result
                     if result.status == StageStatus.SUCCEEDED:
                         outputs_by_stage[task.stage_name] = dict(result.outputs)
@@ -822,7 +865,14 @@ class PipelineRunner:
             if stopped:
                 wait(active)
                 for future, task in list(active.items()):
-                    result = future.result()
+                    try:
+                        result = future.result()
+                    except _StageInterrupted as exc:
+                        result = exc.result
+                        interruption = interruption or exc.interruption
+                        if cancellation_reason is None:
+                            cancelled_stage = task.stage_name
+                            cancellation_reason = _stage_cancellation_reason(result)
                     stage_results[task.stage_name] = result
                     if result.status == StageStatus.SUCCEEDED:
                         outputs_by_stage[task.stage_name] = dict(result.outputs)
@@ -853,6 +903,7 @@ class PipelineRunner:
             failure=failure,
             cancelled_stage=cancelled_stage,
             cancellation_reason=cancellation_reason,
+            interruption=interruption,
         )
 
     def _run_controller_stage_action(
@@ -1305,7 +1356,16 @@ class PipelineRunner:
                 run_started_at=run_started_at,
                 execution_result=execution_result,
             )
-        except (Exception, KeyboardInterrupt) as exc:
+        except KeyboardInterrupt as exc:
+            raise self._interrupted_stage_result(
+                run_uri=run_uri,
+                stage=stage,
+                stage_plan=stage_plan,
+                attempt=attempt,
+                started_at=stage_started_at,
+                interruption=exc,
+            ) from exc
+        except Exception as exc:
             failure = (
                 exc
                 if isinstance(exc, ExecutionFailure)
@@ -1468,7 +1528,16 @@ class PipelineRunner:
                 run_started_at=run_started_at,
                 execution_result=execution_result,
             )
-        except (Exception, KeyboardInterrupt) as exc:
+        except KeyboardInterrupt as exc:
+            raise self._interrupted_stage_result(
+                run_uri=run_uri,
+                stage=stage,
+                stage_plan=stage_plan,
+                attempt=attempt,
+                started_at=stage_started_at,
+                interruption=exc,
+            ) from exc
+        except Exception as exc:
             failure = (
                 exc
                 if isinstance(exc, ExecutionFailure)
@@ -2248,6 +2317,44 @@ class PipelineRunner:
             finalize_run=False,
         )
 
+    def _interrupted_stage_result(
+        self,
+        *,
+        run_uri: str,
+        stage: StageSpec,
+        stage_plan: StagePlan,
+        attempt: int,
+        started_at: str | None,
+        interruption: KeyboardInterrupt,
+    ) -> _StageInterrupted:
+        cancelled_at = self.clock()
+        reason = _keyboard_interrupt_reason()
+        persist_stage_cancellation(
+            self.run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            started_at=started_at,
+            cancelled_at=cancelled_at,
+            reason=reason,
+            clock=self.clock,
+            event_dispatcher=self._event_dispatcher,
+        )
+        return _StageInterrupted(
+            StageRunResult(
+                stage_name=stage.name,
+                action=PlanAction.RUN,
+                status=StageStatus.CANCELLED,
+                attempt=attempt,
+                outputs={},
+                reasons=stage_plan.reasons,
+                started_at=started_at,
+                finished_at=cancelled_at,
+                executor_metadata={"lifecycle_reason": reason.to_dict()},
+            ),
+            interruption,
+        )
+
     def _write_failed_run(
         self,
         run_uri: str,
@@ -2460,6 +2567,13 @@ def _stage_cancellation_reason(result: StageRunResult) -> LifecycleReason:
     return LifecycleReason(
         code="early_stop",
         message="stage requested early stop",
+    )
+
+
+def _keyboard_interrupt_reason() -> LifecycleReason:
+    return LifecycleReason(
+        code="keyboard_interrupt",
+        message="execution interrupted by keyboard interrupt",
     )
 
 

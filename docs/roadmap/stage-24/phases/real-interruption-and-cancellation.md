@@ -257,7 +257,8 @@ Final commands:
   remote-base alignment remains a pre-submit condition
 - Expanded planning: not needed; current contracts and demonstrated mismatch
   make the lean path sufficient
-- Implementation: pending one `loom_phase_executor`
+- Implementation: complete locally; awaiting manager pre-submit work after the
+  remote-base blocker is resolved
 - Refiner: not needed unless the executor returns a qualified blocker
 - Pre-submit gate: pending
 - Independent review: not needed on current fast path; reconsider only for a
@@ -269,9 +270,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Separated `KeyboardInterrupt` from ordinary runner failures in serial, prepared-worker, and bounded-parallel flows; durable stage/run cancellation now precedes re-raise, parallel stops submissions while settling active results, and cancelled stages release their authority lease. Added private marker/PID/release test stages. Changed `src/loom/pipeline/execution/runner.py`, `src/loom/pipeline/execution/authority_adapter.py`, `tests/support/pipeline_execution_stages.py`, `tests/integration/pipeline/test_parallel_execution.py`, `tests/integration/pipeline/test_subprocess_executor_integration.py`, `tests/integration/queue/test_managed_local_runtime.py`, and `tests/e2e/test_execution_lifecycle.py`. |
+| Tests added or updated | Updated the stage-raised parallel interrupt regression. Added real subprocess timeout/worker-exit coverage, real managed-local cancel/process-exit/lease coverage, and POSIX CLI SIGINT coverage for local, subprocess, and bounded-parallel execution. |
+| Validated revision/tree state and evidence | Prepared revision `fb8e9a2`; implementation tree validated before this completion-record-only update. Targeted suites passed: runner (29), parallel (10), subprocess (5), managed-local (14), lifecycle e2e (3). `make validate-pr` passed (Ruff, Pyright, default/config tests, build). `make test-summary` passed: 2,277 passed, 3 skipped, 2,254 deselected; receipt `build/test-summary.md`. |
+| Validation-relevant changes after evidence | None; only this completion record was added after the successful validation receipt. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | POSIX signal/process-group evidence is intentionally Linux-oriented; no broader signal policy, Python-thread preemption, reattachment, or crash recovery was added. The prepared remote-base blocker remains: do not push or open a PR until the manager can align `develop` without the unrelated user-authored commit. |

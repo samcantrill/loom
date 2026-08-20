@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import errno
+import os
 from pathlib import Path
+import sys
 from threading import Event
+import time
 
 import pytest
 
@@ -510,6 +514,83 @@ def test_runtime_cancel_does_not_touch_foreign_work(tmp_path: Path) -> None:
     assert current is not None and current.status is QueueItemStatus.CANCELLED
     assert untouched == foreign.item
     assert status.state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+
+
+def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release(
+    tmp_path: Path,
+) -> None:
+    spec = normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {"pool_name": "local", "mode": "managed", "resources": {"gpu": 1}}
+            ],
+            "queues": [{"queue_name": "local", "pool_name": "local"}],
+            "controller": {"owner_id": "runtime-owner", "max_active_items": 1},
+        }
+    )
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    runtime = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+    )
+    runtime.start()
+    runtime.service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="active",
+            queue_name="local",
+            run_uri="file:///runs/active",
+            adapter="local",
+            resources={"gpu": 1},
+            snapshot={"argv": [sys.executable, "-c", "import time; time.sleep(30)"]},
+        )
+    )
+    runtime.service.enqueue(_request("queued"))
+    runtime.service.enqueue(_request("foreign"))
+    runtime.run_cycle()
+    foreign = runtime.service.claim_next(
+        "local", owner_id="other-owner", claim_id="other-session-claim"
+    )
+    assert foreign is not None
+    active = runtime.service.read_item("active")
+    assert active is not None and active.dispatch_handle is not None
+    pid = int(active.dispatch_handle.evidence["managed_local"]["pid"])
+
+    stop = Event()
+    stop.set()
+    try:
+        status = runtime.serve(
+            stop,
+            poll_interval_seconds=0.01,
+            shutdown_mode="cancel",
+            wait=lambda _timeout: time.sleep(0.01),
+        )
+    finally:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            pass
+        else:
+            os.kill(pid, 9)
+
+    try:
+        os.kill(pid, 0)
+    except OSError as exc:
+        assert exc.errno == errno.ESRCH
+    else:
+        pytest.fail("managed-local child is still live")
+    cancelled = runtime.service.read_item("active")
+    queued = runtime.service.read_item("queued")
+    assert cancelled is not None and cancelled.status is QueueItemStatus.CANCELLED
+    assert queued is not None and queued.status is QueueItemStatus.QUEUED
+    assert runtime.service.read_item("foreign") == foreign.item
+    assert status.state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
+    counter = store.read_resource_limit("workspace-1", "gpu")
+    assert counter is not None and counter.value == 0
 
 
 def test_runtime_recovery_rejects_a_current_session_item(tmp_path: Path) -> None:

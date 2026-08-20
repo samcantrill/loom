@@ -181,7 +181,7 @@ def test_explicit_single_parallelism_keeps_serial_local_path(tmp_path: Path) -> 
     assert result.stage_results["build"].status is StageStatus.SUCCEEDED
 
 
-def test_parallel_stage_interruption_records_durable_failure(
+def test_parallel_stage_interruption_records_durable_cancellation_and_reraises(
     tmp_path: Path,
 ) -> None:
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
@@ -191,38 +191,35 @@ def test_parallel_stage_interruption_records_durable_failure(
     )
     run_uri = path_to_run_uri(tmp_path / "runs" / "stage-interrupted")
 
-    result = PipelineRunner(run_store=run_store).run(
-        RunRequest(
-            pipeline=PipelineSpec(
-                stages=(
-                    StageSpec(
-                        name="interrupt",
-                        factory=StageFactorySpec(
-                            target_path="tests.support.pipeline_execution_stages.KeyboardInterruptStage"
+    with pytest.raises(KeyboardInterrupt, match="stage interrupted intentionally"):
+        PipelineRunner(run_store=run_store).run(
+            RunRequest(
+                pipeline=PipelineSpec(
+                    stages=(
+                        StageSpec(
+                            name="interrupt",
+                            factory=StageFactorySpec(
+                                target_path="tests.support.pipeline_execution_stages.KeyboardInterruptStage"
+                            ),
+                            outputs={
+                                "data": OutputSpec(
+                                    artifact_type="json",
+                                    codec_key="json.v1",
+                                )
+                            },
                         ),
-                        outputs={
-                            "data": OutputSpec(
-                                artifact_type="json",
-                                codec_key="json.v1",
-                            )
-                        },
-                    ),
-                )
-            ),
-            run_uri=run_uri,
-            options=RunOptions(
-                execution={"settings": {"max_parallel_stages": 2}},
-            ),
+                    )
+                ),
+                run_uri=run_uri,
+                options=RunOptions(
+                    execution={"settings": {"max_parallel_stages": 2}},
+                ),
+            )
         )
-    )
 
-    assert result.status is RunStatus.FAILED
-    assert result.stage_results["interrupt"].status is StageStatus.FAILED
-    assert result.stage_results["interrupt"].failure is not None
-    assert result.stage_results["interrupt"].failure.exception_type == (
-        "builtins.KeyboardInterrupt"
-    )
     snapshot = authority.snapshot(run_uri)
+    assert snapshot.status is RunStatus.CANCELLED
+    assert snapshot.stages[0].status is StageStatus.CANCELLED
     assert snapshot.stages[0].active_lease is None
     assert snapshot.stages[0].latest_commit is None
 

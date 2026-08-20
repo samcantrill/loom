@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import os
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -160,11 +161,46 @@ class SleepStage:
         marker_path = context.stage_config.get("started_marker")
         if isinstance(marker_path, str):
             Path(marker_path).write_text(context.stage_name, encoding="utf-8")
+        pid_marker = context.stage_config.get("pid_marker")
+        if isinstance(pid_marker, str):
+            Path(pid_marker).write_text(str(os.getpid()), encoding="utf-8")
         time.sleep(seconds)
         return {
             "data": context.save_artifact(
                 "data",
                 {"slept": seconds},
+                artifact_type="json",
+                codec_key="json.v1",
+            )
+        }
+
+
+class ReleaseStage:
+    """Test stage which waits for its fixture-owned release marker."""
+
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        _ = inputs
+        marker_dir = Path(str(context.stage_config["marker_dir"]))
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        (marker_dir / f"{context.stage_name}.started").write_text(
+            context.stage_name,
+            encoding="utf-8",
+        )
+        timeout_seconds = float(context.stage_config.get("timeout_seconds", 10))
+        deadline = time.monotonic() + timeout_seconds
+        release = marker_dir / "release"
+        while not release.exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("release stage timed out waiting for fixture")
+            time.sleep(0.01)
+        return {
+            "data": context.save_artifact(
+                "data",
+                {"stage": context.stage_name},
                 artifact_type="json",
                 codec_key="json.v1",
             )
