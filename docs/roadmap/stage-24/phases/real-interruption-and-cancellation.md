@@ -2,20 +2,24 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 24, Phase 1
 - Manifest: `docs/roadmap/stage-24/implementation-plan.md`
 - Branch: `agent/stage-24-p1-real-interruption-and-cancellation`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees` and
   `/home/can134/work/active/loom-worktrees/stage-24-p1-real-interruption-and-cancellation`
-- Base revision: current `origin/develop` when execution begins
+- Base revision: `314e418192c3d46635b7f4754ea29ef736809f7d`, the current
+  local `develop` revision when the phase worktree was created
 - PR target: `develop`
 - PR title: `Operational Lifecycle Validation - Phase 1: Real Interruption And Cancellation`
 - Dependencies: completed Stage 23-post and the confirmed Stage 24 planning
   contract
 - Workflow path: fast; refine only if a qualified process-cleanup or durable-
   cancellation blocker satisfies the repository blocker definition
-- Blockers: none
+- Blockers: PR submission is pending remote-base alignment. Local `develop` is
+  one user-authored commit ahead of `origin/develop`, and that base commit also
+  contains unrelated terminal-monitor work. Preserve it and do not push or open
+  this phase PR until the remote base can be aligned without widening the PR.
 
 ## Objective And Context
 
@@ -249,7 +253,8 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete
+- Manager preparation: complete on 2026-08-20 from the recorded local base;
+  remote-base alignment remains a pre-submit condition
 - Expanded planning: not needed; current contracts and demonstrated mismatch
   make the lean path sufficient
 - Implementation: pending one `loom_phase_executor`
