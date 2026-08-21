@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 30, Phase 1
 - Manifest: `docs/roadmap/stage-30/implementation-plan.md`
 - Branch: `agent/stage-30-p1-operations-portability-and-cleanup`
@@ -195,7 +195,8 @@ Final commands:
   blocker.
 - Blocker corrections: 1/3 — fixed reruns against the same configured roots
   accumulating catalog/fixture state; focused two-invocation regression passed.
-- PR and merge: pending.
+- PR and merge: [#224](https://github.com/samcantrill/loom/pull/224) is open;
+  CI and merge are pending.
 
 ## Completion Record
 
@@ -205,5 +206,5 @@ Final commands:
 | Tests added or updated | New catalog/bundle workflow assertion covers two indexed/listed runs, non-empty diff, payload-bearing export/inspect/import, and equal bytes. New cleanup/GC assertion covers preview selection, delete counts, candidate removal, and preserved run paths. Correction 1/3 updates each assertion to invoke its entrypoint twice with the same roots. Targeted evidence: correction regression 2 passed in 18.42s; Ruff passed. Earlier evidence: 5 passed in 8.97s; existing CLI E2E: 4 passed in 3.29s. |
 | Validated revision/tree state and evidence | Rebased tree at `856fa41`: Ruff and Pyright passed; `make validate-pr` default passed 2,204 tests; its config-extra leg ran 133 passed, 1 inherited timing failure, 3 skipped; the same test failed on detached base `d4115c2`. A subsequent exact-tree `make test-summary` passed every leg and wrote `build/test-summary.md`: package 115, unit 1,550, contract 279, integration 206, E2E 54, and config-extra 134 passed, with 0 failures/errors and 3 expected skips. |
 | Validation-relevant changes after evidence | None after rebased tree `856fa41`; this completion update is documentation-only. |
-| PR, review, and merge | pending |
+| PR, review, and merge | Manager fast-path review passed. [#224](https://github.com/samcantrill/loom/pull/224) is open against `develop`; CI and merge are pending. |
 | Residual risk and cleanup | Rerunnability correction 1/3 is complete: each invocation preserves earlier outputs by using unique paths beneath configured roots. Cleanup candidate setup remains an explicitly documented private fixture rather than a public authoring recommendation. No runtime change was made. Generated outputs stay outside version control; branch/worktree cleanup is pending remote merge. |
