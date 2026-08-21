@@ -150,13 +150,14 @@ def test_example_deterministic_sweep_runs_two_trials_and_collects_artifacts(
         / "deterministic-sweep"
         / "run_sweep.py"
     )
-    fields = _summary_fields(_run_example_script(script=script, tmp_path=tmp_path))
+    for _ in range(2):
+        fields = _summary_fields(_run_example_script(script=script, tmp_path=tmp_path))
 
-    assert fields["planned_trials"] == "2"
-    assert fields["run_status"] == "succeeded"
-    assert fields["succeeded_trials"] == "2"
-    assert fields["collected_trials"] == "2"
-    assert fields["artifact_count"] == "2"
+        assert fields["planned_trials"] == "2"
+        assert fields["run_status"] == "succeeded"
+        assert fields["succeeded_trials"] == "2"
+        assert fields["collected_trials"] == "2"
+        assert fields["artifact_count"] == "2"
 
 
 def test_example_event_sink_observes_committed_events_and_isolates_failure(

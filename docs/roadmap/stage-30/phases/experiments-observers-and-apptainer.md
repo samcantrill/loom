@@ -169,7 +169,8 @@ Final commands:
 - Refiner: not needed / pending evidence.
 - Pre-submit gate: pending.
 - Independent review: not needed / pending residual-risk check.
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 — deterministic sweep now scopes each invocation's
+  run URIs beneath a unique child of the configured run root.
 - PR and merge: pending.
 
 ## Completion Record
@@ -177,8 +178,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Added `examples/experiments/deterministic-sweep/`, `examples/extensions/event-sink/`, and `examples/execution/containers/slurm-apptainer/`; routed their group/root catalogs and added focused example tests. |
-| Tests added or updated | Added sweep and event-sink integration journeys, fake-Apptainer e2e coverage, and v30 catalog assertions. |
-| Validated revision/tree state and evidence | Executor tree: focused examples/catalog suite 6 passed; sweep/Apptainer regression suite 3 passed; local execution suite 9 passed; `ruff check` passed. |
-| Validation-relevant changes after evidence | None. |
+| Tests added or updated | Added sweep and event-sink integration journeys, fake-Apptainer e2e coverage, and v30 catalog assertions; sweep coverage reruns the entrypoint against identical roots. |
+| Validated revision/tree state and evidence | Executor tree: focused examples/catalog suite 6 passed; sweep/Apptainer regression suite 3 passed; local execution suite 9 passed; `ruff check` passed. Correction 1 same-root sweep rerun passed (1 test) and focused Ruff passed. |
+| Validation-relevant changes after evidence | Correction 1 scopes rendered sweep run URIs per invocation; its focused rerun and Ruff evidence are current. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
