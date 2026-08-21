@@ -7,7 +7,7 @@
 - Manifest: `docs/roadmap/stage-30/implementation-plan.md`
 - Branch: `agent/stage-30-p1-operations-portability-and-cleanup`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; `/home/can134/work/active/loom-worktrees/stage-30-p1-operations-portability-and-cleanup`
-- Base revision: `e3968f7`
+- Base revision: `d4115c2`
 - PR target: develop
 - PR title: `Stage 30 phase 1: add run portability and cleanup journeys`
 - Dependencies: Stage 8 run catalog, Stage 12 bundles, Stage 21 cleanup/GC, Stage 22 example harness, and Stage 26 operational guidance are merged.
@@ -179,16 +179,17 @@ Final commands:
   quality review passed, and the worktree was created from `origin/develop` at
   `e3968f7` with unrelated control-checkout work excluded.
 - Expanded planning: not needed.
-- Implementation: complete in `44d9d88`; correction 1/3 in `19abda5` gives
+- Implementation: complete in `f42e95a`; correction 1/3 in `4c449c1` gives
   each entrypoint a fresh invocation-local journey directory below the
   configured output and run roots, preserving prior outputs on rerun.
 - Refiner: not needed; correction 1/3 was a bounded rerunnability repair by the
   original executor.
-- Pre-submit gate: passed. Ruff and Pyright passed. The corrected broad default
-  run had two transient process-lifecycle failures under concurrent host load;
-  both passed immediately in isolation, no runtime file changed, and the exact
-  corrected tree then passed every `make test-summary` leg, including the
-  default-selected integration/e2e coverage and config-extra.
+- Pre-submit gate: passed with an inherited-flake justification. After rebasing
+  onto `d4115c2`, Ruff, Pyright, and the 2,204-test default leg passed. The
+  `make validate-pr` config-extra leg had the known controller-lease timing
+  failure while all 133 other tests passed; the same test failed on unchanged
+  detached `origin/develop`. The exact rebased tree then passed every
+  `make test-summary` leg, including all 134 config-extra tests.
 - Independent review: not needed; manager fast-path review found no remaining
   scope, contract, test, domain-neutrality, dependency, or proportionality
   blocker.
@@ -200,9 +201,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `44d9d88`: added `examples/operations/run-catalog-and-bundles/{README.md,example.yaml,pipeline.yaml,run_catalog_workflow.py,stages.py}` and `examples/operations/cleanup-and-gc/{README.md,example.yaml,run_cleanup_and_gc.py}`; routed both in `examples/README.md` and `examples/operations/README.md`; added focused workflow coverage in `tests/integration/examples/test_example_workflows.py`. |
+| Implementation and changed paths | Rebased implementation commit `f42e95a`: added `examples/operations/run-catalog-and-bundles/{README.md,example.yaml,pipeline.yaml,run_catalog_workflow.py,stages.py}` and `examples/operations/cleanup-and-gc/{README.md,example.yaml,run_cleanup_and_gc.py}`; routed both in `examples/README.md` and `examples/operations/README.md`; added focused workflow coverage in `tests/integration/examples/test_example_workflows.py`. Rerunnability correction is `4c449c1`. |
 | Tests added or updated | New catalog/bundle workflow assertion covers two indexed/listed runs, non-empty diff, payload-bearing export/inspect/import, and equal bytes. New cleanup/GC assertion covers preview selection, delete counts, candidate removal, and preserved run paths. Correction 1/3 updates each assertion to invoke its entrypoint twice with the same roots. Targeted evidence: correction regression 2 passed in 18.42s; Ruff passed. Earlier evidence: 5 passed in 8.97s; existing CLI E2E: 4 passed in 3.29s. |
-| Validated revision/tree state and evidence | Corrected tree at `5c1e15a`: Ruff and Pyright passed; focused two-invocation regressions passed (2 in 18.42s); the two transient broad-run lifecycle failures passed in isolation (2 in 24.95s); `make test-summary` passed every leg and wrote `build/test-summary.md`: package 113, unit 1,530, contract 275, integration 203, E2E 54, and config-extra 134 passed, with 0 failures/errors and 3 expected skips. The earlier controller-lease failure also reproduced on an unchanged detached `origin/develop` baseline and is not phase-caused. |
-| Validation-relevant changes after evidence | None after corrected tree `5c1e15a`; this completion update is documentation-only. |
+| Validated revision/tree state and evidence | Rebased tree at `856fa41`: Ruff and Pyright passed; `make validate-pr` default passed 2,204 tests; its config-extra leg ran 133 passed, 1 inherited timing failure, 3 skipped; the same test failed on detached base `d4115c2`. A subsequent exact-tree `make test-summary` passed every leg and wrote `build/test-summary.md`: package 115, unit 1,550, contract 279, integration 206, E2E 54, and config-extra 134 passed, with 0 failures/errors and 3 expected skips. |
+| Validation-relevant changes after evidence | None after rebased tree `856fa41`; this completion update is documentation-only. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Rerunnability correction 1/3 is complete: each invocation preserves earlier outputs by using unique paths beneath configured roots. Cleanup candidate setup remains an explicitly documented private fixture rather than a public authoring recommendation. No runtime change was made. Generated outputs stay outside version control; branch/worktree cleanup is pending remote merge. |
