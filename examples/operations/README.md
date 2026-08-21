@@ -19,6 +19,8 @@ workflows.
 | `operations.failing-run` | A stage failure followed by status and artifact diagnostics. |
 | `operations.resource-preflight` | Local executor resource warnings and strict preflight escalation. |
 | `operations.offline-import-rejections` | Stable machine-readable rejections for incomplete and conflicting offline imports. |
+| `operations.run-catalog-and-bundles` | Index and compare two runs, then export, inspect, import, and verify one payload. |
+| `operations.cleanup-and-gc` | Preview and explicitly delete registered temporary candidates while preserving runs and committed outputs. |
 | `operations.slurm-live-jobs` | Manual scheduler-aware status and cancellation commands for a real submitted SLURM run. |
 
 ## Public Python API Workflows
@@ -45,6 +47,8 @@ uv run python examples/operations/captured-logs/run_captured_logs.py
 uv run python examples/operations/resource-preflight/run_resource_preflight.py
 uv run python examples/operations/resource-leases/run_resource_leases.py
 uv run python examples/operations/offline-import-rejections/run_offline_import_rejections.py
+uv run python examples/operations/run-catalog-and-bundles/run_catalog_workflow.py
+uv run python examples/operations/cleanup-and-gc/run_cleanup_and_gc.py
 uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
 ```
 
@@ -68,6 +72,10 @@ The following `validation: full` examples are supported by focused integration t
   `tests/integration/examples/test_example_workflows.py::test_example_resource_leases_coordinate_blocked_then_released_state`
 - `operations.offline-import-rejections`:
   `tests/integration/examples/test_example_workflows.py::test_example_offline_import_rejections_report_rejection_codes_and_acceptance`
+- `operations.run-catalog-and-bundles`:
+  `tests/integration/examples/test_example_workflows.py::test_example_run_catalog_and_bundles_compares_and_preserves_payload`
+- `operations.cleanup-and-gc`:
+  `tests/integration/examples/test_example_workflows.py::test_example_cleanup_and_gc_is_preview_first_and_candidate_only`
 - `operations.managed-local-queue`:
   `tests/e2e/test_queue_cli.py::test_managed_local_queue_example_is_rerunnable`
 
