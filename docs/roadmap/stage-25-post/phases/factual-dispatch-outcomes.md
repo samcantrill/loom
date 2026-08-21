@@ -241,12 +241,14 @@ Final commands:
   logged, missing adapters fail as invalid, and managed runtime records dispatch
   uncertainty as degraded; manager correction makes the core result fields
   statically required, preserves known assignment causes, and keeps terminal
-  uncertainty fail-closed across later runtime cycles
+  uncertainty fail-closed across later runtime cycles; final implementation
+  revision is `cd0b5dd`
 - Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: focused source-relevant suites pass; full gate pending on the
-  current rebased tree
-- Independent review: optional only for a material residual adapter-boundary
-  risk after manager review
+- Pre-submit gate: passed at `cd0b5dd`; manager scope/API audit, legacy usage
+  audit, required validation, and suite evidence are complete
+- Independent review: one expanded-path review pending because possible-start
+  and cleanup truth are high-consequence adapter boundaries and all correction
+  passes were consumed
 - Blocker corrections: 3/3 — one executor correction for the factual interface,
   diagnostics, missing-adapter mapping, and runtime dispatch state; one manager
   correction for required fields, known assignment causes, and cross-cycle
@@ -260,8 +262,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Replaced queue dispatch `DEFERRED` with factual dispositions and typed non-start/cleanup facts in `controller.py`; centralized queue transitions; mapped local and SLURM adapter boundaries; updated root exports and `queue.md`. Corrections hard-cut result fields to `reason_code`/`cleanup_status`, validate fixed safe codes, add safe selection logging, classify missing adapters as invalid, include dispatch outcomes in managed-runtime degradation, and keep provider-acquire cleanup uncertainty factual. |
-| Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Corrections add safe logging-category and missing-adapter unit coverage, known assignment-cause coverage, and managed-runtime dispatch-uncertainty integration coverage across the same and later cycles. Focused queue unit, contract, and integration command passed (130). |
-| Validated revision/tree state and evidence | Current rebased correction tree: focused Ruff and Pyright passed with zero errors/warnings; phase unit/contract/integration command passed (130); legacy dispatch audit and `git diff --check` passed. Full repository evidence remains pending. |
+| Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Corrections add safe logging-category and missing-adapter unit coverage, known assignment-cause coverage, provider-exception cleanup uncertainty, and managed-runtime dispatch-uncertainty integration coverage across the same and later cycles. Phase unit/contract/integration command passed (130); final correction focus passed (91). |
+| Validated revision/tree state and evidence | `cd0b5dd` clean tree on base `16a1849`: `TMPDIR=/dev/shm make validate-pr` passed (Ruff, Pyright, default 2245 passed/114 deselected, config-extra 134 passed/3 skipped, build); `TMPDIR=/dev/shm make test-summary` passed and wrote `build/test-summary.md` (package 115, unit 1580, contract 285, integration 210, e2e 55, config-extra 134). Legacy dispatch audit and `git diff --check` passed. |
 | Validation-relevant changes after evidence | None; focused evidence is current for source and tests. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | `START_UNCERTAIN` is deliberately terminal queue-local `UNKNOWN` without external recovery; managed-local operation remains degraded until explicit restart/operator action. Full pre-submit approval awaits the repository gate. |
+| Residual risk and cleanup | `START_UNCERTAIN` is deliberately terminal queue-local `UNKNOWN` without external recovery; managed-local operation remains degraded until explicit restart/operator action. Independent review, PR, merge, and cleanup remain. |

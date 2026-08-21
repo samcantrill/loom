@@ -99,4 +99,4 @@ Blockers: none
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | PR #223 passed CI and squash-merged as `0267a2c` | implementation and manager review complete; required local validation passed at `3cd8759` | Hard removal may affect unknown external callers; private repository scheduling capability intentionally remains unstable until Stage 29. | remote/local branch and dedicated worktree removed |
-| 2 | pending | pending | pending | pending |
+| 2 | pending | implementation and manager pre-submit review complete; required validation passed at `cd0b5dd` | Start uncertainty has no external recovery without a handle; managed-local runtime remains degraded until explicit restart/operator action. | pending independent review, PR, remote merge, and worktree cleanup |
