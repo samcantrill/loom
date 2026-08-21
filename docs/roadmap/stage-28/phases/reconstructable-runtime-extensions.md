@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: v28 Phase 2
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p2-reconstructable-runtime-extensions`
@@ -16,7 +16,10 @@
 - Workflow path: expanded because one nested durable activation schema and
   fresh-worker trust boundary causally interact; use at most one phase-planner
   refinement if the current source still leaves that risk unresolved
-- Blockers: none; Phase 1 is remotely merged and recorded
+- Blockers: expanded review found two accepted-contract failures after the 3/3
+  correction budget was consumed: resume does not compare current selections to
+  durable activation evidence before import, and Phase 2 accepts deferred event
+  sinks into run/continuation activation paths
 
 ## Objective And Context
 
@@ -257,10 +260,12 @@ Final commands:
   `e7506b5`; `make validate-pr` completed Ruff, Pyright, 2,260 default tests
   with 1 hardware skip, 135 config-extra tests with 3 skips, and package build; `make test-summary`
   wrote a fully passing six-tier receipt
-- Independent review: pending one bounded expanded review of the activation and
-  fresh-worker trust boundary after PR publication
+- Independent review: completed on PR #228 with two product blockers: resume
+  identity comparison occurs too late or not at all, and Phase 2 event-sink
+  activation violates the deferred lifecycle-owner/worker-subset boundary
 - Blocker corrections: 3/3
-- PR and merge: pending
+- PR and merge: PR #228 is open and CI passed; merge is prohibited while the
+  review blockers remain
 
 ## Completion Record
 
@@ -270,5 +275,5 @@ Final commands:
 | Tests added or updated | Added strict manifest/selector, executor registry/loader, direct validator, resource reparse, worker command, and synthetic installed-entry-point fixtures. The real CLI E2E selects a project subprocess executor plus non-built-in codec/resource kind, asserts independent parent/child validator PIDs, loads the custom payload, and verifies the exact worker activation subset. Phase-targeted acceptance: 189 passed. Gate-failure compatibility cluster: 153 passed. |
 | Validated revision/tree state and evidence | Clean rebased source/test tree at `7dd69f8` plus evidence-only roadmap commits. `make validate-pr` passed Ruff, Pyright, default 2,260 passed / 1 skipped / 115 deselected, config-extra 135 passed / 3 skipped / 2,264 deselected, and package build. `make test-summary` wrote `build/test-summary.md`: package 116, unit 1,594, contract 285, integration 209, E2E 56, and config-extra 135 passed with no failures or errors. |
 | Validation-relevant changes after evidence | none; only this phase execution-plan evidence is updated after the successful receipts. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | Cross-host installation remains environment-owned, and distribution identity is packaging evidence rather than a content hash as accepted. PR review, CI, merge, metadata finalization, and cleanup remain. |
+| PR, review, and merge | PR [#228](https://github.com/samcantrill/loom/pull/228) is ready, targets `develop`, is mergeable, and passed CI. Expanded review found two blockers, so it remains open and unmerged. |
+| Residual risk and cleanup | Blocked at 3/3 corrections. Smallest fixes are to compare every resume selection, including empty selection, with recorded activation metadata before importing targets; and to remove event sinks from Phase 2 run/continuation allowlists and worker projections. Cross-host installation and package-evidence limitations remain accepted. |
