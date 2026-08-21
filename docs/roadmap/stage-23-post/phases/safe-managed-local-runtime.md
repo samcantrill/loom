@@ -10,7 +10,7 @@
 - Base revision: `e0b22c23978435f4a45bfbf2e4f3de8cbdce80b6`
 - PR target: develop
 - PR title: `Managed Local Operations - Phase 1: Safe Runtime Loop`
-- Dependencies: completed Stage 23; no Stage 24 implementation dependency
+- Dependencies: completed Stage 23; no Stage 25 implementation dependency
 - Requirement coverage: FR-1, FR-2, FR-3, FR-4, FR-5, FR-6, FR-7, FR-9, and FR-12
 - Workflow path: expanded because one new public runtime owns timing across process and lease boundaries
 - Blockers: none
@@ -103,7 +103,7 @@ Out of scope:
   controller-local meaning of `max_active_items`.
 - CLI or daemon commands, status-envelope changes, hardware discovery, or
   provider registries.
-- Stage 24 candidate reads/policy decisions.
+- Stage 25 candidate reads/policy decisions.
 
 Assumptions:
 
@@ -233,13 +233,13 @@ Final commands:
   root, or call a fill cycle during drain.
 - Review focus: one-owner construction; no authority provisioning; exact
   deadline behavior; degraded and foreign no-fill; terminal-before-release;
-  queue-root import cost; unchanged Stage 23/24 ownership.
+  queue-root import cost; unchanged Stage 23/25 ownership.
 - Stop if:
   - normal operation needs a new queue/config/database schema;
   - runtime correctness requires persisted process/provider-private tokens;
   - a controller change alters default `run_cycle()` selection or dispatch;
   - selected-pool startup cannot be validated without provisioning authority;
-  - current Stage 24 implementation has changed the cycle contract in a way
+  - current Stage 25 implementation has changed the cycle contract in a way
     not covered by the manifest.
 - Accepted debt and revisit trigger: the phase detects but cannot resolve
   foreign work. Phase 2 owns explicit resolution; durable survival remains
@@ -250,18 +250,18 @@ Final commands:
 - Read section range: this entire phase plan, plus planning requirements FR-1
   through FR-7, FR-9, and FR-12 and decisions DQ-1 through DQ-5.
 - Safe implementation slices: follow slices 1-5 in order; preserve unrelated
-  changes and do not edit Stage 24 planning artifacts.
+  changes and do not edit Stage 25 planning artifacts.
 - Decisions not to revisit: one pool, spec-owned owner, explicit submodule,
   no provisioning, no foreign mutation, default drain, no schema/dependency.
 - Conditions requiring manager action: any stop condition above, a public API
   shape materially different from the fixed contracts, or a validation failure
-  caused by an actual Stage 24 cycle-contract change.
+  caused by an actual Stage 25 cycle-contract change.
 
 ## Workflow State
 
 - Manager preparation: complete at `e0b22c23978435f4a45bfbf2e4f3de8cbdce80b6`;
   the dedicated worktree is clean and based on current `origin/develop`, the
-  manifest remains approved, and Stage 24 has not changed the controller cycle
+  manifest remains approved, and Stage 25 has not changed the controller cycle
   contract
 - Expanded planning: not needed unless the recheck finds a changed public cycle
   or import-boundary risk

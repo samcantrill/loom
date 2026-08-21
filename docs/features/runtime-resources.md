@@ -204,6 +204,189 @@ default queue
 Executor adapters may choose defaults, but those defaults should be documented
 by the executor and included in submission metadata when relevant.
 
+## Stage 29 Per-Stage Managed Placement
+
+Stage 29 keeps `ResourceRequest` as the resource declaration for one stage and
+makes a prepared stage attempt—not a whole run—the managed scheduling unit. It
+never sums `preprocess`, `train`, and `evaluate` resources: dependency state,
+reuse, and parallel branches make such a total both ambiguous and wasteful.
+
+`StageSpec.resource_request` is the authored semantic minimum. Exact-stage
+runtime resources may refine it. The resource implementation for each kind must
+merge without weakening the authored minimum or reject an ambiguous duplicate.
+Run policy supplies pool, maximum parallel stages, defaults, and an optional
+hard agent target; stage placement supplies stage-specific constraints,
+preferences, and fallback. Pool/site hard rules remain non-overridable.
+
+The placement model distinguishes four kinds of scheduling information:
+
+| Kind | Examples | Meaning during placement |
+| --- | --- | --- |
+| Exact consumable scalar | Integer CPU count, RAM bytes | Reserve a normalized quantity from one agent. |
+| Discrete instance | GPU or accelerator device | Select and later bind particular safe instance identities. |
+| Attribute | Architecture, machine label, GPU model | Filter or rank; not consumed. |
+| Relationship | Same agent, same advertised device fabric | Filter or rank a complete candidate claim. |
+
+The resolved placement reuses the existing versioned `ResourceRequest` rather
+than creating a second durable request codec:
+
+```python
+@dataclass(frozen=True)
+class ResolvedStagePlacement:
+    schema_version: int
+    resources: ResourceRequest
+    hard_constraints: tuple[TaggedConstraintSpec, ...] = ()
+    preferences: tuple[TaggedPreferenceSpec, ...] = ()
+    fallback: PreferenceFallbackSpec = field(
+        default_factory=PreferenceFallbackSpec.immediate
+    )
+    fingerprint: str = ""
+```
+
+Coordinator identities such as `stage_work_id` do not belong in this runtime
+value. The coordinator associates the placement fingerprint with its rebuildable
+stage-work projection. Versioned inventory and claim envelopes are separate
+because they cross the agent transport boundary.
+
+Resource-specific implementations are trusted code composed explicitly by the
+deployment:
+
+```python
+class ResourcePlanner(Protocol):
+    kind: str
+    contract_version: int
+
+    def resolve_request(
+        self,
+        authored: ResourceEntry | None,
+        runtime: ResourceEntry | None,
+    ) -> ResourceEntry | None: ...
+    def normalize_inventory(self, value: PlainData) -> PlainData: ...
+    def propose_claims(
+        self,
+        request: ResourceEntry,
+        available: PlainData,
+        *,
+        limit: int,
+    ) -> ClaimSearchResult: ...
+    def explain_failure(
+        self,
+        request: ResourceEntry,
+        available: PlainData,
+    ) -> FailureReason: ...
+```
+
+`ClaimSearchResult` carries bounded claims, an explicit `COMPLETE` or
+`EXHAUSTED` state, and optionally a sound resource-specific winner proof or
+dominance bound. A complete empty result proves that resource infeasible; an
+exhausted result is indeterminate. The scheduler cannot mutate from an
+indeterminate result unless it can compose the supplied bound with all other
+resource and preference bounds to prove the final winner.
+
+The registry is immutable and passed into scheduler composition. Remote and
+durable values may name a supported kind/version but never load a callable,
+constructor, or plugin. The protocol lives in import-light `loom.scheduling`
+rather than root `loom.protocols`, because placement is its only accepted current
+consumer.
+Stage 29 uses one concrete scheduler; it does not add a public scheduler
+replacement protocol.
+
+Quantity arithmetic is exact and owned by the resource contract:
+
+```text
+8 CPU    -> 8 integer CPU units
+10 GiB   -> 10,737,418,240 bytes
+0.25 GPU -> invalid unless a named fractional provider defines its semantics
+```
+
+CPU is a positive integer in Stage 29; fractional CPU is rejected. Memory and
+VRAM normalize to integer bytes. A later scalar resource may accept exact
+decimal/rational quantities only when its resource implementation defines the
+unit and granularity. Binary floating point never owns availability, reservation,
+or release. Unsupported contract version, unit, mode, or granularity rejects the
+request before mutation.
+
+The accepted authored shape remains `resources.entries`; Stage 29 extends the
+GPU entry's validated attributes instead of adding a shorthand parser:
+
+```yaml
+resources:
+  entries:
+    cpu: {kind: cpu, amount: 4, unit: count, attributes: {}}
+    gpu:
+      kind: gpu
+      amount: 1
+      unit: count
+      attributes:
+        allocation_mode: exclusive
+        minimum_vram: {amount: 64, unit: GiB}
+placement:
+  preferences:
+    - kind: resource_attribute_order
+      resource: gpu
+      attribute: model
+      values: [h200, h100, a100]
+```
+
+GPU placement has three explicit meanings:
+
+```text
+exclusive       choose whole GPU instances; each chosen device must satisfy
+                requirements such as minimum VRAM and model attributes
+vram-share      reserve an exact amount of VRAM on a compatible provider that
+                can enforce and release that meaning
+fractional      use a named provider-defined share unit and granularity
+```
+
+These modes are not interchangeable. Requesting 10 GiB VRAM does not silently
+mean one whole GPU, and requesting 0.5 GPU is not accepted merely because the
+number is fractional. A provider must advertise compatible inventory,
+availability, claim, admission, binding, accounting, and release semantics.
+
+Each agent publishes configured inventory separately from current availability:
+
+```python
+AgentOffer(
+    agent_id="machine-A",
+    inventory_revision=7,
+    availability_revision=19,
+    inventory={...},      # trusted manageable resources and attributes
+    availability={...},   # exact resources assignable for the next claim
+)
+```
+
+The scheduler works only with safe projections and proposes a versioned
+`ResourceClaim`. The selected agent remains authoritative for physical binding:
+
+```text
+resource planner  resolves requests, tests feasibility, and proposes safe claims
+scheduler         combines claims for already-ready stages and ranks placements
+coordinator CAS   reserves against exact stage-work and offer revisions
+authority CAS     binds the exact still-ready prepared stage attempt
+agent provider    revalidates reality, binds, accounts, and releases locally
+```
+
+This split is intentional. A coordinator snapshot can become stale between
+selection and delivery, so its durable reservation prevents competing Loom
+assignments while agent admission prevents launching against hardware that no
+longer matches. The pre-grant authority binding leaves the prepared attempt
+`PENDING`; a definitive local decline uses an exact CAS to clear only that
+binding, then publishes a new availability revision. Only accepted grant
+promotion writes `SUBMITTED` and the execution fence. A decline is not stage
+execution failure, while ambiguous acceptance remains bound and unknown.
+
+The placement engine does not interpret dependencies. One authority-side
+planning predicate exposes only ready `PlanAction.RUN` attempts and revalidates
+them at assignment CAS. GPU preferences therefore score a GPU-claiming `train`
+stage but have no effect on a CPU-only `preprocess` stage. Hard artifact/project/
+executor accessibility also filters remote candidates before resource ranking.
+
+Initial built-ins cover integer CPU counts, memory bytes, Boolean/categorical
+attributes, discrete GPUs, per-device VRAM/model predicates, and deterministic
+machine/GPU preferences. More resource kinds can be registered later, but a
+globally consumed licence, quota, or bandwidth resource first needs one clear
+transaction owner across coordinator and agent failures.
+
 ## Runtime Options
 
 `RunOptions` captures invocation-level choices for one run.
@@ -324,6 +507,13 @@ class StageRuntimeOptions:
     reliability: ReliabilityPolicy | None = None
     adapter_options: Mapping[str, object] = field(default_factory=dict)
 ```
+
+Stage 29 plans one typed `placement` field on this exact-stage surface for
+versioned hard constraints, soft preferences, and fallback. Run-level managed
+policy supplies pool/concurrency/defaults and optional hard pinning; it does not
+turn resources into one run-wide claim. The resolved stage placement and its
+fingerprint are persisted scheduling inputs independently of semantic stage
+fingerprints.
 
 Stage option keys are exact stage identifiers. Runtime models validate basic
 identifier shape and expose a helper that checks supplied known-stage sets, but
@@ -716,7 +906,8 @@ Tests should avoid requiring SLURM, Docker, or Apptainer.
 Deferred runtime/resource features:
 
 ```text
-rich accelerator descriptions
+resource/topology kinds beyond Stage 29's explicit CPU, memory, GPU, attribute,
+and single-agent placement consumers
 per-stage container images
 executor-specific schema plugins
 queue time estimates

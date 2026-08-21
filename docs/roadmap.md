@@ -159,6 +159,9 @@ written.
 | v24 | Operational lifecycle and recovery validation | Real-process proof for interruption, cancellation, timeout, shutdown, unclean process loss, authority loss, artifact integrity, and resume without false success or orphaned ownership. |
 | v25 | Resource-aware whole-run queue selection | Default-compatible FIFO selection plus a bounded queue-local policy seam for safe downstream choice of fitting managed-pool candidates. |
 | v26 | Stage-author operations correctness | Truthful stage-author artifact/log/lifecycle guidance and one preparation-failure ordering correction; broader operations work remains deferred. |
+| v27 | Auto-configured local GPU pools | Python-first local GPU inventory, deterministic whole/share/group layouts, safe authority bootstrap, member-backed placement, and explicit NVIDIA discovery. |
+| v28 | Reconstructable runtime extensions and lifecycle hooks | Truthful extension readiness, downstream conformance checks, explicit custom executor/codec/resource activation across CLI and workers, and filtered observe-only lifecycle callbacks. |
+| v29 | Durable dependency-aware stage scheduler and multi-machine agent pools | One managed system that admits runs, schedules each dependency-ready stage attempt across authenticated agent resources, moves artifacts safely, and preserves fenced lifecycle truth through restart, disconnection, cancellation, and recovery. |
 
 ## v0 - Local Runtime Kernel
 
@@ -2214,6 +2217,432 @@ Planning notes:
 - `docs/roadmap/stage-26/planning.md`
 - `docs/roadmap/stage-26/implementation-plan.md`
 
+## v27 - Auto-Configured Local GPU Pools
+
+Status:
+
+- Complete. All three phases merged through
+  [#221](https://github.com/samcantrill/loom/pull/221),
+  [#225](https://github.com/samcantrill/loom/pull/225), and
+  [#226](https://github.com/samcantrill/loom/pull/226); completion metadata is
+  recorded on `develop`.
+
+Goal:
+
+- Let a caller automatically prepare one managed-local GPU pool from supplied
+  or discovered device inventory without changing Loom's integer resource,
+  authority, assignment, or process-lifecycle contracts.
+- Support one GPU per scheduling unit, N logical shares per GPU, and N physical
+  GPUs per grouped unit while keeping each meaning explicit.
+
+Implement:
+
+- An explicit, import-light `loom.queue.gpu` Python surface for immutable local
+  device inventory, topology links, layouts, prepared plans, safe authority
+  provisioning, and managed-runtime composition.
+- Deterministic whole-GPU, interleaved share, explicit/ordered/topology-preferred
+  disjoint group layouts. Shares and groups remain integer logical resources;
+  Loom makes no hardware-isolation claim.
+- Member-backed grouped assignment that acquires, compensates, renews, and
+  releases every physical member key rather than relying on a synthetic group
+  key.
+- An atomic coordination-authority operation that creates missing resource
+  limits or accepts exact matches, rejects any mismatch without partial writes,
+  and is called only by explicit setup—not runtime or ordinary preflight.
+- A dependency-free, explicitly invoked NVIDIA `nvidia-smi` inventory/topology
+  adapter using stable UUID identity, fake command coverage, and an opt-in real
+  hardware profile.
+- Plain-language examples and documentation for the three layouts, the split
+  between planning/provisioning/runtime, redaction, and fractional limitations.
+
+Exit criteria:
+
+- Two manually supplied devices can run as two whole-GPU units or four
+  two-share units through the existing managed-local lifecycle, with exact
+  authority and member cleanup.
+- A four-device topology fixture produces deterministic disjoint two-GPU groups;
+  a group and an individual member cannot overlap, and partial group acquisition
+  leaks no capacity.
+- Provisioning is idempotent for an equal plan and atomic/no-op for a conflicting
+  plan across embedded SQLite and service-backed coordination.
+- Explicit NVIDIA discovery produces the same normalized plan path, fails
+  before mutation/launch on missing or malformed evidence, and never executes
+  during import or default checks.
+- Existing static/manual, CPU-only, delegated, schema-v1/v2, and custom-provider
+  behavior remains compatible; `make validate-pr` and `make test-summary` pass.
+
+Defer:
+
+- Floating queue amounts, compute/memory isolation, MIG/MPS administration,
+  utilization/health placement, hot inventory changes, multi-host resources,
+  overlapping-group packing, and simultaneous mixed layouts over one device
+  set.
+- Authored queue schema v3, automatic provider/plugin loading, an NVML Python
+  dependency, non-NVIDIA first-party adapters, and mandatory real-GPU CI.
+
+Primary feature docs:
+
+- `queue.md`
+- `runtime-resources.md`
+- `preflight.md`
+- `testing.md`
+
+Planning notes:
+
+- [`docs/roadmap/stage-27/planning.md`](roadmap/stage-27/planning.md)
+
+Implementation plan:
+
+- [`docs/roadmap/stage-27/implementation-plan.md`](roadmap/stage-27/implementation-plan.md)
+
+Phase execution plans:
+
+- [`docs/roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md`](roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md)
+- [`docs/roadmap/stage-27/phases/grouped-gpu-placement.md`](roadmap/stage-27/phases/grouped-gpu-placement.md)
+- [`docs/roadmap/stage-27/phases/nvidia-auto-discovery.md`](roadmap/stage-27/phases/nvidia-auto-discovery.md)
+
+## v28 - Reconstructable Runtime Extensions And Lifecycle Hooks
+
+Status:
+
+- Complete. All three phases merged through
+  [#222](https://github.com/samcantrill/loom/pull/222),
+  [#228](https://github.com/samcantrill/loom/pull/228), and
+  [#231](https://github.com/samcantrill/loom/pull/231); completion metadata is
+  recorded on `develop` at `4c1d6c7`.
+
+Goal:
+
+- Let downstream projects extend Loom through honest, testable contracts that
+  work through the same user-visible path as built-ins, including the CLI and
+  fresh stage processes where reconstruction is applicable.
+- Make the limits of every extension point visible. A protocol alone must not
+  be described as CLI-selectable or worker-safe, and installed plugin metadata
+  must remain inert until an explicit trusted setup action selects it.
+- Preserve Loom's authority, lifecycle, planning, artifact, and event
+  invariants while project code supplies implementation behavior.
+
+Implement:
+
+- A capability-based readiness model covering contract definition, Python
+  injection, keyed registration, explicit plugin loading, CLI selection, and
+  fresh-process reconstruction. Each capability reports supported,
+  unsupported, or not applicable with evidence and a revisit trigger.
+- An opt-in, dependency-light `loom.testing` contract-check package for codecs,
+  resource validators, ordinary stage executors, and event sinks. Checks return
+  structured versioned reports and require no `pytest` runtime dependency.
+- An instance-local executor registration pairing one `ExecutorDescriptor`
+  with one factory. This replaces the CLI's private built-in-only factory branch
+  for ordinary stage executors while leaving SLURM whole-run continuation in its
+  specialized path.
+- Exact explicit runtime plugin activation by entry-point group and name for
+  executors, codecs, resource validators, and event sinks. Python callers retain
+  direct object/registry injection; CLI activation is opt-in, deterministic,
+  provenance-visible, and never triggered by help, listing, status, or
+  inspection.
+- A `loom.resource_validators` group whose entry-point name is the validated
+  resource kind and whose target is the existing direct validator callable.
+  Thread the selected registry through config/pipeline/runtime parsing,
+  validation, planning, execution reconstruction, and continuation rather than
+  silently using built-ins.
+- Existing codec activation wired through the artifact-store factory in both
+  the parent and fresh workers that encode or decode project artifacts.
+- A versioned plain-data record of exact activated entry points. Persist group,
+  name, target, and available distribution evidence; never persist live
+  objects, callables, credentials, or plugin-private state. Workers verify the
+  record before importing project stage code.
+- Exact event-type subscriptions over `EventSinkRegistry`. Unfiltered
+  registration preserves observe-all behavior; filtered sinks receive only
+  selected committed events. Dispatch remains registration-ordered,
+  synchronous, observe-only, and best-effort.
+- Consistent activation for `loom validate`, `loom plan`, `loom preflight`, and
+  `loom run`, with propagation to `loom stage run` or `loom stage-job run` only
+  where that process owns a required extension.
+- Documentation classifying every existing downstream seam, its Python/CLI
+  reachability, fresh-process applicability, conformance support, and deferral
+  trigger, with small custom executor, codec, resource, and sink examples plus
+  a downstream Slack/Discord recipe and the mutable-hook boundary.
+
+Exit criteria:
+
+- Existing runs with no explicit activation preserve built-in behavior and do
+  not discover third-party packages.
+- A downstream package passes published contract checks, registers a custom
+  ordinary executor with matching capabilities, selects it from the CLI, and
+  executes a synthetic pipeline through the normal runner path.
+- A selected custom codec and resource validator work in-process and in a real
+  subprocess worker; missing or changed activation fails before stage code.
+- A selected sink subscribes to `stage.completed` without receiving unrelated
+  events, sees committed state, and cannot change run correctness when it
+  raises.
+- Help, plugin listing, read-only inspection, imported run data, and default
+  execution remain import-safe and never activate stored or installed project
+  code implicitly.
+- Targeted contract, package, CLI, subprocess, lifecycle, and import-boundary
+  tests pass, followed by `make validate-pr` and `make test-summary` during
+  implementation.
+
+Defer:
+
+- A universal component registry, service locator, global mutable registries,
+  arbitrary CLI command injection, automatic loading, dependency solving,
+  plugin sandboxing, and treating explicitly activated project plugins as
+  untrusted code.
+- Custom submitted-executor continuation, custom SLURM orchestration, plugin
+  hot reload, remote installation, and payload/artifact distribution. Ordinary
+  one-stage `Executor` implementations are the v28 executable boundary; v29
+  separately owns the resident-profile queue daemon and agent control plane.
+- Plugin registries for data sources, run exporters/importers, and sweep
+  providers. Sources lack a runtime selector, run exchange already supports
+  direct protocol use over portable records, and sweep discovery needs an
+  accepted custom spec boundary.
+- Wiring `FailureClassifier`, `RetryEvaluator`, or `TimeoutAdapter` merely
+  because their protocols exist. They remain contract-only until automatic
+  retry or another accepted consumer establishes one decision path. New
+  reuse-policy semantics remain deferred beyond Stage 26.
+- Mutable before/after hooks, plan/output replacement callbacks, strict callback
+  failure, payload predicates, service-specific adapters, durable cursors,
+  delivery outboxes, and at-least-once external delivery. Mutable hooks can
+  change authoritative execution decisions and therefore need separate
+  ordering, failure, provenance, resume, and process-ownership contracts. A
+  common notification message/severity projection remains deferred until two
+  concrete provider sinks demonstrate one stable shared need.
+
+Primary feature docs:
+
+- `plugins.md`
+- `protocols.md`
+- `execution.md`
+- `runtime-resources.md`
+- `reliability.md`
+- `testing.md`
+- `cli.md`
+
+Planning notes:
+
+- [`docs/roadmap/stage-28/planning.md`](roadmap/stage-28/planning.md)
+
+Implementation plan:
+
+- [`docs/roadmap/stage-28/implementation-plan.md`](roadmap/stage-28/implementation-plan.md)
+
+Phase execution plans:
+
+- [`docs/roadmap/stage-28/phases/truthful-extension-contracts.md`](roadmap/stage-28/phases/truthful-extension-contracts.md)
+- [`docs/roadmap/stage-28/phases/reconstructable-runtime-extensions.md`](roadmap/stage-28/phases/reconstructable-runtime-extensions.md)
+- [`docs/roadmap/stage-28/phases/filtered-lifecycle-observers.md`](roadmap/stage-28/phases/filtered-lifecycle-observers.md)
+
+## v29 - Durable Dependency-Aware Stage Scheduler And Multi-Machine Agent Pools
+
+Status:
+
+- The maintainer confirmed the amendment from whole-run placement to
+  dependency-aware per-stage managed scheduling. Earlier stages remain
+  implemented prerequisites. One expanded removal-first design review and one
+  plan-consistency review passed after bounded corrections. Maintainer
+  implementation-plan approval remains pending, and all three phases are
+  unimplemented.
+
+Goal:
+
+- Keep one run submission/status/cancellation model while scheduling each
+  executable stage attempt according to its own resources, hard constraints,
+  and preferences. A downstream stage is not eligible until its required
+  upstream output commits.
+- Compose bounded local execution, a persistent single-machine daemon, and
+  outbound agents on several machines from the same run orchestrator, concrete
+  placement engine, assignment lifecycle, agent runtime, and application port.
+- Compare ready stages from several admitted runs against the global set of
+  fresh authenticated agent capacity so otherwise idle CPU/GPU resources remain
+  useful without turning Loom into SLURM.
+- Preserve distinct durable owners for run/stage authority, coordinator
+  scheduling state, agent physical/process state, and artifact publication.
+
+Implement:
+
+- A queue item and `run_uri` remain the whole-run client/control identities.
+  Managed scheduling uses exact `(run_uri, stage_name, attempt)`,
+  `stage_work_id`, `assignment_id`, resource claim, agent/session/offer,
+  execution grant, and `process_execution_id` identities without conflation.
+- One shared authority-side predicate over the persisted execution plan,
+  stage/attempt state, and upstream output commits. The durable run orchestrator
+  uses it to resolve REUSE/SKIP/BLOCKED actions and expose ready
+  `PlanAction.RUN` attempts; the authority assignment CAS invokes the same
+  predicate. The placement engine and agent never interpret the DAG.
+- One immutable resolved placement per prepared stage attempt. It reuses
+  `ResourceRequest`, treating authored stage resources as semantic minima and
+  exact-stage runtime resources as non-weakening refinements. Run/pool policy
+  supplies defaults, concurrency, and optional hard pinning; stage policy
+  supplies stage-specific hard rules, preferences, and fallback.
+- Positive integer CPUs, memory/VRAM normalized to integer bytes, discrete
+  device instances, categorical attributes, and explicit GPU modes. Exclusive
+  GPU claims bind exact devices; VRAM-share and fractional requests are valid
+  only when a named provider advertises enforceable accounting/binding. Binary
+  floating point never owns resource arithmetic.
+- Import-light `loom.scheduling` values, an explicitly composed
+  `ResourcePlanner` protocol/registry at the resource-kind boundary, and one
+  concrete pure bounded scheduler. Hard rules filter, soft rules rank only
+  feasible candidates, irrelevant resource preferences contribute nothing,
+  and stable identities break ties. There is no public replaceable scheduler,
+  submitted callable rule, unrestricted DSL, or general solver.
+- A deterministic bounded global snapshot of ready attempts and fresh agent
+  opportunities. Default order is run priority/enqueue order, ready time,
+  topological order, stage name, and attempt; then choose that stage's best
+  feasible placement. A proven-infeasible older attempt may be bypassed, while
+  `SEARCH_EXHAUSTED` remains indeterminate and cannot justify mutation.
+  Existing per-run `max_parallel_stages` limits active/exposed work.
+- A rebuildable coordinator `StageWorkRecord` containing attempt/readiness
+  evidence and resolved-placement fingerprint, but no stage terminal truth.
+  Per-run authority continues to own plans, attempts, statuses, bound inputs,
+  output commits, and retry decisions.
+- Separate production `SQLiteCoordinatorStateStore` and
+  `SQLiteAgentJournal` roots with one active process lock per role. The
+  coordinator owns run admission, stage-work projections, offers, logical
+  reservations, assignments/grants, controls, event acknowledgements, and
+  joined status. An agent owns configured pools, inventory/availability,
+  physical claims, input/result durability, grant/start/process facts, cleanup,
+  and outbox. Required-store failure fails closed.
+- A recoverable cross-store assignment protocol instead of a distributed
+  transaction: coordinator reserves a current logical claim; authority CAS
+  binds the still-ready `PENDING` attempt without advancing lifecycle; the agent
+  stages request/inputs and binds reality; exact decline clears only that
+  ungranted binding; accepted grant promotion writes `SUBMITTED` plus the
+  execution fence; agent records grant/start before one root launch. Ambiguous
+  acceptance remains bound.
+- An authority execution fence that remains valid across coordinator outage and
+  liveness expiry until terminal commit or explicit fencing. This permits a
+  result from the same granted assignment to commit after reconnection while
+  rejecting late output after guarded recovery. Loom guarantees at most one
+  managed root launch per assignment, not exactly-once authored effects.
+- Phase 1 migration of `PipelineRunner`, `ManagedLocalQueueRuntime`, the
+  managed queue/controller, local process/resource admission, prepared attempt,
+  and stage worker into one dependency-aware bounded/persistent local path.
+  Historical queue rows remain inspectable/cancellable; public facades remain
+  callable; managed whole-run resources/argv/direct dispatch and in-memory
+  ready-loop ownership are deprecated rather than silently reinterpreted.
+  `continue_prepared_run` keeps its public validation and structured safe
+  failure, not a fictitious successful legacy path.
+- Versioned expiring offers from outbound agents. Inventory reports only
+  configured manageable CPU, memory, GPU instances/VRAM/mode, safe attributes,
+  resident project/environment/executor fingerprints, and resource-contract
+  versions; availability is a separate exact revision after live claims. Offer
+  expiry removes future capacity only.
+- One application port with direct and HTTP adapters for client and agent
+  operations. Persistent HTTP uses mutual TLS and configured least-privilege
+  client/agent/operator scopes; direct calls use the same authorizer. Payload
+  actor, code/provider names, commands, paths, or credentials never confer
+  authority. Endpoint and secret locations come from protected deployment
+  configuration/environment, with abstract `machine-A`/`machine-B`
+  examples.
+- Resident-project remote execution and a bounded first artifact data path.
+  Before grant, the agent durably materializes the immutable request and all
+  required inputs. After execution it retains output until an authenticated
+  coordinator relay verifies content and publishes coordinator/backend-visible
+  `ArtifactRef` values. Authority commits only those final refs; agent-local
+  file URIs never unlock a remote descendant. A later direct object backend can
+  implement the same boundary.
+- Coordinator outage stops new/downstream assignment but not granted execution.
+  Agents journal and retain result/output, reconnect, reconcile, replay, finish
+  publication, and only then advertise fresh capacity. Agent outage removes
+  capacity but leaves accepted work unknown/reserved; it is never automatically
+  assigned elsewhere. Independent work on other agents may continue.
+- Stage-granular run cancellation: commit intent and stop new work first;
+  cancel/unbind prepared work; fan out exact controls to every active
+  assignment; retain truthful success that wins a race; finalize only after
+  terminal or positive-containment evidence. No descendant starts after run
+  cancellation.
+- Agent drain/resume/reload with availability withdrawn before mutation.
+  Reload reads complete trusted local config, waits for affected live claims,
+  and atomically publishes one new configuration/inventory fingerprint.
+- Exact guarded manual recovery of an unknown assignment. Authenticated
+  expected-state intent plus positive containment tied to the managed
+  agent/session/process boundary may fence/close the old execution. Existing
+  reliability policy alone may create one fresh attempt with current placement
+  and no stale claim/score. Timeout, PID absence, reboot, or plain “mark failed”
+  is rejected. Different-session replacement requires proof for the complete
+  unresolved old-session set.
+
+Exit criteria:
+
+- A local `preprocess -> train -> evaluate` run and persistent single-machine
+  daemon use the same durable stage-work/assignment trace. Train/evaluate never
+  appear before required output commits; reuse/skip consumes no agent capacity;
+  restart reconstructs readiness and status.
+- Several admitted runs can expose independent ready stages. A GPU-waiting stage
+  does not waste CPU capacity that a later proven-feasible preprocess stage can
+  use, and per-run parallel limits remain enforced.
+- If `machine-A` has only 12 GiB devices and `machine-B` has an 80 GiB
+  device, a one-GPU stage requiring 64 GiB VRAM can run only on
+  `machine-B`. GPU/model and agent preferences deterministically rank feasible
+  stages without changing feasibility or affecting CPU-only stages.
+- Concurrent coordinator cycles/offers produce one active assignment for one
+  stage work item. Decline-before-grant clears only that attempt's binding while
+  it remains `PENDING`;
+  grant/start crashes invoke at most one managed launcher; an expired liveness
+  lease cannot invalidate a valid current-fence result.
+- Wrong certificate/role/scope/session/version/nonce/replay fails before
+  mutation. A remote assignment cannot select arbitrary command or code.
+  Input transfer is complete before grant; interrupted output transfer exposes
+  no partial artifact; downstream receives only accessible finalized refs.
+- Coordinator loss during execution yields no new work but the stage continues,
+  buffers output, and commits/reconciles after restart. Agent loss never causes
+  automatic duplication. Same-session restart begins at zero availability.
+- Run cancellation, drain/reload, stale-event replay, and manual recovery pass
+  controlled race tests. Weak containment cannot fence work; known authoritative
+  success prevents requeue; different-session replacement requires complete-set
+  proof.
+- Public legacy reads/facades and delegated SLURM remain compatible. Package,
+  unit, contract, integration, E2E, `make validate-pr`, and
+  `make test-summary` gates pass; opt-in network/GPU receipts use only abstract
+  site data.
+
+Defer:
+
+- Shared-filesystem signalling, agent mesh/peer transfer, inbound agent servers,
+  broker/streaming infrastructure, coordinator election/HA/federation, and
+  automatic agent discovery/provisioning.
+- Distributed/gang stages, cross-agent resource combination, preemption,
+  fair-share/account quotas, optimal packing/general solver, arbitrary topology
+  optimization, and globally consumed resources without one transactional owner.
+- Implicit fractional CPU/GPU, GPU sharing without provider proof, unrestricted
+  constraint/plugin loading, or public scheduler/rule substitution.
+- Automatic retry/failover of unknown accepted work, timeout/PID takeover,
+  process adoption, live migration/checkpointing, node power fencing, or hidden
+  force cancellation.
+- Arbitrary package/config/code shipment, hostile-code sandboxing, peer cache,
+  selected vendor object-store SDK, and automatic dataset replication. The
+  initial coordinator relay is intentionally bounded and may be replaced after
+  measured throughput or a selected backend.
+- Internet-facing hosting, credential issuance/identity federation, general
+  telemetry/log service, coordinator/agent disaster recovery, and mandatory
+  real-network/GPU CI.
+
+Primary feature docs:
+
+- `queue.md`
+- `protocols.md`
+- `execution.md`
+- `runtime-resources.md`
+- `run-store.md`
+- `state.md`
+- `reliability.md`
+- `preflight.md`
+- `cli.md`
+- `testing.md`
+
+Planning notes:
+
+- [`docs/roadmap/stage-29/planning.md`](roadmap/stage-29/planning.md)
+
+Implementation plan:
+
+- [`docs/roadmap/stage-29/implementation-plan.md`](roadmap/stage-29/implementation-plan.md)
+
+Phase execution plans:
+
+- [`docs/roadmap/stage-29/phases/local-daemon-control-boundary.md`](roadmap/stage-29/phases/local-daemon-control-boundary.md)
+- [`docs/roadmap/stage-29/phases/jit-multi-agent-pool.md`](roadmap/stage-29/phases/jit-multi-agent-pool.md)
+- [`docs/roadmap/stage-29/phases/safe-agent-reconfiguration-recovery.md`](roadmap/stage-29/phases/safe-agent-reconfiguration-recovery.md)
 ## Deferred Integration Candidates
 
 The items below are intentionally deferred until their owning contracts exist
@@ -2236,11 +2665,12 @@ future roadmap candidates, not as implicit scope for the versions above.
   V11 owns Loom's dependency-light whole-run queue. Optional adapters for
   Prefect, Ray, Kubernetes, cloud batch systems, or other orchestrators should
   remain separate integrations over Loom queue/run contracts.
-- Worker-daemon prefetch and advanced health-check orchestration beyond v23.
-  Future controllers may pre-submit infrastructure before scheduled start time,
-  heartbeat executor availability, refresh submitted-job status in richer ways,
-  or add more advanced cancellation reconciliation, but those should not expand
-  the bounded managed-local lifecycle stage.
+- Worker-daemon prefetch and advanced health orchestration beyond v29. V29 keeps
+  at most one unresolved assignment handshake for each exact availability
+  revision while already-granted work may continue concurrently; speculative
+  local backlogs, multiple speculative reservations, infrastructure pre-
+  submission, predictive health/utilization placement, and automatic loss
+  recovery remain later work.
 - MLflow-backed and DVC-backed artifact stores. These should be optional
   plugin backends after the v15 remote-store capability model exists. They must
   advertise read/write/list/checksum/delete and transaction semantics like any
@@ -2289,31 +2719,31 @@ Before turning any roadmap version into a full implementation plan:
 | --- | --- | --- |
 | `core-model.md` | v0 | Foundational vocabulary for refs, records, manifests, filters, identifiers, timestamps, and hashing terminology. |
 | `timestamps.md` | v0 | UTC helpers are needed by status, stores, provenance, logs, and generated IDs. |
-| `protocols.md` | v0 | Tiny shared protocols and import-boundary rules come before subsystem contracts. |
+| `protocols.md` | v0, v28, v29 | Tiny shared protocols and import-boundary rules come before subsystem contracts; v28 publishes bounded downstream conformance support; v29 keeps the resource-planner protocol queue-local, uses one concrete scheduler, and keeps agent wire values and direct/HTTP clients on explicit module surfaces with revision-bound work requests, independent control delivery, execution-grant/event acknowledgements, scoped principals, and no root protocol expansion. |
 | `errors.md` | v0, v1, v2, v3 | Shared roots land in v0; composition directive errors mature in v1; CLI formatting and local diagnostics mature in v2 and v3. |
 | `serialization.md` | v0, v1 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and composition manifests. |
 | `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots. |
-| `io.md` | v0, v1, v14, v15, v16 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v14; remote hooks and operations in v15/v16. |
+| `io.md` | v0, v1, v14, v15, v16, v28 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v14; remote hooks and operations in v15/v16; v28 carries explicitly selected codecs through applicable CLI and worker artifact-store factories. |
 | `artifacts.md` | v0, v3, v9, v9-post, v10, v12, v15, v16, v21 | Local artifact refs/stores in v0; inspection in v3; commit/concurrency semantics in v9; authority-backed commit use is mandatory after v9; v10 adds durable service/offline import evidence; bundles/exporters in v12; external/remote interface, multi-location refs, and immutable reuse semantics in v15; payload materialization operations in v16; retention in v21. |
 | `config.md` | v0, v1, v2, v13, v14, v23 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v13; recipe plugins in v14; v23 compatibly extends queue controller and local-assignment configuration. |
-| `pipeline.md` | v0, v2, v9, v13 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later. |
+| `pipeline.md` | v0, v2, v9, v13, v28 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later; v28 threads custom resource validation without changing authored stage-resource data. |
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
-| `runtime-resources.md` | v4, v6, v7, v11, v17, v18, v23 | Shared runtime/resource objects arrive before executor-specific mapping; v11 adds queue pool reconciliation over authority resource leases; v23 adds concrete local assignment without changing portable resource requests. |
-| `execution.md` | v0, v4, v5, v6, v7, v9, v9-post, v10, v11, v17, v18, v19, v23 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; concurrency foundations in v9; v9-post removes local-only mutation entrypoints; v10 makes service connection/start policy explicit and durable; v11 adds whole-run queue dispatch; reliability in v19; v23 adds bounded concurrent managed-local process lifecycle. |
-| `run-store.md` | v0, v3, v5, v8, v9, v9-post, v10, v11, v12, v19, v20, v21, v23 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence contracts; v9-post deprecates `LocalRunStore` as a runtime entrypoint; v10 adds DB-backed authority service/offline import; v11 links queue and authority facts; v23 adds queue-owned local attempt logs and safe dispatch evidence; bundles/reliability/events/cleanup build on the shared contracts. |
-| `state.md` | v0, v5, v7, v9, v9-post, v10, v11, v19, v23 | Basic statuses in v0; attempts/failures, scheduler state, concurrent lifecycle semantics, mandatory authority-backed lifecycle use, durable service state, queue status, and reliability records mature later; v23 adds explicit deferred dispatch and pool-cycle outcomes. |
-| `provenance.md` | v0, v1, v6, v7, v10, v11, v14, v17, v18, v20 | Generic provenance in v0; config composition provenance in v1; submission, offline import evidence, queue dispatch facts, plugin, container, event, and event-sink facts added with those capabilities. |
+| `runtime-resources.md` | v4, v6, v7, v11, v17, v18, v23, v27, v28, v29 | Shared runtime/resource objects arrive before executor-specific mapping; v11 adds queue pool reconciliation over authority resource leases; v23 adds concrete local assignment; v27 documents GPU share/group meanings; v28 preserves custom validation across reconstruction; v29 resolves existing stage resource requests into per-attempt placement, adds exact resource-owned inventory/claim envelopes and explicit GPU modes, and compares global fresh offers while final binding remains agent-local. |
+| `execution.md` | v0, v4, v5, v6, v7, v9, v9-post, v10, v11, v17, v18, v19, v23, v28, v29 | Local execution in v0; options in v4; subprocess in v5; later stages add schedulers, concurrency, authority, reliability, managed-local lifecycle, and reconstructable extensions; v29 places work through the common generic scheduler and inserts a journalled fenced assignment handoff before reusing the same local process/resource path. |
+| `run-store.md` | v0, v3, v5, v8, v9, v9-post, v10, v11, v12, v19, v20, v21, v23, v29 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence; v10 adds DB-backed authority service/offline import; v11 links queue and authority facts; v23 adds local attempt logs/evidence; v29 keeps run authority distinct in joined status and lets known committed success resolve an otherwise missing agent report before any manual recovery. |
+| `state.md` | v0, v5, v7, v9, v9-post, v10, v11, v19, v23, v29 | Basic statuses in v0; attempts/failures, scheduler state, authority-backed lifecycle, queue status, and reliability mature later; v23 adds deferred dispatch/pool-cycle outcomes; v29 adds versioned placement/claim evidence, safe pending reasons, separate assignment/control/connectivity/process/recovery projections, preserves timeout/search ambiguity, and records containment-gated operator resolution without treating offer expiry as run/process truth. |
+| `provenance.md` | v0, v1, v6, v7, v10, v11, v14, v17, v18, v20, v28 | Generic provenance in v0; config composition provenance in v1; submission, offline import evidence, queue dispatch facts, plugin, container, event, and event-sink facts added with those capabilities; v28 records exact safe activation identity for reconstruction. |
 | `resume.md` | v0, v2, v3, v9, v9-post, v10, v13, v19 | Same-run-directory resume in v0; CLI/preflight expose it; v9 clarifies interrupted attempts and leases; v9-post authority-backs continuation entrypoints; v10 adds offline import/equivalence policy; sweeps and retry policies build later. |
-| `preflight.md` | v3, v4, v5, v6, v7, v9, v10, v11, v14, v15, v16, v17, v18, v19, v20, v21, v23 | Core check runner in v3; new checks arrive with each operational feature, including managed-local assignment consistency and capability checks in v23. |
+| `preflight.md` | v3, v4, v5, v6, v7, v9, v10, v11, v14, v15, v16, v17, v18, v19, v20, v21, v23, v27, v28, v29 | Core checks grow with each operational feature; v23 checks managed-local assignment, v27 discovered-plan readiness, v28 selected extensions, and v29 checks resource contract/provider compatibility, exact unit/granularity support, separate role stores/locks, environment/config, mTLS principal policy, resident profile, and same-session reconciliation without performing discovery, provisioning, or launch. |
 | `run-catalog.md` | v8, v9, v9-post, v10, v12, v13, v15, v16, v21 | Catalog/comparison in v8; active-query guarantees and projections in v9; v9-post clarifies authority-backed behavior reads versus artifact-only local directory access; v10 service registry/offline import updates run visibility; bundles and exporters in v12; sweeps integrate in v13; metadata-only external/remote refs and immutable lookup in v15; explicit payload materialization in v16; cleanup later. |
 | `sweeps.md` | v9, v9-post, v10, v11, v13 | V9 defines coordination primitives for large sweeps; v9-post shapes workspace authority and service-backed coordination; v10 service-backs workspace coordination; v11 provides whole-run queue dispatch that later sweeps can use; v13 implements deterministic sweeps as many ordinary runs. |
 | `slurm.md` | v6, v7, v9-post, v10, v11, v18 | Script/dry-run support first; live operations second; v9-post removes local-only submitted-state mutation; v10 clarifies allocation-scoped service supervision and connection policy; v11 adds delegated queue dispatch; container composition after both are stable. |
 | `container-executors.md` | v17, v18 | Docker first; Apptainer and SLURM-container composition second. |
 | `remote-stores.md` | v9, v9-post, v10, v15, v16 | V9 shapes backend capability expectations; v9-post plans service/database authority for multi-host state; v10 delivers durable service supervision; external/remote interface contract, fake handlers, multi-location refs, and bundle ref semantics first; payload operations and optional real backends second. |
-| `reliability.md` | v5, v9, v9-post, v10, v11, v19, v20, v21, v23 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; v9-post makes those foundations mandatory across entrypoints; v10 adds service durability and offline import rejection/acceptance evidence; v11 requires accurate queue cancellation/status reporting; retry and timeout land in v19, events in v20, cleanup in v21, and v23 adds lease-renewal and exact resource-release safety for managed-local work. |
-| `plugins.md` | v14, v15, v16, v20 | Explicit discovery in v14; remote backend, exporter, and event sink integration later. |
-| `queue.md` | v11, v23 | V11 establishes the durable whole-run queue and local/SLURM adapters; v23 adds safe pool cycles, static concrete assignment, deterministic local logs, and redacted pool summaries. |
-| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21, v23 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations; v23 extends queue status without placing scheduling logic in the CLI. |
+| `reliability.md` | v5, v9, v9-post, v10, v11, v19, v20, v21, v23, v28, v29 | Baseline process failure grows through authority, queue cancellation, retry/timeout, events, cleanup, and lease-safe local release; v28 adds exact observe-only subscriptions; v29 adds separate durable coordinator/agent state, execution-grant/start fencing, disconnected continued execution, event replay, no automatic loss redispatch, and positive-containment manual recovery. |
+| `plugins.md` | v14, v15, v16, v20, v28 | Explicit discovery in v14; remote backend, exporter, and event sink integration later; v28 makes readiness capability-specific and explicitly activates ordinary executors, codecs, validators, and filtered sinks through their applicable process roots. |
+| `queue.md` | v11, v23, v25, v27, v29 | V11 establishes the durable whole-run queue and local/SLURM adapters; v23 adds safe pool cycles, concrete assignment, logs, and redacted status; v25 adds bounded oldest-eligible ordering; v27 adds local GPU pools; v29 keeps run admission but schedules each dependency-ready managed stage through one global hard/soft placement, assignment, agent-session, reconciliation, reconfiguration, and containment-gated recovery path. |
+| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21, v23, v28, v29 | Core CLI grows only with owning features; authority and queue commands arrive with their services; v28 adds explicit plugin activation; v29 adds thin daemon and endpoint-backed submit/status/cancel/agent-control/recovery presentation for versioned placement requests and safe scheduler diagnostics, consuming environment-resolved deployment values without owning scheduling, auth, config, or lifecycle policy. |
 | `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
 | `examples/` and `*-example-coverage.md` | v22 | Cross-roadmap example inventory, runnable/manual status, validation tiers, integration/e2e behavior, and documentation refinement are consolidated after the runtime surface through v21 exists. |
 
@@ -2338,10 +2768,10 @@ until there is a specific downstream need and a separate design review.
   continuation in core `loom`. Explicit lookup and publication of
   project-declared immutable artifacts is scoped to v15/v16 instead.
 - Hosted workflow orchestration, remote tracking servers, web dashboards,
-  authorization systems, and hosted run catalog services as core Loom features.
-  V10 owns database-backed authoritative service supervision for Loom's own
-  persistence contract, but external systems such as Prefect or
-  MLflow remain optional adapters.
+  general authorization systems, and hosted run catalog services as core Loom
+  features. V10 owns authority service supervision and v29 adds only scoped
+  daemon/client mTLS principals; external systems such as Prefect or MLflow remain
+  optional adapters.
 - SLURM job arrays, multi-node MPI orchestration, cloud batch backends,
   Kubernetes, cluster-native controllers beyond v11 delegated dispatch, and
   workflow submission across unrelated clusters.

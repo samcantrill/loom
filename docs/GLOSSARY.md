@@ -82,6 +82,30 @@ users can also use it as a quick map to stable repository terms.
 | authoritative read model | A backend-neutral materialized snapshot used to inspect authoritative run state. | Distinguish from raw backend implementation details and from the derived run catalog. |
 | materialized ref | A file- or path-backed materialization observed on disk for an authoritative snapshot. | Use for projection or readback terminology, not as a synonym for authoritative lifecycle state. |
 
+## Queue, scheduling, and agent terms
+
+| Term | Preferred meaning in this repository | Distinguish from / avoid |
+| --- | --- | --- |
+| queue item / `queue_item_id` | One durable whole-run submission and its stable queue identity. | Not a pipeline stage, run URI, dispatch attempt, assignment, or operating-system process. |
+| resolved stage placement | The schema-versioned, immutable per-stage-attempt combination of an authored `ResourceRequest`, exact-stage refinements, hard constraints, soft preferences, target, and fallback policy used by managed scheduling. | Not a whole-run resource sum, coordinator assignment, or physical binding. |
+| stage work / `stage_work_id` | The coordinator's rebuildable scheduling projection for one exact prepared `(run_uri, stage_name, attempt)`, including readiness evidence and a resolved-placement fingerprint. | Not authority-owned stage lifecycle truth and not a queue item. |
+| managed pool | A named scheduling, admission-policy, and authorization domain whose current capacity is contributed by authenticated agent offers. | Not a duplicated fixed coordinator capacity counter and not an external delegated scheduler partition. |
+| coordinator | The application role that durably owns run admission, dependency reconciliation, scheduling snapshots, stage-work projections, assignments and grants, cancellation/control intent, reconciliation acknowledgements, and guarded recovery decisions. | It does not own authoritative stage success/output truth, physical hardware binding, child processes, or agent-local configuration. |
+| agent | The durable configured machine-side logical participant that owns inventory/availability projection, request/input staging, local admission/binding, process supervision/containment, result retention, cleanup, and its journal/outbox. | Distinguish from one daemon process, durable agent session, network connection, or machine hostname. |
+| agent session | One durable incarnation of an agent, resumed only under its fencing and reconciliation rules. | Not a transient connection or coordinator service generation. A new session cannot silently replace unresolved accepted work. |
+| agent offer | An expiring safe scheduling contribution bound to agent/session/configuration, inventory and availability revisions, pool, profile/capabilities, and expiry. | Expiry removes future schedulability only; it is not process-death or job-failure evidence. |
+| resource inventory | The versioned configured resources and attributes that trusted local agent policy permits Loom to manage. | Distinguish from current resource availability and from hardware merely detected but not allocated to Loom. |
+| resource availability | The exact versioned subset of inventory currently assignable for a new claim. | Not historical usage, physical process truth, or capacity that remains valid after its revision changes. |
+| resource claim | A deterministic, versioned, safe description of the resources selected from one agent for a candidate/assignment. | Not an execution grant, physical device binding, authority lease, or claim that combines several agents. |
+| placement candidate | One complete proposed mapping of a ready stage work item's resolved resources and placement policy to resource claims on one agent. | Not a partial resource match, DAG-readiness decision, or committed assignment. |
+| hard constraint | A built-in versioned rule that may make a placement candidate ineligible. | Never use a soft score to override it or describe preference as eligibility. |
+| soft preference | A built-in versioned rule that ranks candidates already proven feasible. | It cannot make a candidate invalid or valid; waiting for preference needs an explicit fallback policy. |
+| scheduling decision | The pure scheduler result selecting at most one ready stage work item, one agent opportunity, and one complete candidate from an immutable snapshot. | Not DAG readiness or durable ownership; coordinator and authority must still revalidate and bind it. |
+| assignment | The coordinator-owned durable handoff joining one exact prepared stage attempt to one agent/session and selected resource claim through fenced lifecycle states. | An ungranted offer is not execution authority; distinguish assignment from queue dispatch, stage attempt, and process execution. |
+| execution grant | The coordinator's durable authorization for one accepted assignment and process-execution identity to pass the agent start fence. | It is not a promise of exactly-once external effects. |
+| execution fence | The authority-owned durable binding that permits results only from the current granted assignment until terminal commit or explicit fencing. | Not an expiring liveness lease; coordinator outage alone does not invalidate it. |
+| work request | One outbound agent request for work bound to one exact current availability revision. | Not a daemon-local queue or prefetched backlog; at most one remains unresolved per availability revision. |
+
 ## Naming heuristics
 
 - Prefer exact exported names when referring to a contract that appears in code
@@ -90,6 +114,12 @@ users can also use it as a quick map to stable repository terms.
 - Use checksum for persisted content integrity and fingerprint for structured
   identity or reuse.
 - Use action for planner decisions and status for persisted lifecycle state.
+- Use constraint for feasibility, preference for ranking, claim for selected
+  scheduling resources, binding for agent-local physical acquisition, and grant
+  for execution authority.
+- Qualify agent identity, session, connection, offer/availability revision,
+  assignment, dispatch attempt, and process execution; never collapse them into
+  an ambiguous "job id" or "daemon id".
 - Prefer `RunStore` and `StageStore` for public lifecycle APIs; spell
   `LocalRunStore` or `LegacyRunStore` explicitly when local-file or migration
   behavior is intended.

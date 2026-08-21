@@ -11,16 +11,18 @@ The v11 queue is intentionally narrow:
 
 ```text
 whole-run queue items
-one deterministic queue per pool
+one FIFO queue per pool
 SQLite-backed workspace queue repository
 managed local and delegated SLURM capacity modes
 Python-first enqueue/control surface
 thin operational CLI for checks, status, cancellation, and foreground drain
 ```
 
-The queue does not provide priorities, fairness, retries, bulk CLI submission,
-SSH dispatch, bundle transport, or queue-side authority resource-limit
-provisioning.
+The queue does not provide priority/fair-share accounts, automatic job retry,
+bulk CLI submission, SSH dispatch, bundle transport, or queue-side authority
+resource-limit provisioning. Stage 29 retains whole-run admission but adds
+dependency-aware placement of each ready managed stage attempt without turning
+Loom into a general cluster manager.
 
 ## Ownership Model
 
@@ -120,50 +122,6 @@ below so adapter state and maintenance timing have one owner. Direct
 `run_once()` loops remain a low-level seam for other custom adapters; they are
 not the recommended managed-local construction pattern.
 
-## Explicit Local NVIDIA GPU Pools
-
-Python callers can turn an explicitly selected NVIDIA host into the same
-managed-local pool without adding queue configuration or changing the queue
-schema. Import the vendor adapter directly; `loom` and `loom.queue` imports do
-not probe hardware:
-
-```python
-from loom.queue.gpu import (
-    LocalGpuPoolLayout,
-    build_managed_local_gpu_runtime,
-    ensure_local_gpu_pool_limits,
-    plan_local_gpu_pool,
-)
-from loom.queue.gpu.nvidia import NvidiaSmiGpuInventoryProvider
-
-inventory = NvidiaSmiGpuInventoryProvider(include_topology=True).discover()
-plan = plan_local_gpu_pool(
-    inventory,
-    LocalGpuPoolLayout.grouped(2, grouping="topology"),
-    pool_name="local-gpu",
-    queue_name="gpu",
-    db_path=".loom/queue.sqlite",
-)
-ensure_local_gpu_pool_limits(plan, store, workspace_id="project-workspace")
-runtime = build_managed_local_gpu_runtime(
-    plan, workspace_id="project-workspace", coordination_store=store
-)
-```
-
-The adapter uses fixed `nvidia-smi` argv and stable GPU UUIDs as both identity
-and the default `CUDA_VISIBLE_DEVICES` binding. Whole-GPU and integer-share
-layouts do not query topology. Topology grouping requests a complete supported
-matrix and fails rather than choosing a weaker fallback. Shares are scheduling
-capacity only; they do not isolate GPU memory or compute. Discovery is frozen
-into the plan, while provisioning is the explicit `ensure...` call; runtime
-construction and ordinary preflight remain read-only.
-
-Command output, PCI addresses, topology, and UUID bindings are operator-local
-discovery context. They are not persisted in ordinary queue status or
-assignment evidence. See the dependency-free
-[fake NVIDIA pool example](../../examples/operations/nvidia-gpu-pool/README.md)
-for the three supported layouts and a complete fake managed-local run.
-
 ## Managed Local Pools
 
 Managed pools validate their configured resources against authority-owned
@@ -174,52 +132,6 @@ terminal outcome.
 Queue preflight can report whether a config contains managed pools. Python
 callers that supply a public coordination store and workspace id can also run
 read-only authority limit reconciliation.
-
-## Managed Selection
-
-Every controller pool mode chooses before it acquires queue ownership. Managed
-queues read a bounded deterministic FIFO window, remove requests that cannot
-fit the current advisory local opportunity, then use either the oldest eligible
-request or one Python `QueueSelectionPolicy` injected into `QueueController`
-(or `ManagedLocalQueueRuntime.from_spec`) by pool name. A policy receives only
-the immutable candidate ID, enqueue time, dispatch attempt, logical resource
-amounts, pool name, and advisory available amounts; it returns one supplied ID
-or stops. It cannot claim work, reserve capacity, or learn slot, process,
-agent, offer, or transport details.
-
-Advisory capacity is not authority. Loom acquires exact local queue ownership
-after evaluating a policy, then local authority/provider admission decides
-whether the request can start. If a typed pre-start capacity non-start is fully
-compensated, the controller may refresh and choose another eligible request in
-the same bounded opportunity without reacquiring the deferred ID. This enables
-head bypass but deliberately makes no fairness or starvation guarantee. All
-other pre-start facts terminalize the queue item: invalid work fails, while
-uncertainty about external start or cleanup becomes queue-local `UNKNOWN` and
-stops the current fill.
-
-Dispatch adapters report one factual disposition: `STARTED`, `COMPLETED`,
-`NOT_STARTED`, or `START_UNCERTAIN`. Every result carries a fixed safe
-`reason_code`; `NOT_STARTED` carries a typed cause and `cleanup_status`. Only
-`CAPACITY` with `NOT_REQUIRED` or `CONFIRMED` cleanup is
-requeued. `START_UNCERTAIN` never implies a usable external handle or retry.
-The controller's verification that it requeued a queue row is separate from
-the adapter's claim that external leases or processes were released.
-
-If durable reservations are introduced later, their ordering is physical or
-advisory availability, active coordinator reservation constraints, eligibility,
-then preference. This queue version creates no reservation records or policy
-fields.
-
-Delegated SLURM pools use the same bounded choose-then-acquire operation with
-default FIFO preference and retain external scheduler ownership. Selection
-policy does not place delegated work. A custom repository used with a
-`QueueController` must provide Loom's private bounded-read and exact-acquire
-capabilities at controller construction; ordinary persistence-only repositories
-remain usable outside controller scheduling. Stage 29 preserves the same
-eligibility/evaluator behavior but moves managed ownership into durable
-assignment/offer records. See the dependency-free
-[managed-local policy example](../../examples/operations/managed-local-queue/README.md)
-for Python construction.
 
 Schema-v1 queue configuration remains compatible and keeps one controller-local
 active item with no concrete assignment provider. Opt into bounded concurrency
@@ -310,19 +222,152 @@ resources={"accelerator": 2}
 
 The two authored slots bind an environment list such as
 `LOOM_ASSIGNED_ACCELERATORS`; `CUDA_VISIBLE_DEVICES` is only a downstream
-naming variant, not vendor behavior. For an explicitly supplied local GPU
-inventory, [`loom.queue.gpu`](../../src/loom/queue/gpu/__init__.py) supports
-`LocalGpuPoolLayout.grouped(...)`: every logical GPU group acquires, renews,
-releases, and rolls back its physical member leases together. It accepts only
-disjoint explicit, ordered, or caller-supplied topology-ranked groups; it does
-not discover vendor hardware or provide general bundle scheduling. The
+naming variant, not vendor behavior. When a placement is genuinely indivisible,
+keep a project-owned provider that acquires, renews, releases, and rolls back
+the same physical member coordination keys used by individual allocation. The
 [paired example provider](../../examples/operations/managed-local-queue/paired_assignment_provider.py)
-remains a copyable pattern for other project-defined indivisible resources, not
-a synthetic bundle-key scheme. The controller active limit is one-runtime-local
-policy, not a distributed quota. Candidate selection remains Stage 24 work;
-generic scheduling, reattachment, resource observation, and notification policy
-remain Stage 25 work.
+is a copyable pattern, not a supported core import or a synthetic bundle-key
+scheme. The controller active limit is one-runtime-local policy, not a
+distributed quota. Stage 25 supplies bounded oldest-eligible queue ordering;
+Stage 29 folds that behavior and the Stage 27 resource/provider seams into the
+generic scheduler described below. Notification policy remains Stage 26 work.
 
+## Stage 29 Dependency-Aware Scheduler Direction
+
+Stage 29 changes managed execution from one whole-run launch to scheduling each
+dependency-ready executable stage attempt. The queue item and `run_uri` remain
+the user-facing submission, status, and cancellation identities. Command-scoped
+local execution, `ManagedLocalQueueRuntime`, a persistent local daemon, and
+several remote agents compose one durable run orchestrator, one concrete
+placement engine, one assignment lifecycle, and one agent runtime. Delegated
+SLURM keeps external scheduler ownership.
+
+The scheduling subsystem has two deliberately separate decisions:
+
+```text
+run orchestrator   interprets the persisted plan and authoritative output state
+placement engine   chooses where an already-ready executable attempt should run
+```
+
+One shared authority-side readiness predicate is used when stage work is exposed
+and again when the exact attempt is bound to an assignment. The placement engine
+never interprets DAG edges. For `preprocess -> train -> evaluate`, only
+`preprocess` initially appears in a placement snapshot. `train` appears only
+after the preprocess output commit, and `evaluate` appears only after train
+commits. Reuse, skip, blocked descendants, and retry remain planner/reliability
+behavior and do not consume agent capacity.
+
+Each prepared `PlanAction.RUN` attempt has an immutable resolved placement
+built from its authored `ResourceRequest`, exact-stage runtime refinements,
+run/pool policy, and site policy. Resources are never added across the whole
+pipeline. CPU is a positive integer count; memory and VRAM normalize to integer
+bytes. Hard constraints remove candidates; soft preferences rank only feasible
+ones. A GPU-model preference affects a GPU training stage but not a CPU-only
+preprocess stage. A hard run or stage target never spills; a preferred agent is
+soft and follows explicit fallback.
+
+The coordinator persists a rebuildable `StageWorkRecord` containing the exact
+`(run_uri, stage_name, attempt)`, ready time/order, plan/authority revision,
+upstream commit identities, and resolved-placement fingerprint. It does not own
+stage success or failure. Per-run authority remains the owner of plans,
+attempts, statuses, bound inputs, output commits, and retry facts.
+
+The scheduler receives one immutable bounded global snapshot:
+
+```python
+snapshot = SchedulingSnapshot(
+    ready_stages=coordinator.ready_stage_window(),
+    opportunities=fresh_agent_availability(),
+    pool_policy=policy,
+)
+
+decision = scheduler.choose(snapshot, resource_planners)
+```
+
+Default stage order is run priority and enqueue order, ready time, topological
+order, stage name, then attempt. For the first stage proven runnable now, the
+scheduler chooses its best feasible single-agent placement. An earlier stage
+proven infeasible on current capacity may be bypassed so, for example, idle CPUs
+can run another preprocess stage while a training stage waits for a GPU.
+Candidate search remains tri-state: complete feasible, complete infeasible, or
+`SEARCH_EXHAUSTED`. An indeterminate older stage is not mislabeled infeasible,
+and an incomplete placement ranking is never committed without a sound winner
+proof.
+
+Every authenticated agent publishes configured inventory separately from
+current availability:
+
+```text
+inventory     resources trusted local configuration permits Loom to manage
+availability  exact resources assignable in this versioned offer revision
+```
+
+An offer binds agent/session/configuration, project and executor capabilities,
+inventory and availability revisions, pool, resource-contract versions, and
+coordinator receipt-time expiry. Expiry removes only future schedulability. It
+does not prove process death, release accepted work, or permit session takeover.
+One stage claim fits wholly on one agent; CPU from `machine-A` is not combined
+with a GPU from `machine-B` for one stage.
+
+Resource-specific matching is explicitly composed trusted code behind
+`ResourcePlanner`; stored and wire values never load callables. The one
+concrete scheduler owns candidate orchestration and deterministic rule order.
+CPU/memory planners propose exact scalar claims. A GPU planner proposes exact
+devices and supports only explicit exclusive, provider-enforced VRAM-share, or
+named provider-defined fractional modes. Stage 29 adds no public replaceable
+scheduler, submitted callable rule protocol, unrestricted constraint language,
+or general solver.
+
+Cross-store correctness is a recoverable protocol, not one imaginary
+transaction:
+
+1. Authority prepares an exact ready attempt; coordinator materializes stage
+   work.
+2. Coordinator transaction reserves current logical claims and creates an
+   assignment intent.
+3. The shared readiness predicate is rechecked and authority CAS binds that
+   still-`PENDING` prepared attempt to the assignment without advancing stage
+   lifecycle.
+4. Agent durably stages the immutable request and required inputs, then performs
+   final physical binding. A definitive pre-grant decline may CAS-unbind only
+   that same binding before coordinator capacity is released; ambiguous
+   acceptance remains bound.
+5. After acceptance, grant promotion changes the bound attempt to `SUBMITTED`
+   and creates an authority execution fence independent of coordinator
+   liveness. Agent records grant and start fences before at most one root
+   launcher invocation.
+6. Agent retains output until an authenticated transfer/backend finalizer
+   returns coordinator-accessible `ArtifactRef` values. Only their authority
+   output commit unlocks descendants and releases the assignment.
+
+The coordinator and each agent use separate SQLite state and process locks.
+A granted stage continues while the coordinator is unavailable because its
+request and inputs are already local; the agent journals and retains results
+until reconnection. No new or downstream work starts until the coordinator
+returns and authority commits the result. Agent loss removes capacity but does
+not fail or reassign accepted work. Exact reconciliation or
+positive-containment operator recovery is required.
+
+All persistent HTTP peers use mutual TLS and scoped principals; direct
+composition invokes the same authorizer. Agents connect outbound using bounded
+long polling and own no prefetched durable queue. Work names a prepared resident
+stage and safe versioned values, not arbitrary shell text. A bounded initial
+coordinator relay provides network-only input/output movement with digest,
+temporary-first, and manifest-last behavior; agent-local file paths are never
+committed as remote output refs.
+
+Queue status joins but labels queue admission, dependency waiting, placement
+waiting, active/unknown assignment, authority stage truth, artifact publication,
+retry, cancellation, and terminal outcome. Cancellation first stops new stage
+work, then controls every exact active assignment; it becomes terminal only
+after terminal or positive-containment evidence. Existing whole-run queue rows
+remain readable and cancellable. New managed work uses a distinct orchestration
+state rather than silently reinterpreting historical `DISPATCHED`.
+
+Delegated pools retain their existing boundary: Loom submits according to the
+delegated adapter and the external scheduler owns ordering, resource placement,
+and dependency submission. Stage 29 does not emulate SLURM policy inside the
+managed stage scheduler.
 ## Delegated SLURM Pools
 
 Delegated SLURM pools use the existing fakeable SLURM command-runner boundary.

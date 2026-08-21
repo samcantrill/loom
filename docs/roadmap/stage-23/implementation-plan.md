@@ -99,7 +99,7 @@ Blockers: none; all three phases are remotely merged into `develop`
 - Decisions no phase may reopen: `max_active_items` is not a distributed
   semaphore; queue never provisions authority limits; live-owner renewal does
   not imply crash-time safety; no provider-private recovery data becomes
-  durable; v23 does not define v25 scheduler policy.
+  durable; v23 does not define v26 scheduler policy.
 
 ## Phase Index
 
@@ -141,7 +141,7 @@ adds the operator contract and public proof without scheduling in CLI.
 - Revisit triggers: a required cross-controller item quota; unattended process
   survival/reattachment; a demonstrated status or recovery consumer for richer
   durable assignment state; dynamic or multi-host inventory; measured SQLite
-  query/CAS pressure; v25's reviewed cross-contract scheduling design.
+  query/CAS pressure; v26's reviewed cross-contract scheduling design.
 
 ## Completion
 

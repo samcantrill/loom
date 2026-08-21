@@ -694,6 +694,21 @@ errors.py         planning, serialization, persistence, selector, and resume err
 Pipeline specs describe work. Project stage objects do the work. `loom.pipeline`
 should not contain domain-specific stage subclasses.
 
+Stage 29 plans a top-level import-light `loom.scheduling` subsystem for managed
+placement of already dependency-ready stage attempts. It owns versioned safe
+inventory/claim/candidate/decision values, explicitly composed resource
+planners, and one concrete pure scheduler. It must not import queue repositories,
+authority implementations, SQLite, routes, artifacts, processes, executors,
+vendors, project code, or CLI.
+
+Dependency readiness does not move into `loom.scheduling`. One planning-owned,
+authority-side predicate over the persisted plan, stage state, and committed
+upstream outputs is shared by durable orchestration and assignment revalidation.
+The coordinator application owns stage-work projections and logical assignments;
+per-run authority owns attempts/status/output commits; the agent application
+owns physical binding and execution. Deployment adapters compose these owners
+above their import-light contracts.
+
 ### 6.6 Execution and Executors
 
 Detailed specifications: [execution.md](features/execution.md),
@@ -733,6 +748,13 @@ errors.py      executor-specific errors
 
 Executors adapt where and how a stage invocation runs. They should not own DAG
 semantics, resume policy, config composition, or artifact indexes.
+
+When Stage 29 is implemented, `PipelineRunner` remains the synchronous public
+facade but managed execution delegates readiness/progress to the durable
+orchestrator and executes one prepared, assignment-fenced stage at a time through
+the agent boundary. The current in-memory serial/thread-pool loop and full-run
+lock must not remain a second managed scheduling owner. Direct/delegated
+compatibility behavior must stay explicit rather than silently sharing state.
 
 ### 6.7 Stores and State
 
