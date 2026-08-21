@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from hashlib import sha256
+import json
 from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol, runtime_checkable
@@ -52,6 +53,10 @@ class LocalGpuDevice:
                 raise QueueServiceError(
                     f"local GPU {field_name} must be a non-empty safe string"
                 )
+        if "," in self.binding_value:
+            raise QueueServiceError(
+                "local GPU binding_value must not contain the CUDA list separator"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -436,7 +441,6 @@ class _LocalGpuAssignmentProvider:
                 safe_evidence={
                     "gpu": {
                         "plan_fingerprint": self._plan.fingerprint,
-                        "device_ids": [device.device_id for device in selected],
                     }
                 },
                 next_maintenance_at=_lease_maintenance_at(tuple(leases)),
@@ -525,9 +529,17 @@ def _fingerprint(
     queue_name: str,
     resource_name: str,
 ) -> str:
-    canonical = "|".join(
-        [layout.kind, str(layout.shares), pool_name, queue_name, resource_name]
-        + [device.device_id for device in inventory.devices]
+    canonical = json.dumps(
+        {
+            "device_ids": [device.device_id for device in inventory.devices],
+            "layout": {"kind": layout.kind, "shares": layout.shares},
+            "pool_name": pool_name,
+            "queue_name": queue_name,
+            "resource_name": resource_name,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
     )
     return sha256(canonical.encode("utf-8")).hexdigest()
 

@@ -207,10 +207,10 @@ Final commands:
 - Manager preparation: passed on base `e5bfa9bcf87ce1f6f93857cc92c76e7d5f252898`
 - Expanded planning: not needed; accepted contracts are complete
 - Implementation: in_progress; one `loom_phase_executor` pending
-- Refiner: not needed
+- Refiner: completed qualified safe-evidence/binding-validation/fingerprint correction
 - Pre-submit gate: pending
 - Independent review: consider only if authority contracts materially change
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3
 - PR and merge: pending
 
 ## Completion Record
@@ -218,8 +218,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Completed in `b67d1f05eecab6ec7dd6acb4f93a14d3598ae92e`: explicit `loom.queue.gpu` planning/runtime composition, atomic coordination limit ensure across SQLite/service authority paths, and scoped package/authority/queue tests. |
-| Tests added or updated | `tests/unit/loom/queue/gpu/test_local.py`, `tests/integration/queue/test_managed_local_gpu_pool.py`, `tests/contracts/test_workspace_coordination_contract.py`, package/store export tests, and the in-memory coordination fake. |
-| Validated revision/tree state and evidence | Clean implementation tree at `b67d1f05eecab6ec7dd6acb4f93a14d3598ae92e`; `make validate-pr` passed (default: 2,189 passed/112 deselected; config-extra: 132 passed/3 skipped), and `make test-summary` passed with receipt `build/test-summary.md` (package 114, unit 1,537, contract 279, integration 205, e2e 54, config-extra 132 passed). |
-| Validation-relevant changes after evidence | None; this completion-record update is documentation only. |
+| Tests added or updated | `tests/unit/loom/queue/gpu/test_local.py`, `tests/integration/queue/test_managed_local_gpu_pool.py`, `tests/contracts/test_workspace_coordination_contract.py`, package/store export tests, and the in-memory coordination fake. The qualified correction adds safe-evidence redaction, structured-fingerprint, and comma-binding regressions to the GPU-local unit module. |
+| Validated revision/tree state and evidence | Clean implementation tree at `b67d1f05eecab6ec7dd6acb4f93a14d3598ae92e`; `make validate-pr` passed (default: 2,189 passed/112 deselected; config-extra: 132 passed/3 skipped), and `make test-summary` passed with receipt `build/test-summary.md` (package 114, unit 1,537, contract 279, integration 205, e2e 54, config-extra 132 passed). Qualified correction: `.venv/bin/pytest -q tests/unit/loom/queue/gpu/test_local.py` passed (10 passed). |
+| Validation-relevant changes after evidence | Qualified correction 1/3 removes device identities from assignment safe evidence, uses canonical structured fingerprint input, rejects comma-containing CUDA bindings, and adds focused regressions; the prior full-validation receipt is stale. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | No Phase 1 blocker. NVIDIA discovery, topology/grouping, and operator documentation remain deferred to later accepted phases; PR/review/merge and worktree cleanup remain manager-owned. |

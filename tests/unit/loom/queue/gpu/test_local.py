@@ -63,6 +63,19 @@ def test_plan_is_deterministic_and_safe_summary_excludes_binding_values() -> Non
     assert left.operator_summary()["devices"]
 
 
+def test_fingerprint_is_structured_and_stable_across_inventory_permutations() -> None:
+    combined = plan_local_gpu_pool(_inventory(("a|b", "0")), whole_gpus())
+    separate = plan_local_gpu_pool(
+        _inventory(("a", "0"), ("b", "1")), whole_gpus()
+    )
+    permuted = plan_local_gpu_pool(
+        _inventory(("b", "other-b"), ("a", "other-a")), whole_gpus()
+    )
+
+    assert combined.fingerprint != separate.fingerprint
+    assert separate.fingerprint == permuted.fingerprint
+
+
 @pytest.mark.parametrize("shares", [0, -1])
 def test_layout_rejects_non_positive_shares(shares: int) -> None:
     with pytest.raises(QueueServiceError, match="positive"):
@@ -74,6 +87,11 @@ def test_inventory_rejects_duplicate_device_or_binding_values() -> None:
         _inventory(("uuid-a", "0"), ("uuid-a", "1"))
     with pytest.raises(QueueServiceError, match="binding values"):
         _inventory(("uuid-a", "0"), ("uuid-b", "0"))
+
+
+def test_device_rejects_cuda_binding_list_separator() -> None:
+    with pytest.raises(QueueServiceError, match="CUDA list separator"):
+        LocalGpuDevice("uuid-a", "0,1")
 
 
 def test_share_provider_interleaves_devices_before_second_share() -> None:
@@ -134,3 +152,31 @@ def test_whole_provider_leases_distinct_devices_for_integer_amount() -> None:
     assert decision.assignment is not None
     assert decision.assignment.bindings.environment["CUDA_VISIBLE_DEVICES"] == "0,1"
     assert len({lease.resource_key for lease in decision.assignment.leases}) == 2
+
+
+def test_assignment_safe_evidence_excludes_device_identity_and_binding() -> None:
+    device_id = "operator-local-device-id"
+    binding_value = "operator-local-binding"
+    plan = plan_local_gpu_pool(_inventory((device_id, binding_value)), whole_gpus())
+    store = InMemoryWorkspaceCoordinationStore()
+    store.create_workspace(WorkspaceIdentity("workspace"))
+    store.ensure_resource_limits("workspace", plan.required_limits)
+
+    decision = plan.assignment_provider(store, workspace_id="workspace").acquire(
+        ResourceAssignmentRequest(
+            consumer_id="item",
+            pool_name=plan.pool_name,
+            owner_id="owner",
+            session_id="session",
+            resources={plan.resource_name: 1},
+            admitted_lease_ids=("logical",),
+            lease_ttl_seconds=30,
+        )
+    )
+
+    assert decision.assignment is not None
+    assert decision.assignment.safe_evidence == {
+        "gpu": {"plan_fingerprint": plan.fingerprint}
+    }
+    assert device_id not in repr(decision.assignment.safe_evidence)
+    assert binding_value not in repr(decision.assignment.safe_evidence)
