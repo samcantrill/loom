@@ -182,21 +182,25 @@ Final commands:
 - Manager preparation: passed on `fd0fd80`; Phases 1 and 2 are remotely merged,
   their completion metadata is current, and the phase scope remains source-free.
 - Expanded planning: not needed.
-- Implementation: blocked — the approved changed-config same-run branch case
-  reaches the existing authority-backed fail-closed output-commit boundary.
+- Implementation: completed — correction 1/3 uses the established
+  checksum-invalid artifact repair path: the affected producer/consumer rerun
+  with superseding commits while the independent branch reuses. The example also
+  states that ordinary post-commit authored config changes remain fail closed.
 - Refiner: not needed / pending evidence.
-- Pre-submit gate: pending.
+- Pre-submit gate: passed — `make validate-pr` passed Ruff, Pyright, default
+  (2,242 passed, 1 skipped), config-extra (141 passed, 3 skipped), and build.
 - Independent review: not needed / pending residual-risk check.
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 — replaced the invalid config-change demonstration
+  with the existing checksum-repair contract path.
 - PR and merge: pending.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Blocked before durable implementation; no example, docs, or runtime paths changed. |
-| Tests added or updated | None; the required integration assertion cannot pass against the current same-run behavior. |
-| Validated revision/tree state and evidence | On `fd0fd80`, a four-stage fork with `input_values.left` recomposed through public `compose_config`/`RunRequest` produced `RUN` for the changed producer and `BLOCKED` for its consumer and independent branch, not the required reuse/run split. |
-| Validation-relevant changes after evidence | Only this blocker record; no validation-relevant source or test changes. |
-| PR, review, and merge | No PR; manager decision required. |
-| Residual risk and cleanup | Existing resume docs state ordinary fingerprint/config changes are fail-closed after an authoritative output commit. A planner/runtime contract decision is needed before this phase can teach branch-specific same-run invalidation. |
+| Implementation and changed paths | Refined `examples/execution/local`; added `examples/storage/fake-backend-materialization`; routed both catalogs; and added bounded support/quick-start/deferred summaries to the seven related feature docs. No `src/loom` changes. |
+| Tests added or updated | Updated local example e2e journey and v0 catalog checks; added integration entrypoint assertions for local checksum repair and fake-backend local materialization. |
+| Validated revision/tree state and evidence | Targeted docs/example, backend/materialization contract, and resume/materialization integration checks passed; `make validate-pr` passed Ruff, Pyright, default 2,242 passed/1 skipped, config-extra 141 passed/3 skipped, and `uv build`; `make test-summary` wrote `build/test-summary.md`. |
+| Validation-relevant changes after evidence | None. |
+| PR, review, and merge | Implementation commit pending; PR/review/merge remain manager-owned. |
+| Residual risk and cleanup | Fake backend is project-local and explicitly unsupported for provider materialization; materialization remains explicit local-copy-only. Ordinary post-commit config changes remain fail closed by design. |

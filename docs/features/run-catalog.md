@@ -9,6 +9,25 @@ the core runtime into a database-backed experiment tracking service.
 
 The catalog is derived from run-store metadata. It is not the source of truth.
 
+## Current Support
+
+Loom indexes, lists, compares, exports, inspects, and imports local run
+collections from authoritative run-store facts. The catalog sidecar is derived
+and rebuildable; it is not a tracking service or deletion authority.
+
+## Quick Start
+
+Run the local catalog and portable-bundle walkthrough:
+
+```sh
+uv run python examples/operations/run-catalog-and-bundles/run_catalog_workflow.py
+```
+
+## Deferred
+
+Remote tracking services, dashboards, distributed indexes, and catalog-owned
+deletion remain outside this feature.
+
 ## Scope
 
 This component owns:

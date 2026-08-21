@@ -141,6 +141,48 @@ def test_example_run_catalog_and_bundles_compares_and_preserves_payload(
         assert (imported_run / "imported_payloads").is_dir()
 
 
+def test_example_local_pipeline_reuses_then_repairs_only_affected_branch(
+    tmp_path: Path,
+) -> None:
+    script = EXAMPLES_ROOT / "execution" / "local" / "run_pipeline.py"
+    fields = _summary_fields(_run_example_script(script=script, tmp_path=tmp_path))
+
+    assert fields["first_status"] == "SUCCEEDED"
+    assert fields["resume_status"] == "SUCCEEDED"
+    assert fields["repair_status"] == "SUCCEEDED"
+    assert fields["config_fingerprint"].startswith("sha256:")
+    assert int(fields["pipeline_stage_fingerprint_count"]) > 0
+    assert fields["resume_actions"] == (
+        "left_seed=REUSE,left_summarize=REUSE,"
+        "right_seed=REUSE,right_summarize=REUSE"
+    )
+    assert fields["repair_actions"] == (
+        "left_seed=RUN,left_summarize=RUN,"
+        "right_seed=REUSE,right_summarize=REUSE"
+    )
+    assert fields["repair_reason"] == "ARTIFACT_CHECKSUM_MISMATCH"
+
+
+def test_example_fake_backend_and_local_materialization(tmp_path: Path) -> None:
+    script = (
+        EXAMPLES_ROOT
+        / "storage"
+        / "fake-backend-materialization"
+        / "run_fake_backend_materialization.py"
+    )
+    fields = _summary_fields(_run_example_script(script=script, tmp_path=tmp_path))
+
+    assert fields["registered_backend_kind"] == "example-backend"
+    assert fields["materialize_capability"] == "unsupported"
+    assert fields["backend_operation_support"] == "unsupported"
+    assert fields["backend_operation"] == "materialize"
+    assert fields["materialization_status"] == "succeeded"
+    assert fields["materialization_operation"] == "artifact.materialize.local.copy"
+    assert fields["checksum_verified"] == "True"
+    assert fields["bytes_equal"] == "True"
+    assert int(fields["bytes_copied"]) > 0
+
+
 def test_example_deterministic_sweep_runs_two_trials_and_collects_artifacts(
     tmp_path: Path,
 ) -> None:

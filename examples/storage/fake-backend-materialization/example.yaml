@@ -1,0 +1,26 @@
+id: storage.fake-backend-materialization
+title: Fake Backend and Explicit Local Materialization
+summary: Register a project-local fake backend, inspect unsupported provider materialization, and checksum-verify an explicit local copy.
+capability: storage
+level: introductory
+introduced_in: v30
+status: runnable
+validation: full
+surface: python_api
+public_surfaces:
+  - python_api
+owner_docs:
+  - examples/storage/README.md
+  - docs/features/remote-stores.md
+owner_stages:
+  - v30
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_fake_backend_and_local_materialization
+entrypoints:
+  - path: run_fake_backend_materialization.py
+    kind: python
+    description: Register the fake backend, inspect its capability result, and copy a local payload with checksum evidence.
+tags:
+  - storage
+  - backend-registry
+  - materialization
+  - checksum

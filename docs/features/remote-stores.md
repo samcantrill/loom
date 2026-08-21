@@ -44,6 +44,28 @@ Two fake adapter shapes are used in contract tests:
 Both examples preserve only plain summaries and operation evidence in run
 exchange metadata. They are not supported first-party adapters.
 
+## Current Support
+
+Core Loom exposes backend-neutral descriptors, factories, handlers, capability
+records, and explicit payload-operation records. Local materialization is an
+explicit checksum-verified copy of a local `file:` payload. The storage example
+uses a project-local fake backend to show this contract without selecting a
+provider.
+
+## Quick Start
+
+Run the fake-backend and explicit local-materialization walkthrough:
+
+```sh
+uv run python examples/storage/fake-backend-materialization/run_fake_backend_materialization.py
+```
+
+## Deferred
+
+Loom ships no selected S3, GCS, Azure, HTTP, MLflow, DVC, W&B, or tracking
+provider; credentials, network operations, automatic materialization, and
+provider retry/cleanup policy remain deferred.
+
 ## Stage 16 No-Backend Boundary
 
 Core `loom` intentionally ends Stage 16 with no real backend family selected.

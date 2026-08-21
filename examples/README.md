@@ -7,8 +7,8 @@ records, local execution, provenance snapshots, and same-run resume decisions.
 Examples are organized by user goal. Root Loom groups focus on runtime
 workflows that consume authored config through the external `weave` dependency.
 Each group has its own README with the runnable examples and what each one
-demonstrates. Later roadmap items can add `experiments/`, `storage/`, and
-`extensions/` groups without making individual backends top level concepts.
+demonstrates. Storage keeps extension contracts separate from individual
+provider concepts.
 
 ## CLI Workflows
 
@@ -18,6 +18,7 @@ demonstrates. Later roadmap items can add `experiments/`, `storage/`, and
 | [Experiments](experiments/README.md) | Deterministic manual sweep planning, execution, status, and collection. |
 | [Extensions](extensions/README.md) | Observe-only event sinks registered directly through the public Python API. |
 | [Operations](operations/README.md) | Authority lifecycle, diagnostics, run catalog comparison, bundle portability, candidate-only cleanup, and live SLURM job commands. |
+| [Storage](storage/README.md) | Fake backend capability/operation evidence and explicit checksum-verified local materialization. |
 
 ## Public Python API Workflows
 
@@ -25,6 +26,7 @@ demonstrates. Later roadmap items can add `experiments/`, `storage/`, and
 | --- | --- |
 | [Execution](execution/README.md) | `PipelineRunner` run/resume flows and `RunOptions` construction and validation. |
 | [Operations](operations/README.md) | Captured-log execution setup and authority-backed resource coordination APIs. |
+| [Storage](storage/README.md) | Backend registry contracts and explicit local artifact materialization. |
 
 Internal demos stay in-repo for regression coverage, but the primary catalog
 excludes support-only workflows that rely on service fixtures or synthetic

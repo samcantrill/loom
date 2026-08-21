@@ -36,6 +36,25 @@ The core rule is:
 A sweep is a deterministic collection of normal pipeline runs.
 ```
 
+## Current Support
+
+Loom supports deterministic sweep planning, ordinary per-trial execution,
+status, and collection through the sweep APIs and CLI. Each trial keeps the
+normal pipeline's config, planning, provenance, and resume contracts.
+
+## Quick Start
+
+Run the two-trial manual sweep walkthrough:
+
+```sh
+uv run python examples/experiments/deterministic-sweep/run_sweep.py
+```
+
+## Deferred
+
+Bayesian optimization, provider-selected scheduling, and domain-specific metric
+selection are not sweep-core behavior.
+
 ### 1.1 Alignment With `loom.md`
 
 [loom.md](../loom.md) lists sweep orchestration as a generic runtime goal. This

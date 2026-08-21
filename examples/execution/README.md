@@ -27,7 +27,7 @@ examples should use `examples/execution/containers/slurm-apptainer/`.
 
 | Example | Demonstrates |
 | --- | --- |
-| `execution.local` | Composing a static pipeline config, running a two-stage local pipeline, writing artifacts through the local store, recording provenance/fingerprints, and reusing unchanged stages from the same run directory. |
+| `execution.local` | Composing a static two-branch pipeline, recording durable fingerprint evidence, reusing unchanged stages, and checksum-repairing only the affected branch in the same run directory. |
 | `execution.python-run-options` | Public Python construction, merge, stage validation, and capability diagnostics for `RunOptions`. |
 
 ## Representative End-to-End Evidence
