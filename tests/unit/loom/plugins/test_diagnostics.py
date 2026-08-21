@@ -75,8 +75,8 @@ def test_group_readiness_exposes_fixed_facet_evidence_and_derives_status() -> No
     assert readiness.status == "registry-ready"
     facets = cast(dict[str, Any], readiness.to_summary()["facets"])
     assert facets["cli_selection"] == {
-        "status": "unsupported",
-        "evidence": "Run commands do not yet select executor plugins.",
+        "status": "supported",
+        "evidence": "Run commands explicitly select ordinary executor plugins.",
     }
 
 
@@ -89,7 +89,9 @@ def test_summarize_plugin_records_keeps_metadata_plain_and_listing_only() -> Non
         package_version="1.0.0",
     )
 
-    result = summarize_plugin_records((record,), selection=PluginSelection(groups=(record.group,)))
+    result = summarize_plugin_records(
+        (record,), selection=PluginSelection(groups=(record.group,))
+    )
 
     assert result.ok is True
     assert result.to_summary() == {
@@ -139,7 +141,9 @@ def test_summarize_plugin_records_keeps_metadata_plain_and_listing_only() -> Non
     }
 
 
-def test_check_plugin_records_loads_selected_recipe_only(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_check_plugin_records_loads_selected_recipe_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     selected = PluginRecord(
         group=LOOM_RECIPES_GROUP,
         name="selected",

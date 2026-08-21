@@ -13,6 +13,7 @@ from loom.cli.options import (
     ConfigCliOptions,
     OutputFormat,
     ValidateCliOptions,
+    add_plugin_option,
     output_format_from_namespace,
 )
 from loom.cli.results import CliWarning, ValidationCliResult
@@ -70,8 +71,6 @@ def register_subparser(
         default=OutputFormat.TEXT.value,
         help="output format",
     )
-    from loom.cli.plugin_activation import add_plugin_option
-
     add_plugin_option(parser)
     parser.add_argument(
         "--traceback",

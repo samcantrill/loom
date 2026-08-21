@@ -2,15 +2,14 @@
 
 from typing import TYPE_CHECKING
 
-from loom.pipeline.executors.base import (
-    Executor,
-    ExecutorFactory,
-    ExecutorRegistration,
-    ExecutorRegistry,
-    create_default_executor_registry,
-)
-
 if TYPE_CHECKING:
+    from loom.pipeline.executors.base import (
+        Executor,
+        ExecutorFactory,
+        ExecutorRegistration,
+        ExecutorRegistry,
+        create_default_executor_registry,
+    )
     from loom.pipeline.executors.apptainer import (
         ApptainerExecutor,
         SingularityExecutor,
@@ -25,6 +24,28 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> object:
+    if name in {
+        "Executor",
+        "ExecutorFactory",
+        "ExecutorRegistration",
+        "ExecutorRegistry",
+        "create_default_executor_registry",
+    }:
+        from loom.pipeline.executors.base import (
+            Executor,
+            ExecutorFactory,
+            ExecutorRegistration,
+            ExecutorRegistry,
+            create_default_executor_registry,
+        )
+
+        return {
+            "Executor": Executor,
+            "ExecutorFactory": ExecutorFactory,
+            "ExecutorRegistration": ExecutorRegistration,
+            "ExecutorRegistry": ExecutorRegistry,
+            "create_default_executor_registry": create_default_executor_registry,
+        }[name]
     if name in {"ExecutorError", "LocalExecutorError"}:
         from loom.pipeline.executors.errors import ExecutorError, LocalExecutorError
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 from collections.abc import Iterable
 
 from loom.io.codecs import CodecRegistry, create_default_codec_registry
@@ -21,17 +20,6 @@ from loom.plugins import (
     load_resource_validator_entry_points,
 )
 from loom.plugins.activation import PluginActivationManifest, resolve_plugin_selections
-
-
-def add_plugin_option(parser: argparse.ArgumentParser) -> None:
-    """Attach the shared explicit repeatable selector option to a CLI parser."""
-    parser.add_argument(
-        "--plugin",
-        action="append",
-        default=None,
-        metavar="GROUP:NAME",
-        help="explicit runtime plugin; may be repeated",
-    )
 
 
 def selected_runtime_plugins(
@@ -95,7 +83,6 @@ def plugin_selectors_for_groups(
 
 
 __all__ = [
-    "add_plugin_option",
     "build_selected_registries",
     "plugin_selectors_for_groups",
     "selected_runtime_plugins",

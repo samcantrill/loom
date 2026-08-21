@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.formatting import format_json_envelope, format_stage_worker_text
-from loom.cli.options import OutputFormat, output_format_from_namespace
+from loom.cli.options import (
+    OutputFormat,
+    add_plugin_option,
+    output_format_from_namespace,
+)
 
 if TYPE_CHECKING:
     from loom.pipeline.execution import StageWorkerResult
@@ -68,8 +72,6 @@ def register_subparser(
         help="output format",
     )
     add_authority_options(run_parser)
-    from loom.cli.plugin_activation import add_plugin_option
-
     add_plugin_option(run_parser)
     run_parser.add_argument(
         "--traceback",
@@ -88,12 +90,22 @@ def handle_run(namespace: argparse.Namespace) -> int:
 
     output_format = output_format_from_namespace(namespace)
     try:
-        result = _run_stage_worker(
-            run_uri=str(namespace.run_uri),
-            stage_name=str(namespace.stage),
-            attempt=namespace.attempt,
-            authority_config=authority_config_from_namespace(namespace),
-            plugin_selectors=tuple(getattr(namespace, "plugin", ()) or ()),
+        plugin_selectors = tuple(getattr(namespace, "plugin", ()) or ())
+        result = (
+            _run_stage_worker(
+                run_uri=str(namespace.run_uri),
+                stage_name=str(namespace.stage),
+                attempt=namespace.attempt,
+                authority_config=authority_config_from_namespace(namespace),
+                plugin_selectors=plugin_selectors,
+            )
+            if plugin_selectors
+            else _run_stage_worker(
+                run_uri=str(namespace.run_uri),
+                stage_name=str(namespace.stage),
+                attempt=namespace.attempt,
+                authority_config=authority_config_from_namespace(namespace),
+            )
         )
     except StageWorkerStateError as exc:
         raise StageWorkerCliError(
@@ -133,6 +145,8 @@ def _run_stage_worker(
         StageWorkerRunRequest,
         create_authority_backed_serial_run_store,
         run_stage_worker,
+    )
+    from loom.pipeline.execution.stage_worker import (
         validate_stage_worker_plugin_activations,
     )
 

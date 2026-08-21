@@ -27,6 +27,7 @@ from loom.cli.options import (
     PlanCliOptions,
     RunCliOptions,
     SelectorCliOptions,
+    add_plugin_option,
     output_format_from_namespace,
 )
 from loom.cli.results import (
@@ -192,8 +193,6 @@ def register_subparser(
         help="output format",
     )
     add_authority_options(parser, include_resolution_mode=True)
-    from loom.cli.plugin_activation import add_plugin_option
-
     add_plugin_option(parser)
     parser.add_argument(
         "--traceback",

@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING
 from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_json_envelope, format_stage_job_text
-from loom.cli.options import OutputFormat, output_format_from_namespace
+from loom.cli.options import (
+    OutputFormat,
+    add_plugin_option,
+    output_format_from_namespace,
+)
 
 STAGE_JOB_RESULT_SCHEMA_VERSION = "loom.cli.stage_job.run.v1"
 
@@ -100,8 +104,6 @@ def register_subparser(
         help="output format",
     )
     add_authority_options(run_parser)
-    from loom.cli.plugin_activation import add_plugin_option
-
     add_plugin_option(run_parser)
     run_parser.add_argument(
         "--traceback",
@@ -121,6 +123,8 @@ def handle_run(namespace: argparse.Namespace) -> int:
         UnsupportedContinuationExecutorError,
         create_authority_backed_serial_run_store,
         run_stage_job,
+    )
+    from loom.pipeline.execution.continuation import (
         validate_prepared_run_plugin_activations,
     )
     from loom.pipeline.status import StageStatus

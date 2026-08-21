@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -24,7 +25,20 @@ class OutputFormat(StrEnum):
             return cls(value)
         except ValueError as exc:
             choices = ", ".join(format.value for format in cls)
-            raise ValueError(f"Unknown output format {value!r}; expected one of: {choices}") from exc
+            raise ValueError(
+                f"Unknown output format {value!r}; expected one of: {choices}"
+            ) from exc
+
+
+def add_plugin_option(parser: argparse.ArgumentParser) -> None:
+    """Attach the shared explicit repeatable plugin selector option."""
+    parser.add_argument(
+        "--plugin",
+        action="append",
+        default=None,
+        metavar="GROUP:NAME",
+        help="explicit runtime plugin; may be repeated",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +55,9 @@ class ConfigCliOptions:
 
         return cls(
             config_path=Path(namespace.config),
-            overlays=tuple(Path(path) for path in getattr(namespace, "overlay", ()) or ()),
+            overlays=tuple(
+                Path(path) for path in getattr(namespace, "overlay", ()) or ()
+            ),
             overrides=tuple(getattr(namespace, "override", ()) or ()),
         )
 
@@ -236,7 +252,11 @@ class RunCliOptions:
     ) -> dict[str, object]:
         """Return a sparse explicit runtime source for run commands."""
 
-        executor = self.executor if self.executor_explicit or include_executor_default else None
+        executor = (
+            self.executor
+            if self.executor_explicit or include_executor_default
+            else None
+        )
         return _runtime_source(
             run_uri=self.run_uri,
             executor=executor,

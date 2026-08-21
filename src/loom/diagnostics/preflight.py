@@ -144,9 +144,13 @@ class _Context:
 
             composed = self.config()
             resolved = cast(Any, composed).resolved
-            self._pipeline = validate_pipeline_config(
-                resolved,
-                registry=cast(Any, self.request.resource_validator_registry),
+            self._pipeline = (
+                validate_pipeline_config(
+                    resolved,
+                    registry=cast(Any, self.request.resource_validator_registry),
+                )
+                if self.request.resource_validator_registry is not None
+                else validate_pipeline_config(resolved)
             )
         except Exception as exc:  # noqa: BLE001
             self._pipeline_error = exc
