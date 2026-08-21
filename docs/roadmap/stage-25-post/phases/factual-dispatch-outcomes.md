@@ -2,20 +2,20 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: 25-post, Phase 2
 - Manifest: `docs/roadmap/stage-25-post/implementation-plan.md`
 - Branch: `agent/stage-25-post-p2-factual-dispatch-outcomes`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`;
   `/home/can134/work/active/loom-worktrees/stage-25-post-p2-factual-dispatch-outcomes`
-- Base revision: current `origin/develop` after Phase 1 remotely merges
+- Base revision: `53dfe73a738cfabb039a4881ca4797144cf9ea78`
 - PR target: develop
 - PR title: `Stage 25-post phase 2: make dispatch outcomes factual`
 - Dependencies: Phase 1 remote merge; planning `FR-7` through `FR-11`, `FQ-2`,
   `FQ-4`, and `DQ-4` through `DQ-7`
 - Workflow path: expanded plan; phase fast path unless Phase 1 refresh exposes a
   new material adapter-boundary risk
-- Blockers: Phase 1 remote merge only
+- Blockers: none
 
 ## Objective And Context
 
@@ -231,7 +231,8 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 1 remote merge and current-source refresh
+- Manager preparation: complete at base `53dfe73`; Phase 1 merge/cleanup,
+  controller/adapters/tests, dispatch-result usage, and fast-path scope refreshed
 - Expanded planning: design review passed after one bounded
   `START_UNCERTAIN` correction; plan review correction locked invalid-work
   step/continuation behavior
