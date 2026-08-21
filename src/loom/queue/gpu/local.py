@@ -439,9 +439,15 @@ class _LocalGpuAssignmentProvider:
                     }
                 ),
                 safe_evidence={
-                    "gpu": {
-                        "plan_fingerprint": self._plan.fingerprint,
-                    }
+                    "slots": [
+                        {
+                            "resource_name": self._plan.resource_name,
+                            "slot_id": f"gpu-{self._plan.inventory.devices.index(device)}",
+                            "lease_id": lease.lease.lease_id,
+                            "expires_at": lease.lease.expires_at,
+                        }
+                        for device, lease in zip(selected, leases, strict=True)
+                    ]
                 },
                 next_maintenance_at=_lease_maintenance_at(tuple(leases)),
             ),
