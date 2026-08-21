@@ -25,8 +25,8 @@ def test_queue_repository_does_not_publish_implicit_fifo_ownership(tmp_path: Pat
         tmp_path / "queue.sqlite",
         clock=lambda: "2020-01-01T00:00:01Z",
     )
-    assert not hasattr(QueueRepository, "claim" "_next")
-    assert not hasattr(repository, "claim" "_next")
+    assert not hasattr(QueueRepository, "claim_next")
+    assert not hasattr(repository, "claim_next")
 
 
 def test_queue_repository_deferral_preserves_fifo_identity(tmp_path: Path) -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -136,7 +136,7 @@ class _QueueSelectionPolicyBinding:
     """Construction-time snapshot of a custom preference implementation."""
 
     policy_id: str
-    select_next: Callable[[QueueSelectionContext], QueueSelectionDecision]
+    implementation: QueueSelectionPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +164,7 @@ def _bind_selection_policy(policy: object) -> _QueueSelectionPolicyBinding:
         raise QueueValidationError("selection policy select_next must be callable")
     return _QueueSelectionPolicyBinding(
         policy_id=policy_id,
-        select_next=cast(Callable[[QueueSelectionContext], QueueSelectionDecision], selector),
+        implementation=cast(QueueSelectionPolicy, policy),
     )
 
 
@@ -220,7 +220,7 @@ def _evaluate_selection(
         )
     preference_id = policy.policy_id
     try:
-        decision = policy.select_next(context)
+        decision = policy.implementation.select_next(context)
     except Exception:  # policy failures are safe stop evidence, never mutation
         return _QueueSelectionEvaluation(
             decision=QueueSelectionDecision(

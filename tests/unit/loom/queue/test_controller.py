@@ -253,7 +253,9 @@ def test_controller_rejects_repository_without_private_selection_capabilities(
         QueueController(service)
 
 
-def test_controller_freezes_policy_identity_and_implementation(tmp_path: Path) -> None:
+def test_controller_freezes_policy_identity_but_not_trusted_behavior(
+    tmp_path: Path,
+) -> None:
     clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)])
     service = _resource_service(tmp_path, clock=clock, capacity=1)
     policy = _MutablePolicy()
@@ -263,7 +265,7 @@ def test_controller_freezes_policy_identity_and_implementation(tmp_path: Path) -
         clock=clock,
     )
     policy.policy_id = "test.mutated"
-    policy.select_next = policy.stop  # type: ignore[method-assign]
+    policy.reason_code = "test.mutated_selected"
     service.enqueue(
         QueueEnqueueRequest(
             queue_item_id="item-1",
@@ -278,7 +280,7 @@ def test_controller_freezes_policy_identity_and_implementation(tmp_path: Path) -
     assert step.item is not None and step.item.status is QueueItemStatus.SUCCEEDED
     assert service.list_audit_events("item-1")[1].detail["selection"] == {
         "preference_id": "test.original",
-        "reason_code": "test.original_selected",
+        "reason_code": "test.mutated_selected",
     }
 
 
@@ -1145,17 +1147,14 @@ class _NewestPolicy:
 
 class _MutablePolicy:
     policy_id = "test.original"
+    reason_code = "test.original_selected"
 
     def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
         return QueueSelectionDecision(
             QueueSelectionDisposition.SELECTED,
-            "test.original_selected",
+            self.reason_code,
             context.candidates[0].queue_item_id,
         )
-
-    def stop(self, context: QueueSelectionContext) -> QueueSelectionDecision:
-        return QueueSelectionDecision(QueueSelectionDisposition.STOPPED, "test.stop")
-
 
 class _InvalidSelectionPolicy:
     policy_id = "test.invalid"
