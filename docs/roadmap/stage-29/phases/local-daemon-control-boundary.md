@@ -1,4 +1,4 @@
-# Phase 1 Execution Plan: Generic Scheduler And Unified Local Daemon Boundary
+# Phase 1 Execution Plan: Dependency-Aware Scheduler And Local Daemon Boundary
 
 ## Metadata
 
@@ -7,200 +7,230 @@
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p1-local-daemon-control-boundary`
 - Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop`, recording the exact completed Stage
-  25, Stage 27, and Stage 28 contracts used by the phase
+- Base revision: current `origin/develop`; record exact prerequisite symbols
 - PR target: `develop`
-- PR title: `feat(queue): add generic scheduler and durable local daemon`
-- Dependencies: completed queue ordering, runtime resources, local GPU/provider
-  foundations, explicit extension composition, current managed-local lifecycle,
-  queue SQLite, and authority service contracts
-- Workflow path: expanded because this phase introduces public/durable placement
-  schemas, coordinator/agent SQLite ownership, assignment/start fencing, mTLS
-  authorization, and a concurrency-sensitive scheduler-to-CAS boundary
-- Blockers: none; preparation must stop and return to planning only if the
-  implemented prerequisite contracts materially contradict this accepted plan
+- PR title: `feat(scheduling): add dependency-aware local stage scheduler`
+- Dependencies: implemented queue/managed-local paths, pipeline planner/runner,
+  runtime resources/profiles, prepared stage worker, per-run SQLite authority,
+  local resource admission/providers, reliability, and process containment
+- Workflow path: expanded because this phase migrates the managed execution unit,
+  adds durable schemas and authority CAS/fences, and changes concurrency/locks
+- Blockers: none; stop if preparation finds a material contradiction with the
+  accepted ownership or compatibility contracts
 
 ## Objective And Context
 
-- Vertical outcome: one command-scoped local run and one persistent co-located
-  daemon accept the same versioned whole-run placement request, normalize exact
-  CPU/memory quantities, choose through the same concrete scheduler, commit a
-  durable assignment, bind resources through the local agent, launch once, and
-  expose later authenticated status/cancel operations.
-- Earlier dependency: reuse completed queue ordering as the scheduler's job-order
-  seam, existing resource validation where its semantics match, and existing
-  assignment/provider/process lifecycle rather than recreating them.
-- Later work explicitly out of scope: Phase 2 adds authenticated remote agents,
-  global candidates, GPU/VRAM claims, machine/model preferences, and outage
-  reconciliation. Phase 3 adds live inventory reload and manual recovery.
+- Vertical outcome: both a bounded local call and a persistent single-machine
+  daemon admit a run, durably resolve its DAG, expose only dependency-ready
+  executable attempts, place them using exact local CPU/memory capacity, execute
+  through a local agent, unlock descendants after authoritative output commit,
+  and provide later status/cancel/restart behavior through the same path.
+- Earlier dependency: reuse current plan actions/readiness, prepared attempt,
+  stage worker/finalization, resource admission, queue SQLite, authority, and
+  managed facade rather than building a second pipeline runtime.
+- Later work explicitly out of scope: Phase 2 adds remote agents, global GPU/
+  VRAM placement, cross-machine artifact relay, and disconnected remote replay.
+  Phase 3 adds live reload and containment-gated recovery.
 
 ## Current Source And Harness
 
-- Relevant inspection areas: `src/loom/queue/models.py`, `service.py`,
-  `repository.py`, `_sqlite.py`, `_scheduler.py`, `controller.py`, `local.py`,
-  `managed_local.py`, `assignments.py`, `status.py`, `config.py`, the completed
-  queue-selection/resource/GPU/extension modules found on current develop,
-  and the authority application/client patterns.
-- Existing tests and seams: queue record/repository/config contracts, SQLite
-  integration, scheduler/controller/local adapter/assignment/runtime unit tests,
-  managed-local integration/E2E, authority idempotency/generation tests, and
-  fakeable process/resource providers.
-- Import/dependency constraints: scheduling values and the resource-planner
-  protocol stay queue-local and import-light; the pure scheduler imports no
-  routes, SQLite, CLI, vendors, agent runtime, or project code. Concrete
-  coordinator, agent, HTTP, and daemon composition sit above those values.
+- Relevant files and symbols:
+  - `src/loom/queue/models.py`, `service.py`, `repository.py`, `_sqlite.py`,
+    `selection.py`, `controller.py`, `local.py`, `managed_local.py`,
+    `assignments.py`, and `status.py` own current whole-run admission/dispatch;
+  - `src/loom/pipeline/execution/runner.py` owns the in-memory ready-stage loop,
+    run lock, stage retry loop, and direct resource admission;
+  - `continuation.py`, `stage_attempts.py`, and `stage_worker.py` own prepared
+    single-stage reconstruction, with a current `SUBMITTED` continuation gap;
+  - `lifecycle.py`, `reliability.py`, and per-run authority stores own statuses,
+    attempts, leases, output commits, and retry facts;
+  - `runtime/options.py`, `profiles.py`, `metadata.py`, `resources.py`, and
+    `specs.py` own exact-stage runtime and authored resource parsing.
+- Existing tests and seams: queue record/repository/controller/managed-local
+  unit and integration tests; pipeline serial/parallel/retry/resume/continuation
+  tests; authority contract/SQLite tests; local resource/provider tests; process
+  fault helpers; public import and CLI E2E tests.
+- Import, dependency, and harness constraints: follow `docs/structure.md` before
+  adding `loom.scheduling`; pure scheduling stays import-light. Tests use fake
+  clocks, barriers, stores, providers, and processes—no real GPU/network.
 
 ## Scope
 
 In scope:
 
-- Schema-versioned whole-run `PlacementRequest` semantics: canonical resource
-  payloads, tagged built-in hard/soft specs, hard target, preferred agents,
-  fallback policy, and deterministic fingerprint. Legacy integer launch-resource
-  records receive an explicit compatible read/migration projection.
-- Versioned safe resource request/inventory/claim envelopes plus an immutable,
-  explicitly supplied resource-planner registry. Implement the current scalar
-  consumers: CPU in exact configured base units and memory in bytes. Claim
-  search returns complete/exhausted state plus any sound winner bound. Reject
-  unsupported kind/version/unit/granularity before queue mutation.
-- One concrete pure scheduler over immutable bounded snapshots. Core hard
-  invariants precede tagged built-in rules; default chooses the oldest runnable
-  job then the best placement. Search is tri-state and never mutates after an
-  older indeterminate job or incomplete selected-job ranking.
-- A local-agent inventory/availability projection derived from trusted local
-  configuration. Managed pool configuration migrates/composes into one local
-  agent without duplicating remote-style capacity in the coordinator.
-- Coordinator application service and `SQLiteCoordinatorStateStore` owning
-  queue placement requests, assignment/claim/grant transitions, idempotency,
-  principal policy, cancellation intent, event acknowledgements, and joined
-  status. Assignment CAS revalidates every local snapshot fence.
-- Separate `SQLiteAgentJournal` owning receipt, local claim/binding projection,
-  proposed acceptance, grant, start fence, process/cleanup observations,
-  critical outbox events, and control results. Required writes fail closed.
-- Direct authorized client plus mTLS HTTP client/server conformance, local agent
-  runtime, one revision-bound work request, persistent co-located daemon, thin
-  CLI composition, and migration of managed public facades to this common path.
-- Safe local pending/assignment/resource diagnostics, redaction, schema/API
-  docs, migration evidence, and representative runnable example.
+- Extend exact-stage runtime options with versioned placement policy: built-in
+  hard target/attribute constraints, tagged soft preferences, fallback, and pool
+  selection. Run policy supplies defaults/concurrency and may hard-pin every
+  executable stage; exact-stage policy cannot weaken pool/site hard rules.
+- Add one resolution function that composes `StageSpec.resource_request` and
+  exact-stage runtime `ResourceRequest`. Built-in CPU/memory planners retain the
+  existing `resources.entries` grammar, positive integer CPU, and normalize
+  memory to integer bytes. Duplicate-kind composition must preserve the authored
+  minimum or reject ambiguity; there is no second resource request codec.
+- Add import-light `loom.scheduling` values for stage candidates, inventory,
+  availability, claims, built-in hard/soft specs, preference reasons, and
+  complete/infeasible/exhausted search. Add one concrete deterministic engine
+  and explicitly supplied resource-planner registry; no public Scheduler API.
+- Extract one shared authority-side readiness predicate over persisted
+  `ExecutionPlan`, current stage/attempt status, and committed upstream output
+  identities. Use it in orchestration and authority assignment CAS. Refactor or
+  retire runner and `run_stage_job` duplicate dependency checks; agent execution
+  validates only exact assignment/grant/input identities.
+- Add a durable `RunOrchestrator` that reconciles controller-only plan actions,
+  prepares each ready `PlanAction.RUN` attempt idempotently, enforces
+  `max_parallel_stages`, materializes `StageWorkRecord`, records retry-derived
+  next attempts, blocks descendants, and finalizes run/queue state.
+- Extend coordinator SQLite with schema-versioned stage work, local agent offer,
+  logical resource reservation, assignment state, control intent, idempotency,
+  and event acknowledgement. Stage work is rebuildable and cannot write stage
+  success/failure. Scheduling runs outside transactions; commit revalidates
+  exact work/authority/order/offer/claim versions.
+- Extend per-run authority with expected-state operations required by the saga:
+  bind the exact still-ready prepared attempt to one assignment and mark it
+  submitted; unbind only the same definitively declined ungranted assignment;
+  create a durable execution fence on grant; accept a late result after liveness
+  expiry while that fence remains current; reject it after terminal or explicit
+  fence. Preserve existing stage/output/reliability ownership.
+- Add a separate local agent SQLite journal and runtime: configured inventory,
+  zero-to-current availability, work receipt, local input/request durability,
+  physical resource admission, accept/decline, grant/start fence, one root
+  launcher invocation, process containment, terminal/outbox facts, and release.
+  Phase 1 local artifact transport maps existing local refs without network
+  transfer but uses the same pre-grant and final-ref port required by Phase 2.
+- Refactor the current stage worker/request path to execute a `SUBMITTED` exact
+  assignment safely without reacquiring managed resources or independently
+  allocating an attempt. Remove the full-run managed lock as execution owner;
+  use authority CAS/controller lease and stage/attempt fences that allow safe
+  parallel branches.
+- Keep queue item/run identity as public admission/cancellation. Introduce a new
+  managed orchestration state rather than reinterpreting historical
+  `DISPATCHED`. Derive terminal queue status from authoritative run completion.
+- Preserve `PipelineRunner`, `ManagedLocalQueueRuntime`, queue service, Python
+  API, and CLI entrypoints as facades over an embedded or persistent coordinator
+  plus local agent. Deprecate managed whole-run resources/argv and direct
+  claim-dispatch through documented compatibility reads/warnings. Preserve
+  `continue_prepared_run` import/validation/structured safe failure exactly.
+- Add the bounded application port, shared authorizer, direct adapter, and a
+  loopback persistent daemon/client composition with protected configuration,
+  role locks, duplicate-start rejection, graceful shutdown, restart scan, safe
+  status, and cancellation. Transport routes contain no policy.
+- Update `docs/structure.md`, glossary/feature docs, public imports, migration
+  notes, and a `machine-A` single-machine example only where the checkout is
+  clean and conflict-free.
 
 Out of scope:
 
-- Multiple remote agents, global machine comparison, remote connection/session
-  replacement, GPU model/VRAM/fabric/fractional-provider placement, or opt-in
-  real-network/GPU evidence; Phase 2 owns these.
-- Drain/resume/reload, disconnected cancellation reconciliation, manual
-  containment recovery, and different-session replacement; Phase 3 owns these.
-- Public replaceable scheduler or custom hard/soft callable protocols, automatic
-  plugin discovery, unrestricted constraint language, global solver, batch/gang
-  placement, preemption/fairness, global licences, data transfer, HA, or retry.
+- Remote agent registration/session replacement, cross-host artifact bytes,
+  GPU model/VRAM/fabric/share placement, multi-machine offers, or real mTLS
+  topology evidence; Phase 2 owns them.
+- Drain/reload, disconnected cancellation completion, positive-containment
+  manual close/requeue, and different-session replacement; Phase 3 owns them.
+- Fair-share, preemption, optimal packing, general solver, distributed/gang
+  stage, public custom constraint/preference callables, process-global plugin
+  registries, arbitrary code shipment, or delegated SLURM changes.
 
 Assumptions:
 
-- The completed prerequisite implementation supplies the accepted queue-order,
-  GPU/provider, and extension seams; their exact private names are not fixed by
-  this plan.
-- Production local composition may be bounded, but still uses distinct logical
-  coordinator and agent SQLite files and the same grant/start ordering as remote.
-- Authored project/deployment config is trusted; submit/client payloads and HTTP
-  values are untrusted bounded data.
+- One local stage claim fits wholly inside the configured local agent.
+- Authored project/deployment config is trusted. Runtime/queue/API data is
+  untrusted versioned plain data and cannot select Python implementations.
+- The local coordinator and agent use separate durable SQLite files even when
+  composed in one process; in-memory doubles are tests only.
 
 ## Fixed Contracts And Private Discretion
 
-- Observable behavior: same placement request and local inventory produce the
-  same normalized scheduler decision through command, managed facade, direct
-  daemon client, and loopback mTLS client. There is no direct FIFO fast path.
-- Public/durable shapes: placement request/resource envelopes are versioned and
-  canonical; assignment persists selected safe claims, scheduler policy/version
-  evidence, job/attempt and local agent/session/config/availability/work-request
-  fences. Full inventory snapshots and rejected candidates remain ephemeral.
-- Quantity contract: resource planner owns exact normalized integer arithmetic;
-  binary floating-point never owns capacity. CPU fraction/granularity and memory
-  unit failures are explicit. Missing requests mean no explicit requirement,
-  not invented defaults.
-- Rule contract: current hard and soft rules are schema-versioned tagged data
-  interpreted by private built-ins. Unknown versions/evaluator errors create no
-  assignment. Soft rules never affect feasibility; fallback waiting is separate.
-- Search contract: evaluation is complete-feasible, complete-infeasible, or
-  exhausted. No younger job can pass an exhausted older job and no partial
-  placement ranking can be committed without a sound winner proof.
-- Trust/failure boundary: every HTTP peer uses mTLS and a scoped application
-  principal; direct calls use the same authorizer. Payload actor/callable-like
-  fields have no authority. Required store failure prevents ack, grant, start,
-  readiness, or fallback to memory.
-- Cross-phase contract: Phase 2 reuses the exact placement, resource, snapshot,
-  decision, assignment, grant, journal, and client semantics and only adds
-  remote offers/resource kinds/current candidates. Phase 3 preserves old claims
-  under their original config fingerprint during drain/reload/recovery.
-- Reproducibility/compatibility: stable queue/item/run identities and legacy
-  reads remain; delegated adapters bypass managed scheduling; deterministic IDs
-  break equal policy ties; scheduler evidence is safe and bounded.
-- Private choices: exact module split beneath the documented ownership, SQLite
-  table/index/tuning/migration mechanics, HTTP route grouping, daemon supervisor
-  example, scheduling loop wake primitive, canonical internal quantity classes,
-  and test helper construction.
+- Observable behavior: for `preprocess -> train -> evaluate`, only preprocess is
+  initially schedulable; each authoritative output commit triggers reconciliation
+  and may expose the next stage. Reuse/skip consumes no agent capacity. Failure,
+  retry, cancellation, and independent-branch behavior match current policy.
+- Public/durable shapes: `ResolvedStagePlacement` contains `ResourceRequest`,
+  hard/soft/fallback policy and fingerprint—never `stage_work_id`. Stage work
+  contains identity/readiness evidence; assignments contain exact coordinator,
+  authority, local agent/session/offer/claim and grant fences.
+- Atomicity: no cross-store transaction is claimed. An ungranted definitive
+  decline must authority-unbind before coordinator release. Ambiguous acceptance
+  stays bound. Grant creates a non-liveness execution fence; every transition is
+  idempotent and expected-state checked.
+- Stage truth: coordinator status is a joined projection. Only authority output
+  commit unlocks descendants. Agent success/outbox receipt alone never does.
+- Resource truth: scheduler proposal is logical; final agent admission is
+  authoritative. Managed worker execution must not reacquire the same claim.
+- Compatibility: old queue rows remain readable; new managed submissions use the
+  new orchestration schema. Public synchronous calls may wait on the durable run
+  but cannot call the old in-memory ready loop. Delegated adapters remain intact.
+- Trust/failure: required store failure blocks ack/grant/start. Direct and local
+  daemon calls use the same principal/scope authorizer. Payloads cannot supply
+  arbitrary argv, local paths, credentials, providers, or actor identity.
+- Cross-phase: Phase 2 reuses exact stage-work/placement/assignment/fence/journal/
+  application-port contracts and replaces only local offer/transport adapters.
+- Private choices: SQLite table/index names, internal event-loop wakeup, exact
+  module subdivision below documented owners, local socket/loopback HTTP wiring,
+  migration helper layout, and test fixture construction.
 
 ## Proportionality
 
-- Existing seams reused: queue record/CAS, completed queue order, resource
-  validation, authority/idempotency patterns, assignment providers, local
-  process lifecycle, status redaction, CLI facades, and fake test harnesses.
-- Material additions and current justification: placement schema for nested
-  resources/preferences; resource registry for current heterogeneous consumers;
-  pure scheduler for one consistent local/remote path; two stores/fences for
-  cross-owner restart correctness; mTLS/scopes for code-execution operations.
-- Optional hardening and future capability deferred: public scheduler/rule
-  substitution, generalized plugin loading, optimal packing, durable candidate
-  history, online backup/restore, revocable offline grants, and exactly-once
-  authored effects.
+- Existing seam reused: queue admission/CAS, runner readiness semantics,
+  `ResourceRequest`, runtime profiles, prepared attempts, stage worker,
+  authority attempts/output commits, retry facts, local admission/providers,
+  process containment, and managed facades.
+- Material additions and current justification: durable stage work for restart;
+  pure scheduler for one local/remote policy; authority assignment/fence CAS for
+  cross-store correctness; separate agent journal for daemon restart; one
+  shared readiness predicate to remove duplication.
+- Optional hardening and future capability deferred: configurable scheduler
+  implementations, custom rule callables, optimal search, online database
+  backup, automatic unknown recovery, remote data transfer, and HA.
 
 ## Invariant Ownership
 
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
-| Placement request is canonical, version-supported, and immutable after submit. | Placement codec + coordinator submit transaction | legacy/untrusted payload or changed idempotency content | different requirements under one job identity | contract/migration/replay tests |
-| Resource quantities and claims use exact resource-owned units. | Resource planner | decimal/unit/granularity boundary | drift or over-allocation | scalar boundary/property-style fixtures |
-| Hard rules precede soft rules and soft cannot widen fit. | Concrete scheduler | malformed tag/private evaluator | invalid placement | unit negatives |
-| Oldest-runnable/best-placement is never decided from indeterminate search. | Concrete scheduler | search budget or incomplete resource claims | younger/worse placement | tri-state exhaustion tests |
-| Same snapshot gives same decision independent of ordering/transport. | Concrete scheduler | mapping/offer order or HTTP projection | topology drift | permutation/client conformance |
-| One item/attempt and one availability request produce at most one assignment. | Coordinator assignment CAS | concurrent triggers/lost response | duplicate execution | SQLite barrier/idempotency tests |
-| `OFFERED` is not execution authority. | Coordinator grant state + agent runtime | eager agent start | unauthorised/duplicate launch | crash-table tests |
-| Local physical claim is acquired/rolled back/released exactly. | Agent provider + journal | stale inventory/partial acquisition | resource overlap/leak | provider integration/failure injection |
-| Start fence precedes at most one root launcher invocation. | Agent journal/runtime | crash around launcher | duplicate root process | injected crash table |
-| Agent event is durable before send and coordinator commit precedes ack. | Two stores | loss/restart around HTTP response | lost terminal/control truth | outbox replay tests |
-| Actor and scope derive from trusted context. | TLS edge + application authorizer | body actor/wrong certificate/scope | unauthorized code/control | direct/HTTP security matrix |
-| Local facade has no second scheduler/lifecycle. | Composition root | retained controller claim path | behavior drift | call-graph/trace tests |
+| Exact attempt is ready under one shared predicate. | Authority readiness function | stale coordinator projection or duplicate worker validator | dependency bypass or false rejection | reuse/retry/diamond and assignment-CAS tests |
+| Resolved request cannot weaken authored minimum. | Runtime resolver + resource planner | profile/explicit merge | under-allocation/OOM | CPU/memory merge negatives |
+| Same complete snapshot gives same decision. | Pure scheduler | input order/search budget | nondeterministic placement | permutation/exhaustion tests |
+| Stage work never owns stage terminal truth. | Coordinator repository boundary | event/restart projection | downstream starts on false success | store/API ownership tests |
+| One active assignment binds one prepared attempt. | Coordinator uniqueness + authority CAS | concurrent cycles/lost response | duplicate launch | barrier/idempotency tests |
+| Definitive decline restores only its ungranted attempt. | Authority unbind CAS | stale decline/parallel grant | dead or incorrectly reopened attempt | decline/grant race tests |
+| Liveness expiry cannot invalidate a current execution result. | Authority execution fence | coordinator outage/late replay | valid output becomes uncommittable | fake-clock restart test |
+| Grant/start fences precede one launcher call. | Agent journal/runtime | crash around accept/grant/start | unauthorized or duplicate process | injected crash table |
+| Input identity and local durability precede grant. | Local artifact port + agent journal | incomplete preparation | granted process cannot continue | pre-grant fault tests |
+| Output commit alone unlocks descendants. | Authority + orchestrator | agent terminal event before commit | consumer reads absent output | event/commit barrier test |
+| Physical claims release exactly after terminal/containment. | Agent provider/journal | worker/store/process failure | overlap or leak | admission/cleanup injection |
+| Managed facade has no whole-run scheduling fork. | Composition root | legacy controller/runner fast path | divergent behavior | trace/call-path integration test |
 
 ## Implementation Slices
 
-1. Inspect and record the completed prerequisite seams; add versioned placement/resource/rule
-   records, exact scalar planners, explicit registries, safe codecs/migrations,
-   and the concrete tri-state scheduler with focused unit/contract tests.
-2. Add coordinator store/application assignment models and transactions,
-   scheduling triggers/lock, decision validation, idempotency, cancellation,
-   pending explanations, and storage-fault/race tests.
-3. Add separate agent journal/outbox and local agent inventory/work/admission/
-   grant/start/process/event loop by composing existing providers/adapters.
-4. Add the authorized client port, direct client, mTLS HTTP adapter, principal
-   policy, daemon activation/role locks, and direct/HTTP conformance/security
-   tests.
-5. Migrate command/controller/managed-runtime facades and CLI to common
-   composition; add end-to-end local persistence/cancel/restart evidence,
-   redacted docs/examples, and remove the managed direct scheduling branch.
+1. Record current prerequisite contracts; add exact-stage placement parsing and
+   resolution, CPU/memory resource planners, scheduling values/registry, and the
+   concrete pure scheduler with import/codec/unit/property tests.
+2. Extract the shared readiness predicate; add durable orchestrator/stage-work
+   reconciliation and refactor runner/stage-job readiness, run locks,
+   controller-only actions, retry, and terminal derivation with DAG tests.
+3. Add coordinator schema/transactions and authority bind/unbind/grant-fence
+   operations; implement the idempotent saga and crash/race/restart tests before
+   connecting any launcher.
+4. Add local agent journal/runtime, local artifact hand-off, provider binding,
+   submitted worker execution, grant/start/process/outbox/release behavior, and
+   fault-injected one-launch tests.
+5. Add application port/authorizer and bounded/persistent local compositions;
+   migrate public managed/runner/CLI facades, queue schema compatibility,
+   status/cancel/restart, docs/examples, and end-to-end evidence.
 
 ## Test And Validation Plan
 
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
-| Package | required | Intentional cheap scheduler/client/resource imports. | Public imports succeed without routes/SQLite/vendor/plugin discovery. |
-| Unit | required | Schemas, exact quantities, rule order, tri-state scheduler, state machines, auth, redaction. | Fraction/unit/version failures; deterministic oldest-runnable; no mutation on exhaustion; safe reasons. |
-| Contract | required | Placement/resource codecs, resource planner, coordinator client, direct/HTTP parity, legacy reads. | Stable round trip/version failure/idempotency and equivalent normalized traces. |
-| Integration | required | SQLite assignment races/faults, provider rollback, outbox replay, cancel/start, persistent clients, facade migration. | One assignment/start; no failed-write ack; exact release; no second path. |
-| E2E / opt-in | required local; real remote/GPU deferred | Command and co-located daemon lifetime. | Submit in one invocation, later status/cancel, restart with durable state, redacted evidence. |
+| Package | required | Cheap intentional `loom.scheduling` and facade imports. | No SQLite/routes/vendor/project imports from scheduling root. |
+| Unit | required | Placement merge, integer CPU/bytes, rule order, tri-state engine, readiness, state machines. | Invalid weaken/unit/version; deterministic decisions; one readiness result. |
+| Contract | required | Runtime/placement codecs, authority CAS/fence, coordinator/agent stores, public compatibility. | Round trip; idempotent replay; old rows/import/failure remain. |
+| Integration | required | DAG reconciliation, cross-store crash table, local admission, process/outbox, cancellation, restart. | No descendant early; exact unbind; late result commits under current fence; one launch/release. |
+| E2E / opt-in | required local | Bounded and persistent local user journeys. | Submit two-stage/diamond runs, later status/cancel, restart both roles, same results/trace. |
 
 Targeted commands:
 
-    uv run pytest tests/unit/loom/queue tests/contracts/test_queue_records_contract.py tests/contracts/test_queue_python_api_contract.py
-    uv run pytest tests/integration/queue tests/e2e/test_queue_cli.py
+    uv run pytest tests/unit/loom/pipeline tests/unit/loom/queue tests/unit/loom/scheduling
+    uv run pytest tests/contracts/test_queue_python_api_contract.py tests/contracts/test_authority_store_contract.py
+    uv run pytest tests/integration/pipeline tests/integration/queue tests/e2e/test_queue_cli.py
 
 Final commands:
 
@@ -209,46 +239,47 @@ Final commands:
 
 ## Risks, Review, And Stops
 
-- Main risks: over-broad public API, lossy legacy migration, float accounting,
-  incomplete search mutation, duplicate scheduler path, cross-store false
-  atomicity, start-before-grant, store failure fallback, and HTTP/direct auth
-  divergence.
-- Review focus: one concrete scheduler; exact resource ownership; tri-state
-  completeness; assignment CAS fields; agent admission rollback; grant/start/
-  outbox ordering; separate stores; no route/facade policy; redaction.
-- Stop if: completed prerequisite contracts materially differ; compatibility needs
-  silent reinterpretation; one local job requires multi-agent allocation; a
-  resource cannot expose safe deterministic claims; correctness requires a
-  cross-store transaction; or mTLS/authorization cannot be proven before code
-  execution.
-- Accepted debt and revisit trigger: bounded oldest-runnable starvation,
-  serialized agent handshake, no optimal packing/custom rule protocol/HA. Revisit
-  only with measured harm or an accepted concrete consumer.
+- Main risks: retaining two readiness interpreters; turning stage work into
+  lifecycle authority; ambiguous resource merge; double admission; false
+  cross-store atomicity; stuck submitted attempt after decline; lease-expired
+  valid result; run-lock serialization; launch before durable grant; old-row
+  reinterpretation; or a hidden whole-run fast path.
+- Review focus: shared predicate call graph, authority/coordinator ownership,
+  saga transition table, unbind/grant race, execution fence semantics, exact
+  resource accounting, worker hand-off, one managed composition, compatibility.
+- Stop if: existing authority cannot express the required expected-state fence
+  without changing its accepted ownership; resource merging needs a universal
+  DSL; safe local execution requires a distributed transaction; successful
+  compatibility is demanded from `continue_prepared_run`; or delegated SLURM
+  would be altered.
+- Accepted debt and revisit trigger: deterministic FIFO-with-bypass, bounded
+  search, no remote transfer/GPU ranking, and compatibility adapters. Revisit
+  only with measured harm or Phase 2's accepted consumer.
 
 ## Executor Handoff
 
-- Read section range: manifest shared constraints; planning FR-1 through FR-18,
-  FR-20, FR-23, FR-27, FR-28; DQ-1 through DQ-12, DQ-14, DQ-15; this full phase.
-- Safe implementation slices: the five slices above in order; stop after phase
-  tests and do not implement Phase 2 remote/global GPU behavior.
-- Decisions not to revisit: one concrete scheduler, tagged built-in rules,
-  exact resource units, oldest-runnable then best placement, tri-state no-
-  mutation exhaustion, separate role stores, grant/start/outbox ordering, mTLS/
-  shared authorizer, one local managed path.
-- Conditions requiring manager action: source-contract mismatch, durable schema
-  incompatibility, public API expansion, another scheduling algorithm, custom
-  hard/soft callable requirement, cross-store transaction, or stop condition.
+- Read section range: implementation manifest `Summary` and `Shared Constraints`;
+  planning FR-1 through FR-20, FR-22, DQ-1 through DQ-10, `Refactor And
+  Deprecation Map`, and this full phase.
+- Safe implementation slices: the five ordered slices above; preserve a working
+  local vertical path after each slice and stop after Phase 1 acceptance.
+- Decisions not to revisit: prepared stage attempt is scheduling unit; one
+  readiness predicate; one concrete pure scheduler; existing `ResourceRequest`;
+  integer CPU; stage work is projection; exact unbind; outage-stable fence;
+  authority commit unlocks; separate role stores; facade compatibility.
+- Conditions requiring manager action: public/durable shape expansion beyond
+  this plan, source contradiction, another scheduler/readiness owner, weakening
+  an authored requirement, cross-store transaction dependency, or stop condition.
 
 ## Workflow State
 
-- Manager preparation: pending current worktree/base and prerequisite-contract recording
-- Expanded planning: generic-scheduler removal-first review passed after bounded
-  tri-state/protocol correction
+- Manager preparation: pending clean worktree/base and exact source-map record
+- Expanded planning: Stage 29 design review passed after one bounded seven-item correction
 - Implementation: pending one `loom_phase_executor`
-- Refiner: not needed unless a qualified product blocker is returned
+- Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: pending
-- Independent review: required because Phase 1 combines new durable schema,
-  assignment/start concurrency, and remote code-execution security boundaries
+- Independent review: required because Phase 1 changes durable authority,
+  cross-store launch fencing, and public managed execution behavior
 - Blocker corrections: 0/3
 - PR and merge: pending
 
