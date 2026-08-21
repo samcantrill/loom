@@ -210,7 +210,8 @@ Final commands:
   found and corrected one managed-runtime compatibility issue
 - Refiner: completed the qualified safe-evidence, binding-validation, and
   fingerprint correction
-- Pre-submit gate: pending
+- Pre-submit gate: passed on current `origin/develop`; branch, scope, contracts,
+  tests, risks, domain neutrality, imports, and proportionality match this plan
 - Independent review: not needed; manager review found no residual blocker
 - Blocker corrections: 2/3
 - PR and merge: pending
@@ -223,5 +224,5 @@ Final commands:
 | Tests added or updated | `tests/unit/loom/queue/gpu/test_local.py`, `tests/integration/queue/test_managed_local_gpu_pool.py`, `tests/contracts/test_workspace_coordination_contract.py`, package/store export tests, and the in-memory coordination fake. Corrections add safe-evidence redaction, structured-fingerprint and comma-binding regressions, required `shares_per_gpu(1)` behavior, and a whole-GPU managed-runtime launch proving distinct CUDA bindings and exact release. |
 | Validated revision/tree state and evidence | Clean source tree at `67bdf982c96f014a813a9ce540cb3959cf186bfc`; `make validate-pr` passed (Ruff, Pyright with zero errors, default 2,193 passed/112 deselected, config-extra 132 passed/3 skipped, and sdist/wheel build). Focused GPU/runtime tests passed (15 passed). `make test-summary` produced `build/test-summary.md` twice with every package, unit, contract, integration, and e2e test passing; config-extra had 131 passed/3 skipped and one unrelated lease-renewal test time out at its five-second stage-allocation wait. The same test passes without coverage and reproduces only under the summary harness's coverage instrumentation, so summary evidence is unavailable for that timing-sensitive test and CI remains required. |
 | Validation-relevant changes after evidence | None. The full validation and summary diagnostics ran after correction 2/3 on the current source, test, dependency, build, and validation configuration. |
-| PR, review, and merge | pending |
+| PR, review, and merge | Manager review and pre-submit gate passed with no blocker; PR publication, CI, and merge remain pending. |
 | Residual risk and cleanup | No Phase 1 blocker. NVIDIA discovery, topology/grouping, and operator documentation remain deferred to later accepted phases; PR/review/merge and worktree cleanup remain manager-owned. |
