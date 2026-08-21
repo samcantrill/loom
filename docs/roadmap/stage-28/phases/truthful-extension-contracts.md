@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: v28 Phase 1
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p1-truthful-extension-contracts`
@@ -225,7 +225,8 @@ Final commands:
 - Independent review: manager-local fast path passed with no product blocker
 - Blocker corrections: 3/3; Pyright fixture typing, fail-closed checker coverage
   plus exact status vocabulary, and text-diagnostic coverage
-- PR and merge: pending
+- PR and merge: [#222](https://github.com/samcantrill/loom/pull/222) open against
+  `develop`; title/base/head/draft state and diff scope verified; merge pending CI
 
 ## Completion Record
 
@@ -235,5 +236,5 @@ Final commands:
 | Tests added or updated | `tests/unit/loom/testing/test_contracts.py`, `tests/package/test_testing_api.py`, `tests/unit/loom/cli/test_plugins.py`, `tests/unit/loom/plugins/test_diagnostics.py`, `tests/package/test_plugins_api.py`, and `tests/contracts/test_cli_plugins_contract.py`; the final targeted phase selections passed 45 tests, including fail-closed and no-import text diagnostics. |
 | Validated revision/tree state and evidence | Candidate `3bc35ec` / tree `2dddf27426d64f2476b30645d52bb82e11cc69cb` on base `3531860`: Ruff passed; repository-wide Pyright passed with 0 errors; final targeted selections passed 45 tests. The phase source passed a complete `make validate-pr` before later test-only review additions. A final-candidate attempt passed Ruff, Pyright, and all 2,185 default tests, then the unchanged `test_runner_renews_controller_lease_until_release` missed its fixed five-second wait while multiple roadmap suites saturated the host; 131 other config-extra tests passed and 3 skipped. The same timing-only failure prevented a fresh passing `make test-summary`; GitHub CI is the required isolated full gate. |
 | Validation-relevant changes after evidence | No runtime source, dependency, build, or validation-configuration change followed the complete source gate. Three test/doc-only corrections are committed and covered by the final targeted, Ruff, and full Pyright receipts above. |
-| PR, review, and merge | pending |
+| PR, review, and merge | [#222](https://github.com/samcantrill/loom/pull/222) is open against `develop`, ready rather than draft, mergeable, and titled `Stage 28 phase 1: publish truthful extension contracts`. Manager-local review passed with no blocker; CI is pending and merge is not yet authorized. |
 | Residual risk and cleanup | No product or phase-design blocker. Local full-suite evidence is limited by a reproducible host-contention timeout in an unchanged controller-lease test; do not merge unless isolated GitHub CI passes. `loom.testing` intentionally proves only caller-supplied trusted cases and does not claim remote/backend behavior. |

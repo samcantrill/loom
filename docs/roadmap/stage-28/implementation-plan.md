@@ -5,7 +5,7 @@ Roadmap stage: `v28`
 Planning document: `docs/roadmap/stage-28/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 1 in progress
+Current phase: Phase 1 PR open
 Blockers: none; Stage 26's Phase 3 dependency is remotely merged
 
 ## Summary
@@ -211,7 +211,7 @@ sinks. This is an observer, not a mutable execution hook.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `truthful-extension-contracts` | in_progress | `docs/roadmap/stage-28/phases/truthful-extension-contracts.md` | `agent/stage-28-p1-truthful-extension-contracts` | pending | Plugin readiness, public conformance support, architecture/docs | Let users determine and test exactly what each in-scope extension contract currently supports. |
+| 1 | `truthful-extension-contracts` | pr_open | `docs/roadmap/stage-28/phases/truthful-extension-contracts.md` | `agent/stage-28-p1-truthful-extension-contracts` | [#222](https://github.com/samcantrill/loom/pull/222) | Plugin readiness, public conformance support, architecture/docs | Let users determine and test exactly what each in-scope extension contract currently supports. |
 | 2 | `reconstructable-runtime-extensions` | pending | `docs/roadmap/stage-28/phases/reconstructable-runtime-extensions.md` | `agent/stage-28-p2-reconstructable-runtime-extensions` | pending | Executor registry, explicit activation, resource/codec threading, worker verification | Execute a custom CLI executor and preserve custom codec/resource behavior through a real fresh worker. |
 | 3 | `filtered-lifecycle-observers` | pending | `docs/roadmap/stage-28/phases/filtered-lifecycle-observers.md` | `agent/stage-28-p3-filtered-lifecycle-observers` | pending | Event subscriptions, sink activation, lifecycle-owner propagation and proof | Select an observe-only sink that receives exact committed lifecycle events without affecting correctness. |
 
@@ -252,6 +252,6 @@ expand delivery semantics.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
+| 1 | [#222](https://github.com/samcantrill/loom/pull/222) open; merge pending CI | Implementation and manager review complete; 45 targeted tests, Ruff, and Pyright pass; isolated CI required for the documented local contention limitation | Caller-supplied conformance cases remain intentionally bounded | Worktree and branch retained until remote merge |
 | 2 | pending | pending | pending | pending |
 | 3 | pending | pending | pending | pending |
