@@ -157,8 +157,8 @@ written.
 | v22 | Examples and validation refinement | Robust example coverage, integration/e2e validation behavior, example harness hardening, and documentation refinement over the implemented surface. |
 | v23 | Managed local concurrency and resource assignment | Pool-scoped managed-local reconcile/fill cycles, structured capacity deferral, exclusive static-slot assignment, lease-safe local process lifecycle, and redacted operational status. |
 | v24 | Operational lifecycle and recovery validation | Real-process proof for interruption, cancellation, timeout, shutdown, unclean process loss, authority loss, artifact integrity, and resume without false success or orphaned ownership. |
-| v25 | Resource-aware whole-run queue selection | One bounded managed selector that applies current-opportunity eligibility then oldest-eligible or caller-provided preference, with atomic ownership and Stage 29 reuse. |
-| v26 | Operational correctness and lifecycle guidance | Truthful stage-author, artifact, logging, and committed lifecycle guidance. |
+| v25 | Resource-aware whole-run queue selection | Default-compatible FIFO selection plus a bounded queue-local policy seam for safe downstream choice of fitting managed-pool candidates. |
+| v26 | Stage-author operations correctness | Truthful stage-author artifact/log/lifecycle guidance and one preparation-failure ordering correction; broader operations work remains deferred. |
 | v27 | Auto-configured local GPU pools | Python-first local GPU inventory, deterministic whole/share/group layouts, safe authority bootstrap, member-backed placement, and explicit NVIDIA discovery. |
 | v28 | Reconstructable runtime extensions and lifecycle hooks | Truthful extension readiness, downstream conformance checks, explicit custom executor/codec/resource activation across CLI and workers, and filtered observe-only lifecycle callbacks. |
 | v29 | Durable generic scheduler and multi-machine agent pools | One exact resource-aware coordinator scheduler composed command-scoped, co-located, or across authenticated agents, with global hard/soft placement, durable assignments, separate role SQLite state, disconnected execution/reconciliation, and containment-gated recovery. |
@@ -1929,9 +1929,12 @@ Phase execution plans:
 
 Status:
 
-- Planning is confirmed and the two-phase implementation plan is ready. This
-  stage follows the completed Stage 23-post managed-local runtime and precedes
-  resource-aware queue selection.
+- Complete. Phase 1 merged in [#216](https://github.com/samcantrill/loom/pull/216),
+  and the Phase 2 implementation plus its independently required HTTP-recovery
+  remediation merged through replacement Phase 3 in
+  [#217](https://github.com/samcantrill/loom/pull/217). This stage follows the
+  completed Stage 23-post managed-local runtime and precedes resource-aware
+  queue selection.
 
 Goal:
 
@@ -2037,9 +2040,9 @@ Defer:
 - Graceful handling of every platform-specific signal, Windows process-control
   parity, scheduler preemption policy, automatic retry-policy changes, and a
   comprehensive backend-by-failure matrix.
-- Real Docker, Apptainer, SLURM, GPU, scheduler-accounting, and remote-service
-  acceptance profiles. They remain opt-in or deferred for a future dedicated
-  validation stage; Stage 26 does not change their gates or evidence policy.
+- Real Docker, Apptainer, SLURM, GPU, scheduler-accounting, notification, and
+  remote-service acceptance profiles. Stage 26 owns their environment gates,
+  commands, evidence, and any runtime-specific strengthening.
 
 Primary feature docs:
 
@@ -2064,68 +2067,72 @@ Phase execution plans:
 
 - `docs/roadmap/stage-24/phases/real-interruption-and-cancellation.md`
 - `docs/roadmap/stage-24/phases/crash-recovery-and-artifact-trust.md`
+- `docs/roadmap/stage-24/phases/http-recovery-parity-and-renewal-proof.md`
 
 ## v25 - Resource-Aware Whole-Run Queue Selection
 
 Status:
 
-- Planning is confirmed. The maintainer-approved unified-scheduling amendment
-  and refreshed quality gate passed; both phases remain pending. Phase 1
-  follows Stage 24, while its functional base remains completed Stage 23.
+- Complete. Safe resource-aware selection merged in
+  [#218](https://github.com/samcantrill/loom/pull/218), and bounded compensated
+  continuation plus its downstream policy proof merged in
+  [#219](https://github.com/samcantrill/loom/pull/219).
 
 Goal:
 
-- Give every managed whole-run entrypoint one bounded selector: Loom filters
-  candidates for the exact execution opportunity, then uses oldest-eligible or
-  one caller-provided preference.
-- Keep selection topology-neutral and keep ownership, resource authority,
-  concrete assignment, and process lifecycle safety inside Loom. Stage 29
-  later composes the same selector with durable assignments and agents.
+- Let a managed whole-run queue use a caller-provided candidate-selection
+  policy so temporarily unusable FIFO-head work need not leave compatible
+  capacity idle.
+- Preserve oldest-eligible source order as the managed default and keep queue
+  mutation, resource authority, concrete assignment, and process lifecycle
+  safety inside Loom.
 
 Implement:
 
-- A bounded deterministic candidate view and one pure engine that applies
-  Loom-owned eligibility before default/custom preference. The default is the
-  oldest eligible candidate; no public default policy class exists.
-- A small queue-local structural policy that chooses one supplied eligible
-  candidate or stops. Python constructor injection is the extension path; all
-  managed entrypoints use the same evaluator with or without injection.
-- Advisory resources describe the current execution opportunity, never global
-  or authoritative capacity. Every selected item still passes authority
-  admission and concrete assignment before start.
-- Selection is separate from atomic ownership. Stage 25 uses a private/additive
-  exact local claim CAS; Stage 29 may attach the same selection evidence to a
-  fenced assignment without changing the policy API. Policy never runs in a
-  transaction or bypasses lifecycle/resource guards.
-- Bounded continuation after typed compensated pre-start capacity deferral,
-  using private exclusions and the same evaluator for default/custom behavior.
+- A bounded, deterministic queued-candidate view containing only selection-safe
+  identity, enqueue ordering, dispatch attempt, and scheduler-neutral logical
+  resource amounts.
+- A small queue-local structural selection-policy protocol that chooses one
+  supplied candidate or stops with a safe reason code. Python constructor
+  injection is the extension path; missing injection uses the same evaluator's
+  internal oldest-eligible preference without a public default policy object.
+- Controller-local advisory logical availability and private current-cycle
+  attempted-item facts. Every selected item still passes
+  authoritative scalar admission and Stage 23 concrete assignment before work
+  starts.
+- Atomic exact-candidate claims, bounded refresh after selection races, and
+  policy-output validation. Project policy code never runs inside a SQLite
+  transaction and cannot bypass active, dispatch, claim, lease, assignment, or
+  process-safety guards.
+- Bounded default/custom continuation after typed pre-start capacity deferral.
+  The controller may try a different, previously unattempted candidate in the
+  same cycle only after guarded compensation completes.
 - Safe cycle and audit evidence containing the policy ID, selected item, and
   reason code without persisting full capacity snapshots or arbitrary
   policy-private state.
-- A dependency-free downstream custom-ordering example and real SQLite queue/
-  coordination tests for eligibility, races, stale capacity, and bounds.
+- A dependency-free downstream smallest-eligible example and real SQLite queue/
+  coordination tests for the two-unit FIFO head, one-unit later item, and one
+  available unit scenario.
 
 Exit criteria:
 
-- Managed entrypoints make the same oldest-eligible/default or custom decision
-  from identical facts; delegated external handoff remains compatible without
-  config or record migration.
-- With B needing two units, A needing one, and one available, the default starts
-  A while B remains queued unchanged; custom policy can reorder only eligible work.
+- Existing callers retain configuration and record compatibility; delegated
+  pools retain external FIFO handoff.
+- A Python caller can inject a managed-pool policy that starts the later
+  one-unit item while the older two-unit item remains queued.
 - Two controllers selecting the same candidate cannot both claim or launch it,
   and stale capacity observations cannot over-allocate authority or concrete
   slots.
-- Candidate evaluation, ownership refresh, deferral, and dispatch remain
-  bounded, and one candidate is attempted at most once per local opportunity.
+- Candidate evaluation, claim refresh, deferral, and dispatch remain bounded,
+  and one candidate is attempted at most once per cycle.
 - Policy input and evidence contain no commands, environments, fencing tokens,
   concrete assignment state, or provider-private payloads.
 - Phase-targeted tests, `make validate-pr`, and `make test-summary` pass.
 
 Defer:
 
-- A fairness/starvation guarantee, durable aging/bypass counters, reservations,
-  runtime estimates, priorities, and preemption. Oldest-eligible is explicitly
-  not a starvation guarantee.
+- A built-in non-FIFO fairness policy, starvation guarantee, durable aging or
+  bypass counters, reservations, runtime estimates, priorities, and preemption.
 - Multiple queues per pool, cross-pool fairness or balancing, distributed
   active-item quotas, automatic retry, and policy hot reload.
 - Dynamic policy discovery, entry-point registration, and authored arbitrary
@@ -2158,106 +2165,67 @@ Phase execution plans:
 - `docs/roadmap/stage-25/phases/safe-resource-aware-selection.md`
 - `docs/roadmap/stage-25/phases/bounded-head-bypass-proof.md`
 
-## v26 - Operational Correctness And Lifecycle Guidance
+## v26 - Stage-Author Operations Correctness
 
 Status:
 
-- The removal-first cross-stage correction and manager quality gate are
-  recorded in [`docs/roadmap/stage-26/planning.md`](roadmap/stage-26/planning.md).
-  The one-phase manifest is ready for implementation after Stage 25 merges.
-
-Goal:
-
-- Give downstream stage authors one simple, truthful operational path for
-  inputs, outputs, temporary workspace, artifact registration, stdout/stderr,
-  project logging, lifecycle facts, and log inspection.
-- Make lifecycle guidance match the existing committed, observe-only event path
-  and correct the demonstrated fresh preparation-failure ordering mismatch.
+- Complete. The stage-author guide, artifact/log/lifecycle proof, and
+  preparation-failure ordering correction merged in
+  [#220](https://github.com/samcantrill/loom/pull/220).
 
 Implement:
 
-- A high-level downstream operations guide with small code snippets for
-  `StageContext.load_input(...)`, `save_artifact(...)`,
-  `local_output_path(...)`, `register_local_artifact(...)`, and
-  `local_workspace_path(...)`. Stages return `ArtifactRef` values; project code
-  owns domain schemas and workspace files are not implicit outputs.
-- A logging guide that distinguishes project-created files from executor-
-  captured stdout/stderr, tracebacks, managed-queue attempt logs, Loom stage
-  logs, and SLURM wrapper logs. Document local pass-through/optional capture,
-  subprocess/container capture, Python logging-handler behavior, and the exact
-  scope of `loom logs`.
-- An evidence-backed correctness pass over the current stage-author, artifact,
-  log, lifecycle-event, example, and documentation paths. Fix only demonstrated
-  mismatches at their authoritative owner without adding unrelated machinery.
-  In particular, commit a fresh run's `FAILED` state before publishing
-  `run.preparation_failed` so observers never see the old `CREATED` state.
-- A canonical lifecycle-event catalog that identifies the authoritative state
-  owner and states that observers receive facts only after the corresponding
-  commit. Existing event sinks remain available without a second notification
-  message, severity, or registration layer.
-- Dependency-free runnable examples and proportional local tests. Existing
-  `make validate-pr`, `make test-summary`, and external opt-in suites keep their
-  current meanings.
-
-Exit criteria:
-
-- A stage author can identify the correct output/workspace helper, return
-  declared artifacts, and understand what is or is not durable.
-- Logging documentation and examples accurately distinguish every currently
-  supported log owner and capture boundary without promising aggregation or
-  uniform backend behavior.
-- Canonical lifecycle-event documentation matches current emitted behavior and
-  states that observers receive committed facts.
-- A fresh preparation failure is observed only after `FAILED` is committed,
-  while an already-terminal opened run retains its state.
-- No public or durable type, service SDK, network credential, observer filter,
-  plugin activation path, or unrelated Stage 26 feature is added.
+- Document managed saves, explicit local-file registration, workspace-only
+  files, input loading, declared `ArtifactRef` returns, and project ownership
+  of domain schemas and checkpoint compatibility.
+- Document executor-owned streams and paths for local, subprocess, Docker,
+  Apptainer, SLURM, and managed queue paths, including the distinction between
+  `loom logs`, scheduler wrapper logs, queue-attempt logs, tracebacks, and
+  project-owned files.
+- Publish the exact emitted lifecycle names and commit-before-observe rule.
+  For a fresh preparation failure, persist `FAILED` before publishing
+  `run.preparation_failed`; an already-terminal opened run remains unchanged.
 
 Defer:
 
-- Generic or stage scheduling, cross-pool policy, resource-usage sampling or
-  observation, resource recommendations, process reattachment, and new
-  resume/reuse semantics.
-- New external acceptance profiles, PR-gate/Make/CI policy, and mandatory real
-  clusters, GPUs, containers, services, networks, or credentials.
-- Notification message/severity/notifier contracts and registration helpers.
-  Stage 28 owns exact event subscriptions, explicit sink activation, provenance,
-  lifecycle-owner reconstruction, and direct downstream Slack/Discord recipes.
-- Provider adapters, asynchronous delivery, retry, cursors, outboxes,
-  deduplication, replay, at-least/exactly-once guarantees, arbitrary payload
-  predicates, mutable/fatal hooks, and parsing domain content in core.
+- Queue selection remains Stage 25 work. Generic scheduling, fine-grained
+  scheduling, resource usage observation, GPU setup, resume-policy changes,
+  and environment acceptance profiles require later accepted stage plans; they
+  are not inferred from this documentation phase.
+- Generic event filtering and activation belong to Stage 28. Notification
+  messages, severity, service adapters, and delivery remain outside core Loom
+  until a concrete shared consumer justifies their design.
+- Agent or daemon ownership belongs to Stage 29. No new queue, resource,
+  scheduler, resume, plugin, profile, or validation-gate API is introduced.
+- Real clusters, GPUs, containers, services, networks, or notification
+  credentials remain opt-in and are not required for default validation.
 
 Primary feature docs:
 
 - `pipeline.md`
 - `artifacts.md`
 - `execution.md`
-- `slurm.md`
-- `container-executors.md`
 - `reliability.md`
+- `runtime-resources.md`
+- `queue.md`
+- `resume.md`
 - `plugins.md`
 - `testing.md`
 
 Planning notes:
 
-- [`docs/roadmap/stage-26/planning.md`](roadmap/stage-26/planning.md)
-
-Implementation plan:
-
-- [`docs/roadmap/stage-26/implementation-plan.md`](roadmap/stage-26/implementation-plan.md)
-
-Phase execution plans:
-
-- [`docs/roadmap/stage-26/phases/stage-author-correctness-and-logging.md`](roadmap/stage-26/phases/stage-author-correctness-and-logging.md)
+- `docs/roadmap/stage-26/planning.md`
+- `docs/roadmap/stage-26/implementation-plan.md`
 
 ## v27 - Auto-Configured Local GPU Pools
 
 Status:
 
-- Planning is confirmed in
-  [`docs/roadmap/stage-27/planning.md`](roadmap/stage-27/planning.md); the
-  manager quality gate and maintainer approval passed, and Phase 1 follows the
-  normal roadmap predecessor gate.
+- Complete. All three phases merged through
+  [#221](https://github.com/samcantrill/loom/pull/221),
+  [#225](https://github.com/samcantrill/loom/pull/225), and
+  [#226](https://github.com/samcantrill/loom/pull/226); completion metadata is
+  recorded on `develop`.
 
 Goal:
 
@@ -2337,9 +2305,11 @@ Phase execution plans:
 
 Status:
 
-- Planning is confirmed. Expanded design-safety review, one bounded design
-  correction, independent plan review, and one bounded plan correction passed;
-  all three phases remain pending and Phase 1 follows Stage 27.
+- Complete. All three phases merged through
+  [#222](https://github.com/samcantrill/loom/pull/222),
+  [#228](https://github.com/samcantrill/loom/pull/228), and
+  [#231](https://github.com/samcantrill/loom/pull/231); completion metadata is
+  recorded on `develop` at `4c1d6c7`.
 
 Goal:
 

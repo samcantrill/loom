@@ -1,15 +1,18 @@
 # Roadmap v24 Planning: Operational Lifecycle And Recovery Validation
 
-Status: confirmed; ready for implementation
+Status: complete
 Roadmap stage: v24
-Evidence tree: `/home/can134/work/active/loom` on `develop` at
-`f709731ef9ce023a3a403eb7ca257bd059f416d7`; relevant dirty paths are the
-requested Stage 24/25 roadmap artifacts, `docs/roadmap.md`, and numbering-only
-references in adjacent feature, Stage 23, Stage 23-post, and example docs
-Planning route: lean because the stage exercises existing public and durable
-lifecycle, authority, artifact, and resume contracts; it adds no new public
-abstraction, schema, service, or dependency
-Current gate: planning workflow complete; Phase 1 pending
+Evidence tree: merged `origin/develop` at
+`d9273bf5e16630f2bf9465d8ff8599769378c996`; the dirty control checkout was not
+rewritten during implementation or completion metadata work
+Planning route: expanded during Phase 2 after implementation proved that the
+accepted corruption-recovery behavior conflicts with the one-commit-per-stage
+schema; the maintainer approved append-only output-commit supersession on
+2026-08-20. Independent review then found the HTTP recovery transport gap; the
+maintainer approved narrow replacement Phase 3, which closed that finding and
+the renewal-TTL evidence gap.
+Current gate: complete; Phase 1 merged in #216 and replacement Phase 3 merged
+the Phase 2 implementation and remediation in #217
 Blockers: none
 
 Stage 24 adds real boundary-level proof where fake processes, injected
@@ -21,10 +24,10 @@ state, ownership, artifacts, and recovery agree.
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
 | Evidence | Runner, CLI, subprocess timeout, managed-local shutdown, authority, resume, artifact, test harness, and external acceptance paths were inspected after Stage 23-post. | None. | Preserve existing owners and test only real boundaries. |
-| Functionality | Graceful user stops cancel; ordinary failures/timeouts fail; unclean loss is classified during authoritative recovery; no incomplete output is reusable. | None. | Implement Phase 1 lifecycle alignment. |
-| Design | Reuse runner lifecycle writers, executor cleanup, queue process handling, authority recovery transitions, planner invalidation, and current test support. | None. | Keep new helpers test-private. |
-| Validation | Serial, subprocess, parallel, managed-local, hard-loss, authority-loss, and artifact-corruption boundaries need proportionate combined proof; external runtimes remain future dedicated validation work. | None. | Execute the recorded obligations by phase. |
-| Detailed plan / approval | The user accepted the operational-testing recommendation and requested a new Stage 24 on 2026-08-18. The manifest and two linked phase plans are manager-reviewed. | None. | Begin Phase 1 from current `origin/develop`. |
+| Functionality | Graceful user stops cancel; ordinary failures/timeouts fail; unclean loss is classified during authoritative recovery; no incomplete output is reusable. | None. | Preserve the merged lifecycle contract. |
+| Design | Runner lifecycle, executor cleanup, queue process handling, authority recovery, planner invalidation, and artifact commit owners remain explicit; repair history is append-only and fenced. | None. | Preserve these ownership boundaries in later stages. |
+| Validation | Serial, subprocess, parallel, managed-local, hard-loss, authority-loss, HTTP recovery, renewal-TTL, and artifact-corruption boundaries have proportionate combined proof; external runtimes remain Stage 26 work. | None. | Retain the hermetic PR gate and Stage 26 deferral. |
+| Detailed plan / approval | Phase 1 merged in #216. Independent review blocked unpublished Phase 2, the maintainer approved the narrow replacement, and Phase 3 merged the complete recovery/artifact implementation in #217 after local and CI gates passed. | None. | Stage complete. |
 
 ## Evidence And Scope
 
@@ -44,8 +47,9 @@ state, ownership, artifacts, and recovery agree.
 - Included gaps: keyboard interrupt becomes failure; timeout and managed cancel
   lack real-child proof; controller ownership expires without renewal and
   differs by backend; crash recovery and corrupt-artifact resume lack e2e proof.
-- Excluded: reattachment, repair command, daemon, retry/status/schema changes,
-  cross-platform signal parity, external scheduling, containers, and clusters.
+- Excluded: reattachment, repair command, daemon, retry/status changes, schema
+  changes beyond the versioned output-commit migration, cross-platform signal
+  parity, external scheduling, containers, and clusters.
 
 ## Minimum Useful Change
 
@@ -63,8 +67,11 @@ state, ownership, artifacts, and recovery agree.
   attempt 2. Bring the local service authority up to the existing SQLite lease-
   exclusion contract and renew live controller leases privately; live or
   ambiguous ownership remains a conflict.
-- Prove checksum invalidation through one public branch-shaped workflow.
-- Leave environment-dependent acceptance to a future dedicated validation stage.
+- Prove checksum invalidation through one public branch-shaped workflow. When
+  that explicit repair rerun succeeds, append a fenced attempt-specific commit
+  which names the previously current commit, retain the old immutable commit,
+  and project only the new commit and facts as current.
+- Leave environment-dependent acceptance to Stage 26.
 
 ## Functional Requirements
 
@@ -77,11 +84,11 @@ state, ownership, artifacts, and recovery agree.
 | FR-5 | Managed-local cancel against a real blocking child observes process exit before item cancellation and scalar/member lease release; pending and foreign-owner work are unchanged. | No crash-time reattachment or foreign PID action. | Stage 23-post runtime/controller. | One real-process integration/e2e scenario. | locked |
 | FR-6 | Killing a test-owned coordinator/worker tree after a start marker cannot produce success, committed outputs, downstream starts, or immediately stealable live ownership. | External supervisor performs containment; Loom does not promise to kill after its own death. | Run lock, authority lease, process fixture. | Hard-loss subprocess scenario. | locked |
 | FR-7 | A live runner renews its controller lease. Explicit resume obtains a new exclusive lease only after abandonment, verifies recovery facts for the old controller and incomplete attempt, then records interrupted/stale transitions/events before attempt 2. Live or ambiguous ownership blocks both authority backends. | No silent repair, public repair command, or new run-lock protocol. | Lease renewal/exclusion, recovery scan, transitions, planner, attempts. | Renewal unit, cross-backend contract, recovery e2e. | locked |
-| FR-8 | Corrupting a checksummed successful artifact through the local store causes public resume to rerun its producer and consumers, reuse an independent branch, expose checksum mismatch, and restore payload/index agreement. | Invalid serialized state may continue to fail clearly; this requirement is byte corruption with valid metadata. | Artifact store, planner, CLI resume. | Branch-shaped public e2e. | locked |
+| FR-8 | Corrupting a checksummed successful artifact through the local store causes public resume to rerun its producer and consumers, reuse an independent branch, expose checksum mismatch, and restore payload/index agreement. Each successful repair attempt appends an immutable output commit linked to the prior current commit; the new attempt/commit becomes current without deleting history. | Invalid serialized state may continue to fail clearly; this requirement is byte corruption with valid metadata. Ordinary changed-config replacement remains fail-closed unless separately authorized. | Artifact store, planner, authority commit, CLI resume. | Cross-backend commit/migration contracts and branch-shaped public e2e. | locked; supersession approved 2026-08-20 |
 | FR-9 | Loss of the real local authority service while a stage is active fails closed before output commit, exposes diagnostics, starts no dependent work, and never steals a valid lease. | No automatic service restart or network partition matrix. | Service authority and commit boundary. | One bounded service-loss integration test. | locked |
 | FR-10 | Real-process tests use condition markers, monotonic deadlines, fixture-owned process groups/PIDs, and `finally` cleanup; no arbitrary sleep is the success oracle and no unvalidated PID is signalled. | Test-only support; no runtime dependency. | Existing test support. | Helper unit/use review and flake-free targeted runs. | locked |
 | FR-11 | Existing success, exception, early-stop, fake-process, fake-authority, commit-failure, delegated, and resume behavior remains compatible; add combined tests only for causal interactions. | No comprehensive executor-by-failure matrix. | Current suite. | Targeted regressions plus PR gate. | locked |
-| FR-12 | Default validation remains hermetic. Real Docker, Apptainer, SLURM, GPU, scheduler-accounting, queue-dispatch, and remote-service profiles remain opt-in or future dedicated validation work; Stage 26 changes no gates. | No external service in `make validate-pr`. | Test markers/harness and roadmap. | Command/marker/docs audit. | locked |
+| FR-12 | Default validation remains hermetic. Real Docker, Apptainer, SLURM, GPU, scheduler-accounting, queue-dispatch, notification, and remote-service profiles remain Stage 26 opt-in work. | No external service in `make validate-pr`. | Test markers/harness and roadmap. | Command/marker/docs audit. | locked |
 
 ## Functionality Agreement
 
@@ -91,9 +98,9 @@ state, ownership, artifacts, and recovery agree.
 | FQ-2 | FR-2, FR-3 | Python/CLI propagation | Persist cancellation/cleanup, re-raise, and let CLI map 130; parallel in-flight work settles truthfully because local threads are not safely preemptible. | Python callers receive the interrupt; parallel exit may wait for bounded in-flight work. | locked |
 | FQ-3 | FR-6, FR-7 | Unclean loss | Retain active evidence until authoritative recovery records `INTERRUPTED`/`STALE`. | Pre-recovery inspection may still show `RUNNING`. | locked |
 | FQ-4 | FR-4 | Timeout | Keep typed timeout as failure, distinct from user cancellation. | No unified stopped status. | locked |
-| FQ-5 | FR-8 | Artifact corruption | Rerun the affected branch on byte/checksum mismatch; malformed state still fails. | May recompute identical logical output. | locked |
+| FQ-5 | FR-8 | Artifact corruption | Rerun the affected branch on byte/checksum mismatch; append a fenced superseding commit for each repaired stage and retain the earlier commit; malformed state still fails. | Requires one versioned durable migration and current-versus-history projection. | locked; maintainer approved 2026-08-20 |
 | FQ-6 | FR-5, FR-10 | Process truth | Terminal state/release follows observed exit; fakes retain exhaustive ordering. | One slower POSIX proof. | locked |
-| FQ-7 | FR-9, FR-12 | Environment tiers | Local authority is hermetic; external sites remain opt-in or future dedicated validation work. | External failures are not all PR-gated. | locked |
+| FQ-7 | FR-9, FR-12 | Environment tiers | Local authority is hermetic; external sites remain Stage 26 profiles. | External failures are not all PR-gated. | locked |
 
 ## Behavior Baseline
 
@@ -105,6 +112,9 @@ state, ownership, artifacts, and recovery agree.
 - Hard loss writes no fictional terminal state. Exclusive authority and matching
   recovery facts precede `INTERRUPTED`/`STALE` evidence and attempt 2; authority
   loss fails closed, while checksum mismatch reruns only the affected branch.
+- A successful corruption repair never rewrites attempt 1. Attempt 2 atomically
+  appends commit C2 with C1 as its expected predecessor; C2 and its artifact
+  facts become current while C1 remains immutable history.
 
 ## Minimum Design
 
@@ -127,10 +137,22 @@ state, ownership, artifacts, and recovery agree.
   commit ordering, exit-before-resource-release ordering, no reuse of old
   `RUNNING`/corrupt work, explicit recovery rather than silent rewrite, and
   hermetic default validation.
+- Corruption-repair commit flow: planner-owned checksum mismatch authorizes the
+  runner to name the current commit; authority verifies the latest active
+  attempt, fencing token, and expected current commit in one transaction,
+  appends the new commit/facts, succeeds the attempt/stage, and releases the
+  lease. A competing or stale repair fails without changing the current head.
+- Inspection flow: the existing stage snapshot remains a current-state
+  projection, while one backend-neutral `list_output_commits` read returns the
+  retained commit/fact composites in authority revision order for audit and
+  contract proof. No second history abstraction is added.
 - Private discretion: helper names, exception nesting, process mechanics,
   markers, polling, PID shape, fixtures, and test placement.
-- No public protocol, command, config, status, schema, marker, plugin, or
-  dependency. Preserve source import direction; tests consume public surfaces.
+- No new command, config, status, marker, plugin, or dependency. The sole
+  durable expansion is a versioned append-only commit-supersession field and
+  migration, plus the minimum protocol input/read behavior needed to preserve
+  current projection and immutable history. Preserve source import direction;
+  tests consume public surfaces.
 
 ## Complexity Delta
 
@@ -142,8 +164,9 @@ state, ownership, artifacts, and recovery agree.
 | Real timeout and managed cancel | Injected/fake paths cannot prove child exit ordering. | More mock assertions. | keep one proof each |
 | Controller continuity/recovery | Fixed TTL is not renewed and transitions lack workflow proof. | Treat TTL as lifetime. | private renewal plus existing recovery surfaces |
 | Corruption and service-loss workflows | Connect planner/commit owners across real boundaries. | More isolated units. | keep one each |
+| Append-only commit supersession | The locked corrupt-artifact rerun reaches attempt 2 but both backends reject its output because each stage can own only one commit. | Reuse attempt 1's commit or overwrite it. | retain immutable history; add explicit fenced current-head replacement and one versioned migration |
 | Supervisor, reattachment, full matrix | Not required by current ownership contracts. | Add future machinery now. | defer/remove |
-| External-runtime gate | Infrastructure is not reliably present. | Require Docker/cluster. | defer to a dedicated validation stage |
+| External-runtime gate | Infrastructure is not reliably present. | Require Docker/cluster. | defer to Stage 26 |
 
 ## Design Agreement
 
@@ -153,21 +176,21 @@ state, ownership, artifacts, and recovery agree.
 | DQ-2 | FR-3 through FR-6, FR-10 | Synchronization | Marker files and monotonic bounded polling establish readiness and exit. Never use a fixed sleep as the assertion. | Small test-support helper required. | locked |
 | DQ-3 | FR-4, FR-5 | Cleanup proof | Assert exact child/group non-liveness before terminal state and release, while deterministic fakes retain branch-level timing proof. | POSIX-specific process check in default Linux CI. | locked |
 | DQ-4 | FR-6, FR-7 | Recovery truth | Privately renew live controller ownership; after loss, exclusive acquisition plus recovery facts decide abandonment. Use deterministic authority time, never PID or wall-clock waiting. | Renewal errors must fail closed; recovery waits for all relevant leases. | locked |
-| DQ-5 | FR-8 | Artifact oracle | Assert planner reason, attempt counts, payload content, outputs, and run index together. | More assertions in one causally combined e2e. | locked |
+| DQ-5 | FR-8 | Artifact and commit oracle | The runner may request supersession only for the checksum-mismatch rerun path and must name the expected current commit. Authority atomically appends an attempt-specific successor after fence/current-head validation; snapshots expose only successor facts as current while durable history retains the predecessor. Assert planner reason, commit lineage, attempt counts, payload content, outputs, and run index together. | Requires a versioned SQLite migration, service parity, and an expanded-path review. | locked; maintainer approved 2026-08-20 |
 | DQ-6 | FR-9 | Authority failure point | Stop the local authority after stage start and before commit; no new production failpoint. | Fixture orchestration is more involved than a fake. | locked |
-| DQ-7 | FR-11, FR-12 | Validation shape | PR-gate hermetic local behavior; retain environment-specific acceptance and receipts as opt-in or later dedicated work. | External-runtime regressions depend on scheduled/manual evidence. | locked |
+| DQ-7 | FR-11, FR-12 | Validation shape | PR-gate hermetic local behavior; retain environment-specific acceptance and receipts in Stage 26. | External-runtime regressions depend on scheduled/manual evidence. | locked |
 
 ## Examples And Validation
 
 | Example or invariant | Behavior or risk | Authoritative owner and boundary | Minimal coverage | Status |
 | --- | --- | --- | --- | --- |
-| Local/subprocess CLI Ctrl-C | Signal, cancellation, cleanup, artifact/downstream absence, and exit 130 agree; subprocess leaves no worker. | Runner, executor, CLI. | One real-signal e2e per causal process owner. | planned |
-| Parallel local Ctrl-C | New scheduling stops while already-running stages settle without fictional cancellation or lost valid commits. | Parallel runner/CLI. | One bounded coordinator-signal case plus focused stage-raised interrupt. | planned |
-| Enforced timeout | Production timeout kills/observes worker and persists timeout failure. | Subprocess executor/reliability boundary. | One integration test; injected unit retained. | planned |
-| Managed-local cancel | Exit precedes item cancellation/lease release. | Runtime/adapter/authority. | One real child; deterministic fakes retained. | planned |
-| Hard coordinator loss | Controller renewal preserves live ownership; after loss, active leases block and exclusive recovery records interruption/stale evidence before attempt 2. | Authority, lock, planner, runner. | Renewal unit plus isolated loss/resume and lease-parity contract. | planned |
-| Authority service loss | Commit fails closed; dependants do not start. | Service authority mutation. | One bounded integration test. | planned |
-| Corrupt artifact resume | Mismatch invalidates one branch and repairs bytes/index. | Artifact store, planner, commit. | One public branch e2e. | planned |
+| Local/subprocess CLI Ctrl-C | Signal, cancellation, cleanup, artifact/downstream absence, and exit 130 agree; subprocess leaves no worker. | Runner, executor, CLI. | One real-signal e2e per causal process owner. | passed |
+| Parallel local Ctrl-C | New scheduling stops while already-running stages settle without fictional cancellation or lost valid commits. | Parallel runner/CLI. | One bounded coordinator-signal case plus focused stage-raised interrupt. | passed |
+| Enforced timeout | Production timeout kills/observes worker and persists timeout failure. | Subprocess executor/reliability boundary. | One integration test; injected unit retained. | passed |
+| Managed-local cancel | Exit precedes item cancellation/lease release. | Runtime/adapter/authority. | One real child; deterministic fakes retained. | passed |
+| Hard coordinator loss | Controller renewal preserves live ownership; after loss, active leases block and exclusive recovery records interruption/stale evidence before attempt 2. | Authority, lock, planner, runner. | Renewal unit plus isolated loss/resume, HTTP transport, and lease-parity contract. | passed |
+| Authority service loss | Commit fails closed; dependants do not start. | Service authority mutation. | One bounded integration test. | passed |
+| Corrupt artifact resume | Mismatch invalidates one branch; fenced append-only supersession repairs bytes/current index without erasing the prior commit. | Artifact store, planner, authority commit. | Cross-backend supersession/migration contracts plus one public branch e2e. | passed |
 
 Causal interactions requiring combined coverage:
 
@@ -177,23 +200,25 @@ Causal interactions requiring combined coverage:
   release;
 - unclean process loss + authority liveness/expiry + recovery transition + new
   attempt;
-- checksum mismatch + DAG invalidation + artifact/index replacement;
+- checksum mismatch + DAG invalidation + fenced commit supersession + current
+  artifact/index replacement;
 - authority process loss + output-commit authorization + downstream blocking.
 
 All other categories remain focused tests rather than an executor/store matrix;
-external profiles remain opt-in or future dedicated validation work.
+Stage 26 owns external profiles.
 
 ## Phase Shaping
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Real interruption and cancellation | A user can stop serial, subprocess, bounded-parallel, or managed-local work and Loom's exit, state, process liveness, artifacts, downstream work, and leases agree; actual subprocess timeout is proven. | Runner/CLI/executor/managed runtime and test support; no unclean recovery, corruption, external runtime, new status, or daemon. | Completed Stage 23-post. | Focused runner regression, three real Ctrl-C cases, real timeout, real managed cancel, full PR gate. | pending |
-| 2. Crash recovery and artifact trust | Unclean process/authority loss cannot create false success, explicit recovery/resume is conservative and inspectable, and corrupt checksummed output repairs only its affected branch. | Authority/recovery/planner/artifact/runner plus public workflow tests; no repair command, reattachment, cluster/container acceptance, or retry redesign. | Phase 1 merged. | Hard-loss recovery, live-owner refusal, real authority loss, corrupt-artifact resume, docs, full PR gate. | pending |
+| 1. Real interruption and cancellation | A user can stop serial, subprocess, bounded-parallel, or managed-local work and Loom's exit, state, process liveness, artifacts, downstream work, and leases agree; actual subprocess timeout is proven. | Runner/CLI/executor/managed runtime and test support; no unclean recovery, corruption, external runtime, new status, or daemon. | Completed Stage 23-post. | Focused runner regression, three real Ctrl-C cases, real timeout, real managed cancel, full PR gate. | merged in #216 |
+| 2. Crash recovery and artifact trust | Unclean process/authority loss cannot create false success, explicit recovery/resume is conservative and inspectable, and corrupt checksummed output repairs only its affected branch through append-only commit supersession. | Authority/recovery/planner/artifact/runner, the versioned output-commit migration, and public workflow tests; no repair command, reattachment, cluster/container acceptance, or retry redesign. | Phase 1 merged. | Implementation and gates passed, but independent review found missing HTTP recovery transport and incomplete post-TTL renewal evidence. | blocked; adopted by Phase 3 |
+| 3. HTTP recovery parity and renewal proof | Publish the Phase 2 implementation only after the HTTP authority path transports repository recovery facts and renewal remains exclusive past original expiry. | Existing v2 protocol/client/service/adapter and deterministic authority time; no new durable model or weaker recovery. | Phase 2 explicitly blocked; maintainer approved replacement. | 50 focused tests, full gates, exact HTTP recovery parity, runner recovery, and post-TTL ownership proof. | merged in #217 |
 
-Two phases separate graceful cleanup—where Loom is alive and must complete
+Phase 1 separates graceful cleanup—where Loom is alive and must complete
 termination—from unclean recovery—where Loom cannot assume cleanup ran and must
-rely on authority and durable evidence. Each phase delivers a complete user-
-observable safety outcome.
+rely on authority and durable evidence. Phase 3 is the bounded replacement
+publication path for blocked Phase 2, not a new product surface.
 
 ## Quality Gate
 
@@ -201,17 +226,20 @@ observable safety outcome.
 | --- | --- | --- |
 | Behavior and agreements locked | FR/FQ rows distinguish cooperative stop, caught signal, failure/timeout, unclean loss, authority loss, and corruption. | pass |
 | Minimum design justified | Existing lifecycle, transition, authority, planner, artifact, executor, and queue owners are reused. | pass |
-| Complexity delta proportionate | No public repair API, supervisor, reattachment, schema, dependency, status, or broad matrix. | pass |
+| Complexity delta proportionate | The previously excluded schema change is now limited to the demonstrated current consumer: append-only attempt-specific commit supersession. No repair command, supervisor, reattachment, dependency, status, or broad matrix is added. | pass after maintainer approval |
 | Contracts and private discretion clear | Observable ordering and outcomes are fixed; helper names, process mechanics, and file placement remain private. | pass |
 | Invariant ownership and validation proportionate | Each real process, parallel scheduling, authority recovery, and artifact interaction is covered once; focused tests remain authoritative elsewhere. | pass |
-| Phases vertical and reviewable | Graceful lifecycle proof and unclean recovery/artifact trust are independently useful two-phase outcomes. | pass |
+| Phases vertical and reviewable | Graceful lifecycle proof and unclean recovery/artifact trust remain distinct; replacement Phase 3 contains only the independently demonstrated publication gaps. | pass |
 | No unresolved blocker | The user accepted the recommendation and requested this stage; repository evidence resolves placement and semantics. | pass |
 
-Gate result: lean planning, implementation manifest, phase plans, manager review,
-and maintainer approval are complete. Stage 24 is ready for Phase 1 execution.
+Gate result: complete. Phase 1 merged in #216. Phase 2 moved to the expanded
+route after its executor demonstrated the durable conflict; independent review
+then correctly blocked its HTTP recovery path. The maintainer approved the
+narrow replacement, and Phase 3 closed both findings before #217 passed local
+validation, manager review, CI, and squash merge.
 
 Accepted risks: POSIX-only signals, settled rather than preempted parallel work,
-no reattachment/machine-loss cleanup, and external evidence that is not PR-gated.
+no reattachment/machine-loss cleanup, and Stage 26 external evidence.
 
 ## Decisions And Deferrals
 
@@ -219,5 +247,6 @@ no reattachment/machine-loss cleanup, and external evidence that is not PR-gated
 | --- | --- | --- | --- |
 | Ctrl-C | Serial/prepared work cancels; parallel stops new starts and settles in-flight truthfully; then re-raise for exit 130. | Matches explicit stop without claiming unsafe thread preemption. | Cooperative parallel cancellation is accepted. |
 | Unclean loss | Renew live controller leases; after loss require exclusive acquisition and recovery facts, then record `INTERRUPTED`/`STALE` evidence. | TTL alone must not misclassify a live runner; dead PID is not authority. | Reattachment owner is accepted. |
-| Timeout/corruption | Timeout fails; valid checksum mismatch reruns its branch; malformed state errors. | Preserves failure intent and conservative reuse. | Reliability/repair policy changes. |
-| Deferrals | No supervisor, repair API, new schema/status, broad matrix, or external-runtime PR gate. | Current private seams suffice; later work needs an accepted consumer and owner. | A current consumer requires one. |
+| Timeout/corruption | Timeout fails; valid checksum mismatch reruns its branch and may atomically append a commit that explicitly supersedes the expected current commit; malformed state errors. | Keeps the new successful attempt and current output aligned without rewriting history. | Broader replacement policy is accepted. |
+| Output-commit history | Multiple immutable commits per stage are durable; the highest valid authority revision is current, each successor names its predecessor, snapshots/materialized indexes expose only current facts, and one `list_output_commits` read exposes retained composites in revision order. | This is the smallest truthful model for the current corruption-repair and inspection consumers. | A consumer requires filtering, pagination, or a broader history read model. |
+| Deferrals | No supervisor, repair API, schema work beyond output-commit supersession, new status, broad matrix, or external-runtime PR gate. | Current private seams and Stage 26 own these concerns. | A current consumer requires one. |

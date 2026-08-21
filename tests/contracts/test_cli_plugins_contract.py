@@ -38,39 +38,28 @@ def test_plugins_list_json_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     assert main(["plugins", "list", "--format", "json"], stdout=stdout, stderr=stderr) == 0
 
     assert stderr.getvalue() == ""
-    assert json.loads(stdout.getvalue()) == {
-        "schema_version": "loom.cli.plugins.list.v1",
-        "ok": True,
-        "warnings": [],
-        "result": {
-            "selection": {"groups": [], "names": [], "packages": []},
-            "load_requested": False,
-            "ok": True,
-            "records": [
-                {
-                    "group": LOOM_RECIPES_GROUP,
-                    "name": "alpha",
-                    "value": "loom.plugins.contract_recipe:recipe",
-                    "status": "metadata",
-                    "readiness": "registry-ready",
-                }
-            ],
-            "loaded": [],
-            "duplicates": [],
-            "failures": [],
-            "missing": [],
-            "unsupported_groups": [],
-            "listing_only": [],
-            "counts": {
-                "records": 1,
-                "loaded": 0,
-                "duplicates": 0,
-                "failures": 0,
-                "missing": 0,
-                "unsupported_groups": 0,
-                "listing_only": 0,
-            },
-        },
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema_version"] == "loom.cli.plugins.list.v2"
+    assert payload["ok"] is True
+    assert payload["warnings"] == []
+    assert payload["result"]["records"] == [
+        {
+            "group": LOOM_RECIPES_GROUP,
+            "name": "alpha",
+            "value": "loom.plugins.contract_recipe:recipe",
+            "status": "metadata",
+            "readiness": "registry-ready",
+        }
+    ]
+    readiness = payload["result"]["group_readiness"]
+    assert [item["group"] for item in readiness][:2] == [LOOM_RECIPES_GROUP, "loom.codecs"]
+    assert set(readiness[0]["facets"]) == {
+        "contract",
+        "python_injection",
+        "registry",
+        "plugin_loading",
+        "cli_selection",
+        "fresh_process_reconstruction",
     }
 
 
@@ -107,7 +96,7 @@ def test_plugins_check_listing_only_contract(monkeypatch: pytest.MonkeyPatch) ->
 
     payload = json.loads(stdout.getvalue())
     assert stderr.getvalue() == ""
-    assert payload["schema_version"] == "loom.cli.plugins.check.v1"
+    assert payload["schema_version"] == "loom.cli.plugins.check.v2"
     assert payload["ok"] is False
     assert payload["result"]["records"][0]["readiness"] == "listing-only"
     assert payload["result"]["unsupported_groups"] == [LOOM_ARTIFACT_STORE_BACKENDS_GROUP]

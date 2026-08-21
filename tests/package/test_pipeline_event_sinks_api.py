@@ -21,6 +21,8 @@ def test_pipeline_event_sinks_public_exports() -> None:
         "EventSinkFailureRecorder",
         "EventSinkContext",
         "EventSink",
+        "EventSinkSubscription",
+        "EventSinkRegistration",
         "EventSinkCallbackResult",
         "EventSinkDispatchResult",
         "EventSinkRegistry",

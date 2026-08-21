@@ -34,6 +34,8 @@ from loom.pipeline.stores import (
     AuthorityResolutionMode,
     LocalRunStore,
 )
+from loom.plugins import LOOM_CODECS_GROUP, LOOM_EVENT_SINKS_GROUP, PluginRecord
+from loom.plugins.activation import PluginActivationManifest
 
 
 pytestmark = pytest.mark.unit
@@ -162,10 +164,17 @@ def _preflight_result(
 
 
 class FakeRunStore:
-    def __init__(self, *, exists: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        exists: bool = False,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
         self.exists = exists
         self.opened: list[str] = []
         self.allocated = 0
+        self.metadata = dict(metadata or {})
+        self.events: list[str] = []
 
     def resolve_run_uri(self, run_uri: str) -> str:
         assert run_uri == "file://./runs/demo"
@@ -173,6 +182,12 @@ class FakeRunStore:
 
     def open_run(self, run_uri: str) -> None:
         self.opened.append(run_uri)
+        self.events.append("open")
+
+    def read_run_user_metadata(self, run_uri: str) -> dict[str, object]:
+        assert run_uri == "file:///abs/runs/demo"
+        self.events.append("read_activation")
+        return dict(self.metadata)
 
     def run_uri_exists(self, run_uri: str) -> bool:
         assert run_uri == "file:///abs/runs/demo"
@@ -337,6 +352,185 @@ def test_run_resume_opens_existing_run(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls["preflight_run_uri"] == "file:///abs/runs/demo"
     assert calls["request_run_uri"] == "file:///abs/runs/demo"
     assert calls["open_existing"] is True
+
+
+def test_run_resume_compares_exact_activation_before_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = PluginRecord(
+        group=LOOM_CODECS_GROUP,
+        name="example",
+        value="project.plugins:codec",
+        package="project",
+        package_version="1",
+    )
+    store = FakeRunStore(
+        metadata={"plugin_activations": PluginActivationManifest((record,)).to_dict()}
+    )
+    _patch_common(monkeypatch, store=store)
+
+    def build_registries(
+        _records: object,
+    ) -> tuple[None, None, None, PluginActivationManifest]:
+        store.events.append("import")
+        return None, None, None, PluginActivationManifest((record,))
+
+    import loom.cli.plugin_activation as plugin_activation
+
+    monkeypatch.setattr(
+        plugin_activation, "build_selected_registries", build_registries
+    )
+
+    result = run_command.build_run_result(
+        config_options=ConfigCliOptions(config_path=Path("base.yaml")),
+        run_options=run_command.RunCliOptions(
+            run_uri="file://./runs/demo", resume=True
+        ),
+        selector_options=run_command.SelectorCliOptions(),
+        plugin_records=(record,),
+    )
+
+    assert result.status == "SUCCEEDED"
+    assert store.events[:3] == ["open", "read_activation", "import"]
+
+
+def test_run_resume_rejects_omitted_or_changed_activation_before_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = PluginRecord(
+        group=LOOM_CODECS_GROUP,
+        name="example",
+        value="project.plugins:codec",
+        package="project",
+        package_version="1",
+    )
+    changed = PluginRecord(
+        group=LOOM_CODECS_GROUP,
+        name="example",
+        value="project.plugins:changed_codec",
+        package="project",
+        package_version="1",
+    )
+    store = FakeRunStore(
+        metadata={"plugin_activations": PluginActivationManifest((recorded,)).to_dict()}
+    )
+
+    with pytest.raises(CliError, match="missing plugin activation"):
+        run_command._validate_resume_plugin_activations(
+            store, "file:///abs/runs/demo", ()
+        )
+    with pytest.raises(CliError, match="plugin target changed"):
+        run_command._validate_resume_plugin_activations(
+            store, "file:///abs/runs/demo", (changed,)
+        )
+
+    import loom.cli.plugin_activation as plugin_activation
+
+    monkeypatch.setattr(
+        plugin_activation,
+        "build_selected_registries",
+        lambda _records: pytest.fail("mismatched plugin target was imported"),
+    )
+    _patch_common(monkeypatch, store=store)
+    with pytest.raises(CliError, match="missing plugin activation"):
+        run_command.build_run_result(
+            config_options=ConfigCliOptions(config_path=Path("base.yaml")),
+            run_options=run_command.RunCliOptions(
+                run_uri="file://./runs/demo", resume=True
+            ),
+            selector_options=run_command.SelectorCliOptions(),
+        )
+    with pytest.raises(CliError, match="plugin target changed"):
+        run_command.build_run_result(
+            config_options=ConfigCliOptions(config_path=Path("base.yaml")),
+            run_options=run_command.RunCliOptions(
+                run_uri="file://./runs/demo", resume=True
+            ),
+            selector_options=run_command.SelectorCliOptions(),
+            plugin_records=(changed,),
+        )
+
+
+def test_run_resume_reports_unavailable_distribution_evidence() -> None:
+    recorded = PluginRecord(
+        group=LOOM_CODECS_GROUP,
+        name="example",
+        value="project.plugins:codec",
+    )
+    current = PluginRecord(
+        group=LOOM_CODECS_GROUP,
+        name="example",
+        value="project.plugins:codec",
+        package="project",
+        package_version="1",
+    )
+    store = FakeRunStore(
+        metadata={"plugin_activations": PluginActivationManifest((recorded,)).to_dict()}
+    )
+
+    warnings = run_command._validate_resume_plugin_activations(
+        store, "file:///abs/runs/demo", (current,)
+    )
+
+    assert [warning.code for warning in warnings] == [
+        "cli.run.plugin_activation_distribution_unavailable"
+    ]
+
+
+def test_resume_run_uri_is_resolved_from_selected_profile_before_import() -> None:
+    config = {
+        "runtime": {
+            "profile": "research",
+            "run_uri": "file://./runs/base",
+        },
+        "runtime_profiles": {
+            "research": {"run_uri": "file://./runs/profile"},
+            "other": {"run_uri": "file://./runs/other"},
+        },
+    }
+
+    assert (
+        run_command._resume_run_uri_before_plugin_import(
+            config, run_command.RunCliOptions(resume=True)
+        )
+        == "file://./runs/profile"
+    )
+    assert (
+        run_command._resume_run_uri_before_plugin_import(
+            config,
+            run_command.RunCliOptions(
+                run_uri="file://./runs/explicit", resume=True, profile="other"
+            ),
+        )
+        == "file://./runs/explicit"
+    )
+
+
+def test_run_execution_allowlist_accepts_event_sinks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed: set[str] = set()
+
+    def select_plugins(
+        _selectors: object, *, allowed_groups: object
+    ) -> tuple[PluginRecord, ...]:
+        allowed.update(cast(tuple[str, ...], allowed_groups))
+        return ()
+
+    import loom.cli.plugin_activation as plugin_activation
+
+    monkeypatch.setattr(plugin_activation, "selected_runtime_plugins", select_plugins)
+    _patch_common(monkeypatch)
+
+    assert main(["run", "base.yaml"], stdout=io.StringIO(), stderr=io.StringIO()) == 0
+    assert LOOM_EVENT_SINKS_GROUP in allowed
+
+    sink = PluginRecord(
+        group=LOOM_EVENT_SINKS_GROUP,
+        name="metrics",
+        value="project.plugins:metrics_sink",
+    )
+    run_command._validate_run_plugin_record_groups((sink,))
 
 
 def test_run_preflight_helper_skips_fresh_run_group_for_resume(

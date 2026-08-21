@@ -1,15 +1,14 @@
 # Roadmap Stage 26 Planning: Operational Correctness And Lifecycle Guidance
 
-Status: confirmed; removal-first cross-stage correction and manager quality gate passed
+Status: complete
 Roadmap stage: v26
-Evidence tree: `/home/can134/work/active/loom` at
-`2c05906c15791a025ff2cae90633d77efdc89aac`; unrelated concurrent Stage 25 and
-Stage 29 roadmap edits are preserved
+Evidence tree: merged `origin/develop` at
+`e5bfa9bcf87ce1f6f93857cc92c76e7d5f252898`
 Planning route: lean cross-stage correction because the maintainer removed a
 not-yet-implemented public notification layer; the earlier expanded review is
 retained as evidence but no new public or durable decision was added
-Current gate: ready for Phase 1 after Stage 25 remotely merges
-Blockers: Stage 25 remote merge only
+Current gate: complete; Phase 1 merged in #220
+Blockers: none
 
 Stage 26 makes existing Loom behavior easier to use correctly. It gives stage
 authors one clear guide for artifacts, workspace, logs, and lifecycle facts and
@@ -22,11 +21,11 @@ validation gate.
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
-| Evidence | `StageContext`, executors, logs, lifecycle emitters, event sinks, examples, tests, and adjacent plans were inspected at the evidence revision. | Refresh after Stage 25 merges. | Preserve existing owners and durable formats. |
-| Functionality | The stage is limited to operational guidance and demonstrated compatibility corrections. | None. | Implement one vertical phase. |
-| Design | Existing context, artifact, log, lifecycle, event, and observer contracts remain authoritative; no public type is added. | None. | Keep documentation and corrections at their current owners. |
-| Validation | Hermetic unit, contract, integration, and runnable-example coverage is sufficient. | None. | Use existing gates. |
-| Approval | The maintainer approved removal of the overlapping notification phase and assigned generic observer filtering/activation to Stage 28. | Stage 25 sequencing only. | Advance after predecessor merge. |
+| Evidence | `StageContext`, executors, logs, lifecycle emitters, event sinks, examples, tests, and adjacent plans were refreshed after Stage 25. | None. | Complete. |
+| Functionality | The downstream guide, hermetic example, lifecycle catalog, and preparation-failure ordering correction merged in #220. | None. | Complete. |
+| Design | Existing context, artifact, log, lifecycle, event, and observer contracts remain authoritative; no public type was added. | None. | Complete. |
+| Validation | Targeted tests, `make validate-pr`, `make test-summary`, manager review, and required CI passed. | None. | Complete. |
+| Approval | The removal-first scope remained intact through remote merge and cleanup. | None. | Complete. |
 
 ## Evidence And Scope
 
@@ -34,7 +33,7 @@ validation gate.
 | --- | --- | --- | --- |
 | `StageContext`, artifacts, and stores | Narrow load/save/register/path helpers already support the intended stage-author path. Workspace files are not outputs until explicitly registered and returned. | Downstream operations guide. | FR-1, FR-3 |
 | Local, subprocess, container, SLURM, and managed queue execution | Stream capture and log ownership differ deliberately by executor and process owner. | Truthful logging table and examples. | FR-2, FR-3 |
-| Runtime events and lifecycle emitters | Current event names exceed older prose. A fresh `run.preparation_failed` is emitted before the run reads as `FAILED`, contrary to the existing post-commit event contract. | Event catalog and smallest source correction. | FR-3, FR-4 |
+| Runtime events and lifecycle emitters | The exact emitted catalog is now published. Before #220, fresh `run.preparation_failed` observation preceded `FAILED`; the merged runner persists `FAILED` first. | Event catalog and smallest source correction. | FR-3, FR-4 |
 | `EventSinkRegistry` and `RuntimeEventDispatcher` | Ordered, synchronous, best-effort observation, failure capture, observer links, and append-before-dispatch already exist. | Document the observer boundary without a second notification layer. | FR-4 |
 | Stage 28 plans | Exact subscriptions, sink registration values, plugin/CLI activation, provenance, and lifecycle-owner reconstruction form one coherent later extension path. | Cross-stage ownership. | FR-4, FR-5 |
 
@@ -244,8 +243,8 @@ normalization contract.
 
 ### Lifecycle Catalog And Ordering
 
-At the evidence revision, the lifecycle catalog to refresh against source and
-publish consists of:
+At the merged evidence revision, the lifecycle catalog refreshed against
+source and published in the downstream and feature guides consists of:
 
 ```text
 run.created              stage.planned
@@ -255,15 +254,15 @@ run.started              stage.failed
 run.completed            stage.cancelled
 run.failed               stage.skipped
 run.cancelled            stage.reused
+run.interrupted          stage.stale
 run.preparation_failed   stage.blocked
 ```
 
-The catalog is descriptive rather than a new event-name API. Implementation
-must refresh it after Stage 25 merges and document the exact names actually
-emitted at that source revision.
+The catalog is descriptive rather than a new event-name API. It records the
+exact names emitted at the merged source revision.
 
 The one accepted runtime correction is an ordering change in the fresh-run
-preparation-failure path. The current mismatch is approximately:
+preparation-failure path. The pre-#220 mismatch was approximately:
 
 ```python
 emit("run.preparation_failed")
@@ -271,7 +270,7 @@ if prior_status is RunStatus.CREATED:
     write_status(RunStatus.FAILED)
 ```
 
-The corrected order is:
+The merged order is:
 
 ```python
 if prior_status is RunStatus.CREATED:
@@ -287,10 +286,10 @@ error or alter run correctness.
 
 | Example or invariant | Behavior or risk | Authoritative owner and boundary | Minimal coverage | Status |
 | --- | --- | --- | --- | --- |
-| Managed and file-backed outputs | Workspace confused with publication. | `StageContext` and artifact store. | Copyable snippets plus existing contracts. | planned |
-| Executor logging table | Uniform wording hides different owners. | Executor/store/SLURM/queue. | Source-backed table and focused tests. | planned |
-| Fresh preparation failure | Observer reads `CREATED`. | Runner status writer then event dispatcher. | Callback reads `FAILED`; terminal-run regression. | planned |
-| Lifecycle catalog | Docs omit emitted names. | Event/lifecycle source. | Exact documented/source sequence. | planned |
+| Managed and file-backed outputs | Workspace confused with publication. | `StageContext` and artifact store. | Copyable snippets plus existing contracts. | passed |
+| Executor logging table | Uniform wording hides different owners. | Executor/store/SLURM/queue. | Source-backed table and focused tests. | passed |
+| Fresh preparation failure | Observer reads `CREATED`. | Runner status writer then event dispatcher. | Callback reads `FAILED`; terminal-run regression. | passed |
+| Lifecycle catalog | Docs omit emitted names. | Event/lifecycle source. | Exact documented/source sequence. | passed |
 
 Causal interactions requiring combined coverage are limited to fresh
 preparation failure plus committed-state observation. Other documentation and
@@ -300,7 +299,7 @@ example cases remain focused.
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Stage-author correctness and logging | One downstream guide plus truthful artifact/log/event behavior and the demonstrated preparation-order correction. | Context/docs/examples/runner tests only; no notification, subscription, plugin, scheduler, sampler, resume, or gate API. | Stage 25 merged. | Copyable guide, exact log/event claims, `FAILED` visible before event, full gates. | pending |
+| 1. Stage-author correctness and logging | One downstream guide plus truthful artifact/log/event behavior and the demonstrated preparation-order correction. | Context/docs/examples/runner tests only; no notification, subscription, plugin, scheduler, sampler, resume, or gate API. | Stage 25 merged. | Copyable guide, exact log/event claims, `FAILED` visible before event, full gates. | merged |
 
 One phase is sufficient because the removed notification feature was the only
 independent second vertical outcome.
@@ -315,10 +314,11 @@ independent second vertical outcome.
 | Contracts and private discretion clear | No public/durable addition; exact ordering behavior fixed. | pass |
 | Invariant ownership and validation proportionate | Only preparation failure needs combined state/event proof. | pass |
 | Phases vertical and reviewable | One independently useful phase remains. | pass |
-| No unresolved blocker | Stage 25 is sequencing, not a design blocker. | pass |
+| No unresolved blocker | Phase 1 merged with no unresolved product or workflow blocker. | pass |
 
-Gate result: ready for Phase 1 after Stage 25 remotely merges. Maintainer
-approval for the cross-stage correction was recorded on 2026-08-20.
+Gate result: complete. The removal-first scope remained coherent through
+implementation; Phase 1 passed validation, manager review, required CI, remote
+merge, and cleanup.
 
 Accepted risks and revisit triggers: executor logging remains heterogeneous.
 Add a common notification projection only after at least two concrete provider

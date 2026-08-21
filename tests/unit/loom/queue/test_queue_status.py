@@ -15,6 +15,7 @@ from loom.queue import (
     QueueItem,
     QueueItemStatus,
     QueueService,
+    SQLiteQueueRepository,
     normalize_queue_spec,
 )
 from loom.queue.controller import (
@@ -81,10 +82,7 @@ def test_pool_status_has_exact_allowlisted_shape_and_never_reads_legacy_evidence
             queue_item_id="queued", queue_name="gpu", run_uri="file:///runs/queued"
         )
     )
-    claimed = service.claim_next(
-        "gpu-pool", owner_id="controller", claim_id="claim-1"
-    )
-    assert claimed is not None
+    claimed = _claim_fixture(service, "active", claim_id="claim-1")
     active = service.record_dispatch_handle(
         "active",
         DispatchHandle(
@@ -121,7 +119,7 @@ def test_pool_status_has_exact_allowlisted_shape_and_never_reads_legacy_evidence
                 "fencing_token": "do-not-render",
             },
         ),
-        expected=claimed.item,
+        expected=claimed,
     )
     assert active.status is QueueItemStatus.DISPATCHED
 
@@ -187,7 +185,7 @@ def test_pool_status_claimed_item_has_no_fabricated_handle_facts(tmp_path: Path)
             queue_item_id="claimed", queue_name="gpu", run_uri="file:///runs/claimed"
         )
     )
-    assert service.claim_next("gpu-pool", owner_id="controller", claim_id="claim-1")
+    assert _claim_fixture(service, "claimed", claim_id="claim-1")
 
     pool = build_queue_pool_status(service, pool_name="gpu-pool").to_dict()
     attempt = cast(Mapping[str, object], cast(list[object], pool["active_attempts"])[0])
@@ -223,12 +221,11 @@ def test_pool_status_labels_only_matching_same_session_observation(
             adapter="local",
         )
     )
-    claimed = service.claim_next("gpu-pool", owner_id="controller", claim_id="claim")
-    assert claimed is not None
+    claimed = _claim_fixture(service, "active", claim_id="claim")
     service.record_dispatch_handle(
         "active",
         _managed_handle(),
-        expected=claimed.item,
+        expected=claimed,
     )
 
     matching_pool = build_queue_pool_status(
@@ -313,10 +310,9 @@ def test_pool_status_requires_durable_claim_owner_for_live_observation(
             adapter="local",
         )
     )
-    claimed = service.claim_next("gpu-pool", owner_id="controller", claim_id="claim")
-    assert claimed is not None
+    claimed = _claim_fixture(service, "active", claim_id="claim")
     service.record_dispatch_handle(
-        "active", _managed_handle(owner_id="evidence-owner"), expected=claimed.item
+        "active", _managed_handle(owner_id="evidence-owner"), expected=claimed
     )
 
     pool = build_queue_pool_status(
@@ -363,8 +359,7 @@ def test_pool_status_omits_unknown_or_malformed_managed_evidence(
             adapter="local",
         )
     )
-    claimed = service.claim_next("gpu-pool", owner_id="controller", claim_id="claim")
-    assert claimed is not None
+    claimed = _claim_fixture(service, "active", claim_id="claim")
     service.record_dispatch_handle(
         "active",
         DispatchHandle(
@@ -374,7 +369,7 @@ def test_pool_status_omits_unknown_or_malformed_managed_evidence(
             dispatch_attempt=1,
             evidence={"managed_local": dict(managed_local)},
         ),
-        expected=claimed.item,
+        expected=claimed,
     )
 
     report = build_queue_operational_status(service, pool_name="gpu-pool")
@@ -403,9 +398,8 @@ def test_pool_status_text_matches_json_safe_facts_and_redaction(tmp_path: Path) 
             adapter="local",
         )
     )
-    claimed = service.claim_next("gpu-pool", owner_id="controller", claim_id="claim")
-    assert claimed is not None
-    service.record_dispatch_handle("active", _managed_handle(), expected=claimed.item)
+    claimed = _claim_fixture(service, "active", claim_id="claim")
+    service.record_dispatch_handle("active", _managed_handle(), expected=claimed)
 
     report = build_queue_operational_status(service, pool_name="gpu-pool")
     payload = report.to_dict()
@@ -433,6 +427,23 @@ def test_pool_status_text_matches_json_safe_facts_and_redaction(tmp_path: Path) 
         assert str(value) in text
     assert "argv" not in text
     assert "fencing_token" not in text
+
+
+def _claim_fixture(service: QueueService, item_id: str, *, claim_id: str) -> QueueItem:
+    item = service.read_item(item_id)
+    assert item is not None
+    repository = cast(SQLiteQueueRepository, service.repository)
+    claimed = repository._claim_selection_candidate(
+        item_id,
+        pool_name=item.pool_name,
+        expected_dispatch_attempt=item.dispatch_attempt,
+        owner_id="controller",
+        claim_id=claim_id,
+        preference_id="test.fixture",
+        reason_code="test.fixture",
+    )
+    assert claimed is not None
+    return claimed
 
 
 def _managed_handle(*, owner_id: str = "controller") -> DispatchHandle:

@@ -41,7 +41,35 @@ The core rule is:
 Test loom as a generic workflow runtime, not as a domain application.
 ```
 
-### 1.1 Alignment With `loom.md`
+### 1.1 Operational lifecycle acceptance
+
+Lifecycle behavior needs a small number of real-process integration tests in
+addition to unit and store-contract coverage. These tests use only
+fixture-owned processes and deterministic authority time. They prove the
+observable sequence, not private helper calls:
+
+```text
+hard loss:
+  start a real controller and worker -> wait for authoritative RUNNING state
+  -> kill both without cleanup -> refuse resume while ownership is live
+  -> expire authority time -> resume as attempt 2 -> run downstream
+
+authority loss:
+  stop the real local authority while a stage is active -> let the stage finish
+  -> reject output commit -> exit nonzero -> publish no artifact index or dependent
+
+artifact corruption:
+  complete a branched run -> corrupt one checksummed payload -> public resume
+  -> rerun only producer and consumers -> reuse the independent branch
+```
+
+Each test should assert several independent oracles together: process exit,
+authority status and attempts, event order, output commits, payload bytes,
+artifact index, and downstream start. Timing belongs behind markers, lease
+expiry controls, or process identity checks; fixed sleeps are not an ownership
+or lifecycle oracle.
+
+### 1.2 Alignment With `loom.md`
 
 [loom.md](../loom.md) requires `loom` to remain useful and testable on its own. This
 document turns that into a test layout and strategy built around synthetic
@@ -77,6 +105,20 @@ tests/package
   boundaries
 ```
 
+### 2.2 Opt-in NVIDIA acceptance
+
+Default validation uses a fake `nvidia-smi` runner and does not require a GPU,
+driver, CUDA toolkit, or benchmark. A host operator may run the narrow hardware
+acceptance profile explicitly:
+
+```sh
+LOOM_TEST_NVIDIA_GPU=1 uv run pytest -m gpu tests/gpu_acceptance
+```
+
+It observes local inventory, prepares a temporary authority and queue, and runs
+an environment-only subprocess. It verifies assignment cleanup but makes no
+claim about compute, memory, driver policy, health, or performance.
+
 Tests should reinforce the architecture:
 
 ```text
@@ -87,6 +129,20 @@ core primitives do not import pipeline
 status commands do not import project stage code
 plugins do not load automatically on import
 ```
+
+### 2.1 Downstream conformance support
+
+`loom.testing` is an opt-in package for downstream test suites. It provides
+immutable `ContractFinding` and `ContractReport` values plus four bounded
+checks: `check_codec_contract`, `check_resource_validator_contract`,
+`check_executor_contract`, and `check_event_sink_contract`. Callers supply
+the samples, requests, events, and contexts that make a claim meaningful.
+
+The package has no `pytest`, plugin discovery, CLI, configuration-composition,
+or optional-runtime dependency, and runtime/package roots must not import it.
+It catches ordinary supplied-object exceptions into deterministic findings but
+does not construct, discover, isolate, retry, time out, or otherwise admit an
+extension. A passing report is evidence only for its supplied cases.
 
 ---
 

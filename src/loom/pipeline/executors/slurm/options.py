@@ -352,6 +352,7 @@ def build_stage_job_command_argv(
     *,
     launcher_argv: Sequence[str] = DEFAULT_SLURM_LAUNCHER_ARGV,
     authority_config: AuthorityConfig | None = None,
+    plugin_selectors: Sequence[str] = (),
 ) -> SlurmCommandArgv:
     run_uri_text = _required_string(run_uri, path="run_uri")
     stage_text = _required_string(stage_name, path="stage_name")
@@ -367,6 +368,12 @@ def build_stage_job_command_argv(
     ]
     if authority_config is not None:
         command_args.extend(authority_config_to_cli_args(authority_config))
+    for selector in plugin_selectors:
+        if not isinstance(selector, str) or not selector:
+            raise SlurmOptionError(
+                "plugin_selectors must contain non-empty GROUP:NAME strings"
+            )
+        command_args.extend(("--plugin", selector))
     return SlurmCommandArgv(
         launcher_argv=launcher_argv,
         command_args=tuple(command_args),
@@ -529,7 +536,9 @@ def _plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
     return MappingProxyType(dict(sorted(cast(Mapping[str, PlainData], thawed).items())))
 
 
-def _thaw_plain_mapping(value: Mapping[str, PlainData], *, path: str) -> dict[str, PlainData]:
+def _thaw_plain_mapping(
+    value: Mapping[str, PlainData], *, path: str
+) -> dict[str, PlainData]:
     thawed = thaw_plain_data(value, path=path)
     if not isinstance(thawed, Mapping):
         raise SlurmOptionError(f"{path} must be a mapping")

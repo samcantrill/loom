@@ -139,7 +139,8 @@ def test_managed_local_queue_example_is_rerunnable(tmp_path: Path) -> None:
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
         assert "owner: example-runtime" in result.stdout
-        assert "item-1: slots=['slot-a', 'slot-b']" in result.stdout
+        assert "item-2: slots=['slot-a']" in result.stdout
+        assert "item-3: slots=['slot-b']" in result.stdout
         assert "source=same_session_live" in result.stdout
         assert "succeeded: 3" in result.stdout
         assert "active: 0" in result.stdout

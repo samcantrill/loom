@@ -11,6 +11,7 @@ from loom.plugins import (
     LOOM_EVENT_SINKS_GROUP,
     LOOM_EXECUTORS_GROUP,
     LOOM_RECIPES_GROUP,
+    LOOM_RESOURCE_VALIDATORS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SOURCES_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
@@ -26,7 +27,6 @@ pytestmark = pytest.mark.contract
 def test_future_group_readiness_contract_is_listing_only_except_event_sinks() -> None:
     future_groups = (
         LOOM_SOURCES_GROUP,
-        LOOM_EXECUTORS_GROUP,
         LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
         LOOM_RUN_EXPORTERS_GROUP,
         LOOM_SWEEP_PROVIDERS_GROUP,
@@ -36,11 +36,15 @@ def test_future_group_readiness_contract_is_listing_only_except_event_sinks() ->
         LOOM_RECIPES_GROUP,
         LOOM_CODECS_GROUP,
         LOOM_EVENT_SINKS_GROUP,
+        LOOM_EXECUTORS_GROUP,
+        LOOM_RESOURCE_VALIDATORS_GROUP,
     )
     assert PLUGIN_GROUP_READINESS == {
         LOOM_RECIPES_GROUP: "registry-ready",
         LOOM_CODECS_GROUP: "registry-ready",
         LOOM_EVENT_SINKS_GROUP: "registry-ready",
+        LOOM_EXECUTORS_GROUP: "registry-ready",
+        LOOM_RESOURCE_VALIDATORS_GROUP: "registry-ready",
         **{group: "listing-only" for group in future_groups},
     }
     assert plugin_group_readiness(LOOM_EVENT_SINKS_GROUP).status == "registry-ready"

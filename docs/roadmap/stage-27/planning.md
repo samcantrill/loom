@@ -6,8 +6,8 @@ Evidence tree: `/home/can134/work/active/loom` at `314e418`; relevant dirty path
 Planning route: expanded because the feature adds a public discovery/layout API,
 an external-command boundary, grouped physical ownership, and an explicit
 authority mutation
-Current gate: implementation sequencing
-Blockers: none for planning; implementation follows the accepted roadmap order
+Current gate: Stage 27 Phase 1 implementation
+Blockers: none; current `origin/develop` includes completed Stage 26
 
 This is authoritative state for a Loom feature, not a project-local NVIDIA
 helper. The design stays Python-first and preserves the
@@ -22,7 +22,7 @@ existing queue record and authored queue-config schemas.
 | Design | Public `loom.queue.gpu` planning surface, atomic create-or-match authority provisioning, member-key grouped assignment, and explicit NVIDIA discovery. | None. | Preserve the approved surface during implementation. |
 | Validation | Hermetic inventory/authority/provider tests plus an opt-in real-NVIDIA profile. | None. | Execute by phase. |
 | Detailed plan | Three vertical phases are linked from the implementation manifest. | None. | Review manifest consistency. |
-| Approval | User confirmed this should become a reusable Loom feature. | Exact plan is not yet approved. | Maintainer reviews this draft. |
+| Approval | Maintainer approved the reusable Loom feature and detailed plan. | None. | Execute Phase 1. |
 
 ## Evidence And Scope
 

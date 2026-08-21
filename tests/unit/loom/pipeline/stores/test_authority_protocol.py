@@ -135,8 +135,8 @@ def test_protocol_readiness_reports_version_schema_and_capabilities() -> None:
 
 def test_protocol_readiness_marks_incompatible_versions_not_ready() -> None:
     incompatible = AuthorityProtocolVersion(
-        protocol_version=2,
-        min_supported_protocol_version=2,
+        protocol_version=AUTHORITY_PROTOCOL_VERSION + 1,
+        min_supported_protocol_version=AUTHORITY_PROTOCOL_VERSION + 1,
     )
     readiness = AuthorityProtocolReadiness(
         version=incompatible,

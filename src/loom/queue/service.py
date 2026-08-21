@@ -280,21 +280,6 @@ class QueueService:
             queue_item_id, cancellation, expected=expected
         )
 
-    def claim_next(
-        self,
-        pool_name: str,
-        *,
-        owner_id: str,
-        claim_id: str,
-    ):
-        self._ensure_running()
-        self._require_pool(pool_name)
-        return self.repository.claim_next(
-            pool_name,
-            owner_id=owner_id,
-            claim_id=claim_id,
-        )
-
     def record_dispatch_handle(
         self,
         queue_item_id: str,

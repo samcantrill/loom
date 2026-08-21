@@ -2,21 +2,21 @@
 
 ## Metadata
 
-- Status: pending
+- Status: merged
 - Roadmap stage and phase: v25 Phase 1
 - Manifest: `docs/roadmap/stage-25/implementation-plan.md`
 - Branch: `agent/stage-25-p1-safe-resource-aware-selection`
 - Worktree root and path:
   `/home/can134/work/active/loom-worktrees/stage-25-p1-safe-resource-aware-selection`
-- Base revision: current `origin/develop` after Stage 24 remotely merges; record
-  the exact revision before branch creation
+- Base revision: `616e43aa8ca284dee4586c345d25e5bf7ce3b266`
 - PR target: `develop`
 - PR title: `Whole-Run Queue Selection - Phase 1: Safe Resource-Aware Selection`
-- Dependencies: Stage 24 merged; completed Stage 23/23-post cycle, deferral,
-  guarded claim, ownership, runtime, and managed-resource contracts intact
+- Dependencies: Stage 24 merged through #216 and #217, with completion metadata
+  at `616e43a`; completed Stage 23/23-post cycle, deferral, guarded claim,
+  ownership, runtime, and managed-resource contracts intact
 - Workflow path: expanded because this phase adds a public protocol, changes
   the managed default, and adds SQLite exact-selection concurrency
-- Blockers: Stage 24 merge only; no Stage 25 design blocker
+- Blockers: none
 
 ## Objective And Context
 
@@ -33,12 +33,20 @@
 
 ## Current Source And Harness
 
-- Relevant seams: `_scheduler.py` FIFO ordering; public repository/service
-  `claim_next`; `QueueController.run_cycle()` and `run_once()`; managed active
-  reads; launch logical resources; SQLite update fencing; queue audit.
-- Existing tests cover FIFO, repository/SQLite recovery, controller dispatch,
-  managed admission/coordination, and Stage 23 lifecycle. Refresh exact merged
-  shapes after Stage 24.
+- Relevant seams at `616e43a`: `_scheduler.py` owns private FIFO ordering;
+  `QueueRepository` and `QueueService` expose `claim_next()` plus the all-row,
+  FIFO-ordered `read_pool_snapshot()`; `QueueController.run_cycle()` and
+  `run_once()` each call `claim_next()` directly; `recovery_items()` supplies
+  active lifecycle reconciliation; `LaunchContract.resources` carries logical
+  requests; and SQLite uses `BEGIN IMMEDIATE`, expected-item JSON fencing, and
+  queue audit details that can carry selection evidence without DDL.
+- Current harnesses cover FIFO in `tests/unit/loom/queue/test_scheduler.py`,
+  controller behavior in `tests/unit/loom/queue/test_controller.py`, repository
+  contracts and SQLite races in `tests/contracts/test_queue_repository_contract.py`
+  and `tests/integration/queue/test_sqlite_repository.py`, package/API imports in
+  `tests/package/test_import.py` and
+  `tests/contracts/test_queue_python_api_contract.py`, and managed admission in
+  `tests/integration/queue/test_managed_local_controller.py`.
 - Import constraints: selection stays under `loom.queue`, remains import-light,
   and imports no routes, CLI, authority implementation, concrete provider,
   adapter, agent, vendor, or optional dependency.
@@ -191,22 +199,31 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete; refresh after Stage 24 merge
+- Manager preparation: complete at base `616e43a`; current source and harness
+  seams refreshed
 - Expanded planning: revised design approved; no additional spawned pass
-- Implementation: not started
+- Implementation: complete at `03546a9`; public selection values, private
+  SQLite ownership, and shared managed controller wiring landed in `f0634fa`,
+  `9e0b11e`, and `03546a9`
 - Refiner: optional only for a qualified blocker; unused
-- Pre-submit gate: not run
-- Independent review: required after implementation due default/concurrency risk
+- Pre-submit gate: manager passed at `8398254`; the implementation receipt from
+  `03546a9` passed `make validate-pr` and `make test-summary`, and the manager
+  reran all six targeted suites with 61 passes
+- Independent review: passed at `8398254` with no blocker, localized correction,
+  optional hardening, future-capability finding, or workflow issue
 - Blocker corrections: 0/3
-- PR and merge: pending
+- PR and merge: [#218](https://github.com/samcantrill/loom/pull/218)
+  squash-merged to `develop` as `ff2b7ee`; it was non-draft, mergeable, and
+  correctly targeted `develop`, with required CI passing at final PR revision
+  `a52aaaa`
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added import-light `loom.queue.selection`, five facade exports, bounded SQLite candidate reads/exact claims with allowlisted selection audit evidence, and one managed controller selector for `run_cycle()`/`run_once()`. Updated `src/loom/queue/{__init__.py,_sqlite.py,controller.py,selection.py,service.py}` and the phase-scoped package, unit, contract, and SQLite integration tests. |
+| Tests added or updated | Covered immutable public records, safe projection/default/custom selection, invalid policy behavior, managed entrypoint parity, B-two/A-one head bypass, policy mapping validation, bounded candidate ordering, and concurrent exact ownership. Focused queue suites: 69 passed. |
+| Validated revision/tree state and evidence | Implementation revision `03546a9c17e8b4646925144d1a9750d8adbb0257` had a clean tree. `make validate-pr` passed; `make test-summary` passed (2,300 passed, 0 failed, 0 errors; receipt `build/test-summary.md`). The manager reran the six targeted files at `8398254` with 61 passes, and required CI passed. |
+| Validation-relevant changes after evidence | Completion and approval metadata only; no source, test, dependency, build, or validation-configuration change. |
+| PR, review, and merge | [#218](https://github.com/samcantrill/loom/pull/218) passed manager and required independent review with no findings, passed required CI at final revision `a52aaaa`, and squash-merged to `develop` as `ff2b7ee`. |
+| Residual risk and cleanup | No blocker. Accepted bounded-lookahead/advisory-capacity limitations, Phase 1 stop-after-deferral behavior, and the private local CAS remain intentionally deferred to Phase 2 or Stage 29. The Phase 1 worktree, local branch, and remote branch were removed; the dirty control checkout was preserved. |

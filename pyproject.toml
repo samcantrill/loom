@@ -68,6 +68,7 @@ markers = [
     "slurm: tests that require or simulate SLURM-specific execution behavior",
     "network: tests that require network access",
     "optional_dependency: tests that require optional dependencies outside the default dev environment",
+    "gpu: opt-in tests that observe a locally installed NVIDIA GPU",
 ]
 
 [tool.pyright]

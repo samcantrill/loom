@@ -1,0 +1,26 @@
+id: execution.containers.slurm-apptainer
+title: Apptainer Container Executor
+summary: Run a prepared stage through a fake Apptainer command that records the selected exec flags and worker invocation.
+capability: execution
+level: advanced
+introduced_in: v30
+status: runnable
+validation: full
+surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/execution/README.md
+owner_stages:
+  - v30
+validation_path: tests/e2e/test_example_journeys.py::test_e2e_example_apptainer_executor_runs_with_fake_command
+entrypoints:
+  - path: run_apptainer_pipeline.py
+    kind: python
+    description: Run a pipeline through loom run --executor apptainer with a local fake command.
+tags:
+  - apptainer
+  - singularity
+  - containers
+  - slurm
+  - hpc

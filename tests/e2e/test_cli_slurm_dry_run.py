@@ -12,6 +12,7 @@ import pytest
 from loom.cli.main import main
 from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
 from loom.pipeline.stores.service_authority import LocalAuthorityService
+from tests.support.stage28_entry_points import install_stage28_entry_points
 
 pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
@@ -136,6 +137,42 @@ def test_cli_slurm_dry_run_renders_direct_apptainer_image(
     assert manifest["jobs"][0]["command"]["metadata"]["container_runtime"] == (
         "apptainer"
     )
+
+
+def test_cli_slurm_afterok_propagates_sink_to_lifecycle_owning_stage_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
+    install_stage28_entry_points(tmp_path / "site", monkeypatch)
+    config_path = tmp_path / "pipeline.yaml"
+    config_path.write_text(
+        "pipeline:\n"
+        "  stages:\n"
+        "    - name: build\n"
+        "      factory:\n"
+        "        _target_: tests.support.pipeline_execution_stages.JsonProducerStage\n"
+        "      outputs:\n"
+        "        data:\n"
+        "          artifact_type: json\n"
+        "          codec_key: json.v1\n",
+        encoding="utf-8",
+    )
+
+    with LocalAuthorityService.start() as service:
+        payload = _run_slurm_dry_run(
+            config_path,
+            tmp_path / "runs" / "filtered-sink",
+            "slurm-afterok",
+            authority_args=authority_config_to_cli_args(service.config()),
+            plugin_selectors=("loom.event_sinks:stage28.completed",),
+        )
+
+    command = payload["result"]["generated_commands"][0]["argv"]
+    plugin_index = command.index("--plugin")
+    assert command[plugin_index + 1] == "loom.event_sinks:stage28.completed"
 
 
 def test_cli_slurm_dry_run_artifacts_cover_diamond_and_secret_boundary(
@@ -372,6 +409,7 @@ def _run_slurm_dry_run(
     *,
     authority_args: tuple[str, ...],
     resume: bool = False,
+    plugin_selectors: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -389,6 +427,8 @@ def _run_slurm_dry_run(
     ]
     if resume:
         args.append("--resume")
+    for selector in plugin_selectors:
+        args.extend(("--plugin", selector))
 
     assert main(args, stdout=stdout, stderr=stderr) == 0
     assert stderr.getvalue() == ""

@@ -25,6 +25,27 @@ The resume layer should not execute stages, load domain-specific checkpoints, or
 repair ambiguous state silently. It should produce a deterministic execution plan
 that the runner can execute and that the CLI can explain.
 
+## Current Support
+
+Same-run resume reuses stages only when persisted fingerprints and required
+artifacts remain valid. A checksum-invalid persisted artifact can rerun its
+producer and downstream branch with superseding commits while an independent
+branch remains reusable. Ordinary authored config changes after an authority
+output commit fail closed rather than overwriting that commit.
+
+## Quick Start
+
+Run the local reuse and checksum-repair walkthrough:
+
+```sh
+uv run python examples/execution/local/run_pipeline.py
+```
+
+## Deferred
+
+Stage-internal checkpoint loading and automatic repair of ambiguous persisted
+state remain project or future-runtime concerns.
+
 ---
 
 ## 2. Core Position
@@ -61,6 +82,20 @@ stage-internal resume:
 For example, `loom` may decide that the `train` stage must run. The training
 stage may then decide to resume from `latest.ckpt` inside its stage directory.
 `loom` should not implement model-specific checkpoint loading.
+
+For an authority-backed run, a checksum mismatch is a recoverable invalidation,
+not permission to overwrite arbitrary successful state. The planner marks the
+producer `RUN` with `ARTIFACT_CHECKSUM_MISMATCH`, propagates
+`UPSTREAM_WILL_RUN` through its consumers, and leaves independent branches
+reusable. The runner may request output replacement only for that planned
+corruption branch. Ordinary fingerprint or config changes remain fail-closed
+when the stage already has an authoritative output commit.
+
+An interrupted active run is also conservative. A resume controller must first
+obtain the exclusive controller lease and find expired recovery evidence for
+the prior controller and every incomplete active attempt. It then records the
+run as `INTERRUPTED` and active stages as `STALE`, with matching events, before
+planning attempt 2. A live or ambiguous owner blocks resume.
 
 ### 1.1 Alignment With `loom.md`
 

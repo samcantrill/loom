@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 import pytest
 
+from loom.artifacts import ArtifactRef
 from loom.authority._repository import initialize_authority_repository
 from loom.authority.mutation_service import (
     AuthorityMutationOperation,
@@ -191,6 +192,88 @@ def test_mutation_service_dispatches_cleanup_report_operations(tmp_path) -> None
     assert listed.accepted is True
     assert listed.result is not None
     assert listed.result.cleanup_reports == appended.result.cleanup_reports
+
+
+def test_mutation_service_lists_output_commit_composites(tmp_path) -> None:
+    repository = initialize_authority_repository(
+        tmp_path,
+        service_generation="generation-1",
+    )
+    service = AuthorityMutationService(repository)
+    run_uri = "file:///runs/output-history-r1"
+    assert service.handle(
+        AuthorityMutationOperation.ADMIT_RUN,
+        _run_request(
+            "admit-output-run",
+            run_uri=run_uri,
+            operation_kind=AuthorityProtocolOperationKind.RUN_LIFECYCLE,
+        ),
+    ).accepted
+    allocated = service.handle(
+        AuthorityMutationOperation.ALLOCATE_STAGE_ATTEMPT,
+        AuthorityProtocolRequest(
+            metadata=AuthorityProtocolMetadata(
+                request_id="allocate-build",
+                operation_kind=AuthorityProtocolOperationKind.STAGE_ATTEMPT,
+                service_generation="generation-1",
+            ),
+            run_uri=run_uri,
+            stage_name="build",
+            owner_id="worker-1",
+            body={"lease_ttl_seconds": 30},
+        ).to_dict(),
+    )
+    assert allocated.result is not None
+    assert allocated.result.stage_attempt is not None
+    assert allocated.result.lease is not None
+    committed = service.handle(
+        AuthorityMutationOperation.RECORD_OUTPUT_COMMIT,
+        AuthorityProtocolRequest(
+            metadata=AuthorityProtocolMetadata(
+                request_id="commit-build",
+                operation_kind=AuthorityProtocolOperationKind.OUTPUT_COMMIT,
+                service_generation="generation-1",
+            ),
+            run_uri=run_uri,
+            stage_name="build",
+            owner_id="worker-1",
+            fencing_token=allocated.result.lease.fencing_token,
+            body={
+                "attempt_id": allocated.result.stage_attempt.attempt_id,
+                "outputs": {
+                    "out": ArtifactRef(
+                        artifact_id="build/out",
+                        uri=f"{run_uri}/artifacts/build/out.json",
+                        artifact_type="json",
+                    ).to_dict()
+                },
+                "supersedes_commit_id": None,
+            },
+        ).to_dict(),
+    )
+    listed = service.handle(
+        AuthorityMutationOperation.LIST_OUTPUT_COMMITS,
+        AuthorityProtocolRequest(
+            metadata=AuthorityProtocolMetadata(
+                request_id="list-build-commits",
+                operation_kind=AuthorityProtocolOperationKind.OUTPUT_COMMIT,
+                service_generation="generation-1",
+            ),
+            run_uri=run_uri,
+            stage_name="build",
+        ).to_dict(),
+    )
+
+    assert committed.accepted
+    assert committed.result is not None
+    assert listed.accepted
+    assert listed.result is not None
+    assert len(listed.result.output_commits) == 1
+    assert listed.result.output_commits[0].commit == committed.result.output_commit
+    assert (
+        listed.result.output_commits[0].artifact_facts
+        == committed.result.artifact_facts
+    )
 
 
 def _request(

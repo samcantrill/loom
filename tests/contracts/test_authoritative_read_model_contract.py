@@ -22,6 +22,7 @@ from loom.pipeline.reliability import (
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.stores import (
+    AUTHORITY_SCHEMA_VERSION,
     AuthoritativeReadOptions,
     MaterializedRefKind,
     PerRunAuthorityStore,
@@ -208,7 +209,7 @@ def test_authoritative_read_contract_carries_backend_facts_and_materialized_refs
     )
 
     assert snapshot.status is RunStatus.SUCCEEDED
-    assert snapshot.schema_version == 1
+    assert snapshot.schema_version == AUTHORITY_SCHEMA_VERSION
     assert snapshot.revision.sequence >= 1
     assert snapshot.submitted_operations[0].submission_id == "sub-1"
     assert snapshot.stages[0].status is StageStatus.SUCCEEDED

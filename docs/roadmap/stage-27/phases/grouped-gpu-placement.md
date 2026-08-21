@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: planned
+- Status: merged
 - Roadmap stage and phase: Stage 27, Phase 2
 - Manifest: docs/roadmap/stage-27/implementation-plan.md
 - Branch: agent/stage-27-p2-grouped-gpu-placement
-- Worktree root and path: use the recorded Stage 27 worktree root and a dedicated
-  Phase 2 path
-- Base revision: current `origin/develop` after Phase 1 is remotely merged
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+  `/home/can134/work/active/loom-worktrees/stage-27-p2-grouped-gpu-placement`
+- Base revision: `4513da7c2625ad4df01f3373bdbb4cb7270080a6`
 - PR target: develop
 - PR title: `feat(queue): add member-backed grouped GPU placement`
 - Dependencies: Phase 1 remotely merged
 - Workflow path: expanded because one logical assignment owns several physical
   leases and must compensate partial acquisition
-- Blockers: Phase 1
+- Blockers: none
 
 ## Objective And Context
 
@@ -212,22 +212,33 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: draft complete; approval pending
-- Expanded planning: manager-local; refinement not needed
-- Implementation: pending
-- Refiner: not needed
-- Pre-submit gate: pending
-- Independent review: optional only for a material residual member-release risk
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation: passed on `4513da7c2625ad4df01f3373bdbb4cb7270080a6`;
+  Phase 1 public keys, plan, provider, and runtime composition are present
+- Expanded planning: refinement not needed; this plan already fixes member
+  ownership, compensation, ordering, evidence, and validation contracts
+- Implementation: completed; grouped planner, member-backed provider, docs, and
+  focused tests are ready for manager validation
+- Refiner: completed one qualified member-lifecycle correction; existing adapter
+  ordering and GPU provider release behavior satisfied the added coverage
+- Manager correction: fixed static type narrowing for topology pair keys and
+  immutable assignment evidence after the first full validation attempt
+- Validation correction: widened only the timing-sensitive controller-renewal
+  test event budget after it reproduced as the sole config-extra gate failure
+- Pre-submit gate: passed against current `origin/develop`; branch, scope,
+  contracts, tests, risks, domain neutrality, imports, and proportionality match
+  this plan
+- Independent review: not needed; manager review plus grouped cancellation and
+  all-member release-precedence coverage leave no material residual lifecycle risk
+- Blocker corrections: 3/3
+- PR and merge: PR #225 passed required CI and was squash-merged as `7922f8f`
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added GPU-local links, disjoint explicit/ordered/topology grouping, member-backed lifecycle handling, and focused docs in `src/loom/queue/gpu`, queue docs, and managed-local example guidance. Stabilized the pre-existing controller-renewal integration event budget required by the full gate. |
+| Tests added or updated | Added explicit/ordered/topology planner validation and determinism, provider decision/evidence/renewal/release contracts, partial-acquisition and individual-member SQLite contention, grouped managed-local cancellation with termination-before-release, fake grouped E2E launches, and import coverage. Release tests prove every member is attempted with ownership-lost versus unfinished-error precedence. |
+| Validated revision/tree state and evidence | Clean current tree at `de10411d12c032b6fe84fe8d26cb26146be248e2`; `make validate-pr` passed (Ruff, Pyright with zero errors, default 2,224 passed/114 deselected, config-extra 134 passed/3 skipped/2,227 deselected, and sdist/wheel build). `make test-summary` passed with `build/test-summary.md`: package 115, unit 1,561, contract 284, integration 209, e2e 55, and config-extra 134 passed/3 skipped; overall 2,358 passed/3 skipped. |
+| Validation-relevant changes after evidence | None. Current `origin/develop` remains `4513da7`, and no source, test, dependency, build, or validation configuration changed after the successful receipts. |
+| PR, review, and merge | [PR #225](https://github.com/samcantrill/loom/pull/225) targeted `develop`, passed required CI in 4m10s, and was squash-merged as `7922f8faceb39106aa51f72fbcec24003bffd4d3`. Manager review and the pre-submit gate passed with no blocker. |
+| Residual risk and cleanup | Greedy topology selection remains intentionally disjoint and non-optimal. The phase worktree and local/remote branch were removed. |

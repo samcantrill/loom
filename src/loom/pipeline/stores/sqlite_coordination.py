@@ -100,9 +100,7 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "reason_json",
         }
     ),
-    "trial_leases": frozenset(
-        {"lease_id", "workspace_id", "sweep_id", "trial_id"}
-    ),
+    "trial_leases": frozenset({"lease_id", "workspace_id", "sweep_id", "trial_id"}),
     "resource_leases": frozenset(
         {"lease_id", "workspace_id", "resource_key", "amount"}
     ),
@@ -501,6 +499,62 @@ class SQLiteWorkspaceCoordinationStore:
                 revision=revision,
             )
 
+    def ensure_resource_limits(
+        self, workspace_id: str, limits: Mapping[str, int]
+    ) -> tuple[ConcurrencyCounter, ...]:
+        """Atomically create missing resource limits or accept exact matches."""
+
+        normalized = _resource_limits_mapping(limits)
+        with self._transaction(initialize=True) as conn:
+            _require_workspace(conn, workspace_id)
+            rows = {
+                key: _resource_limit_row(conn, workspace_id, key) for key in normalized
+            }
+            mismatched = [
+                key
+                for key, row in rows.items()
+                if row is not None and cast(int, row["limit_value"]) != normalized[key]
+            ]
+            if mismatched:
+                raise CoordinationStoreError(
+                    "resource limits do not match existing authority limits: "
+                    + ", ".join(mismatched),
+                    kind=CoordinationFailureKind.INVALID_OR_UNSUPPORTED,
+                )
+            missing = [key for key, row in rows.items() if row is None]
+            if missing:
+                now = self._now()
+                revision = self._insert_revision(conn, now=now)
+                for key in missing:
+                    conn.execute(
+                        """
+                        INSERT INTO resource_limits (
+                            workspace_id, resource_key, limit_value, revision_sequence
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (workspace_id, key, normalized[key], revision.sequence),
+                    )
+                    rows[key] = _resource_limit_row(conn, workspace_id, key)
+            now = self._now()
+            counters: list[ConcurrencyCounter] = []
+            for key in normalized:
+                row = rows[key]
+                if row is None:
+                    raise CoordinationStoreError(
+                        "resource limit creation did not persist"
+                    )
+                counters.append(
+                    ConcurrencyCounter(
+                        counter_name=_resource_counter_name(key),
+                        value=_active_resource_amount(conn, workspace_id, key, now),
+                        limit=normalized[key],
+                        revision=_revision_for(
+                            conn, cast(int, row["revision_sequence"])
+                        ),
+                    )
+                )
+            return tuple(counters)
+
     def read_resource_limit(
         self, workspace_id: str, resource_key: str
     ) -> ConcurrencyCounter | None:
@@ -663,6 +717,7 @@ class SQLiteWorkspaceCoordinationStore:
         with self._connection(initialize=initialize) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                _migrate_schema(conn)
                 _raise_for_schema(conn)
                 yield conn
             except Exception:
@@ -774,12 +829,14 @@ class SQLiteWorkspaceCoordinationStore:
         ).fetchone()
         if row is None:
             raise CoordinationStoreError(
-                f"unknown lease: {lease_id}", kind=CoordinationFailureKind.OWNERSHIP_LOST
+                f"unknown lease: {lease_id}",
+                kind=CoordinationFailureKind.OWNERSHIP_LOST,
             )
         lease = _lease_from_row(row, conn=conn)
         if lease.owner_id != owner_id or lease.fencing_token != fencing_token:
             raise CoordinationStoreError(
-                "stale or foreign lease token", kind=CoordinationFailureKind.OWNERSHIP_LOST
+                "stale or foreign lease token",
+                kind=CoordinationFailureKind.OWNERSHIP_LOST,
             )
         if lease.state is not LeaseState.ACTIVE:
             raise CoordinationStoreError(
@@ -1097,6 +1154,33 @@ def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
     )
 
 
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Atomically advance one known-complete v1 coordination database."""
+
+    try:
+        row = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'schema_version'"
+        ).fetchone()
+    except sqlite3.DatabaseError:
+        return
+    if row is None:
+        return
+    try:
+        version = int(cast(str, row["value"]))
+    except (TypeError, ValueError):
+        return
+    if version != 1:
+        return
+    if _schema_shape_failure(conn) is not None:
+        raise AuthoritySchemaError(
+            "SQLite coordination v1 schema is incomplete or invalid"
+        )
+    conn.execute(
+        "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
+        (str(AUTHORITY_SCHEMA_VERSION),),
+    )
+
+
 def _missing_schema_check() -> AuthoritySchemaCheck:
     return AuthoritySchemaCheck(
         current_version=AUTHORITY_SCHEMA_VERSION,
@@ -1147,9 +1231,7 @@ def _raise_for_schema(conn: sqlite3.Connection) -> None:
         raise AuthoritySchemaError(check.failure.message)
 
 
-def _workspace_row(
-    conn: sqlite3.Connection, workspace_id: str
-) -> sqlite3.Row | None:
+def _workspace_row(conn: sqlite3.Connection, workspace_id: str) -> sqlite3.Row | None:
     return cast(
         sqlite3.Row | None,
         conn.execute(
@@ -1212,9 +1294,7 @@ def _trial_from_row(row: sqlite3.Row) -> TrialReference:
     )
 
 
-def _lease_from_row(
-    row: sqlite3.Row, *, conn: sqlite3.Connection
-) -> LeaseRecord:
+def _lease_from_row(row: sqlite3.Row, *, conn: sqlite3.Connection) -> LeaseRecord:
     return LeaseRecord(
         lease_id=cast(str, row["lease_id"]),
         kind=LeaseKind(cast(str, row["kind"])),
@@ -1397,9 +1477,20 @@ def _non_empty_string(value: object, field: str) -> str:
     return value
 
 
+def _resource_limits_mapping(limits: Mapping[str, int]) -> dict[str, int]:
+    if not isinstance(limits, Mapping):
+        raise CoordinationStoreError("limits must be a mapping")
+    normalized: dict[str, int] = {}
+    for key, value in limits.items():
+        normalized[_non_empty_string(key, "resource limit key")] = _positive_int(
+            value, f"resource limit for {key!r}"
+        )
+    return dict(sorted(normalized.items()))
+
+
 def _positive_int(value: object, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{field} must be a positive integer")
+        raise CoordinationStoreError(f"{field} must be a positive integer")
     return value
 
 

@@ -41,6 +41,7 @@ from .models import (
 )
 from .repository import QueueRepository
 from .resources import require_managed_pool_limits
+from .selection import QueueSelectionPolicy
 from .service import QueueService, QueueServiceState
 from .status import QueuePoolStatus, build_queue_pool_status
 
@@ -155,6 +156,7 @@ class ManagedLocalQueueRuntime:
         lease_ttl_seconds: int = 60,
         wait_timeout_seconds: float = 0.0,
         assignment_provider: ResourceAssignmentProvider | None = None,
+        selection_policies: Mapping[str, QueueSelectionPolicy] | None = None,
         log_directory: str | Path | None = None,
         clock: Callable[[], str] = utc_timestamp,
     ) -> "ManagedLocalQueueRuntime":
@@ -199,6 +201,7 @@ class ManagedLocalQueueRuntime:
         controller = QueueController(
             service,
             adapters={adapter.adapter_name: adapter},
+            selection_policies=selection_policies,
             owner_id=owner_id,
             clock=clock,
         )
@@ -331,6 +334,16 @@ class ManagedLocalQueueRuntime:
             self._state = ManagedLocalQueueRuntimeState.DEGRADED
             raise
         self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
+        current_item_ids = {item.queue_item_id for item in _current}
+        terminal_degraded = tuple(
+            item_id
+            for item_id in self._degraded_item_ids
+            if item_id not in current_item_ids
+        )
+        if terminal_degraded and not self._shutdown_active:
+            raise QueueServiceError(
+                "managed local runtime remains degraded after terminal dispatch uncertainty"
+            )
         if self._foreign_item_ids and not self._shutdown_active:
             self._state = ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
             raise QueueServiceError(
@@ -400,16 +413,11 @@ class ManagedLocalQueueRuntime:
                 )
                 if self._state is ManagedLocalQueueRuntimeState.CANCELLING:
                     self._cancel_current_session_items()
-            if (
-                shutdown_started_at is not None
-                and self._shutdown_timed_out(
-                    shutdown_started_at, shutdown_timeout_seconds
-                )
+            if shutdown_started_at is not None and self._shutdown_timed_out(
+                shutdown_started_at, shutdown_timeout_seconds
             ):
                 current, foreign = self._classify_recovery()
-                self._foreign_item_ids = tuple(
-                    item.queue_item_id for item in foreign
-                )
+                self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
                 if current:
                     raise ManagedLocalShutdownTimeoutError(
                         tuple(item.queue_item_id for item in current)
@@ -427,9 +435,7 @@ class ManagedLocalQueueRuntime:
                 return self.status()
             if shutdown_started_at is not None:
                 current, foreign = self._classify_recovery()
-                self._foreign_item_ids = tuple(
-                    item.queue_item_id for item in foreign
-                )
+                self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
                 if not current:
                     if foreign:
                         self._state = ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
@@ -507,7 +513,7 @@ class ManagedLocalQueueRuntime:
         self._next_maintenance_at = result.next_maintenance_at
         degraded = tuple(
             step.item.queue_item_id
-            for step in result.reconciliation_steps
+            for step in (*result.reconciliation_steps, *result.dispatch_steps)
             if step.item is not None and step.outcome in {"degraded", "unknown"}
         )
         self._degraded_item_ids = degraded

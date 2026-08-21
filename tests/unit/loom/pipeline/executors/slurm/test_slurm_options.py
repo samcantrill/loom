@@ -120,3 +120,21 @@ def test_generated_stage_job_command_targets_phase_two_command() -> None:
         "--executor",
         "local",
     )
+
+
+def test_generated_stage_job_command_carries_applicable_plugin_selectors() -> None:
+    command = build_stage_job_command_argv(
+        "file:///runs/run-1",
+        "build",
+        plugin_selectors=(
+            "loom.codecs:stage28.tagged-json.v1",
+            "loom.resource_validators:stage28.device",
+        ),
+    )
+
+    assert command.command_args[-4:] == (
+        "--plugin",
+        "loom.codecs:stage28.tagged-json.v1",
+        "--plugin",
+        "loom.resource_validators:stage28.device",
+    )

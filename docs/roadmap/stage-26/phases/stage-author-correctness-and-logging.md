@@ -2,20 +2,20 @@
 
 ## Metadata
 
-- Status: pending
+- Status: merged
 - Roadmap stage and phase: Stage 26, Phase 1
 - Manifest: `docs/roadmap/stage-26/implementation-plan.md`
 - Branch: `agent/stage-26-p1-stage-author-correctness-and-logging`
-- Worktree root and path: manager-recorded `loom-worktrees` sibling;
-  `<worktree-root>/stage-26-p1-stage-author-correctness-and-logging`
-- Base revision: current `origin/develop` after Stage 25 remotely merges
+- Worktree root and path: `../loom-worktrees`;
+  `../loom-worktrees/stage-26-p1-stage-author-correctness-and-logging`
+- Base revision: `3464d52` (`origin/develop`; Stage 25 remotely merged)
 - PR target: `develop`
 - PR title: `Stage 26 phase 1: clarify stage operations and lifecycle facts`
 - Dependencies: Stage 25 remotely merged; planning `FR-1` through `FR-5`,
   `FQ-1` through `FQ-5`, and `DQ-1` through `DQ-4`
 - Workflow path: fast unless the source audit demonstrates a new public or
   durable contract decision
-- Blockers: Stage 25 remote merge; no planning blocker
+- Blockers: none
 
 ## Objective And Context
 
@@ -262,23 +262,29 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning complete; refresh source and exact test paths
-  after Stage 25 remote merge
+- Manager preparation: complete; Stage 25 merge, source seams, exact targeted
+  test paths, branch, worktree, base, target, and title verified
 - Expanded planning: not needed unless a stop condition is reached
-- Implementation: pending one `loom_phase_executor`
+- Implementation: complete at `d4e8dc948d56a2a03631269b871b012d04bfb6cf`;
+  manager pre-submit, review, CI, remote merge, and cleanup passed
 - Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: pending
-- Independent review: manager-local fast path
+- Pre-submit gate: passed manager-locally; scope, fixed contracts, tests,
+  validation freshness, domain neutrality, import direction, and proportionality
+  matched the phase plan with no blocker
+- Independent review: manager-local fast-path review passed; no expanded-path
+  or residual-risk trigger required a spawned reviewer
 - Blocker corrections: 0/3
-- PR and merge: pending
+- PR and merge: [#220](https://github.com/samcantrill/loom/pull/220)
+  passed required CI and was squash-merged to `develop` as `e5bfa9b` from
+  final reviewed PR revision `3db0c58`
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added `docs/downstream-operations.md`; routed it from README/structure/examples; refreshed lifecycle catalogs and Stage 26 roadmap scope; extended the captured-logs example with an explicitly registered file output and workspace-only file; and changed `PipelineRunner._record_preparation_failure` to persist fresh-run `FAILED` before event observation. |
+| Tests added or updated | `tests/unit/loom/pipeline/execution/test_runner.py` now proves an event observer reads `FAILED`; `tests/unit/loom/pipeline/test_context.py` covers explicit local file registration; `tests/integration/examples/test_example_workflows.py` proves the hermetic example returns refs, publishes the registered file, and leaves the workspace file separate. |
+| Validated revision/tree state and evidence | At `d4e8dc948d56a2a03631269b871b012d04bfb6cf`, `git diff --check` and the tracked tree were clean. Targeted commands passed: 11 contract/context, 19 local-execution/CLI, 30 runner, and 10 example/CLI tests. `make validate-pr` passed. `make test-summary` produced `build/test-summary.md`: 2,307 passed, 0 failed, 0 errors, 3 skipped (2026-08-20T23:23:09Z). |
+| Validation-relevant changes after evidence | None. Later commits changed phase workflow metadata only; source, tests, dependencies, build, and validation configuration stayed unchanged. |
+| PR, review, and merge | [#220](https://github.com/samcantrill/loom/pull/220) targeted `develop` with the planned title/head and matching diff. Manager fast-path review and required CI passed; the PR was squash-merged as `e5bfa9b` on 2026-08-20T23:31:37Z. |
+| Residual risk and cleanup | No blocker. Executor logging remains intentionally heterogeneous. The phase worktree and local/remote phase branches were removed; the dirty, divergent control checkout and unrelated Stage 27 worktree were preserved. |

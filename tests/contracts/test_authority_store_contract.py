@@ -380,12 +380,51 @@ def test_per_run_authority_contract_records_revisioned_lifecycle_facts(
 
     snapshot = store.snapshot(run_uri)
     assert snapshot.status is RunStatus.RUNNING
-    assert snapshot.schema_version == 1
+    assert snapshot.schema_version == 2
     assert snapshot.submitted_operations == (submitted_record,)
     assert snapshot.stages[0].status is StageStatus.SUCCEEDED
     assert snapshot.stages[0].attempts[0].status is StageStatus.SUCCEEDED
     assert snapshot.stages[0].latest_commit == commit.commit
     assert snapshot.stages[0].artifact_facts == commit.artifact_facts
+
+
+def test_output_commit_supersession_retains_history_and_fences_head(
+    authority_case: AuthorityStoreCase,
+) -> None:
+    store, run_uri = authority_case.store, authority_case.run_uri
+    store.create_run(run_uri)
+    first = store.allocate_stage_attempt(run_uri, "build", owner_id="one", lease_ttl_seconds=30)
+    assert first.lease is not None
+    initial = store.record_output_commit(
+        run_uri, "build", attempt_id=first.attempt.attempt_id,
+        fencing_token=first.lease.fencing_token,
+        outputs={"out": ArtifactRef(artifact_id="build/one", uri=f"{run_uri}/one", artifact_type="json")},
+    )
+    store.transition_stage(
+        run_uri, "build", from_status=StageStatus.SUCCEEDED, to_status=StageStatus.STALE,
+        intent=TransitionIntent.RESUME,
+    )
+    second = store.allocate_stage_attempt(run_uri, "build", owner_id="two", lease_ttl_seconds=30)
+    assert second.lease is not None
+    with pytest.raises(ValueError, match="current head"):
+        store.record_output_commit(
+            run_uri, "build", attempt_id=second.attempt.attempt_id,
+            fencing_token=second.lease.fencing_token,
+            outputs={"out": ArtifactRef(artifact_id="build/two", uri=f"{run_uri}/two", artifact_type="json")},
+            supersedes_commit_id="wrong",
+        )
+    successor = store.record_output_commit(
+        run_uri, "build", attempt_id=second.attempt.attempt_id,
+        fencing_token=second.lease.fencing_token,
+        outputs={"out": ArtifactRef(artifact_id="build/two", uri=f"{run_uri}/two", artifact_type="json")},
+        supersedes_commit_id=initial.commit.commit_id,
+    )
+    history = store.list_output_commits(run_uri, stage_name="build")
+    assert [record.commit.commit_id for record in history] == [initial.commit.commit_id, successor.commit.commit_id]
+    assert successor.commit.supersedes_commit_id == initial.commit.commit_id
+    stage = store.snapshot(run_uri).stages[0]
+    assert stage.latest_commit == successor.commit
+    assert stage.artifact_facts == successor.artifact_facts
 
 
 def test_per_run_authority_contract_appends_cleanup_facts(

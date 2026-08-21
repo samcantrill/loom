@@ -132,6 +132,13 @@ behavioral expectations for extension points.
 
 Do not put test helpers in the runtime module.
 
+For installed downstream implementations, the opt-in `loom.testing` package
+provides bounded caller-sampled checks for codecs, resource validators,
+executors, and event sinks. It returns versioned plain-data reports and is not
+imported by runtime or package roots. These checks execute trusted supplied
+objects and samples; they do not discover plugins or prove remote behavior,
+credentials, performance, concurrency, or reachability.
+
 ---
 
 ## 4. Initial Scope

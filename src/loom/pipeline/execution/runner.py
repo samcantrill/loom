@@ -17,6 +17,7 @@ from loom.pipeline.planning import (
     ExecutionPlan,
     PlanAction,
     PlanReason,
+    PlanReasonCode,
     StageFingerprintRecord,
     StagePlan,
     build_stage_fingerprint,
@@ -39,7 +40,7 @@ from loom.pipeline.runtime import (
 from loom.pipeline.specs import PipelineSpec, StageSpec, parse_pipeline_config
 from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.stage import Stage
-from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.status import RunStatus, StageStatus, StageStatusRecord
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
     AuthorityStoreError,
@@ -58,7 +59,12 @@ from loom.pipeline.stores import (
 from loom.pipeline.stores.config import authority_config_to_cli_args
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
-from loom.serialization import PlainData, ensure_plain_data, json_dumps_pretty
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    json_dumps_pretty,
+    thaw_plain_data,
+)
 from loom.timestamps import utc_timestamp
 
 from .errors import (
@@ -74,6 +80,7 @@ from .lifecycle import (
     bind_stage_inputs,
     commit_stage_execution_result,
     next_stage_attempt,
+    persist_stage_cancellation,
     persist_stage_failure,
     record_stage_failure_and_failed_run,
     write_stage_artifact_index_refs,
@@ -116,6 +123,7 @@ from .stage_attempts import prepare_stage_attempt
 ArtifactStoreFactory = Callable[[Path], ArtifactStore]
 RunnerRunStore = LegacyRunStore | OfflineEvidenceRunStore
 _STAGE_LEASE_RENEWAL_INTERVAL_SECONDS = 60.0
+_CONTROLLER_LEASE_RENEWAL_INTERVAL_SECONDS = 60.0
 _REQUIRED_PARALLEL_CAPABILITIES = (
     BackendCapability.ATOMIC_TRANSITIONS,
     BackendCapability.ATTEMPT_ALLOCATION,
@@ -138,6 +146,29 @@ class _ExecutionOutcome:
     failure: ExecutionFailure | None
     cancelled_stage: str | None = None
     cancellation_reason: LifecycleReason | None = None
+    interruption: KeyboardInterrupt | None = None
+
+
+@dataclass(slots=True)
+class _ControllerLeaseRenewal:
+    stop_event: Event
+    thread: Thread
+    errors: list[BaseException]
+
+
+class _StageInterrupted(Exception):
+    """Private handoff for an interrupt after its stage cancellation is durable."""
+
+    def __init__(
+        self,
+        result: StageRunResult,
+        interruption: KeyboardInterrupt,
+        *,
+        cancelled_stage: str | None,
+    ) -> None:
+        self.result = result
+        self.interruption = interruption
+        self.cancelled_stage = cancelled_stage
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,13 +222,13 @@ class PipelineRunner:
             if run_store is None:
                 raise PipelineExecutionError("PipelineRunner requires services")
             if offline_execution:
-                services = RuntimeServices.from_legacy(
-                    cast(Any, run_store).local_store
-                )
+                services = RuntimeServices.from_legacy(cast(Any, run_store).local_store)
             else:
                 services = RuntimeServices.from_legacy(cast(LegacyRunStore, run_store))
         elif run_store is not None:
-            raise PipelineExecutionError("PipelineRunner accepts either services or run_store")
+            raise PipelineExecutionError(
+                "PipelineRunner accepts either services or run_store"
+            )
         execution_store = (
             run_store
             if is_offline_evidence_run_store(run_store)
@@ -230,6 +261,10 @@ class PipelineRunner:
         self._stage_lease_renewal_interval_seconds = (
             _STAGE_LEASE_RENEWAL_INTERVAL_SECONDS
         )
+        self._controller_lease_renewal_interval_seconds = (
+            _CONTROLLER_LEASE_RENEWAL_INTERVAL_SECONDS
+        )
+        self._controller_lease_renewal: _ControllerLeaseRenewal | None = None
         self._event_dispatcher: RuntimeEventDispatcher | None = None
 
     def run(self, request: RunRequest) -> RunResult:
@@ -270,7 +305,14 @@ class PipelineRunner:
                     executor=str(getattr(self.executor, "name", "unknown")),
                 ),
             )
+            renewal = self._start_controller_lease_renewal(run_uri, lock.token)
             try:
+                self._raise_controller_lease_renewal_error()
+                self._recover_abandoned_run_if_needed(
+                    request=request,
+                    run_uri=run_uri,
+                    prior_status=self._run_status_before_preparation(run_uri),
+                )
                 self._emit_run_event(
                     run_uri,
                     "run.opened" if request.open_existing else "run.created",
@@ -288,6 +330,7 @@ class PipelineRunner:
                     started_at=started_at,
                 )
             finally:
+                self._stop_controller_lease_renewal(renewal)
                 release_run_lock(self.run_store, lock)
         finally:
             self._event_dispatcher = previous_event_dispatcher
@@ -425,6 +468,140 @@ class PipelineRunner:
             diagnostics=tuple(error.to_dict() for error in admission.errors),
         )
 
+    def _start_controller_lease_renewal(
+        self, run_uri: str, token: str
+    ) -> _ControllerLeaseRenewal | None:
+        renew = getattr(self.run_store, "renew_run_lock", None)
+        if not callable(renew):
+            return None
+        stop_event = Event()
+        errors: list[BaseException] = []
+        interval_seconds = max(
+            0.001, float(self._controller_lease_renewal_interval_seconds)
+        )
+
+        def renew_until_released() -> None:
+            while not stop_event.wait(interval_seconds):
+                try:
+                    renew(run_uri, token)
+                except BaseException as exc:
+                    errors.append(exc)
+                    stop_event.set()
+                    return
+
+        renewal = _ControllerLeaseRenewal(
+            stop_event=stop_event,
+            thread=Thread(
+                target=renew_until_released,
+                name="loom-controller-lease",
+                daemon=True,
+            ),
+            errors=errors,
+        )
+        self._controller_lease_renewal = renewal
+        renewal.thread.start()
+        return renewal
+
+    def _stop_controller_lease_renewal(
+        self, renewal: _ControllerLeaseRenewal | None
+    ) -> None:
+        if renewal is None:
+            return
+        renewal.stop_event.set()
+        renewal.thread.join()
+        if self._controller_lease_renewal is renewal:
+            self._controller_lease_renewal = None
+
+    def _raise_controller_lease_renewal_error(self) -> None:
+        renewal = self._controller_lease_renewal
+        if renewal is None or not renewal.errors:
+            return
+        error = renewal.errors[0]
+        if isinstance(error, Exception):
+            raise error
+        raise PipelineExecutionError(
+            f"controller lease renewal failed: {type(error).__name__}"
+        ) from error
+
+    def _recover_abandoned_run_if_needed(
+        self,
+        *,
+        request: RunRequest,
+        run_uri: str,
+        prior_status: RunStatus,
+    ) -> None:
+        if not request.open_existing or prior_status not in {
+            RunStatus.RUNNING,
+            RunStatus.SUBMITTED,
+        }:
+            return
+        authority_store = self.services.authority_store
+        if authority_store is None:
+            raise AuthorityStoreError("recovery requires an authoritative backend")
+        snapshot = authority_store.snapshot(run_uri)
+        recovery = authority_store.scan_recovery(run_uri)
+        active_stages = tuple(
+            stage
+            for stage in snapshot.stages
+            if stage.status in {StageStatus.RUNNING, StageStatus.SUBMITTED}
+        )
+        controller_recovered = any(record.stage_name is None for record in recovery)
+        recovered_attempt_ids = {
+            record.attempt_id for record in recovery if record.attempt_id is not None
+        }
+        if not controller_recovered or any(
+            not stage.attempts
+            or stage.attempts[-1].attempt_id not in recovered_attempt_ids
+            for stage in active_stages
+        ):
+            raise AuthorityStoreError(
+                "recovery requires expired controller and incomplete attempt evidence"
+            )
+        reason = LifecycleReason(code="recovered_after_authority_expiry")
+        write_run_status(
+            self.run_store,
+            run_uri=run_uri,
+            status=RunStatus.INTERRUPTED,
+            created_at=self._created_at(run_uri, self.clock()),
+            updated_at=self.clock(),
+            intent=TransitionIntent.RECOVERY,
+            metadata={"reason_code": reason.code},
+        )
+        self._emit_run_event(
+            run_uri,
+            "run.interrupted",
+            timestamp=self.clock(),
+            payload={"reason": reason.to_dict()},
+        )
+        write_stage_status_with_intent = getattr(
+            self.run_store, "write_stage_status_with_intent", None
+        )
+        if not callable(write_stage_status_with_intent):
+            raise AuthorityStoreError("recovery requires transition-aware stage state")
+        for stage in active_stages:
+            attempt = stage.attempts[-1].attempt
+            write_stage_status_with_intent(
+                run_uri,
+                stage.stage_name,
+                StageStatusRecord(
+                    run_uri=run_uri,
+                    stage_name=stage.stage_name,
+                    status=StageStatus.STALE,
+                    attempt=attempt,
+                    updated_at=self.clock(),
+                    message="recovered after controller lease expiry",
+                    metadata={"reason_code": reason.code},
+                ),
+                intent=TransitionIntent.RECOVERY,
+            )
+            self._emit_stage_event(
+                run_uri,
+                stage.stage_name,
+                "stage.stale",
+                timestamp=self.clock(),
+                payload={"attempt": attempt, "reason": reason.to_dict()},
+            )
+
     def _run_locked(
         self,
         *,
@@ -466,6 +643,7 @@ class PipelineRunner:
                 fingerprint_context=request.fingerprint_context,
                 persist=True,
             )
+            self._prepare_checksum_repair_branch(run_uri=run_uri, plan=plan)
         except Exception as exc:
             self._record_preparation_failure(
                 run_uri=run_uri,
@@ -553,6 +731,7 @@ class PipelineRunner:
                 run_started_at=started_at,
             )
 
+        self._raise_controller_lease_renewal_error()
         finished_at = self.clock()
         if outcome.failure is None and outcome.cancellation_reason is None:
             write_run_status(
@@ -634,7 +813,7 @@ class PipelineRunner:
             stage_plan.stage_name: outcome.stage_results[stage_plan.stage_name]
             for stage_plan in plan.ordered_stage_plans
         }
-        result_metadata: dict[str, PlainData] = dict(request.metadata)
+        result_metadata = _request_durable_metadata(request)
         if outcome.cancellation_reason is not None:
             result_metadata["reason"] = outcome.cancellation_reason.to_dict()
             result_metadata["reason_code"] = outcome.cancellation_reason.code
@@ -656,6 +835,8 @@ class PipelineRunner:
             metadata=result_metadata,
         )
         self._write_offline_evidence_manifest_if_needed(run_uri)
+        if outcome.interruption is not None:
+            raise outcome.interruption
         return result
 
     def _run_serial_plan(
@@ -688,22 +869,35 @@ class PipelineRunner:
                     blocked_by=failed_stage or cancelled_stage or "cancelled",
                 )
                 continue
-            result = self._run_controller_stage_action(
-                request=request,
-                run_uri=run_uri,
-                run_dir=run_dir,
-                local_run_store=local_run_store,
-                config_mapping=config_mapping,
-                spec=spec,
-                stage=stage,
-                stage_plan=stage_plan,
-                resolved_runtime=resolved_runtime[stage.name],
-                plan=plan,
-                artifact_store=artifact_store,
-                produced_outputs=outputs_by_stage,
-                created_at=created_at,
-                run_started_at=run_started_at,
-            )
+            try:
+                result = self._run_controller_stage_action(
+                    request=request,
+                    run_uri=run_uri,
+                    run_dir=run_dir,
+                    local_run_store=local_run_store,
+                    config_mapping=config_mapping,
+                    spec=spec,
+                    stage=stage,
+                    stage_plan=stage_plan,
+                    resolved_runtime=resolved_runtime[stage.name],
+                    plan=plan,
+                    artifact_store=artifact_store,
+                    produced_outputs=outputs_by_stage,
+                    created_at=created_at,
+                    run_started_at=run_started_at,
+                )
+            except _StageInterrupted as interrupted:
+                result = interrupted.result
+                stage_results[stage.name] = result
+                return _ExecutionOutcome(
+                    stage_results=stage_results,
+                    outputs_by_stage=outputs_by_stage,
+                    failed_stage=failed_stage,
+                    failure=failure,
+                    cancelled_stage=interrupted.cancelled_stage,
+                    cancellation_reason=_keyboard_interrupt_reason(),
+                    interruption=interrupted.interruption,
+                )
             stage_results[stage.name] = result
             if result.status == StageStatus.SUCCEEDED:
                 outputs_by_stage[stage.name] = dict(result.outputs)
@@ -733,6 +927,7 @@ class PipelineRunner:
         failure: ExecutionFailure | None = None
         cancelled_stage: str | None = None
         cancellation_reason: LifecycleReason | None = None
+        interruption: KeyboardInterrupt | None = None
         active: dict[Future[StageRunResult], _ParallelTask] = {}
         with ThreadPoolExecutor(
             max_workers=context.policy.max_parallel_stages,
@@ -782,10 +977,23 @@ class PipelineRunner:
                             "parallel scheduler made no progress; static plan is not executable"
                         )
                     continue
-                done, _pending = wait(active, return_when=FIRST_COMPLETED)
+                try:
+                    done, _pending = wait(active, return_when=FIRST_COMPLETED)
+                except KeyboardInterrupt as exc:
+                    interruption = exc
+                    cancellation_reason = _keyboard_interrupt_reason()
+                    stopped = True
+                    continue
                 for future in done:
                     task = active.pop(future)
-                    result = future.result()
+                    try:
+                        result = future.result()
+                    except _StageInterrupted as exc:
+                        result = exc.result
+                        interruption = exc.interruption
+                        cancelled_stage = exc.cancelled_stage
+                        cancellation_reason = _keyboard_interrupt_reason()
+                        stopped = True
                     stage_results[task.stage_name] = result
                     if result.status == StageStatus.SUCCEEDED:
                         outputs_by_stage[task.stage_name] = dict(result.outputs)
@@ -822,7 +1030,14 @@ class PipelineRunner:
             if stopped:
                 wait(active)
                 for future, task in list(active.items()):
-                    result = future.result()
+                    try:
+                        result = future.result()
+                    except _StageInterrupted as exc:
+                        result = exc.result
+                        interruption = interruption or exc.interruption
+                        if cancellation_reason is None:
+                            cancelled_stage = exc.cancelled_stage
+                            cancellation_reason = _keyboard_interrupt_reason()
                     stage_results[task.stage_name] = result
                     if result.status == StageStatus.SUCCEEDED:
                         outputs_by_stage[task.stage_name] = dict(result.outputs)
@@ -853,6 +1068,7 @@ class PipelineRunner:
             failure=failure,
             cancelled_stage=cancelled_stage,
             cancellation_reason=cancellation_reason,
+            interruption=interruption,
         )
 
     def _run_controller_stage_action(
@@ -873,6 +1089,7 @@ class PipelineRunner:
         created_at: str,
         run_started_at: str,
     ) -> StageRunResult:
+        self._raise_controller_lease_renewal_error()
         if stage_plan.action == PlanAction.REUSE:
             return self._reuse_stage(
                 run_uri, stage_plan, created_at=created_at, started_at=run_started_at
@@ -1202,6 +1419,12 @@ class PipelineRunner:
             )
 
         attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
+        self._authorize_checksum_repair_attempt(
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            plan=plan,
+        )
         record_resolved_reliability_policy_fact(
             self.run_store,
             run_uri=run_uri,
@@ -1305,7 +1528,16 @@ class PipelineRunner:
                 run_started_at=run_started_at,
                 execution_result=execution_result,
             )
-        except (Exception, KeyboardInterrupt) as exc:
+        except KeyboardInterrupt as exc:
+            raise self._interrupted_stage_result(
+                run_uri=run_uri,
+                stage=stage,
+                stage_plan=stage_plan,
+                attempt=attempt,
+                started_at=stage_started_at,
+                interruption=exc,
+            ) from exc
+        except Exception as exc:
             failure = (
                 exc
                 if isinstance(exc, ExecutionFailure)
@@ -1373,10 +1605,36 @@ class PipelineRunner:
                 resolved_runtime=resolved_runtime,
                 executor_name=str(getattr(self.executor, "name", "unknown")),
                 executor_metadata={"worker_command": "loom stage run"},
-                metadata={"subprocess": True},
+                metadata={
+                    "subprocess": True,
+                    **(
+                        {
+                            "stage_resources": thaw_plain_data(
+                                stage.resources, path="StageSpec.resources"
+                            )
+                        }
+                        if request.resource_validator_registry is not None
+                        else {}
+                    ),
+                    **(
+                        {
+                            "plugin_activations": dict(
+                                request.worker_plugin_activation_manifest
+                            )
+                        }
+                        if request.worker_plugin_activation_manifest is not None
+                        else {}
+                    ),
+                },
                 clock=self.clock,
             )
             attempt = prepared.attempt
+            self._authorize_checksum_repair_attempt(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=attempt,
+                plan=plan,
+            )
             record_resolved_reliability_policy_fact(
                 self.run_store,
                 run_uri=run_uri,
@@ -1468,7 +1726,16 @@ class PipelineRunner:
                 run_started_at=run_started_at,
                 execution_result=execution_result,
             )
-        except (Exception, KeyboardInterrupt) as exc:
+        except KeyboardInterrupt as exc:
+            raise self._interrupted_stage_result(
+                run_uri=run_uri,
+                stage=stage,
+                stage_plan=stage_plan,
+                attempt=attempt,
+                started_at=stage_started_at,
+                interruption=exc,
+            ) from exc
+        except Exception as exc:
             failure = (
                 exc
                 if isinstance(exc, ExecutionFailure)
@@ -1504,6 +1771,40 @@ class PipelineRunner:
             if resource_admission is not None:
                 self._release_stage_resource_admission(resource_admission)
 
+    def _prepare_checksum_repair_branch(
+        self, *, run_uri: str, plan: ExecutionPlan
+    ) -> None:
+        prepare = getattr(self.run_store, "prepare_checksum_repair", None)
+        if not callable(prepare):
+            return
+        repair_stages = _checksum_repair_stage_names(plan)
+        for stage_plan in plan.ordered_stage_plans:
+            stage_name = stage_plan.stage_name
+            if (
+                stage_name not in repair_stages
+                or stage_plan.action is not PlanAction.RUN
+            ):
+                continue
+            if self.run_store.read_stage_outputs(run_uri, stage_name) is None:
+                continue
+            prepare(run_uri, stage_name)
+
+    def _authorize_checksum_repair_attempt(
+        self,
+        *,
+        run_uri: str,
+        stage_name: str,
+        attempt: int,
+        plan: ExecutionPlan,
+    ) -> None:
+        if stage_name not in _checksum_repair_stage_names(plan):
+            return
+        if self.run_store.read_stage_outputs(run_uri, stage_name) is None:
+            return
+        authorize = getattr(self.run_store, "authorize_checksum_repair_output", None)
+        if callable(authorize):
+            authorize(run_uri, stage_name, attempt=attempt)
+
     def _commit_stage_execution_result(
         self,
         *,
@@ -1518,7 +1819,8 @@ class PipelineRunner:
         run_started_at: str,
         execution_result: StageExecutionResult,
     ) -> StageRunResult:
-        return commit_stage_execution_result(
+        self._raise_controller_lease_renewal_error()
+        result = commit_stage_execution_result(
             self.run_store,
             run_uri=run_uri,
             stage=stage,
@@ -1535,6 +1837,8 @@ class PipelineRunner:
             event_dispatcher=self._event_dispatcher,
             finalize_run_on_failure=False,
         )
+        self._raise_controller_lease_renewal_error()
+        return result
 
     def _execute_stage_request_with_lease_renewal(
         self,
@@ -1699,7 +2003,7 @@ class PipelineRunner:
         else:
             self.run_store.create_run(
                 run_uri,
-                metadata=request.metadata,
+                metadata=_request_durable_metadata(request),
                 idempotency_key=request.idempotency_key,
             )
 
@@ -1720,6 +2024,19 @@ class PipelineRunner:
         exc: Exception,
     ) -> None:
         failed_at = self.clock()
+        if prior_status is RunStatus.CREATED:
+            write_run_status(
+                self.run_store,
+                run_uri=run_uri,
+                status=RunStatus.FAILED,
+                created_at=created_at,
+                updated_at=failed_at,
+                finished_at=failed_at,
+                metadata={
+                    "failure_phase": "preparation",
+                    "error_type": type(exc).__name__,
+                },
+            )
         try:
             self._emit_run_event(
                 run_uri,
@@ -1734,19 +2051,6 @@ class PipelineRunner:
         except Exception:
             # Failure recording must never hide the preparation error.
             pass
-        if prior_status is RunStatus.CREATED:
-            write_run_status(
-                self.run_store,
-                run_uri=run_uri,
-                status=RunStatus.FAILED,
-                created_at=created_at,
-                updated_at=failed_at,
-                finished_at=failed_at,
-                metadata={
-                    "failure_phase": "preparation",
-                    "error_type": type(exc).__name__,
-                },
-            )
 
     def _resolve_config_and_spec(
         self, request: RunRequest
@@ -1765,7 +2069,9 @@ class PipelineRunner:
             raise RunRequestError(
                 "config mapping must contain a top-level 'pipeline' key"
             )
-        return config_mapping, parse_pipeline_config(config_mapping["pipeline"])
+        return config_mapping, parse_pipeline_config(
+            config_mapping["pipeline"], registry=request.resource_validator_registry
+        )
 
     def _write_config_and_provenance(
         self,
@@ -1791,7 +2097,7 @@ class PipelineRunner:
             self.run_store.write_run_user_metadata(
                 run_uri,
                 {
-                    **request.metadata,
+                    **_request_durable_metadata(request),
                     "config_provenance": _plain_mapping_from_maybe_to_dict(
                         getattr(request.config, "provenance"),
                         path="config_provenance",
@@ -2248,6 +2554,66 @@ class PipelineRunner:
             finalize_run=False,
         )
 
+    def _interrupted_stage_result(
+        self,
+        *,
+        run_uri: str,
+        stage: StageSpec,
+        stage_plan: StagePlan,
+        attempt: int,
+        started_at: str | None,
+        interruption: KeyboardInterrupt,
+    ) -> _StageInterrupted:
+        committed = self.run_store.read_stage_status(run_uri, stage.name)
+        if committed is not None and committed.status is StageStatus.SUCCEEDED:
+            outputs = self.run_store.read_stage_outputs(run_uri, stage.name)
+            if outputs is None:
+                raise PipelineExecutionError(
+                    "committed successful stage is missing durable outputs"
+                ) from interruption
+            return _StageInterrupted(
+                StageRunResult(
+                    stage_name=stage.name,
+                    action=PlanAction.RUN,
+                    status=StageStatus.SUCCEEDED,
+                    attempt=attempt,
+                    outputs=outputs,
+                    reasons=stage_plan.reasons,
+                    started_at=committed.started_at,
+                    finished_at=committed.finished_at,
+                ),
+                interruption,
+                cancelled_stage=None,
+            )
+        cancelled_at = self.clock()
+        reason = _keyboard_interrupt_reason()
+        persist_stage_cancellation(
+            self.run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            started_at=started_at,
+            cancelled_at=cancelled_at,
+            reason=reason,
+            clock=self.clock,
+            event_dispatcher=self._event_dispatcher,
+        )
+        return _StageInterrupted(
+            StageRunResult(
+                stage_name=stage.name,
+                action=PlanAction.RUN,
+                status=StageStatus.CANCELLED,
+                attempt=attempt,
+                outputs={},
+                reasons=stage_plan.reasons,
+                started_at=started_at,
+                finished_at=cancelled_at,
+                executor_metadata={"lifecycle_reason": reason.to_dict()},
+            ),
+            interruption,
+            cancelled_stage=stage.name,
+        )
+
     def _write_failed_run(
         self,
         run_uri: str,
@@ -2463,6 +2829,13 @@ def _stage_cancellation_reason(result: StageRunResult) -> LifecycleReason:
     )
 
 
+def _keyboard_interrupt_reason() -> LifecycleReason:
+    return LifecycleReason(
+        code="keyboard_interrupt",
+        message="execution interrupted by keyboard interrupt",
+    )
+
+
 def _retry_policy_from_runtime(
     resolved_runtime: ResolvedStageRuntimeOptions,
 ) -> RetryPolicy | None:
@@ -2530,6 +2903,19 @@ def _failure_requires_global_stop(failure: ExecutionFailure) -> bool:
     return exception_type.rsplit(".", 1)[-1].startswith("Authority")
 
 
+def _checksum_repair_stage_names(plan: ExecutionPlan) -> frozenset[str]:
+    repair_stages: set[str] = set()
+    for stage_plan in plan.ordered_stage_plans:
+        if not any(
+            reason.code is PlanReasonCode.ARTIFACT_CHECKSUM_MISMATCH
+            for reason in stage_plan.reasons
+        ):
+            continue
+        repair_stages.add(stage_plan.stage_name)
+        repair_stages.update(stage_plan.downstream_stages)
+    return frozenset(repair_stages)
+
+
 def _is_composed_config(value: object) -> bool:
     return all(
         hasattr(value, name)
@@ -2541,6 +2927,13 @@ def _is_composed_config(value: object) -> bool:
             "recipe_manifest",
         )
     )
+
+
+def _request_durable_metadata(request: RunRequest) -> dict[str, PlainData]:
+    metadata = dict(request.metadata)
+    if request.plugin_activation_manifest is not None:
+        metadata["plugin_activations"] = dict(request.plugin_activation_manifest)
+    return metadata
 
 
 def _worker_authority_cli_args(services: RuntimeServices) -> tuple[str, ...]:

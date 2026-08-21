@@ -1,12 +1,13 @@
 # Roadmap Stage 27 Implementation Plan: Auto-Configured Local GPU Pools
 
-Status: ready; manager quality gate and maintainer approval passed
+Status: complete; all three phases remotely merged
 Roadmap stage: 27
 Planning document: docs/roadmap/stage-27/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 1 pending
-Blockers: roadmap predecessor completion before Phase 1 implementation
+Worktree root: `/home/can134/work/active/loom-worktrees`
+Current phase: none; Stage 27 complete
+Blockers: none
 
 ## Summary
 
@@ -88,9 +89,9 @@ Blockers: roadmap predecessor completion before Phase 1 implementation
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `gpu-plans-safe-bootstrap` | pending | `docs/roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md` | `agent/stage-27-p1-gpu-plans-safe-bootstrap` | pending | GPU inventory/layout/plan API, atomic authority ensure, whole/share composition | Run a manually supplied whole/share GPU pool safely without authored slots. |
-| 2 | `grouped-gpu-placement` | pending | `docs/roadmap/stage-27/phases/grouped-gpu-placement.md` | `agent/stage-27-p2-grouped-gpu-placement` | pending | Deterministic disjoint groups and member-backed assignment lifecycle | Allocate N strongly connected GPUs as one logical unit without member overlap. |
-| 3 | `nvidia-auto-discovery` | pending | `docs/roadmap/stage-27/phases/nvidia-auto-discovery.md` | `agent/stage-27-p3-nvidia-auto-discovery` | pending | Explicit NVIDIA command adapter, diagnostics, docs, examples, acceptance | Turn installed NVIDIA hardware into the same reviewed plan automatically. |
+| 1 | `gpu-plans-safe-bootstrap` | merged | `docs/roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md` | `agent/stage-27-p1-gpu-plans-safe-bootstrap` | [#221](https://github.com/samcantrill/loom/pull/221) | GPU inventory/layout/plan API, atomic authority ensure, whole/share composition | Run a manually supplied whole/share GPU pool safely without authored slots. |
+| 2 | `grouped-gpu-placement` | merged | `docs/roadmap/stage-27/phases/grouped-gpu-placement.md` | `agent/stage-27-p2-grouped-gpu-placement` | [#225](https://github.com/samcantrill/loom/pull/225) | Deterministic disjoint groups and member-backed assignment lifecycle | Allocate N strongly connected GPUs as one logical unit without member overlap. |
+| 3 | `nvidia-auto-discovery` | merged | `docs/roadmap/stage-27/phases/nvidia-auto-discovery.md` | `agent/stage-27-p3-nvidia-auto-discovery` | [#226](https://github.com/samcantrill/loom/pull/226) | Explicit NVIDIA command adapter, diagnostics, docs, examples, acceptance | Turn installed NVIDIA hardware into the same reviewed plan automatically. |
 
 ## Quality Gate
 
@@ -101,8 +102,8 @@ Blockers: roadmap predecessor completion before Phase 1 implementation
 - Optional independent review: not used for the plan; reconsider before Phase
   1 only if authority/backend contracts change before implementation.
 - Correction: not needed.
-- Ready for implementation: yes; Phase 1 remains execution-blocked until the
-  normal roadmap predecessor gate is satisfied.
+- Ready for implementation: yes; Phase 1 starts from current `origin/develop`
+  after remotely completed Stage 26.
 - Accepted risks: shares provide no isolation; one layout owns a device set;
   topology grouping is deterministic/disjoint rather than globally optimal;
   NVIDIA parsing remains an explicit external-command boundary.
@@ -113,6 +114,6 @@ Blockers: roadmap predecessor completion before Phase 1 implementation
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
-| 2 | pending | pending | pending | pending |
-| 3 | pending | pending | pending | pending |
+| 1 | [#221](https://github.com/samcantrill/loom/pull/221) squash-merged as `f67d29c` | Implementation, manager review, `make validate-pr`, and required CI passed | Shares express scheduling capacity, not isolation | Phase worktree and local/remote branch removed |
+| 2 | [#225](https://github.com/samcantrill/loom/pull/225) squash-merged as `7922f8f` | Implementation, manager review, `make validate-pr`, `make test-summary`, and required CI passed | Greedy topology grouping is disjoint and deterministic, not globally optimal | Phase worktree and local/remote branch removed |
+| 3 | [#226](https://github.com/samcantrill/loom/pull/226) squash-merged as `a1bf92c` | Implementation, correction 1/3, manager review, `make validate-pr`, `make test-summary`, and required CI passed | Real NVIDIA hardware remains an explicit opt-in acceptance environment | Phase worktree and local/remote branch removed |

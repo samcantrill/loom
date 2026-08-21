@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from loom.pipeline.errors import PipelineSpecError
 from loom.pipeline.graph import StageGraph, build_stage_graph
 from loom.pipeline.specs import PipelineSpec, parse_pipeline_config
+from loom.pipeline.resources import ResourceValidatorRegistry
 from loom.pipeline.stage_factory import construct_stage
 
 
@@ -30,7 +31,11 @@ class PipelineTargetCheckResult:
     checked_paths: tuple[str, ...]
 
 
-def validate_pipeline_config(config: Mapping[str, object]) -> PipelineValidationResult:
+def validate_pipeline_config(
+    config: Mapping[str, object],
+    *,
+    registry: ResourceValidatorRegistry | None = None,
+) -> PipelineValidationResult:
     """Validate a resolved top-level config and return pipeline facts."""
 
     if not isinstance(config, Mapping):
@@ -38,10 +43,11 @@ def validate_pipeline_config(config: Mapping[str, object]) -> PipelineValidation
     if "pipeline" not in config:
         raise PipelineSpecError("$.pipeline is required")
 
-    spec = parse_pipeline_config(config["pipeline"])
+    spec = parse_pipeline_config(config["pipeline"], registry=registry)
     graph = build_stage_graph(spec)
     stage_factory_target_paths = tuple(
-        f"$.pipeline.stages[{index}].factory" for index, _stage in enumerate(spec.stages)
+        f"$.pipeline.stages[{index}].factory"
+        for index, _stage in enumerate(spec.stages)
     )
     return PipelineValidationResult(
         spec=spec,

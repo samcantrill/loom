@@ -2,20 +2,20 @@
 
 ## Metadata
 
-- Status: planned
+- Status: merged
 - Roadmap stage and phase: Stage 27, Phase 1
 - Manifest: docs/roadmap/stage-27/implementation-plan.md
 - Branch: agent/stage-27-p1-gpu-plans-safe-bootstrap
-- Worktree root and path: use the `loom-worktrees` sibling of the control
-  checkout; record the exact phase path when implementation starts
-- Base revision: current `origin/develop` after the roadmap predecessor gate
+- Worktree root and path: recorded manifest worktree root;
+  `<worktree-root>/stage-27-p1-gpu-plans-safe-bootstrap`
+- Base revision: `e3968f785736d47b54aa3e8972b5368a4ecbaa56`
 - PR target: develop
 - PR title: `feat(queue): add planned local GPU pools and safe bootstrap`
 - Dependencies: completed Stage 23 and Stage 23-post managed-local contracts;
-  normal roadmap predecessor gate
-- Workflow path: expanded because atomic authority mutation crosses embedded,
-  service, and client backends
-- Blockers: maintainer approval and predecessor completion
+  current base includes remotely completed Stages 25 and 26
+- Workflow path: fast; the accepted atomic authority contract is complete and
+  all supported backend seams are present on the verified base
+- Blockers: none
 
 ## Objective And Context
 
@@ -170,7 +170,7 @@ Targeted commands:
     uv run pytest tests/contracts/test_workspace_coordination_contract.py
     uv run pytest tests/integration/authority/test_mutation_api.py
     uv run pytest tests/unit/loom/queue/gpu tests/integration/queue/test_managed_local_gpu_pool.py
-    uv run pytest tests/package/test_queue_api.py
+    uv run pytest tests/contracts/test_queue_python_api_contract.py tests/package/test_import.py tests/package/test_pipeline_store_api.py
 
 Final commands:
 
@@ -183,16 +183,18 @@ Final commands:
   misleading share semantics, unsafe persistence of binding values.
 - Review focus: ensure atomicity/no-resize, dependency direction, deterministic
   keys/fingerprint, and reuse of existing lifecycle owners.
-- Stop if: a supported authority backend cannot implement batch atomicity; Stage
-  26 accepts a conflicting resource-provisioning owner; safe operation would
-  require a queue/config schema change; or GPU binding values reach status.
+- Stop if: a supported authority backend cannot implement batch atomicity; a
+  concurrent change introduces a conflicting resource-provisioning owner; safe
+  operation would require a queue/config schema change; or GPU binding values
+  reach status.
 - Accepted debt/revisit: Python-first only; mixed layouts and declarative config
   require later accepted consumers.
 
 ## Executor Handoff
 
-- Read section range: this entire phase plan, planning `FR-1` through `FR-12`,
-  and manifest shared constraints.
+- Read section range: phase-plan headings `Current Source And Harness` through
+  `Executor Handoff`, planning `FR-1` through `FR-12`, and manifest `Shared
+  Constraints`.
 - Safe slices: authority ensure first, GPU plan second, runtime composition
   third, public/docs/tests last.
 - Decisions not to revisit: integer shares, explicit ensure, no schema v3, one
@@ -202,22 +204,25 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: draft complete; approval pending
-- Expanded planning: manager-local; independent review not yet needed
-- Implementation: pending
-- Refiner: not needed
-- Pre-submit gate: pending
-- Independent review: consider only if authority contracts materially change
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation: passed on base `e3968f785736d47b54aa3e8972b5368a4ecbaa56`
+- Expanded planning: not needed; accepted contracts are complete
+- Implementation: completed by one `loom_phase_executor`; manager verification
+  found and corrected one managed-runtime compatibility issue
+- Refiner: completed the qualified safe-evidence, binding-validation, and
+  fingerprint correction
+- Pre-submit gate: passed on current `origin/develop`; branch, scope, contracts,
+  tests, risks, domain neutrality, imports, and proportionality match this plan
+- Independent review: not needed; manager review found no residual blocker
+- Blocker corrections: 2/3
+- PR and merge: PR #221 passed required CI and was squash-merged as `f67d29c`
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Completed through `67bdf982c96f014a813a9ce540cb3959cf186bfc`: explicit `loom.queue.gpu` planning/runtime composition, atomic coordination limit ensure across SQLite/service authority paths, safe ordinal assignment evidence, and scoped package/authority/queue tests. |
+| Tests added or updated | `tests/unit/loom/queue/gpu/test_local.py`, `tests/integration/queue/test_managed_local_gpu_pool.py`, `tests/contracts/test_workspace_coordination_contract.py`, package/store export tests, and the in-memory coordination fake. Corrections add safe-evidence redaction, structured-fingerprint and comma-binding regressions, required `shares_per_gpu(1)` behavior, and a whole-GPU managed-runtime launch proving distinct CUDA bindings and exact release. |
+| Validated revision/tree state and evidence | Clean source tree at `67bdf982c96f014a813a9ce540cb3959cf186bfc`; `make validate-pr` passed (Ruff, Pyright with zero errors, default 2,193 passed/112 deselected, config-extra 132 passed/3 skipped, and sdist/wheel build). Focused GPU/runtime tests passed (15 passed). `make test-summary` produced `build/test-summary.md` twice with every package, unit, contract, integration, and e2e test passing; config-extra had 131 passed/3 skipped and one unrelated lease-renewal test time out at its five-second stage-allocation wait. The same test passes without coverage and reproduces only under the summary harness's coverage instrumentation, so summary evidence is unavailable for that timing-sensitive test and CI remains required. |
+| Validation-relevant changes after evidence | None. The full validation and summary diagnostics ran after correction 2/3 on the current source, test, dependency, build, and validation configuration. |
+| PR, review, and merge | [PR #221](https://github.com/samcantrill/loom/pull/221) targeted `develop`, passed required CI in 5m10s, and was squash-merged as `f67d29c32175cd8acd8c152bf49fe2c60605bba7`. Manager review and the pre-submit gate passed with no blocker. |
+| Residual risk and cleanup | No Phase 1 blocker. NVIDIA discovery, topology/grouping, and operator documentation remain deferred to later accepted phases. The phase worktree and local/remote branch were removed. |

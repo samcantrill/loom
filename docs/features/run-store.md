@@ -51,11 +51,22 @@ V9-post starts the public naming transition. The root
 `loom.pipeline.stores.RunStore` export now means the authority-backed run
 lifecycle surface produced by `create_run_store(...)`, with scoped
 `StageStore` handles for stage lifecycle, attempts, leases, submitted
-operations, fenced output commits, snapshots, recovery, and cleanup facts. The
+operations, fenced output commits, snapshots, recovery, and cleanup facts. An
+explicit checksum-repair rerun appends a successor output commit naming the
+current predecessor; snapshots project only the successor facts while authority
+history retains both immutable commits. Ordinary changed-config reruns do not
+receive replacement authority. The
 older path-shaped aggregate in `loom.pipeline.stores.run_store` is named
 `LegacyRunStore` while runtime callers are migrated in later phases. Local run
 files remain useful for materialization and projections, but they must not
 satisfy the public authority `RunStore` contract.
+
+The output-commit history is available through the backend-neutral
+`list_output_commits` read as commit/fact composites in revision order. Local
+authority schema v1 migrates atomically to v2, and the authority-service
+repository migrates its known v3 output table to v4. Complete older stores keep
+their commit and artifact facts; invalid or unknown layouts fail without a
+partial table replacement.
 
 V9-post also splits local file/materialization access behind
 `RunArtifactStore` and `StageArtifactStore`. These surfaces expose paths,

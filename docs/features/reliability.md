@@ -17,6 +17,25 @@ explicit.
 This document collects retry, timeout, failure metadata, cleanup, garbage
 collection, event hook, and artifact retention behavior into one design surface.
 
+## Current Support
+
+Loom persists failure, retry, cleanup, and event facts through its run stores.
+Event sinks are explicit observe-only callbacks; a sink failure is recorded
+without changing a successfully committed runtime fact.
+
+## Quick Start
+
+Run the direct event-sink example:
+
+```sh
+uv run python examples/extensions/event-sink/run_event_sink.py
+```
+
+## Deferred
+
+Remote notification delivery, cluster-preemption recovery details, and dashboard
+delivery are not provided by the core runtime.
+
 ## Scope
 
 This component owns:
@@ -409,12 +428,17 @@ run.planned
 run.started
 run.completed
 run.failed
+run.cancelled
+run.interrupted
+run.preparation_failed
 stage.planned
 stage.started
 stage.completed
 stage.failed
+stage.cancelled
 stage.skipped
 stage.reused
+stage.stale
 stage.blocked
 ```
 

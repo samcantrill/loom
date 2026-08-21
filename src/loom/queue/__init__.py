@@ -33,9 +33,11 @@ from .controller import (
     QueueDispatchCancellation,
     QueueDispatchDisposition,
     QueueDispatchInspection,
+    QueueDispatchNonStartCause,
     QueueDispatchResult,
     QueueDrainResult,
     QueueInspectableDispatchAdapter,
+    QueuePreStartCleanupStatus,
 )
 from .errors import (
     QueueConfigError,
@@ -63,13 +65,20 @@ from .models import (
     RunIntent,
     validate_one_queue_per_pool,
 )
-from .repository import QueueClaimResult, QueuePoolSnapshot, QueueRepository
+from .repository import QueuePoolSnapshot, QueueRepository
 from .service import (
     QueueEnqueueRequest,
     QueueItemInspection,
     QueueService,
     QueueServiceState,
     QueueServiceStatus,
+)
+from .selection import (
+    QueueSelectionCandidate,
+    QueueSelectionContext,
+    QueueSelectionDecision,
+    QueueSelectionDisposition,
+    QueueSelectionPolicy,
 )
 
 __all__ = [
@@ -90,7 +99,6 @@ __all__ = [
     "QueueAuditEvent",
     "QueueCancellableDispatchAdapter",
     "QueueClaim",
-    "QueueClaimResult",
     "QueueClient",
     "QueueConfigError",
     "QueueController",
@@ -103,6 +111,7 @@ __all__ = [
     "QueueDispatchCancellation",
     "QueueDispatchDisposition",
     "QueueDispatchInspection",
+    "QueueDispatchNonStartCause",
     "QueueDispatchResult",
     "QueueDrainResult",
     "QueueEnqueueRequest",
@@ -113,6 +122,7 @@ __all__ = [
     "QueuePool",
     "QueuePoolSnapshot",
     "QueuePoolMode",
+    "QueuePreStartCleanupStatus",
     "QueueRecoveryRecord",
     "QueueRepository",
     "QueueInspectableDispatchAdapter",
@@ -123,6 +133,11 @@ __all__ = [
     "QueueServiceState",
     "QueueServiceStateError",
     "QueueServiceStatus",
+    "QueueSelectionCandidate",
+    "QueueSelectionContext",
+    "QueueSelectionDecision",
+    "QueueSelectionDisposition",
+    "QueueSelectionPolicy",
     "QueueStorageError",
     "QueueValidationError",
     "RunIntent",

@@ -68,6 +68,11 @@ def test_import_loom_queue_public_api() -> None:
     assert "QueueController" in loom.queue.__all__
     assert "QueueCycleResult" in loom.queue.__all__
     assert "QueueDispatchDisposition" in loom.queue.__all__
+    assert "QueueSelectionCandidate" in loom.queue.__all__
+    assert "QueueSelectionContext" in loom.queue.__all__
+    assert "QueueSelectionDisposition" in loom.queue.__all__
+    assert "QueueSelectionDecision" in loom.queue.__all__
+    assert "QueueSelectionPolicy" in loom.queue.__all__
     assert "ResourceAssignmentProvider" in loom.queue.__all__
     assert "StaticSlotAssignmentProvider" in loom.queue.__all__
     assert "load_queue_spec" in loom.queue.__all__
@@ -81,6 +86,24 @@ def test_import_managed_local_queue_runtime_is_explicit() -> None:
 
     assert ManagedLocalQueueRuntime
     assert "ManagedLocalQueueRuntime" not in loom.queue.__all__
+
+
+def test_import_local_gpu_planning_is_explicit_and_does_not_probe_hardware() -> None:
+    import loom.queue
+    from loom.queue.gpu import (
+        LocalGpuDevice,
+        LocalGpuLink,
+        LocalGpuPoolLayout,
+        LocalGpuPoolPlan,
+        plan_local_gpu_pool,
+    )
+
+    assert LocalGpuDevice
+    assert LocalGpuLink
+    assert LocalGpuPoolLayout.grouped
+    assert LocalGpuPoolPlan
+    assert plan_local_gpu_pool
+    assert "LocalGpuDevice" not in loom.queue.__all__
 
 
 def test_package_includes_typing_marker() -> None:

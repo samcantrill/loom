@@ -16,6 +16,7 @@ from loom.pipeline.stores import (
     AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LIMITS_ENSURE_PATH,
     AUTHORITY_COORDINATION_SWEEP_CREATE_PATH,
     AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH,
     AUTHORITY_COORDINATION_TRIAL_LIST_PATH,
@@ -24,6 +25,7 @@ from loom.pipeline.stores import (
     AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH,
     AUTHORITY_MUTATION_OFFLINE_IMPORT_PATH,
     AUTHORITY_MUTATION_OPEN_RUN_PATH,
+    AUTHORITY_MUTATION_LIST_OUTPUT_COMMITS_PATH,
     AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH,
     AUTHORITY_MUTATION_ROUTE_PREFIX,
     AUTHORITY_MUTATION_RUN_ADMIT_PATH,
@@ -36,6 +38,7 @@ from loom.pipeline.stores.authority_client import (
     AUTHORITY_MUTATION_CLEANUP_REPORT_LIST_PATH,
     AUTHORITY_MUTATION_CLEANUP_RESULT_APPEND_PATH,
     AUTHORITY_MUTATION_CLEANUP_RESULT_LIST_PATH,
+    AUTHORITY_MUTATION_RUN_RECOVERY_SCAN_PATH,
 )
 from loom.serialization import PlainData
 
@@ -64,9 +67,7 @@ def route_group_manifest(
         "service_generation": services.service_generation,
         "workspace_id": services.workspace_id,
         "mutation_routes_implemented": services.mutation_service is not None,
-        "operations": [
-            operation.value for operation in AuthorityMutationOperation
-        ]
+        "operations": [operation.value for operation in AuthorityMutationOperation]
         if services.mutation_service is not None
         else [],
     }
@@ -96,6 +97,19 @@ def open_run(
     """Read a run snapshot through the configured mutation service."""
 
     return _handle(AuthorityMutationOperation.OPEN_RUN, payload, services)
+
+
+@router.post(
+    AUTHORITY_MUTATION_RUN_RECOVERY_SCAN_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
+    response_model=None,
+)
+def scan_run_recovery(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Scan authoritative controller and attempt recovery facts for a run."""
+
+    return _handle(AuthorityMutationOperation.SCAN_RUN_RECOVERY, payload, services)
 
 
 @router.post(
@@ -266,7 +280,9 @@ def list_cleanup_results(
 
 
 @router.post(
-    AUTHORITY_MUTATION_OFFLINE_IMPORT_PATH.removeprefix(AUTHORITY_MUTATION_ROUTE_PREFIX),
+    AUTHORITY_MUTATION_OFFLINE_IMPORT_PATH.removeprefix(
+        AUTHORITY_MUTATION_ROUTE_PREFIX
+    ),
     response_model=None,
 )
 def import_offline_evidence(
@@ -296,9 +312,7 @@ def transition_stage(
 
 
 @router.post(
-    AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH.removeprefix(
-        MUTATION_ROUTE_PREFIX
-    ),
+    AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def allocate_stage_attempt(
@@ -359,9 +373,7 @@ def finish_stage_attempt(
 
 
 @router.post(
-    AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH.removeprefix(
-        MUTATION_ROUTE_PREFIX
-    ),
+    AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def record_output_commit(
@@ -378,9 +390,24 @@ def record_output_commit(
 
 
 @router.post(
-    AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH.removeprefix(
-        MUTATION_ROUTE_PREFIX
-    ),
+    AUTHORITY_MUTATION_LIST_OUTPUT_COMMITS_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
+    response_model=None,
+)
+def list_output_commits(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """List append-only output commit history."""
+
+    return _handle(
+        AuthorityMutationOperation.LIST_OUTPUT_COMMITS,
+        payload,
+        services,
+    )
+
+
+@router.post(
+    AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def create_workspace(
@@ -432,9 +459,7 @@ def list_trials(
 
 
 @router.post(
-    AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH.removeprefix(
-        MUTATION_ROUTE_PREFIX
-    ),
+    AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def acquire_trial_lease(
@@ -468,9 +493,7 @@ def renew_coordination_lease(
 
 
 @router.post(
-    AUTHORITY_COORDINATION_LEASE_RELEASE_PATH.removeprefix(
-        MUTATION_ROUTE_PREFIX
-    ),
+    AUTHORITY_COORDINATION_LEASE_RELEASE_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def release_coordination_lease(
@@ -504,9 +527,7 @@ def fail_coordination_lease(
 
 
 @router.post(
-    AUTHORITY_COORDINATION_COUNTER_LIMIT_SET_PATH.removeprefix(
-        MUTATION_ROUTE_PREFIX
-    ),
+    AUTHORITY_COORDINATION_COUNTER_LIMIT_SET_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def set_counter_limit(
@@ -519,9 +540,7 @@ def set_counter_limit(
 
 
 @router.post(
-    AUTHORITY_COORDINATION_COUNTER_INCREMENT_PATH.removeprefix(
-        MUTATION_ROUTE_PREFIX
-    ),
+    AUTHORITY_COORDINATION_COUNTER_INCREMENT_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def increment_counter(
@@ -534,9 +553,7 @@ def increment_counter(
 
 
 @router.post(
-    AUTHORITY_COORDINATION_COUNTER_DECREMENT_PATH.removeprefix(
-        MUTATION_ROUTE_PREFIX
-    ),
+    AUTHORITY_COORDINATION_COUNTER_DECREMENT_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def decrement_counter(
@@ -562,9 +579,7 @@ def read_counter(
 
 
 @router.post(
-    AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH.removeprefix(
-        MUTATION_ROUTE_PREFIX
-    ),
+    AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def scan_coordination_recovery(
@@ -600,9 +615,7 @@ def acquire_resource_lease(
 
 
 @router.post(
-    AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH.removeprefix(
-        MUTATION_ROUTE_PREFIX
-    ),
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def set_resource_limit(
@@ -615,9 +628,22 @@ def set_resource_limit(
 
 
 @router.post(
-    AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH.removeprefix(
+    AUTHORITY_COORDINATION_RESOURCE_LIMITS_ENSURE_PATH.removeprefix(
         MUTATION_ROUTE_PREFIX
     ),
+    response_model=None,
+)
+def ensure_resource_limits(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Atomically create resource limits or accept exact existing limits."""
+
+    return _handle(AuthorityMutationOperation.ENSURE_RESOURCE_LIMITS, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
     response_model=None,
 )
 def read_resource_limit(

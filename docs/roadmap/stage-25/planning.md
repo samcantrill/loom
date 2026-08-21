@@ -1,15 +1,14 @@
 # Roadmap v25 Planning: Resource-Aware Whole-Run Queue Selection
 
-Status: confirmed; unified-scheduling amendment and manager quality gate passed
+Status: complete
 Roadmap stage: v25
-Evidence tree: `develop` at `2c05906c15791a025ff2cae90633d77efdc89aac`;
-source is unchanged since Stage 25 review
+Evidence tree: merged `origin/develop` at
+`88339b7ab1116b28d14a4db5b77d05ce1d4264cc`
 Planning route: expanded because this stage introduces a public policy seam,
 changes SQLite claim concurrency, and now establishes the selection behavior
 that Stage 29 reuses across command-scoped, co-located, and remote-agent forms
-Current gate: revised planning and implementation-plan quality gates complete;
-Phase 1 not started
-Blockers: Stage 24 must remotely merge before Phase 1 starts; no planning blocker
+Current gate: complete; Phase 1 merged in #218 and Phase 2 merged in #219
+Blockers: none
 
 Stage 25 gives the whole-run queue one bounded engine. Loom filters candidates
 that cannot run in the current opportunity, then uses oldest-eligible ordering
@@ -22,9 +21,9 @@ scheduler.
 ## Current State
 
 Evidence, behavior, design, validation, the manifest, both phase plans, and the
-design guide are locked. The maintainer approved the unified model on
-2026-08-20. Execution remains pending only on Stage 24; Phase 1 must refresh the
-merged Stage 23/24 source before implementation.
+design guide are complete. The maintainer approved the unified model on
+2026-08-20; both implementation phases then passed local validation, review,
+required CI, and remote merge.
 
 ## Evidence And Scope
 
@@ -179,14 +178,14 @@ merged Stage 23/24 source before implementation.
 
 | Example or invariant | Behavior or risk | Authoritative owner and boundary | Minimal coverage | Status |
 | --- | --- | --- | --- | --- |
-| Default oldest eligible | B needs two, A needs one, one available; A starts and B is unchanged. | Selection engine plus admission. | Unit and real SQLite integration. | planned |
-| Custom eligible ordering | Two candidates fit; injected policy chooses the younger/smaller one from the supplied tuple. | Policy preference plus validation. | Public API integration. | planned |
-| Managed entrypoint parity | `run_once()` and `run_cycle()` with the same opportunity make the same first selection. | Shared selection engine. | Parameterized controller test. | planned |
-| Selected-ownership race | Two controllers choose A. | SQLite exact CAS. | Exactly one ownership success; loser bounded refresh. | planned |
-| Stale opportunity | A appears to fit but authority acquisition loses. | Authority/provider. | Safe deferral, release, then bounded reconsideration. | planned |
-| Invalid policy | Absent/excluded ID or exception. | Selection validation. | No mutation; fixed safe error. | planned |
-| Topology-safe projection | Policy receives no agent, target, offer, slot, lease, command, or environment. | Selection projection. | Exact fields/import tests. | planned |
-| Delegated compatibility | External scheduler handoff retains established behavior. | Pool/adapter boundary. | Existing delegated suite. | planned |
+| Default oldest eligible | B needs two, A needs one, one available; A starts and B is unchanged. | Selection engine plus admission. | Unit and real SQLite integration. | passed |
+| Custom eligible ordering | Two candidates fit; injected policy chooses the younger/smaller one from the supplied tuple. | Policy preference plus validation. | Public API integration. | passed |
+| Managed entrypoint parity | `run_once()` and `run_cycle()` with the same opportunity make the same first selection. | Shared selection engine. | Parameterized controller test. | passed |
+| Selected-ownership race | Two controllers choose A. | SQLite exact CAS. | Exactly one ownership success; loser bounded refresh. | passed |
+| Stale opportunity | A appears to fit but authority acquisition loses. | Authority/provider. | Safe deferral, release, then bounded reconsideration. | passed |
+| Invalid policy | Absent/excluded ID or exception. | Selection validation. | No mutation; fixed safe error. | passed |
+| Topology-safe projection | Policy receives no agent, target, offer, slot, lease, command, or environment. | Selection projection. | Exact fields/import tests. | passed |
+| Delegated compatibility | External scheduler handoff retains established behavior. | Pool/adapter boundary. | Existing delegated suite. | passed |
 
 Causal interactions requiring combined coverage:
 
@@ -202,8 +201,8 @@ topology-neutral engine once rather than simulating future transport.
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Safe resource-aware selection | Five public types, one eligibility/default/custom engine, advisory local opportunity, bounded candidates, exact local CAS, managed entrypoint integration, and safe ownership evidence. | Queue selection, built-in SQLite scheduling capability, service/controller; no post-deferral continuation, assignments, agents, or transport. | Stage 24 merged; Stage 23/23-post contracts refreshed. | Default B-two/A-one starts A; custom ordering and claim races are safe; entrypoints share the engine. | pending |
-| 2. Bounded head-bypass proof | Compensated continuation, private opportunity exclusions, one bound, safe stop/error evidence, downstream custom-policy example, docs, and causal integration/E2E proof. | Managed whole-run pools; no fairness, durable history, policy registry, assignment state, or generic scheduler. | Phase 1 merged. | Stale capacity safely defers then another eligible candidate may start; bounds/redaction/delegated checks pass. | pending |
+| 1. Safe resource-aware selection | Five public types, one eligibility/default/custom engine, advisory local opportunity, bounded candidates, exact local CAS, managed entrypoint integration, and safe ownership evidence. | Queue selection, built-in SQLite scheduling capability, service/controller; no post-deferral continuation, assignments, agents, or transport. | Stage 24 merged; Stage 23/23-post contracts refreshed. | Default B-two/A-one starts A; custom ordering and claim races are safe; entrypoints share the engine. | merged |
+| 2. Bounded head-bypass proof | Compensated continuation, private opportunity exclusions, one bound, safe stop/error evidence, downstream custom-policy example, docs, and causal integration/E2E proof. | Managed whole-run pools; no fairness, durable history, policy registry, assignment state, or generic scheduler. | Phase 1 merged. | Stale capacity safely defers then another eligible candidate may start; bounds/redaction/delegated checks pass. | merged |
 
 Two phases still separate persistence/concurrency from repeated-deferral proof.
 Stage 29 later changes the managed ownership composition, not the selection API
@@ -220,10 +219,11 @@ or behavior.
 | Validation proportionate | Three causal combinations plus focused projection, parity, and delegated tests. | pass |
 | Phases reviewable | Two vertical phases preserve current lifecycle while making the selector reusable. | pass |
 | Plan review | Original expanded reviews passed; the concrete Stage 29 consumer exposed and the maintainer resolved the remaining split-path issue. Manager consistency gate was refreshed across all artifacts. | pass |
-| No blocker | Stage 24 sequencing is an execution dependency only. | pass |
+| No blocker | Both phases merged with no unresolved product or workflow blocker. | pass |
 
-Gate result: revised planning, design guide, manifest, and phase plans are
-coherent and maintainer-approved. Phase 1 remains pending Stage 24.
+Gate result: complete. The revised planning, design guide, manifest, and phase
+plans remained coherent through implementation; both phases passed validation,
+review, required CI, remote merge, and cleanup.
 
 Accepted risks and revisit triggers:
 

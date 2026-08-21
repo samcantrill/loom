@@ -19,8 +19,8 @@ pytestmark = pytest.mark.unit
 RUN_URI = "file:///runs/unit-r1"
 
 
-def test_repository_schema_version_includes_stage_lifecycle() -> None:
-    assert AUTHORITY_REPOSITORY_SCHEMA_VERSION == 3
+def test_repository_schema_version_includes_output_supersession() -> None:
+    assert AUTHORITY_REPOSITORY_SCHEMA_VERSION == 4
 
 
 def test_admit_run_rejects_duplicate_and_returns_revision(tmp_path) -> None:
@@ -91,12 +91,11 @@ def test_append_event_retries_by_id_before_revision_validation(tmp_path) -> None
         timestamp="2020-01-01T00:00:00Z",
     )
 
-    record = repository.append_audit_event(
-        RUN_URI, event, expected_revision=initial
+    record = repository.append_audit_event(RUN_URI, event, expected_revision=initial)
+    assert (
+        repository.append_audit_event(RUN_URI, event, expected_revision=initial)
+        == record
     )
-    assert repository.append_audit_event(
-        RUN_URI, event, expected_revision=initial
-    ) == record
     with pytest.raises(AuthorityRepositoryError, match="conflicts"):
         repository.append_audit_event(
             RUN_URI,

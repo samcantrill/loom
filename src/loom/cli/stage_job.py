@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_json_envelope, format_stage_job_text
-from loom.cli.options import OutputFormat, output_format_from_namespace
+from loom.cli.options import (
+    OutputFormat,
+    add_plugin_option,
+    output_format_from_namespace,
+)
 
 STAGE_JOB_RESULT_SCHEMA_VERSION = "loom.cli.stage_job.run.v1"
+
+if TYPE_CHECKING:
+    from loom.pipeline.stores.artifact_store import ArtifactStore
 
 
 class StageJobCliError(CliError):
@@ -51,7 +61,9 @@ def register_subparser(
         help="run and finalize one prepared stage job",
     )
     run_parser.add_argument("--run-uri", required=True, metavar="URI", help="run URI")
-    run_parser.add_argument("--stage", required=True, metavar="STAGE", help="stage name")
+    run_parser.add_argument(
+        "--stage", required=True, metavar="STAGE", help="stage name"
+    )
     run_parser.add_argument(
         "--executor",
         required=True,
@@ -92,6 +104,7 @@ def register_subparser(
         help="output format",
     )
     add_authority_options(run_parser)
+    add_plugin_option(run_parser)
     run_parser.add_argument(
         "--traceback",
         action="store_true",
@@ -111,6 +124,9 @@ def handle_run(namespace: argparse.Namespace) -> int:
         create_authority_backed_serial_run_store,
         run_stage_job,
     )
+    from loom.pipeline.execution.continuation import (
+        validate_prepared_run_plugin_activations,
+    )
     from loom.pipeline.status import StageStatus
 
     output_format = output_format_from_namespace(namespace)
@@ -120,13 +136,64 @@ def handle_run(namespace: argparse.Namespace) -> int:
             exit_code=ExitCode.EXECUTOR,
         )
     authority_config = authority_config_from_namespace(namespace)
+    store = create_authority_backed_serial_run_store(
+        "runs",
+        authority_config=authority_config,
+        owner_id="stage-job",
+    )
+    selected_records = ()
+    artifact_store_factory: Callable[[Path], ArtifactStore] | None = None
+    validator_registry = None
+    event_sink_registry = None
+    plugin_selectors = tuple(getattr(namespace, "plugin", ()) or ())
+    if plugin_selectors:
+        from loom.cli.plugin_activation import (
+            build_selected_event_sink_registry,
+            build_selected_registries,
+            selected_runtime_plugins,
+        )
+        from loom.pipeline.stores import LocalArtifactStore
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
+
+        selected_records = selected_runtime_plugins(
+            plugin_selectors,
+            allowed_groups=(
+                LOOM_CODECS_GROUP,
+                LOOM_EVENT_SINKS_GROUP,
+                LOOM_RESOURCE_VALIDATORS_GROUP,
+            ),
+        )
+        try:
+            validate_prepared_run_plugin_activations(
+                run_store=store,
+                run_uri=str(namespace.run_uri),
+                selected_plugin_records=selected_records,
+                allowed_groups=(
+                    LOOM_CODECS_GROUP,
+                    LOOM_EVENT_SINKS_GROUP,
+                    LOOM_RESOURCE_VALIDATORS_GROUP,
+                ),
+            )
+        except ContinuationStateError as exc:
+            raise _cli_error_from_continuation(exc) from exc
+        codecs, validator_registry, _executors, _manifest = build_selected_registries(
+            selected_records
+        )
+        if any(record.group == LOOM_EVENT_SINKS_GROUP for record in selected_records):
+            event_sink_registry = build_selected_event_sink_registry(selected_records)
+
+        def selected_artifact_store_factory(root: Path) -> ArtifactStore:
+            return LocalArtifactStore(root, codec_registry=codecs)
+
+        artifact_store_factory = selected_artifact_store_factory
+
     try:
         result = run_stage_job(
-            run_store=create_authority_backed_serial_run_store(
-                "runs",
-                authority_config=authority_config,
-                owner_id="stage-job",
-            ),
+            run_store=store,
             request=StageJobRunRequest(
                 run_uri=str(namespace.run_uri),
                 stage_name=str(namespace.stage),
@@ -137,6 +204,10 @@ def handle_run(namespace: argparse.Namespace) -> int:
                 authority_owner_id=namespace.authority_owner_id,
                 authority_fencing_token=namespace.authority_fencing_token,
             ),
+            artifact_store_factory=artifact_store_factory,
+            resource_validator_registry=validator_registry,
+            event_sink_registry=event_sink_registry,
+            selected_plugin_records=selected_records,
         )
     except UnsupportedContinuationExecutorError as exc:
         raise _cli_error_from_continuation(exc, exit_code=ExitCode.EXECUTOR) from exc

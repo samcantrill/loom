@@ -10,6 +10,7 @@ import pytest
 from loom.artifacts import ArtifactRef
 from loom.pipeline.status import RunStatus
 from loom.pipeline.stores import (
+    AUTHORITY_SCHEMA_VERSION,
     AuthoritativeReadOptions,
     LocalMaterializationRequest,
     LocalRunStore,
@@ -159,7 +160,7 @@ def test_sqlite_schema_failure_read_preserves_warning_contract(
         run_uri,
     )
 
-    assert snapshot.schema_version == 1
+    assert snapshot.schema_version == AUTHORITY_SCHEMA_VERSION
     assert snapshot.stages == ()
     assert snapshot.warnings[0].code is ReadModelWarningCode.UNSUPPORTED_SCHEMA
     assert snapshot.warnings[0].detail["kind"] == "missing"

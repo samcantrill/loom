@@ -19,6 +19,13 @@ The queue pool-status active limit is controller-local, not a distributed
 semaphore; authority-backed scalar and static-slot leases remain the safety
 boundary for managed-local work.
 
+An explicit local NVIDIA inventory can instead be composed in Python through
+`loom.queue.gpu.nvidia.NvidiaSmiGpuInventoryProvider`. It supplies normalized
+UUID-backed devices to the existing GPU plan and managed-local lifecycle; it
+does not add an authored resource schema, runtime profile, automatic hardware
+selection, or an import-time command. Integer GPU shares express queue capacity
+only and do not claim memory or compute isolation.
+
 ## Scope
 
 Current alignment:

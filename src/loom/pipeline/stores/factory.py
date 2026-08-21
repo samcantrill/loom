@@ -89,7 +89,9 @@ def create_run_store(
     resolved_config = config_from_authority_reference(reference)
     if resolved_config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
         raise AuthorityStoreError(_removed_sqlite_authority_message())
-    if resolved_config.endpoint is not None and _is_http_endpoint(resolved_config.endpoint):
+    if resolved_config.endpoint is not None and _is_http_endpoint(
+        resolved_config.endpoint
+    ):
         raise AuthorityFactoryError(
             "public run-store factory cannot adapt HTTP authority endpoints until "
             "the runner online path migrates to AuthorityClient",
@@ -520,9 +522,7 @@ class _PerRunAuthorityStageStore:
             stage_name=self._stage_name,
         )
 
-    def write_retry_decision(
-        self, decision: RetryDecisionRecord
-    ) -> BackendRevision:
+    def write_retry_decision(self, decision: RetryDecisionRecord) -> BackendRevision:
         if decision.status.stage_id != self._stage_name:
             raise AuthorityStoreError("retry decision stage_id mismatch")
         return self._authority_store.write_retry_decision(self._run_uri, decision)
@@ -533,9 +533,7 @@ class _PerRunAuthorityStageStore:
             stage_name=self._stage_name,
         )
 
-    def write_timeout_outcome(
-        self, outcome: TimeoutOutcomeRecord
-    ) -> BackendRevision:
+    def write_timeout_outcome(self, outcome: TimeoutOutcomeRecord) -> BackendRevision:
         if outcome.status.stage_id != self._stage_name:
             raise AuthorityStoreError("timeout outcome stage_id mismatch")
         return self._authority_store.write_timeout_outcome(self._run_uri, outcome)
@@ -552,6 +550,7 @@ class _PerRunAuthorityStageStore:
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
     ) -> OutputCommit:
         return self._authority_store.record_output_commit(
@@ -560,7 +559,13 @@ class _PerRunAuthorityStageStore:
             attempt_id=attempt_id,
             fencing_token=fencing_token,
             outputs=outputs,
+            supersedes_commit_id=supersedes_commit_id,
             reason=reason,
+        )
+
+    def list_output_commits(self) -> tuple[OutputCommit, ...]:
+        return self._authority_store.list_output_commits(
+            self._run_uri, stage_name=self._stage_name
         )
 
     def snapshot(self) -> StageLifecycleSnapshot:

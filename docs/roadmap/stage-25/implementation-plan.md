@@ -1,14 +1,13 @@
 # Roadmap Stage 25 Implementation Plan: Resource-Aware Whole-Run Queue Selection
 
-Status: ready; unified-scheduling amendment and quality gate passed
+Status: complete
 Roadmap stage: `v25`
 Planning document: `docs/roadmap/stage-25/planning.md`
 Plain-language design guide: `docs/roadmap/stage-25/design-guide.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 1 pending
-Blockers: Stage 24 must remotely merge before Phase 1 starts; no planning
-blocker
+Current phase: complete
+Blockers: none
 
 ## Summary
 
@@ -130,8 +129,8 @@ limits remain independent.
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `safe-resource-aware-selection` | pending | `docs/roadmap/stage-25/phases/safe-resource-aware-selection.md` | `agent/stage-25-p1-safe-resource-aware-selection` | pending | Selection values/engine, local opportunity, built-in bounded read/exact CAS, controller integration | Use one safe oldest-eligible/custom selector across managed entrypoints. |
-| 2 | `bounded-head-bypass-proof` | pending | `docs/roadmap/stage-25/phases/bounded-head-bypass-proof.md` | `agent/stage-25-p2-bounded-head-bypass-proof` | pending | Compensated continuation, private exclusions/bounds, safe evidence, example/docs/causal proof | Reconsider safely after stale capacity without loops or policy-visible history. |
+| 1 | `safe-resource-aware-selection` | merged | `docs/roadmap/stage-25/phases/safe-resource-aware-selection.md` | `agent/stage-25-p1-safe-resource-aware-selection` | [#218](https://github.com/samcantrill/loom/pull/218) | Selection values/engine, local opportunity, built-in bounded read/exact CAS, controller integration | Use one safe oldest-eligible/custom selector across managed entrypoints. |
+| 2 | `bounded-head-bypass-proof` | merged | `docs/roadmap/stage-25/phases/bounded-head-bypass-proof.md` | `agent/stage-25-p2-bounded-head-bypass-proof` | [#219](https://github.com/samcantrill/loom/pull/219) | Compensated continuation, private exclusions/bounds, safe evidence, example/docs/causal proof | Reconsider safely after stale capacity without loops or policy-visible history. |
 
 Phase 1 is independently useful and establishes the stable engine Stage 29
 will compose. Phase 2 proves repeated selection after actual admission facts
@@ -149,8 +148,8 @@ change; it does not add durable scheduling state.
   default.
 - Correction: complete. It changes behavior and internal ownership wording but
   adds no Stage 29 runtime records or new public selection types.
-- Ready for implementation: yes after Stage 24 remotely merges and the source
-  baseline is refreshed.
+- Implementation complete: yes. Phase 1 merged in #218 and Phase 2 merged in
+  #219 after manager, independent, local-validation, and required-CI gates.
 - Accepted risks: oldest-eligible starvation, stale advisory capacity, bounded
   window misses, and the later private managed-ownership migration to Stage 29
   assignments.
@@ -162,5 +161,5 @@ change; it does not add durable scheduling state.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
-| 2 | pending | pending | pending | pending |
+| 1 | [#218](https://github.com/samcantrill/loom/pull/218) squash-merged to `develop` as `ff2b7ee` | `make validate-pr`; `make test-summary` with 2,300 passes; 61 targeted manager tests; manager and independent review; required CI passed at final PR revision `a52aaaa` | Accepted bounded lookahead, advisory capacity, Phase 1 stop-after-deferral, and temporary local CAS only | Phase branch/worktree and remote branch removed; dirty control checkout preserved |
+| 2 | [#219](https://github.com/samcantrill/loom/pull/219) squash-merged to `develop` as `88339b7` | `make validate-pr`; `make test-summary` with 2,307 passes; 68 targeted queue tests; full E2E harness with 54 passes; manager and independent review; required CI passed at final PR revision `824b83b` | Accepted bounded lookahead misses, advisory-capacity churn, possible larger-request starvation, and Stage 29's later assignment/offer ownership migration | Phase branch/worktree and remote branch removed; dirty control checkout preserved |

@@ -1,12 +1,12 @@
 # Roadmap Stage 26 Implementation Plan: Operational Correctness And Lifecycle Guidance
 
-Status: ready; removal-first cross-stage correction and manager quality gate passed
+Status: complete
 Roadmap stage: `v26`
 Planning document: `docs/roadmap/stage-26/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 1 pending
-Blockers: Stage 25 remote merge before Phase 1 starts
+Current phase: complete
+Blockers: none
 
 ## Summary
 
@@ -62,7 +62,7 @@ Blockers: Stage 25 remote merge before Phase 1 starts
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `stage-author-correctness-and-logging` | pending | `docs/roadmap/stage-26/phases/stage-author-correctness-and-logging.md` | `agent/stage-26-p1-stage-author-correctness-and-logging` | pending | Downstream guide, artifact/log/event truth, preparation-failure ordering, examples/tests | Give stage authors one truthful operational path and ensure observers see committed lifecycle state. |
+| 1 | `stage-author-correctness-and-logging` | merged | `docs/roadmap/stage-26/phases/stage-author-correctness-and-logging.md` | `agent/stage-26-p1-stage-author-correctness-and-logging` | [#220](https://github.com/samcantrill/loom/pull/220) | Downstream guide, artifact/log/event truth, preparation-failure ordering, examples/tests | Give stage authors one truthful operational path and ensure observers see committed lifecycle state. |
 
 The former generic-lifecycle-notifications phase is no longer accepted. It was
 removed because the proposed message/severity/helper surface had no concrete
@@ -80,7 +80,8 @@ by Stage 28.
 - Correction: the Stage 26 notification phase and all dependencies on its
   proposed public types were removed; Stage 28 now owns generic observer
   mechanics and direct provider examples.
-- Ready for implementation: yes, after Stage 25 remotely merges.
+- Implementation complete: yes. Phase 1 passed targeted and full local gates,
+  manager review, required CI, remote squash merge, and cleanup.
 - Accepted risks: executor logging remains intentionally heterogeneous and the
   source audit may narrow prose rather than change behavior.
 - Revisit triggers: a demonstrated public artifact/log gap, a new lifecycle
@@ -91,4 +92,4 @@ by Stage 28.
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
+| 1 | [#220](https://github.com/samcantrill/loom/pull/220) squash-merged to `develop` as `e5bfa9b` | Targeted tests, `make validate-pr`, and `make test-summary` passed (2,307 passed); manager review and required CI passed at final PR revision `3db0c58` | Executor logging remains intentionally heterogeneous. | Phase worktree and local/remote phase branches removed; dirty control checkout preserved. |

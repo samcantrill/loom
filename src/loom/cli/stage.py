@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.formatting import format_json_envelope, format_stage_worker_text
-from loom.cli.options import OutputFormat, output_format_from_namespace
+from loom.cli.options import (
+    OutputFormat,
+    add_plugin_option,
+    output_format_from_namespace,
+)
 
 if TYPE_CHECKING:
     from loom.pipeline.execution import StageWorkerResult
+    from loom.pipeline.stores.artifact_store import ArtifactStore
     from loom.pipeline.stores import AuthorityConfig
 
 STAGE_WORKER_RESULT_SCHEMA_VERSION = "loom.cli.stage.run.v1"
@@ -21,7 +28,9 @@ STAGE_WORKER_RESULT_SCHEMA_VERSION = "loom.cli.stage.run.v1"
 class StageWorkerCliError(CliError):
     """Raised when direct worker state cannot be reconstructed."""
 
-    def __init__(self, message: str, *, context: dict[str, object] | None = None) -> None:
+    def __init__(
+        self, message: str, *, context: dict[str, object] | None = None
+    ) -> None:
         super().__init__(
             message,
             code="cli.stage.worker_state",
@@ -46,7 +55,9 @@ def register_subparser(
         help="run one prepared stage attempt",
     )
     run_parser.add_argument("--run-uri", required=True, metavar="URI", help="run URI")
-    run_parser.add_argument("--stage", required=True, metavar="STAGE", help="stage name")
+    run_parser.add_argument(
+        "--stage", required=True, metavar="STAGE", help="stage name"
+    )
     run_parser.add_argument(
         "--attempt",
         type=_positive_attempt,
@@ -61,6 +72,7 @@ def register_subparser(
         help="output format",
     )
     add_authority_options(run_parser)
+    add_plugin_option(run_parser)
     run_parser.add_argument(
         "--traceback",
         action="store_true",
@@ -78,11 +90,22 @@ def handle_run(namespace: argparse.Namespace) -> int:
 
     output_format = output_format_from_namespace(namespace)
     try:
-        result = _run_stage_worker(
-            run_uri=str(namespace.run_uri),
-            stage_name=str(namespace.stage),
-            attempt=namespace.attempt,
-            authority_config=authority_config_from_namespace(namespace),
+        plugin_selectors = tuple(getattr(namespace, "plugin", ()) or ())
+        result = (
+            _run_stage_worker(
+                run_uri=str(namespace.run_uri),
+                stage_name=str(namespace.stage),
+                attempt=namespace.attempt,
+                authority_config=authority_config_from_namespace(namespace),
+                plugin_selectors=plugin_selectors,
+            )
+            if plugin_selectors
+            else _run_stage_worker(
+                run_uri=str(namespace.run_uri),
+                stage_name=str(namespace.stage),
+                attempt=namespace.attempt,
+                authority_config=authority_config_from_namespace(namespace),
+            )
         )
     except StageWorkerStateError as exc:
         raise StageWorkerCliError(
@@ -116,24 +139,62 @@ def _run_stage_worker(
     stage_name: str,
     attempt: int | None,
     authority_config: "AuthorityConfig | None" = None,
+    plugin_selectors: tuple[str, ...] = (),
 ) -> "StageWorkerResult":
     from loom.pipeline.execution import (
         StageWorkerRunRequest,
         create_authority_backed_serial_run_store,
         run_stage_worker,
     )
+    from loom.pipeline.execution.stage_worker import (
+        validate_stage_worker_plugin_activations,
+    )
+
+    store = create_authority_backed_serial_run_store(
+        "runs",
+        authority_config=authority_config,
+        owner_id="stage-worker",
+    )
+    worker_request = StageWorkerRunRequest(
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+    )
+    selected_records = ()
+    artifact_store_factory: Callable[[Path], ArtifactStore] | None = None
+    validator_registry = None
+    if plugin_selectors:
+        from loom.cli.plugin_activation import (
+            build_selected_registries,
+            selected_runtime_plugins,
+        )
+        from loom.plugins import LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
+
+        selected_records = selected_runtime_plugins(
+            plugin_selectors,
+            allowed_groups=(LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
+        )
+        validate_stage_worker_plugin_activations(
+            run_store=store,
+            request=worker_request,
+            selected_plugin_records=selected_records,
+        )
+        codecs, validator_registry, _executors, _manifest = build_selected_registries(
+            selected_records
+        )
+        from loom.pipeline.stores import LocalArtifactStore
+
+        def selected_artifact_store_factory(root: Path) -> ArtifactStore:
+            return LocalArtifactStore(root, codec_registry=codecs)
+
+        artifact_store_factory = selected_artifact_store_factory
 
     return run_stage_worker(
-        run_store=create_authority_backed_serial_run_store(
-            "runs",
-            authority_config=authority_config,
-            owner_id="stage-worker",
-        ),
-        request=StageWorkerRunRequest(
-            run_uri=run_uri,
-            stage_name=stage_name,
-            attempt=attempt,
-        ),
+        run_store=store,
+        request=worker_request,
+        selected_plugin_records=selected_records,
+        artifact_store_factory=artifact_store_factory,
+        resource_validator_registry=validator_registry,
     )
 
 

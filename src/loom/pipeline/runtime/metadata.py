@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
 from typing import Any, cast
 
-from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data, thaw_plain_data
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 from loom.serialization.errors import PlainDataError
 
 from loom.pipeline.errors import RuntimeResourceError
-from loom.pipeline.resources import ResourceEntry, ResourceRequest, parse_resource_request
+from loom.pipeline.resources import (
+    ResourceEntry,
+    ResourceRequest,
+    ResourceValidatorRegistry,
+    parse_resource_request,
+)
 from loom.pipeline.reliability import ReliabilityPolicy, merge_reliability_options
 from loom.pipeline.runtime.environment import (
     RunEnvironmentRequest,
@@ -35,8 +45,12 @@ class ResolvedStageRuntimeOptions:
 
     stage_id: str
     executor: str = "local"
-    resources: ResourceRequest | Mapping[str, object] = field(default_factory=ResourceRequest)
-    execution: ExecutionOptions | Mapping[str, object] = field(default_factory=ExecutionOptions)
+    resources: ResourceRequest | Mapping[str, object] = field(
+        default_factory=ResourceRequest
+    )
+    execution: ExecutionOptions | Mapping[str, object] = field(
+        default_factory=ExecutionOptions
+    )
     reliability: ReliabilityPolicy | Mapping[str, object] | None = None
     run_environment: RunEnvironmentRequest | Mapping[str, object] = field(
         default_factory=RunEnvironmentRequest
@@ -45,11 +59,22 @@ class ResolvedStageRuntimeOptions:
         default_factory=StageEnvironmentRequest
     )
     adapter_options: Mapping[str, PlainData] = field(default_factory=dict)
+    validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "stage_id", _non_empty_string(self.stage_id, "stage_id"))
-        object.__setattr__(self, "executor", _non_empty_string(self.executor, "executor"))
-        object.__setattr__(self, "resources", _coerce_resources(self.resources))
+    def __post_init__(
+        self, validator_registry: ResourceValidatorRegistry | None
+    ) -> None:
+        object.__setattr__(
+            self, "stage_id", _non_empty_string(self.stage_id, "stage_id")
+        )
+        object.__setattr__(
+            self, "executor", _non_empty_string(self.executor, "executor")
+        )
+        object.__setattr__(
+            self,
+            "resources",
+            _coerce_resources(self.resources, registry=validator_registry),
+        )
         object.__setattr__(self, "execution", _coerce_execution(self.execution))
         object.__setattr__(
             self,
@@ -107,12 +132,19 @@ class RuntimeMetadata:
         default_factory=dict
     )
     schema_version: int = RUNTIME_METADATA_SCHEMA_VERSION
+    validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self, validator_registry: ResourceValidatorRegistry | None
+    ) -> None:
         object.__setattr__(self, "schema_version", _schema_version(self.schema_version))
-        options = parse_run_options(self.options)
+        options = parse_run_options(self.options, registry=validator_registry)
         object.__setattr__(self, "options", options)
-        object.__setattr__(self, "stages", _stage_mapping(self.stages))
+        object.__setattr__(
+            self,
+            "stages",
+            _stage_mapping(self.stages, registry=validator_registry),
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         options = cast(RunOptions, self.options)
@@ -136,8 +168,7 @@ class RuntimeMetadata:
             "environment": run_environment.to_safe_metadata(),
             "adapter_options": _adapter_metadata(options.adapter_options),
             "stages": {
-                stage_id: stage.to_safe_metadata()
-                for stage_id, stage in stages.items()
+                stage_id: stage.to_safe_metadata() for stage_id, stage in stages.items()
             },
         }
 
@@ -146,11 +177,14 @@ def resolve_run_runtime(
     options: RunOptions | Mapping[str, object] | None = None,
     *,
     stage_ids: Iterable[str],
+    registry: ResourceValidatorRegistry | None = None,
 ) -> Mapping[str, ResolvedStageRuntimeOptions]:
     """Resolve normalized runtime options into per-stage executor handoffs."""
 
-    normalized = parse_run_options(options)
-    stage_id_tuple = tuple(_non_empty_string(stage_id, "stage_ids") for stage_id in stage_ids)
+    normalized = parse_run_options(options, registry=registry)
+    stage_id_tuple = tuple(
+        _non_empty_string(stage_id, "stage_ids") for stage_id in stage_ids
+    )
     validate_stage_runtime_options(normalized, known_stage_ids=stage_id_tuple)
     run_execution = cast(ExecutionOptions, normalized.execution)
     run_reliability = cast(ReliabilityPolicy | None, normalized.reliability)
@@ -186,6 +220,7 @@ def resolve_run_runtime(
             run_environment=run_environment,
             stage_environment=stage_runtime.environment,
             adapter_options=stage_adapter_options,
+            validator_registry=registry,
         )
     return MappingProxyType(dict(sorted(resolved.items())))
 
@@ -194,16 +229,23 @@ def build_runtime_metadata(
     options: RunOptions | Mapping[str, object] | None,
     *,
     stage_ids: Iterable[str],
+    registry: ResourceValidatorRegistry | None = None,
 ) -> RuntimeMetadata:
     """Build safe metadata from normalized run options and canonical stages."""
 
-    normalized = parse_run_options(options)
-    resolved = resolve_run_runtime(normalized, stage_ids=stage_ids)
-    return RuntimeMetadata(options=normalized, stages=resolved)
+    normalized = parse_run_options(options, registry=registry)
+    resolved = resolve_run_runtime(normalized, stage_ids=stage_ids, registry=registry)
+    return RuntimeMetadata(
+        options=normalized,
+        stages=resolved,
+        validator_registry=registry,
+    )
 
 
 def _stage_mapping(
     stages: Mapping[str, ResolvedStageRuntimeOptions | Mapping[str, object]],
+    *,
+    registry: ResourceValidatorRegistry | None = None,
 ) -> Mapping[str, ResolvedStageRuntimeOptions]:
     if not isinstance(stages, Mapping):
         raise RuntimeResourceError("RuntimeMetadata.stages must be a mapping")
@@ -219,6 +261,7 @@ def _stage_mapping(
                     Any,
                     _object_mapping(value, f"RuntimeMetadata.stages[{stage_id!r}]"),
                 ),
+                validator_registry=registry,
             )
         if stage.stage_id != stage_id:
             raise RuntimeResourceError(
@@ -228,13 +271,17 @@ def _stage_mapping(
     return MappingProxyType(dict(sorted(resolved.items())))
 
 
-def _coerce_resources(value: object) -> ResourceRequest:
+def _coerce_resources(
+    value: object,
+    *,
+    registry: ResourceValidatorRegistry | None = None,
+) -> ResourceRequest:
     if isinstance(value, ResourceRequest):
         return value
     mapping = _object_mapping(value, "resources")
     if "schema_version" in mapping:
-        return ResourceRequest.from_dict(mapping)
-    return parse_resource_request(mapping)
+        return ResourceRequest.from_dict(mapping, registry=registry)
+    return parse_resource_request(mapping, registry=registry)
 
 
 def _coerce_execution(value: object) -> ExecutionOptions:
@@ -269,7 +316,9 @@ def _coerce_run_environment(value: object) -> RunEnvironmentRequest:
 def _coerce_stage_environment(value: object) -> StageEnvironmentRequest:
     if isinstance(value, StageEnvironmentRequest):
         return value
-    return StageEnvironmentRequest.from_dict(_object_mapping(value, "stage_environment"))
+    return StageEnvironmentRequest.from_dict(
+        _object_mapping(value, "stage_environment")
+    )
 
 
 def _resource_request_metadata(resources: ResourceRequest) -> dict[str, PlainData]:
@@ -305,9 +354,13 @@ def _merge_plain_mappings(
     return _freeze_plain_mapping({**first, **second}, "adapter_options")
 
 
-def _freeze_plain_mapping(value: Mapping[str, PlainData], path: str) -> Mapping[str, PlainData]:
+def _freeze_plain_mapping(
+    value: Mapping[str, PlainData], path: str
+) -> Mapping[str, PlainData]:
     try:
-        normalized = ensure_plain_data(thaw_plain_data(dict(value), path=path), path=path)
+        normalized = ensure_plain_data(
+            thaw_plain_data(dict(value), path=path), path=path
+        )
     except PlainDataError as exc:
         raise RuntimeResourceError(f"{path} must be plain data: {exc}") from exc
     if not isinstance(normalized, dict):

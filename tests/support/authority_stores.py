@@ -95,6 +95,7 @@ class _RunState:
     leases: dict[str, LeaseRecord] = field(default_factory=dict)
     submitted: dict[str, SubmittedOperationRecord] = field(default_factory=dict)
     commits: dict[str, OutputCommitRecord] = field(default_factory=dict)
+    output_commits: list[OutputCommit] = field(default_factory=list)
     facts: dict[str, list[ArtifactFactRecord]] = field(default_factory=dict)
     cleanup: list[CleanupCandidate] = field(default_factory=list)
     cleanup_reports: dict[str, CleanupReportFact] = field(default_factory=dict)
@@ -424,7 +425,11 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         return self._stage_reliability_records(
             self._require_run(run_uri).reliability_status_details.values(),
             stage_name=stage_name,
-            sort_key=lambda detail: (detail.stage_id, detail.attempt, detail.created_at),
+            sort_key=lambda detail: (
+                detail.stage_id,
+                detail.attempt,
+                detail.created_at,
+            ),
         )
 
     def write_stage_attempt_transaction(
@@ -528,10 +533,17 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
     ) -> OutputCommit:
         state = self._require_run(run_uri)
         self._require_stage_fence(state, stage_name, attempt_id, fencing_token)
+        current = state.commits.get(stage_name)
+        if current is None:
+            if supersedes_commit_id is not None:
+                raise ValueError("output commit has no current predecessor")
+        elif supersedes_commit_id != current.commit_id:
+            raise ValueError("stale or missing output commit current head")
         revision = self._next_revision()
         commit = OutputCommitRecord(
             commit_id=f"{stage_name}-{attempt_id}-commit",
@@ -541,6 +553,7 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             committed_at=self._now(),
             revision=revision,
             output_names=tuple(outputs),
+            supersedes_commit_id=supersedes_commit_id,
         )
         facts = tuple(
             ArtifactFactRecord(
@@ -553,6 +566,19 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         )
         state.commits[stage_name] = commit
         state.facts[stage_name] = list(facts)
+        state.output_commits.append(OutputCommit(commit=commit, artifact_facts=facts))
+        lease = next(
+            lease
+            for lease in state.leases.values()
+            if lease.attempt_id == attempt_id and lease.state is LeaseState.ACTIVE
+        )
+        self._replace_lease(
+            state,
+            lease,
+            revision=revision,
+            state_value=LeaseState.RELEASED,
+            reason=reason,
+        )
         state.attempts[stage_name] = [
             StageAttempt(
                 run_uri=attempt.run_uri,
@@ -575,6 +601,15 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         state.revision = revision
         return OutputCommit(commit=commit, artifact_facts=facts)
 
+    def list_output_commits(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[OutputCommit, ...]:
+        return tuple(
+            commit
+            for commit in self._require_run(run_uri).output_commits
+            if stage_name is None or commit.commit.stage_name == stage_name
+        )
+
     def append_audit_event(
         self, run_uri: str, event: PipelineEvent
     ) -> PipelineEventRecord:
@@ -585,7 +620,9 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         )
         if existing is not None:
             if not _event_matches_record(event, existing):
-                raise ValueError(f"event_id {event.event_id!r} conflicts with an existing event")
+                raise ValueError(
+                    f"event_id {event.event_id!r} conflicts with an existing event"
+                )
             return existing
         record = PipelineEventRecord(
             run_uri=run_uri,
@@ -1198,6 +1235,44 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
             revision=revision,
         )
 
+    def ensure_resource_limits(
+        self, workspace_id: str, limits: Mapping[str, int]
+    ) -> tuple[ConcurrencyCounter, ...]:
+        if workspace_id not in self._workspaces:
+            raise ValueError("unknown workspace")
+        normalized = _resource_limits_mapping(limits)
+        mismatched = [
+            key
+            for key, limit in normalized.items()
+            if (existing := self._resource_limits.get((workspace_id, key))) is not None
+            and existing != limit
+        ]
+        if mismatched:
+            raise CoordinationStoreError(
+                "resource limits do not match existing authority limits: "
+                + ", ".join(mismatched),
+                kind=CoordinationFailureKind.INVALID_OR_UNSUPPORTED,
+            )
+        missing = [
+            key
+            for key in normalized
+            if (workspace_id, key) not in self._resource_limits
+        ]
+        revision = self._next_revision() if missing else None
+        for key in missing:
+            self._resource_limits[(workspace_id, key)] = normalized[key]
+            if revision is not None:
+                self._resource_limit_revisions[(workspace_id, key)] = revision
+        return tuple(
+            ConcurrencyCounter(
+                counter_name=f"resource:{key}",
+                value=self._active_resource_amount(workspace_id, key),
+                limit=normalized[key],
+                revision=self._resource_limit_revisions[(workspace_id, key)],
+            )
+            for key in normalized
+        )
+
     def read_resource_limit(
         self, workspace_id: str, resource_key: str
     ) -> ConcurrencyCounter | None:
@@ -1365,7 +1440,8 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         lease = self._leases[lease_id]
         if lease.owner_id != owner_id or lease.fencing_token != fencing_token:
             raise CoordinationStoreError(
-                "stale or foreign lease token", kind=CoordinationFailureKind.OWNERSHIP_LOST
+                "stale or foreign lease token",
+                kind=CoordinationFailureKind.OWNERSHIP_LOST,
             )
         if lease.state is not LeaseState.ACTIVE:
             raise CoordinationStoreError(
@@ -1450,6 +1526,19 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
     def _at_tick(tick: int) -> str:
         value = datetime(2020, 1, 1, tzinfo=UTC) + timedelta(seconds=tick)
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _resource_limits_mapping(limits: Mapping[str, int]) -> dict[str, int]:
+    if not isinstance(limits, Mapping):
+        raise ValueError("limits must be a mapping")
+    normalized: dict[str, int] = {}
+    for key, value in limits.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError("resource limit keys must be non-empty strings")
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError("resource limits must be positive integers")
+        normalized[key] = value
+    return dict(sorted(normalized.items()))
 
 
 __all__ = [

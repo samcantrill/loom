@@ -19,13 +19,6 @@ from .models import (
 
 
 @dataclass(frozen=True, slots=True)
-class QueueClaimResult:
-    """Result returned by FIFO queue item claims."""
-
-    item: QueueItem
-
-
-@dataclass(frozen=True, slots=True)
 class QueuePoolSnapshot:
     """One deterministic repository read of every item in a selected pool."""
 
@@ -42,14 +35,6 @@ class QueueRepository(Protocol):
     def read_item(self, queue_item_id: str) -> QueueItem | None: ...
 
     def read_pool_snapshot(self, pool_name: str) -> QueuePoolSnapshot: ...
-
-    def claim_next(
-        self,
-        pool_name: str,
-        *,
-        owner_id: str,
-        claim_id: str,
-    ) -> QueueClaimResult | None: ...
 
     def record_dispatch_handle(
         self,
@@ -91,7 +76,6 @@ class QueueRepository(Protocol):
 
 
 __all__ = [
-    "QueueClaimResult",
     "QueuePoolSnapshot",
     "QueueRepository",
 ]

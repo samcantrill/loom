@@ -354,8 +354,13 @@ class PerRunAuthorityStore(Protocol):
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
     ) -> OutputCommit: ...
+
+    def list_output_commits(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[OutputCommit, ...]: ...
 
     def append_audit_event(
         self, run_uri: str, event: PipelineEvent
@@ -504,8 +509,11 @@ class StageStore(Protocol):
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
     ) -> OutputCommit: ...
+
+    def list_output_commits(self) -> tuple[OutputCommit, ...]: ...
 
     def snapshot(self) -> StageLifecycleSnapshot: ...
 

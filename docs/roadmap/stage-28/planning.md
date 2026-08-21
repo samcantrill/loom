@@ -8,9 +8,9 @@ are preserved
 Planning route: expanded because public plugin/executor registration, durable
 worker reconstruction, resource-validation threading, and callback contracts
 interact
-Current gate: planning workflow complete; Phase 1 not started
-Blockers: none; Stage 27 is a sequencing dependency rather than a planning
-blocker
+Current gate: Phase 1 remotely merged; Phase 2 pending
+Blockers: none; Stage 26's lifecycle-event dependency for Phase 3 is satisfied
+on current `origin/develop`
 
 ## Plain-Language Overview
 
@@ -319,7 +319,11 @@ assembly, and callback behavior while each leaves a useful result.
 
 Gate result: planning, expanded design-safety review, implementation planning,
 independent plan review, one bounded design correction, and one bounded plan
-correction are complete. Phase 1 remains pending until Stage 27 remotely merges.
+correction are complete. The maintainer removed the non-technical Stage 27
+sequencing gate on 2026-08-21, and Phase 1 remotely merged in
+[#222](https://github.com/samcantrill/loom/pull/222). Phase 2 may proceed. Stage
+26's lifecycle catalog and commit-before-observe correction remain the only
+cross-stage dependency, apply to Phase 3, and are already remotely merged.
 
 ## Decisions And Deferrals
 

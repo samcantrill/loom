@@ -1,0 +1,16 @@
+name: deterministic-sweep
+schema_version: 1
+trial:
+  value: 0
+pipeline:
+  name: deterministic-sweep
+  stages:
+    - name: measure
+      factory:
+        _target_: stages:MeasureTrialStage
+      config:
+        value: ${trial.value}
+      outputs:
+        measurement:
+          artifact_type: json
+          codec_key: json.v1

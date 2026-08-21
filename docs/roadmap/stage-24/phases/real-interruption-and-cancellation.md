@@ -2,20 +2,24 @@
 
 ## Metadata
 
-- Status: pending
+- Status: merged
 - Roadmap stage and phase: Stage 24, Phase 1
 - Manifest: `docs/roadmap/stage-24/implementation-plan.md`
 - Branch: `agent/stage-24-p1-real-interruption-and-cancellation`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees` and
   `/home/can134/work/active/loom-worktrees/stage-24-p1-real-interruption-and-cancellation`
-- Base revision: current `origin/develop` when execution begins
+- Base revision: `f709731ef9ce023a3a403eb7ca257bd059f416d7`, the current
+  `origin/develop` revision, followed by branch-local commit `eb51850` carrying
+  only the approved Stage 24/25 roadmap planning needed by this phase
 - PR target: `develop`
 - PR title: `Operational Lifecycle Validation - Phase 1: Real Interruption And Cancellation`
 - Dependencies: completed Stage 23-post and the confirmed Stage 24 planning
   contract
 - Workflow path: fast; refine only if a qualified process-cleanup or durable-
   cancellation blocker satisfies the repository blocker definition
-- Blockers: none
+- Blockers: none. The branch was rebased onto `origin/develop`; the approved
+  roadmap planning was transplanted without the unrelated terminal-monitor
+  work in the local user-authored `develop` commit.
 
 ## Objective And Context
 
@@ -249,24 +253,30 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete
+- Manager preparation: complete on 2026-08-20; submission history is aligned
+  directly to the recorded `origin/develop` base
 - Expanded planning: not needed; current contracts and demonstrated mismatch
   make the lean path sufficient
-- Implementation: pending one `loom_phase_executor`
+- Implementation: complete, including two blocker corrections
 - Refiner: not needed unless the executor returns a qualified blocker
-- Pre-submit gate: pending
+- Pre-submit gate: passed
 - Independent review: not needed on current fast path; reconsider only for a
   material residual process-safety risk
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Blocker corrections: 2/3 -- preserve a committed successful stage when a
+  post-commit event dispatch is interrupted, and make the owned subprocess
+  worker exit observable before re-raising the interrupt; manager verification
+  also made managed-local worker death observable before fallback cleanup and
+  aligned cancelled attempt-lease evidence with the cancellation outcome
+- PR and merge: PR [#216](https://github.com/samcantrill/loom/pull/216)
+  passed CI and was squash-merged to `develop` as `8cc9bfa`
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Separated `KeyboardInterrupt` from ordinary runner failures in serial, prepared-worker, and bounded-parallel flows; durable stage/run cancellation now precedes re-raise, parallel stops submissions while settling active results, and cancelled stages release their authority lease. Blocker correction 1 preserves a durably committed successful stage and its outputs when interruption arrives during `stage.completed` dispatch, while the run is cancelled and unresolved work is blocked. The private subprocess runner now terminates and boundedly observes its owned worker before propagating `KeyboardInterrupt`. Changed `src/loom/pipeline/execution/runner.py`, `src/loom/pipeline/execution/authority_adapter.py`, `src/loom/pipeline/executors/subprocess.py`, `tests/support/pipeline_execution_stages.py`, `tests/support/processes.py`, `tests/unit/loom/pipeline/execution/test_runner.py`, `tests/integration/pipeline/test_parallel_execution.py`, `tests/integration/pipeline/test_subprocess_executor_integration.py`, `tests/integration/queue/test_managed_local_runtime.py`, and `tests/e2e/test_execution_lifecycle.py`. |
+| Tests added or updated | Updated the stage-raised parallel interrupt regression and added a post-commit event-dispatch interrupt regression. Real subprocess timeout coverage retains first-attempt timeout facts/logs and worker-death evidence, then proves a clean successful second attempt and artifact index. POSIX CLI SIGINT coverage observes worker death before fixture fallback cleanup; all new PID signalling validates the captured Linux process-start identity first. The real managed-local cancellation scenario now uses authored static assignment and proves release of both `gpu` and `gpu-0`, without disturbing queued or foreign work. |
+| Validated revision/tree state and evidence | Prepared revision `e8f2804` plus two blocker corrections and manager verification amendments; the final implementation tree was validated on the clean `origin/develop`-based PR branch before this completion-record-only update. The combined targeted suites passed: 62 tests across runner, parallel, subprocess, managed-local, and lifecycle e2e. `make validate-pr` passed: Ruff, Pyright, 2,139 default tests, 128 config-extra tests with 3 expected skips, and package build. `make test-summary` passed: 2,267 passed, 3 skipped, 2,244 deselected; receipt `build/test-summary.md`. |
+| Validation-relevant changes after evidence | None; only this refreshed completion record was added after the successful validation receipt. |
+| PR, review, and merge | PR [#216](https://github.com/samcantrill/loom/pull/216) passed manager review and GitHub CI, then squash-merged to `develop` as `8cc9bfa` on 2026-08-20. |
+| Residual risk and cleanup | POSIX signal/process-group evidence is intentionally Linux-oriented; no broader signal policy, Python-thread preemption, reattachment, or crash recovery was added. The phase branch/worktree is removed after this merge record. Updating the local control checkout is deferred to preserve its unrelated terminal-monitor commit and newer uncommitted roadmap work; remote `develop` is the Phase 2 base. |

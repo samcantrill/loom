@@ -2,20 +2,20 @@
 
 ## Metadata
 
-- Status: pending
+- Status: merged
 - Roadmap stage and phase: v28 Phase 1
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p1-truthful-extension-contracts`
-- Worktree root and path: record during phase preparation; default to the
-  `loom-worktrees` sibling of the discovered control checkout
-- Base revision: current `origin/develop` after Stage 27 remotely merges
+- Worktree root and path: `../loom-worktrees` /
+  `stage-28-p1-truthful-extension-contracts`
+- Base revision: `3531860` (`origin/develop` after Stage 27 Phase 1)
 - PR target: `develop`
 - PR title: `Stage 28 phase 1: publish truthful extension contracts`
-- Dependencies: Stage 27 remotely merged; planning `FR-1` through `FR-3`,
-  `FR-12`, `DQ-1`, `DQ-2`, and `EDR-3`/`EDR-8`
+- Dependencies: planning `FR-1` through `FR-3`, `FR-12`, `DQ-1`, `DQ-2`, and
+  `EDR-3`/`EDR-8`; no cross-stage runtime dependency
 - Workflow path: fast; the expanded stage design review already fixed the only
   public report/readiness decisions
-- Blockers: Stage 27 merge only; no design blocker
+- Blockers: none
 
 ## Objective And Context
 
@@ -214,22 +214,25 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete
+- Manager preparation: complete; branch, worktree, base, target, title,
+  dependency boundary, source seams, and targeted tests verified
 - Expanded planning: not needed; stage-level design review resolved report risk
-- Implementation: pending one `loom_phase_executor`
-- Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: pending
-- Independent review: manager-local fast path
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Implementation: complete in [#222](https://github.com/samcantrill/loom/pull/222)
+- Refiner: not needed; all qualified findings were manager-local
+- Pre-submit gate: complete; isolated GitHub CI passed
+- Independent review: manager-local fast path passed with no product blocker
+- Blocker corrections: 3/3; Pyright fixture typing, fail-closed checker coverage
+  plus exact status vocabulary, and text-diagnostic coverage
+- PR and merge: [#222](https://github.com/samcantrill/loom/pull/222)
+  squash-merged to `develop` as `3b3c51f`
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Merge `3b3c51f`: `src/loom/plugins/diagnostics.py`, `src/loom/plugins/__init__.py`, and `src/loom/cli/plugins.py` add derived six-facet readiness and v2 CLI diagnostic payloads; `src/loom/testing/` adds report values and the four bounded public checkers; phase-scoped docs update `docs/features/plugins.md`, `docs/features/protocols.md`, `docs/features/testing.md`, and `docs/structure.md`. |
+| Tests added or updated | `tests/unit/loom/testing/test_contracts.py`, `tests/package/test_testing_api.py`, `tests/unit/loom/cli/test_plugins.py`, `tests/unit/loom/plugins/test_diagnostics.py`, `tests/package/test_plugins_api.py`, and `tests/contracts/test_cli_plugins_contract.py`; the final targeted phase selections passed 45 tests, including fail-closed and no-import text diagnostics. |
+| Validated revision/tree state and evidence | Final targeted selections passed 45 tests; Ruff and repository-wide Pyright passed. Local full-suite attempts documented one unchanged controller-lease test missing its fixed five-second wait under concurrent roadmap validation; isolated GitHub `CI/checks` passed the published tree in 3m47s before merge. |
+| Validation-relevant changes after evidence | No validation-relevant change followed the passing isolated CI receipt; this post-merge record is documentation-only. |
+| PR, review, and merge | [#222](https://github.com/samcantrill/loom/pull/222) passed manager review and CI, then squash-merged to `develop` as `3b3c51f` on 2026-08-21. |
+| Residual risk and cleanup | `loom.testing` intentionally proves only caller-supplied trusted cases and does not claim remote/backend behavior. Phase worktree and local/remote branch were removed after verified remote merge. |

@@ -246,6 +246,14 @@ def validate_prepared_run_typed_metadata(
                 "metadata key is reserved for unsafe prepared-run payloads",
                 category="unsafe_field",
             )
+        if name == "plugin_activations":
+            if not isinstance(entry, dict):
+                raise PreparedRunStorePayloadError(
+                    entry_field,
+                    "plugin activation metadata must be a mapping",
+                    category="opaque_payload",
+                )
+            continue
         if not isinstance(entry, dict):
             raise PreparedRunStorePayloadError(
                 entry_field,

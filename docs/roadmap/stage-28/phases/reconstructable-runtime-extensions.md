@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: pending
+- Status: merged
 - Roadmap stage and phase: v28 Phase 2
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p2-reconstructable-runtime-extensions`
-- Worktree root and path: record during phase preparation; default to the
-  `loom-worktrees` sibling of the discovered control checkout
-- Base revision: current `origin/develop` after Phase 1 remotely merges
+- Worktree root and path: `../loom-worktrees` /
+  `stage-28-p2-reconstructable-runtime-extensions`
+- Base revision: `986a86f` (current `origin/develop`)
 - PR target: `develop`
 - PR title: `Stage 28 phase 2: reconstruct selected runtime extensions`
 - Dependencies: Phase 1 merged; planning `FR-1`, `FR-2`, and `FR-4` through
@@ -16,7 +16,8 @@
 - Workflow path: expanded because one nested durable activation schema and
   fresh-worker trust boundary causally interact; use at most one phase-planner
   refinement if the current source still leaves that risk unresolved
-- Blockers: none after Phase 1 merge
+- Blockers: none; the maintainer authorized one additional bounded correction,
+  and both expanded-review findings are resolved at `e896e52`
 
 ## Objective And Context
 
@@ -245,24 +246,33 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete
-- Expanded planning: optional one refinement only for unresolved activation/
-  worker boundary at current base
-- Implementation: pending one `loom_phase_executor`
-- Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: pending
-- Independent review: one expanded reviewer only if residual durable/trust risk
-  remains after manager validation
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation: complete; branch, worktree, base, predecessor merge,
+  target, title, ownership, source seams, and targeted tests verified
+- Expanded planning: not needed; the reviewed activation-manifest and worker
+  trust boundary remains decision-complete on the current base
+- Implementation: complete at `e896e52` after executor work, three original
+  bounded manager corrections, and one maintainer-authorized correction for the
+  expanded-review findings
+- Refiner: not used; all concrete findings had direct manager-local fixes
+- Pre-submit gate: passed after the clean rebase onto `origin/develop` at
+  `986a86f`; `make validate-pr` completed Ruff, Pyright, 2,287 default tests
+  with 1 hardware skip, 141 config-extra tests with 3 container-runtime skips,
+  and package build; `make test-summary` wrote a fully passing six-tier receipt
+- Independent review: completed on PR #228; its two product blockers are
+  resolved by pre-import resume identity comparison, including empty selection,
+  and removal of event sinks from Phase 2 run/continuation worker applicability
+- Blocker corrections: 4/4; the maintainer explicitly authorized the fourth
+  bounded correction to resolve both expanded-review findings
+- PR and merge: PR #228 passed refreshed CI and manager review, then squash
+  merged to `develop` as `1040be4`
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | `12340f6` introduced the registries, adapters, activation evidence, and first worker wiring. `3070b71` completed validator threading across config/runtime/preflight/continuation roots, built-in factory composition, worker-only activation subsets, authored-resource preservation, and a real custom executor/codec/validator subprocess path. `9d007ff` removed an isolated pytest module-name collision. `37a6248` restored lazy imports and no-plugin compatibility. `e896e52` compares resume identity before target import and removes deferred event sinks from execution/worker allowlists. Changes stay within CLI composition, plugin adapters/diagnostics, runtime parsing/capabilities, execution reconstruction, executor command builders, tests, and the accepted docs. |
+| Tests added or updated | Added strict manifest/selector, executor registry/loader, direct validator, resource reparse, worker command, and synthetic installed-entry-point fixtures. The real CLI E2E selects a project subprocess executor plus non-built-in codec/resource kind, proves exact resume succeeds and omitted activation fails, asserts independent parent/child validator PIDs, loads the custom payload, and verifies the exact worker activation subset. The review correction's broad Stage 28 cluster passed 343 tests. |
+| Validated revision/tree state and evidence | Clean rebased source/test tree at `e896e52` plus this evidence-only roadmap commit. `make validate-pr` passed Ruff, Pyright, default 2,287 passed / 1 skipped / 121 deselected, config-extra 141 passed / 3 skipped / 2,291 deselected, and package build. `make test-summary` wrote `build/test-summary.md`: package 116, unit 1,619, contract 286, integration 210, E2E 56, and config-extra 141 passed with no failures or errors. |
+| Validation-relevant changes after evidence | none; only roadmap evidence and post-merge status are updated after the successful receipts. |
+| PR, review, and merge | PR [#228](https://github.com/samcantrill/loom/pull/228) targeted `develop`, passed CI in 4m22s, had no remaining review blocker, and squash merged as `1040be4`. |
+| Residual risk and cleanup | No known blocker. Cross-host installation remains an operator responsibility; unavailable distribution evidence is reported as a warning while exact group/name/target identity remains mandatory. |
