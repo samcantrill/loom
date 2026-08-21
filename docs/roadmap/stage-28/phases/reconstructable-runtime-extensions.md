@@ -249,23 +249,25 @@ Final commands:
   target, title, ownership, source seams, and targeted tests verified
 - Expanded planning: not needed; the reviewed activation-manifest and worker
   trust boundary remains decision-complete on the current base
-- Implementation: source and phase-scoped tests committed at `c2cfa12`; final
-  validation receipt is pending because this executor's command window ends
-  during repository-wide Pyright/test-harness runs
-- Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: pending
-- Independent review: one expanded reviewer only if residual durable/trust risk
-  remains after manager validation
-- Blocker corrections: 0/3
+- Implementation: complete at `71aca78` after executor work plus three bounded
+  manager corrections for missing composition-root wiring, an isolated-harness
+  test-module collision, and import/readiness/preflight compatibility
+- Refiner: not used; all concrete findings had direct manager-local fixes
+- Pre-submit gate: passed on `71aca78`; `make validate-pr` completed Ruff,
+  Pyright, 2,222 default tests, 132 config-extra tests with 3 skips, and package
+  build; `make test-summary` wrote a fully passing six-tier receipt
+- Independent review: pending one bounded expanded review of the activation and
+  fresh-worker trust boundary after PR publication
+- Blocker corrections: 3/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `c2cfa12` adds instance-local executor registrations and executor/validator adapters; exact activation selection, manifest/readback/comparison, command plugin options, reserved request metadata, selected parser injection, codec artifact factory closure, and worker command/evidence checks. Changed paths: `src/loom/cli/{plugin_activation,run,validate,plan,preflight,stage}.py`, `src/loom/plugins/{activation,entrypoints,executors,resource_validators,diagnostics,__init__}.py`, `src/loom/pipeline/{executors,execution/{models,runner,stage_worker},specs,validation}.py`, and canonical `docs/features/plugins.md` / `docs/structure.md`. |
-| Tests added or updated | Added `tests/unit/loom/plugins/test_activation.py` and `tests/unit/loom/pipeline/executors/test_registry.py`; updated plugin readiness/known-group contracts. Focused run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/loom/plugins/test_activation.py tests/unit/loom/pipeline/executors/test_registry.py tests/unit/loom/cli/test_run.py tests/unit/loom/pipeline/execution/test_stage_worker.py` — 35 passed. Broader phase-targeted run reached 99 passed for CLI, worker, subprocess, plugin, and contract coverage before the command window limit. |
-| Validated revision/tree state and evidence | Clean committed tree at `c2cfa12` after focused tests and Ruff. `make validate-pr` and `make test-summary` were invoked on the stable tree, but this executor environment terminates both during repository-wide Pyright/test-harness execution after 30 seconds; no successful final receipt or `build/test-summary.md` was produced. |
-| Validation-relevant changes after evidence | none after `c2cfa12`; final gate remains required. |
+| Implementation and changed paths | `c2cfa12` introduced the registries, adapters, activation evidence, and first worker wiring. `e60e309` completed validator threading across config/runtime/preflight/continuation roots, built-in factory composition, worker-only activation subsets, authored-resource preservation, and a real custom executor/codec/validator subprocess path. `af44469` removed an isolated pytest module-name collision. `71aca78` restored lazy imports and no-plugin compatibility while making readiness diagnostics match the executable groups. Changes stay within CLI composition, plugin adapters/diagnostics, runtime parsing/capabilities, execution reconstruction, executor command builders, tests, and the accepted docs. |
+| Tests added or updated | Added strict manifest/selector, executor registry/loader, direct validator, resource reparse, worker command, and synthetic installed-entry-point fixtures. The real CLI E2E selects a project subprocess executor plus non-built-in codec/resource kind, asserts independent parent/child validator PIDs, loads the custom payload, and verifies the exact worker activation subset. Phase-targeted acceptance: 189 passed. Gate-failure compatibility cluster: 153 passed. |
+| Validated revision/tree state and evidence | Clean source/test tree at `71aca78`. `make validate-pr` passed Ruff, Pyright, default 2,222 passed / 112 deselected, config-extra 132 passed / 3 skipped / 2,225 deselected, and package build. `make test-summary` wrote `build/test-summary.md`: package 115, unit 1,567, contract 279, integration 206, E2E 55, and config-extra 132 passed with no failures or errors. |
+| Validation-relevant changes after evidence | none; only this phase execution-plan evidence is updated after the successful receipts. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Residual blocker: rerun the two required final commands in an environment without the 30-second command limit, then have the manager inspect their receipts. No PR, review, merge, or cleanup performed. |
+| Residual risk and cleanup | Cross-host installation remains environment-owned, and distribution identity is packaging evidence rather than a content hash as accepted. PR review, CI, merge, metadata finalization, and cleanup remain. |
