@@ -15,6 +15,7 @@ from loom.queue import (
     QueueItem,
     QueueItemStatus,
     QueueService,
+    SQLiteQueueRepository,
     normalize_queue_spec,
 )
 from loom.queue.controller import (
@@ -431,7 +432,8 @@ def test_pool_status_text_matches_json_safe_facts_and_redaction(tmp_path: Path) 
 def _claim_fixture(service: QueueService, item_id: str, *, claim_id: str) -> QueueItem:
     item = service.read_item(item_id)
     assert item is not None
-    claimed = service.repository._claim_selection_candidate(
+    repository = cast(SQLiteQueueRepository, service.repository)
+    claimed = repository._claim_selection_candidate(
         item_id,
         pool_name=item.pool_name,
         expected_dispatch_attempt=item.dispatch_attempt,

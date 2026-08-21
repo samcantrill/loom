@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -11,6 +12,7 @@ from loom.queue import (
     QueueItemStatus,
     QueueService,
     QueueServiceState,
+    SQLiteQueueRepository,
     normalize_queue_spec,
 )
 
@@ -104,7 +106,8 @@ def _clock(*values: str):
 def _claim_fixture(service: QueueService, item_id: str, *, claim_id: str):
     item = service.read_item(item_id)
     assert item is not None
-    claimed = service.repository._claim_selection_candidate(
+    repository = cast(SQLiteQueueRepository, service.repository)
+    claimed = repository._claim_selection_candidate(
         item_id,
         pool_name=item.pool_name,
         expected_dispatch_attempt=item.dispatch_attempt,
