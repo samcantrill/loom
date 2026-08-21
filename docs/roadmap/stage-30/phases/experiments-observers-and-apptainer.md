@@ -7,7 +7,7 @@
 - Manifest: `docs/roadmap/stage-30/implementation-plan.md`
 - Branch: `agent/stage-30-p2-experiments-observers-and-apptainer`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; `/home/can134/work/active/loom-worktrees/stage-30-p2-experiments-observers-and-apptainer`
-- Base revision: `4513da7`
+- Base revision: `16a1849`
 - PR target: develop
 - PR title: `Stage 30 phase 2: demonstrate sweeps observers and Apptainer`
 - Dependencies: Stage 30 Phase 1 remote merge and existing Stage 13/18/20/22 behavior.
@@ -161,14 +161,18 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: passed on `4513da7`; Phase 1 is remotely merged and its
-  completion metadata is current on `origin/develop`.
+- Manager preparation: passed; Phase 1 is remotely merged and its completion
+  metadata is current. The phase was rebased onto current `origin/develop` at
+  `16a1849` before final validation.
 - Expanded planning: not needed.
 - Implementation: passed; added deterministic sweep, direct event-sink, and
   fake-Apptainer examples with focused catalog and journey coverage.
-- Refiner: not needed / pending evidence.
-- Pre-submit gate: pending.
-- Independent review: not needed / pending residual-risk check.
+- Refiner: not needed; correction 1 was completed by the healthy executor.
+- Pre-submit gate: passed on rebased implementation tree `1aec267`; Ruff and
+  Pyright passed, the default matrix passed 2,224 tests, config-extra passed 138
+  tests with 3 expected skips, and package builds succeeded.
+- Independent review: not needed; manager fast-path review found no remaining
+  scope, contract, truthfulness, test, dependency, or proportionality blocker.
 - Blocker corrections: 1/3 — deterministic sweep now scopes each invocation's
   run URIs beneath a unique child of the configured run root.
 - PR and merge: pending.
@@ -179,7 +183,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added `examples/experiments/deterministic-sweep/`, `examples/extensions/event-sink/`, and `examples/execution/containers/slurm-apptainer/`; routed their group/root catalogs and added focused example tests. |
 | Tests added or updated | Added sweep and event-sink integration journeys, fake-Apptainer e2e coverage, and v30 catalog assertions; sweep coverage reruns the entrypoint against identical roots. |
-| Validated revision/tree state and evidence | Executor tree: focused examples/catalog suite 6 passed; sweep/Apptainer regression suite 3 passed; local execution suite 9 passed; `ruff check` passed. Correction 1 same-root sweep rerun passed (1 test) and focused Ruff passed. |
-| Validation-relevant changes after evidence | Correction 1 scopes rendered sweep run URIs per invocation; its focused rerun and Ruff evidence are current. |
+| Validated revision/tree state and evidence | Rebased implementation tree `1aec267`: targeted runtime regressions 12 passed; executable example/catalog coverage 43 passed; Ruff and Pyright passed; `make validate-pr` default passed 2,224 tests and config-extra passed 138 with 3 expected skips; package builds succeeded. The exact-tree `make test-summary` receipt passed package 115, unit 1,561, contract 284, integration 209, E2E 55, and config-extra 138 tests with zero failures/errors and 3 expected skips. |
+| Validation-relevant changes after evidence | None after `1aec267`; this evidence update is documentation-only. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Fake Apptainer proves command integration rather than live HPC/container isolation, and the README says so explicitly. Plugin packaging remains a secondary illustrative snippet. Correction 1 makes the sweep rerunnable against identical configured roots. Branch/worktree cleanup is pending remote merge. |
