@@ -2,17 +2,17 @@
 
 ## Metadata
 
-- Status: planned
+- Status: pr_open
 - Roadmap stage and phase: Stage 30, Phase 2
 - Manifest: `docs/roadmap/stage-30/implementation-plan.md`
 - Branch: `agent/stage-30-p2-experiments-observers-and-apptainer`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; `/home/can134/work/active/loom-worktrees/stage-30-p2-experiments-observers-and-apptainer`
-- Base revision: current `origin/develop` after Phase 1 is remotely merged
+- Base revision: `e7506b5`
 - PR target: develop
 - PR title: `Stage 30 phase 2: demonstrate sweeps observers and Apptainer`
 - Dependencies: Stage 30 Phase 1 remote merge and existing Stage 13/18/20/22 behavior.
 - Workflow path: fast
-- Blockers: Phase 1 must merge first.
+- Blockers: none
 
 ## Objective And Context
 
@@ -161,23 +161,30 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: approved; prepare from current `origin/develop` only
-  after Phase 1 remote merge.
+- Manager preparation: passed; Phase 1 is remotely merged and its completion
+  metadata is current. The phase was rebased onto current `origin/develop` at
+  `e7506b5` after Stage 27 completed and before final validation.
 - Expanded planning: not needed.
-- Implementation: pending.
-- Refiner: not needed / pending evidence.
-- Pre-submit gate: pending.
-- Independent review: not needed / pending residual-risk check.
-- Blocker corrections: 0/3
-- PR and merge: pending.
+- Implementation: passed; added deterministic sweep, direct event-sink, and
+  fake-Apptainer examples with focused catalog and journey coverage.
+- Refiner: not needed; correction 1 was completed by the healthy executor.
+- Pre-submit gate: passed on rebased tree `7bccb97`; Ruff and Pyright passed,
+  the default matrix passed 2,242 tests with 1 expected skip, config-extra
+  passed 139 tests with 3 expected skips, and package builds succeeded.
+- Independent review: not needed; manager fast-path review found no remaining
+  scope, contract, truthfulness, test, dependency, or proportionality blocker.
+- Blocker corrections: 1/3 — deterministic sweep now scopes each invocation's
+  run URIs beneath a unique child of the configured run root.
+- PR and merge: [#227](https://github.com/samcantrill/loom/pull/227) is open;
+  CI and merge are pending.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added `examples/experiments/deterministic-sweep/`, `examples/extensions/event-sink/`, and `examples/execution/containers/slurm-apptainer/`; routed their group/root catalogs and added focused example tests. |
+| Tests added or updated | Added sweep and event-sink integration journeys, fake-Apptainer e2e coverage, and v30 catalog assertions; sweep coverage reruns the entrypoint against identical roots. |
+| Validated revision/tree state and evidence | Rebased tree `7bccb97`: targeted runtime regressions 12 passed; executable example/catalog coverage 44 passed; Ruff and Pyright passed; `make validate-pr` default passed 2,242 tests with 1 expected skip and config-extra passed 139 with 3 expected skips; package builds succeeded. The exact-tree `make test-summary` receipt passed package 116, unit 1,577, contract 285, integration 209, E2E 55, and config-extra 139 tests with zero failures/errors and 3 expected skips. |
+| Validation-relevant changes after evidence | None after `7bccb97`; this evidence refresh is documentation-only. |
+| PR, review, and merge | Manager fast-path review passed. [#227](https://github.com/samcantrill/loom/pull/227) is open against `develop`; CI and merge are pending. |
+| Residual risk and cleanup | Fake Apptainer proves command integration rather than live HPC/container isolation, and the README says so explicitly. Plugin packaging remains a secondary illustrative snippet. Correction 1 makes the sweep rerunnable against identical configured roots. Branch/worktree cleanup is pending remote merge. |

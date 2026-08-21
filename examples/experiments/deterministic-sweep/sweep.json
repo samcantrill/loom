@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "mode": "manual",
+  "sweep_id": "deterministic-sweep",
+  "trials": [
+    {"overrides": {"trial.value": 3}},
+    {"overrides": {"trial.value": 7}}
+  ]
+}

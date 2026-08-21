@@ -60,6 +60,7 @@ PYTHON_API_EXAMPLES = {
     "operations.captured-logs",
     "operations.managed-local-queue",
     "operations.resource-leases",
+    "extensions.event-sink",
 }
 USER_FACING_V10_EXAMPLES = {
     "execution.offline-first-import": "smoke",
@@ -264,6 +265,29 @@ def test_v17_docker_examples_are_cataloged_and_documented() -> None:
     assert "security sandbox" in docker_readme
     assert "untrusted project code" in docker_readme
     assert "Docker daemon" in docker_readme
+
+
+def test_v30_experiment_extension_and_apptainer_examples_are_cataloged() -> None:
+    manifests = _example_manifest_map()
+    expected = {
+        "experiments.deterministic-sweep": "cli",
+        "extensions.event-sink": "python_api",
+        "execution.containers.slurm-apptainer": "cli",
+    }
+    for example_id, surface in expected.items():
+        manifest = manifests[example_id]
+        assert manifest["introduced_in"] == "v30"
+        assert manifest["status"] == "runnable"
+        assert manifest["validation"] == "full"
+        assert manifest["surface"] == surface
+
+    examples_readme = (EXAMPLES_ROOT / "README.md").read_text(encoding="utf-8")
+    execution_readme = (EXAMPLES_ROOT / "execution" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    assert "experiments/README.md" in examples_readme
+    assert "extensions/README.md" in examples_readme
+    assert "execution.containers.slurm-apptainer" in execution_readme
 
 
 def test_inventory_owner_docs_and_feature_coverage_references_are_true() -> None:
