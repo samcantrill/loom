@@ -379,7 +379,8 @@ Final commands:
   source seams, and targeted commands verified
 - Expanded planning: not needed; the cross-stage correction confirmed this
   phase as the sole exact-filter owner
-- Implementation: pending one `loom_phase_executor`
+- Implementation: complete; filtered registration, CLI activation, continuation
+  dispatch, docs, and phase-scoped proof committed at `4398545`
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: pending
 - Independent review: manager-local fast path
@@ -390,9 +391,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
+| Implementation and changed paths | `EventSinkSubscription`/`EventSinkRegistration` and filtered registry dispatch in `src/loom/pipeline/event_sinks.py`; plugin registration normalization in `src/loom/plugins/event_sinks.py`; selected lifecycle-owner registry construction in `src/loom/cli/plugin_activation.py`, `run.py`, and `stage_job.py`; stage-job dispatcher threading in `src/loom/pipeline/execution/continuation.py`; v2 sink conformance in `src/loom/testing/checks.py`; lifecycle/Slack-Discord/mutable-hook documentation in `examples/extensions/event-sink/README.md`. |
+| Tests added or updated | Package exports; subscription validation, exact filtering, ordering/failure compatibility, plugin registration factory, v2 conformance selection, run/stage-job group allowlists, committed stage-job observation, and selected filtered-sink CLI E2E in the matching package, unit, integration, E2E, and Stage 28 test-support files. |
+| Validated revision/tree state and evidence | `4398545` (`fix(stage-28): satisfy observer type contracts`) was clean for validation. Targeted isolated commands passed: 39 package/unit/plugin/conformance tests and 27 contract/integration/E2E tests. `make validate-pr` passed (Ruff, Pyright, default/config-extra tests, build). `make test-summary` passed: 2,438 passed, 0 failed, 3 skipped; receipt `build/test-summary.md` generated 2026-08-21T07:07:42Z. |
+| Validation-relevant changes after evidence | None; this completion-record-only metadata commit follows the validated implementation revision. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No blocker. Synchronous observer latency and crash-before-callback loss remain the accepted debt; retries, delivery state, and mutable hooks remain intentionally deferred. Worktree and branch remain for manager PR handling. |
