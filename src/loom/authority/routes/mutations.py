@@ -16,6 +16,7 @@ from loom.pipeline.stores import (
     AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LIMITS_ENSURE_PATH,
     AUTHORITY_COORDINATION_SWEEP_CREATE_PATH,
     AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH,
     AUTHORITY_COORDINATION_TRIAL_LIST_PATH,
@@ -624,6 +625,21 @@ def set_resource_limit(
     """Set a resource limit through authority-owned coordination."""
 
     return _handle(AuthorityMutationOperation.SET_RESOURCE_LIMIT, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_RESOURCE_LIMITS_ENSURE_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def ensure_resource_limits(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Atomically create resource limits or accept exact existing limits."""
+
+    return _handle(AuthorityMutationOperation.ENSURE_RESOURCE_LIMITS, payload, services)
 
 
 @router.post(

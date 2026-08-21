@@ -88,6 +88,16 @@ def test_import_managed_local_queue_runtime_is_explicit() -> None:
     assert "ManagedLocalQueueRuntime" not in loom.queue.__all__
 
 
+def test_import_local_gpu_planning_is_explicit_and_does_not_probe_hardware() -> None:
+    import loom.queue
+    from loom.queue.gpu import LocalGpuDevice, LocalGpuPoolPlan, plan_local_gpu_pool
+
+    assert LocalGpuDevice
+    assert LocalGpuPoolPlan
+    assert plan_local_gpu_pool
+    assert "LocalGpuDevice" not in loom.queue.__all__
+
+
 def test_package_includes_typing_marker() -> None:
     assert files("loom").joinpath("py.typed").is_file()
 

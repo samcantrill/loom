@@ -1957,6 +1957,13 @@ class AuthorityRepository:
             limit=limit,
         )
 
+    def ensure_resource_limits(
+        self, workspace_id: str, limits: Mapping[str, int]
+    ) -> tuple[ConcurrencyCounter, ...]:
+        """Atomically create missing generic resource limits or match existing ones."""
+
+        return self._coordination_store().ensure_resource_limits(workspace_id, limits)
+
     def read_resource_limit(
         self, workspace_id: str, resource_key: str
     ) -> ConcurrencyCounter | None:

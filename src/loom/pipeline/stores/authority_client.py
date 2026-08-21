@@ -143,6 +143,9 @@ AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH = (
 AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/resources/limit"
 )
+AUTHORITY_COORDINATION_RESOURCE_LIMITS_ENSURE_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/resources/limits/ensure"
+)
 AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/resources/limit/read"
 )
@@ -1210,6 +1213,24 @@ class AuthorityClient:
             workspace_id=workspace_id,
         )
 
+    def ensure_resource_limits(
+        self,
+        workspace_id: str,
+        limits: Mapping[str, int],
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Atomically create missing resource limits or accept exact matches."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_RESOURCE_LIMITS_ENSURE_PATH,
+            body={"workspace_id": workspace_id, "limits": dict(limits)},
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
     def read_resource_limit(
         self,
         workspace_id: str,
@@ -1410,6 +1431,7 @@ __all__ = [
     "AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH",
     "AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH",
     "AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH",
+    "AUTHORITY_COORDINATION_RESOURCE_LIMITS_ENSURE_PATH",
     "AuthorityClient",
     "AuthorityClientError",
     "AuthorityHttpTransport",

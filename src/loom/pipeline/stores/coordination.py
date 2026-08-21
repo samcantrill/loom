@@ -38,7 +38,11 @@ class CoordinationStoreError(ValueError):
         kind: CoordinationFailureKind | None = None,
     ) -> None:
         super().__init__(message)
-        self.kind = CoordinationFailureKind.INTERNAL if kind is None else CoordinationFailureKind(kind)
+        self.kind = (
+            CoordinationFailureKind.INTERNAL
+            if kind is None
+            else CoordinationFailureKind(kind)
+        )
 
 
 class CoordinationFailureKind(StrEnum):
@@ -494,6 +498,10 @@ class WorkspaceCoordinationStore(Protocol):
     def set_resource_limit(
         self, workspace_id: str, resource_key: str, *, limit: int | None
     ) -> ConcurrencyCounter: ...
+
+    def ensure_resource_limits(
+        self, workspace_id: str, limits: Mapping[str, int]
+    ) -> tuple[ConcurrencyCounter, ...]: ...
 
     def read_resource_limit(
         self, workspace_id: str, resource_key: str
