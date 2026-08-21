@@ -98,5 +98,5 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
+| 1 | pending | implementation and manager review complete; required local validation passed at `3cd8759` | Hard removal may affect unknown external callers; private repository scheduling capability intentionally remains unstable until Stage 29. | pending remote merge and worktree cleanup |
 | 2 | pending | pending | pending | pending |

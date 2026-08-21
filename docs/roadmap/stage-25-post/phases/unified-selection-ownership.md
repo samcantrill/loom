@@ -8,7 +8,7 @@
 - Branch: `agent/stage-25-post-p1-unified-selection-ownership`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`;
   `/home/can134/work/active/loom-worktrees/stage-25-post-p1-unified-selection-ownership`
-- Base revision: `e3968f785736d47b54aa3e8972b5368a4ecbaa56`
+- Base revision: `d4115c204bc7e297e1a9ab77fdde931fff0ba92d`
 - PR target: develop
 - PR title: `Stage 25-post phase 1: unify queue selection and ownership`
 - Dependencies: merged Stage 25 and Stage 26 metadata on current
@@ -199,27 +199,29 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete at base `e3968f7`; source/tests and hard-cutover
-  usage audit refreshed
+- Manager preparation: complete at current base `d4115c2`; source/tests and
+  hard-cutover usage audit refreshed after the clean rebase
 - Expanded planning: design review passed; plan review simplification removed
   the orphan public ownership-result export
-- Implementation: complete at `53916ae`; unified private selection/ownership,
-  public cut-over, caller migration, tests, and queue feature documentation
-  recorded below
+- Implementation: complete at `3cd8759`; unified private selection/ownership,
+  identity-only policy binding, public cut-over, obsolete FIFO-selector removal,
+  caller migration, tests, and queue feature documentation recorded below
 - Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: pending
-- Independent review: not needed unless implementation leaves a material
-  residual risk
-- Blocker corrections: 0/3
+- Pre-submit gate: passed at `3cd8759`; manager scope/API audit and required
+  validation are complete
+- Independent review: not needed; the fast-path manager review found no
+  material residual risk after the bounded correction
+- Blocker corrections: 1/3; manager corrected policy binding to freeze only
+  recorded identity and removed the now-unused FIFO-only selector
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Private immutable attempt and construction-bound repository capabilities in `controller.py`; frozen policy binding in `selection.py`; removed public implicit acquisition from service/repository/SQLite/root exports; migrated first-party fixtures and updated `docs/features/queue.md`. |
-| Tests added or updated | Controller coverage for unsupported repository construction, frozen policy ID/implementation, delegated FIFO without resource filtering, and lost-CAS bound; public API/repository cut-over coverage; SQLite exact-CAS fixtures/race coverage; lifecycle, runtime, and status fixture migration. |
-| Validated revision/tree state and evidence | `53916ae` clean implementation tree: targeted queue suites passed (71); `make validate-pr` passed (Ruff, Pyright, default 2178 passed/112 deselected, config-extra 132 passed/3 skipped, build); `make test-summary` passed and wrote `build/test-summary.md` (package 113, unit 1533, contract 275, integration 203, e2e 54, config-extra 132). |
+| Implementation and changed paths | Private immutable attempt and construction-bound repository capabilities in `controller.py`; identity-only frozen policy binding in `selection.py`; removed public implicit acquisition from service/repository/SQLite/root exports; removed unused `_scheduler.py`; migrated first-party fixtures and updated `docs/features/queue.md`. |
+| Tests added or updated | Controller coverage for unsupported repository construction, frozen policy ID with live implementation behavior, delegated FIFO without resource filtering, and lost-CAS bound; public API/repository cut-over coverage; SQLite exact-CAS fixtures/race coverage; lifecycle, runtime, and status fixture migration. |
+| Validated revision/tree state and evidence | `3cd8759` clean implementation tree rebased on `d4115c2`: targeted queue suites passed (75); `TMPDIR=/dev/shm make validate-pr` passed (Ruff, Pyright, default 2206 passed/112 deselected, config-extra 132 passed/3 skipped, build); `TMPDIR=/dev/shm make test-summary` passed and wrote `build/test-summary.md` (package 115, unit 1552, contract 279, integration 206, e2e 54, config-extra 132). A disk-backed `/tmp` retry first exposed an unrelated baseline lease-renewal timeout that reproduced on clean `origin/develop`; the same test passed in 0.81 seconds with the isolated memory-backed temp location used for final evidence. |
 | Validation-relevant changes after evidence | None; this completion-record-only update does not alter source, tests, dependencies, build, or validation configuration. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Accepted hard cut-over may break unknown external callers; private custom-repository capability remains intentionally unstable until Stage 29. No executor cleanup required. |
