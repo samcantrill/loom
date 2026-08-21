@@ -217,7 +217,8 @@ Final commands:
 - Manager preparation: complete; branch, worktree, base, target, title,
   dependency boundary, source seams, and targeted tests verified
 - Expanded planning: not needed; stage-level design review resolved report risk
-- Implementation: pending one `loom_phase_executor`
+- Implementation: complete at `a391ba5ff03c4f3c5e0934fb9f9f784db983483c`; phase source,
+  tests, and canonical documentation are committed
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: pending
 - Independent review: manager-local fast path
@@ -228,9 +229,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
+| Implementation and changed paths | `a391ba5ff03c4f3c5e0934fb9f9f784db983483c`: `src/loom/plugins/diagnostics.py`, `src/loom/plugins/__init__.py`, and `src/loom/cli/plugins.py` add derived six-facet readiness and v2 CLI diagnostic payloads; `src/loom/testing/` adds report values and the four bounded public checkers; phase-scoped docs update `docs/features/plugins.md`, `docs/features/protocols.md`, `docs/features/testing.md`, and `docs/structure.md`. |
+| Tests added or updated | `tests/unit/loom/testing/test_contracts.py`, `tests/package/test_testing_api.py`, `tests/unit/loom/plugins/test_diagnostics.py`, `tests/package/test_plugins_api.py`, and `tests/contracts/test_cli_plugins_contract.py`; targeted phase selection passed 43 tests. |
+| Validated revision/tree state and evidence | Source/test/docs tree at `a391ba5ff03c4f3c5e0934fb9f9f784db983483c`: `ruff check .` passed; changed-path Pyright passed with 0 errors; `uv build` passed; `make test-summary` passed all 2,313 selected tests (3 skipped) and wrote `build/test-summary.md` at `2026-08-21T00:15:00+00:00`. `make validate-pr` was started on the stable tree, but this executor's command runner ended its receipt before the full gate completed; the manager must obtain that single gate receipt before pre-submit. |
+| Validation-relevant changes after evidence | none; this completion-record-only commit does not alter source, tests, dependencies, build, or validation configuration. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No product or phase-design blocker. The only outstanding gate is the manager's complete `make validate-pr` receipt; `loom.testing` intentionally proves only caller-supplied trusted cases and does not claim remote/backend behavior. |
