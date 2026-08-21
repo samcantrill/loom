@@ -5,8 +5,9 @@ Roadmap stage: 25-post
 Planning document: `docs/roadmap/stage-25-post/planning.md`
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 2, factual dispatch outcomes
-Blockers: none
+Current phase: Phase 2, factual dispatch outcomes (blocked)
+Blockers: Phase 2 independent review found contradictory local possible-start
+evidence after all three scoped correction passes were consumed.
 
 ## Summary
 
@@ -74,7 +75,7 @@ Blockers: none
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `unified-selection-ownership` | merged | `docs/roadmap/stage-25-post/phases/unified-selection-ownership.md` | `agent/stage-25-post-p1-unified-selection-ownership` | #223 | Private scheduling operation, policy binding, repository capability/cut-over, controller and caller migration | Make every current path select and acquire through one bounded implementation. |
-| 2 | `factual-dispatch-outcomes` | in_progress | `docs/roadmap/stage-25-post/phases/factual-dispatch-outcomes.md` | `agent/stage-25-post-p2-factual-dispatch-outcomes` | pending | Public dispatch facts, built-in adapters, controller transition table, diagnostics/evidence | Make retry impossible unless capacity non-start and cleanup are both proven safe. |
+| 2 | `factual-dispatch-outcomes` | blocked | `docs/roadmap/stage-25-post/phases/factual-dispatch-outcomes.md` | `agent/stage-25-post-p2-factual-dispatch-outcomes` | pending | Public dispatch facts, built-in adapters, controller transition table, diagnostics/evidence | Make retry impossible unless capacity non-start and cleanup are both proven safe. |
 
 ## Quality Gate
 
@@ -99,4 +100,4 @@ Blockers: none
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | PR #223 passed CI and squash-merged as `0267a2c` | implementation and manager review complete; required local validation passed at `3cd8759` | Hard removal may affect unknown external callers; private repository scheduling capability intentionally remains unstable until Stage 29. | remote/local branch and dedicated worktree removed |
-| 2 | pending | implementation and manager pre-submit review complete; required validation passed at `cd0b5dd` | Start uncertainty has no external recovery without a handle; managed-local runtime remains degraded until explicit restart/operator action. | pending independent review, PR, remote merge, and worktree cleanup |
+| 2 | blocked before PR; independent review found contradictory local possible-start evidence | implementation and manager pre-submit validation passed at `cd0b5dd`, but review found one product blocker after correction budget exhaustion | `START_UNCERTAIN` currently carries a false definite non-start boolean on process-runner exceptions | branch/worktree retained for authorized continuation |

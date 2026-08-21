@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: 25-post, Phase 2
 - Manifest: `docs/roadmap/stage-25-post/implementation-plan.md`
 - Branch: `agent/stage-25-post-p2-factual-dispatch-outcomes`
@@ -15,7 +15,10 @@
   `FQ-4`, and `DQ-4` through `DQ-7`
 - Workflow path: expanded plan; phase fast path unless Phase 1 refresh exposes a
   new material adapter-boundary risk
-- Blockers: none
+- Blockers: independent review found contradictory durable evidence on the
+  supported local process-runner exception path: the result is correctly
+  `START_UNCERTAIN` but records `local_process_started: false`. The smallest fix
+  is known, but the phase's three scoped correction passes are exhausted.
 
 ## Objective And Context
 
@@ -246,16 +249,17 @@ Final commands:
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: passed at `cd0b5dd`; manager scope/API audit, legacy usage
   audit, required validation, and suite evidence are complete
-- Independent review: one expanded-path review pending because possible-start
-  and cleanup truth are high-consequence adapter boundaries and all correction
-  passes were consumed
+- Independent review: blocker found; `LocalQueueDispatchAdapter` persists a
+  definite non-start boolean inside `START_UNCERTAIN` evidence when process
+  start raises
 - Blocker corrections: 3/3 — one executor correction for the factual interface,
   diagnostics, missing-adapter mapping, and runtime dispatch state; one manager
   correction for required fields, known assignment causes, and cross-cycle
   terminal-uncertainty blocking; one manager correction preventing false
   cleanup confirmation when assignment acquisition raises without a provider
   assignment handle
-- PR and merge: pending
+- PR and merge: blocked before submission; no knowingly contradictory evidence
+  will be published
 
 ## Completion Record
 
@@ -265,5 +269,5 @@ Final commands:
 | Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Corrections add safe logging-category and missing-adapter unit coverage, known assignment-cause coverage, provider-exception cleanup uncertainty, and managed-runtime dispatch-uncertainty integration coverage across the same and later cycles. Phase unit/contract/integration command passed (130); final correction focus passed (91). |
 | Validated revision/tree state and evidence | `cd0b5dd` clean tree on base `16a1849`: `TMPDIR=/dev/shm make validate-pr` passed (Ruff, Pyright, default 2245 passed/114 deselected, config-extra 134 passed/3 skipped, build); `TMPDIR=/dev/shm make test-summary` passed and wrote `build/test-summary.md` (package 115, unit 1580, contract 285, integration 210, e2e 55, config-extra 134). Legacy dispatch audit and `git diff --check` passed. |
 | Validation-relevant changes after evidence | None; focused evidence is current for source and tests. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | `START_UNCERTAIN` is deliberately terminal queue-local `UNKNOWN` without external recovery; managed-local operation remains degraded until explicit restart/operator action. Independent review, PR, merge, and cleanup remain. |
+| PR, review, and merge | Independent expanded-path review found one product blocker in local possible-start evidence; PR submission is blocked because the three scoped correction passes are exhausted. |
+| Residual risk and cleanup | `LocalQueueDispatchAdapter._pre_start_cleanup_result` records `local_process_started: false` for a process-runner exception while returning `START_UNCERTAIN`. The smallest fix is to omit that field from the uncertainty branch and add a focused regression assertion. Worktree and branch are retained for an authorized continuation. |
