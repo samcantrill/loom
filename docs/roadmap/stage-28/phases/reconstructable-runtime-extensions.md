@@ -253,9 +253,10 @@ Final commands:
   manager corrections for missing composition-root wiring, an isolated-harness
   test-module collision, and import/readiness/preflight compatibility
 - Refiner: not used; all concrete findings had direct manager-local fixes
-- Pre-submit gate: passed on `71aca78`; `make validate-pr` completed Ruff,
-  Pyright, 2,222 default tests, 132 config-extra tests with 3 skips, and package
-  build; `make test-summary` wrote a fully passing six-tier receipt
+- Pre-submit gate: passed after the clean rebase onto `origin/develop` at
+  `16a1849`; `make validate-pr` completed Ruff, Pyright, 2,242 default tests,
+  134 config-extra tests with 3 skips, and package build; `make test-summary`
+  wrote a fully passing six-tier receipt
 - Independent review: pending one bounded expanded review of the activation and
   fresh-worker trust boundary after PR publication
 - Blocker corrections: 3/3
@@ -267,7 +268,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | `c2cfa12` introduced the registries, adapters, activation evidence, and first worker wiring. `e60e309` completed validator threading across config/runtime/preflight/continuation roots, built-in factory composition, worker-only activation subsets, authored-resource preservation, and a real custom executor/codec/validator subprocess path. `af44469` removed an isolated pytest module-name collision. `71aca78` restored lazy imports and no-plugin compatibility while making readiness diagnostics match the executable groups. Changes stay within CLI composition, plugin adapters/diagnostics, runtime parsing/capabilities, execution reconstruction, executor command builders, tests, and the accepted docs. |
 | Tests added or updated | Added strict manifest/selector, executor registry/loader, direct validator, resource reparse, worker command, and synthetic installed-entry-point fixtures. The real CLI E2E selects a project subprocess executor plus non-built-in codec/resource kind, asserts independent parent/child validator PIDs, loads the custom payload, and verifies the exact worker activation subset. Phase-targeted acceptance: 189 passed. Gate-failure compatibility cluster: 153 passed. |
-| Validated revision/tree state and evidence | Clean source/test tree at `71aca78`. `make validate-pr` passed Ruff, Pyright, default 2,222 passed / 112 deselected, config-extra 132 passed / 3 skipped / 2,225 deselected, and package build. `make test-summary` wrote `build/test-summary.md`: package 115, unit 1,567, contract 279, integration 206, E2E 55, and config-extra 132 passed with no failures or errors. |
+| Validated revision/tree state and evidence | Clean rebased source/test tree at `f4d36cc` plus evidence-only roadmap commits. `make validate-pr` passed Ruff, Pyright, default 2,242 passed / 114 deselected, config-extra 134 passed / 3 skipped / 2,245 deselected, and package build. `make test-summary` wrote `build/test-summary.md`: package 115, unit 1,578, contract 284, integration 209, E2E 56, and config-extra 134 passed with no failures or errors. |
 | Validation-relevant changes after evidence | none; only this phase execution-plan evidence is updated after the successful receipts. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Cross-host installation remains environment-owned, and distribution identity is packaging evidence rather than a content hash as accepted. PR review, CI, merge, metadata finalization, and cleanup remain. |
