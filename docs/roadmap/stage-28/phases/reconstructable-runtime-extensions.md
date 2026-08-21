@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: v28 Phase 2
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p2-reconstructable-runtime-extensions`
-- Worktree root and path: record during phase preparation; default to the
-  `loom-worktrees` sibling of the discovered control checkout
-- Base revision: current `origin/develop` after Phase 1 remotely merges
+- Worktree root and path: `../loom-worktrees` /
+  `stage-28-p2-reconstructable-runtime-extensions`
+- Base revision: `d4115c2` (`origin/develop` after Phase 1 merge metadata)
 - PR target: `develop`
 - PR title: `Stage 28 phase 2: reconstruct selected runtime extensions`
 - Dependencies: Phase 1 merged; planning `FR-1`, `FR-2`, and `FR-4` through
@@ -16,7 +16,7 @@
 - Workflow path: expanded because one nested durable activation schema and
   fresh-worker trust boundary causally interact; use at most one phase-planner
   refinement if the current source still leaves that risk unresolved
-- Blockers: none after Phase 1 merge
+- Blockers: none; Phase 1 is remotely merged and recorded
 
 ## Objective And Context
 
@@ -245,9 +245,10 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete
-- Expanded planning: optional one refinement only for unresolved activation/
-  worker boundary at current base
+- Manager preparation: complete; branch, worktree, base, predecessor merge,
+  target, title, ownership, source seams, and targeted tests verified
+- Expanded planning: not needed; the reviewed activation-manifest and worker
+  trust boundary remains decision-complete on the current base
 - Implementation: pending one `loom_phase_executor`
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: pending
