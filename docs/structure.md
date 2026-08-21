@@ -366,6 +366,11 @@ src/loom/
     event_sinks.py
     recipes.py
 
+  testing/
+    __init__.py
+    reports.py
+    checks.py
+
   cli/
     __init__.py
     main.py
@@ -883,6 +888,12 @@ not import `loom.cli`, config-only optional dependencies, local stores,
 executors, project stage modules, or command registration. Check implementations
 that need heavier public APIs should import them inside runner code rather than
 through the package root.
+
+`loom.testing` is a separate opt-in downstream test-support package. It may
+depend on public runtime contracts to execute caller-supplied conformance cases,
+but `loom`, runtime modules, package roots, plugin discovery, and CLI modules
+must not import it. It owns versioned plain-data contract reports, not runtime
+validation or extension activation.
 
 Preflight is best-effort and non-persistent by default. It can report stable
 check IDs, statuses, severities, messages, and plain-data details suitable for

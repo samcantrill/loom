@@ -116,6 +116,20 @@ status commands do not import project stage code
 plugins do not load automatically on import
 ```
 
+### 2.1 Downstream conformance support
+
+`loom.testing` is an opt-in package for downstream test suites. It provides
+immutable `ContractFinding` and `ContractReport` values plus four bounded
+checks: `check_codec_contract`, `check_resource_validator_contract`,
+`check_executor_contract`, and `check_event_sink_contract`. Callers supply
+the samples, requests, events, and contexts that make a claim meaningful.
+
+The package has no `pytest`, plugin discovery, CLI, configuration-composition,
+or optional-runtime dependency, and runtime/package roots must not import it.
+It catches ordinary supplied-object exceptions into deterministic findings but
+does not construct, discover, isolate, retry, time out, or otherwise admit an
+extension. A passing report is evidence only for its supplied cases.
+
 ---
 
 ## 3. Package Boundary

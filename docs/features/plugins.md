@@ -613,19 +613,27 @@ loading is available through `load_event_sink_entry_points(records, registry,
 
 ### 7.6 Readiness Classifications
 
-Stage 14 exposed all known groups as metadata namespaces. Runtime event work now
-makes event sinks registry-ready as an explicit supplied-registry adapter:
+Readiness reports independent facts, not one broad claim. Every known group has
+these fixed facets: `contract`, `python_injection`, `registry`,
+`plugin_loading`, `cli_selection`, and `fresh_process_reconstruction`. A facet
+is `supported`, `unsupported`, or `not_applicable`, and carries local evidence.
+The compatibility `status` is derived: it is `registry-ready` only when both
+`registry` and `plugin_loading` are supported; otherwise it is `listing-only`.
 
-| Group | Stage 14 readiness | Current contract evidence | Revisit trigger |
+| Group | Contract / injection | Registry / loading | CLI / reconstruction | Derived status and revisit trigger |
 | --- | --- | --- | --- |
-| `loom.recipes` | registry-ready | `RecipeCatalog` owns recipe registration and replacement policy | Recipe catalog plugin policy changes |
-| `loom.codecs` | registry-ready | `CodecRegistry` owns codec validation and duplicate key policy | Codec registry replacement or adapter policy changes |
-| `loom.sources` | listing-only | `DataSource` exists, but no source plugin registry or loader contract is stable | Source-owned registry and plugin adapter contract lands |
-| `loom.executors` | listing-only | Executor descriptors cover capabilities, not third-party implementation loading | Executor implementation registry or descriptor loader lands |
-| `loom.artifact_store_backends` | listing-only | Stage 15 owns backend descriptors, config handoff, capability records, URI policy, credentials, operation semantics, and registry shape | Stage 15 defines a store-owned backend registry and descriptor contract |
-| `loom.run_exporters` | listing-only | `RunExporter` and `RunImporter` protocols exist, but no plugin registry or loader contract is stable | Run exchange defines supplied exporter/importer plugin registries |
-| `loom.sweep_providers` | listing-only | Sweep provider protocols exist, but no plugin registry or loader contract is stable | Sweep planning defines a supplied provider plugin registry |
-| `loom.event_sinks` | registry-ready | `EventSinkRegistry` owns explicit registration and duplicate-name policy | Event sink plugin constructor or registry policy changes |
+| `loom.recipes` | supported / supported | supported / supported | unsupported / unsupported | registry-ready; add explicit run selection and activation evidence when a consumer needs them |
+| `loom.codecs` | supported / supported | supported / supported | unsupported / unsupported | registry-ready; add explicit run selection and activation evidence when a consumer needs them |
+| `loom.sources` | supported / `not_applicable` | `not_applicable` / `not_applicable` | `not_applicable` / `not_applicable` | listing-only; add a source-owned registry and adapter contract |
+| `loom.executors` | supported / supported | unsupported / unsupported | unsupported / unsupported | listing-only; add an executor implementation registry and loader |
+| `loom.artifact_store_backends` | unsupported / `not_applicable` | `not_applicable` / `not_applicable` | `not_applicable` / `not_applicable` | listing-only; publish a store-owned backend contract and registry |
+| `loom.run_exporters` | supported / `not_applicable` | `not_applicable` / `not_applicable` | `not_applicable` / `not_applicable` | listing-only; define supplied exporter/importer registries |
+| `loom.sweep_providers` | supported / `not_applicable` | `not_applicable` / `not_applicable` | `not_applicable` / `not_applicable` | listing-only; define a supplied provider registry |
+| `loom.event_sinks` | supported / supported | supported / supported | unsupported / unsupported | registry-ready; add explicit lifecycle selection and activation evidence when needed |
+
+`loom plugins list` and `loom plugins check` JSON use v2 envelopes so they can
+include the full `group_readiness` records while preserving existing record and
+group fields. Text diagnostics print each facet and its evidence.
 
 Listing-only means discovery, CLI list output, and selected diagnostics may
 report installed entry point metadata, but Stage 14 must not import targets,

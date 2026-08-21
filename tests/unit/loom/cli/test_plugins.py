@@ -264,6 +264,48 @@ def test_plugins_list_labels_event_sinks_registry_ready(
     assert stderr.getvalue() == ""
 
 
+def test_plugins_list_text_reports_facet_evidence_without_importing_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        plugins_command,
+        "_entry_point_provider",
+        _fake_provider(
+            (
+                _fake_entry_point(
+                    group=LOOM_EXECUTORS_GROUP,
+                    name="project",
+                    value="loom.plugins._project:executor",
+                ),
+            )
+        ),
+    )
+
+    def fail_import(name: str, package: str | None = None) -> ModuleType:
+        del package
+        raise AssertionError(f"listing-only target should not be imported: {name}")
+
+    monkeypatch.setattr(importlib, "import_module", fail_import)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["plugins", "list", "--group", LOOM_EXECUTORS_GROUP],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    output = stdout.getvalue()
+    assert "readiness loom.executors contract: supported" in output
+    assert "readiness loom.executors plugin_loading: unsupported" in output
+    assert "readiness loom.sources registry: not_applicable" in output
+    assert "Run commands do not yet select executor plugins." in output
+    assert stderr.getvalue() == ""
+
+
 @pytest.mark.parametrize("group", _FUTURE_GROUPS)
 def test_plugins_check_does_not_import_future_group_targets(
     monkeypatch: pytest.MonkeyPatch,
