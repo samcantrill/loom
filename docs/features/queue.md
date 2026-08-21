@@ -18,9 +18,10 @@ Python-first enqueue/control surface
 thin operational CLI for checks, status, cancellation, and foreground drain
 ```
 
-The queue does not provide priorities, fairness, retries, bulk CLI submission,
-SSH dispatch, bundle transport, or queue-side authority resource-limit
-provisioning.
+The queue does not provide priority/fair-share accounts, automatic job retry,
+bulk CLI submission, SSH dispatch, bundle transport, or queue-side authority
+resource-limit provisioning. Stage 29 adds resource-aware whole-run placement
+without turning Loom into a general cluster manager.
 
 ## Ownership Model
 
@@ -226,13 +227,142 @@ the same physical member coordination keys used by individual allocation. The
 [paired example provider](../../examples/operations/managed-local-queue/paired_assignment_provider.py)
 is a copyable pattern, not a supported core import or a synthetic bundle-key
 scheme. The controller active limit is one-runtime-local policy, not a
-distributed quota. Resource-aware candidate selection remains Stage 25 work;
-the approved [plain-language design guide](../roadmap/stage-25/design-guide.md)
-documents the current FIFO limitation, oldest-eligible default, caller policy
-boundary, exact ownership, bounded continuation, and Stage 29 reuse.
-Notification policy is Stage 26 work. Generic scheduling, reattachment, and
-resource observation remain deferred until a later stage has accepted
-requirements.
+distributed quota. Stage 25 supplies bounded oldest-eligible queue ordering;
+Stage 29 folds that behavior and the Stage 27 resource/provider seams into the
+generic scheduler described below. Notification policy remains Stage 26 work.
+
+## Stage 29 Generic Scheduler Direction
+
+Stage 29 changes managed queue placement, not delegated scheduler ownership.
+Command-scoped local execution, `ManagedLocalQueueRuntime`, a persistent local
+daemon, and several remote agents all compose the same coordinator scheduler
+and assignment lifecycle. There is no second local scheduler and no durable
+queue on each agent.
+
+The durable submission carries a versioned whole-run placement request:
+
+```yaml
+placement:
+  schema_version: 1
+  resources:
+    cpu:
+      contract: scalar/v1
+      quantity: "4"
+    memory:
+      contract: bytes/v1
+      minimum: 68719476736
+    gpu:
+      contract: gpu/v1
+      count: 1
+      mode: exclusive
+      each:
+        minimum_vram_bytes: 68719476736
+  hard_constraints:
+    - type: machine-attribute/v1
+      attribute: architecture
+      equals: x86_64
+  soft_preferences:
+    - type: preferred-agent-order/v1
+      agents: [machine-A, machine-B]
+  fallback:
+    mode: immediate
+```
+
+This is a request for the whole run's launch placement. It is separate from a
+pipeline stage's `ResourceRequest`; Loom does not sum stage requests and guess
+whether stages overlap. Submission validates and fingerprints the placement
+request before it becomes queue state.
+
+Every authenticated agent publishes two related views:
+
+```text
+inventory     what trusted local configuration permits the agent to manage
+availability  what remains assignable in one exact current revision
+```
+
+An offer binds those views to the agent, durable agent session, configuration
+fingerprint, inventory revision, availability revision, pool contribution,
+resident execution profile, and expiry. Expiry removes only future scheduling
+capacity. It does not imply that a process died, release an accepted claim, or
+permit another session to take over.
+
+A managed pool is a scheduling, admission-policy, and authorization domain. Its
+capacity is derived from fresh authenticated agent contributions; the
+coordinator does not maintain a second aggregate capacity number that can drift
+from agent truth. Initially one job must fit completely on one agent. CPU from
+`machine-A` cannot be combined with a GPU from `machine-B` for one placement.
+
+The scheduler receives one immutable bounded snapshot:
+
+```python
+snapshot = SchedulingSnapshot(
+    waiting_jobs=queue.in_order(),
+    opportunities=fresh_agent_availability(),
+    pool_policy=policy,
+)
+
+decision = scheduler.choose(snapshot, resource_planners)
+```
+
+Its order is deliberate:
+
+1. Generate complete single-agent candidate claims for the oldest waiting job.
+2. Apply core safety rules and tagged hard constraints. These can only remove a
+   candidate.
+3. If the job is proven infeasible now, continue to the next queued job.
+4. For the oldest runnable job, apply pool and job soft preferences. These can
+   only rank already-feasible placements.
+5. Use stable identities for deterministic ties and return at most one
+   decision.
+
+Candidate search is tri-state: complete feasible, complete infeasible, or
+`SEARCH_EXHAUSTED`. The coordinator does not skip an older indeterminate job or
+commit a winner from an incomplete placement set unless the resource planner
+provides a sound winner proof. This trades some throughput for explicit
+correctness under bounded search.
+
+Queue order and machine preference therefore remain different policies:
+
+```python
+job = oldest_runnable_job(snapshot)      # queue policy
+agent = best_feasible_placement(job)     # placement policy
+```
+
+Pool/site policy may prefer GPU models or fill machines in a deterministic
+order, and a job may express a preferred agent order. Hard targeting is a hard
+constraint: a job targeted to `machine-A` never spills to `machine-B`.
+Preferences do not make an invalid placement valid. Immediate fallback is the
+default; waiting for a preferred placement and relaxing later requires an
+explicit durable fallback policy.
+
+Resource-specific behavior is behind a narrow, explicitly composed trusted
+planner registry. A scalar planner proposes exact quantity claims; a GPU
+planner proposes concrete safe device claims. Built-in hard/soft rules are
+versioned tagged data interpreted by private dispatch, not remotely supplied
+callables. Stage 29 deliberately adds neither a public replaceable scheduler
+protocol nor an unrestricted constraint language.
+
+The coordinator's commit remains the distributed correctness boundary. In one
+transaction it revalidates the queue attempt, agent/session, configuration,
+inventory and availability revisions, work request, target, claim fingerprint/
+contract versions, and assignment uniqueness. A successful transaction creates
+`OFFERED`; it does not authorize execution. The selected agent then performs
+authoritative local admission and binding. Drift produces a safe decline and a
+new availability revision, not an unsafe launch.
+
+One availability revision has at most one unresolved work request/assignment
+handshake. Accept or decline resolves it, after which the agent reports a new
+revision. This prevents two coordinator decisions from spending the same
+capacity while allowing previously granted jobs to keep running concurrently.
+
+Safe pending diagnostics distinguish unsupported resource contracts, no known
+capable agent, temporary resource shortage, hard-constraint mismatch,
+preferred-fallback waiting, stale snapshot, and search exhaustion. They never
+expose commands, secrets, raw device bindings, or local paths.
+
+Delegated pools retain their existing boundary: Loom submits one whole run and
+the external scheduler owns its own resource placement. Stage 29 does not
+silently apply the managed Loom scheduler inside delegated SLURM ordering.
 
 ## Delegated SLURM Pools
 

@@ -1,646 +1,629 @@
-# Roadmap v29 Planning: Durable Daemon And Multi-Machine Agent Pools
+# Roadmap v29 Planning: Durable Generic Scheduler And Multi-Machine Agent Pools
 
-Status: confirmed; topology/lifecycle and conditional-loss amendment approved
+Status: manager quality gate passed; maintainer implementation-plan approval pending
 Roadmap stage: v29
-Evidence tree: `develop` at `2c05906c15791a025ff2cae90633d77efdc89aac`;
-source is unchanged since `314e418`
-Planning route: expanded for a network command-execution boundary, durable
-assignment identity, session fencing, cross-owner recovery, and migration of
-existing managed entrypoints onto one coordinator/agent implementation
-Current gate: planning and detailed-plan gates complete; maintainer confirmed
-the conditional verified-loss policy on 2026-08-20
-Blockers: revised Stage 25 and Stage 28 must merge before Phase 1
+Evidence tree: `develop` at `0d077a6c5cd0621e1c24960753b51d3b961b898e`;
+relevant dirty paths are this Stage 29 artifact set plus the roadmap, glossary,
+and scheduling/resource/protocol feature-document propagation
+Planning route: expanded because the amendment changes public resource and
+placement contracts, durable queue/assignment state, coordinator/agent trust
+boundaries, and causally interacting scheduling/admission concurrency
+Current gate: maintainer-approved behavior recorded; expanded design and
+detailed plan-consistency reviews passed after bounded corrections
+Blockers: none; Phase 1 preparation must inspect the exact implemented
+prerequisite contracts on current `origin/develop` before editing them
 
-Stage 29 makes one managed model usable command-scoped, co-located, or across a
-coordinator and outbound agents. Each composes the same coordinator,
-Stage 25 selector, assignment lifecycle, client port, and agent runtime. Only
-transport varies. Shared-filesystem transport remains out of scope.
+Stage 29 supplies one managed whole-run scheduler and execution model in three
+compositions: a bounded local command, a persistent single-machine daemon, and
+a coordinator with outbound agents on several machines. The coordinator sees
+all waiting work and all current authenticated agent capacity, selects the next
+runnable job, chooses its best feasible single-machine placement, and commits a
+durable assignment. Deployment changes transport and lifetime, not scheduling,
+resource, security, or lifecycle semantics. Shared-filesystem communication is
+deferred.
 
 ## Current State
 
-The maintainer approved one managed path on 2026-08-20, then requested more
-explicit topology, acknowledgement, singleton, configuration, and machine-loss
-behavior. This amendment keeps the coordinator-owned queue and outbound agent
-connections, explains that long polling is immediate coordinator-directed
-delivery rather than a daemon scheduler, and adds bounded redispatch only after
-non-completion and old-execution containment are both proven. The maintainer
-confirmed that redispatch must remain conditional. Execution awaits merged
-Stages 25/28; Phase 1 then starts from refreshed source.
+The maintainer has approved two connected behavior sets.
+
+The generic scheduling amendment requires:
+
+- a versioned whole-run placement request with extensible resource-specific
+  request data;
+- configured agents publishing versioned inventory and current availability for
+  CPU, memory, discrete devices, device memory, attributes, and later registered
+  resource kinds;
+- one coordinator scheduler comparing a bounded global set of job-to-agent
+  candidates rather than selecting independently for whichever agent polls;
+- hard constraints that can only remove placements, soft preferences that only
+  rank feasible placements, and queue ordering that remains separate from
+  machine ranking;
+- exact normalized quantities, including supported fractional resources, with
+  no binary floating-point accounting;
+- explicit exclusive, VRAM-share, or provider-defined fractional GPU meanings;
+- one job fitting wholly on one agent initially; and
+- coordinator placement reservation followed by authoritative agent-local
+  admission and binding.
+
+The previously accepted durable outage/security behavior remains unchanged:
+
+- the coordinator and every agent use separate SQLite state;
+- a committed execution grant survives coordinator disconnection and ordinary
+  coordinator process restart;
+- a disconnected agent accepts no new work, but continues supervising granted
+  work, journals bounded critical events, reconnects, reconciles, and replays;
+- agent unavailability removes capacity but does not establish job outcome;
+- accepted work is never automatically reassigned after agent loss; and
+- only exact reconciliation, authoritative success, or authenticated positive-
+  containment manual recovery may resolve an unknown accepted assignment.
 
 ## Evidence And Scope
 
-| Source or area | Current finding | Used for | Related IDs |
+| Source or area | Implemented foundation or preparation obligation | Stage 29 use | Related IDs |
 | --- | --- | --- | --- |
-| `QueueController`/`ManagedLocalQueueRuntime` | Direct claim/dispatch beside daemon assignments would create two lifecycle paths. | Facade migration. | FR-1, FR-4, FR-9 |
-| Queue models/service | Queue/run identity and lifecycle exist, but durable handoff/journal do not. | Assignment mapping. | FR-2, FR-5, FR-9, FR-12 |
-| Revised Stage 25 | One engine applies eligibility then oldest-eligible/custom preference, independent of topology and ownership transition. | Common JIT selection. | FR-2, FR-4, FR-6 |
-| Local adapter/providers | Admission, binding, containment, cancellation, cleanup, and fail-closed loss already work. | Agent engine. | FR-3, FR-10, FR-13 |
-| Authority service/client | HTTP version/idempotency and generation exist; remote-agent auth does not. | Transport/fencing. | FR-7, FR-8, FR-13 |
-| Stage 27 | Immutable local GPU plans/providers and fingerprints exist. | Offer/config inputs. | FR-3, FR-14 |
+| Queue controller/runtime and SQLite | Implemented managed queue, controller, assignment, and SQLite seams are Stage 29 prerequisites; Phase 1 preparation verifies their exact current names and compatibility surface. | Preserve public facades, replace managed selection/claim with coordinator scheduling and assignment CAS. | FR-1, FR-2, FR-14 |
+| Stage 25 implementation | Supplies the completed queue eligibility/order seam; exact current names are rediscovered at Phase 1 preparation. | Reuse or narrow it as queue ordering inside the Stage 29 scheduler, not as opportunity-local placement. | FR-6, FR-11 |
+| Runtime resource model | Typed resource entries and validators distinguish kind, amount, unit, and attributes but do not own global matching or physical allocation. | Reuse validation vocabulary where truthful; add a separate whole-run placement request and scheduling resource contracts. | FR-7, FR-8 |
+| Stage 27 implementation | Supplies completed local GPU inventory/plans/providers. | Project safe device inventory and bind selected claims without exposing raw device bindings. | FR-3, FR-12, FR-26 |
+| Stage 28 implementation | Supplies completed explicit trusted extension activation. | Reuse explicit composition; do not let submitted payloads or stored metadata load scheduler code. | FR-8, FR-16 |
+| Existing assignment provider/adapter | Local admission, concrete binding, renewal/release, process containment, cancellation, and cleanup already have owners. | Keep physical acquisition and process truth agent-local. | FR-3, FR-14, FR-17 |
+| Existing authority app/client | Versioning, idempotency, service generations, and scoped mutation patterns exist. | Reuse patterns without merging queue, run, scheduler, or agent authority. | FR-15, FR-16, FR-21 |
+| Maintainer behavior agreement | Global resources, hard/soft constraints, machine/GPU preferences, exact fractions, and explicit GPU modes are current requirements. | Supersedes the prior Stage 29 deferral of global placement redesign. | all scheduling IDs |
 
-- Outcome: one per-user daemon persists queue work and may co-locate its agent
-  or coordinate outbound agents. The same path backs command-scoped and
-  `ManagedLocalQueueRuntime` entrypoints without HTTP or a background process.
-- Included: one coordinator; direct/HTTP clients; one agent runtime/journal;
-  durable assignments; expiring offers; facade migration; daemon singleton
-  guards; multi-agent long polls; targeting; cancellation/status; drain/reload;
-  evidence-gated bounded redispatch; recovery; environment-driven deployment;
-  and a network receipt using only `machine-A` and `machine-B` labels.
-- Remote profile: Loom/project/config are pre-staged; assignment carries the
-  existing bounded launch snapshot. General code/data/artifact/log transfer is
-  later data-plane work.
-- Non-goals: topology-specific schedulers/runtimes, shared-filesystem signalling,
-  peer traffic, HA/federation, preemption/fairness, cross-host jobs, remote
-  installation/data plane, timeout-only ambiguous-loss retry, general job-
-  failure retry, or universal scheduling.
-- Durable additions are assignments, admitted agents, control intent, the
-  agent journal, and the minimal verified-loss decision/evidence needed to
-  create a bounded next attempt. Sessions/offers expire; private/secret values
-  stay excluded.
+- User-visible outcome: a client submits a whole-run job once; the coordinator
+  durably queues it, evaluates all fresh agent offers, explains why it is
+  pending when none fit, chooses the oldest runnable job and its best feasible
+  machine, atomically reserves the placement, and lets that agent bind and run
+  it. Later clients can inspect or cancel it.
+- Included: generic resource envelopes and registered planners, exact scalar and
+  fractional quantities, discrete devices and VRAM, machine attributes, hard
+  constraints, tiered/weighted preferences, global single-agent placement,
+  deterministic bounded search, safe diagnostics, durable assignments, direct
+  and mTLS clients, agent journals, outage continuation, and guarded recovery.
+- Non-goals: pipeline-stage scheduling, cross-agent gang allocation, combining
+  resources from several machines for one job, preemption, fair-share accounts,
+  unrestricted constraint expressions, a general solver, coordinator HA,
+  automatic loss redispatch, global floating licences without an accepted
+  transactional owner, or shared-filesystem signalling.
+- Public/durable impact: one queue-local resource-planner protocol, concrete
+  scheduler values, a schema-versioned placement request and resource claim
+  projection, assignment scheduling
+  evidence, richer safe offer data, and pending-placement status. Existing queue
+  identities, run authority, adapter process behavior, and delegated external
+  scheduler ownership remain distinct.
 
 ## Minimum Useful Change
 
-- Add `QueueCoordinator` for eligibility, Stage 25 preference, assignment,
-  cancellation, and status; expose it through one `QueueCoordinatorClient`
-  port with direct and authenticated HTTP implementations.
-- Add one `QueueAgentRuntime` for opportunity publication, bounded work pull,
-  journal-before-start, existing admission/execution, and reporting.
-- Recompose `QueueController`, `ManagedLocalQueueRuntime`, command-scoped
-  managed operations, and co-located daemon operation around the direct client
-  and agent runtime. They remain callable without a daemon/network but no longer
-  retain a direct managed claim/dispatch implementation.
-- Remote agents substitute the secure HTTP client; core behavior is unchanged.
+- A command-scoped local run and persistent co-located daemon both use the same
+  coordinator scheduler with one local agent offer. A request for 1.5 CPUs and
+  10 GiB memory is normalized exactly, matched, reserved, admitted, and released
+  through the common assignment path.
+- With `machine-A` advertising one 40 GiB GPU and `machine-B` one 80 GiB GPU, a
+  job requiring one exclusive GPU with at least 64 GiB VRAM is eligible only on
+  `machine-B`. If both fit, configured model/machine preferences rank them.
+- The closest reusable seams are completed queue ordering, runtime resource
+  validation, local GPU plans, assignment providers, and durable queue CAS.
+  None represents a global placement candidate or safe cross-machine resource
+  claim, so Stage 29 needs those explicit contracts.
+- Defer multi-agent jobs, general solvers, plugin-discovered stock-daemon custom
+  scheduling unless current merged Stage 28 already supplies a truthful
+  reconstruction path, automatic recovery, HA, and data transfer.
 
 ## Functional Requirements
 
-| ID | Required behavior and boundary | Validation | Status |
-| --- | --- | --- | --- |
-| FR-1 | One managed model supports command-scoped compatibility, `ManagedLocalQueueRuntime`, co-located daemon, and designated coordinator/remote agents. Existing entrypoints are facades, not topology schedulers. | Normalized lifecycle parity. | locked |
-| FR-2 | Coordinator alone owns queue order/eligibility/Stage 25 preference, assignments, cancellation intent, and joined status; it never owns physical inventory or child processes. | Ownership contracts. | locked |
-| FR-3 | One agent runtime owns local config/inventory/plan/provider, allocatable opportunity, journal, admission, process containment, cleanup, and safe diagnostics for direct and HTTP clients. | Agent conformance and redaction. | locked |
-| FR-4 | Same queue + exact opportunity + policy produces the same choice and assignment transitions in every managed composition. No `is_remote`/topology branch enters core scheduling or execution. | Direct/HTTP conformance. | locked |
-| FR-5 | Queue/run/pool/agent/session/config/offer/assignment/attempt/process/slot/external IDs stay joinable and distinct; `queue_item_id` remains submission identity. | Codec/transitions. | locked |
-| FR-6 | Each opportunity is one agent's fresh pool contribution; coordinator applies target/profile/capability/current single-agent fit then revised Stage 25 oldest-eligible/custom preference. Agent performs final admission/binding; capacity is never combined for one job. | Fit/expiry races. | locked |
-| FR-7 | One coordinator-client port covers register, full offer/heartbeat, work pull, accept/report, and bounded control. Direct and HTTP clients have identical application semantics; agents make no inbound/peer connections. | Client conformance/fake transport. | locked |
-| FR-8 | Non-loopback HTTP requires verified TLS and separate scoped client/agent credentials; validate version/workspace/role/size/idempotency before mutation. Direct composition still validates session/revision/transitions in core. | Auth/version/replay negatives. | locked |
-| FR-9 | One work request creates at most one fenced `OFFERED` assignment. Agent journals receipt, admits locally, declines before acceptance on failure, or journals acceptance/process identity and obtains acknowledgement before start. Retries never duplicate process. | Crash/race injection. | locked |
-| FR-10 | Cancellation is durable coordinator intent; agent terminates, observes exit, releases ownership, and reports terminal. Unreachable accepted work is never reassigned from timeout alone; verified stopped and incomplete work may enter the bounded loss-redispatch gate. | Cancel/loss races. | locked |
-| FR-11 | Hard `target_agent_id` never relaxes; unknown targets fail submission and known offline targets remain queued with a safe reason. | Target parity. | locked |
-| FR-12 | Queue item, assignment, and run-authority lifecycle stay separate joined views. `OFFERED` reserves without claiming execution; acceptance authorizes the dispatch attempt; running maps to existing dispatched evidence. | State/join contracts. | locked |
-| FR-13 | Service/agent restart and network loss fence stale sessions. Work may continue only while ownership safety can be maintained; otherwise the agent terminates fail-closed and reconciliation classifies authoritative completion, proven non-completion, or ambiguity. | Restart/partition. | locked |
-| FR-14 | Config change publishes a new fingerprint/opportunity. Removal withdraws capacity then drains; force explicitly cancels. No mutation beneath live assignments. | Drain/reload. | locked |
-| FR-15 | Core tests are topology-free; direct/HTTP clients share a conformance suite; command, co-located, loopback-remote, and one opt-in `machine-A`/`machine-B` scenario prove the same normalized trace without a full Cartesian matrix. | Hermetic + receipt. | locked |
-| FR-16 | A free slice keeps one bounded work long poll outstanding, so the coordinator returns newly available work immediately. Presence/control delivery remains active independently while all slices are busy. Agents hold no queued backlog. | Timing/backpressure/cancel tests. | locked |
-| FR-17 | Daemon startup is single-active per local state root and stable `agent_id`; a second live agent session is rejected, graceful shutdown relinquishes it, and crash replacement waits for expiry/reconciliation. Coordinator/agent endpoints and secret-file references are supplied by the environment or supervisor, never committed examples. | Lock/register/config tests. | locked |
-| FR-18 | Whole-run infrastructure-loss redispatch is opt-in, finite, and captured durably when the queue item is submitted. It requires authoritative absence of committed run success plus positive proof that the old execution cannot continue. It increments `dispatch_attempt`, fences every old mutation, and never treats heartbeat/offer expiry as proof. Resume occurs only when the selected run/artifact stores are accessible and existing resume validation permits reuse; otherwise it is a fresh whole-run attempt. | Loss evidence/retry matrix. | locked |
+| ID | Required behavior | Scope and non-goals | Dependencies | Validation | Status |
+| --- | --- | --- | --- | --- | --- |
+| FR-1 | Command-scoped local, managed runtime, co-located daemon, and remote-agent modes compose one coordinator scheduler, assignment lifecycle, and agent runtime. | No topology-specific scheduler or retained direct claim path. | Queue facades. | Normalized trace parity. | locked |
+| FR-2 | Coordinator alone owns durable queue order, scheduling orchestration, placement reservation, assignment, cancellation intent, recovery decision, and joined status. | It does not own hardware, local bindings, or child processes. | Coordinator SQLite. | Ownership/import review. | locked |
+| FR-3 | Each agent owns trusted local configuration, inventory observation, availability, final admission/binding, process containment/cleanup, and a separate SQLite journal/outbox. | Coordinator cannot remotely replace config or manufacture capacity. | Local plans/providers. | Offer/binding/reload tests. | locked |
+| FR-4 | The same validated scheduling snapshot and policy produce the same decision through direct or HTTP composition. | Transport, connection order, and agent polling order cannot affect ranking. | Pure scheduler. | Permutation and client conformance. | locked |
+| FR-5 | Queue/run/pool, placement request, resource contract, inventory/availability revision, coordinator ID/epoch/generation, agent/session/connection, work request, assignment/attempt/process, resource claim/slot, and external identities remain distinct and joinable. | No overloaded job, lease, or offer identity. | Durable models. | Codec/identity tests. | locked |
+| FR-6 | For a bounded queue window and all current schedulable agent opportunities, the coordinator generates single-agent candidates, removes hard-ineligible candidates, chooses the next runnable job, ranks its placements, and returns at most one decision per commit cycle. Candidate evaluation is tri-state: complete feasible, complete infeasible, or search exhausted. | Resources from several agents never combine for one job; no batch/gang commit. An older indeterminate job cannot be skipped. | Queue order and offers. | Multi-agent candidate/race/search tests. | locked |
+| FR-7 | Submission durably records a schema-versioned, canonically fingerprinted whole-run placement request containing resource-specific payloads, hard constraints, soft preferences, target, and fallback policy. | Do not infer whole-run capacity by aggregating pipeline-stage requests. | Queue record migration. | Round-trip/migration tests. | locked |
+| FR-8 | Explicitly registered resource implementations validate and normalize request/inventory payloads, propose bounded deterministic claims with complete/exhausted state and optional sound winner bound, validate safe claim projections, and explain failure. Coordinator and agent advertise compatible contract identity/version. | No process-global registry, automatic plugin discovery, or remote callable loading. | Resource registry/composition. | Contract/version/bound/failure tests. | locked |
+| FR-9 | Core hard invariants apply before schema-versioned tagged built-in hard constraints. Unknown versions, invalid payloads, or evaluator failures produce no mutation and an explicit scheduler error. | Security, pool, target, session, offer freshness, required contract, and single-agent rules are non-overridable. Public custom constraint implementations are deferred. | Candidate evaluator. | Negative/version/fault tests. | locked |
+| FR-10 | Schema-versioned tagged built-in soft preferences rank only already-feasible candidates using deterministic bounded integer or tiered contributions with safe reason evidence. | A preference never makes an invalid placement valid or silently acts as a hard rule. Public custom preference implementations are deferred. | Placement policy. | Hard-versus-soft/version tests. | locked |
+| FR-11 | Queue ordering is separate from placement ranking. Default behavior chooses the oldest job having at least one feasible current placement, then chooses that job's best placement. | No global pair score that lets machine affinity bypass queue order; no starvation guarantee yet. | Completed queue ordering seam. | Oldest-runnable examples. | locked |
+| FR-12 | An offer distinguishes configured inventory from current availability and includes stable agent/session, config fingerprint, inventory and availability revisions, resource contract versions, safe attributes, and bounded TTL. | No credentials, commands, paths, raw bindings, or provider tokens. Coordinator receipt time owns expiry. | Agent offer protocol. | Codec/redaction/expiry tests. | locked |
+| FR-13 | An agent has at most one unresolved work-admission request for one availability revision. Once an assignment consumes it, the agent accepts/declines and publishes a newer availability revision before another assignment. | Serializes assignment handshakes, not job execution; no daemon backlog or prefetch. | Long polling. | Duplicate/reorder/backpressure tests. | locked |
+| FR-14 | Scheduling is pure and outside SQLite. Assignment commit revalidates job/attempt, agent/session, config/offer/availability/work-request revisions, target, claim compatibility, and uniqueness in one coordinator transaction. Agent final admission remains authoritative; a pre-grant decline does not start or advance the execution attempt. | No distributed transaction between stores. | Assignment CAS and provider. | Barrier/stale-offer/decline tests. | locked |
+| FR-15 | One client port covers submit/status/cancel/recovery plus agent registration, reconcile, event replay/ack, offer, work, accept, and control. Agents connect outbound only. | No inbound agent service or peer mesh. | Direct and HTTP adapters. | Port conformance. | locked |
+| FR-16 | Every persistent HTTP participant uses mTLS and a scoped principal; direct calls use the same authorizer. Resource/constraint implementations are trusted local composition, while wire payloads are untrusted bounded data. | Authenticated data cannot choose/import code or override actor identity. | TLS and application auth. | Peer/scope/payload tests. | locked |
+| FR-17 | `OFFERED` reserves one job/placement without execution authority. Agent journals receipt and local acquisition; coordinator commits an execution grant; agent journals grant/start fence before at most one root launcher call; stable events replay until coordinator commit/ack. | No exactly-once authored effects claim. | Separate role stores. | Crash table. | locked |
+| FR-18 | Acceptance and cancellation serialize durably. Cancel-first prevents grant/start; grant-first records pending control until exact local containment/cleanup. | Connectivity loss is not cancellation completion. | Assignment/control state. | Race/outage tests. | locked |
+| FR-19 | `target_agent_id` is hard. Unknown target rejects submission; known offline target remains queued and never spills. `preferred_agent_ids` are soft and fall back according to explicit policy. | Target and preference cannot be conflated. | Placement request. | Target/preference tests. | locked |
+| FR-20 | Pending status safely distinguishes unsupported request, no currently known capable agent, waiting for capacity, waiting for preferred placement, target offline, stale inventory, and bounded-search exhaustion. | Snapshot-relative diagnostics are not permanent infrastructure truth and raw candidate state is not durable history. | Scheduler explanations. | Safe status tests. | locked |
+| FR-21 | Granted work continues through coordinator disconnect/restart; the agent takes no new work, journals events, authenticates/reconciles/replays, then republishes inventory/availability. Required-store failure never falls back to memory/reset. | Coordinator remains new-work/control availability boundary. | Stores and reconciliation. | Outage tests. | locked |
+| FR-22 | Drain/resume/reload are serialized controls. Availability withdraws before drain; reload validates and atomically swaps one complete config/inventory fingerprint only after affected claims release. | No hot mutation beneath live work. | Agent control. | Reconfiguration tests. | locked |
+| FR-23 | Test the scheduler core once, direct/HTTP with one conformance suite, and only representative deployment topologies. Exercise causal interactions across candidate choice/CAS, agent admission, grant/start, event replay, cancellation, auth, restart, and recovery. | No Cartesian topology/resource matrix. | Test harness. | Required suites. | locked |
+| FR-24 | One active process owns each role state root and one unresolved durable session owns each agent ID. Same-session recovery starts at zero availability; another session requires graceful retirement or complete-set terminal/positive-containment proof and atomic old-session fencing. | Timeout or one contained assignment cannot authorize takeover. | Role locks/session store. | Multi-assignment replacement tests. | locked |
+| FR-25 | Accepted offline work is never automatically redispatched. Exact positive containment plus scoped operator intent may atomically close/fence the expected old attempt and optionally requeue; timeout, PID absence, or plain “mark failed” cannot. | Manual rerun can repeat unknown external effects. | Recovery transaction. | Evidence/auth/stale-report tests. | locked |
+| FR-26 | GPU requests use explicit allocation modes. Exclusive requests consume exact devices and use VRAM as a per-device eligibility attribute; VRAM-share requests consume normalized memory on a provider-advertised shareable device; fractional requests require a named compatible provider and granularity. | A numeric fraction never invents isolation or sharing on an arbitrary GPU. | Stage 27 planners/providers. | Exclusive/share/mismatch tests. | locked |
+| FR-27 | A managed pool is a scheduling/security domain: it owns admitted agents/selectors, allowed resource contracts, queue/placement policy, defaults, and scopes. Capacity is derived from current authenticated offers. | Do not duplicate global capacity in coordinator config; preserve legacy local reads through explicit migration/composition. | Pool/config migration. | Config/migration tests. | locked |
+| FR-28 | Delegated external pools retain external scheduler ownership. Generic scheduling initially covers managed whole-run work only. | No SLURM policy emulation, pipeline-stage scheduler, multi-agent job, preemption, or general solver. | Existing delegated adapters. | Compatibility/import tests. | locked |
 
 ## Functionality Agreement
 
-| ID | IDs | Decision and tradeoff | State |
-| --- | --- | --- | --- |
-| FQ-1 | FR-1, FR-4 | Deployment is composition: coordinator and agent may share a call stack/process or cross HTTP; core semantics do not vary. | locked |
-| FQ-2 | FR-1, FR-9 | Migrate managed direct dispatch to assignments. Existing classes/methods delegate through direct client rather than preserve another scheduler. | locked |
-| FQ-3 | FR-2, FR-6 | One durable coordinator queue; a free agent supplies the execution opportunity; fixed eligibility precedes Stage 25 preference. First compatible requester wins. | locked |
-| FQ-4 | FR-7, FR-8 | One client port with direct and outbound HTTP implementations; no broker, streaming RPC, or mandatory loopback socket. | locked |
-| FQ-5 | FR-9, FR-12, FR-18 | `OFFERED` is a durable reservation; pre-accept decline/expiry leaves item queued/attempt unchanged. Acceptance blocks ordinary reassignment; only the verified-loss gate may authorize a later attempt. | locked |
-| FQ-6 | FR-11 | Hard target uses normal eligibility and queue audit. | locked |
-| FQ-7 | FR-3, FR-14 | Trusted local config owns inventory; remote intent is drain/resume/reload with preconditions. | locked |
-| FQ-8 | FR-10, FR-13, FR-18 | Heartbeat expiry never proves child death. Ambiguity fails closed; positive containment plus no committed success may permit bounded opt-in redispatch. | locked |
-| FQ-9 | FR-15 | Test core once, clients by one conformance suite, and representative compositions by normalized traces using only abstract machine labels. | locked |
-| FQ-10 | FR-7, FR-16 | Keep outbound pull. The coordinator still chooses and returns the job immediately through an already-open long poll; pull supplies current capacity/backpressure without requiring inbound agent reachability. | locked |
-| FQ-11 | FR-13, FR-18 | Separate completion evidence, execution-containment evidence, and retry policy. Only all required evidence in one coordinator transaction may create the next dispatch attempt. | locked |
-| FQ-12 | FR-8, FR-17 | Use local process locks plus coordinator session admission for singleton safety; keep endpoints and credential-file locations in process environment/supervisor configuration, with raw credentials in protected files or a secret provider. | locked |
+| ID | Decision | State |
+| --- | --- | --- |
+| FQ-1 | Deployment is composition: command-local, co-located daemon, and remote pool use one coordinator scheduler and agent runtime. | locked |
+| FQ-2 | The scheduler considers all current agent opportunities globally; outbound pull is only transport/backpressure. | locked |
+| FQ-3 | One job fits completely on one agent initially. Aggregate cross-machine capacity is status only. | locked |
+| FQ-4 | Resource kinds own schema, exact unit/fraction normalization, feasibility, claims, and failure explanation; core owns orchestration and assignment safety. | locked |
+| FQ-5 | GPU exclusive, VRAM-share, and fractional-provider modes are explicit and never inferred from a bare decimal. | locked |
+| FQ-6 | Versioned built-in hard constraints filter; versioned built-in soft preferences rank; fallback waiting is a separate policy. | locked |
+| FQ-7 | Default queue order is oldest runnable, followed by best placement for that job. | locked |
+| FQ-8 | Site policy fixes how site and job preference tiers combine; equal scores use stable identifiers. | locked |
+| FQ-9 | Inventory means configured potential capacity; availability means capacity claimable now. One revision admits at most one unresolved assignment handshake. | locked |
+| FQ-10 | Coordinator reserves a placement; agent admission/binding is physical truth. A stale decline safely triggers a new scheduling cycle. | locked |
+| FQ-11 | Pools group policy, trust, and admitted agents; agents publish capacity. | locked |
+| FQ-12 | Resource implementation code is explicitly composed trusted code; built-in constraint/preference tags and all requests/offers/claims are versioned untrusted data across transport. | locked |
+| FQ-13 | Accepted disconnected execution continues, but no new work is taken and no loss-based automatic redispatch occurs. | locked |
+| FQ-14 | Separate role SQLite stores, durable session/grants/outbox, mTLS principals, and containment-gated recovery remain mandatory. | locked |
+| FQ-15 | Candidate generation is bounded and deterministic; search exhaustion is distinct from infeasibility. | locked |
+| FQ-16 | Existing managed facades migrate to the common path; delegated external ordering remains separate. | locked |
 
 ## Behavior Baseline
 
-### Identity and opportunity model
+### One model in three compositions
 
-| Identity/fact | Owner and distinction |
-| --- | --- |
-| `workspace_id`, `service_generation` | Authority service administrative scope and activation fence; neither is host/PID/protocol. |
-| `queue_item_id`, `run_uri` | Durable queue submission versus prepared authoritative run. |
-| `pool_name` | Coordinator-owned global destination, not one machine slice. |
-| `agent_id`, `agent_session_id` | Stable configured execution agent versus one activation. Direct local composition has both too. |
-| config fingerprint, `offer_revision` | Immutable local-plan identity versus one session-local opportunity revision. |
-| `assignment_id`, `dispatch_attempt`, `process_execution_id` | Placement handoff, accepted execution authorization, and one journalled process start. |
-| available resources/capabilities | Expiring opportunity observation, never authority truth or fingerprint input. |
-| resource slot/external job ID | Agent/provider identity versus downstream adapter evidence. |
+| Mode | Long-lived pieces | Observable behavior |
+| --- | --- | --- |
+| Command-scoped local | None after the bounded command. | Compose coordinator, authorized direct client, scheduler, and local agent against bounded separate SQLite role stores; no daemon/socket required. |
+| Persistent single machine | One per-user process contains coordinator and co-located agent. | Clients submit/status/cancel over time; the local agent publishes the same inventory/availability contract used remotely. |
+| Multi-machine pool | One designated coordinator and one agent daemon per participating machine; coordinator host may also run an agent. | Clients use the coordinator; `machine-A` and `machine-B` authenticate, reconcile, publish resources, and hold outbound work requests. |
 
-A command-scoped local call constructs/registers a local agent session and
-offer in process. A daemon keeps them alive. A remote agent sends the same wire
-values over HTTP. Equivalent values yield equivalent decisions.
+```text
+clients ------------------- mTLS --------------------> coordinator
+                                                        |
+machine-A agent ---- offer/work/events/control -------->| durable queue
+machine-B agent ---- offer/work/events/control -------->| scheduler
+                                                        | assignments
 
-### Coordinator-client and offer interfaces
+each agent: trusted plan -> inventory/availability -> admission/binding
+            -> process -> separate SQLite journal/outbox
+```
 
-One application-level port is used by direct and HTTP clients. The exact method
-grouping may be simplified, but these operations and value semantics are fixed:
+### Resource and placement model
+
+The durable whole-run request is conceptually:
+
+```yaml
+placement:
+  resources:
+    cpu: {amount: 16}
+    memory: {amount: 128GiB}
+    gpu:
+      mode: exclusive
+      count: 2
+      each:
+        vram: {minimum: 80GiB}
+  hard_constraints:
+    - {attribute: architecture, equals: x86_64}
+  soft_preferences:
+    - {kind: gpu_model_order, order: [h200, h100, a100]}
+    - {kind: agent_order, order: [machine-A, machine-B]}
+```
+
+Resource payloads are versioned plain data owned by a registered resource
+contract. Authored decimals are normalized before persistence and comparison:
+
+```text
+1.5 CPU  -> exact configured CPU base units, such as 1500 millicpu
+10 GiB   -> 10,737,418,240 bytes
+0.25 GPU -> invalid unless a named fractional provider defines units/granularity
+```
+
+The core does not impose one universal quantity or constraint language. Scalar,
+discrete, attribute, and topology implementations produce complete safe claims;
+candidate-wide constraints may inspect the combined placement. Initial topology
+is within one agent, such as selecting two GPUs on the same advertised fabric.
+
+Conceptual subsystem protocols are:
 
 ```python
-class QueueCoordinatorClient(Protocol):
-    def register_agent(self, request: RegisterAgent) -> Registration: ...
-    def publish_offer(self, offer: AgentOffer) -> OfferReceipt: ...
-    def heartbeat(self, heartbeat: AgentHeartbeat) -> OfferReceipt: ...
-    def request_work(self, request: WorkRequest) -> Assignment | NoWork: ...
-    def accept_assignment(self, acceptance: Acceptance) -> Acknowledgement: ...
-    def report_assignment(self, report: AssignmentReport) -> Acknowledgement: ...
-    def poll_control(self, request: ControlPoll) -> ControlIntent | NoControl: ...
-    def report_control(self, result: ControlResult) -> Acknowledgement: ...
+class ResourcePlanner(Protocol):
+    kind: str
+    contract_version: int
+
+    def normalize_request(self, value: PlainData) -> PlainData: ...
+    def normalize_inventory(self, value: PlainData) -> PlainData: ...
+    def propose_claims(
+        self,
+        request: PlainData,
+        available: PlainData,
+        *,
+        limit: int,
+    ) -> ClaimSearchResult: ...
+    def explain_failure(self, request: PlainData, available: PlainData) -> FailureReason: ...
+
+
 ```
 
-Every value is versioned, bounded, serializable, and validated in the
-coordinator service even for direct calls. HTTP adds authentication and codecs
-but cannot add scheduling or lifecycle policy.
+`ClaimSearchResult` contains the bounded claims, an explicit `COMPLETE` or
+`EXHAUSTED` state, and optionally a resource-contract-specific sound winner
+proof/dominance bound. `COMPLETE` with no claims proves resource infeasibility;
+`EXHAUSTED` remains indeterminate. The scheduler may use claims from an
+exhausted result only when it can compose the registered bound with all other
+resource and preference bounds to prove the final winner; otherwise the whole
+cycle returns `SEARCH_EXHAUSTED` without mutation. The result and proof are
+trusted in-process scheduler values, not submitted or wire-loaded callables.
 
-A full offer conceptually carries:
+The resource protocol lives beside the queue scheduler, not in root
+`loom.protocols`. Its immutable registry is explicitly passed by composition.
+Current hard constraints and preferences are versioned tagged plain-data specs
+handled by private built-in dispatch, for example
+`attribute_equals/v1`, `gpu_model_order/v1`, and `agent_order/v1`. This meets
+the accepted generic built-in behavior without publishing future-only callable
+protocols. Remote payloads name only allowed contract/spec identities and data;
+they never carry targets, callables, constructors, or plugin-private state.
+
+### Global scheduling behavior
+
+One scheduling cycle is pure over an immutable snapshot:
 
 ```python
-AgentOffer(
-    workspace_id="example-workspace",
-    agent_id="machine-A",
-    agent_session_id="session-A",
-    config_fingerprint="<validated-plan-fingerprint>",
-    offer_revision=4,
-    published_at="<timestamp>",
-    expires_at="<timestamp>",
-    resident_profiles=("resident-profile",),
-    capability_fingerprints=("<safe-capability-fingerprint>",),
-    contributions=(
-        PoolContribution(
-            pool_name="gpu-pool",
-            declared={"gpu": 4},
-            allocatable={"gpu": 3},
-            safe_slot_labels=("machine-A/gpu-0", "machine-A/gpu-1", "machine-A/gpu-3"),
-        ),
-    ),
-)
+for job in snapshot.queue_order:
+    search = search_placements(job, snapshot.current_opportunities)
+    if search.exhausted:
+        return NoPlacement(reason="SEARCH_EXHAUSTED")
+    if search.complete_infeasible:
+        continue
+
+    # The first completely evaluated runnable job is the oldest runnable job.
+    # Mutation requires complete placement ranking or a sound proof of winner.
+    if not search.ranking_complete_or_winner_proven:
+        return NoPlacement(reason="SEARCH_EXHAUSTED")
+    return SchedulingDecision(job, choose_best(search.candidates))
+
+return NoPlacement(explanations=bounded_safe_reasons)
 ```
 
-It never carries credentials, commands, environment values, resolved paths,
-raw hardware bindings, provider tokens, or lease/fencing tokens. A heartbeat
-renews exactly one unchanged revision; config, capability, drain, or capacity
-change publishes another complete offer. A `WorkRequest` contains only
-agent/session, exact offer revision, and pool. The coordinator reads the full
-offer rather than trusting a copied capacity/profile snapshot.
+The coordinator recalculates after every committed decision. It does not batch
+assignments or try to find a globally optimal packing. Resource planners return
+bounded deterministic claims; the scheduler performs deterministic combination
+and dominance pruning under a fixed budget. It may commit only when every older
+job is proven infeasible and the selected job's best placement is proven from a
+complete ranking or sound resource-provided bound. Otherwise status reports
+`SEARCH_EXHAUSTED`, never skips to younger work, never chooses from a partial
+ranking, and never labels the request `INFEASIBLE`.
 
-Pool aggregation is for scheduling visibility, not physical authority. If
-`machine-A` offers one GPU and `machine-B` offers one GPU, the global pool may
-show two available GPUs, but a job requesting two GPUs is ineligible because it
-cannot fit on either agent. The agent selected by the opportunity still performs
-the authoritative local admission and concrete slot binding.
+Soft preference contributions use bounded integers or ordered tiers. The pool
+policy fixes precedence between operator/site defaults and job preferences.
+Stable job, agent, resource-claim, and candidate identifiers break remaining
+ties. Waiting for a preferred machine is an explicit fallback deadline; the
+default is immediate fallback to the next feasible placement.
 
-### Assignment lifecycle
+### Offers, long polling, and assignment
+
+Each safe offer contains two related but distinct projections:
+
+- inventory: configured capacity and attributes that could be usable when free;
+- availability: the exact current resource view against which one new claim may
+  be proposed.
+
+One agent session holds at most one unresolved `WorkRequest` tied to one
+availability revision. This keeps dispatch immediate but prevents several
+coordinator decisions from consuming the same stale snapshot. After accept or
+decline, the agent publishes a newer revision and may immediately accept another
+job while earlier jobs continue running.
+
+The cross-owner handoff is:
 
 ```text
-queue item QUEUED
-       |
-       | bounded eligibility + Stage 25 preference + atomic fence
-       v
-assignment OFFERED  (queue item is reserved but not execution-claimed)
-       |
-       +---- DECLINED / EXPIRED
-       |        queue item remains QUEUED
-       |        dispatch attempt unchanged
-       |
-       v
-assignment ACCEPTED
-queue item CLAIMED / dispatch attempt authorized
-       |
-       v
-assignment RUNNING
-queue item DISPATCHED
-       |
-       v
-one guarded terminal result
+1. scheduler computes one decision from queue + all current offers
+2. coordinator transaction revalidates every job/opportunity/policy fence
+3. coordinator commits OFFERED with safe resource claims and scheduling evidence
+4. agent commits receipt and performs final local admission/binding
+5a. decline: agent commits/reports reason; no process/start/attempt advancement
+5b. success: agent commits proposed ACCEPTED + process_execution_id
+6. coordinator commits ACCEPTED + execution grant; replay returns same grant
+7. agent commits grant + write-ahead start fence
+8. agent invokes the root launcher at most once for that fence
+9. agent journals lifecycle/control events before send
+10. coordinator commits each stable event before acknowledgement
 ```
 
-The agent persists offered receipt before admission. On admission failure
-it persists/reports `DECLINED` and publishes fresh opportunity facts before
-requesting again. On success it journals acceptance plus a unique process ID,
-obtains idempotent coordinator acknowledgement, and only then starts.
+The assignment transaction verifies at least job ID/status/attempt, pool,
+target, agent/session, config fingerprint, inventory/availability revisions,
+work-request identity, resource-contract versions, claim fingerprint, and no
+active assignment. The scheduler never runs inside SQLite. An in-process
+coordinator scheduling lock serializes the ephemeral offer cache with durable
+assignment commit; crash after commit is recovered through stable work-request
+and assignment identities.
 
-Queue, assignment, authoritative run, and same-session process observations
-remain separate source-labelled fields in status. An expired offer can say
-"agent capacity unavailable" while an accepted assignment remains running or
-unreachable; it cannot mark the run failed. Cancellation first commits
-coordinator intent, then the agent terminates the contained process, observes
-exit, releases resource ownership, journals the result, and reports it. Only
-that fenced cleanup evidence permits terminal cancellation.
+### GPU meanings
 
-Remote reconfiguration remains three explicit controls. Drain/resume may name a
-pool; reload is whole-agent because it validates and atomically swaps one
-complete config fingerprint. Control state is exactly `PENDING`, `APPLYING`,
-`APPLIED`, or `REJECTED`. The coordinator persists delivery/status, while the
-agent control journal owns application and deduplication. Drain withdraws
-allocatable capacity before waiting. Reload reads trusted local config, sends no
-config payload over the network, fully validates the new Stage 27 plan, drains
-affected live ownership, then swaps. Force is visible cancellation followed by
-drain; no control silently evicts work.
+GPU allocation modes are explicit:
 
-### Common topology
+```yaml
+# exclusive device; VRAM is an eligibility attribute
+gpu: {mode: exclusive, count: 1, each: {vram: {minimum: 80GiB}}}
 
-```text
-clients ---------------- submit/status/cancel ----------------> coordinator
-                                                                  |
-                                                           queue/assignments
-                                                                  |
-                     QueueCoordinatorClient                       |
-managed local agent <----- direct calls --------------------------|
-co-located daemon agent <-- direct calls -------------------------|
-remote agent <------------ outbound HTTPS/long poll --------------|
+# provider-supported consumable memory on one shareable device
+gpu: {mode: vram-share, memory: 10GiB, max_devices: 1}
+
+# provider-defined exact fraction; never inferred on arbitrary hardware
+gpu: {mode: fractional, amount: 0.25, provider: mps-share}
 ```
 
-The coordinator's work method always resolves the exact current offer, reads a
-bounded queue window, applies fixed eligibility and Stage 25 preference, and
-atomically creates one assignment. Only the client transport differs.
+The agent advertises safe opaque device/slot IDs, model, capacity, allocation
+modes, normalized availability, and safe topology labels. Stage 27 provider
+state maps those IDs to real local devices and enforces acquisition/release.
+Advertising a fractional value is not an isolation claim; status names the
+provider semantics and safe limitations.
 
-### Why outbound pull still means coordinator control
+### Identities and state ownership
 
-The coordinator, not the agent, decides which queue item runs. "Pull" describes
-how an available execution opportunity reaches that decision, not who controls
-the queue. Each free agent slice keeps one bounded `WorkRequest` open. If work
-is already queued the coordinator replies immediately; if work arrives later it
-completes the existing long poll immediately. Normal dispatch therefore has no
-heartbeat-interval delay:
+| Owner | Durable SQLite facts | Reconstructed/ephemeral facts |
+| --- | --- | --- |
+| Coordinator | identity/epoch, principals, admitted sessions, queue and placement requests, assignments/claims/grants, cancellation/control, idempotency/event acks, recovery audit | connections, liveness, full inventory/availability offers, long polls, candidate graphs, current pending explanations |
+| Agent | agent/session, coordinator watermark, accepted resource claims, local bindings' safe recovery projection, grants/start fences, process/containment/cleanup, critical events/outbox, controls/acks | HTTP connection, live provider/process objects, timers, current inventory observation and delivery batch |
 
-```text
-machine-A agent                 coordinator                 client
-      |-- WorkRequest (held) ------>|                         |
-      |                             |<------ submit job ------|
-      |<------ Assignment ----------|                         |
-      |-- ACCEPTED ---------------->|                         |
-      |<-- durable acknowledgement -|                         |
-      |-- start/report ------------>|                         |
-```
+Co-location never merges the stores. Missing, corrupt, rolled-back,
+unmigratable, or unwritable required state blocks readiness/acknowledgement
+instead of being recreated.
 
-This has push-like scheduling latency but preserves outbound-only networking.
-A coordinator-push design would still need agent addresses, inbound TLS/auth,
-capacity/backpressure messages, delivery acknowledgement, duplicate suppression,
-and reconnect recovery. It would move the same handshake behind a second agent
-server without removing the hard parts. Outbound long polling additionally
-works through common host firewalls and address translation, and an agent that
-has no free slice naturally asks for no work.
+### Client, security, and lifecycle boundary
 
-There are two logical activities over the same client protocol:
+The import-light coordinator client port covers ordinary client and agent
+operations. HTTP uses mutual TLS; a verified certificate maps to one durable
+principal, and the application authorizer checks action plus workspace/pool/
+agent scope. Direct calls inject an explicit principal and use the same
+authorizer. Only a detail-free health endpoint may be unauthenticated.
 
-- a session/control activity remains live while the daemon is running, renews
-  the exact offer, and receives cancellation or drain/resume/reload intent even
-  when every execution slice is occupied; and
-- a work activity has at most one outstanding request per genuinely free slice
-  and receives at most one assignment. It owns no local job backlog.
+Resource offers are authenticated statements, not physical truth. Every field
+is schema/version/size bounded; the agent's final admission protects physical
+safety. Scheduler extension code is trusted installed/configured code and never
+comes from submission or agent payload. Failures in resource/constraint/
+preference implementations produce no assignment mutation and bounded safe
+diagnostics.
 
-Endpoint layout and whether heartbeat responses or a separate bounded control
-poll carry control intent remain private. The observable requirements are
-prompt control delivery, bounded reconnect/backoff, and independence from free
-work capacity.
+A granted process continues during coordinator outage. The agent accepts no new
+work and applies no unseen control, but supervises, journals, reconnects,
+reconciles, and replays before publishing fresh availability. Agent loss removes
+future capacity only; accepted assignments remain reserved. Offer or connection
+expiry never proves death, failure, containment, or permission to redispatch.
 
-The no-backlog rule contains machine failure. If `machine-A` disappears, every
-unassigned item remains in the coordinator queue and can immediately flow to
-`machine-B`. Only assignments actually offered to or accepted by `machine-A`
-need recovery; a batch of prefetched jobs cannot become stranded there.
-
-### Atomicity and acknowledgement model
-
-The network cannot provide literal exactly-once message delivery. Stage 29
-instead uses retryable delivery plus durable idempotency to guarantee at most
-one Loom process start per accepted assignment within the documented storage,
-containment, and fencing fault model.
-
-The coordinator performs one transaction that revalidates the queue item,
-dispatch attempt, target, service generation, agent session, exact offer
-revision, and absence of another active assignment before writing `OFFERED`.
-The assignment record is its durable outbound fact. The agent journal is the
-durable inbound/start fact. The handshake is deliberately not a distributed
-two-phase-commit framework:
-
-```text
-1. coordinator commits OFFERED
-2. agent commits offered receipt
-3. agent performs final local admission
-4a. failure: agent commits/reports DECLINED and releases admission
-4b. success: agent commits ACCEPTED + process_execution_id
-5. coordinator commits ACCEPTED and returns an idempotent acknowledgement
-6. agent starts exactly that process_execution_id
-7. agent commits/reports RUNNING and the eventual terminal/cleanup result
-8. coordinator commits each report before acknowledging it
-```
-
-Every mutation carries a request/idempotency ID and expected assignment,
-session, generation, and revision. If a reply is lost, the caller retries the
-same request and receives the already-committed result. The agent retains an
-unacknowledged journal result and replays it after reconnect. A journal commit
-failure prevents process start; a coordinator commit failure prevents a
-successful acknowledgement. Concrete SQLite transactions and journal encoding
-remain private, but their supported durability mode must survive process
-restart and be exercised by crash injection at every numbered boundary.
-
-### Coordinator and agent lifecycle
-
-Coordinator restart reopens the durable queue/assignment/control stores under
-a new `service_generation`. It publishes readiness only after store migration,
-an assignment recovery scan, route/auth initialization, and local process-lock
-acquisition. Sessions and offers are intentionally empty after restart; agents
-reconnect, register, reconcile, and publish a complete fresh offer. No new work
-is assigned from stale cached presence.
-
-An agent starts with a new `agent_session_id`, reads its execution/control
-journal before offering nonzero capacity, and reconnects with bounded
-exponential backoff plus jitter. A fresh second session for the same stable
-`agent_id` is rejected with `AGENT_SESSION_ALREADY_ACTIVE`; it cannot silently
-replace a live daemon. Graceful shutdown relinquishes the session. After crash
-or loss, replacement waits for the previous session to expire and starts at
-zero capacity until its old assignments are reconciled.
-
-Each daemon state root has an exclusive operating-system process lock; a second
-process reports the existing daemon and exits without killing or replacing it.
-The coordinator also obtains an exclusive activation against its durable store
-before changing `service_generation`. These checks prevent accidental duplicate
-processes sharing one configured state root. Two separately configured stores
-are two independent coordinators; Stage 29 has no election or discovery system
-that can infer they were intended to be one. A deployment therefore configures
-every client and agent with exactly one coordinator endpoint.
-
-If the coordinator is unreachable, agents start no new work. Accepted work may
-continue only while existing authority ownership can be renewed. At the safety
-deadline, the agent contains and terminates the process before releasing local
-resources, journals the result, and reports it after reconnect. If the entire
-machine is unavailable, offer expiry removes only its future scheduling
-opportunity; other agents continue consuming the central queue.
-
-### Completion, machine loss, and bounded redispatch
-
-Loss recovery separates three questions that cannot safely be collapsed:
-
-1. Did the authoritative run already commit `SUCCEEDED` with validated outputs?
-2. Can the old assignment still execute or commit side effects?
-3. Does the queue's explicit infrastructure-loss policy permit another whole-
-   run dispatch attempt?
-
-The coordinator may create another attempt only when the answer is respectively
-no, no, and yes in one fenced transaction. Heartbeat or offer expiry answers
-none of these questions. The resulting behavior is:
-
-| Lost work | Coordinator behavior |
-| --- | --- |
-| Still globally queued | Unaffected; another compatible agent may receive it. |
-| `OFFERED` but never accepted | Expire/decline the assignment and leave the same attempt queued. |
-| Authoritative run success committed but terminal report lost | Reconcile completion from source-labelled run evidence; never rerun. |
-| Accepted work proven stopped and not successful | If bounded loss redispatch is enabled, atomically close the old assignment, increment `dispatch_attempt`, and make untargeted work eligible again. |
-| Accepted work may still be running or containment is unproven | Mark recovery required; do not redispatch. |
-| Hard-targeted work | Preserve its immutable target; it cannot move to another agent implicitly. |
-
-Positive stop evidence may be a journalled same-session exit/cleanup result, a
-restarted agent's exact assignment reconciliation, or an operator/supervisor
-containment attestation tied to the assignment and prior machine activation.
-PID absence, heartbeat timeout, a new session, or a new coordinator generation
-alone is insufficient. Stage 29 does not add a machine-power-control service,
-so immediate failover of an unreachable running assignment requires an existing
-external fencing source; otherwise it waits for reconciliation.
-
-Loss redispatch is a small queue policy, not a general retry engine. It is off
-unless trusted queue/submission configuration explicitly enables it and
-supplies a finite bound. The resolved policy is captured with the submission so
-later daemon config edits cannot retroactively make running jobs retryable. It
-applies only to infrastructure loss proven safe, not an ordinary failed job.
-Each new attempt retains the queue item/run identity but has a new
-`dispatch_attempt` and assignment fence, so delayed old messages cannot finish
-or release the new work.
-
-Cross-machine *resume* is conditional. When the selected run/artifact stores
-are accessible from `machine-B`, existing Loom resume planning may reuse only
-committed, fingerprint-matching outputs. When partial state exists only on
-`machine-A`, Stage 29 cannot transfer it; the next attempt is fresh or remains
-blocked according to the resident profile. This keeps data transfer out of the
-control-plane stage without claiming recovery that the replacement agent cannot
-perform.
+Same-session restart resumes durable state at zero availability and reconciles.
+A different session requires graceful retirement or one operator transaction
+that revalidates every unresolved old-session execution as terminal or
+positively contained, then fences/retires the whole session. Assignment-level
+manual recovery likewise requires exact positive containment and expected
+versions; it may close/fence and optionally requeue atomically. Timeout, PID
+absence, or plain assertion is insufficient.
 
 ### Abstract deployment configuration
 
-Committed examples use only `machine-A`, `machine-B`, and environment
-references. Stable non-secret intent belongs in trusted local daemon config;
-deployment-specific endpoints and credential/certificate file references come
-from the process environment or service supervisor. Raw credentials belong in
-permission-restricted files or a secret provider, not committed config or CLI
-arguments. An endpoint or bind address is not itself a secret; it is kept out of
-committed examples because it is deployment-specific. Certificate private keys
-and credentials are the secret material.
-
-Conceptual coordinator configuration:
-
 ```yaml
+# coordinator
 daemon:
   roles: [coordinator]
-  workspace_id: example-workspace
-  state_root: ${oc.env:LOOM_DAEMON_STATE_ROOT}
+  coordinator_id: example-coordinator
+  coordinator_state_file: ${oc.env:LOOM_COORDINATOR_STATE_FILE}
   bind: ${oc.env:LOOM_COORDINATOR_BIND}
-  tls_certificate_file: ${oc.env:LOOM_COORDINATOR_CERT_FILE}
-  tls_private_key_file: ${oc.env:LOOM_COORDINATOR_KEY_FILE}
-  admitted_agents:
-    - agent_id: machine-A
-      credential_file: ${oc.env:LOOM_MACHINE_A_CREDENTIAL_FILE}
-      pools: [gpu-pool]
-    - agent_id: machine-B
-      credential_file: ${oc.env:LOOM_MACHINE_B_CREDENTIAL_FILE}
-      pools: [gpu-pool]
-  loss_recovery:
-    redispatch_after_verified_stop: true
-    max_redispatches: 1
+  scheduling_pools:
+    gpu-pool:
+      admitted_agents: [machine-A, machine-B]
+      allowed_resource_contracts: [cpu, memory, gpu]
+      queue_policy: oldest-runnable
+      preferences:
+        - {kind: gpu_model_order, order: [h200, h100, a100]}
+        - {kind: agent_order, order: [machine-A, machine-B]}
+  tls:
+    server_certificate_file: ${oc.env:LOOM_COORDINATOR_CERT_FILE}
+    server_private_key_file: ${oc.env:LOOM_COORDINATOR_KEY_FILE}
+    client_ca_file: ${oc.env:LOOM_CLIENT_CA_FILE}
 ```
 
-The coordinator treats this as a default that is resolved and durably captured
-for each new queue item; changing the daemon configuration affects future
-submissions only.
-
-Conceptual agent configuration on `machine-A`:
-
 ```yaml
+# machine-A agent
 daemon:
   roles: [agent]
-  workspace_id: example-workspace
   agent_id: machine-A
+  agent_state_file: ${oc.env:LOOM_AGENT_STATE_FILE}
   coordinator_url: ${oc.env:LOOM_COORDINATOR_URL}
-  coordinator_ca_file: ${oc.env:LOOM_COORDINATOR_CA_FILE}
-  credential_file: ${oc.env:LOOM_AGENT_CREDENTIAL_FILE}
+  tls:
+    coordinator_ca_file: ${oc.env:LOOM_COORDINATOR_CA_FILE}
+    client_certificate_file: ${oc.env:LOOM_AGENT_CERT_FILE}
+    client_private_key_file: ${oc.env:LOOM_AGENT_KEY_FILE}
   pools:
     gpu-pool:
       resident_profiles: [resident-profile]
       plan: ${oc.env:LOOM_LOCAL_POOL_PLAN}
 ```
 
-An ignored, permission-restricted environment file may contain only
-deployment-local values or references:
-
-```dotenv
-LOOM_COORDINATOR_URL=<coordinator-url>
-LOOM_COORDINATOR_CA_FILE=<coordinator-ca-file>
-LOOM_AGENT_CREDENTIAL_FILE=<protected-agent-credential-file>
-LOOM_DAEMON_STATE_ROOT=<local-state-root>
-LOOM_LOCAL_POOL_PLAN=<local-pool-plan>
-```
-
-Loom need not add a dotenv dependency: a shell, user service, container runtime,
-or secret injector may populate the environment. Phase 1/2 fix the final
-validated field and `LOOM_*` names before exposing the CLI/JSON surface. Status,
-logs, diagnostics, receipts, and errors show only safe IDs and never resolved
-secret values or local paths.
+Environment/supervisor configuration owns endpoints and secret file references.
+Logs/status/errors show safe IDs only. A user service manager may restart
+daemons; Loom owns state recovery/reconnection, not process supervision or
+remote power control.
 
 ## Minimum Design
 
-- `loom.queue.selection` remains the pure Stage 25 engine.
-- A queue coordinator application service owns scheduling/assignment/
-  cancellation/status policy. It depends on selection and private/additive
-  coordinator storage, not on HTTP, CLI, local adapters, agents, or vendors.
-- One import-light client protocol and versioned values serve direct and HTTP
-  implementations. Direct calls retain validation; HTTP owns only auth/codec.
-- One explicit agent-side module owns offer construction, polling, journal
-  reconciliation, and composition with existing local adapter/providers. It
-  does not own a durable backlog or queue policy. Its session/control activity
-  remains independent of its per-free-slice work requests.
-- `QueueController` and `ManagedLocalQueueRuntime` remain compatibility/
-  operational facades. Their managed methods invoke the common agent runtime
-  through the direct client; they do not directly claim and dispatch after the
-  Phase 1 migration. Delegated external adapters retain their separate handoff
-  semantics.
-- Private SQLite coordinator storage atomically owns one active assignment per
-  `(queue_item_id, dispatch_attempt)`; public repository/schema-v1 compatibility
-  remains.
-- Sessions/full offers are generation-scoped ephemeral cache facts. Admitted
-  agents, assignments, cancellation, and undelivered drain/resume/reload intent
-  survive restart. The agent journal is local durable start truth.
-- A private coordinator recovery transaction owns verified-loss classification
-  and bounded attempt creation. It consumes authoritative completion and exact
-  containment evidence; it never promotes liveness timeout into execution
-  truth or becomes a general retry-policy framework.
-- Queue routes compose with the authority app/generation. Loopback is default;
-  non-loopback requires a secure profile. No generic hierarchy is added.
-- Daemon composition owns a local exclusive process lock, role-specific
-  readiness, environment resolution/redaction, graceful session relinquish,
-  and bounded reconnect. Coordinator registration rejects a second fresh
-  session for one stable agent identity.
-- Names, routes, tables, polling, journal encoding, lock representation, and
-  supervisor files are private; the port, state machines, owner split, and
-  configuration source separation are fixed.
+- `loom.queue.scheduling` owns import-light placement request/resource envelope,
+  snapshot/candidate/decision, failure/score, and the resource-planner protocol.
+  It imports no routes, CLI, SQLite, vendors, agent runtime, or project code.
+- One concrete deterministic pure scheduler implementation owns bounded candidate
+  orchestration, core hard invariants, queue-versus-placement ordering,
+  deterministic tie-breaking, and safe explanations. The coordinator calls it
+  directly; no replaceable public `Scheduler` protocol is introduced.
+- An explicit immutable registry owns resource planners. Current hard constraints
+  and preferences are versioned tagged request/config data interpreted by
+  private built-in evaluators. Resource-specific agent binders compose existing
+  assignment providers rather than moving physical lifecycle into the scheduler.
+- The coordinator application service owns snapshot construction, event-driven
+  scheduling triggers, the offer-cache scheduling lock, decision validation,
+  durable assignment CAS, cancellation/recovery, and joined status.
+- The agent module owns inventory/availability projection, one revision-bound
+  work request, claim admission/binding, journal/outbox, reconciliation, and
+  controls. It never holds a queued job backlog.
+- Managed pools become scheduling/security domains. Legacy managed-local pool
+  capacity has an explicit read/migration/composition path into one local agent
+  inventory; new coordinator config does not duplicate remote capacity.
+- `QueueController` and `ManagedLocalQueueRuntime` remain facades over direct
+  coordinator/agent composition. Delegated adapters remain external schedulers.
+- Persist normalized placement request/fingerprint and selected successful
+  claims/policy evidence. Do not persist full offers, candidate graphs, rejected
+  scores, callbacks, registries, live bindings, or raw failure exceptions.
+- Exact filenames, private helper classes, SQLite table layout/tuning, endpoint
+  grouping, batching internals, and provider-specific local values remain
+  implementation discretion.
 
 ## Complexity Delta
 
-| Decision | Necessity or simpler boundary | Result |
-| --- | --- | --- |
-| Coordinator application service | One owner is required for queue selection and assignments across transports. | keep |
-| Direct plus HTTP client implementations | Local must avoid mandatory network while remote needs it; both serve one port. | keep two edge adapters |
-| Durable assignment + local journal | Network and process-start crash windows cross durable owners. | keep minimal |
-| Migrate direct managed controller | Leaving direct claim/dispatch creates a second scheduler/lifecycle. | replace with facade delegation |
-| Session/full expiring offer | Current execution opportunity cannot come from static config. | keep ephemeral |
-| HTTP composition/TLS credentials | Remote requests can execute user code. | keep scoped |
-| Long pull versus coordinator push | An already-open free-slice request gives immediate coordinator-directed delivery while avoiding an inbound agent server/address registry. | keep outbound long poll |
-| Singleton locks and session rejection | Duplicate local daemons or fresh sessions can start/process the same assignment. Existing OS locks and registration transitions suffice. | keep two narrow guards |
-| Verified-loss bounded redispatch | Current consumer needs work to continue after proven machine loss, but timeout retry duplicates possible execution. | keep opt-in evidence gate, not general retry |
-| Eligibility/plugin/placement interfaces | Fixed current rules and agent pull suffice. | do not add |
-| General daemon/comms/resource hierarchy | Two fixed roles and two transports suffice. | remove/defer |
-| Payload/data/log transport and HA | Not needed for resident control proof. | defer |
+| Added mechanism | Current necessity | Simpler alternative | Decision |
+| --- | --- | --- | --- |
+| One generic whole-run scheduler | Global hard/soft placement across machines is now required. | Per-request opportunity selection cannot compare machines. | keep one concrete core |
+| Versioned placement request and safe claims | Integer maps cannot express VRAM/device relationships/fractions or survive network/restart safely. | Put nested data in metadata. | keep explicit durable schema |
+| Resource planner/binder registration | CPU, memory, discrete GPU, VRAM share, and future kinds have different matching/binding semantics. | Encode every kind in scheduler conditionals. | keep narrow subsystem protocols |
+| Inventory versus availability revisions | Diagnostics and placement need potential capability distinct from current free capacity. | One aggregate availability vector. | keep distinct projections |
+| Versioned hard-constraint and soft-preference specs | Machine/GPU requirements and preferences are current behavior and persist with jobs/policy. | Public callable protocols or one unrestricted score function. | keep tagged built-ins; defer public extension protocols |
+| One revision-bound work request | Prevents concurrent claims from consuming one stale availability view. | Coordinator-side speculative multi-reservation ledger. | keep serialized handshake initially |
+| Separate coordinator/agent SQLite and outbox/fences | Cross-machine accepted execution and replay must survive owner restarts. | Memory or one co-located DB loses/merges authority. | keep role stores |
+| mTLS plus scoped authorizer | Network calls can submit/start/stop/rerun code. | Bearer or loopback trust cannot bind actors/scopes. | keep |
+| Unrestricted constraint DSL/general solver | No accepted workload needs arbitrary expressions or optimal gang packing. | Registered bounded implementations and heuristics. | defer |
+| Coordinator-global/external resources | Licences/shared quotas require an authoritative transactional owner. | Pretend they are agent-local inventory. | defer until owner accepted |
+| Distributed scheduler plugin reconstruction | Built-ins and explicit Python composition meet initial scheduler consumers. | Automatic discovery/loading widens trust and deployment surface. | defer unless merged Stage 28 already proves the exact consumer |
+| HA, data plane, automatic retry, preemption | Independent authority and product contracts required. | Single coordinator plus durable outage behavior meets current outcome. | defer |
 
 ## Design Agreement
 
-| ID | Requirement IDs | Decision | Recommendation and evidence | Tradeoff | State |
-| --- | --- | --- | --- | --- | --- |
-| DQ-1 | FR-1 through FR-4 | Common core | One coordinator service and one agent runtime; entrypoints are compositions/facades. | Local internals change despite public compatibility. | locked |
-| DQ-2 | FR-5, FR-9, FR-12 | Durable state | Keep queue identity; persist assignment separately; map acceptance/running/terminal to existing queue lifecycle. | Adds versioned coordinator storage and journal. | locked |
-| DQ-3 | FR-6, FR-11 | Scheduling | Opportunity-specific fixed eligibility then Stage 25 ordering; agent admission decides truth. | No global best-machine optimization. | locked |
-| DQ-4 | FR-7, FR-8, FR-16 | Port/transport | Direct and HTTP clients implement one request/reply contract; remote free slices hold outbound long polls and control remains independently deliverable. | Two adapter conformance obligations and reconnect logic. | locked |
-| DQ-5 | FR-3, FR-14 | Local authority | Agent config owns inventory/offer/provider; coordinator receives safe facts and bounded intent results. | Central service cannot replace hardware config. | locked |
-| DQ-6 | FR-9, FR-10, FR-13, FR-18 | Fencing/recovery | Commit before every acknowledgement/start, fence every transition, fail closed, and allow another attempt only from authoritative non-success plus positive containment plus bounded policy. | Availability yields when execution remains ambiguous. | locked |
-| DQ-7 | FR-14 | Reconfiguration | Withdraw offer, drain, then swap immutable config fingerprint. | Shrink is not instantaneous. | locked |
-| DQ-8 | FR-15 | Validation | Core once, clients by conformance, representative topology E2Es, one abstract `machine-A`/`machine-B` product receipt. | Not every case runs in every topology. | locked |
-| DQ-9 | FR-17 | Activation/configuration | Use a per-state-root OS lock, exclusive coordinator activation, fresh-session rejection, graceful relinquish, and environment-resolved deployment values. | Crash replacement may wait for session expiry; separately configured coordinators remain independent. | locked |
-| DQ-10 | FR-18 | Loss continuation | Keep globally queued/unaccepted work mobile; make verified infrastructure-loss redispatch finite and opt-in; delegate output reuse to existing resume validation. | Immediate retry is unavailable without containment evidence or portable run state. | locked |
+| ID | Decision | Tradeoff | State |
+| --- | --- | --- | --- |
+| DQ-1 | One coordinator scheduler and one agent runtime serve every managed composition. | Existing local internals migrate. | locked |
+| DQ-2 | One concrete scheduler is pure over immutable bounded snapshots; coordinator mutation validates one returned decision. No public scheduler substitution protocol exists. | Lost races recalculate; alternate algorithms require a later consumer. | locked |
+| DQ-3 | Default is job-first oldest-runnable ordering, then best placement for that job. | No global optimum or starvation guarantee. | locked |
+| DQ-4 | Initial placements contain exactly one agent; no cross-machine aggregation. | Distributed jobs remain unsupported. | locked |
+| DQ-5 | Resource kinds own exact units/fractions and safe claims; core owns orchestration, determinism, and assignment uniqueness. | Multiple bounded contracts instead of one DSL. | locked |
+| DQ-6 | Core hard invariants are non-overridable; versioned built-in hard specs only narrow; versioned built-in soft specs only rank; fallback waiting is separate. Public custom rule protocols are deferred. | Policy vocabulary is deliberately bounded. | locked |
+| DQ-7 | Site policy fixes preference tier precedence and stable tie-breaks. | Users cannot supply unbounded scores that override operator policy. | locked |
+| DQ-8 | Offers distinguish inventory and availability; one availability revision admits one unresolved assignment handshake. | Assignment throughput is serialized per agent but execution remains concurrent. | locked |
+| DQ-9 | Coordinator placement reservation and agent physical admission are separate commit-before-ack owners. | Stale offers may decline and reschedule. | locked |
+| DQ-10 | Managed pools own policy/trust/admission domain; agent offers own capacity. | Legacy pool config needs explicit migration/composition. | locked |
+| DQ-11 | Separate production SQLite stores, durable grants/outbox, and same-session zero-capacity reconciliation remain topology-independent. | Two schema families and no cross-role transaction. | locked |
+| DQ-12 | Authorized direct and mTLS HTTP clients implement one bounded port; outbound long polls and independent control remain. | Two adapter conformance obligations. | locked |
+| DQ-13 | Accepted offline work remains reserved until reconciliation/success or positive-containment operator recovery. | No automatic failover. | locked |
+| DQ-14 | Candidate search is tri-state and bounded/deterministic. Mutation requires every older job proven infeasible and the selected job's placement winner proven from complete ranking or a sound bound; otherwise return search exhaustion with no assignment. | Complex work may wait until bounds/configuration improve, but queue/order semantics remain correct. | locked |
+| DQ-15 | Resource implementations are explicitly composed trusted code with compatible contract versions; built-in rule specs and transport contain data only. | Stock-daemon third-party resource loading or custom rule implementations may require later scoped work. | locked |
 
 ## Expanded Design Review
 
+The earlier Stage 29 removal-first and plan-consistency reviews remain valid for
+separate role stores, mTLS/scoped principals, execution grants/start fences,
+outbox replay, same-session recovery, and containment-gated manual recovery.
+The generic-scheduler amendment received one removal-first pass over DQ-2
+through DQ-10 and DQ-14 through DQ-15 before manifest/phase reshaping.
+
 | Finding | Related IDs | Evidence and consequence | Required action | Status |
 | --- | --- | --- | --- | --- |
-| Command-scoped compatibility remained a second managed implementation. | FR-1, FR-4 | Preserving direct claim/dispatch beside daemon assignments would diverge in eligibility, evidence, cancellation, and recovery. | Migrate managed `QueueController`/runtime to direct-client coordinator/agent composition; keep facades only. | resolved by 2026-08-20 amendment |
-| Stage 25 default/custom split would leak into topology. | FR-2, FR-4, FR-6 | Remote requests require eligibility before ordering. | Revise Stage 25 to one oldest-eligible/custom engine. | resolved in Stage 25 amendment |
-| Mandatory loopback HTTP confused transport with behavior. | FR-4, FR-7 | Local parity needs same port/state machine, not socket overhead or network failure modes. | Keep direct and HTTP clients with conformance tests. | resolved |
-| Queue identity rename had no consumer. | FR-5 | `queue_item_id` already identifies durable submission. | Retain it; keep run/assignment IDs separate. | resolved |
-| Presence/request facts were duplicated or over-persisted. | FR-6, FR-7, FR-13 | Offers expire and `WorkRequest` can reference one exact revision. | Keep full offers ephemeral; request repeats no capacity/profile/config. | resolved |
-| Public repository/daemon framework would broaden unrelated surfaces. | FR-1, FR-2, FR-7 | Built-in coordinator has the only current assignment/transport consumer. | Use private/additive storage and composition objects; no general hierarchy. | resolved |
-| Pull was described as if the agent scheduled from a periodic local queue. | FR-2, FR-7, FR-16 | A free slice can hold a long poll while coordinator selection remains authoritative; push would add inbound reachability without removing acknowledgements. | Specify immediate coordinator response, independent control delivery, and no agent backlog. | resolved by 2026-08-20 refinement |
-| Loss handling treated every accepted disconnect as permanently ambiguous. | FR-10, FR-13, FR-18 | Globally queued work already remains mobile; accepted work can safely move only after both non-success and containment are authoritative. | Add one opt-in finite verified-loss gate; retain recovery-required for timeout-only ambiguity. | resolved by 2026-08-20 refinement |
-| Daemon examples left activation and environment ownership implicit. | FR-8, FR-17 | Duplicate local processes/sessions and committed endpoint/secret values are reachable deployment failures. | Add local/store locks, fresh-session rejection, and environment/secret-file configuration using only abstract labels. | resolved by 2026-08-20 refinement |
+| Bounded search could skip an older indeterminate job or rank only a partial placement set. | FR-6, FR-11, FR-20; DQ-3, DQ-14 | CAS cannot detect a semantically wrong younger/partial choice. | Use tri-state search; mutate only after all older jobs are proven infeasible and the selected winner is complete or soundly bounded. | resolved |
+| Public hard-constraint/preference protocols had no custom consumer and lacked version identity for durable payloads. | FR-7, FR-9, FR-10; DQ-5 through DQ-7, DQ-15 | Restart/upgrade could reinterpret stored data and future-only APIs would become compatibility debt. | Keep versioned resource protocol; use versioned tagged built-in hard/soft specs and defer public callable rules. | resolved |
+| Public `Scheduler` protocol had no alternate implementation or boundary consumer. | FR-1, FR-2; DQ-2 | Suggested replaceable policy and added conformance surface without behavior. | Coordinator calls one concrete pure scheduler directly; defer substitution protocol. | resolved |
+
+Removal-first result: pass after one bounded manager correction. The retained
+public/durable mechanisms each have a current resource, scheduling, transport,
+restart, or security consumer; speculative scheduler/rule substitution was
+removed without weakening the accepted generic behavior.
+
+The detailed plan-consistency pass then checked the manifest, all three phase
+plans, roadmap, glossary, and feature ownership documents.
+
+| Finding | Related IDs | Evidence and consequence | Required action | Status |
+| --- | --- | --- | --- | --- |
+| The resource-planner example returned claims without complete/exhausted search state or a sound bound. | FR-6, FR-8; DQ-5, DQ-14 | The scheduler could not prove whether bounded claim enumeration allowed mutation. | Return `ClaimSearchResult` with explicit state and optional sound winner/dominance proof. | resolved |
+| The runtime-resource `PlacementRequest` example omitted durable fallback. | FR-7, FR-19; DQ-6 | The example could not represent the accepted immediate/deadline preference behavior after restart. | Add the versioned fallback spec to the durable request shape. | resolved |
+| Phase 2 described target and resource compatibility as tagged hard rules. | FR-9, FR-14, FR-19; DQ-5, DQ-6, DQ-9 | Dispatch could accidentally make non-overridable core/planner invariants look policy-replaceable. | Keep target in the core request/CAS and compatibility with resource planner/offer validator/CAS; tags cover candidate attributes/features only. | resolved |
+
+Detailed plan result: pass after one bounded consistency correction. No new
+acceptance criterion was added.
 
 ## Examples And Validation
 
-| Example or invariant | Behavior or risk | Owner | Minimal coverage | Status |
-| --- | --- | --- | --- | --- |
-| Topology parity | Same queue/opportunity/policy yields same normalized trace through direct and HTTP clients. | Coordinator/agent services. | Shared conformance scenario. | planned |
-| Managed facade parity | `run_once`, managed cycle, and co-located daemon delegate to the same assignment/agent path. | Compatibility composition. | Process-spy and state trace. | planned |
-| Competing/retried delivery | `machine-A`, `machine-B`, or message retries produce one active assignment/process. | Coordinator transaction + journal. | Barrier/fault injection. | planned |
-| One-agent fit | One GPU on `machine-A` plus one on `machine-B` cannot satisfy a two-GPU item; one agent with two GPUs can. | Eligibility then agent admission. | Offer/provider integration. | planned |
-| Offer expiry | Capacity becomes unschedulable; accepted work is not failed/requeued. | Offer cache versus assignment. | Fake clock. | planned |
-| Target offline | Known target stays queued and cannot spill. | Eligibility/assignment CAS. | Two-agent test. | planned |
-| Immediate long-poll dispatch | A free `machine-A` request is completed when a job arrives; busy `machine-B` still receives cancellation/control. | Coordinator/client and agent loops. | Barrier plus fake transport. | planned |
-| Duplicate daemon/session | Second local process or fresh same-agent registration cannot become ready. | Daemon lock + registration service. | Process/register race. | planned |
-| Cancel/restart/loss | One guarded terminal; stale sessions fail; verified stopped/non-success work redispatches only within policy; ambiguity remains. | Agent/process/coordinator recovery. | Real process and restart/partition/evidence matrix. | planned |
-| Drain/reload | Capacity leaves offer before wait/swap. | Agent config runtime. | Stage 27 fake + coordination. | planned |
-| Real network | Actual resident job proves TLS/auth/reconnect/cancel/expiry. | HTTP/deployment edge. | One redacted opt-in receipt. | planned |
+| Scenario | Minimum assertion |
+| --- | --- |
+| Local/facade parity | Command, managed runtime, and co-located daemon normalize the same placement request and produce the same scheduler/assignment trace. |
+| Exact scalar fraction | 1.5 CPU plus 10 GiB normalizes exactly, reserves/releases without drift, and rejects unsupported granularity. |
+| VRAM hard fit | `machine-A` 40 GiB is rejected; `machine-B` 80 GiB is feasible for a 64 GiB exclusive request. |
+| Discrete multi-GPU | Two exact qualifying safe device IDs on one agent satisfy count two; one GPU on each of two agents does not. |
+| GPU modes | Exclusive, VRAM-share, and named fractional requests match only compatible inventory/providers and account/release exact claims. |
+| Hard versus soft | Hard architecture/target/model failure cannot be overridden by machine/GPU score; equal feasible candidates follow configured tiers and stable tie-break. |
+| Queue versus placement | Oldest job with any feasible placement is chosen before a younger high-affinity job; chosen job then gets its best machine. |
+| Preferred fallback | Preferred busy agent either falls back immediately or waits until the explicit deadline; preference never silently becomes hard. |
+| Determinism | Permuted queue/offer/resource map input yields the same normalized decision/evidence. |
+| Search bound | Exhausted candidate budget reports `SEARCH_EXHAUSTED`, not permanent infeasibility. |
+| Stale offer/CAS | Availability changes after calculation; transaction makes no stale assignment and refreshes. |
+| Agent admission decline | External/local drift defeats advertised claim; agent releases partial acquisition, reports decline, and no process/attempt advances. |
+| Two-agent race | Competing scheduling triggers create one assignment for one job and consume one work request once. |
+| Assignment crash table | Fault before/after assignment, receipt, local acquisition, grant, start fence, launcher, event commit, and ack never duplicates root launch or loses acknowledged state. |
+| Pending diagnostics | Unsupported contract, no capable machine, waiting capacity/preference, target offline, stale offer, and search exhaustion are safe and source-labelled. |
+| Required-store failure | No ack/start through failed writes; missing/corrupt/migration failure prevents readiness/reset. |
+| Coordinator outage | Granted process continues; no new work; offline terminal event survives agent SQLite and replays after same-ID/epoch restart. |
+| Agent outage/recovery | Offer disappears; accepted assignment remains reserved; only exact reconcile/success or scoped positive-containment recovery closes it. |
+| Security | Wrong cert, role/scope/body actor, resource contract/version/size, remote callable-like payload, or replay fingerprint fails before mutation. |
+| Reconfiguration | Availability withdraws before drain; old claims finish under old fingerprint; complete new inventory swaps atomically or old plan remains. |
+| Delegated compatibility | SLURM/external pools preserve established handoff and do not pass through managed resource planners. |
 
-Causal interactions requiring combined coverage:
-
-- Stage 25 selection + two work requests + assignment fencing;
-- assignment delivery retry + journal persistence + process start;
-- direct/HTTP client + identical opportunity + normalized lifecycle trace;
-- offer expiry + accepted work + reassignment prohibition;
-- run completion evidence + containment evidence + bounded redispatch CAS;
-- daemon process lock + fresh-session rejection/expiry admission + startup recovery;
-- open work long poll + new submission + independent busy-agent cancellation;
-- config drain + allocatable offer + live resource lease;
-- network/generation loss + safety deadline + process containment.
+Causal combinations requiring combined coverage are limited to: candidate choice
+plus assignment CAS; offer revision plus work-request consumption; resource claim
+plus agent acquisition/rollback; queue order plus placement score; grant plus
+start fence/launcher; acceptance plus cancellation; event commit plus lost ack/
+generation change; agent liveness plus no-reassignment; session resume plus role
+lock; containment plus operator auth/CAS/stale report; and config drain plus live
+resource ownership.
 
 ## Phase Shaping
 
-| Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
-| --- | --- | --- | --- | --- | --- |
-| 1. Unified local daemon and control boundary | Coordinator service/client port, durable assignments, direct client, common agent journal/runtime, migrated managed facades, composed HTTP routes, and co-located daemon run one resident job through the same path. | Core assignment/agent/local composition and CLI; no remote admission, multi-agent routing, or reconfiguration. | Stage 28 and revised Stage 25. | Command, managed runtime, direct daemon, and loopback HTTP have equivalent normalized traces; race/crash/cancel tests pass. | pending |
-| 2. JIT multi-agent pool | HTTP client and admitted remote agents contribute expiring opportunities; compatible work is selected/assigned/targeted/monitored through unchanged core. Long work polls and independent control delivery use environment-resolved secure deployment. | Auth, offer cache, eligibility, singleton sessions, multi-agent status; no payload, placement policy, or HA. | Phase 1. | `machine-A`/`machine-B` races, immediate arrival, fit/target/expiry, client conformance, and opt-in `machine-A`/`machine-B` resident receipt. | pending |
-| 3. Safe reconfiguration and recovery | Common agent runtime drains/resumes/reloads and reconciles restart/partition/cancel outcomes; definitively stopped, incomplete, untargeted work may redispatch under a finite opt-in policy. | Control intent, config fingerprints, journal/containment/completion evidence and recovery docs; no hot mutation, reattachment, timeout retry, general retry, or data plane. | Phase 2 and Stage 27. | Drain/shrink, restart/partition fencing, completion/containment/redispatch matrix, exact ambiguity, operational example. | pending |
+| Phase | Vertical outcome | Acceptance focus | Status |
+| --- | --- | --- | --- |
+| 1. Generic scheduler and unified local daemon boundary | Whole-run placement schema, resource/constraint/preference contracts, exact scalar/fractional normalization, deterministic oldest-runnable/local placement, assignment CAS, common coordinator/client/agent core, separate stores/outbox, direct and mTLS loopback paths, facade migration, persistent co-located daemon. | Local placement parity, exact quantity accounting, unsupported contracts, decision/CAS and grant/start/store/auth faults, multi-client lifetime. | pending |
+| 2. Global multi-agent resource placement | Authenticated remote inventory/availability offers, one revision-bound work request, bounded global candidates, GPU/VRAM/discrete claims, hard target/constraints, site and job preferences, pending diagnostics, durable sessions, coordinator-outage continuation, reconciliation/event replay. | Two-agent GPU/VRAM fit/race/order/preference, stale offers/declines, deterministic bounds, peer/scope negatives, clock/backpressure/outage, opt-in receipt. | pending |
+| 3. Safe agent reconfiguration and recovery | Drain/resume/reload over versioned inventory, disconnected cancellation reconciliation, containment evidence, authenticated manual close/fence/optional requeue, and complete-set guarded session replacement. | Old/new inventory claim isolation, serialized controls, no silent force, positive-containment gate, success race, stale report, target preservation, multi-assignment replacement rejection. | pending |
 
-Three phases remain justified: establish and migrate the common local core,
-extend only its transport/eligibility to several machines, then add destructive
-operations and recovery.
+Three phases keep the public/durable scheduler plus local common path as the
+architectural gate, remote global placement as one end-to-end pool capability,
+and destructive recovery/reconfiguration as a separately reviewable boundary.
+Splitting the scheduler from local assignment would leave an unusable layer;
+combining recovery with remote placement would mix unrelated high-risk behavior.
 
 ## Quality Gate
 
 | Check | Evidence | Result |
 | --- | --- | --- |
-| Behavior and agreements locked | Original unified model remains approved; FR-10/13/15-18 and FQ-5/8-12 lock the confirmed pull/lifecycle/conditional-loss refinement. | pass |
-| Minimum design justified | Starts from Stage 25 selection, current queue/authority/local adapter and adds only durable/network ownership gaps. | pass |
-| Complexity proportionate | Long pull reuses one client port; singleton uses two narrow guards; loss continuation adds one bounded evidence gate rather than push infrastructure, general retry, a data plane, or HA. | pass |
-| Contracts/private discretion clear | Port, state machines, owner split, durable/ephemeral facts, acknowledgement order, lifecycle evidence, and configuration source separation are fixed; routes/tables/encodings remain private. | pass |
-| Invariants/validation proportionate | Nine causal interactions cover the new arrival, duplicate-daemon, and verified-loss races without a full Cartesian matrix. | pass |
-| Phases reviewable | Common local value first, remote extension second, destructive operations third. | pass |
-| Review correction | Prior removal-first/plan reviews passed; the maintainer-confirmed refinement is propagated to the manifest and phase contracts. | pass |
-| No blocker | No planning blocker; Stage 25/28 sequencing remains. | pass |
+| Behavior and agreements locked | Maintainer confirmed the generic scheduler behavior and directed all revisions into Stage 29; prior outage/security behavior remains accepted. | pass |
+| Minimum design justified | Every durable/protocol addition has a current CPU/memory/GPU/machine-preference, network, restart, or correctness consumer. | pass |
+| Complexity delta proportionate | One concrete bounded scheduler and narrow resource/rule seams; no DSL, solver, gang work, HA, automatic retry, or universal framework. | pass |
+| Contracts and private discretion clear | Placement/offer/claim/assignment/auth boundaries fixed; file/table/route/search internals left private. | pass |
+| Invariant ownership and validation proportionate | Queue, scheduler, coordinator CAS, agent binding, stores, TLS/auth, process, and recovery each have one owner with causal tests. | pass |
+| Phases vertical and reviewable | Three phases deliver local scheduling, global remote placement, then guarded recovery. | pass |
+| Expanded review | Removal-first and detailed plan-consistency passes each completed with one bounded correction; all concrete findings are resolved. | pass |
 
-Gate result: the refined planning contract is confirmed and coherent. Phase 1
-remains pending merged Stages 25/28.
+Gate result: the manager planning quality gate passes. The artifacts are ready
+for maintainer implementation-plan approval and have no unresolved product or
+design blocker.
 
-Accepted risks: oldest-eligible has no fairness guarantee; one coordinator is
-an availability boundary; a fresh duplicate agent waits for session expiry;
-resident profiles need pre-staged environments and keep data/logs local;
-fail-closed partitions can terminate work; and an unreachable accepted job
-cannot move immediately without positive external or returning-agent
-containment evidence. Revisit on measured harm or an accepted stronger
-fencing/data contract.
+Accepted risks: oldest-runnable work can starve large jobs; bounded heuristics
+may miss complex feasible combinations; serialized per-agent handshakes trade
+dispatch throughput for simple correctness; offers can be stale and decline;
+the coordinator remains a new-work/control availability boundary; no automatic
+agent-loss recovery exists; fractional GPU semantics are only as strong as the
+configured provider; and a manually authorized unknown-result rerun may repeat
+external effects.
 
 ## Decisions And Deferrals
 
 | Item | Decision or deferral | Rationale | Revisit trigger |
 | --- | --- | --- | --- |
-| Managed topology | One coordinator/assignment/agent core; direct and HTTP clients only. | Deployment must not change behavior. | A third transport cannot implement the port. |
-| Existing managed APIs | Preserve as facades over common direct composition. | Source compatibility without implementation fork. | A facade cannot truthfully map results. |
-| Selection | Revised Stage 25 eligibility then oldest-eligible/custom preference. | Same opportunity produces same choice everywhere. | Accepted fairness/placement design. |
-| Durable handoff | Separate assignment and local journal; `OFFERED` precedes accepted attempt. | Network/start ambiguity crosses owners. | Stronger transactional execution substrate exists. |
-| Pool/target | Global pool aggregates expiring agent opportunities; hard target uses normal eligibility. | Preserve local resource authority and one queue. | Gang work or soft affinity becomes current. |
-| Transport | Direct calls locally; remote free slices hold outbound secure HTTP long polls and a session/control activity remains available independently. | Immediate coordinator-directed delivery without inbound agent servers. | Scale requires another transport. |
-| Activation | One process per state root, one store activation, and one fresh session per stable agent. | Prevent accidental duplicate daemons without election machinery. | HA or automatic failover becomes current. |
-| Deployment configuration | Trusted local pool config; environment-resolved endpoints/certificate/credential-file references; protected secret material; drain/resume/reload intent only. | Keep machine-local and secret values out of committed config and projections. | Reviewed config/secret distribution requested. |
-| Loss continuation | Timeout remains recovery-required. Verified stopped and incomplete untargeted work may redispatch only under finite opt-in policy; resume depends on accessible validated state. | Continue safe work after machine loss without claiming arbitrary exactly-once side effects. | Stronger automatic node fencing or portable data plane is accepted. |
-| Data/HA/framework | Resident mode and one coordinator; transfer, HA, and generic hierarchies deferred. | No current consumer. | Demonstrated data/availability/third-role need. |
+| Scheduling scope | Managed whole-run, global single-agent placement. | Current daemon job is one resident whole run. | Accepted distributed/gang job. |
+| Queue order | Oldest runnable then best placement. | Preserves predictable queue semantics while adding machine ranking. | Accepted fairness/priority/reservation policy. |
+| Resources | Exact registered resource contracts; built-in scalar, memory, GPU/device/VRAM, attributes. | Current requirements differ semantically. | New resource with a demonstrated owner/consumer. |
+| Fractions | Resource-defined fixed-point/rational normalization; explicit GPU provider mode. | Avoids float drift and invented sharing. | Provider requires another exact representation. |
+| Preferences | Deterministic site-defined tiers; job contributions bounded; fallback separate. | Prevents soft rules overriding hard/operator policy. | Accepted dynamic/learned scoring. |
+| Pools | Policy/security/admission domains; capacity from offers. | Avoid duplicate stale global capacity. | Accepted quota/accounting authority. |
+| Candidate search | Tri-state bounded deterministic enumeration/heuristics; no mutation on indeterminate earlier job or incomplete winner. | Meets current small pool without violating queue/ranking semantics. | Measured workloads exceed bounds or require optimal matching. |
+| Extension loading | Explicit trusted resource composition and contract versions; tagged built-in rules and data-only wire. | Keeps remote code execution and durable rule semantics narrow. | Stock daemon needs third-party resource or custom rule implementations. |
+| Global resources | Deferred without coordinator/external transactional owner. | Agent-local matching cannot reserve a global licence safely. | Concrete global resource requirement and owner. |
+| Transport | Direct locally; outbound mTLS HTTP long poll remotely. | Immediate coordinator control without inbound agent server. | Scale proves port insufficient. |
+| Persistence/outage | Separate role SQLite; granted work continues; no new disconnected work. | Preserves owner facts across restart. | Reviewed HA/restore/fencing contract. |
+| Agent loss | Wait; positive-containment manual recovery only. | Avoid duplicate unknown execution. | External node fencing plus accepted automatic retry semantics. |
+| Data/resume | Pre-staged resident mode; reuse only accessible committed validated state. | Scheduler is a control plane, not data plane. | Accepted transfer/staging design. |
+| Delegated pools | External scheduler remains authoritative. | Avoid pretending Loom controls external placement. | Accepted delegated-agent integration. |

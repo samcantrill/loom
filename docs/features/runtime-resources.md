@@ -197,6 +197,145 @@ default queue
 Executor adapters may choose defaults, but those defaults should be documented
 by the executor and included in submission metadata when relevant.
 
+## Stage 29 Whole-Run Placement Resources
+
+Stage 29 introduces a related but separate resource contract for placing one
+queued whole-run launch on one managed agent. It does not change the meaning of
+an authored stage `ResourceRequest` and does not derive a launch request by
+adding stage resources together. A submitter supplies an explicit versioned
+`PlacementRequest` because stage overlap, reuse, and executor behavior make
+automatic aggregation ambiguous.
+
+The placement model distinguishes four kinds of scheduling information:
+
+| Kind | Examples | Meaning during placement |
+| --- | --- | --- |
+| Exact consumable scalar | CPU shares, RAM bytes | Reserve a normalized quantity from one agent. |
+| Discrete instance | GPU or accelerator device | Select and later bind particular safe instance identities. |
+| Attribute | Architecture, machine label, GPU model | Filter or rank; not consumed. |
+| Relationship | Same agent, same advertised device fabric | Filter or rank a complete candidate claim. |
+
+The generic envelope is versioned plain data rather than one universal schema:
+
+```python
+@dataclass(frozen=True)
+class ResourceEnvelope:
+    kind: str
+    contract_version: int
+    value: PlainData
+
+@dataclass(frozen=True)
+class PlacementRequest:
+    schema_version: int
+    resources: Mapping[str, ResourceEnvelope]
+    hard_constraints: tuple[TaggedConstraintSpec, ...] = ()
+    soft_preferences: tuple[TaggedPreferenceSpec, ...] = ()
+    target_agent_id: str | None = None
+    fallback: PreferenceFallbackSpec = field(
+        default_factory=PreferenceFallbackSpec.immediate
+    )
+```
+
+Resource-specific implementations are trusted code composed explicitly by the
+deployment:
+
+```python
+class ResourcePlanner(Protocol):
+    kind: str
+    contract_version: int
+
+    def normalize_request(self, value: PlainData) -> PlainData: ...
+    def normalize_inventory(self, value: PlainData) -> PlainData: ...
+    def propose_claims(
+        self,
+        request: PlainData,
+        available: PlainData,
+        *,
+        limit: int,
+    ) -> ClaimSearchResult: ...
+    def explain_failure(
+        self,
+        request: PlainData,
+        available: PlainData,
+    ) -> FailureReason: ...
+```
+
+`ClaimSearchResult` carries bounded claims, an explicit `COMPLETE` or
+`EXHAUSTED` state, and optionally a sound resource-specific winner proof or
+dominance bound. A complete empty result proves that resource infeasible; an
+exhausted result is indeterminate. The scheduler cannot mutate from an
+indeterminate result unless it can compose the supplied bound with all other
+resource and preference bounds to prove the final winner.
+
+The registry is immutable and passed into scheduler composition. Remote and
+durable values may name a supported kind/version but never load a callable,
+constructor, or plugin. The protocol lives with queue scheduling rather than in
+root `loom.protocols`, because placement is its only accepted current consumer.
+Stage 29 uses one concrete scheduler; it does not add a public scheduler
+replacement protocol.
+
+Quantity arithmetic is exact and owned by the resource contract:
+
+```text
+1.5 CPU  -> 1500 millicpu when that is the configured scalar granularity
+10 GiB   -> 10,737,418,240 bytes
+0.25 GPU -> invalid unless a named fractional provider defines its semantics
+```
+
+Authored decimals normalize before persistence and comparison. Binary floating
+point never owns availability, reservation, or release. A resource request is
+rejected before mutation when its contract version, unit, mode, or granularity
+is unsupported.
+
+GPU placement has three explicit meanings:
+
+```text
+exclusive       choose whole GPU instances; each chosen device must satisfy
+                requirements such as minimum VRAM and model attributes
+vram-share      reserve an exact amount of VRAM on a compatible provider that
+                can enforce and release that meaning
+fractional      use a named provider-defined share unit and granularity
+```
+
+These modes are not interchangeable. Requesting 10 GiB VRAM does not silently
+mean one whole GPU, and requesting 0.5 GPU is not accepted merely because the
+number is fractional. A provider must advertise compatible inventory,
+availability, claim, admission, binding, accounting, and release semantics.
+
+Each agent publishes configured inventory separately from current availability:
+
+```python
+AgentOffer(
+    agent_id="machine-A",
+    inventory_revision=7,
+    availability_revision=19,
+    inventory={...},      # trusted manageable resources and attributes
+    availability={...},   # exact resources assignable for the next claim
+)
+```
+
+The scheduler works only with safe projections and proposes a versioned
+`ResourceClaim`. The selected agent remains authoritative for physical binding:
+
+```text
+resource planner  normalizes, tests feasibility, and proposes safe claims
+scheduler         combines claims, applies hard rules, and ranks preferences
+coordinator CAS   reserves one claim against exact job/offer revisions
+agent provider    revalidates reality, binds, accounts, and releases locally
+```
+
+This split is intentional. A coordinator snapshot can become stale between
+selection and delivery, so its durable reservation prevents competing Loom
+assignments while agent admission prevents launching against hardware that no
+longer matches. A failed local admission declines the offer and publishes a new
+availability revision; it is not treated as a job execution failure.
+
+Initial built-ins cover exact CPU shares, memory bytes, Boolean/categorical
+attributes, discrete GPUs, per-device VRAM/model predicates, and deterministic
+machine/GPU preferences. More resource kinds can be registered later, but a
+globally consumed licence, quota, or bandwidth resource first needs one clear
+transaction owner across coordinator and agent failures.
+
 ## Runtime Options
 
 `RunOptions` captures invocation-level choices for one run.
@@ -709,7 +848,8 @@ Tests should avoid requiring SLURM, Docker, or Apptainer.
 Deferred runtime/resource features:
 
 ```text
-rich accelerator descriptions
+rich accelerator descriptions inside authored stage resources beyond the
+separate Stage 29 whole-run placement contract
 per-stage container images
 executor-specific schema plugins
 queue time estimates
