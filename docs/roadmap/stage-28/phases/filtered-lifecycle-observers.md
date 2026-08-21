@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: v28 Phase 3
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p3-filtered-lifecycle-observers`
-- Worktree root and path: record during phase preparation; default to the
-  `loom-worktrees` sibling of the discovered control checkout
-- Base revision: current `origin/develop` after Phase 2 remotely merges
+- Worktree root and path: `../loom-worktrees` /
+  `stage-28-p3-filtered-lifecycle-observers`
+- Base revision: `569cbca` (current `origin/develop` after Phase 2 merge metadata)
 - PR target: `develop`
 - PR title: `Stage 28 phase 3: add filtered lifecycle observers`
 - Dependencies: Phase 2 merged; planning `FR-1` through `FR-3` and `FR-8`
@@ -374,7 +374,9 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete
+- Manager preparation: complete; repository `samcantrill/loom`, current base,
+  predecessor merge, branch, dedicated worktree, target, title, ownership,
+  source seams, and targeted commands verified
 - Expanded planning: not needed; the cross-stage correction confirmed this
   phase as the sole exact-filter owner
 - Implementation: pending one `loom_phase_executor`
