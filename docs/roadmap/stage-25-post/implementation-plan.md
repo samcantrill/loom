@@ -73,7 +73,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `unified-selection-ownership` | pending | `docs/roadmap/stage-25-post/phases/unified-selection-ownership.md` | `agent/stage-25-post-p1-unified-selection-ownership` | pending | Private scheduling operation, policy binding, repository capability/cut-over, controller and caller migration | Make every current path select and acquire through one bounded implementation. |
+| 1 | `unified-selection-ownership` | in_progress | `docs/roadmap/stage-25-post/phases/unified-selection-ownership.md` | `agent/stage-25-post-p1-unified-selection-ownership` | pending | Private scheduling operation, policy binding, repository capability/cut-over, controller and caller migration | Make every current path select and acquire through one bounded implementation. |
 | 2 | `factual-dispatch-outcomes` | pending | `docs/roadmap/stage-25-post/phases/factual-dispatch-outcomes.md` | `agent/stage-25-post-p2-factual-dispatch-outcomes` | pending | Public dispatch facts, built-in adapters, controller transition table, diagnostics/evidence | Make retry impossible unless capacity non-start and cleanup are both proven safe. |
 
 ## Quality Gate
