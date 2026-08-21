@@ -577,15 +577,16 @@ validation.
 
 ### 12.6 Stage 29 Scheduling Resources
 
-`ResourcePlanner` belongs beside the managed queue scheduler, for example under
-`loom.queue.scheduling`, rather than in `loom.protocols`.
+`ResourcePlanner` belongs in the import-light `loom.scheduling` subsystem beside
+the concrete managed stage-placement engine, rather than in `loom.protocols` or
+under the whole-run queue package.
 
 Reason:
 
 ```text
-its semantics depend on versioned whole-run placement requests, agent
-inventory/availability, bounded candidate claims, exact reservation units, and
-scheduler-safe failure explanations
+its semantics depend on resolving authored and exact-stage `ResourceRequest`
+values, versioned agent inventory/availability, bounded candidate claims, exact
+reservation units, and scheduler-safe failure explanations
 ```
 
 Stage 29 has one accepted scheduler implementation, so it adds no public
@@ -593,7 +594,9 @@ Stage 29 has one accepted scheduler implementation, so it adds no public
 versioned tagged data with built-in dispatch, so it also adds no public callable
 protocol for submitted rules. These choices keep the extension surface attached
 to a real consumer and prevent wire or stored data from authorizing code
-loading.
+loading. Dependency readiness is not another resource or scheduler protocol: one
+authority-side planning predicate is shared by orchestration and assignment CAS,
+while the pure placement engine receives only already-ready stage attempts.
 
 ---
 

@@ -231,72 +231,51 @@ distributed quota. Stage 25 supplies bounded oldest-eligible queue ordering;
 Stage 29 folds that behavior and the Stage 27 resource/provider seams into the
 generic scheduler described below. Notification policy remains Stage 26 work.
 
-## Stage 29 Generic Scheduler Direction
+## Stage 29 Dependency-Aware Scheduler Direction
 
-Stage 29 changes managed queue placement, not delegated scheduler ownership.
-Command-scoped local execution, `ManagedLocalQueueRuntime`, a persistent local
-daemon, and several remote agents all compose the same coordinator scheduler
-and assignment lifecycle. There is no second local scheduler and no durable
-queue on each agent.
+Stage 29 changes managed execution from one whole-run launch to scheduling each
+dependency-ready executable stage attempt. The queue item and `run_uri` remain
+the user-facing submission, status, and cancellation identities. Command-scoped
+local execution, `ManagedLocalQueueRuntime`, a persistent local daemon, and
+several remote agents compose one durable run orchestrator, one concrete
+placement engine, one assignment lifecycle, and one agent runtime. Delegated
+SLURM keeps external scheduler ownership.
 
-The durable submission carries a versioned whole-run placement request:
-
-```yaml
-placement:
-  schema_version: 1
-  resources:
-    cpu:
-      contract: scalar/v1
-      quantity: "4"
-    memory:
-      contract: bytes/v1
-      minimum: 68719476736
-    gpu:
-      contract: gpu/v1
-      count: 1
-      mode: exclusive
-      each:
-        minimum_vram_bytes: 68719476736
-  hard_constraints:
-    - type: machine-attribute/v1
-      attribute: architecture
-      equals: x86_64
-  soft_preferences:
-    - type: preferred-agent-order/v1
-      agents: [machine-A, machine-B]
-  fallback:
-    mode: immediate
-```
-
-This is a request for the whole run's launch placement. It is separate from a
-pipeline stage's `ResourceRequest`; Loom does not sum stage requests and guess
-whether stages overlap. Submission validates and fingerprints the placement
-request before it becomes queue state.
-
-Every authenticated agent publishes two related views:
+The scheduling subsystem has two deliberately separate decisions:
 
 ```text
-inventory     what trusted local configuration permits the agent to manage
-availability  what remains assignable in one exact current revision
+run orchestrator   interprets the persisted plan and authoritative output state
+placement engine   chooses where an already-ready executable attempt should run
 ```
 
-An offer binds those views to the agent, durable agent session, configuration
-fingerprint, inventory revision, availability revision, pool contribution,
-resident execution profile, and expiry. Expiry removes only future scheduling
-capacity. It does not imply that a process died, release an accepted claim, or
-permit another session to take over.
+One shared authority-side readiness predicate is used when stage work is exposed
+and again when the exact attempt is bound to an assignment. The placement engine
+never interprets DAG edges. For `preprocess -> train -> evaluate`, only
+`preprocess` initially appears in a placement snapshot. `train` appears only
+after the preprocess output commit, and `evaluate` appears only after train
+commits. Reuse, skip, blocked descendants, and retry remain planner/reliability
+behavior and do not consume agent capacity.
 
-A managed pool is a scheduling, admission-policy, and authorization domain. Its
-capacity is derived from fresh authenticated agent contributions; the
-coordinator does not maintain a second aggregate capacity number that can drift
-from agent truth. Initially one job must fit completely on one agent. CPU from
-`machine-A` cannot be combined with a GPU from `machine-B` for one placement.
+Each prepared `PlanAction.RUN` attempt has an immutable resolved placement
+built from its authored `ResourceRequest`, exact-stage runtime refinements,
+run/pool policy, and site policy. Resources are never added across the whole
+pipeline. CPU is a positive integer count; memory and VRAM normalize to integer
+bytes. Hard constraints remove candidates; soft preferences rank only feasible
+ones. A GPU-model preference affects a GPU training stage but not a CPU-only
+preprocess stage. A hard run or stage target never spills; a preferred agent is
+soft and follows explicit fallback.
 
-The scheduler receives one immutable bounded snapshot:
+The coordinator persists a rebuildable `StageWorkRecord` containing the exact
+`(run_uri, stage_name, attempt)`, ready time/order, plan/authority revision,
+upstream commit identities, and resolved-placement fingerprint. It does not own
+stage success or failure. Per-run authority remains the owner of plans,
+attempts, statuses, bound inputs, output commits, and retry facts.
+
+The scheduler receives one immutable bounded global snapshot:
 
 ```python
 snapshot = SchedulingSnapshot(
-    waiting_jobs=queue.in_order(),
+    ready_stages=coordinator.ready_stage_window(),
     opportunities=fresh_agent_availability(),
     pool_policy=policy,
 )
@@ -304,66 +283,88 @@ snapshot = SchedulingSnapshot(
 decision = scheduler.choose(snapshot, resource_planners)
 ```
 
-Its order is deliberate:
+Default stage order is run priority and enqueue order, ready time, topological
+order, stage name, then attempt. For the first stage proven runnable now, the
+scheduler chooses its best feasible single-agent placement. An earlier stage
+proven infeasible on current capacity may be bypassed so, for example, idle CPUs
+can run another preprocess stage while a training stage waits for a GPU.
+Candidate search remains tri-state: complete feasible, complete infeasible, or
+`SEARCH_EXHAUSTED`. An indeterminate older stage is not mislabeled infeasible,
+and an incomplete placement ranking is never committed without a sound winner
+proof.
 
-1. Generate complete single-agent candidate claims for the oldest waiting job.
-2. Apply core safety rules and tagged hard constraints. These can only remove a
-   candidate.
-3. If the job is proven infeasible now, continue to the next queued job.
-4. For the oldest runnable job, apply pool and job soft preferences. These can
-   only rank already-feasible placements.
-5. Use stable identities for deterministic ties and return at most one
-   decision.
+Every authenticated agent publishes configured inventory separately from
+current availability:
 
-Candidate search is tri-state: complete feasible, complete infeasible, or
-`SEARCH_EXHAUSTED`. The coordinator does not skip an older indeterminate job or
-commit a winner from an incomplete placement set unless the resource planner
-provides a sound winner proof. This trades some throughput for explicit
-correctness under bounded search.
-
-Queue order and machine preference therefore remain different policies:
-
-```python
-job = oldest_runnable_job(snapshot)      # queue policy
-agent = best_feasible_placement(job)     # placement policy
+```text
+inventory     resources trusted local configuration permits Loom to manage
+availability  exact resources assignable in this versioned offer revision
 ```
 
-Pool/site policy may prefer GPU models or fill machines in a deterministic
-order, and a job may express a preferred agent order. Hard targeting is a hard
-constraint: a job targeted to `machine-A` never spills to `machine-B`.
-Preferences do not make an invalid placement valid. Immediate fallback is the
-default; waiting for a preferred placement and relaxing later requires an
-explicit durable fallback policy.
+An offer binds agent/session/configuration, project and executor capabilities,
+inventory and availability revisions, pool, resource-contract versions, and
+coordinator receipt-time expiry. Expiry removes only future schedulability. It
+does not prove process death, release accepted work, or permit session takeover.
+One stage claim fits wholly on one agent; CPU from `machine-A` is not combined
+with a GPU from `machine-B` for one stage.
 
-Resource-specific behavior is behind a narrow, explicitly composed trusted
-planner registry. A scalar planner proposes exact quantity claims; a GPU
-planner proposes concrete safe device claims. Built-in hard/soft rules are
-versioned tagged data interpreted by private dispatch, not remotely supplied
-callables. Stage 29 deliberately adds neither a public replaceable scheduler
-protocol nor an unrestricted constraint language.
+Resource-specific matching is explicitly composed trusted code behind
+`ResourcePlanner`; stored and wire values never load callables. The one
+concrete scheduler owns candidate orchestration and deterministic rule order.
+CPU/memory planners propose exact scalar claims. A GPU planner proposes exact
+devices and supports only explicit exclusive, provider-enforced VRAM-share, or
+named provider-defined fractional modes. Stage 29 adds no public replaceable
+scheduler, submitted callable rule protocol, unrestricted constraint language,
+or general solver.
 
-The coordinator's commit remains the distributed correctness boundary. In one
-transaction it revalidates the queue attempt, agent/session, configuration,
-inventory and availability revisions, work request, target, claim fingerprint/
-contract versions, and assignment uniqueness. A successful transaction creates
-`OFFERED`; it does not authorize execution. The selected agent then performs
-authoritative local admission and binding. Drift produces a safe decline and a
-new availability revision, not an unsafe launch.
+Cross-store correctness is a recoverable protocol, not one imaginary
+transaction:
 
-One availability revision has at most one unresolved work request/assignment
-handshake. Accept or decline resolves it, after which the agent reports a new
-revision. This prevents two coordinator decisions from spending the same
-capacity while allowing previously granted jobs to keep running concurrently.
+1. Authority prepares an exact ready attempt; coordinator materializes stage
+   work.
+2. Coordinator transaction reserves current logical claims and creates an
+   assignment intent.
+3. The shared readiness predicate is rechecked and authority CAS binds that
+   prepared attempt to the assignment.
+4. Agent durably stages the immutable request and required inputs, then performs
+   final physical binding. A definitive pre-grant decline may CAS-unbind only
+   that same assignment before coordinator capacity is released; ambiguous
+   acceptance remains bound.
+5. A committed grant creates an authority execution fence independent of
+   coordinator liveness. Agent records grant and start fences before at most one
+   root launcher invocation.
+6. Agent retains output until an authenticated transfer/backend finalizer
+   returns coordinator-accessible `ArtifactRef` values. Only their authority
+   output commit unlocks descendants and releases the assignment.
 
-Safe pending diagnostics distinguish unsupported resource contracts, no known
-capable agent, temporary resource shortage, hard-constraint mismatch,
-preferred-fallback waiting, stale snapshot, and search exhaustion. They never
-expose commands, secrets, raw device bindings, or local paths.
+The coordinator and each agent use separate SQLite state and process locks.
+A granted stage continues while the coordinator is unavailable because its
+request and inputs are already local; the agent journals and retains results
+until reconnection. No new or downstream work starts until the coordinator
+returns and authority commits the result. Agent loss removes capacity but does
+not fail or reassign accepted work. Exact reconciliation or
+positive-containment operator recovery is required.
 
-Delegated pools retain their existing boundary: Loom submits one whole run and
-the external scheduler owns its own resource placement. Stage 29 does not
-silently apply the managed Loom scheduler inside delegated SLURM ordering.
+All persistent HTTP peers use mutual TLS and scoped principals; direct
+composition invokes the same authorizer. Agents connect outbound using bounded
+long polling and own no prefetched durable queue. Work names a prepared resident
+stage and safe versioned values, not arbitrary shell text. A bounded initial
+coordinator relay provides network-only input/output movement with digest,
+temporary-first, and manifest-last behavior; agent-local file paths are never
+committed as remote output refs.
 
+Queue status joins but labels queue admission, dependency waiting, placement
+waiting, active/unknown assignment, authority stage truth, artifact publication,
+retry, cancellation, and terminal outcome. Cancellation first stops new stage
+work, then controls every exact active assignment; it becomes terminal only
+after terminal or positive-containment evidence. Existing whole-run queue rows
+remain readable and cancellable. New managed work uses a distinct orchestration
+state rather than silently reinterpreting historical `DISPATCHED`.
+
+Delegated pools retain their existing boundary: Loom submits according to the
+delegated adapter and the external scheduler owns ordering, resource placement,
+and dependency submission. Stage 29 does not emulate SLURM policy inside the
+managed stage scheduler.
 ## Delegated SLURM Pools
 
 Delegated SLURM pools use the existing fakeable SLURM command-runner boundary.
