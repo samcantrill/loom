@@ -8,7 +8,7 @@
 - Branch: agent/stage-27-p1-gpu-plans-safe-bootstrap
 - Worktree root and path: recorded manifest worktree root;
   `<worktree-root>/stage-27-p1-gpu-plans-safe-bootstrap`
-- Base revision: `e5bfa9bcf87ce1f6f93857cc92c76e7d5f252898`
+- Base revision: `e3968f785736d47b54aa3e8972b5368a4ecbaa56`
 - PR target: develop
 - PR title: `feat(queue): add planned local GPU pools and safe bootstrap`
 - Dependencies: completed Stage 23 and Stage 23-post managed-local contracts;
@@ -204,22 +204,24 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: passed on base `e5bfa9bcf87ce1f6f93857cc92c76e7d5f252898`
+- Manager preparation: passed on base `e3968f785736d47b54aa3e8972b5368a4ecbaa56`
 - Expanded planning: not needed; accepted contracts are complete
-- Implementation: in_progress; one `loom_phase_executor` pending
-- Refiner: completed qualified safe-evidence/binding-validation/fingerprint correction
+- Implementation: completed by one `loom_phase_executor`; manager verification
+  found and corrected one managed-runtime compatibility issue
+- Refiner: completed the qualified safe-evidence, binding-validation, and
+  fingerprint correction
 - Pre-submit gate: pending
-- Independent review: consider only if authority contracts materially change
-- Blocker corrections: 1/3
+- Independent review: not needed; manager review found no residual blocker
+- Blocker corrections: 2/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Completed in `b67d1f05eecab6ec7dd6acb4f93a14d3598ae92e`: explicit `loom.queue.gpu` planning/runtime composition, atomic coordination limit ensure across SQLite/service authority paths, and scoped package/authority/queue tests. |
-| Tests added or updated | `tests/unit/loom/queue/gpu/test_local.py`, `tests/integration/queue/test_managed_local_gpu_pool.py`, `tests/contracts/test_workspace_coordination_contract.py`, package/store export tests, and the in-memory coordination fake. The qualified correction adds safe-evidence redaction, structured-fingerprint, and comma-binding regressions to the GPU-local unit module. |
-| Validated revision/tree state and evidence | Clean implementation tree at `b67d1f05eecab6ec7dd6acb4f93a14d3598ae92e`; `make validate-pr` passed (default: 2,189 passed/112 deselected; config-extra: 132 passed/3 skipped), and `make test-summary` passed with receipt `build/test-summary.md` (package 114, unit 1,537, contract 279, integration 205, e2e 54, config-extra 132 passed). Qualified correction: `.venv/bin/pytest -q tests/unit/loom/queue/gpu/test_local.py` passed (10 passed). |
-| Validation-relevant changes after evidence | Qualified correction 1/3 removes device identities from assignment safe evidence, uses canonical structured fingerprint input, rejects comma-containing CUDA bindings, and adds focused regressions; the prior full-validation receipt is stale. |
+| Implementation and changed paths | Completed through `67bdf982c96f014a813a9ce540cb3959cf186bfc`: explicit `loom.queue.gpu` planning/runtime composition, atomic coordination limit ensure across SQLite/service authority paths, safe ordinal assignment evidence, and scoped package/authority/queue tests. |
+| Tests added or updated | `tests/unit/loom/queue/gpu/test_local.py`, `tests/integration/queue/test_managed_local_gpu_pool.py`, `tests/contracts/test_workspace_coordination_contract.py`, package/store export tests, and the in-memory coordination fake. Corrections add safe-evidence redaction, structured-fingerprint and comma-binding regressions, required `shares_per_gpu(1)` behavior, and a whole-GPU managed-runtime launch proving distinct CUDA bindings and exact release. |
+| Validated revision/tree state and evidence | Clean source tree at `67bdf982c96f014a813a9ce540cb3959cf186bfc`; `make validate-pr` passed (Ruff, Pyright with zero errors, default 2,193 passed/112 deselected, config-extra 132 passed/3 skipped, and sdist/wheel build). Focused GPU/runtime tests passed (15 passed). `make test-summary` produced `build/test-summary.md` twice with every package, unit, contract, integration, and e2e test passing; config-extra had 131 passed/3 skipped and one unrelated lease-renewal test time out at its five-second stage-allocation wait. The same test passes without coverage and reproduces only under the summary harness's coverage instrumentation, so summary evidence is unavailable for that timing-sensitive test and CI remains required. |
+| Validation-relevant changes after evidence | None. The full validation and summary diagnostics ran after correction 2/3 on the current source, test, dependency, build, and validation configuration. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | No Phase 1 blocker. NVIDIA discovery, topology/grouping, and operator documentation remain deferred to later accepted phases; PR/review/merge and worktree cleanup remain manager-owned. |
