@@ -230,6 +230,66 @@ def test_grouped_provider_rolls_back_first_member_on_second_member_conflict(
     )
 
 
+def test_grouped_runtime_cancel_observes_exit_before_releasing_every_member(
+    tmp_path: Path,
+) -> None:
+    plan = plan_local_gpu_pool(
+        _inventory(),
+        grouped(2, groups=(("uuid-a", "uuid-b"),)),
+        db_path=str(tmp_path / "queue.sqlite"),
+    )
+    process = _Process(301)
+    store = _TerminationObservingStore(tmp_path / "coordination.sqlite", process)
+    store.create_workspace(WorkspaceIdentity("workspace"))
+    ensure_local_gpu_pool_limits(plan, store, workspace_id="workspace")
+    runtime = build_managed_local_gpu_runtime(
+        plan,
+        workspace_id="workspace",
+        coordination_store=store,
+        process_runner=_Runner([process]),
+    )
+    runtime.start()
+    runtime.service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="grouped",
+            queue_name=plan.queue_name,
+            run_uri="file:///runs/grouped",
+            adapter="local",
+            resources={plan.resource_name: 1},
+            snapshot={"argv": ["fake"]},
+        )
+    )
+    runtime.run_cycle()
+    item = runtime.service.read_item("grouped")
+
+    assert item is not None and item.dispatch_handle is not None
+    member_lease_ids = {
+        lease.lease.lease_id
+        for lease in runtime.adapter._active[
+            item.dispatch_handle.handle_id
+        ].assignment.leases
+    }
+    cancelled = runtime.controller.cancel_item(
+        "grouped", requested_by="operator", reason="stop"
+    )
+
+    assert cancelled.item is not None
+    assert cancelled.item.status is QueueItemStatus.CANCELLED
+    assert process.returncode == -15
+    assert {
+        lease_id for lease_id, _exit_status in store.release_observations
+    } >= member_lease_ids
+    assert all(
+        exit_status is not None
+        for lease_id, exit_status in store.release_observations
+        if lease_id in member_lease_ids
+    )
+    assert all(
+        store.read_resource_limit("workspace", key).value == 0  # type: ignore[union-attr]
+        for key in plan.required_limits
+    )
+
+
 class _Process:
     def __init__(self, pid: int) -> None:
         self.pid = pid
@@ -262,3 +322,14 @@ class _Runner:
     ):  # noqa: ANN201
         self.environments.append(dict(env or {}))
         return self._processes.pop(0)
+
+
+class _TerminationObservingStore(SQLiteWorkspaceCoordinationStore):
+    def __init__(self, path: Path, process: _Process) -> None:
+        super().__init__(path)
+        self._process = process
+        self.release_observations: list[tuple[str, int | None]] = []
+
+    def release_lease(self, lease_id: str, **kwargs):  # noqa: ANN003, ANN201
+        self.release_observations.append((lease_id, self._process.poll()))
+        return super().release_lease(lease_id, **kwargs)

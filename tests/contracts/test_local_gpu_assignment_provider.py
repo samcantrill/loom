@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from loom.pipeline.stores import LifecycleReason, WorkspaceIdentity
+import pytest
+
+from loom.pipeline.stores import (
+    CoordinationFailureKind,
+    CoordinationStoreError,
+    LifecycleReason,
+    WorkspaceIdentity,
+)
 from loom.queue.assignments import (
     ResourceAssignmentDisposition,
     ResourceAssignmentRequest,
@@ -96,6 +103,59 @@ def test_grouped_provider_renews_and_releases_every_member() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("failures", "expected_error"),
+    [
+        (
+            (CoordinationFailureKind.OWNERSHIP_LOST, None),
+            CoordinationFailureKind.OWNERSHIP_LOST,
+        ),
+        (
+            (CoordinationFailureKind.OWNERSHIP_LOST, "unfinished release"),
+            RuntimeError,
+        ),
+    ],
+)
+def test_grouped_provider_release_attempts_every_member_with_existing_precedence(
+    failures: tuple[CoordinationFailureKind, str | None],
+    expected_error: CoordinationFailureKind | type[RuntimeError],
+) -> None:
+    plan = plan_local_gpu_pool(
+        LocalGpuInventory(
+            (LocalGpuDevice("uuid-a", "0"), LocalGpuDevice("uuid-b", "1"))
+        ),
+        grouped(2, groups=(("uuid-a", "uuid-b"),)),
+    )
+    store = _ReleaseFailureStore()
+    store.create_workspace(WorkspaceIdentity("workspace"))
+    store.ensure_resource_limits("workspace", plan.required_limits)
+    provider = plan.assignment_provider(store, workspace_id="workspace")
+    decision = provider.acquire(_request(plan))
+
+    assert decision.assignment is not None
+    store.failures = dict(
+        zip(
+            (lease.lease.lease_id for lease in reversed(decision.assignment.leases)),
+            failures,
+            strict=True,
+        )
+    )
+
+    with pytest.raises(Exception) as raised:
+        provider.release(
+            decision.assignment, reason=LifecycleReason(code="test_release")
+        )
+
+    assert store.release_attempts == [
+        lease.lease.lease_id for lease in reversed(decision.assignment.leases)
+    ]
+    if expected_error is CoordinationFailureKind.OWNERSHIP_LOST:
+        assert isinstance(raised.value, CoordinationStoreError)
+        assert raised.value.kind is CoordinationFailureKind.OWNERSHIP_LOST
+    else:
+        assert isinstance(raised.value, expected_error)
+
+
 def _plan_and_store():  # noqa: ANN201
     plan = plan_local_gpu_pool(
         LocalGpuInventory(
@@ -131,3 +191,19 @@ class _UnexpectedSecondAcquireStore(InMemoryWorkspaceCoordinationStore):
         if self._acquire_calls == 2:
             raise RuntimeError("injected second-member failure")
         return super().acquire_resource_lease(*args, **kwargs)
+
+
+class _ReleaseFailureStore(InMemoryWorkspaceCoordinationStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: dict[str, CoordinationFailureKind | str | None] = {}
+        self.release_attempts: list[str] = []
+
+    def release_lease(self, lease_id: str, **kwargs):  # noqa: ANN003, ANN201
+        self.release_attempts.append(lease_id)
+        failure = self.failures.get(lease_id)
+        if failure is CoordinationFailureKind.OWNERSHIP_LOST:
+            raise CoordinationStoreError("ownership lost", kind=failure)
+        if isinstance(failure, str):
+            raise RuntimeError(failure)
+        return super().release_lease(lease_id, **kwargs)

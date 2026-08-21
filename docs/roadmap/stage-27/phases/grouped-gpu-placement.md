@@ -218,10 +218,11 @@ Final commands:
   ownership, compensation, ordering, evidence, and validation contracts
 - Implementation: completed; grouped planner, member-backed provider, docs, and
   focused tests are ready for manager validation
-- Refiner: not needed
+- Refiner: completed one qualified member-lifecycle correction; existing adapter
+  ordering and GPU provider release behavior satisfied the added coverage
 - Pre-submit gate: pending
 - Independent review: optional only for a material residual member-release risk
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3
 - PR and merge: pending
 
 ## Completion Record
@@ -229,8 +230,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Added GPU-local links, disjoint explicit/ordered/topology grouping, member-backed lifecycle handling, and focused docs in `src/loom/queue/gpu`, queue docs, and managed-local example guidance. |
-| Tests added or updated | Added grouped unit, assignment-contract, SQLite contention/rollback, and fake E2E pair-launch coverage. |
-| Validated revision/tree state and evidence | Executor targeted suite: 37 passed; targeted Ruff check/format and `git diff --check` passed. Manager `make validate-pr` and `make test-summary` remain pending. |
-| Validation-relevant changes after evidence | none recorded |
+| Tests added or updated | Added grouped cancellation coverage proving process exit is observed before each member release and exact member cleanup, plus provider-release coverage proving every member is attempted with ownership-lost versus unfinished-error precedence. |
+| Validated revision/tree state and evidence | Executor targeted suite: 37 passed; refiner focused suite: 11 passed (`tests/contracts/test_local_gpu_assignment_provider.py`, `tests/integration/queue/test_managed_local_gpu_pool.py`); focused Ruff check/format and `git diff --check` passed. Manager `make validate-pr` and `make test-summary` remain pending. |
+| Validation-relevant changes after evidence | Refiner added lifecycle regression coverage only; production behavior was already conformant. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Greedy topology selection remains intentionally disjoint and non-optimal; worktree and branch retained for manager handoff. |
