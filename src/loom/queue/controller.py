@@ -683,6 +683,10 @@ class QueueController:
             raise QueueServiceError("selection_limit must be a positive integer")
         attempted_item_ids = attempted_item_ids or set()
         policy = self._selection_policies.get(pool.pool_name)
+        decision = QueueSelectionDecision(
+            QueueSelectionDisposition.STOPPED,
+            _SELECTION_LIMIT_EXHAUSTED_REASON_CODE,
+        )
         for step in range(1, selection_limit + 1):
             candidates = tuple(
                 candidate
