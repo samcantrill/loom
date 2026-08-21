@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 27, Phase 2
 - Manifest: docs/roadmap/stage-27/implementation-plan.md
 - Branch: agent/stage-27-p2-grouped-gpu-placement
-- Worktree root and path: use the recorded Stage 27 worktree root and a dedicated
-  Phase 2 path
-- Base revision: current `origin/develop` after Phase 1 is remotely merged
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+  `/home/can134/work/active/loom-worktrees/stage-27-p2-grouped-gpu-placement`
+- Base revision: `35318601789703288db6b16ddd6fb80707e4959c`
 - PR target: develop
 - PR title: `feat(queue): add member-backed grouped GPU placement`
 - Dependencies: Phase 1 remotely merged
 - Workflow path: expanded because one logical assignment owns several physical
   leases and must compensate partial acquisition
-- Blockers: Phase 1
+- Blockers: none
 
 ## Objective And Context
 
@@ -212,9 +212,11 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: draft complete; approval pending
-- Expanded planning: manager-local; refinement not needed
-- Implementation: pending
+- Manager preparation: passed on `35318601789703288db6b16ddd6fb80707e4959c`;
+  Phase 1 public keys, plan, provider, and runtime composition are present
+- Expanded planning: refinement not needed; this plan already fixes member
+  ownership, compensation, ordering, evidence, and validation contracts
+- Implementation: pending one `loom_phase_executor`
 - Refiner: not needed
 - Pre-submit gate: pending
 - Independent review: optional only for a material residual member-release risk
