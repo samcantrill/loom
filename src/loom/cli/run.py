@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from loom.diagnostics import PreflightRequest, PreflightResult
     from weave.api import ComposedConfig
     from loom.pipeline.execution import RunRequest, RunResult
+    from loom.pipeline.event_sinks import EventSinkRegistry
     from loom.io.codecs import CodecRegistry
     from loom.pipeline.executors import ExecutorRegistry
     from loom.pipeline.resources import ResourceValidatorRegistry
@@ -220,6 +221,7 @@ def handle(namespace: argparse.Namespace) -> int:
     from loom.cli.plugin_activation import selected_runtime_plugins
     from loom.plugins import (
         LOOM_CODECS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
         LOOM_EXECUTORS_GROUP,
         LOOM_RESOURCE_VALIDATORS_GROUP,
     )
@@ -230,6 +232,7 @@ def handle(namespace: argparse.Namespace) -> int:
             LOOM_EXECUTORS_GROUP,
             LOOM_CODECS_GROUP,
             LOOM_RESOURCE_VALIDATORS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
         ),
     )
 
@@ -374,18 +377,31 @@ def _build_run_result_with_warnings(
     executor_registry: ExecutorRegistry | None = None
     activation_manifest: PluginActivationManifest | None = None
     worker_activation_manifest: PluginActivationManifest | None = None
+    event_sink_registry: EventSinkRegistry | None = None
     if plugin_records:
         from loom.cli.plugin_activation import (
+            build_selected_event_sink_registry,
             build_selected_registries,
             plugin_selectors_for_groups,
         )
-        from loom.plugins import LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
         from loom.plugins.activation import PluginActivationManifest
         from loom.plugins.entrypoints import PluginRecord
 
         codecs, validators, executor_registry, activation_manifest = (
             build_selected_registries(cast(Sequence[PluginRecord], plugin_records))
         )
+        if any(
+            record.group == LOOM_EVENT_SINKS_GROUP
+            for record in cast(Sequence[PluginRecord], plugin_records)
+        ):
+            event_sink_registry = build_selected_event_sink_registry(
+                cast(Sequence[PluginRecord], plugin_records)
+            )
         worker_selectors = frozenset(
             plugin_selectors_for_groups(
                 cast(Sequence[PluginRecord], plugin_records),
@@ -486,6 +502,7 @@ def _build_run_result_with_warnings(
             validator_registry=validators,
             activation_manifest=activation_manifest,
             worker_activation_manifest=worker_activation_manifest,
+            event_sink_registry=event_sink_registry,
         )
     )
     result = (
@@ -648,21 +665,29 @@ def build_slurm_dry_run_result(
     )
     validator_registry = None
     activation_manifest = None
-    worker_plugin_selectors: tuple[str, ...] = ()
+    stage_job_plugin_selectors: tuple[str, ...] = ()
     if plugin_records:
         from loom.cli.plugin_activation import (
             build_selected_registries,
             plugin_selectors_for_groups,
         )
-        from loom.plugins import LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
         from loom.plugins.entrypoints import PluginRecord
 
         _codecs, validator_registry, _executors, activation_manifest = (
             build_selected_registries(cast(Sequence[PluginRecord], plugin_records))
         )
-        worker_plugin_selectors = plugin_selectors_for_groups(
+        stage_job_plugin_selectors = plugin_selectors_for_groups(
             cast(Sequence[PluginRecord], plugin_records),
-            groups=(LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
+            groups=(
+                LOOM_CODECS_GROUP,
+                LOOM_EVENT_SINKS_GROUP,
+                LOOM_RESOURCE_VALIDATORS_GROUP,
+            ),
         )
     composed = _compose_config(
         config_options.config_path,
@@ -786,7 +811,7 @@ def build_slurm_dry_run_result(
             apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
             stage_apptainer_options=_stage_slurm_apptainer_options(runtime_options),
             container_build_results=container_build_results,
-            plugin_selectors=worker_plugin_selectors,
+            plugin_selectors=stage_job_plugin_selectors,
         )
     return _slurm_dry_run_cli_result(result, warnings=warnings), warnings
 
@@ -1028,6 +1053,7 @@ def _validate_run_plugin_record_groups(plugin_records: Sequence[object]) -> None
 
     from loom.plugins import (
         LOOM_CODECS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
         LOOM_EXECUTORS_GROUP,
         LOOM_RESOURCE_VALIDATORS_GROUP,
     )
@@ -1035,6 +1061,7 @@ def _validate_run_plugin_record_groups(plugin_records: Sequence[object]) -> None
     allowed = {
         LOOM_CODECS_GROUP,
         LOOM_EXECUTORS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
         LOOM_RESOURCE_VALIDATORS_GROUP,
     }
     for record in plugin_records:
@@ -1753,21 +1780,29 @@ def build_slurm_live_submission_result(
     )
     validator_registry = None
     activation_manifest = None
-    worker_plugin_selectors: tuple[str, ...] = ()
+    stage_job_plugin_selectors: tuple[str, ...] = ()
     if plugin_records:
         from loom.cli.plugin_activation import (
             build_selected_registries,
             plugin_selectors_for_groups,
         )
-        from loom.plugins import LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
         from loom.plugins.entrypoints import PluginRecord
 
         _codecs, validator_registry, _executors, activation_manifest = (
             build_selected_registries(cast(Sequence[PluginRecord], plugin_records))
         )
-        worker_plugin_selectors = plugin_selectors_for_groups(
+        stage_job_plugin_selectors = plugin_selectors_for_groups(
             cast(Sequence[PluginRecord], plugin_records),
-            groups=(LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
+            groups=(
+                LOOM_CODECS_GROUP,
+                LOOM_EVENT_SINKS_GROUP,
+                LOOM_RESOURCE_VALIDATORS_GROUP,
+            ),
         )
     composed = _compose_config(
         config_options.config_path,
@@ -1910,7 +1945,7 @@ def build_slurm_live_submission_result(
             apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
             stage_apptainer_options=_stage_slurm_apptainer_options(runtime_options),
             container_build_results=container_build_results,
-            plugin_selectors=worker_plugin_selectors,
+            plugin_selectors=stage_job_plugin_selectors,
         )
         submit = submit_afterok_slurm
     try:
@@ -1993,6 +2028,7 @@ def _build_run_request(
     validator_registry: "ResourceValidatorRegistry | None" = None,
     activation_manifest: "PluginActivationManifest | None" = None,
     worker_activation_manifest: "PluginActivationManifest | None" = None,
+    event_sink_registry: "EventSinkRegistry | None" = None,
 ) -> "RunRequest":
     from loom.pipeline.execution import RunRequest
 
@@ -2009,6 +2045,7 @@ def _build_run_request(
             if worker_activation_manifest is not None
             else None
         ),
+        event_sink_registry=event_sink_registry,
     )
 
 

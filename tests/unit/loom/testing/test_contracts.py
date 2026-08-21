@@ -8,6 +8,7 @@ from typing import cast
 import pytest
 
 from loom.pipeline.event_sinks import EventSinkContext
+from loom.pipeline.event_sinks import EventSinkRegistration, EventSinkSubscription
 from loom.pipeline.events import EventReference, PipelineEventRecord
 from loom.pipeline.execution.models import StageExecutionRequest, StageExecutionResult
 from loom.pipeline.resources import ResourceEntry
@@ -186,6 +187,7 @@ def test_event_sink_contract_and_report_error_are_bounded() -> None:
     )
 
     assert report.ok
+    assert report.contract_version == 2
     assert received == [event]
     failure = ContractReport(
         "loom.example",
@@ -213,6 +215,43 @@ def test_event_sink_contract_does_not_build_context_for_non_callable_sink() -> N
     assert not report.ok
     assert [finding.code for finding in report.findings] == [
         "event_sink.callable",
+        "event_sink.subscription",
         "event_sink.invoke",
     ]
-    assert {finding.status for finding in report.findings} == {"fail"}
+    assert [finding.status for finding in report.findings] == ["fail", "pass", "fail"]
+
+
+def test_event_sink_contract_only_invokes_matching_registration_events() -> None:
+    received: list[EventReference] = []
+    started = EventReference(
+        event_id="started",
+        run_uri="run://contract",
+        event_type="run.started",
+        occurred_at="2020-01-01T00:00:00Z",
+        durability="durable",
+        sequence=1,
+    )
+    completed = EventReference(
+        event_id="completed",
+        run_uri="run://contract",
+        event_type="run.completed",
+        occurred_at="2020-01-01T00:00:01Z",
+        durability="durable",
+        sequence=2,
+    )
+    report = check_event_sink_contract(
+        EventSinkRegistration(
+            sink=lambda event, context: received.append(cast(EventReference, event)),
+            subscription=EventSinkSubscription(event_types=("run.completed",)),
+        ),
+        events=(started, completed),
+        context_factory=lambda _event: cast(EventSinkContext, object()),
+    )
+
+    assert report.ok
+    assert [finding.code for finding in report.findings] == [
+        "event_sink.callable",
+        "event_sink.subscription",
+        "event_sink.invoke",
+    ]
+    assert received == [completed]

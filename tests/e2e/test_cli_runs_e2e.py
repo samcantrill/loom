@@ -320,6 +320,54 @@ def test_cli_selected_executor_codec_and_validator_survive_subprocess(
     assert stderr.getvalue() == ""
 
 
+def test_cli_selected_filtered_sink_observes_only_completed_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_stage28_entry_points(tmp_path / "site", monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    marker = tmp_path / "sink-events.txt"
+    monkeypatch.setenv("LOOM_STAGE28_EVENT_SINK_MARKER", str(marker))
+    config_path = tmp_path / "pipeline.yaml"
+    config_path.write_text(
+        "pipeline:\n"
+        "  stages:\n"
+        "    - name: build\n"
+        "      factory:\n"
+        "        _target_: tests.support.stage28_plugins.Stage28ProducerStage\n"
+        "      outputs:\n"
+        "        data:\n"
+        "          artifact_type: stage28-json\n"
+        "          codec_key: stage28.tagged-json.v1\n",
+        encoding="utf-8",
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    with LocalAuthorityService.start() as service:
+        exit_code = main(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                path_to_run_uri(tmp_path / "runs" / "filtered-sink"),
+                "--plugin",
+                "loom.codecs:stage28.tagged-json.v1",
+                "--plugin",
+                "loom.event_sinks:stage28.completed",
+                *authority_config_to_cli_args(service.config()),
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    assert exit_code == 0, f"stdout={stdout.getvalue()} stderr={stderr.getvalue()}"
+    assert json.loads(stdout.getvalue())["result"]["status"] == "SUCCEEDED"
+    assert marker.read_text(encoding="utf-8").splitlines() == ["stage.completed"]
+
+
 def _create_run(
     root: Path,
     run_path: Path,

@@ -506,7 +506,7 @@ def test_resume_run_uri_is_resolved_from_selected_profile_before_import() -> Non
     )
 
 
-def test_run_execution_allowlist_defers_event_sinks(
+def test_run_execution_allowlist_accepts_event_sinks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     allowed: set[str] = set()
@@ -523,15 +523,14 @@ def test_run_execution_allowlist_defers_event_sinks(
     _patch_common(monkeypatch)
 
     assert main(["run", "base.yaml"], stdout=io.StringIO(), stderr=io.StringIO()) == 0
-    assert LOOM_EVENT_SINKS_GROUP not in allowed
+    assert LOOM_EVENT_SINKS_GROUP in allowed
 
     sink = PluginRecord(
         group=LOOM_EVENT_SINKS_GROUP,
         name="metrics",
         value="project.plugins:metrics_sink",
     )
-    with pytest.raises(CliError, match="not applicable"):
-        run_command._validate_run_plugin_record_groups((sink,))
+    run_command._validate_run_plugin_record_groups((sink,))
 
 
 def test_run_preflight_helper_skips_fresh_run_group_for_resume(

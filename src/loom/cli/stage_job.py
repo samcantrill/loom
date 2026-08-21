@@ -144,31 +144,47 @@ def handle_run(namespace: argparse.Namespace) -> int:
     selected_records = ()
     artifact_store_factory: Callable[[Path], ArtifactStore] | None = None
     validator_registry = None
+    event_sink_registry = None
     plugin_selectors = tuple(getattr(namespace, "plugin", ()) or ())
     if plugin_selectors:
         from loom.cli.plugin_activation import (
+            build_selected_event_sink_registry,
             build_selected_registries,
             selected_runtime_plugins,
         )
         from loom.pipeline.stores import LocalArtifactStore
-        from loom.plugins import LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
 
         selected_records = selected_runtime_plugins(
             plugin_selectors,
-            allowed_groups=(LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
+            allowed_groups=(
+                LOOM_CODECS_GROUP,
+                LOOM_EVENT_SINKS_GROUP,
+                LOOM_RESOURCE_VALIDATORS_GROUP,
+            ),
         )
         try:
             validate_prepared_run_plugin_activations(
                 run_store=store,
                 run_uri=str(namespace.run_uri),
                 selected_plugin_records=selected_records,
-                allowed_groups=(LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
+                allowed_groups=(
+                    LOOM_CODECS_GROUP,
+                    LOOM_EVENT_SINKS_GROUP,
+                    LOOM_RESOURCE_VALIDATORS_GROUP,
+                ),
             )
         except ContinuationStateError as exc:
             raise _cli_error_from_continuation(exc) from exc
         codecs, validator_registry, _executors, _manifest = build_selected_registries(
             selected_records
         )
+        if any(record.group == LOOM_EVENT_SINKS_GROUP for record in selected_records):
+            event_sink_registry = build_selected_event_sink_registry(selected_records)
 
         def selected_artifact_store_factory(root: Path) -> ArtifactStore:
             return LocalArtifactStore(root, codec_registry=codecs)
@@ -190,6 +206,7 @@ def handle_run(namespace: argparse.Namespace) -> int:
             ),
             artifact_store_factory=artifact_store_factory,
             resource_validator_registry=validator_registry,
+            event_sink_registry=event_sink_registry,
             selected_plugin_records=selected_records,
         )
     except UnsupportedContinuationExecutorError as exc:

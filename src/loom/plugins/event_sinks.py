@@ -6,7 +6,7 @@ import inspect
 from collections.abc import Callable, Iterable
 from typing import cast
 
-from loom.pipeline.event_sinks import EventSink, EventSinkRegistry
+from loom.pipeline.event_sinks import EventSink, EventSinkRegistration, EventSinkRegistry
 
 from .entrypoints import (
     LOOM_EVENT_SINKS_GROUP,
@@ -26,7 +26,12 @@ def load_event_sink_entry_points(
     """Load selected event sink entry points into a caller-supplied registry."""
 
     def register_sink(record: PluginRecord, value: object) -> None:
-        registry.register(record.name, _sink_from_plugin_value(value))
+        registration = _registration_from_plugin_value(value)
+        registry.register(
+            record.name,
+            registration.sink,
+            subscription=registration.subscription,
+        )
 
     return load_entry_points(
         records=_filter_records(records, LOOM_EVENT_SINKS_GROUP),
@@ -38,16 +43,21 @@ def load_event_sink_entry_points(
     )
 
 
-def _sink_from_plugin_value(value: object) -> EventSink:
-    """Normalize plugin values to an event sink callback."""
+def _registration_from_plugin_value(value: object) -> EventSinkRegistration:
+    """Normalize plugin values to an event sink registration."""
 
+    if isinstance(value, EventSinkRegistration):
+        return value
     if isinstance(value, type):
-        return _sink_from_class(value)
+        return EventSinkRegistration(sink=_sink_from_class(value))
     if callable(value):
         callable_value = cast(Callable[..., object], value)
         if _callable_accepts_event_sink_args(callable_value):
-            return cast(EventSink, value)
-        return _sink_from_factory(cast(Callable[[], object], callable_value))
+            return EventSinkRegistration(sink=cast(EventSink, value))
+        candidate = _sink_from_factory(cast(Callable[[], object], callable_value))
+        if isinstance(candidate, EventSinkRegistration):
+            return candidate
+        return EventSinkRegistration(sink=candidate)
     raise TypeError(
         "event sink entry point value must be a callable sink, "
         "no-arg sink class, or no-arg factory"
@@ -62,11 +72,13 @@ def _sink_from_class(sink_type: type[object]) -> EventSink:
     return _as_sink(candidate)
 
 
-def _sink_from_factory(factory: Callable[[], object]) -> EventSink:
+def _sink_from_factory(factory: Callable[[], object]) -> EventSink | EventSinkRegistration:
     try:
         candidate = factory()
     except Exception as exc:
         raise TypeError(f"event sink factory {factory!r} raised: {exc}") from exc
+    if isinstance(candidate, EventSinkRegistration):
+        return candidate
     return _as_sink(candidate)
 
 
