@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from itertools import combinations
 from dataclasses import dataclass, field
 from datetime import timedelta
 from hashlib import sha256
@@ -60,10 +61,43 @@ class LocalGpuDevice:
 
 
 @dataclass(frozen=True, slots=True)
+class LocalGpuLink:
+    """One undirected, provider-local ordering relationship between two GPUs."""
+
+    left_id: str
+    right_id: str
+    rank: int
+    kind: str
+
+    def __post_init__(self) -> None:
+        for field_name in ("left_id", "right_id", "kind"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value or "\0" in value:
+                raise QueueServiceError(
+                    f"local GPU link {field_name} must be a non-empty safe string"
+                )
+        if self.left_id == self.right_id:
+            raise QueueServiceError("local GPU links must join distinct device IDs")
+        if (
+            isinstance(self.rank, bool)
+            or not isinstance(self.rank, int)
+            or self.rank < 0
+        ):
+            raise QueueServiceError(
+                "local GPU link rank must be a non-negative integer"
+            )
+        if self.right_id < self.left_id:
+            left_id, right_id = self.right_id, self.left_id
+            object.__setattr__(self, "left_id", left_id)
+            object.__setattr__(self, "right_id", right_id)
+
+
+@dataclass(frozen=True, slots=True)
 class LocalGpuInventory:
     """Immutable operator-supplied local GPU inventory."""
 
     devices: tuple[LocalGpuDevice, ...]
+    links: tuple[LocalGpuLink, ...] = ()
 
     def __post_init__(self) -> None:
         devices = tuple(self.devices)
@@ -77,8 +111,26 @@ class LocalGpuInventory:
             raise QueueServiceError("local GPU device IDs must be unique")
         if len({device.binding_value for device in devices}) != len(devices):
             raise QueueServiceError("local GPU binding values must be unique")
+        links = tuple(self.links)
+        if not all(isinstance(link, LocalGpuLink) for link in links):
+            raise QueueServiceError(
+                "local GPU inventory links must be LocalGpuLink values"
+            )
+        device_ids = {device.device_id for device in devices}
+        if any(
+            link.left_id not in device_ids or link.right_id not in device_ids
+            for link in links
+        ):
+            raise QueueServiceError("local GPU links must name inventory device IDs")
+        if len({(link.left_id, link.right_id) for link in links}) != len(links):
+            raise QueueServiceError("local GPU link pairs must be unique")
         object.__setattr__(
             self, "devices", tuple(sorted(devices, key=lambda item: item.device_id))
+        )
+        object.__setattr__(
+            self,
+            "links",
+            tuple(sorted(links, key=lambda item: (item.left_id, item.right_id))),
         )
 
 
@@ -95,10 +147,15 @@ class LocalGpuPoolLayout:
 
     kind: str
     shares: int = 1
+    gpus_per_slot: int = 1
+    grouping: str | None = None
+    groups: tuple[tuple[str, ...], ...] = ()
 
     def __post_init__(self) -> None:
-        if self.kind not in {"whole", "shares"}:
-            raise QueueServiceError("local GPU layout kind must be whole or shares")
+        if self.kind not in {"whole", "shares", "grouped"}:
+            raise QueueServiceError(
+                "local GPU layout kind must be whole, shares, or grouped"
+            )
         if (
             isinstance(self.shares, bool)
             or not isinstance(self.shares, int)
@@ -107,6 +164,52 @@ class LocalGpuPoolLayout:
             raise QueueServiceError("local GPU shares must be a positive integer")
         if self.kind == "whole" and self.shares != 1:
             raise QueueServiceError("whole GPU layouts require exactly one share")
+        if self.kind != "grouped":
+            if self.gpus_per_slot != 1 or self.grouping is not None or self.groups:
+                raise QueueServiceError(
+                    "only grouped GPU layouts may define grouping details"
+                )
+            return
+        if self.shares != 1:
+            raise QueueServiceError("grouped GPU layouts require exactly one share")
+        if (
+            isinstance(self.gpus_per_slot, bool)
+            or not isinstance(self.gpus_per_slot, int)
+            or self.gpus_per_slot <= 0
+        ):
+            raise QueueServiceError(
+                "grouped GPU gpus_per_slot must be a positive integer"
+            )
+        if self.grouping not in {"explicit", "ordered", "topology"}:
+            raise QueueServiceError(
+                "grouped GPU layouts require explicit, ordered, or topology grouping"
+            )
+        groups = tuple(tuple(group) for group in self.groups)
+        object.__setattr__(self, "groups", groups)
+        if self.grouping == "explicit":
+            if not groups:
+                raise QueueServiceError("explicit grouped GPU layouts require groups")
+            if any(
+                len(group) != self.gpus_per_slot
+                or any(
+                    not isinstance(device_id, str) or not device_id
+                    for device_id in group
+                )
+                for group in groups
+            ):
+                raise QueueServiceError(
+                    "explicit GPU groups must contain exact-size non-empty device IDs"
+                )
+            normalized_groups = tuple(sorted(tuple(sorted(group)) for group in groups))
+            if len(
+                {device_id for group in normalized_groups for device_id in group}
+            ) != sum(len(group) for group in normalized_groups):
+                raise QueueServiceError("explicit GPU groups must be disjoint")
+            object.__setattr__(self, "groups", normalized_groups)
+        elif groups:
+            raise QueueServiceError(
+                "only explicit grouped GPU layouts may provide groups"
+            )
 
     @classmethod
     def whole_gpus(cls) -> "LocalGpuPoolLayout":
@@ -115,6 +218,21 @@ class LocalGpuPoolLayout:
     @classmethod
     def shares_per_gpu(cls, shares: int) -> "LocalGpuPoolLayout":
         return cls("shares", shares)
+
+    @classmethod
+    def grouped(
+        cls,
+        gpus_per_slot: int,
+        *,
+        grouping: str = "explicit",
+        groups: Iterable[Iterable[str]] | None = None,
+    ) -> "LocalGpuPoolLayout":
+        return cls(
+            "grouped",
+            gpus_per_slot=gpus_per_slot,
+            grouping=grouping,
+            groups=tuple(tuple(group) for group in (groups or ())),
+        )
 
 
 def whole_gpus() -> LocalGpuPoolLayout:
@@ -129,9 +247,69 @@ def shares_per_gpu(shares: int) -> LocalGpuPoolLayout:
     return LocalGpuPoolLayout.shares_per_gpu(shares)
 
 
+def grouped(
+    gpus_per_slot: int,
+    *,
+    grouping: str = "explicit",
+    groups: Iterable[Iterable[str]] | None = None,
+) -> LocalGpuPoolLayout:
+    """Use one logical queue unit backed by a disjoint group of physical GPUs."""
+
+    return LocalGpuPoolLayout.grouped(gpus_per_slot, grouping=grouping, groups=groups)
+
+
 @dataclass(frozen=True, slots=True)
 class _GpuPlacement:
     device_ids: tuple[str, ...]
+
+
+def _placements_for_layout(
+    inventory: LocalGpuInventory, layout: LocalGpuPoolLayout
+) -> tuple[_GpuPlacement, ...]:
+    if layout.kind != "grouped":
+        return ()
+    device_ids = tuple(device.device_id for device in inventory.devices)
+    if layout.grouping == "explicit":
+        groups = layout.groups
+        unknown = sorted(
+            {
+                device_id
+                for group in groups
+                for device_id in group
+                if device_id not in device_ids
+            }
+        )
+        if unknown:
+            raise QueueServiceError(
+                "explicit GPU groups name unknown inventory devices: "
+                + ", ".join(unknown)
+            )
+        return tuple(_GpuPlacement(group) for group in groups)
+    if layout.grouping == "ordered":
+        groups = tuple(
+            device_ids[index : index + layout.gpus_per_slot]
+            for index in range(0, len(device_ids), layout.gpus_per_slot)
+        )
+        return tuple(
+            _GpuPlacement(group)
+            for group in groups
+            if len(group) == layout.gpus_per_slot
+        )
+    candidates: list[tuple[int, int, tuple[str, ...]]] = []
+    links = {(link.left_id, link.right_id): link for link in inventory.links}
+    for group in combinations(device_ids, layout.gpus_per_slot):
+        pair_links = [links.get(tuple(sorted(pair))) for pair in combinations(group, 2)]
+        if any(link is None for link in pair_links):
+            continue
+        ranks = [link.rank for link in pair_links if link is not None]
+        candidates.append((max(ranks, default=0), sum(ranks), group))
+    selected: list[_GpuPlacement] = []
+    used: set[str] = set()
+    for _worst_rank, _total_rank, group in sorted(candidates):
+        if not used.intersection(group):
+            selected.append(_GpuPlacement(group))
+            used.update(group)
+    return tuple(selected)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +325,7 @@ class LocalGpuPoolPlan:
     required_limits: Mapping[str, int]
     fingerprint: str
     _placements: tuple[_GpuPlacement, ...] = field(repr=False, compare=False)
+    _unused_device_ids: tuple[str, ...] = field(repr=False, compare=False, default=())
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -185,6 +364,8 @@ class LocalGpuPoolPlan:
                     }
                     for device in self.inventory.devices
                 ],
+                "groups": [placement.device_ids for placement in self._placements],
+                "unused_device_ids": self._unused_device_ids,
             }
         )
 
@@ -208,10 +389,22 @@ def plan_local_gpu_pool(
     pool_name = validate_queue_id(pool_name, "pool_name")
     queue_name = validate_queue_id(queue_name, "queue_name")
     resource_name = validate_queue_id(
-        resource_name or ("gpu" if layout.kind == "whole" else "gpu_share"),
+        resource_name
+        or {
+            "whole": "gpu",
+            "shares": "gpu_share",
+            "grouped": "gpu_group",
+        }[layout.kind],
         "resource_name",
     )
-    capacity = len(resolved.devices) * layout.shares
+    placements = _placements_for_layout(resolved, layout)
+    if layout.kind == "grouped" and not placements:
+        raise QueueServiceError("local GPU layout cannot produce a complete group")
+    capacity = (
+        len(placements)
+        if layout.kind == "grouped"
+        else len(resolved.devices) * layout.shares
+    )
     if max_active_items is None:
         max_active_items = capacity
     if (
@@ -235,6 +428,8 @@ def plan_local_gpu_pool(
             for share_round in range(layout.shares)
             for device in resolved.devices
         )
+        if layout.kind == "shares"
+        else placements
     )
     fingerprint = _fingerprint(
         resolved,
@@ -273,6 +468,14 @@ def plan_local_gpu_pool(
         required_limits=required_limits,
         fingerprint=fingerprint,
         _placements=placements,
+        _unused_device_ids=tuple(
+            device.device_id
+            for device in resolved.devices
+            if device.device_id
+            not in {
+                member for placement in placements for member in placement.device_ids
+            }
+        ),
     )
 
 
@@ -343,26 +546,28 @@ class _LocalGpuAssignmentProvider:
         amount = request.resources.get(self._plan.resource_name)
         if len(request.resources) != 1 or amount is None:
             return _failed("resource_assignment.request_invalid")
+        if self._plan.layout.kind == "grouped" and amount != 1:
+            return _failed("resource_assignment.group_amount_invalid")
         if self._plan.layout.kind == "shares" and amount != 1:
             return _failed("resource_assignment.share_amount_invalid")
         if self._plan.layout.kind == "whole" and amount > len(self._devices):
             return _failed("resource_assignment.request_exceeds_inventory")
-        candidates = (
-            self._plan._placements
-            if self._plan.layout.kind == "shares"
-            else tuple(
-                item for item in self._plan._placements if len(item.device_ids) == 1
-            )
-        )
         if self._plan.layout.kind == "whole":
-            return self._acquire_whole(request, amount, candidates)
+            return self._acquire_whole(
+                request,
+                amount,
+                tuple(
+                    item for item in self._plan._placements if len(item.device_ids) == 1
+                ),
+            )
+        candidates = self._plan._placements
         for offset in range(len(candidates)):
             index = (self._next_share_placement + offset) % len(candidates)
             placement = candidates[index]
-            assigned = self._try_placement(request, placement)
-            if assigned is not None:
+            decision = self._try_placement(request, placement)
+            if decision is not None:
                 self._next_share_placement = (index + 1) % len(candidates)
-                return assigned
+                return decision
         return ResourceAssignmentDecision(
             ResourceAssignmentDisposition.DEFERRED,
             reason_code="resource_assignment.capacity_unavailable",
@@ -393,10 +598,22 @@ class _LocalGpuAssignmentProvider:
     ) -> ResourceAssignmentDecision | None:
         leases: list[ResourceLeaseRecord] = []
         for device_id in placement.device_ids:
-            lease = self._acquire_device(request, device_id)
-            if lease is None:
+            try:
+                lease = self._store.acquire_resource_lease(
+                    self._workspace_id,
+                    _device_key(device_id),
+                    owner_id=f"{request.owner_id}:{request.session_id}",
+                    amount=1,
+                    lease_ttl_seconds=request.lease_ttl_seconds,
+                )
+            except CoordinationStoreError as exc:
                 self._release_partial(leases)
-                return None
+                if exc.kind is CoordinationFailureKind.CAPACITY:
+                    return None
+                return _failed(f"resource_assignment.{exc.kind.value}")
+            except Exception:  # noqa: BLE001
+                self._release_partial(leases)
+                return _failed("resource_assignment.internal")
             leases.append(lease)
         return self._assignment(leases)
 
@@ -467,19 +684,15 @@ class _LocalGpuAssignmentProvider:
             ResourceLeaseRecord(old.workspace_id, old.resource_key, new, old.amount)
             for old, new in zip(assignment.leases, renewed, strict=True)
         )
-        return ResourceAssignment(
-            provider_name=assignment.provider_name,
-            live_token=assignment.live_token,
-            leases=leases,
-            bindings=assignment.bindings,
-            safe_evidence=assignment.safe_evidence,
-            next_maintenance_at=_lease_maintenance_at(leases),
-        )
+        decision = self._assignment(list(leases))
+        assert decision.assignment is not None
+        return decision.assignment
 
     def release(
         self, assignment: ResourceAssignment, *, reason: LifecycleReason
     ) -> None:
         first_error: Exception | None = None
+        first_unfinished_error: Exception | None = None
         for lease in reversed(assignment.leases):
             try:
                 self._store.release_lease(
@@ -491,6 +704,13 @@ class _LocalGpuAssignmentProvider:
             except Exception as exc:  # noqa: BLE001
                 if first_error is None:
                     first_error = exc
+                if first_unfinished_error is None and (
+                    not isinstance(exc, CoordinationStoreError)
+                    or exc.kind is not CoordinationFailureKind.OWNERSHIP_LOST
+                ):
+                    first_unfinished_error = exc
+        if first_unfinished_error is not None:
+            raise first_unfinished_error
         if first_error is not None:
             raise first_error
 
@@ -538,7 +758,22 @@ def _fingerprint(
     canonical = json.dumps(
         {
             "device_ids": [device.device_id for device in inventory.devices],
-            "layout": {"kind": layout.kind, "shares": layout.shares},
+            "links": [
+                {
+                    "left_id": link.left_id,
+                    "right_id": link.right_id,
+                    "rank": link.rank,
+                    "kind": link.kind,
+                }
+                for link in inventory.links
+            ],
+            "layout": {
+                "kind": layout.kind,
+                "shares": layout.shares,
+                "gpus_per_slot": layout.gpus_per_slot,
+                "grouping": layout.grouping,
+                "groups": layout.groups,
+            },
             "pool_name": pool_name,
             "queue_name": queue_name,
             "resource_name": resource_name,

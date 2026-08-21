@@ -16,6 +16,7 @@ from loom.queue.gpu import (
     LocalGpuInventory,
     build_managed_local_gpu_runtime,
     ensure_local_gpu_pool_limits,
+    grouped,
     plan_local_gpu_pool,
     shares_per_gpu,
     whole_gpus,
@@ -152,6 +153,80 @@ def test_share_leases_peak_at_capacity_then_release_exactly(tmp_path: Path) -> N
     assert all(
         store.read_resource_limit("workspace", key).value == 0  # type: ignore[union-attr]
         for key in plan.required_limits
+    )
+
+
+def test_grouped_and_individual_providers_contend_on_member_leases(
+    tmp_path: Path,
+) -> None:
+    inventory = _inventory()
+    grouped_plan = plan_local_gpu_pool(
+        inventory, grouped(2, groups=(("uuid-a", "uuid-b"),))
+    )
+    individual_plan = plan_local_gpu_pool(inventory, whole_gpus())
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace"))
+    ensure_local_gpu_pool_limits(grouped_plan, store, workspace_id="workspace")
+    ensure_local_gpu_pool_limits(individual_plan, store, workspace_id="workspace")
+    individual = individual_plan.assignment_provider(store, workspace_id="workspace")
+    provider = grouped_plan.assignment_provider(store, workspace_id="workspace")
+
+    occupied = individual.acquire(_request(individual_plan, "individual"))
+    blocked = provider.acquire(_request(grouped_plan, "group"))
+
+    assert occupied.disposition is ResourceAssignmentDisposition.ASSIGNED
+    assert blocked.disposition is ResourceAssignmentDisposition.DEFERRED
+    assert all(
+        store.read_resource_limit("workspace", key).value == expected  # type: ignore[union-attr]
+        for key, expected in {
+            **{grouped_plan.resource_name: 0, individual_plan.resource_name: 0},
+            "loom.gpu.device.uuid-a": 1,
+            "loom.gpu.device.uuid-b": 0,
+        }.items()
+    )
+
+    assert occupied.assignment is not None
+    individual.release(occupied.assignment, reason=LifecycleReason(code="complete"))
+    assigned = provider.acquire(_request(grouped_plan, "group-after-release"))
+
+    assert assigned.disposition is ResourceAssignmentDisposition.ASSIGNED
+    assert assigned.assignment is not None
+    assert assigned.assignment.bindings.environment == {"CUDA_VISIBLE_DEVICES": "0,1"}
+    renewed = provider.renew(assigned.assignment)
+    provider.release(renewed, reason=LifecycleReason(code="complete"))
+    assert all(
+        store.read_resource_limit("workspace", key).value == 0  # type: ignore[union-attr]
+        for key in grouped_plan.required_limits
+    )
+
+
+def test_grouped_provider_rolls_back_first_member_on_second_member_conflict(
+    tmp_path: Path,
+) -> None:
+    plan = plan_local_gpu_pool(_inventory(), grouped(2, groups=(("uuid-a", "uuid-b"),)))
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace"))
+    ensure_local_gpu_pool_limits(plan, store, workspace_id="workspace")
+    occupied = store.acquire_resource_lease(
+        "workspace",
+        "loom.gpu.device.uuid-b",
+        owner_id="individual:session",
+        amount=1,
+        lease_ttl_seconds=30,
+    )
+
+    decision = plan.assignment_provider(store, workspace_id="workspace").acquire(
+        _request(plan, "group")
+    )
+
+    assert decision.disposition is ResourceAssignmentDisposition.DEFERRED
+    assert store.read_resource_limit("workspace", "loom.gpu.device.uuid-a").value == 0  # type: ignore[union-attr]
+    assert store.read_resource_limit("workspace", "loom.gpu.device.uuid-b").value == 1  # type: ignore[union-attr]
+    store.release_lease(
+        occupied.lease.lease_id,
+        owner_id=occupied.lease.owner_id,
+        fencing_token=occupied.lease.fencing_token,
+        reason=LifecycleReason(code="complete"),
     )
 
 

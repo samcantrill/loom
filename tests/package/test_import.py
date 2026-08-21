@@ -90,9 +90,17 @@ def test_import_managed_local_queue_runtime_is_explicit() -> None:
 
 def test_import_local_gpu_planning_is_explicit_and_does_not_probe_hardware() -> None:
     import loom.queue
-    from loom.queue.gpu import LocalGpuDevice, LocalGpuPoolPlan, plan_local_gpu_pool
+    from loom.queue.gpu import (
+        LocalGpuDevice,
+        LocalGpuLink,
+        LocalGpuPoolLayout,
+        LocalGpuPoolPlan,
+        plan_local_gpu_pool,
+    )
 
     assert LocalGpuDevice
+    assert LocalGpuLink
+    assert LocalGpuPoolLayout.grouped
     assert LocalGpuPoolPlan
     assert plan_local_gpu_pool
     assert "LocalGpuDevice" not in loom.queue.__all__

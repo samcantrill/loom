@@ -250,15 +250,18 @@ resources={"accelerator": 2}
 
 The two authored slots bind an environment list such as
 `LOOM_ASSIGNED_ACCELERATORS`; `CUDA_VISIBLE_DEVICES` is only a downstream
-naming variant, not vendor behavior. When a placement is genuinely indivisible,
-keep a project-owned provider that acquires, renews, releases, and rolls back
-the same physical member coordination keys used by individual allocation. The
+naming variant, not vendor behavior. For an explicitly supplied local GPU
+inventory, [`loom.queue.gpu`](../../src/loom/queue/gpu/__init__.py) supports
+`LocalGpuPoolLayout.grouped(...)`: every logical GPU group acquires, renews,
+releases, and rolls back its physical member leases together. It accepts only
+disjoint explicit, ordered, or caller-supplied topology-ranked groups; it does
+not discover vendor hardware or provide general bundle scheduling. The
 [paired example provider](../../examples/operations/managed-local-queue/paired_assignment_provider.py)
-is a copyable pattern, not a supported core import or a synthetic bundle-key
-scheme. The controller active limit is one-runtime-local policy, not a
-distributed quota. Candidate selection remains Stage 24 work; generic
-scheduling, reattachment, resource observation, and notification policy remain
-Stage 25 work.
+remains a copyable pattern for other project-defined indivisible resources, not
+a synthetic bundle-key scheme. The controller active limit is one-runtime-local
+policy, not a distributed quota. Candidate selection remains Stage 24 work;
+generic scheduling, reattachment, resource observation, and notification policy
+remain Stage 25 work.
 
 ## Delegated SLURM Pools
 

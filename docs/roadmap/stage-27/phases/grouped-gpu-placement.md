@@ -216,7 +216,8 @@ Final commands:
   Phase 1 public keys, plan, provider, and runtime composition are present
 - Expanded planning: refinement not needed; this plan already fixes member
   ownership, compensation, ordering, evidence, and validation contracts
-- Implementation: pending one `loom_phase_executor`
+- Implementation: completed; grouped planner, member-backed provider, docs, and
+  focused tests are ready for manager validation
 - Refiner: not needed
 - Pre-submit gate: pending
 - Independent review: optional only for a material residual member-release risk
@@ -227,9 +228,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
+| Implementation and changed paths | Added GPU-local links, disjoint explicit/ordered/topology grouping, member-backed lifecycle handling, and focused docs in `src/loom/queue/gpu`, queue docs, and managed-local example guidance. |
+| Tests added or updated | Added grouped unit, assignment-contract, SQLite contention/rollback, and fake E2E pair-launch coverage. |
+| Validated revision/tree state and evidence | Executor targeted suite: 37 passed; targeted Ruff check/format and `git diff --check` passed. Manager `make validate-pr` and `make test-summary` remain pending. |
 | Validation-relevant changes after evidence | none recorded |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Greedy topology selection remains intentionally disjoint and non-optimal; worktree and branch retained for manager handoff. |
