@@ -356,7 +356,7 @@ def test_local_adapter_rejects_private_assignment_evidence_before_start() -> Non
 
     assert result.disposition is QueueDispatchDisposition.NOT_STARTED
     assert result.non_start_cause is QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED
-    assert result.pre_start_cleanup_status is QueuePreStartCleanupStatus.CONFIRMED
+    assert result.cleanup_status is QueuePreStartCleanupStatus.CONFIRMED
     assert runner.argv is None
     assert provider.release_calls == 1
     assert _active_amount(store, "gpu") == 0
@@ -554,7 +554,7 @@ def test_local_adapter_reports_admission_rejection_without_launching_process() -
     assert result.status is QueueItemStatus.UNKNOWN
     assert result.disposition is QueueDispatchDisposition.NOT_STARTED
     assert result.non_start_cause is QueueDispatchNonStartCause.CAPACITY
-    assert result.pre_start_cleanup_status is QueuePreStartCleanupStatus.NOT_REQUIRED
+    assert result.cleanup_status is QueuePreStartCleanupStatus.NOT_REQUIRED
     assert result.evidence["local_process_started"] is False
     assert runner.argv is None
 

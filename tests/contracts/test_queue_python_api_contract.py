@@ -112,9 +112,9 @@ def test_queue_selection_public_api_is_import_light_and_in_process_only() -> Non
 def test_queue_dispatch_facts_are_public_and_legacy_deferred_is_not() -> None:
     result = QueueDispatchResult(
         disposition=QueueDispatchDisposition.NOT_STARTED,
-        reason="test.capacity",
+        reason_code="test.capacity",
         non_start_cause=QueueDispatchNonStartCause.CAPACITY,
-        pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+        cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
     )
 
     assert [value.value for value in QueueDispatchDisposition] == [

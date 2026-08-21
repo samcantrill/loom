@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -35,6 +36,7 @@ from .service import QueueService
 _SELECTION_LIMIT = 32
 _POLICY_STOPPED_REASON_CODE = "queue_selection.policy_stopped"
 _SELECTION_LIMIT_EXHAUSTED_REASON_CODE = "queue_selection.selection_limit_exhausted"
+_SAFE_REASON_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
 class QueueDispatchDisposition(StrEnum):
@@ -71,10 +73,10 @@ class QueueDispatchResult:
     disposition: QueueDispatchDisposition | str | None = None
     handle_id: str | None = None
     status: QueueItemStatus = QueueItemStatus.UNKNOWN
-    reason: str = "dispatch-result"
+    reason_code: str = "queue_dispatch.result"
     evidence: Mapping[str, PlainData] = field(default_factory=dict)
     non_start_cause: QueueDispatchNonStartCause | str | None = None
-    pre_start_cleanup_status: QueuePreStartCleanupStatus | str | None = None
+    cleanup_status: QueuePreStartCleanupStatus | str | None = None
     next_maintenance_at: str | None = None
 
     def __post_init__(self) -> None:
@@ -90,8 +92,8 @@ class QueueDispatchResult:
             )
             cleanup = (
                 None
-                if self.pre_start_cleanup_status is None
-                else QueuePreStartCleanupStatus(self.pre_start_cleanup_status)
+                if self.cleanup_status is None
+                else QueuePreStartCleanupStatus(self.cleanup_status)
             )
         except ValueError as exc:
             raise QueueServiceError("invalid dispatch result factual value") from exc
@@ -152,9 +154,8 @@ class QueueDispatchResult:
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "disposition", disposition)
         object.__setattr__(self, "non_start_cause", cause)
-        object.__setattr__(self, "pre_start_cleanup_status", cleanup)
-        if not isinstance(self.reason, str) or not self.reason:
-            raise QueueServiceError("reason must be a non-empty string")
+        object.__setattr__(self, "cleanup_status", cleanup)
+        object.__setattr__(self, "reason_code", _safe_reason_code(self.reason_code))
         try:
             evidence = freeze_plain_data(self.evidence, path="evidence")
         except PlainDataError as exc:
@@ -180,7 +181,7 @@ class QueueDispatchResult:
         return (
             self.disposition is QueueDispatchDisposition.NOT_STARTED
             and self.non_start_cause is QueueDispatchNonStartCause.CAPACITY
-            and self.pre_start_cleanup_status
+            and self.cleanup_status
             in {
                 QueuePreStartCleanupStatus.NOT_REQUIRED,
                 QueuePreStartCleanupStatus.CONFIRMED,
@@ -301,7 +302,7 @@ class FakeQueueDispatchAdapter:
             disposition=QueueDispatchDisposition.COMPLETED,
             handle_id=f"fake:{item.queue_item_id}:{item.dispatch_attempt}",
             status=QueueItemStatus.SUCCEEDED,
-            reason="fake-dispatch-completed",
+            reason_code="queue_dispatch.fake_completed",
             evidence={"queue_item_id": item.queue_item_id},
         )
 
@@ -863,10 +864,10 @@ class QueueController:
             return QueueDispatchResult(
                 disposition=QueueDispatchDisposition.NOT_STARTED,
                 status=QueueItemStatus.UNKNOWN,
-                reason="queue_dispatch.adapter_unavailable",
+                reason_code="queue_dispatch.adapter_unavailable",
                 evidence={"adapter": item.launch_contract.adapter, "available": False},
-                non_start_cause=QueueDispatchNonStartCause.AUTHORITY_UNAVAILABLE,
-                pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+                non_start_cause=QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED,
+                cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
             )
         result = adapter.dispatch(item)
         if not isinstance(result, QueueDispatchResult):
@@ -880,7 +881,7 @@ class QueueController:
             return QueueDispatchResult(
                 disposition=QueueDispatchDisposition.START_UNCERTAIN,
                 status=QueueItemStatus.UNKNOWN,
-                reason="queue_dispatch.adapter_exception",
+                reason_code="queue_dispatch.adapter_exception",
                 evidence={
                     "adapter": item.launch_contract.adapter,
                     "exception_type": type(exc).__name__,
@@ -897,7 +898,7 @@ class QueueController:
 
         if result.is_safe_capacity_non_start:
             deferred = self._service.defer_item(
-                item.queue_item_id, reason_code=result.reason, expected=item
+                item.queue_item_id, reason_code=result.reason_code, expected=item
             )
             self._require_compensated_pre_start_deferral(item, deferred)
             return _QueueDispatchTransition(
@@ -907,7 +908,7 @@ class QueueController:
             )
         if result.disposition is QueueDispatchDisposition.NOT_STARTED:
             assert result.non_start_cause is not None
-            assert result.pre_start_cleanup_status is not None
+            assert result.cleanup_status is not None
             invalid = (
                 result.non_start_cause
                 is QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED
@@ -915,12 +916,12 @@ class QueueController:
             completed = self._service.complete_item(
                 item.queue_item_id,
                 status=QueueItemStatus.FAILED if invalid else QueueItemStatus.UNKNOWN,
-                reason=result.reason,
+                reason=result.reason_code,
                 expected=item,
                 evidence=self._completion_evidence(result),
             )
             safe_invalid = invalid and (
-                result.pre_start_cleanup_status
+                result.cleanup_status
                 in {
                     QueuePreStartCleanupStatus.NOT_REQUIRED,
                     QueuePreStartCleanupStatus.CONFIRMED,
@@ -934,7 +935,7 @@ class QueueController:
             completed = self._service.complete_item(
                 item.queue_item_id,
                 status=QueueItemStatus.UNKNOWN,
-                reason=result.reason,
+                reason=result.reason_code,
                 expected=item,
                 evidence=self._completion_evidence(result),
             )
@@ -959,7 +960,7 @@ class QueueController:
             completed = self._service.complete_item(
                 item.queue_item_id,
                 status=result.status,
-                reason=result.reason,
+                reason=result.reason_code,
                 expected=persisted,
             )
             return _QueueDispatchTransition(
@@ -981,9 +982,9 @@ class QueueController:
             "non_start_cause": None
             if result.non_start_cause is None
             else result.non_start_cause.value,
-            "pre_start_cleanup_status": None
-            if result.pre_start_cleanup_status is None
-            else result.pre_start_cleanup_status.value,
+            "cleanup_status": None
+            if result.cleanup_status is None
+            else result.cleanup_status.value,
         }
         return evidence
 
@@ -1189,6 +1190,12 @@ def _thaw_evidence(evidence: Mapping[str, PlainData]) -> Mapping[str, PlainData]
     if not isinstance(thawed, Mapping):
         raise QueueServiceError("evidence must be a mapping")
     return cast(Mapping[str, PlainData], thawed)
+
+
+def _safe_reason_code(value: object) -> str:
+    if not isinstance(value, str) or _SAFE_REASON_CODE_RE.fullmatch(value) is None:
+        raise QueueServiceError("reason_code must be a 1-128 character safe ASCII code")
+    return value
 
 
 __all__ = [

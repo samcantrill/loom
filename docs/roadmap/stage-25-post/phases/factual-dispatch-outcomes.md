@@ -231,29 +231,31 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: complete at base `53dfe73`; Phase 1 merge/cleanup,
+- Manager preparation: refreshed at base `4513da7`; Phase 1 merge/cleanup,
   controller/adapters/tests, dispatch-result usage, and fast-path scope refreshed
 - Expanded planning: design review passed after one bounded
   `START_UNCERTAIN` correction; plan review correction locked invalid-work
   step/continuation behavior
-- Implementation: complete in the assigned Phase 2 worktree; factual dispatch
-  results, controller transitions, built-in adapters, docs, and scoped tests are
-  ready for manager inspection
+- Implementation: corrected in the assigned Phase 2 worktree: factual results
+  use safe `reason_code`/`cleanup_status` fields, safe policy diagnostics are
+  logged, missing adapters fail as invalid, and managed runtime records dispatch
+  uncertainty as degraded
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: source-relevant suites pass; the full gate remains blocked by
   the reproduced, unrelated optional-config controller-lease-renewal timeout
 - Independent review: optional only for a material residual adapter-boundary
   risk after manager review
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 — accepted factual-interface, safe-policy-logging,
+  missing-adapter, and managed-runtime dispatch-outcome correction
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Replaced queue dispatch `DEFERRED` with factual dispositions and typed non-start/cleanup facts in `controller.py`; centralized queue transitions; mapped local and SLURM adapter boundaries; updated root exports and `queue.md`. |
-| Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Focused queue unit, contract, and integration command: 118 passed. |
-| Validated revision/tree state and evidence | `ruff check` passed. `make validate-pr` reached Ruff and Pyright successfully; `make test-summary` passed package (115), unit (1560), contract (280), integration (206), and e2e (54) suites. Its optional-config suite had one failure, reproduced in isolation: `tests/integration/pipeline/test_controller_lease_renewal.py::test_runner_renews_controller_lease_until_release` timed out before stage allocation. No queue source or test points to that pipeline failure. |
-| Validation-relevant changes after evidence | Only this completion record; implementation/test evidence remains current. |
+| Implementation and changed paths | Replaced queue dispatch `DEFERRED` with factual dispositions and typed non-start/cleanup facts in `controller.py`; centralized queue transitions; mapped local and SLURM adapter boundaries; updated root exports and `queue.md`. The correction hard-cuts result fields to `reason_code`/`cleanup_status`, validates fixed safe codes, adds safe selection logging, classifies missing adapters as invalid, and includes dispatch outcomes in managed-runtime degradation. |
+| Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. The correction adds safe logging-category and missing-adapter unit coverage plus managed-runtime dispatch-uncertainty integration coverage. Focused queue unit, contract, and integration command passed. |
+| Validated revision/tree state and evidence | Correction focused Ruff check, phase unit/contract/integration command, legacy dispatch audit, and `git diff --check` passed. Earlier `make test-summary` passed package (115), unit (1560), contract (280), integration (206), and e2e (54) suites. Its optional-config suite had one failure, reproduced in isolation: `tests/integration/pipeline/test_controller_lease_renewal.py::test_runner_renews_controller_lease_until_release` timed out before stage allocation. No queue source or test points to that pipeline failure. |
+| Validation-relevant changes after evidence | This correction changes result names, built-in mappings, selection logging, and managed-runtime cycle state; focused evidence above was run after those changes. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | `START_UNCERTAIN` is deliberately terminal queue-local `UNKNOWN` without external recovery. Full pre-submit approval awaits resolution or disposition of the unrelated optional-config test failure. |

@@ -510,7 +510,7 @@ class ManagedLocalQueueRuntime:
         self._next_maintenance_at = result.next_maintenance_at
         degraded = tuple(
             step.item.queue_item_id
-            for step in result.reconciliation_steps
+            for step in (*result.reconciliation_steps, *result.dispatch_steps)
             if step.item is not None and step.outcome in {"degraded", "unknown"}
         )
         self._degraded_item_ids = degraded

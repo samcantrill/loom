@@ -225,10 +225,10 @@ class LocalQueueDispatchAdapter:
         if drift_evidence is not None:
             return QueueDispatchResult(
                 disposition=QueueDispatchDisposition.NOT_STARTED,
-                reason="local.launch_contract_drift",
+                reason_code="local.launch_contract_drift",
                 evidence=drift_evidence,
                 non_start_cause=QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED,
-                pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+                cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
             )
         command = _launch_command(item)
         admission_request = _resource_admission_request(
@@ -246,28 +246,27 @@ class LocalQueueDispatchAdapter:
             if admission.failure_kind is CoordinationFailureKind.CAPACITY:
                 return QueueDispatchResult(
                     disposition=QueueDispatchDisposition.NOT_STARTED,
-                    reason="resource_admission.capacity_unavailable",
+                    reason_code="resource_admission.capacity_unavailable",
                     evidence={"local_process_started": False},
                     non_start_cause=QueueDispatchNonStartCause.CAPACITY,
-                    pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+                    cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
                 )
             if admission.failure_kind is CoordinationFailureKind.INVALID_OR_UNSUPPORTED:
                 return QueueDispatchResult(
                     disposition=QueueDispatchDisposition.NOT_STARTED,
-                    reason=admission.reason_code
-                    or "resource_admission.unsupported_resource",
+                    reason_code="resource_admission.invalid_or_unsupported",
                     evidence={"local_process_started": False},
                     non_start_cause=QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED,
-                    pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+                    cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
                 )
             return QueueDispatchResult(
                 disposition=QueueDispatchDisposition.NOT_STARTED,
-                reason=admission.reason_code or "local resource admission unavailable",
+                reason_code="resource_admission.unavailable",
                 evidence={
                     "local_process_started": False,
                 },
                 non_start_cause=_non_start_cause(admission.failure_kind),
-                pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+                cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
             )
         try:
             assignment_decision = self.assignment_provider.acquire(
@@ -295,7 +294,7 @@ class LocalQueueDispatchAdapter:
             )
             return self._pre_start_cleanup_result(
                 item,
-                reason="local assignment acquisition failed",
+                reason_code="local.assignment_acquire_failed",
                 exception=exc,
                 cleanup=cleanup,
             )
@@ -311,7 +310,7 @@ class LocalQueueDispatchAdapter:
             if cleanup["pending"]:
                 return self._pre_start_cleanup_result(
                     item,
-                    reason="local assignment cleanup pending",
+                    reason_code="local.assignment_cleanup_pending",
                     exception=None,
                     cleanup=cleanup,
                 )
@@ -321,18 +320,17 @@ class LocalQueueDispatchAdapter:
             ):
                 return QueueDispatchResult(
                     disposition=QueueDispatchDisposition.NOT_STARTED,
-                    reason=assignment_decision.reason_code
-                    or "resource_assignment.capacity_unavailable",
+                    reason_code="resource_assignment.capacity_unavailable",
                     evidence={"local_process_started": False},
                     non_start_cause=QueueDispatchNonStartCause.CAPACITY,
-                    pre_start_cleanup_status=QueuePreStartCleanupStatus.CONFIRMED,
+                    cleanup_status=QueuePreStartCleanupStatus.CONFIRMED,
                 )
             return QueueDispatchResult(
                 disposition=QueueDispatchDisposition.NOT_STARTED,
-                reason=assignment_decision.reason_code or "resource assignment failed",
+                reason_code="resource_assignment.failed",
                 evidence={"local_process_started": False},
                 non_start_cause=QueueDispatchNonStartCause.INTERNAL,
-                pre_start_cleanup_status=QueuePreStartCleanupStatus.CONFIRMED,
+                cleanup_status=QueuePreStartCleanupStatus.CONFIRMED,
             )
         assignment = assignment_decision.assignment
         assert assignment is not None
@@ -348,7 +346,7 @@ class LocalQueueDispatchAdapter:
             )
             return self._pre_start_cleanup_result(
                 item,
-                reason="local assignment launch preparation failed",
+                reason_code="local.assignment_launch_rejected",
                 exception=exc,
                 cleanup=cleanup,
                 non_start_cause=QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED,
@@ -369,7 +367,7 @@ class LocalQueueDispatchAdapter:
             )
             return self._pre_start_cleanup_result(
                 item,
-                reason="local process start failed",
+                reason_code="local.process_start_failed",
                 exception=exc,
                 cleanup=cleanup,
                 start_uncertain=True,
@@ -393,7 +391,7 @@ class LocalQueueDispatchAdapter:
             disposition=QueueDispatchDisposition.STARTED,
             handle_id=handle_id,
             status=QueueItemStatus.DISPATCHED,
-            reason="local process dispatched",
+            reason_code="local.process_dispatched",
             evidence={
                 "managed_local": _managed_local_evidence(
                     owner_id=self.owner_id,
@@ -677,7 +675,7 @@ class LocalQueueDispatchAdapter:
         self,
         item: QueueItem,
         *,
-        reason: str,
+        reason_code: str,
         exception: Exception | None,
         cleanup: _CleanupResult,
         start_uncertain: bool = False,
@@ -695,15 +693,15 @@ class LocalQueueDispatchAdapter:
         if start_uncertain:
             return QueueDispatchResult(
                 disposition=QueueDispatchDisposition.START_UNCERTAIN,
-                reason="local.process_start_exception",
+                reason_code="local.process_start_exception",
                 evidence=evidence,
             )
         return QueueDispatchResult(
             disposition=QueueDispatchDisposition.NOT_STARTED,
-            reason=reason,
+            reason_code=reason_code,
             evidence=evidence,
             non_start_cause=non_start_cause,
-            pre_start_cleanup_status=(
+            cleanup_status=(
                 QueuePreStartCleanupStatus.UNCERTAIN
                 if pending
                 else QueuePreStartCleanupStatus.CONFIRMED

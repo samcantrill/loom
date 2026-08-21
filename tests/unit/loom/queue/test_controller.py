@@ -40,15 +40,17 @@ def test_dispatch_result_requires_explicit_factual_dispositions() -> None:
     )
     not_started = QueueDispatchResult(
         disposition="not_started",
-        reason="capacity",
+        reason_code="capacity",
         non_start_cause="capacity",
-        pre_start_cleanup_status="confirmed",
+        cleanup_status="confirmed",
     )
 
     assert completed.disposition is QueueDispatchDisposition.COMPLETED
     assert started.disposition is QueueDispatchDisposition.STARTED
     assert not_started.disposition is QueueDispatchDisposition.NOT_STARTED
     assert not_started.is_safe_capacity_non_start is True
+    assert not hasattr(not_started, "reason")
+    assert not hasattr(not_started, "pre_start_cleanup_status")
 
 
 @pytest.mark.parametrize(
@@ -80,6 +82,10 @@ def test_dispatch_result_requires_explicit_factual_dispositions() -> None:
         (
             {"disposition": "start_uncertain", "non_start_cause": "internal"},
             "without non-start facts",
+        ),
+        (
+            {"disposition": "start_uncertain", "reason_code": "not safe"},
+            "safe ASCII code",
         ),
     ],
 )
@@ -219,6 +225,85 @@ def test_invalid_or_failing_selection_policy_does_not_claim_item(
     assert [event.event_type for event in service.list_audit_events("item-1")] == [
         "queue.item.enqueued"
     ]
+
+
+@pytest.mark.parametrize(
+    ("policy", "category"),
+    [
+        ("wrong_result", "wrong_result_type"),
+        ("selected_unknown", "selected_unknown_candidate"),
+        ("invalid_reason", "invalid_reason_code"),
+        ("missing_selected", "missing_selected_id"),
+    ],
+)
+def test_controller_logs_safe_invalid_selection_categories(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    policy: str,
+    category: str,
+) -> None:
+    service = _resource_service(
+        tmp_path,
+        clock=_clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)]),
+        capacity=1,
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+    caplog.set_level("WARNING", logger="loom.queue.selection")
+
+    selection_policy = {
+        "wrong_result": _WrongResultPolicy,
+        "selected_unknown": _InvalidSelectionPolicy,
+        "invalid_reason": _InvalidReasonCodePolicy,
+        "missing_selected": _MissingSelectedIdPolicy,
+    }[policy]()
+    step = QueueController(
+        service, selection_policies={"gpu-pool": selection_policy}
+    ).run_once(pool_name="gpu-pool")
+
+    assert step.outcome == "idle"
+    record = caplog.records[-1]
+    assert record.queue_pool_name == "gpu-pool"
+    assert record.queue_policy_id == selection_policy.policy_id
+    assert record.queue_selection_invalid_category == category
+    assert [event.event_type for event in service.list_audit_events("item-1")] == [
+        "queue.item.enqueued"
+    ]
+
+
+def test_controller_logs_policy_exception_without_raw_exception(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    service = _resource_service(
+        tmp_path,
+        clock=_clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)]),
+        capacity=1,
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+    caplog.set_level("WARNING", logger="loom.queue.selection")
+
+    QueueController(
+        service, selection_policies={"gpu-pool": _FailingSelectionPolicy()}
+    ).run_once(pool_name="gpu-pool")
+
+    record = caplog.records[-1]
+    assert record.message == "queue selection policy exception"
+    assert record.queue_pool_name == "gpu-pool"
+    assert record.queue_policy_id == "test.failing"
+    assert "private selection exception" not in caplog.text
 
 
 def test_selection_policy_mapping_rejects_unknown_pool(tmp_path: Path) -> None:
@@ -363,7 +448,9 @@ def test_foreground_drain_completes_fake_work_without_orphaned_claims(
     assert result.recovery_records == ()
 
 
-def test_controller_marks_missing_fake_adapter_unknown(tmp_path: Path) -> None:
+def test_controller_fails_missing_adapter_as_invalid_unsupported(
+    tmp_path: Path,
+) -> None:
     clock = _clock(
         "2020-01-01T00:00:00Z",
         "2020-01-01T00:00:01Z",
@@ -383,7 +470,14 @@ def test_controller_marks_missing_fake_adapter_unknown(tmp_path: Path) -> None:
     step = QueueController(service, adapters={}, clock=clock).run_once()
 
     assert step.item is not None
-    assert step.item.status is QueueItemStatus.UNKNOWN
+    assert step.outcome == "failed"
+    assert step.item.status is QueueItemStatus.FAILED
+    completed = service.list_audit_events("item-1")[-1]
+    assert completed.detail["evidence"]["queue_dispatch"] == {
+        "disposition": "not_started",
+        "non_start_cause": "invalid_or_unsupported",
+        "cleanup_status": "not_required",
+    }
     assert service.scan_recovery() == ()
 
 
@@ -664,9 +758,9 @@ def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
         (
             QueueDispatchResult(
                 disposition="not_started",
-                reason="test.invalid",
+                reason_code="test.invalid",
                 non_start_cause="invalid_or_unsupported",
-                pre_start_cleanup_status="confirmed",
+                cleanup_status="confirmed",
             ),
             "failed",
             QueueItemStatus.FAILED,
@@ -675,9 +769,9 @@ def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
         (
             QueueDispatchResult(
                 disposition="not_started",
-                reason="test.invalid_cleanup_uncertain",
+                reason_code="test.invalid_cleanup_uncertain",
                 non_start_cause="invalid_or_unsupported",
-                pre_start_cleanup_status="uncertain",
+                cleanup_status="uncertain",
             ),
             "unknown",
             QueueItemStatus.FAILED,
@@ -686,9 +780,9 @@ def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
         (
             QueueDispatchResult(
                 disposition="not_started",
-                reason="test.authority",
+                reason_code="test.authority",
                 non_start_cause="authority_unavailable",
-                pre_start_cleanup_status="not_required",
+                cleanup_status="not_required",
             ),
             "unknown",
             QueueItemStatus.UNKNOWN,
@@ -697,9 +791,9 @@ def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
         (
             QueueDispatchResult(
                 disposition="not_started",
-                reason="test.ownership",
+                reason_code="test.ownership",
                 non_start_cause="ownership_lost",
-                pre_start_cleanup_status="confirmed",
+                cleanup_status="confirmed",
             ),
             "unknown",
             QueueItemStatus.UNKNOWN,
@@ -708,9 +802,9 @@ def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
         (
             QueueDispatchResult(
                 disposition="not_started",
-                reason="test.internal",
+                reason_code="test.internal",
                 non_start_cause="internal",
-                pre_start_cleanup_status="confirmed",
+                cleanup_status="confirmed",
             ),
             "unknown",
             QueueItemStatus.UNKNOWN,
@@ -719,9 +813,9 @@ def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
         (
             QueueDispatchResult(
                 disposition="not_started",
-                reason="test.capacity_cleanup_uncertain",
+                reason_code="test.capacity_cleanup_uncertain",
                 non_start_cause="capacity",
-                pre_start_cleanup_status="uncertain",
+                cleanup_status="uncertain",
             ),
             "unknown",
             QueueItemStatus.UNKNOWN,
@@ -729,7 +823,7 @@ def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
         ),
         (
             QueueDispatchResult(
-                disposition="start_uncertain", reason="test.start_uncertain"
+                disposition="start_uncertain", reason_code="test.start_uncertain"
             ),
             "unknown",
             QueueItemStatus.UNKNOWN,
@@ -1078,7 +1172,7 @@ class _AsyncAdapter:
             disposition="started",
             handle_id=f"async:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="async-dispatched",
+            reason_code="test.async_dispatched",
             evidence={"queue_item_id": item.queue_item_id},
         )
 
@@ -1116,7 +1210,7 @@ class _DelegatedHandoffAdapter:
             disposition="started",
             handle_id=f"delegated:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="delegated-dispatched",
+            reason_code="test.delegated_dispatched",
             evidence={"queue_item_id": item.queue_item_id},
         )
 
@@ -1135,9 +1229,9 @@ class _CapacityAdapter:
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
             disposition="not_started",
-            reason="resource_admission.capacity_unavailable",
+            reason_code="resource_admission.capacity_unavailable",
             non_start_cause=QueueDispatchNonStartCause.CAPACITY,
-            pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+            cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
         )
 
 
@@ -1162,15 +1256,15 @@ class _DeferFirstAdapter:
         if item.queue_item_id == "deferred-head":
             return QueueDispatchResult(
                 disposition="not_started",
-                reason="resource_admission.capacity_unavailable",
+                reason_code="resource_admission.capacity_unavailable",
                 non_start_cause=QueueDispatchNonStartCause.CAPACITY,
-                pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+                cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
             )
         return QueueDispatchResult(
             disposition="completed",
             handle_id=f"defer-first:{item.queue_item_id}",
             status=QueueItemStatus.SUCCEEDED,
-            reason="completed",
+            reason_code="test.completed",
         )
 
 
@@ -1182,7 +1276,7 @@ class _DegradingAdapter:
             disposition="started",
             handle_id=f"degrading:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="started",
+            reason_code="test.started",
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -1204,7 +1298,7 @@ class _ItemLocalFailureAdapter:
             disposition="started",
             handle_id=f"item-local-failure:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="started",
+            reason_code="test.started",
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -1236,7 +1330,7 @@ class _CountingAdapter:
             disposition="started",
             handle_id=f"counting:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="started",
+            reason_code="test.started",
             evidence=evidence,
         )
 
@@ -1258,7 +1352,7 @@ class _CancellableStartedAdapter:
             disposition="started",
             handle_id=f"cancellable:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="started",
+            reason_code="test.started",
         )
 
     def cancel(self, item, *, requested_by, reason) -> QueueDispatchCancellation:  # noqa: ANN001
@@ -1302,6 +1396,39 @@ class _InvalidSelectionPolicy:
             "test.invalid_selected",
             "not-in-context",
         )
+
+
+class _WrongResultPolicy:
+    policy_id = "test.wrong_result"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        return "not-a-decision"  # type: ignore[return-value]
+
+
+class _InvalidReasonCodePolicy:
+    policy_id = "test.invalid_reason"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        decision = QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED,
+            "test.valid",
+            context.candidates[0].queue_item_id,
+        )
+        object.__setattr__(decision, "reason_code", "invalid reason")
+        return decision
+
+
+class _MissingSelectedIdPolicy:
+    policy_id = "test.missing_selected"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        decision = QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED,
+            "test.valid",
+            context.candidates[0].queue_item_id,
+        )
+        object.__setattr__(decision, "queue_item_id", None)
+        return decision
 
 
 class _FailingSelectionPolicy:

@@ -182,7 +182,7 @@ class SlurmQueueDispatchAdapter:
             )
             return QueueDispatchResult(
                 disposition=QueueDispatchDisposition.START_UNCERTAIN,
-                reason="slurm.sbatch_exception",
+                reason_code="slurm.sbatch_exception",
                 evidence=_plain_mapping(
                     {
                         "adapter": SLURM_QUEUE_ADAPTER_NAME,
@@ -203,7 +203,7 @@ class SlurmQueueDispatchAdapter:
         if not sbatch.ok:
             return QueueDispatchResult(
                 disposition=QueueDispatchDisposition.NOT_STARTED,
-                reason="slurm.sbatch_rejected",
+                reason_code="slurm.sbatch_rejected",
                 evidence=_plain_mapping(
                     {
                         "adapter": SLURM_QUEUE_ADAPTER_NAME,
@@ -221,14 +221,14 @@ class SlurmQueueDispatchAdapter:
                     path="slurm_submission_failure_evidence",
                 ),
                 non_start_cause=QueueDispatchNonStartCause.INTERNAL,
-                pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+                cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
             )
         try:
             parsed = parse_sbatch_parsable_output(sbatch.stdout)
         except SlurmJobIdParseError as exc:
             return QueueDispatchResult(
                 disposition=QueueDispatchDisposition.START_UNCERTAIN,
-                reason="slurm.sbatch_unusable_job_id",
+                reason_code="slurm.sbatch_unusable_job_id",
                 evidence=_plain_mapping(
                     {
                         "adapter": SLURM_QUEUE_ADAPTER_NAME,
@@ -267,7 +267,7 @@ class SlurmQueueDispatchAdapter:
             disposition=QueueDispatchDisposition.STARTED,
             handle_id=handle_id,
             status=QueueItemStatus.DISPATCHED,
-            reason="SLURM job submitted",
+            reason_code="slurm.job_submitted",
             evidence=_plain_mapping(
                 {
                     "adapter": SLURM_QUEUE_ADAPTER_NAME,

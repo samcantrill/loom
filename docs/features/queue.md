@@ -198,8 +198,9 @@ uncertainty about external start or cleanup becomes queue-local `UNKNOWN` and
 stops the current fill.
 
 Dispatch adapters report one factual disposition: `STARTED`, `COMPLETED`,
-`NOT_STARTED`, or `START_UNCERTAIN`. `NOT_STARTED` carries a typed cause and
-cleanup fact; only `CAPACITY` with `NOT_REQUIRED` or `CONFIRMED` cleanup is
+`NOT_STARTED`, or `START_UNCERTAIN`. Every result carries a fixed safe
+`reason_code`; `NOT_STARTED` carries a typed cause and `cleanup_status`. Only
+`CAPACITY` with `NOT_REQUIRED` or `CONFIRMED` cleanup is
 requeued. `START_UNCERTAIN` never implies a usable external handle or retry.
 The controller's verification that it requeued a queue row is separate from
 the adapter's claim that external leases or processes were released.
