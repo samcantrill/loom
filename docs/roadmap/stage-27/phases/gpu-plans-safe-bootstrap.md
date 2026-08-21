@@ -217,9 +217,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
+| Implementation and changed paths | Completed in `b67d1f05eecab6ec7dd6acb4f93a14d3598ae92e`: explicit `loom.queue.gpu` planning/runtime composition, atomic coordination limit ensure across SQLite/service authority paths, and scoped package/authority/queue tests. |
+| Tests added or updated | `tests/unit/loom/queue/gpu/test_local.py`, `tests/integration/queue/test_managed_local_gpu_pool.py`, `tests/contracts/test_workspace_coordination_contract.py`, package/store export tests, and the in-memory coordination fake. |
+| Validated revision/tree state and evidence | Clean implementation tree at `b67d1f05eecab6ec7dd6acb4f93a14d3598ae92e`; `make validate-pr` passed (default: 2,189 passed/112 deselected; config-extra: 132 passed/3 skipped), and `make test-summary` passed with receipt `build/test-summary.md` (package 114, unit 1,537, contract 279, integration 205, e2e 54, config-extra 132 passed). |
+| Validation-relevant changes after evidence | None; this completion-record update is documentation only. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No Phase 1 blocker. NVIDIA discovery, topology/grouping, and operator documentation remain deferred to later accepted phases; PR/review/merge and worktree cleanup remain manager-owned. |
