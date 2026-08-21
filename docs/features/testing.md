@@ -105,6 +105,20 @@ tests/package
   boundaries
 ```
 
+### 2.2 Opt-in NVIDIA acceptance
+
+Default validation uses a fake `nvidia-smi` runner and does not require a GPU,
+driver, CUDA toolkit, or benchmark. A host operator may run the narrow hardware
+acceptance profile explicitly:
+
+```sh
+LOOM_TEST_NVIDIA_GPU=1 uv run pytest -m gpu tests/gpu_acceptance
+```
+
+It observes local inventory, prepares a temporary authority and queue, and runs
+an environment-only subprocess. It verifies assignment cleanup but makes no
+claim about compute, memory, driver policy, health, or performance.
+
 Tests should reinforce the architecture:
 
 ```text

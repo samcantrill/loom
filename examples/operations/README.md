@@ -1,5 +1,9 @@
 # Operations Examples
 
+The [NVIDIA local GPU pool](nvidia-gpu-pool/README.md) example uses a fake
+command runner to demonstrate explicit discovery, whole/share/group plans, and
+a managed-local lifecycle without requiring NVIDIA hardware.
+
 Operations examples cover how users inspect, debug, and manage runs after or
 around execution: authority lifecycle, preflight checks, status, bounded logs,
 metadata-only artifact inspection, failure diagnostics, resource coordination,

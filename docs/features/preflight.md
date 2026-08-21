@@ -22,6 +22,12 @@ resource limits.
 Pool status is a read-only operation and likewise does not refresh durable lease
 acquisition evidence or turn a preflight result into live process proof.
 
+NVIDIA local GPU observation is deliberately outside default queue preflight.
+An operator explicitly imports `loom.queue.gpu.nvidia`, calls discovery once,
+then explicitly prepares authority limits before constructing a runtime. This
+avoids command execution while loading config, importing Loom, or performing a
+generic preflight check.
+
 ## Scope
 
 Preflight owns:

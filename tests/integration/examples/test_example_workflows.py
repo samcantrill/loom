@@ -159,6 +159,28 @@ def test_example_cleanup_and_gc_is_preview_first_and_candidate_only(
         assert _run_uri_path(fields["second_run_uri"]).is_dir()
 
 
+def test_example_nvidia_gpu_pool_uses_fake_discovery_and_releases_group(
+    tmp_path: Path,
+) -> None:
+    output = _run_example_script(
+        script=EXAMPLES_ROOT
+        / "operations"
+        / "nvidia-gpu-pool"
+        / "run_nvidia_gpu_pool.py",
+        tmp_path=tmp_path / "nvidia-gpu-pool",
+    )
+    fields = _summary_fields(output)
+
+    assert fields == {
+        "whole_capacity": "2",
+        "shares_capacity": "4",
+        "grouped_capacity": "1",
+        "grouped_binding": "GPU-fake-a,GPU-fake-b",
+        "safe_summary_has_uuid": "False",
+        "grouped_status": "SUCCEEDED",
+    }
+
+
 def _run_example_script(*, script: Path, tmp_path: Path) -> str:
     output_root = tmp_path / "outputs"
     env = _example_environment(output_root=output_root)
