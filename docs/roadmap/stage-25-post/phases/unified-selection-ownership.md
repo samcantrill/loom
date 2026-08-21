@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 25-post, Phase 1
 - Manifest: `docs/roadmap/stage-25-post/implementation-plan.md`
 - Branch: `agent/stage-25-post-p1-unified-selection-ownership`
@@ -213,7 +213,8 @@ Final commands:
   material residual risk after the bounded correction
 - Blocker corrections: 1/3; manager corrected policy binding to freeze only
   recorded identity and removed the now-unused FIFO-only selector
-- PR and merge: PR #223 open, correctly targeting `develop`; CI pending
+- PR and merge: PR #223 passed CI and was squash-merged to `develop` as
+  `0267a2c`
 
 ## Completion Record
 
@@ -223,5 +224,5 @@ Final commands:
 | Tests added or updated | Controller coverage for unsupported repository construction, frozen policy ID with live implementation behavior, delegated FIFO without resource filtering, and lost-CAS bound; public API/repository cut-over coverage; SQLite exact-CAS fixtures/race coverage; lifecycle, runtime, and status fixture migration. |
 | Validated revision/tree state and evidence | `3cd8759` clean implementation tree rebased on `d4115c2`: targeted queue suites passed (75); `TMPDIR=/dev/shm make validate-pr` passed (Ruff, Pyright, default 2206 passed/112 deselected, config-extra 132 passed/3 skipped, build); `TMPDIR=/dev/shm make test-summary` passed and wrote `build/test-summary.md` (package 115, unit 1552, contract 279, integration 206, e2e 54, config-extra 132). A disk-backed `/tmp` retry first exposed an unrelated baseline lease-renewal timeout that reproduced on clean `origin/develop`; the same test passed in 0.81 seconds with the isolated memory-backed temp location used for final evidence. |
 | Validation-relevant changes after evidence | None; this completion-record-only update does not alter source, tests, dependencies, build, or validation configuration. |
-| PR, review, and merge | Manager fast-path review passed; PR #223 is open, non-draft, mergeable, and correctly targets `develop`; CI and squash merge pending. |
-| Residual risk and cleanup | Accepted hard cut-over may break unknown external callers; private custom-repository capability remains intentionally unstable until Stage 29. No executor cleanup required. |
+| PR, review, and merge | Manager fast-path review passed; PR #223 passed CI and was squash-merged to `develop` as `0267a2c` on 2026-08-21. |
+| Residual risk and cleanup | Accepted hard cut-over may break unknown external callers; private custom-repository capability remains intentionally unstable until Stage 29. Remote/local phase branches and the dedicated implementation worktree were removed. |
