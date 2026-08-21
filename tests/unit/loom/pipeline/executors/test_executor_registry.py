@@ -1,3 +1,5 @@
+"""Unit tests for the instance-local executor registry."""
+
 from __future__ import annotations
 
 from typing import Any, cast
