@@ -1,13 +1,12 @@
 # Roadmap Stage 25-post Implementation Plan: Unified Queue Scheduling Boundaries
 
-Status: approved
+Status: complete
 Roadmap stage: 25-post
 Planning document: `docs/roadmap/stage-25-post/planning.md`
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 2, factual dispatch outcomes
-Blockers: none; the maintainer authorized one explicit correction-budget
-exception and the independent-review finding is resolved locally.
+Current phase: all phases merged
+Blockers: none
 
 ## Summary
 
@@ -75,7 +74,7 @@ exception and the independent-review finding is resolved locally.
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `unified-selection-ownership` | merged | `docs/roadmap/stage-25-post/phases/unified-selection-ownership.md` | `agent/stage-25-post-p1-unified-selection-ownership` | #223 | Private scheduling operation, policy binding, repository capability/cut-over, controller and caller migration | Make every current path select and acquire through one bounded implementation. |
-| 2 | `factual-dispatch-outcomes` | pr_open | `docs/roadmap/stage-25-post/phases/factual-dispatch-outcomes.md` | `agent/stage-25-post-p2-factual-dispatch-outcomes` | #230 | Public dispatch facts, built-in adapters, controller transition table, diagnostics/evidence | Make retry impossible unless capacity non-start and cleanup are both proven safe. |
+| 2 | `factual-dispatch-outcomes` | merged | `docs/roadmap/stage-25-post/phases/factual-dispatch-outcomes.md` | `agent/stage-25-post-p2-factual-dispatch-outcomes` | #230 | Public dispatch facts, built-in adapters, controller transition table, diagnostics/evidence | Make retry impossible unless capacity non-start and cleanup are both proven safe. |
 
 ## Quality Gate
 
@@ -100,4 +99,4 @@ exception and the independent-review finding is resolved locally.
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | PR #223 passed CI and squash-merged as `0267a2c` | implementation and manager review complete; required local validation passed at `3cd8759` | Hard removal may affect unknown external callers; private repository scheduling capability intentionally remains unstable until Stage 29. | remote/local branch and dedicated worktree removed |
-| 2 | PR #230 open against `develop`; CI and merge pending | independent-review blocker resolved under one maintainer-authorized correction-budget exception; manager pre-submit review and required validation pass at `0bfb546` | Start uncertainty has no external recovery without a handle; no contradictory definite non-start evidence remains | branch/worktree retained through remote merge |
+| 2 | PR #230 passed CI and squash-merged as `99aadda` | independent-review blocker resolved under one maintainer-authorized correction-budget exception; manager pre-submit review and required validation passed at `0bfb546` | Start uncertainty has no external recovery without a handle; no contradictory definite non-start evidence remains | remote/local branch and dedicated worktree removed |

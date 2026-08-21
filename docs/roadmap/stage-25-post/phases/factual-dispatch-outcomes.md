@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: 25-post, Phase 2
 - Manifest: `docs/roadmap/stage-25-post/implementation-plan.md`
 - Branch: `agent/stage-25-post-p2-factual-dispatch-outcomes`
@@ -260,8 +260,8 @@ Final commands:
   cleanup confirmation when assignment acquisition raises without a provider
   assignment handle; and the authorized manager correction removing
   contradictory local possible-start evidence
-- PR and merge: PR #230 opened against `develop`; metadata and scope verified;
-  CI and merge pending
+- PR and merge: PR #230 passed CI and squash-merged into `develop` as
+  `99aadda`
 
 ## Completion Record
 
@@ -271,5 +271,5 @@ Final commands:
 | Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Corrections add safe logging-category and missing-adapter unit coverage, known assignment-cause coverage, provider-exception cleanup uncertainty, managed-runtime dispatch-uncertainty integration coverage across the same and later cycles, and an assertion that possible-start evidence omits a definite non-start claim. Refreshed phase unit/contract/integration command passed (130). |
 | Validated revision/tree state and evidence | `0bfb546` clean tree on base `cb84498`: focused local adapter (28) and phase matrix (130) passed; `TMPDIR=/dev/shm make validate-pr` passed (Ruff, Pyright, default 2263 passed/1 skipped/121 deselected, config-extra 141 passed/3 skipped/2267 deselected, sdist and wheel); `TMPDIR=/dev/shm make test-summary` passed and wrote `build/test-summary.md` (package 116, unit 1596, contract 286, integration 210, e2e 55, config-extra 141/3 skipped). Scope/API, legacy dispatch/claim, and `git diff --check` audits passed. |
 | Validation-relevant changes after evidence | None; only this metadata evidence record follows validation. |
-| PR, review, and merge | PR #230 targets `develop` with the required title and validated diff; independent expanded-path review blocker is resolved and manager pre-submit review passed; CI and merge remain. |
-| Residual risk and cleanup | `START_UNCERTAIN` deliberately remains terminal queue-local `UNKNOWN` without external recovery when no usable handle exists. Branch/worktree cleanup follows remote merge. |
+| PR, review, and merge | PR #230 targeted `develop` with the required title and validated diff; independent expanded-path review blocker was resolved, manager pre-submit review passed, GitHub CI passed, and the PR squash-merged as `99aadda`. |
+| Residual risk and cleanup | `START_UNCERTAIN` deliberately remains terminal queue-local `UNKNOWN` without external recovery when no usable handle exists. The local/remote phase branch and dedicated worktree were removed after merge. |
