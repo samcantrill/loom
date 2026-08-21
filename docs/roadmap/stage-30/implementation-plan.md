@@ -48,7 +48,7 @@ Blockers: none
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | operations-portability-and-cleanup | merged | docs/roadmap/stage-30/phases/operations-portability-and-cleanup.md | agent/stage-30-p1-operations-portability-and-cleanup | [#224](https://github.com/samcantrill/loom/pull/224) | operations examples, catalog, focused tests | Demonstrate multi-run comparison/transfer and safe candidate-only cleanup. |
 | 2 | experiments-observers-and-apptainer | merged | docs/roadmap/stage-30/phases/experiments-observers-and-apptainer.md | agent/stage-30-p2-experiments-observers-and-apptainer | [#227](https://github.com/samcantrill/loom/pull/227) | experiments/extensions/Apptainer examples, routing, tests | Demonstrate sweeps, observe-only sinks, and hermetic HPC container execution. |
-| 3 | resume-storage-and-guide-clarity | pending | docs/roadmap/stage-30/phases/resume-storage-and-guide-clarity.md | agent/stage-30-p3-resume-storage-and-guide-clarity | pending | local resume example, storage example, related feature docs, final validation | Explain reuse/invalidation, explicit materialization, and current/deferred support. |
+| 3 | resume-storage-and-guide-clarity | pr_open | docs/roadmap/stage-30/phases/resume-storage-and-guide-clarity.md | agent/stage-30-p3-resume-storage-and-guide-clarity | [#229](https://github.com/samcantrill/loom/pull/229) | local resume example, storage example, related feature docs, final validation | Explain reuse/invalidation, explicit materialization, and current/deferred support. |
 
 ## Quality Gate
 
@@ -71,4 +71,4 @@ Blockers: none
 | --- | --- | --- | --- | --- |
 | 1 | [#224](https://github.com/samcantrill/loom/pull/224) squash-merged as `a0d81e1` | Implementation, manager validation, and GitHub CI passed | Cleanup candidate setup is an explicitly documented private fixture | Phase branch and worktree removed after merge |
 | 2 | [#227](https://github.com/samcantrill/loom/pull/227) squash-merged as `1683662` | Implementation, manager validation, and GitHub CI passed | Fake Apptainer proves command integration, not live HPC/container isolation | Phase branch and worktree removed after merge |
-| 3 | pending | pending | pending | pending |
+| 3 | [#229 open](https://github.com/samcantrill/loom/pull/229); merge pending | Implementation and manager validation passed; CI pending | Fake backend is local-only; config changes remain fail-closed after authority commits | Branch and worktree cleanup pending remote merge |

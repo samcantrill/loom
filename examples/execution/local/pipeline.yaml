@@ -2,9 +2,9 @@ name: local-pipeline-example
 schema_version: 1
 pipeline:
   name: local-pipeline-example
-  description: Two local stages with JSON and text artifacts.
+  description: Two independent local branches with JSON and text artifacts.
   stages:
-    - name: seed
+    - name: left_seed
       factory:
         _target_: stages:SeedNumbersStage
       config:
@@ -14,11 +14,41 @@ pipeline:
           artifact_type: json
           codec_key: json.v1
 
-    - name: summarize
+    - name: left_summarize
       factory:
         _target_: stages:SummarizeNumbersStage
       inputs:
-        numbers: seed.numbers
+        numbers: left_seed.numbers
+      resources:
+        entries:
+          cpu:
+            kind: cpu
+            amount: 1
+            unit: count
+            attributes: {}
+      outputs:
+        summary:
+          artifact_type: json
+          codec_key: json.v1
+        note:
+          artifact_type: text
+          codec_key: text.v1
+
+    - name: right_seed
+      factory:
+        _target_: stages:SeedNumbersStage
+      config:
+        values: [3, 6, 9]
+      outputs:
+        numbers:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: right_summarize
+      factory:
+        _target_: stages:SummarizeNumbersStage
+      inputs:
+        numbers: right_seed.numbers
       resources:
         entries:
           cpu:

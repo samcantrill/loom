@@ -37,6 +37,25 @@ The core rule is:
 Plugin discovery is explicit, opt-in, and adapter-shaped.
 ```
 
+## Current Support
+
+`loom.plugins` discovers and loads selected installed extension entry points
+only when a caller asks it to. Direct event-sink registration is also available
+through the runtime's explicit registry, without plugin discovery on import.
+
+## Quick Start
+
+Run the direct event-sink walkthrough:
+
+```sh
+uv run python examples/extensions/event-sink/run_event_sink.py
+```
+
+## Deferred
+
+Import-time discovery, implicit installation, and service-specific notification
+SDKs are not plugin-layer behavior.
+
 Importing `loom` should not discover or import third-party plugins.
 
 ### 1.1 Alignment With `loom.md`

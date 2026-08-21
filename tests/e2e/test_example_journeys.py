@@ -27,14 +27,25 @@ def test_e2e_example_local_pipeline_run_with_resume(tmp_path: Path) -> None:
 
     assert payload["first_status"] == "SUCCEEDED"
     assert payload["resume_status"] == "SUCCEEDED"
+    assert payload["repair_status"] == "SUCCEEDED"
     first_stage_actions = payload["first_stage_actions"]
     resume_stage_actions = payload["resume_stage_actions"]
+    repair_stage_actions = payload["repair_stage_actions"]
     assert isinstance(first_stage_actions, dict)
     assert isinstance(resume_stage_actions, dict)
-    assert set(first_stage_actions) == {"seed", "summarize"}
-    assert set(resume_stage_actions) == {"seed", "summarize"}
-    assert resume_stage_actions["seed"] == "REUSE"
-    assert resume_stage_actions["summarize"] == "REUSE"
+    assert isinstance(repair_stage_actions, dict)
+    stage_names = {"left_seed", "left_summarize", "right_seed", "right_summarize"}
+    assert set(first_stage_actions) == stage_names
+    assert set(resume_stage_actions) == stage_names
+    assert set(repair_stage_actions) == stage_names
+    assert set(resume_stage_actions.values()) == {"REUSE"}
+    assert repair_stage_actions == {
+        "left_seed": "RUN",
+        "left_summarize": "RUN",
+        "right_seed": "REUSE",
+        "right_summarize": "REUSE",
+    }
+    assert payload["repair_reason"] == "ARTIFACT_CHECKSUM_MISMATCH"
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
 

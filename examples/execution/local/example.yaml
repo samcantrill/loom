@@ -1,6 +1,6 @@
 id: execution.local
 title: Local Pipeline Run
-summary: Run a local two-stage pipeline and reuse unchanged stages from the same run directory.
+summary: Reuse unchanged local branches, then repair only the branch with a checksum-invalid persisted artifact.
 capability: execution
 level: introductory
 introduced_in: v0
@@ -19,7 +19,7 @@ validation_command: uv run pytest tests/integration/docs/test_v0_python_examples
 entrypoints:
   - path: run_pipeline.py
     kind: python
-    description: Run the pipeline twice and print stage actions plus artifact URIs.
+    description: Run unchanged and checksum-repair resumes with durable fingerprint and per-branch action evidence.
 tags:
   - local-run
   - artifacts

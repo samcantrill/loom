@@ -61,6 +61,7 @@ PYTHON_API_EXAMPLES = {
     "operations.managed-local-queue",
     "operations.resource-leases",
     "extensions.event-sink",
+    "storage.fake-backend-materialization",
 }
 USER_FACING_V10_EXAMPLES = {
     "execution.offline-first-import": "smoke",
@@ -273,6 +274,7 @@ def test_v30_experiment_extension_and_apptainer_examples_are_cataloged() -> None
         "experiments.deterministic-sweep": "cli",
         "extensions.event-sink": "python_api",
         "execution.containers.slurm-apptainer": "cli",
+        "storage.fake-backend-materialization": "python_api",
     }
     for example_id, surface in expected.items():
         manifest = manifests[example_id]
@@ -287,6 +289,7 @@ def test_v30_experiment_extension_and_apptainer_examples_are_cataloged() -> None
     )
     assert "experiments/README.md" in examples_readme
     assert "extensions/README.md" in examples_readme
+    assert "storage/README.md" in examples_readme
     assert "execution.containers.slurm-apptainer" in execution_readme
 
 

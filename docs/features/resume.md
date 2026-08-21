@@ -25,6 +25,27 @@ The resume layer should not execute stages, load domain-specific checkpoints, or
 repair ambiguous state silently. It should produce a deterministic execution plan
 that the runner can execute and that the CLI can explain.
 
+## Current Support
+
+Same-run resume reuses stages only when persisted fingerprints and required
+artifacts remain valid. A checksum-invalid persisted artifact can rerun its
+producer and downstream branch with superseding commits while an independent
+branch remains reusable. Ordinary authored config changes after an authority
+output commit fail closed rather than overwriting that commit.
+
+## Quick Start
+
+Run the local reuse and checksum-repair walkthrough:
+
+```sh
+uv run python examples/execution/local/run_pipeline.py
+```
+
+## Deferred
+
+Stage-internal checkpoint loading and automatic repair of ambiguous persisted
+state remain project or future-runtime concerns.
+
 ---
 
 ## 2. Core Position
