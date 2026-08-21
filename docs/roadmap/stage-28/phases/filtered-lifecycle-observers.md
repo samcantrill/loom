@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: v28 Phase 3
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p3-filtered-lifecycle-observers`
@@ -18,7 +18,7 @@
   or competing filter owner.
 - Workflow path: fast; filter semantics and ownership passed the expanded stage
   review and the removal-first cross-stage correction
-- Blockers: none on the reviewed evidence base
+- Blockers: none; PR `#231` is merged into `develop` as `01e977a`
 
 ## Objective And Context
 
@@ -389,8 +389,9 @@ Final commands:
 - Independent review: manager-local fast path
 - Blocker corrections: 1/3; `c059912` is the bounded lifecycle-owner selector
   propagation correction
-- PR and merge: [#231](https://github.com/samcantrill/loom/pull/231) is
-  open against `develop`; CI and merge pending
+- PR and merge: [#231](https://github.com/samcantrill/loom/pull/231)
+  passed required CI and was squash-merged into `develop` as `01e977a` on
+  2026-08-21
 
 ## Completion Record
 
@@ -399,6 +400,6 @@ Final commands:
 | Implementation and changed paths | `EventSinkSubscription`/`EventSinkRegistration` and filtered registry dispatch in `src/loom/pipeline/event_sinks.py`; plugin registration normalization in `src/loom/plugins/event_sinks.py`; selected lifecycle-owner registry construction in `src/loom/cli/plugin_activation.py`, `run.py`, and `stage_job.py`; stage-job dispatcher threading in `src/loom/pipeline/execution/continuation.py`; v2 sink conformance in `src/loom/testing/checks.py`; lifecycle/Slack-Discord/mutable-hook documentation in `examples/extensions/event-sink/README.md`. |
 | Tests added or updated | Package exports; subscription validation, exact filtering, ordering/failure compatibility, plugin registration factory, v2 conformance selection, run/stage-job group allowlists, committed stage-job observation, selected filtered-sink CLI E2E, and SLURM afterok stage-job selector propagation in the matching package, unit, integration, E2E, and Stage 28 test-support files. |
 | Validated revision/tree state and evidence | `c059912` (`fix(stage-28): propagate sinks to stage jobs`) was clean for validation. The combined manager-focused cluster passed 58 package/unit/contract/integration/E2E tests. `make validate-pr` passed: Ruff, Pyright, default 2,298 passed / 1 skipped / 121 deselected, config-extra 141 passed / 3 skipped / 2,302 deselected, and package build. `make test-summary` passed: 2,439 passed, 0 failed, 3 skipped; receipt `build/test-summary.md` generated 2026-08-21T07:22:58Z. |
-| Validation-relevant changes after evidence | None; this completion-record-only metadata commit follows the validated implementation revision. |
-| PR, review, and merge | [#231](https://github.com/samcantrill/loom/pull/231) is a ready, mergeable PR targeting `develop`. Manager-local review found no blocker after the bounded SLURM stage-job selector correction; CI and merge are pending. |
-| Residual risk and cleanup | No blocker. Synchronous observer latency and crash-before-callback loss remain the accepted debt; retries, delivery state, and mutable hooks remain intentionally deferred. Worktree and branch remain for manager PR handling. |
+| Validation-relevant changes after evidence | None; only phase/manifest status metadata followed the validated implementation revision. |
+| PR, review, and merge | [#231](https://github.com/samcantrill/loom/pull/231) targeted `develop`, passed manager-local review and required CI in 4m37s, and was squash-merged as `01e977a` on 2026-08-21. |
+| Residual risk and cleanup | No blocker. Synchronous observer latency and crash-before-callback loss remain the accepted debt; retries, delivery state, and mutable hooks remain intentionally deferred. The worktree and local/remote phase branch were removed after merge. |

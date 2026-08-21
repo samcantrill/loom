@@ -1,12 +1,12 @@
 # Roadmap Stage 28 Implementation Plan: Reconstructable Runtime Extensions And Lifecycle Hooks
 
-Status: ready; plan quality gate passed
+Status: complete; all phases merged
 Roadmap stage: `v28`
 Planning document: `docs/roadmap/stage-28/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 3 PR open
-Blockers: none; Stage 26's Phase 3 dependency is remotely merged
+Current phase: complete
+Blockers: none; all three phases are remotely merged into `develop`
 
 ## Summary
 
@@ -213,7 +213,7 @@ sinks. This is an observer, not a mutable execution hook.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `truthful-extension-contracts` | merged | `docs/roadmap/stage-28/phases/truthful-extension-contracts.md` | `agent/stage-28-p1-truthful-extension-contracts` | [#222](https://github.com/samcantrill/loom/pull/222) | Plugin readiness, public conformance support, architecture/docs | Let users determine and test exactly what each in-scope extension contract currently supports. |
 | 2 | `reconstructable-runtime-extensions` | merged | `docs/roadmap/stage-28/phases/reconstructable-runtime-extensions.md` | `agent/stage-28-p2-reconstructable-runtime-extensions` | [#228](https://github.com/samcantrill/loom/pull/228) | Executor registry, explicit activation, resource/codec threading, worker verification | Execute a custom CLI executor and preserve custom codec/resource behavior through a real fresh worker. |
-| 3 | `filtered-lifecycle-observers` | pr_open | `docs/roadmap/stage-28/phases/filtered-lifecycle-observers.md` | `agent/stage-28-p3-filtered-lifecycle-observers` | [#231](https://github.com/samcantrill/loom/pull/231) | Event subscriptions, sink activation, lifecycle-owner propagation and proof | Select an observe-only sink that receives exact committed lifecycle events without affecting correctness. |
+| 3 | `filtered-lifecycle-observers` | merged | `docs/roadmap/stage-28/phases/filtered-lifecycle-observers.md` | `agent/stage-28-p3-filtered-lifecycle-observers` | [#231](https://github.com/samcantrill/loom/pull/231) | Event subscriptions, sink activation, lifecycle-owner propagation and proof | Select an observe-only sink that receives exact committed lifecycle events without affecting correctness. |
 
 Phase 1 is independently useful and non-mutating. Phase 2 supplies the shared
 activation/reconstruction path. Phase 3 reuses it for callbacks and does not
@@ -236,9 +236,9 @@ expand delivery semantics.
   sink-v2 traceability. The later maintainer-approved cross-stage correction
   removed Stage 26 notification types and made Phase 3's subscription the sole
   generic provider filter. Manager verification found no remaining blocker.
-- Ready for implementation: yes. The maintainer removed the non-technical Stage
-  27 sequencing gate on 2026-08-21. Stage 26's lifecycle-event dependency is
-  limited to Phase 3 and is satisfied on current `origin/develop`.
+- Implementation complete: yes. All three phases are remotely merged into
+  `develop`; their validation, review, and CI gates passed; and their worktrees
+  and local/remote phase branches were removed.
 - Accepted risks: explicit plugin packages may be absent from worker
   environments; distribution metadata may be unavailable; public conformance
   checks prove only supplied cases; synchronous sinks can add latency; custom
@@ -254,4 +254,4 @@ expand delivery semantics.
 | --- | --- | --- | --- | --- |
 | 1 | [#222](https://github.com/samcantrill/loom/pull/222) squash-merged as `3b3c51f` | Six-facet readiness, v2 diagnostics, and four public conformance checks implemented; 45 targeted tests and isolated CI passed | Caller-supplied conformance cases remain intentionally bounded | Worktree and local/remote branch removed |
 | 2 | [#228](https://github.com/samcantrill/loom/pull/228) squash-merged as `1040be4` | Explicit executor/codec/resource-validator activation, durable identity, fresh-worker reconstruction, and strict resume comparison implemented; full validation and CI passed | Explicit packages remain an operator installation responsibility; unavailable distribution evidence is a warning | Worktree and local/remote branch removed; merge metadata recorded as `569cbca` |
-| 3 | pending | pending | pending | pending |
+| 3 | [#231](https://github.com/samcantrill/loom/pull/231) squash-merged as `01e977a` | Exact sink subscriptions, explicit lifecycle-owner activation, stage-job reconstruction, v2 conformance, downstream recipes, 58 focused tests, full validation, 2,439-test summary, manager review, and CI passed | Synchronous callback latency and crash-before-callback loss remain accepted; retries, delivery state, provider APIs, and mutable hooks remain deferred | Worktree and local/remote branch removed |
