@@ -86,9 +86,10 @@ from current clean `origin/develop` after its predecessor merges
   - coordinator reservation is logical; agent admission is physical truth.
     Agent drift may produce a definitive pre-grant decline;
   - cross-store transitions form an idempotent saga. Authority CAS binds one
-    prepared attempt to one assignment; an exact durable definitive decline may
-    unbind only that ungranted assignment and restore prepared state;
-  - a grant creates an authority execution fence independent of coordinator
+    `PENDING` prepared attempt to one assignment without advancing lifecycle; an
+    exact durable definitive decline may clear only that ungranted binding;
+  - after acceptance, grant promotion changes that bound attempt to `SUBMITTED`
+    and creates an authority execution fence independent of coordinator
     liveness. The agent durably records grant/start before at most one root
     launcher call. Expiring liveness evidence cannot invalidate a later result
     from the same current fence;
@@ -154,11 +155,13 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 2. Reconcile controller-only actions; use the shared predicate to idempotently
    prepare ready executable attempts and materialize stage work.
 3. Schedule one decision from a bounded global snapshot; coordinator reserves
-   current logical claims, then authority binds the exact still-ready attempt.
+   current logical claims, then authority binds the exact still-ready `PENDING`
+   attempt without advancing its lifecycle.
 4. Agent durably stages request/inputs and binds resources. A definitive decline
    follows exact authority unbind; ambiguity stays bound.
-5. Coordinator grants the bound assignment; agent records durable grant/start
-   and launches once. Granted work continues through coordinator loss.
+5. After durable acceptance, authority grant promotion writes `SUBMITTED` and
+   the execution fence; coordinator exposes the grant, then agent records
+   durable grant/start and launches once. Granted work continues through loss.
 6. Agent retains and replays result/output. Relay finalizes accessible refs;
    authority commits terminal truth; coordinator releases and reconciles newly
    ready descendants or the final run state.

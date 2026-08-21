@@ -86,11 +86,12 @@ In scope:
   success/failure. Scheduling runs outside transactions; commit revalidates
   exact work/authority/order/offer/claim versions.
 - Extend per-run authority with expected-state operations required by the saga:
-  bind the exact still-ready prepared attempt to one assignment and mark it
-  submitted; unbind only the same definitively declined ungranted assignment;
-  create a durable execution fence on grant; accept a late result after liveness
-  expiry while that fence remains current; reject it after terminal or explicit
-  fence. Preserve existing stage/output/reliability ownership.
+  bind the exact still-ready `PENDING` attempt to one assignment without a stage
+  transition; clear only the same definitively declined ungranted binding;
+  promote an accepted binding atomically to `SUBMITTED` plus a durable execution
+  fence; accept a late result after liveness expiry while that fence remains
+  current; reject it after terminal or explicit fence. Preserve existing
+  stage/output/reliability ownership.
 - Add a separate local agent SQLite journal and runtime: configured inventory,
   zero-to-current availability, work receipt, local input/request durability,
   physical resource admission, accept/decline, grant/start fence, one root
@@ -111,9 +112,11 @@ In scope:
   claim-dispatch through documented compatibility reads/warnings. Preserve
   `continue_prepared_run` import/validation/structured safe failure exactly.
 - Add the bounded application port, shared authorizer, direct adapter, and a
-  loopback persistent daemon/client composition with protected configuration,
-  role locks, duplicate-start rejection, graceful shutdown, restart scan, safe
-  status, and cancellation. Transport routes contain no policy.
+  persistent local daemon/client composition with protected configuration, role
+  locks, duplicate-start rejection, graceful shutdown, restart scan, safe
+  status, and cancellation. Local IPC may be used; any persistent HTTP path is
+  already mTLS-authenticated rather than treated as trusted because it is
+  loopback. Transport routes contain no policy.
 - Update `docs/structure.md`, glossary/feature docs, public imports, migration
   notes, and a `machine-A` single-machine example only where the checkout is
   clean and conflict-free.
@@ -147,10 +150,11 @@ Assumptions:
   hard/soft/fallback policy and fingerprint—never `stage_work_id`. Stage work
   contains identity/readiness evidence; assignments contain exact coordinator,
   authority, local agent/session/offer/claim and grant fences.
-- Atomicity: no cross-store transaction is claimed. An ungranted definitive
-  decline must authority-unbind before coordinator release. Ambiguous acceptance
-  stays bound. Grant creates a non-liveness execution fence; every transition is
-  idempotent and expected-state checked.
+- Atomicity: no cross-store transaction is claimed. Pre-grant binding leaves the
+  attempt `PENDING`; an ungranted definitive decline must authority-clear that
+  binding before coordinator release. Ambiguous acceptance stays bound. Grant
+  promotion alone writes `SUBMITTED` and a non-liveness execution fence; every
+  transition is idempotent and expected-state checked.
 - Stage truth: coordinator status is a joined projection. Only authority output
   commit unlocks descendants. Agent success/outbox receipt alone never does.
 - Resource truth: scheduler proposal is logical; final agent admission is
@@ -164,8 +168,8 @@ Assumptions:
 - Cross-phase: Phase 2 reuses exact stage-work/placement/assignment/fence/journal/
   application-port contracts and replaces only local offer/transport adapters.
 - Private choices: SQLite table/index names, internal event-loop wakeup, exact
-  module subdivision below documented owners, local socket/loopback HTTP wiring,
-  migration helper layout, and test fixture construction.
+  module subdivision below documented owners, authenticated local socket versus
+  loopback mTLS HTTP wiring, migration helper layout, and test fixtures.
 
 ## Proportionality
 
@@ -190,7 +194,7 @@ Assumptions:
 | Same complete snapshot gives same decision. | Pure scheduler | input order/search budget | nondeterministic placement | permutation/exhaustion tests |
 | Stage work never owns stage terminal truth. | Coordinator repository boundary | event/restart projection | downstream starts on false success | store/API ownership tests |
 | One active assignment binds one prepared attempt. | Coordinator uniqueness + authority CAS | concurrent cycles/lost response | duplicate launch | barrier/idempotency tests |
-| Definitive decline restores only its ungranted attempt. | Authority unbind CAS | stale decline/parallel grant | dead or incorrectly reopened attempt | decline/grant race tests |
+| Definitive decline clears only its ungranted binding without a backwards stage transition. | Authority binding CAS | stale decline/parallel grant | dead or incorrectly reopened attempt | decline/grant race tests |
 | Liveness expiry cannot invalidate a current execution result. | Authority execution fence | coordinator outage/late replay | valid output becomes uncommittable | fake-clock restart test |
 | Grant/start fences precede one launcher call. | Agent journal/runtime | crash around accept/grant/start | unauthorized or duplicate process | injected crash table |
 | Input identity and local durability precede grant. | Local artifact port + agent journal | incomplete preparation | granted process cannot continue | pre-grant fault tests |

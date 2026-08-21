@@ -369,10 +369,11 @@ agent provider    revalidates reality, binds, accounts, and releases locally
 This split is intentional. A coordinator snapshot can become stale between
 selection and delivery, so its durable reservation prevents competing Loom
 assignments while agent admission prevents launching against hardware that no
-longer matches. A definitive pre-grant local decline uses an exact authority CAS
-to restore only that prepared attempt, then publishes a new availability
-revision; it is not treated as stage execution failure. Ambiguous acceptance
-remains bound and unknown.
+longer matches. The pre-grant authority binding leaves the prepared attempt
+`PENDING`; a definitive local decline uses an exact CAS to clear only that
+binding, then publishes a new availability revision. Only accepted grant
+promotion writes `SUBMITTED` and the execution fence. A decline is not stage
+execution failure, while ambiguous acceptance remains bound and unknown.
 
 The placement engine does not interpret dependencies. One authority-side
 planning predicate exposes only ready `PlanAction.RUN` attempts and revalidates

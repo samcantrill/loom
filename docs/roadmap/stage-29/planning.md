@@ -121,7 +121,7 @@ solver, and automatic unknown-work recovery remain deferred.
 | FR-7 | Hard constraints remove candidates; soft preferences rank only feasible candidates. GPU preferences apply only to GPU claims. A hard target pins the relevant stage or whole run; a preferred machine remains soft with explicit fallback. | Preferences never manufacture feasibility. | Hard/soft/resource relevance tests. | locked |
 | FR-8 | The coordinator schedules a bounded deterministic window of ready attempts across admitted runs and all fresh agent offers. Default order is run priority/enqueue order, ready time, topological order, stage name, then attempt; an earlier currently infeasible attempt may be bypassed for usable capacity. | Fair-share, preemption, and starvation guarantees are deferred. Search exhaustion is not infeasibility. | Ordering, bypass, determinism tests. | locked |
 | FR-9 | The coordinator persists rebuildable stage-work projections and durable assignment/claim facts; the per-run authority remains the sole owner of plans, attempts, stage/run status, inputs, output commits, and retry facts. | No database may silently overwrite another owner's truth. | Ownership and restart tests. | locked |
-| FR-10 | Cross-store hand-off is an idempotent protocol, not a distributed transaction. A prepared authority attempt is bound by CAS to one assignment; an exact ungranted definitive decline can CAS-unbind only that assignment and restore the prepared attempt. A grant creates a durable assignment execution fence that remains valid across coordinator outage until terminal commit or explicit fencing. Every partial state has a deterministic reconciliation action. | Ambiguous acceptance cannot be unbound; do not claim global atomicity or exactly-once authored effects. | Crash-point, decline, expired-liveness, and late-result tests. | locked |
+| FR-10 | Cross-store hand-off is an idempotent protocol, not a distributed transaction. A prepared `PENDING` authority attempt is bound by CAS to one assignment without advancing stage lifecycle; an exact ungranted definitive decline clears only that binding. Grant promotion atomically changes the same bound attempt to `SUBMITTED` and creates a durable assignment execution fence that remains valid across coordinator outage until terminal commit or explicit fencing. Every partial state has a deterministic reconciliation action. | Ambiguous acceptance cannot be unbound; do not claim global atomicity or exactly-once authored effects. | Crash-point, decline, expired-liveness, and late-result tests. | locked |
 | FR-11 | Agents publish versioned, expiring inventory and availability, then perform final local admission/binding against current truth. A stale offer may be declined without starting the attempt. | Coordinator reservations do not prove physical acquisition. | Offer/bind drift tests. | locked |
 | FR-12 | An agent is eligible only when it can reconstruct the configured project/environment and read inputs/write outputs through an authenticated supported artifact path. Initial remote mode uses a bounded coordinator-mediated streaming relay over existing artifact contracts. Before grant, required inputs and the immutable request are durable locally. Output finalization verifies content and returns coordinator/backend-accessible `ArtifactRef`s; only those refs may be committed. | Local path coincidence and agent-local `file:` refs are never remote accessibility. Scheduler remains control-plane only; direct backend plugins may replace the relay later. | Capability, checksum, interrupted-transfer, outage-buffer, and ref-rewrite tests. | locked |
 | FR-13 | Each run honors `max_parallel_stages`; independent ready branches may run concurrently and work from other runs may fill capacity. | A run lock cannot remain held by one in-memory loop for the full managed run. | Parallel/restart tests. | locked |
@@ -141,7 +141,7 @@ solver, and automatic unknown-work recovery remain deferred.
 | --- | --- | --- | --- | --- | --- |
 | FQ-1 | FR-1–FR-4 | A run is the admitted/control object; a prepared stage attempt is the managed scheduling unit. | It preserves the user model while matching existing stage worker and attempt seams. | More durable orchestration state than whole-run dispatch. | locked |
 | FQ-2 | FR-2, FR-8 | “The scheduler handles dependencies” means the scheduling subsystem includes a dependency reconciler and a separate placement engine. | One owner interprets DAG state; the pure engine remains testable and domain-neutral. | Two cooperating components instead of one large scheduler class. | locked |
-| FQ-3 | FR-5–FR-7 | Resources and preferences are stage-specific; whole-run policy supplies defaults, a pool, concurrency, and optional hard pinning. | Training preferences no longer distort preprocessing/evaluation placement. | More explicit configuration. | locked |
+| FQ-3 | FR-5–FR-7 | Resources and preferences are stage-specific; run-level policy supplies defaults, a pool, concurrency, and optional hard pinning. | Training preferences no longer distort preprocessing/evaluation placement. | More explicit configuration. | locked |
 | FQ-4 | FR-8, FR-13 | Admit several runs and schedule globally from ready attempts. | Otherwise a blocked or GPU-heavy run wastes CPU capacity and serializes unrelated work. | Initial fairness is deterministic FIFO-with-safe-bypass, not fair-share. | locked |
 | FQ-5 | FR-12 | Network-only multi-machine execution requires a real artifact transport. | A bounded authenticated coordinator relay works with local coordinator storage and preserves future backend substitution. | The coordinator is initially a throughput bottleneck. | locked |
 | FQ-6 | FR-15, FR-16 | Unknown accepted work waits for reconciliation or guarded manual recovery. | Avoids duplicate scientific work and external effects after crashes. | Capacity can remain unavailable during long outages. | locked |
@@ -222,18 +222,19 @@ agent SQLite. The safe sequence is deliberately recoverable:
 2. One coordinator transaction reserves a current offer/claim and creates an
    assignment intent with uniqueness on the stage work and claim versions.
 3. The shared readiness predicate is re-evaluated and an authority CAS binds the
-   still-current prepared attempt to that exact assignment and records
-   `SUBMITTED`. Failure aborts the unused reservation.
+   still-current `PENDING` prepared attempt to that exact assignment without
+   advancing its lifecycle. Failure aborts the unused reservation.
 4. The agent journals receipt, durably materializes the immutable request and
    required inputs, then attempts physical binding. A definitive decline is
-   recorded durably; an authority CAS unbinds only that still-ungranted
-   assignment and restores the prepared attempt before coordinator capacity is
-   released. Ambiguous acceptance remains bound and unknown.
-5. Coordinator commits a grant only for the current bound assignment. That
-   creates a durable authority execution fence independent of coordinator
-   liveness. The agent persists grant and start fences before one root launcher
-   call. Expiring liveness leases may affect status but cannot invalidate a
-   later result from the same unfenced assignment.
+   recorded durably; an authority CAS clears only that still-ungranted binding,
+   leaving the attempt `PENDING`, before coordinator capacity is released.
+   Ambiguous acceptance remains bound and unknown.
+5. After durable agent acceptance, grant promotion CAS verifies the same
+   binding, changes the attempt `PENDING -> SUBMITTED`, and creates a durable
+   authority execution fence independent of coordinator liveness. Coordinator
+   then exposes the committed grant. The agent persists grant and start fences
+   before one root launcher call. Expiring liveness leases may affect status but
+   cannot invalidate a later result from the same unfenced assignment.
 6. Output payloads are checksummed and staged. Relay finalization returns
    coordinator/backend-accessible `ArtifactRef`s for the same content
    identities; agent-local refs remain transfer evidence. Authority commits only
@@ -373,7 +374,7 @@ not delete legacy queue records or silently reinterpret `DISPATCHED`.
 | Finding | Related IDs | Evidence and consequence | Required action | Status |
 | --- | --- | --- | --- | --- |
 | Runner and stage-job readiness could remain two interpreters | FR-2, FR-4; DQ-1 | Current paths independently evaluate upstream state and can disagree after reuse/retry/migration. | Share one authority-side predicate at work exposure and assignment CAS; agent validates only bound grant/inputs. | corrected |
-| Pre-grant decline had no reverse authority transition | FR-10, FR-11; DQ-5, DQ-6 | `SUBMITTED` could remain bound to a dead assignment after ordinary bind drift. | Add exact same-assignment unbind CAS, allowed only after durable definitive decline and before grant. | corrected |
+| Pre-grant decline had no reverse authority transition | FR-10, FR-11; DQ-5, DQ-6 | Advancing to `SUBMITTED` before admission could strand a dead assignment or require a backwards lifecycle transition. | Keep the pre-grant binding separate while the attempt remains `PENDING`; exact decline clears it, and only grant promotion writes `SUBMITTED` plus the execution fence. | corrected |
 | Coordinator outage conflicted with expiring stage leases | FR-10, FR-16; DQ-5, DQ-8 | A valid disconnected result could become uncommittable when a coordinator-renewed lease expired. | Make the assignment execution fence independent of liveness expiry until terminal or explicit fencing. | corrected |
 | Relay did not define authoritative output refs | FR-12; DQ-7 | Agent-local `file:` refs could enter authority and be unreadable downstream. | Relay finalization produces coordinator/backend-visible refs; authority commits only those refs. | corrected |
 | Resolved placement mixed runtime and coordinator identities | FR-5, FR-9; DQ-2, DQ-3 | `stage_work_id` and a second resource codec coupled owners and duplicated `ResourceRequest`. | Keep coordinator ID on `StageWorkRecord` and reuse `ResourceRequest`; add transport envelopes only for inventory/claims. | corrected |

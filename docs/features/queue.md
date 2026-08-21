@@ -20,8 +20,9 @@ thin operational CLI for checks, status, cancellation, and foreground drain
 
 The queue does not provide priority/fair-share accounts, automatic job retry,
 bulk CLI submission, SSH dispatch, bundle transport, or queue-side authority
-resource-limit provisioning. Stage 29 adds resource-aware whole-run placement
-without turning Loom into a general cluster manager.
+resource-limit provisioning. Stage 29 retains whole-run admission but adds
+dependency-aware placement of each ready managed stage attempt without turning
+Loom into a general cluster manager.
 
 ## Ownership Model
 
@@ -325,14 +326,16 @@ transaction:
 2. Coordinator transaction reserves current logical claims and creates an
    assignment intent.
 3. The shared readiness predicate is rechecked and authority CAS binds that
-   prepared attempt to the assignment.
+   still-`PENDING` prepared attempt to the assignment without advancing stage
+   lifecycle.
 4. Agent durably stages the immutable request and required inputs, then performs
    final physical binding. A definitive pre-grant decline may CAS-unbind only
-   that same assignment before coordinator capacity is released; ambiguous
+   that same binding before coordinator capacity is released; ambiguous
    acceptance remains bound.
-5. A committed grant creates an authority execution fence independent of
-   coordinator liveness. Agent records grant and start fences before at most one
-   root launcher invocation.
+5. After acceptance, grant promotion changes the bound attempt to `SUBMITTED`
+   and creates an authority execution fence independent of coordinator
+   liveness. Agent records grant and start fences before at most one root
+   launcher invocation.
 6. Agent retains output until an authenticated transfer/backend finalizer
    returns coordinator-accessible `ArtifactRef` values. Only their authority
    output commit unlocks descendants and releases the assignment.
