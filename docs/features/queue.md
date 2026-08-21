@@ -120,6 +120,50 @@ below so adapter state and maintenance timing have one owner. Direct
 `run_once()` loops remain a low-level seam for other custom adapters; they are
 not the recommended managed-local construction pattern.
 
+## Explicit Local NVIDIA GPU Pools
+
+Python callers can turn an explicitly selected NVIDIA host into the same
+managed-local pool without adding queue configuration or changing the queue
+schema. Import the vendor adapter directly; `loom` and `loom.queue` imports do
+not probe hardware:
+
+```python
+from loom.queue.gpu import (
+    LocalGpuPoolLayout,
+    build_managed_local_gpu_runtime,
+    ensure_local_gpu_pool_limits,
+    plan_local_gpu_pool,
+)
+from loom.queue.gpu.nvidia import NvidiaSmiGpuInventoryProvider
+
+inventory = NvidiaSmiGpuInventoryProvider(include_topology=True).discover()
+plan = plan_local_gpu_pool(
+    inventory,
+    LocalGpuPoolLayout.grouped(2, grouping="topology"),
+    pool_name="local-gpu",
+    queue_name="gpu",
+    db_path=".loom/queue.sqlite",
+)
+ensure_local_gpu_pool_limits(plan, store, workspace_id="project-workspace")
+runtime = build_managed_local_gpu_runtime(
+    plan, workspace_id="project-workspace", coordination_store=store
+)
+```
+
+The adapter uses fixed `nvidia-smi` argv and stable GPU UUIDs as both identity
+and the default `CUDA_VISIBLE_DEVICES` binding. Whole-GPU and integer-share
+layouts do not query topology. Topology grouping requests a complete supported
+matrix and fails rather than choosing a weaker fallback. Shares are scheduling
+capacity only; they do not isolate GPU memory or compute. Discovery is frozen
+into the plan, while provisioning is the explicit `ensure...` call; runtime
+construction and ordinary preflight remain read-only.
+
+Command output, PCI addresses, topology, and UUID bindings are operator-local
+discovery context. They are not persisted in ordinary queue status or
+assignment evidence. See the dependency-free
+[fake NVIDIA pool example](../../examples/operations/nvidia-gpu-pool/README.md)
+for the three supported layouts and a complete fake managed-local run.
+
 ## Managed Local Pools
 
 Managed pools validate their configured resources against authority-owned

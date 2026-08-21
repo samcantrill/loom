@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: Stage 27, Phase 3
 - Manifest: docs/roadmap/stage-27/implementation-plan.md
 - Branch: agent/stage-27-p3-nvidia-auto-discovery
-- Worktree root and path: use the recorded Stage 27 worktree root and a dedicated
-  Phase 3 path
-- Base revision: current `origin/develop` after Phase 2 is remotely merged
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+  `/home/can134/work/active/loom-worktrees/stage-27-p3-nvidia-auto-discovery`
+- Base revision: `16a184912ca2aaa65fdcd73e046023c5466b0fa7`
 - PR target: develop
 - PR title: `feat(queue): discover and prepare local NVIDIA GPU pools`
 - Dependencies: Phase 2 remotely merged
 - Workflow path: fast; external parsing is fake-tested and real hardware remains
   an opt-in acceptance profile
-- Blockers: Phase 2
+- Blockers: none
 
 ## Objective And Context
 
@@ -232,23 +232,32 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: draft complete; approval pending
-- Expanded planning: not needed for this phase after earlier contracts land
-- Implementation: pending
-- Refiner: not needed
-- Pre-submit gate: pending
-- Independent review: not needed unless parser uncertainty creates a material
-  supported-host blocker
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation: passed on `16a184912ca2aaa65fdcd73e046023c5466b0fa7`;
+  Phase 2 is merged and official NVIDIA query/topology contracts were verified
+- Expanded planning: not needed; the external parser boundary, normalized
+  output, failure modes, import behavior, and opt-in hardware gate are fixed
+- Implementation: completed locally in `14a9156`; adapter, fake example,
+  opt-in acceptance profile, scoped docs, and phase tests are ready for manager
+  validation
+- Refiner: correction 1/3 completed locally for topology-rank parsing: distinct
+  NVLink counts rank by directness and reciprocal matrix tokens match exactly
+- Pre-submit gate: passed on `73b87bc`; full validation and the required test
+  summary are current for the implementation tree
+- Independent review: not needed; manager review closed the only concrete
+  parser blocker through correction 1/3
+- Blocker corrections: 1/3 — current bounded fix validates exact reciprocal
+  topology tokens, rejects `NV0`, and normalizes positive NVLink counts into
+  deterministic ranks before grouped planning
+- PR and merge: [#226](https://github.com/samcantrill/loom/pull/226) open,
+  correctly targeting `develop`; required CI and merge pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none recorded |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | `14a9156` adds `loom.queue.gpu.nvidia`, fake NVIDIA pool example, opt-in profile, scoped docs, and phase tests. |
+| Tests added or updated | Device/topology parser, import boundary, provider protocol, fake managed-local example, and opt-in real-host acceptance coverage. |
+| Validated revision/tree state and evidence | `make validate-pr` passed on the implementation tree at `73b87bc`: Ruff, Pyright, default 2,242 passed/1 opt-in GPU skip/115 deselected, config-extra 135 passed/3 container skips/2,246 deselected, and sdist/wheel build. `make test-summary` passed: package 116, unit 1,577, contract 285, integration 209, e2e 55, config-extra 135 with 3 skips. |
+| Validation-relevant changes after evidence | Roadmap-only gate/PR metadata follows; no source, test, dependency, build, or validation-configuration change. Correction 1/3 remains the final implementation change. |
+| PR, review, and merge | Manager review passed; [#226](https://github.com/samcantrill/loom/pull/226) is open, non-draft, mergeable, and targets `develop`; required CI and merge pending. |
+| Residual risk and cleanup | Real host evidence remains explicit/opt-in; worktree and branch retained for manager validation. |
