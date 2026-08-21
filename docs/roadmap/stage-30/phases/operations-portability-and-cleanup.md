@@ -179,15 +179,17 @@ Final commands:
   quality review passed, and the worktree was created from `origin/develop` at
   `e3968f7` with unrelated control-checkout work excluded.
 - Expanded planning: not needed.
-- Implementation: complete in `44d9d88`; two runnable, output-root-aware
-  operations projects use existing public CLI/Python behavior only.
+- Implementation: complete in `44d9d88`; correction 1/3 in `19abda5` gives
+  each entrypoint a fresh invocation-local journey directory below the
+  configured output and run roots, preserving prior outputs on rerun.
 - Refiner: not needed / pending evidence.
 - Pre-submit gate: blocked. `make validate-pr` passed Ruff, Pyright, and the
   default suite (2,175 passed, 114 deselected), but config-extra had one
   unrelated failure in
   `tests/integration/pipeline/test_controller_lease_renewal.py::test_runner_renews_controller_lease_until_release`.
 - Independent review: not needed / pending residual-risk check.
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 — fixed reruns against the same configured roots
+  accumulating catalog/fixture state; focused two-invocation regression passed.
 - PR and merge: pending.
 
 ## Completion Record
@@ -195,8 +197,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | `44d9d88`: added `examples/operations/run-catalog-and-bundles/{README.md,example.yaml,pipeline.yaml,run_catalog_workflow.py,stages.py}` and `examples/operations/cleanup-and-gc/{README.md,example.yaml,run_cleanup_and_gc.py}`; routed both in `examples/README.md` and `examples/operations/README.md`; added focused workflow coverage in `tests/integration/examples/test_example_workflows.py`. |
-| Tests added or updated | New catalog/bundle workflow assertion covers two indexed/listed runs, non-empty diff, payload-bearing export/inspect/import, and equal bytes. New cleanup/GC assertion covers preview selection, delete counts, candidate removal, and preserved run paths. Targeted evidence: 5 passed in 8.97s; existing CLI E2E: 4 passed in 3.29s; Ruff passed. |
+| Tests added or updated | New catalog/bundle workflow assertion covers two indexed/listed runs, non-empty diff, payload-bearing export/inspect/import, and equal bytes. New cleanup/GC assertion covers preview selection, delete counts, candidate removal, and preserved run paths. Correction 1/3 updates each assertion to invoke its entrypoint twice with the same roots. Targeted evidence: correction regression 2 passed in 18.42s; Ruff passed. Earlier evidence: 5 passed in 8.97s; existing CLI E2E: 4 passed in 3.29s. |
 | Validated revision/tree state and evidence | Implementation commit `44d9d88`; `make validate-pr` default leg passed (2,175 passed, 114 deselected) and config-extra ran 133 passed, 1 failed, 3 skipped. `make test-summary` wrote `build/test-summary.md`: package 113 passed, unit 1,530 passed, contract 275 passed, integration 203 passed, E2E 54 passed; config-extra 133 passed, 1 failed, 3 skipped. |
-| Validation-relevant changes after evidence | None after `44d9d88`; this completion record is documentation-only. |
+| Validation-relevant changes after evidence | `19abda5` is the only validation-relevant correction after the original receipt; it was covered by the focused two-invocation regression. This completion update is documentation-only. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Blocked only by the reproducible, unrelated controller-lease test failure above (isolated rerun also failed before stage allocation). No runtime change was made or is in scope. Generated test outputs stay outside version control; the worktree and branch remain for manager diagnosis. |
+| Residual risk and cleanup | Rerunnability correction 1/3 is complete: each invocation preserves earlier outputs by using unique paths beneath configured roots. The phase remains blocked only by the reproducible, unrelated controller-lease test failure above (isolated rerun also failed before stage allocation). No runtime change was made or is in scope. Generated test outputs stay outside version control; the worktree and branch remain for manager diagnosis. |
