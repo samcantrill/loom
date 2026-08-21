@@ -6,7 +6,7 @@ Planning document: docs/roadmap/stage-27/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Worktree root: `/home/can134/work/active/loom-worktrees`
-Current phase: Phase 2 in_progress
+Current phase: Phase 2 pr_open
 Blockers: none
 
 ## Summary
@@ -90,7 +90,7 @@ Blockers: none
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `gpu-plans-safe-bootstrap` | merged | `docs/roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md` | `agent/stage-27-p1-gpu-plans-safe-bootstrap` | [#221](https://github.com/samcantrill/loom/pull/221) | GPU inventory/layout/plan API, atomic authority ensure, whole/share composition | Run a manually supplied whole/share GPU pool safely without authored slots. |
-| 2 | `grouped-gpu-placement` | in_progress | `docs/roadmap/stage-27/phases/grouped-gpu-placement.md` | `agent/stage-27-p2-grouped-gpu-placement` | pending | Deterministic disjoint groups and member-backed assignment lifecycle | Allocate N strongly connected GPUs as one logical unit without member overlap. |
+| 2 | `grouped-gpu-placement` | pr_open | `docs/roadmap/stage-27/phases/grouped-gpu-placement.md` | `agent/stage-27-p2-grouped-gpu-placement` | [#225](https://github.com/samcantrill/loom/pull/225) | Deterministic disjoint groups and member-backed assignment lifecycle | Allocate N strongly connected GPUs as one logical unit without member overlap. |
 | 3 | `nvidia-auto-discovery` | pending | `docs/roadmap/stage-27/phases/nvidia-auto-discovery.md` | `agent/stage-27-p3-nvidia-auto-discovery` | pending | Explicit NVIDIA command adapter, diagnostics, docs, examples, acceptance | Turn installed NVIDIA hardware into the same reviewed plan automatically. |
 
 ## Quality Gate
@@ -115,5 +115,5 @@ Blockers: none
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | [#221](https://github.com/samcantrill/loom/pull/221) squash-merged as `f67d29c` | Implementation, manager review, `make validate-pr`, and required CI passed | Shares express scheduling capacity, not isolation | Phase worktree and local/remote branch removed |
-| 2 | pending | pending | pending | pending |
+| 2 | [#225](https://github.com/samcantrill/loom/pull/225) open; merge pending | Implementation, manager review, `make validate-pr`, and `make test-summary` passed; CI pending | Greedy topology grouping is disjoint and deterministic, not globally optimal | Worktree and branch retained until merge |
 | 3 | pending | pending | pending | pending |

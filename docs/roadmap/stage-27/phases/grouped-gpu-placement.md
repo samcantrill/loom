@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 27, Phase 2
 - Manifest: docs/roadmap/stage-27/implementation-plan.md
 - Branch: agent/stage-27-p2-grouped-gpu-placement
@@ -230,7 +230,7 @@ Final commands:
 - Independent review: not needed; manager review plus grouped cancellation and
   all-member release-precedence coverage leave no material residual lifecycle risk
 - Blocker corrections: 3/3
-- PR and merge: pending
+- PR and merge: PR #225 is open and manager-approved; CI and merge are pending
 
 ## Completion Record
 
@@ -240,5 +240,5 @@ Final commands:
 | Tests added or updated | Added explicit/ordered/topology planner validation and determinism, provider decision/evidence/renewal/release contracts, partial-acquisition and individual-member SQLite contention, grouped managed-local cancellation with termination-before-release, fake grouped E2E launches, and import coverage. Release tests prove every member is attempted with ownership-lost versus unfinished-error precedence. |
 | Validated revision/tree state and evidence | Clean current tree at `de10411d12c032b6fe84fe8d26cb26146be248e2`; `make validate-pr` passed (Ruff, Pyright with zero errors, default 2,224 passed/114 deselected, config-extra 134 passed/3 skipped/2,227 deselected, and sdist/wheel build). `make test-summary` passed with `build/test-summary.md`: package 115, unit 1,561, contract 284, integration 209, e2e 55, and config-extra 134 passed/3 skipped; overall 2,358 passed/3 skipped. |
 | Validation-relevant changes after evidence | None. Current `origin/develop` remains `4513da7`, and no source, test, dependency, build, or validation configuration changed after the successful receipts. |
-| PR, review, and merge | Manager review and pre-submit gate passed with no blocker; PR publication, CI, and merge remain pending. |
+| PR, review, and merge | [PR #225](https://github.com/samcantrill/loom/pull/225) targets `develop`, is non-draft and mergeable, and has the verified phase title and head. Manager review and the pre-submit gate passed with no blocker; CI and merge remain pending. |
 | Residual risk and cleanup | Greedy topology selection remains intentionally disjoint and non-optimal; worktree and branch retained for manager handoff. |
