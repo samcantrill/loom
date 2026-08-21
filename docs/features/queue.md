@@ -189,10 +189,26 @@ agent, offer, or transport details.
 
 Advisory capacity is not authority. Loom acquires exact local queue ownership
 after evaluating a policy, then local authority/provider admission decides
-whether the request can start. If a typed pre-start capacity deferral is fully
+whether the request can start. If a typed pre-start capacity non-start is fully
 compensated, the controller may refresh and choose another eligible request in
 the same bounded opportunity without reacquiring the deferred ID. This enables
-head bypass but deliberately makes no fairness or starvation guarantee.
+head bypass but deliberately makes no fairness or starvation guarantee. All
+other pre-start facts terminalize the queue item: invalid work fails, while
+uncertainty about external start or cleanup becomes queue-local `UNKNOWN` and
+stops the current fill.
+
+Dispatch adapters report one factual disposition: `STARTED`, `COMPLETED`,
+`NOT_STARTED`, or `START_UNCERTAIN`. Every result carries a fixed safe
+`reason_code`; `NOT_STARTED` carries a typed cause and `cleanup_status`. Only
+`CAPACITY` with `NOT_REQUIRED` or `CONFIRMED` cleanup is
+requeued. `START_UNCERTAIN` never implies a usable external handle or retry.
+The controller's verification that it requeued a queue row is separate from
+the adapter's claim that external leases or processes were released.
+
+If durable reservations are introduced later, their ordering is physical or
+advisory availability, active coordinator reservation constraints, eligibility,
+then preference. This queue version creates no reservation records or policy
+fields.
 
 Delegated SLURM pools use the same bounded choose-then-acquire operation with
 default FIFO preference and retain external scheduler ownership. Selection

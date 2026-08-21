@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ _DEFAULT_REASON_CODE = "queue_selection.default_oldest_eligible"
 _NO_ELIGIBLE_REASON_CODE = "queue_selection.no_eligible_candidate"
 _INVALID_DECISION_REASON_CODE = "queue_selection.invalid_decision"
 _POLICY_ERROR_REASON_CODE = "queue_selection.policy_error"
+_LOGGER = logging.getLogger(__name__)
 
 
 class QueueSelectionDisposition(StrEnum):
@@ -84,7 +86,9 @@ class QueueSelectionContext:
                     "candidates must contain QueueSelectionCandidate records"
                 )
             if candidate.queue_item_id in candidate_ids:
-                raise QueueValidationError("candidates must have unique queue_item_id values")
+                raise QueueValidationError(
+                    "candidates must have unique queue_item_id values"
+                )
             candidate_ids.add(candidate.queue_item_id)
         object.__setattr__(self, "candidates", candidates)
         object.__setattr__(
@@ -112,7 +116,9 @@ class QueueSelectionDecision:
                 "disposition must be 'selected' or 'stopped'"
             ) from exc
         object.__setattr__(self, "disposition", disposition)
-        object.__setattr__(self, "reason_code", _safe_code(self.reason_code, "reason_code"))
+        object.__setattr__(
+            self, "reason_code", _safe_code(self.reason_code, "reason_code")
+        )
         if disposition is QueueSelectionDisposition.SELECTED:
             object.__setattr__(
                 self,
@@ -120,7 +126,9 @@ class QueueSelectionDecision:
                 validate_queue_id(self.queue_item_id, "queue_item_id"),
             )
         elif self.queue_item_id is not None:
-            raise QueueValidationError("stopped decisions must not include queue_item_id")
+            raise QueueValidationError(
+                "stopped decisions must not include queue_item_id"
+            )
 
 
 class QueueSelectionPolicy(Protocol):
@@ -203,7 +211,9 @@ def _evaluate_selection(
                 QueueSelectionDisposition.STOPPED,
                 _NO_ELIGIBLE_REASON_CODE,
             ),
-            preference_id=_DEFAULT_PREFERENCE_ID if policy is None else policy.policy_id,
+            preference_id=_DEFAULT_PREFERENCE_ID
+            if policy is None
+            else policy.policy_id,
             source_had_candidates=bool(items),
             has_eligible_candidates=False,
         )
@@ -222,6 +232,13 @@ def _evaluate_selection(
     try:
         decision = policy.implementation.select_next(context)
     except Exception:  # policy failures are safe stop evidence, never mutation
+        _LOGGER.warning(
+            "queue selection policy exception",
+            extra={
+                "queue_pool_name": context.pool_name,
+                "queue_policy_id": preference_id,
+            },
+        )
         return _QueueSelectionEvaluation(
             decision=QueueSelectionDecision(
                 QueueSelectionDisposition.STOPPED,
@@ -231,11 +248,16 @@ def _evaluate_selection(
             source_had_candidates=True,
             has_eligible_candidates=True,
         )
-    if not isinstance(decision, QueueSelectionDecision) or (
-        decision.disposition is QueueSelectionDisposition.SELECTED
-        and decision.queue_item_id
-        not in {candidate.queue_item_id for candidate in context.candidates}
-    ):
+    invalid_category = _invalid_decision_category(decision, context)
+    if invalid_category is not None:
+        _LOGGER.warning(
+            "queue selection policy returned an invalid decision",
+            extra={
+                "queue_pool_name": context.pool_name,
+                "queue_policy_id": preference_id,
+                "queue_selection_invalid_category": invalid_category,
+            },
+        )
         return _QueueSelectionEvaluation(
             decision=QueueSelectionDecision(
                 QueueSelectionDisposition.STOPPED,
@@ -251,6 +273,33 @@ def _evaluate_selection(
         source_had_candidates=True,
         has_eligible_candidates=True,
     )
+
+
+def _invalid_decision_category(
+    decision: object, context: QueueSelectionContext
+) -> str | None:
+    """Classify untrusted policy output without retaining its raw contents."""
+
+    if not isinstance(decision, QueueSelectionDecision):
+        return "wrong_result_type"
+    try:
+        disposition = QueueSelectionDisposition(decision.disposition)
+    except (TypeError, ValueError):
+        return "wrong_result_type"
+    if not isinstance(decision.reason_code, str) or (
+        _SAFE_CODE_RE.fullmatch(decision.reason_code) is None
+    ):
+        return "invalid_reason_code"
+    if disposition is QueueSelectionDisposition.SELECTED:
+        if not isinstance(decision.queue_item_id, str) or not decision.queue_item_id:
+            return "missing_selected_id"
+        if decision.queue_item_id not in {
+            candidate.queue_item_id for candidate in context.candidates
+        }:
+            return "selected_unknown_candidate"
+    return None
+
+
 def _is_eligible(
     item: QueueItem,
     *,
@@ -271,7 +320,9 @@ def _is_eligible(
     )
 
 
-def _non_negative_resources(value: Mapping[str, int], field_name: str) -> Mapping[str, int]:
+def _non_negative_resources(
+    value: Mapping[str, int], field_name: str
+) -> Mapping[str, int]:
     if not isinstance(value, Mapping):
         raise QueueValidationError(f"{field_name} must be a mapping")
     resources: dict[str, int] = {}

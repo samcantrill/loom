@@ -2,20 +2,22 @@
 
 ## Metadata
 
-- Status: planned
+- Status: pr_open
 - Roadmap stage and phase: 25-post, Phase 2
 - Manifest: `docs/roadmap/stage-25-post/implementation-plan.md`
 - Branch: `agent/stage-25-post-p2-factual-dispatch-outcomes`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`;
   `/home/can134/work/active/loom-worktrees/stage-25-post-p2-factual-dispatch-outcomes`
-- Base revision: current `origin/develop` after Phase 1 remotely merges
+- Base revision: `cb84498cfd042ba2c2b0a460e5df248fbc2a6037`
 - PR target: develop
 - PR title: `Stage 25-post phase 2: make dispatch outcomes factual`
+- PR: #230
 - Dependencies: Phase 1 remote merge; planning `FR-7` through `FR-11`, `FQ-2`,
   `FQ-4`, and `DQ-4` through `DQ-7`
 - Workflow path: expanded plan; phase fast path unless Phase 1 refresh exposes a
   new material adapter-boundary risk
-- Blockers: Phase 1 remote merge only
+- Blockers: none; the maintainer authorized one explicit correction-budget
+  exception for the independent-review finding.
 
 ## Objective And Context
 
@@ -231,25 +233,43 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 1 remote merge and current-source refresh
+- Manager preparation: refreshed at base `4513da7`; Phase 1 merge/cleanup,
+  controller/adapters/tests, dispatch-result usage, and fast-path scope refreshed
 - Expanded planning: design review passed after one bounded
   `START_UNCERTAIN` correction; plan review correction locked invalid-work
   step/continuation behavior
-- Implementation: pending one `loom_phase_executor`
+- Implementation: corrected in the assigned Phase 2 worktree: factual results
+  use safe `reason_code`/`cleanup_status` fields, safe policy diagnostics are
+  logged, missing adapters fail as invalid, and managed runtime records dispatch
+  uncertainty as degraded; manager correction makes the core result fields
+  statically required, preserves known assignment causes, and keeps terminal
+  uncertainty fail-closed across later runtime cycles; the authorized final
+  correction keeps local possible-start evidence factual; final implementation
+  revision is `0bfb546`
 - Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: pending
-- Independent review: optional only for a material residual adapter-boundary
-  risk after manager review
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Pre-submit gate: passed at `0bfb546` on base `cb84498`; scope/API and legacy
+  usage audits, required validation, suite summary, and build evidence are
+  complete
+- Independent review: blocker resolved locally; `START_UNCERTAIN` no longer
+  persists the definite `local_process_started: false` non-start claim
+- Blocker corrections: 4 total with one maintainer-authorized exception — one
+  executor correction for the factual interface,
+  diagnostics, missing-adapter mapping, and runtime dispatch state; one manager
+  correction for required fields, known assignment causes, and cross-cycle
+  terminal-uncertainty blocking; one manager correction preventing false
+  cleanup confirmation when assignment acquisition raises without a provider
+  assignment handle; and the authorized manager correction removing
+  contradictory local possible-start evidence
+- PR and merge: PR #230 opened against `develop`; metadata and scope verified;
+  CI and merge pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Replaced queue dispatch `DEFERRED` with factual dispositions and typed non-start/cleanup facts in `controller.py`; centralized queue transitions; mapped local and SLURM adapter boundaries; updated root exports and `queue.md`. Corrections hard-cut result fields to `reason_code`/`cleanup_status`, validate fixed safe codes, add safe selection logging, classify missing adapters as invalid, include dispatch outcomes in managed-runtime degradation, and keep provider-acquire cleanup uncertainty factual. |
+| Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Corrections add safe logging-category and missing-adapter unit coverage, known assignment-cause coverage, provider-exception cleanup uncertainty, managed-runtime dispatch-uncertainty integration coverage across the same and later cycles, and an assertion that possible-start evidence omits a definite non-start claim. Refreshed phase unit/contract/integration command passed (130). |
+| Validated revision/tree state and evidence | `0bfb546` clean tree on base `cb84498`: focused local adapter (28) and phase matrix (130) passed; `TMPDIR=/dev/shm make validate-pr` passed (Ruff, Pyright, default 2263 passed/1 skipped/121 deselected, config-extra 141 passed/3 skipped/2267 deselected, sdist and wheel); `TMPDIR=/dev/shm make test-summary` passed and wrote `build/test-summary.md` (package 116, unit 1596, contract 286, integration 210, e2e 55, config-extra 141/3 skipped). Scope/API, legacy dispatch/claim, and `git diff --check` audits passed. |
+| Validation-relevant changes after evidence | None; only this metadata evidence record follows validation. |
+| PR, review, and merge | PR #230 targets `develop` with the required title and validated diff; independent expanded-path review blocker is resolved and manager pre-submit review passed; CI and merge remain. |
+| Residual risk and cleanup | `START_UNCERTAIN` deliberately remains terminal queue-local `UNKNOWN` without external recovery when no usable handle exists. Branch/worktree cleanup follows remote merge. |

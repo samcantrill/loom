@@ -33,9 +33,11 @@ from .controller import (
     QueueDispatchCancellation,
     QueueDispatchDisposition,
     QueueDispatchInspection,
+    QueueDispatchNonStartCause,
     QueueDispatchResult,
     QueueDrainResult,
     QueueInspectableDispatchAdapter,
+    QueuePreStartCleanupStatus,
 )
 from .errors import (
     QueueConfigError,
@@ -109,6 +111,7 @@ __all__ = [
     "QueueDispatchCancellation",
     "QueueDispatchDisposition",
     "QueueDispatchInspection",
+    "QueueDispatchNonStartCause",
     "QueueDispatchResult",
     "QueueDrainResult",
     "QueueEnqueueRequest",
@@ -119,6 +122,7 @@ __all__ = [
     "QueuePool",
     "QueuePoolSnapshot",
     "QueuePoolMode",
+    "QueuePreStartCleanupStatus",
     "QueueRecoveryRecord",
     "QueueRepository",
     "QueueInspectableDispatchAdapter",

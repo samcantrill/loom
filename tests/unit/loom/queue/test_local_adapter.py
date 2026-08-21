@@ -16,8 +16,11 @@ from loom.pipeline.stores import (
 )
 from loom.queue import (
     LaunchContract,
+    QueueDispatchDisposition,
+    QueueDispatchNonStartCause,
     QueueItem,
     QueueItemStatus,
+    QueuePreStartCleanupStatus,
     RunIntent,
 )
 from loom.queue.assignments import (
@@ -43,7 +46,7 @@ def test_local_adapter_launches_observes_and_releases_resource_leases() -> None:
 
     result = adapter.dispatch(item)
 
-    assert result.complete is False
+    assert result.disposition is QueueDispatchDisposition.STARTED
     assert result.status is QueueItemStatus.DISPATCHED
     assert runner.argv == ("python", "-c", "print('ok')")
     assert _active_amount(store, "gpu") == 1
@@ -122,9 +125,11 @@ def test_local_adapter_redacts_released_leases_after_process_start_failure() -> 
 
     result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
 
-    assert result.status is QueueItemStatus.FAILED
+    assert result.disposition is QueueDispatchDisposition.START_UNCERTAIN
+    assert result.status is QueueItemStatus.UNKNOWN
     result_evidence = thaw_plain_data(result.evidence, path="evidence")
     assert isinstance(result_evidence, dict)
+    assert "local_process_started" not in result_evidence
     assert result_evidence["released_resource_leases"] == [
         {
             "resource_key": "gpu",
@@ -350,7 +355,9 @@ def test_local_adapter_rejects_private_assignment_evidence_before_start() -> Non
 
     result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
 
-    assert result.status is QueueItemStatus.FAILED
+    assert result.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert result.non_start_cause is QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED
+    assert result.cleanup_status is QueuePreStartCleanupStatus.CONFIRMED
     assert runner.argv is None
     assert provider.release_calls == 1
     assert _active_amount(store, "gpu") == 0
@@ -370,6 +377,52 @@ def test_local_adapter_compensates_scalar_admission_when_assignment_acquire_rais
     result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
 
     assert result.status is QueueItemStatus.UNKNOWN
+    assert result.non_start_cause is QueueDispatchNonStartCause.INTERNAL
+    assert result.cleanup_status is QueuePreStartCleanupStatus.UNCERTAIN
+    assert _active_amount(store, "gpu") == 0
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "expected_cause"),
+    [
+        (
+            "resource_assignment.request_exceeds_inventory",
+            QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED,
+        ),
+        (
+            "resource_assignment.invalid_or_unsupported",
+            QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED,
+        ),
+        (
+            "resource_assignment.unavailable",
+            QueueDispatchNonStartCause.AUTHORITY_UNAVAILABLE,
+        ),
+        (
+            "resource_assignment.ownership_lost",
+            QueueDispatchNonStartCause.OWNERSHIP_LOST,
+        ),
+        ("project.assignment_failure", QueueDispatchNonStartCause.INTERNAL),
+    ],
+)
+def test_local_adapter_maps_only_known_assignment_failure_causes(
+    reason_code: str,
+    expected_cause: QueueDispatchNonStartCause,
+) -> None:
+    store = _store()
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    runner = _FakeRunner(_FakeProcess(pid=130, pgid=130))
+    adapter = _adapter(
+        store,
+        runner,
+        assignment_provider=_FailedAssignmentProvider(reason_code),
+    )
+
+    result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
+
+    assert result.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert result.non_start_cause is expected_cause
+    assert result.cleanup_status is QueuePreStartCleanupStatus.CONFIRMED
+    assert runner.argv is None
     assert _active_amount(store, "gpu") == 0
 
 
@@ -404,7 +457,8 @@ def test_local_adapter_rejects_conflicting_assignment_environment_binding() -> N
         _item("item-1", resources={"gpu": 1}, env={"VISIBLE_GPUS": "other"})
     )
 
-    assert result.status is QueueItemStatus.FAILED
+    assert result.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert result.non_start_cause is QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED
     assert runner.argv is None
     assert provider.release_calls == 1
     assert _active_amount(store, "gpu") == 0
@@ -521,8 +575,8 @@ def test_local_adapter_checks_drift_before_resource_admission() -> None:
 
     result = adapter.dispatch(item)
 
-    assert result.complete is True
-    assert result.status is QueueItemStatus.FAILED
+    assert result.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert result.non_start_cause is QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED
     assert result.evidence["drift_detected"] is True
     assert runner.argv is None
     assert _active_amount(store, "gpu") == 0
@@ -544,8 +598,10 @@ def test_local_adapter_reports_admission_rejection_without_launching_process() -
 
     result = adapter.dispatch(item)
 
-    assert result.complete is True
     assert result.status is QueueItemStatus.UNKNOWN
+    assert result.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert result.non_start_cause is QueueDispatchNonStartCause.CAPACITY
+    assert result.cleanup_status is QueuePreStartCleanupStatus.NOT_REQUIRED
     assert result.evidence["local_process_started"] is False
     assert runner.argv is None
 
@@ -748,6 +804,25 @@ class _AcquireFailingAssignmentProvider:
 
     def acquire(self, request):  # noqa: ANN001, ANN201
         raise RuntimeError("assignment acquisition failed")
+
+    def renew(self, assignment):  # noqa: ANN001, ANN201
+        return assignment
+
+    def release(self, assignment, *, reason):  # noqa: ANN001, ANN201
+        return None
+
+
+class _FailedAssignmentProvider:
+    provider_name = "test"
+
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = reason_code
+
+    def acquire(self, request):  # noqa: ANN001, ANN201
+        return ResourceAssignmentDecision(
+            disposition=ResourceAssignmentDisposition.FAILED,
+            reason_code=self.reason_code,
+        )
 
     def renew(self, assignment):  # noqa: ANN001, ANN201
         return assignment

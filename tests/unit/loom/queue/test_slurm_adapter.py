@@ -10,7 +10,13 @@ from loom.pipeline.executors.slurm.commands import (
     SlurmCommandResult,
 )
 from loom.serialization import thaw_plain_data
-from loom.queue import LaunchContract, QueueItem, QueueItemStatus, RunIntent
+from loom.queue import (
+    LaunchContract,
+    QueueDispatchDisposition,
+    QueueItem,
+    QueueItemStatus,
+    RunIntent,
+)
 from loom.queue.slurm import SlurmQueueDispatchAdapter
 
 
@@ -36,7 +42,7 @@ def test_slurm_adapter_submits_and_records_durable_handoff_without_leases() -> N
     evidence = _mapping(thaw_plain_data(result.evidence, path="evidence"))
     handoff = _mapping(evidence["delegated_handoff"])
     verification = _mapping(evidence["delegated_launch_verification"])
-    assert result.complete is False
+    assert result.disposition is QueueDispatchDisposition.STARTED
     assert result.status is QueueItemStatus.DISPATCHED
     assert result.handle_id == "slurm:item-1:1:42"
     assert evidence["scheduler_job_id"] == "42"

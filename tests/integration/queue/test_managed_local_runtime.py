@@ -210,7 +210,9 @@ def test_runtime_resolves_a_claimed_foreign_item_to_unknown(tmp_path: Path) -> N
     )
     runtime.start()
     runtime.service.enqueue(_request("claimed"))
-    _claim_fixture(runtime, "claimed", owner_id="runtime-owner", claim_id="previous-session-claim")
+    _claim_fixture(
+        runtime, "claimed", owner_id="runtime-owner", claim_id="previous-session-claim"
+    )
     assert runtime.start().state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
 
     resolved = runtime.resolve_recovery_unknown(
@@ -495,7 +497,9 @@ def test_runtime_explicit_cancel_only_finishes_current_work_after_cleanup(
 def test_runtime_cancel_does_not_touch_foreign_work(tmp_path: Path) -> None:
     runtime, _restarted, _store, process = _foreign_runtime_pair(tmp_path)
     runtime.service.enqueue(_request("foreign"))
-    foreign = _claim_fixture(runtime, "foreign", owner_id="other-owner", claim_id="other-session-claim")
+    foreign = _claim_fixture(
+        runtime, "foreign", owner_id="other-owner", claim_id="other-session-claim"
+    )
     stop = Event()
     stop.set()
 
@@ -574,7 +578,9 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
     runtime.service.enqueue(_request("queued"))
     runtime.service.enqueue(_request("foreign"))
     runtime.run_cycle()
-    foreign = _claim_fixture(runtime, "foreign", owner_id="other-owner", claim_id="other-session-claim")
+    foreign = _claim_fixture(
+        runtime, "foreign", owner_id="other-owner", claim_id="other-session-claim"
+    )
     active = runtime.service.read_item("active")
     assert active is not None and active.dispatch_handle is not None
     managed = active.dispatch_handle.evidence["managed_local"]
@@ -612,7 +618,9 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
 def test_runtime_recovery_rejects_a_current_session_item(tmp_path: Path) -> None:
     runtime, _restarted, _store, process = _foreign_runtime_pair(tmp_path)
     runtime.service.enqueue(_request("foreign"))
-    foreign = _claim_fixture(runtime, "foreign", owner_id="other-owner", claim_id="other-session-claim")
+    foreign = _claim_fixture(
+        runtime, "foreign", owner_id="other-owner", claim_id="other-session-claim"
+    )
     with pytest.raises(QueueServiceError, match="requires recovery"):
         runtime.run_cycle()
     current_before = runtime.service.read_item("active")
@@ -684,6 +692,57 @@ def test_runtime_degraded_work_blocks_refill_until_a_later_healthy_reconciliatio
     assert [
         step.item.queue_item_id for step in recovered.dispatch_steps if step.item
     ] == ["queued"]
+
+
+def test_runtime_records_dispatch_uncertainty_and_stops_refill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {"pool_name": "local", "mode": "managed", "resources": {"gpu": 1}}
+            ],
+            "queues": [{"queue_name": "local", "pool_name": "local"}],
+            "controller": {
+                "owner_id": "runtime-owner",
+                "max_active_items": 1,
+                "max_dispatches_per_cycle": 2,
+            },
+        }
+    )
+    store = SQLiteWorkspaceCoordinationStore(tmp_path / "coordination.sqlite")
+    store.create_workspace(WorkspaceIdentity("workspace-1"))
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    runtime = ManagedLocalQueueRuntime.from_spec(
+        spec,
+        workspace_id="workspace-1",
+        coordination_store=store,
+        process_runner=_Runner([_Process(pid=101)]),
+        clock=lambda: "2020-01-01T00:00:00Z",
+    )
+    runtime.start()
+    runtime.service.enqueue(_request("uncertain"))
+    runtime.service.enqueue(_request("waiting"))
+
+    def uncertain_dispatch(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN201
+        raise RuntimeError("possible external start")
+
+    monkeypatch.setattr(runtime.adapter, "dispatch", uncertain_dispatch)
+    result = runtime.run_cycle()
+
+    assert runtime.state is ManagedLocalQueueRuntimeState.DEGRADED
+    assert runtime.status().degraded_item_ids == ("uncertain",)
+    assert [step.outcome for step in result.dispatch_steps] == ["unknown"]
+    uncertain = runtime.service.read_item("uncertain")
+    waiting = runtime.service.read_item("waiting")
+    assert uncertain is not None and uncertain.status is QueueItemStatus.UNKNOWN
+    assert waiting is not None and waiting.status is QueueItemStatus.QUEUED
+    with pytest.raises(QueueServiceError, match="terminal dispatch uncertainty"):
+        runtime.run_cycle()
+    waiting = runtime.service.read_item("waiting")
+    assert waiting is not None and waiting.status is QueueItemStatus.QUEUED
 
 
 def test_runtime_uses_spec_owner_and_authored_static_assignment(tmp_path: Path) -> None:
@@ -878,8 +937,16 @@ def _two_slot_spec(tmp_path):  # noqa: ANN001, ANN202
                             "gpu": {
                                 "provider": "static-slots",
                                 "slots": [
-                                    {"id": "gpu-0", "coordination_key": "gpu-0", "value": "0"},
-                                    {"id": "gpu-1", "coordination_key": "gpu-1", "value": "1"},
+                                    {
+                                        "id": "gpu-0",
+                                        "coordination_key": "gpu-0",
+                                        "value": "0",
+                                    },
+                                    {
+                                        "id": "gpu-1",
+                                        "coordination_key": "gpu-1",
+                                        "value": "1",
+                                    },
                                 ],
                                 "binding": {
                                     "type": "environment-list",
