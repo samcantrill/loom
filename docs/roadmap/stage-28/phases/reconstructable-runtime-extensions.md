@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: pr_open
 - Roadmap stage and phase: v28 Phase 2
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p2-reconstructable-runtime-extensions`
 - Worktree root and path: `../loom-worktrees` /
   `stage-28-p2-reconstructable-runtime-extensions`
-- Base revision: `d4115c2` (`origin/develop` after Phase 1 merge metadata)
+- Base revision: `986a86f` (current `origin/develop`)
 - PR target: `develop`
 - PR title: `Stage 28 phase 2: reconstruct selected runtime extensions`
 - Dependencies: Phase 1 merged; planning `FR-1`, `FR-2`, and `FR-4` through
@@ -16,10 +16,8 @@
 - Workflow path: expanded because one nested durable activation schema and
   fresh-worker trust boundary causally interact; use at most one phase-planner
   refinement if the current source still leaves that risk unresolved
-- Blockers: expanded review found two accepted-contract failures after the 3/3
-  correction budget was consumed: resume does not compare current selections to
-  durable activation evidence before import, and Phase 2 accepts deferred event
-  sinks into run/continuation activation paths
+- Blockers: none; the maintainer authorized one additional bounded correction,
+  and both expanded-review findings are resolved at `e896e52`
 
 ## Objective And Context
 
@@ -252,28 +250,29 @@ Final commands:
   target, title, ownership, source seams, and targeted tests verified
 - Expanded planning: not needed; the reviewed activation-manifest and worker
   trust boundary remains decision-complete on the current base
-- Implementation: complete at `71aca78` after executor work plus three bounded
-  manager corrections for missing composition-root wiring, an isolated-harness
-  test-module collision, and import/readiness/preflight compatibility
+- Implementation: complete at `e896e52` after executor work, three original
+  bounded manager corrections, and one maintainer-authorized correction for the
+  expanded-review findings
 - Refiner: not used; all concrete findings had direct manager-local fixes
 - Pre-submit gate: passed after the clean rebase onto `origin/develop` at
-  `e7506b5`; `make validate-pr` completed Ruff, Pyright, 2,260 default tests
-  with 1 hardware skip, 135 config-extra tests with 3 skips, and package build; `make test-summary`
-  wrote a fully passing six-tier receipt
-- Independent review: completed on PR #228 with two product blockers: resume
-  identity comparison occurs too late or not at all, and Phase 2 event-sink
-  activation violates the deferred lifecycle-owner/worker-subset boundary
-- Blocker corrections: 3/3
-- PR and merge: PR #228 is open and CI passed; merge is prohibited while the
-  review blockers remain
+  `986a86f`; `make validate-pr` completed Ruff, Pyright, 2,287 default tests
+  with 1 hardware skip, 141 config-extra tests with 3 container-runtime skips,
+  and package build; `make test-summary` wrote a fully passing six-tier receipt
+- Independent review: completed on PR #228; its two product blockers are
+  resolved by pre-import resume identity comparison, including empty selection,
+  and removal of event sinks from Phase 2 run/continuation worker applicability
+- Blocker corrections: 4/4; the maintainer explicitly authorized the fourth
+  bounded correction to resolve both expanded-review findings
+- PR and merge: PR #228 is open; the rebased correction has passed local gates
+  and awaits refreshed CI before manager approval and merge
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `c2cfa12` introduced the registries, adapters, activation evidence, and first worker wiring. `e60e309` completed validator threading across config/runtime/preflight/continuation roots, built-in factory composition, worker-only activation subsets, authored-resource preservation, and a real custom executor/codec/validator subprocess path. `af44469` removed an isolated pytest module-name collision. `71aca78` restored lazy imports and no-plugin compatibility while making readiness diagnostics match the executable groups. Changes stay within CLI composition, plugin adapters/diagnostics, runtime parsing/capabilities, execution reconstruction, executor command builders, tests, and the accepted docs. |
-| Tests added or updated | Added strict manifest/selector, executor registry/loader, direct validator, resource reparse, worker command, and synthetic installed-entry-point fixtures. The real CLI E2E selects a project subprocess executor plus non-built-in codec/resource kind, asserts independent parent/child validator PIDs, loads the custom payload, and verifies the exact worker activation subset. Phase-targeted acceptance: 189 passed. Gate-failure compatibility cluster: 153 passed. |
-| Validated revision/tree state and evidence | Clean rebased source/test tree at `7dd69f8` plus evidence-only roadmap commits. `make validate-pr` passed Ruff, Pyright, default 2,260 passed / 1 skipped / 115 deselected, config-extra 135 passed / 3 skipped / 2,264 deselected, and package build. `make test-summary` wrote `build/test-summary.md`: package 116, unit 1,594, contract 285, integration 209, E2E 56, and config-extra 135 passed with no failures or errors. |
+| Implementation and changed paths | `12340f6` introduced the registries, adapters, activation evidence, and first worker wiring. `3070b71` completed validator threading across config/runtime/preflight/continuation roots, built-in factory composition, worker-only activation subsets, authored-resource preservation, and a real custom executor/codec/validator subprocess path. `9d007ff` removed an isolated pytest module-name collision. `37a6248` restored lazy imports and no-plugin compatibility. `e896e52` compares resume identity before target import and removes deferred event sinks from execution/worker allowlists. Changes stay within CLI composition, plugin adapters/diagnostics, runtime parsing/capabilities, execution reconstruction, executor command builders, tests, and the accepted docs. |
+| Tests added or updated | Added strict manifest/selector, executor registry/loader, direct validator, resource reparse, worker command, and synthetic installed-entry-point fixtures. The real CLI E2E selects a project subprocess executor plus non-built-in codec/resource kind, proves exact resume succeeds and omitted activation fails, asserts independent parent/child validator PIDs, loads the custom payload, and verifies the exact worker activation subset. The review correction's broad Stage 28 cluster passed 343 tests. |
+| Validated revision/tree state and evidence | Clean rebased source/test tree at `e896e52` plus this evidence-only roadmap commit. `make validate-pr` passed Ruff, Pyright, default 2,287 passed / 1 skipped / 121 deselected, config-extra 141 passed / 3 skipped / 2,291 deselected, and package build. `make test-summary` wrote `build/test-summary.md`: package 116, unit 1,619, contract 286, integration 210, E2E 56, and config-extra 141 passed with no failures or errors. |
 | Validation-relevant changes after evidence | none; only this phase execution-plan evidence is updated after the successful receipts. |
-| PR, review, and merge | PR [#228](https://github.com/samcantrill/loom/pull/228) is ready, targets `develop`, is mergeable, and passed CI. Expanded review found two blockers, so it remains open and unmerged. |
-| Residual risk and cleanup | Blocked at 3/3 corrections. Smallest fixes are to compare every resume selection, including empty selection, with recorded activation metadata before importing targets; and to remove event sinks from Phase 2 run/continuation allowlists and worker projections. Cross-host installation and package-evidence limitations remain accepted. |
+| PR, review, and merge | PR [#228](https://github.com/samcantrill/loom/pull/228) is ready and targets `develop`; the rebased branch awaits refreshed CI and final manager merge verification. |
+| Residual risk and cleanup | No known blocker. Cross-host installation remains an operator responsibility; unavailable distribution evidence is reported as a warning while exact group/name/target identity remains mandatory. |
