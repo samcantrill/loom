@@ -69,7 +69,8 @@ def test_group_readiness_exposes_fixed_facet_evidence_and_derives_status() -> No
     assert readiness.facets["registry"].status == "unsupported"
     assert readiness.facets["plugin_loading"].status == "unsupported"
     assert readiness.status == "listing-only"
-    assert readiness.to_summary()["facets"]["cli_selection"] == {
+    facets = cast(dict[str, Any], readiness.to_summary()["facets"])
+    assert facets["cli_selection"] == {
         "status": "unsupported",
         "evidence": "Run commands do not yet select executor plugins.",
     }

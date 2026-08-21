@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
-from loom.pipeline.execution.models import StageExecutionResult
+from loom.pipeline.event_sinks import EventSinkContext
+from loom.pipeline.events import EventReference
+from loom.pipeline.execution.models import StageExecutionRequest, StageExecutionResult
 from loom.pipeline.resources import ResourceEntry
 from loom.pipeline.status import StageStatus
 from loom.testing import (
@@ -78,7 +81,10 @@ def test_resource_validator_contract_records_rejection_and_prerequisite_failures
 
 
 def test_executor_contract_reports_result_identity() -> None:
-    request = SimpleNamespace(stage=SimpleNamespace(name="stage"), attempt=1)
+    request = cast(
+        StageExecutionRequest,
+        SimpleNamespace(stage=SimpleNamespace(name="stage"), attempt=1),
+    )
 
     class Executor:
         name = "test"
@@ -114,11 +120,11 @@ def test_event_sink_contract_and_report_error_are_bounded() -> None:
         del context
         received.append(event)
 
-    event = object()
+    event = cast(EventReference, object())
     report = check_event_sink_contract(
         sink,
         events=(event,),
-        context_factory=lambda _event: object(),
+        context_factory=lambda _event: cast(EventSinkContext, object()),
     )
 
     assert report.ok
