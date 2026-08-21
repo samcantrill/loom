@@ -16,6 +16,7 @@ from loom.pipeline.event_sinks import (
     EventSinkContext,
     EventSinkError,
     EventSinkFailureRecord,
+    EventSink,
     EventSinkRegistration,
     EventSinkRegistry,
     EventSinkRegistryError,
@@ -187,15 +188,15 @@ def test_subscription_filters_exact_event_types_without_dispatch_records() -> No
         event_reference=_event_record().to_event_reference(),
     )
 
-    registry.register("audit.all", lambda _event, _context: calls.append("all"))
+    registry.register("audit.all", lambda event, context: calls.append("all"))
     registry.register(
         "audit.completed",
-        lambda _event, _context: calls.append("completed"),
+        lambda event, context: calls.append("completed"),
         subscription=EventSinkSubscription(event_types=("stage.completed",)),
     )
     registry.register(
         "audit.failed",
-        lambda _event, _context: calls.append("failed"),
+        lambda event, context: calls.append("failed"),
         subscription=EventSinkSubscription(event_types=("stage.failed",)),
     )
 
@@ -227,7 +228,7 @@ def test_subscription_validates_authoritative_event_names(
 
 def test_registration_is_frozen_and_requires_callable_sink() -> None:
     with pytest.raises(EventSinkError, match="callable"):
-        EventSinkRegistration(sink=cast(object, object()))
+        EventSinkRegistration(sink=cast(EventSink, object()))
 
 
 def test_sink_context_protocol_is_narrow() -> None:

@@ -610,7 +610,7 @@ def test_load_event_sink_entry_points_accepts_filtered_registration_factory(
 
     def registration_factory() -> EventSinkRegistration:
         return EventSinkRegistration(
-            sink=lambda event, _context: calls.append(event.event_type),
+            sink=lambda event, context: calls.append(event.event_type),
             subscription=EventSinkSubscription(event_types=("run.completed",)),
         )
 

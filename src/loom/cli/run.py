@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from loom.diagnostics import PreflightRequest, PreflightResult
     from weave.api import ComposedConfig
     from loom.pipeline.execution import RunRequest, RunResult
+    from loom.pipeline.event_sinks import EventSinkRegistry
     from loom.io.codecs import CodecRegistry
     from loom.pipeline.executors import ExecutorRegistry
     from loom.pipeline.resources import ResourceValidatorRegistry
@@ -376,7 +377,7 @@ def _build_run_result_with_warnings(
     executor_registry: ExecutorRegistry | None = None
     activation_manifest: PluginActivationManifest | None = None
     worker_activation_manifest: PluginActivationManifest | None = None
-    event_sink_registry = None
+    event_sink_registry: EventSinkRegistry | None = None
     if plugin_records:
         from loom.cli.plugin_activation import (
             build_selected_event_sink_registry,
@@ -2011,7 +2012,7 @@ def _build_run_request(
     validator_registry: "ResourceValidatorRegistry | None" = None,
     activation_manifest: "PluginActivationManifest | None" = None,
     worker_activation_manifest: "PluginActivationManifest | None" = None,
-    event_sink_registry: object | None = None,
+    event_sink_registry: "EventSinkRegistry | None" = None,
 ) -> "RunRequest":
     from loom.pipeline.execution import RunRequest
 

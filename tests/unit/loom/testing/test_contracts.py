@@ -241,7 +241,7 @@ def test_event_sink_contract_only_invokes_matching_registration_events() -> None
     )
     report = check_event_sink_contract(
         EventSinkRegistration(
-            sink=lambda event, _context: received.append(cast(EventReference, event)),
+            sink=lambda event, context: received.append(cast(EventReference, event)),
             subscription=EventSinkSubscription(event_types=("run.completed",)),
         ),
         events=(started, completed),

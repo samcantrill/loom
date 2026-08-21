@@ -91,7 +91,8 @@ def filtered_event_sink() -> EventSinkRegistration:
 
     marker = os.environ["LOOM_STAGE28_EVENT_SINK_MARKER"]
 
-    def sink(event: object, _context: object) -> None:
+    def sink(event: object, context: object) -> None:
+        del context
         event_type = getattr(event, "event_type")
         with Path(marker).open("a", encoding="utf-8") as handle:
             handle.write(f"{event_type}\n")
