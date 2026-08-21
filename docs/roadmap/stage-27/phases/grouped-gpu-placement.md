@@ -222,9 +222,11 @@ Final commands:
   ordering and GPU provider release behavior satisfied the added coverage
 - Manager correction: fixed static type narrowing for topology pair keys and
   immutable assignment evidence after the first full validation attempt
+- Validation correction: widened only the timing-sensitive controller-renewal
+  test event budget after it reproduced as the sole config-extra gate failure
 - Pre-submit gate: pending
 - Independent review: optional only for a material residual member-release risk
-- Blocker corrections: 2/3
+- Blocker corrections: 3/3
 - PR and merge: pending
 
 ## Completion Record
@@ -233,7 +235,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added GPU-local links, disjoint explicit/ordered/topology grouping, member-backed lifecycle handling, and focused docs in `src/loom/queue/gpu`, queue docs, and managed-local example guidance. |
 | Tests added or updated | Added grouped cancellation coverage proving process exit is observed before each member release and exact member cleanup, plus provider-release coverage proving every member is attempted with ownership-lost versus unfinished-error precedence. |
-| Validated revision/tree state and evidence | Executor targeted suite: 37 passed; refiner focused suite: 11 passed. The first manager `make validate-pr` attempt passed Ruff and then found six Phase 2 Pyright errors before tests. Correction 2/3 then passed targeted Pyright with zero errors and the grouped unit/contract/integration/e2e plus package import set with 40 passed. Final manager validation remains pending. |
-| Validation-relevant changes after evidence | Correction 2/3 makes topology pair-key arity explicit and narrows frozen evidence and parametrized expected errors for Pyright; behavior is unchanged and final evidence is pending. |
+| Validated revision/tree state and evidence | Executor targeted suite: 37 passed; refiner focused suite: 11 passed. The first manager `make validate-pr` attempt passed Ruff and then found six Phase 2 Pyright errors before tests. Correction 2/3 passed targeted Pyright with zero errors and the grouped unit/contract/integration/e2e plus package import set with 40 passed. The second full attempt passed Ruff, Pyright, and 2,222 default tests, then the known controller-renewal test alone exceeded its five-second event wait in config-extra (131 passed/3 skipped). Correction 3/3 passes both controller-renewal tests (2 passed), including the formerly failing test under coverage (1 passed in 9.10s). Final manager validation remains pending. |
+| Validation-relevant changes after evidence | Correction 3/3 replaces fixed five-second waits in the unrelated timing-sensitive controller-renewal integration test with one 15-second event budget; runtime behavior is unchanged and final evidence is pending. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Greedy topology selection remains intentionally disjoint and non-optimal; worktree and branch retained for manager handoff. |

@@ -28,6 +28,8 @@ pytest.importorskip("yaml")
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
+_EVENT_TIMEOUT_SECONDS = 15
+
 
 class _ControllerRenewalAuthority(SQLitePerRunAuthorityStore):
     def __init__(self, *, fail_renewal: bool = False) -> None:
@@ -151,7 +153,7 @@ def _release_after_renewal(
     authority: _ControllerRenewalAuthority, marker_dir: Path
 ) -> Thread:
     def release() -> None:
-        if not authority.renewal_observed.wait(timeout=5):
+        if not authority.renewal_observed.wait(timeout=_EVENT_TIMEOUT_SECONDS):
             return
         marker_dir.mkdir(parents=True, exist_ok=True)
         (marker_dir / "release").write_text("release", encoding="utf-8")
@@ -187,11 +189,13 @@ def test_runner_renews_controller_lease_until_release(tmp_path: Path) -> None:
     execution = Thread(target=execute, daemon=True)
     execution.start()
     try:
-        assert authority.stage_allocated.wait(timeout=5)
+        assert authority.stage_allocated.wait(timeout=_EVENT_TIMEOUT_SECONDS)
         authority.expected_renewal_time = "2020-01-01T23:59:59Z"
         authority.clock.value = authority.expected_renewal_time
-        assert authority.expected_renewal_observed.wait(timeout=5)
-        assert authority.expected_stage_renewal_observed.wait(timeout=5)
+        assert authority.expected_renewal_observed.wait(timeout=_EVENT_TIMEOUT_SECONDS)
+        assert authority.expected_stage_renewal_observed.wait(
+            timeout=_EVENT_TIMEOUT_SECONDS
+        )
 
         authority.clock.value = "2020-01-02T00:00:01Z"
         with pytest.raises(AuthorityStoreError, match="active controller lease"):
@@ -203,7 +207,7 @@ def test_runner_renews_controller_lease_until_release(tmp_path: Path) -> None:
     finally:
         marker_dir.mkdir(parents=True, exist_ok=True)
         (marker_dir / "release").write_text("release", encoding="utf-8")
-        execution.join(timeout=5)
+        execution.join(timeout=_EVENT_TIMEOUT_SECONDS)
     assert not execution.is_alive()
     assert errors == []
     assert len(results) == 1
@@ -234,7 +238,7 @@ def test_controller_renewal_error_blocks_output_commit(tmp_path: Path) -> None:
 
     with pytest.raises(AuthorityStoreError, match="controller renewal unavailable"):
         runner.run(RunRequest(config=_release_config(marker_dir), run_uri=run_uri))
-    release.join(timeout=5)
+    release.join(timeout=_EVENT_TIMEOUT_SECONDS)
 
     snapshot = authority.snapshot(run_uri)
     active = next(stage for stage in snapshot.stages if stage.stage_name == "active")
