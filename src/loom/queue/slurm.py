@@ -20,8 +20,11 @@ from loom.timestamps import utc_timestamp
 
 from .controller import (
     QueueDispatchCancellation,
+    QueueDispatchDisposition,
     QueueDispatchInspection,
+    QueueDispatchNonStartCause,
     QueueDispatchResult,
+    QueuePreStartCleanupStatus,
 )
 from .errors import QueueServiceError
 from .models import QueueItem, QueueItemStatus
@@ -178,9 +181,8 @@ class SlurmQueueDispatchAdapter:
                 started_at=self._clock(),
             )
             return QueueDispatchResult(
-                handle_id=f"slurm-submit:{item.queue_item_id}:{item.dispatch_attempt}",
-                status=QueueItemStatus.FAILED,
-                reason="SLURM submission failed",
+                disposition=QueueDispatchDisposition.START_UNCERTAIN,
+                reason="slurm.sbatch_exception",
                 evidence=_plain_mapping(
                     {
                         "adapter": SLURM_QUEUE_ADAPTER_NAME,
@@ -200,9 +202,8 @@ class SlurmQueueDispatchAdapter:
             )
         if not sbatch.ok:
             return QueueDispatchResult(
-                handle_id=f"slurm-submit:{item.queue_item_id}:{item.dispatch_attempt}",
-                status=QueueItemStatus.FAILED,
-                reason="SLURM submission failed",
+                disposition=QueueDispatchDisposition.NOT_STARTED,
+                reason="slurm.sbatch_rejected",
                 evidence=_plain_mapping(
                     {
                         "adapter": SLURM_QUEUE_ADAPTER_NAME,
@@ -219,14 +220,15 @@ class SlurmQueueDispatchAdapter:
                     },
                     path="slurm_submission_failure_evidence",
                 ),
+                non_start_cause=QueueDispatchNonStartCause.INTERNAL,
+                pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
             )
         try:
             parsed = parse_sbatch_parsable_output(sbatch.stdout)
         except SlurmJobIdParseError as exc:
             return QueueDispatchResult(
-                handle_id=f"slurm-submit:{item.queue_item_id}:{item.dispatch_attempt}",
-                status=QueueItemStatus.UNKNOWN,
-                reason="SLURM submission returned an invalid job id",
+                disposition=QueueDispatchDisposition.START_UNCERTAIN,
+                reason="slurm.sbatch_unusable_job_id",
                 evidence=_plain_mapping(
                     {
                         "adapter": SLURM_QUEUE_ADAPTER_NAME,
@@ -258,8 +260,11 @@ class SlurmQueueDispatchAdapter:
             scheduler_job_id=parsed.job_id,
             status_read_succeeded=first_status_read.succeeded,
         )
-        handle_id = f"slurm:{item.queue_item_id}:{item.dispatch_attempt}:{parsed.job_id}"
+        handle_id = (
+            f"slurm:{item.queue_item_id}:{item.dispatch_attempt}:{parsed.job_id}"
+        )
         return QueueDispatchResult(
+            disposition=QueueDispatchDisposition.STARTED,
             handle_id=handle_id,
             status=QueueItemStatus.DISPATCHED,
             reason="SLURM job submitted",
@@ -288,7 +293,6 @@ class SlurmQueueDispatchAdapter:
                 },
                 path="slurm_dispatch_evidence",
             ),
-            complete=False,
         )
 
     def inspect(self, item: QueueItem) -> QueueDispatchInspection:
@@ -490,7 +494,9 @@ def _persisted_handoff_durable(item: QueueItem) -> bool:
 def _dispatch_evidence(item: QueueItem) -> Mapping[str, PlainData]:
     if item.dispatch_handle is None:
         raise QueueServiceError("SLURM item has no dispatch handle")
-    evidence = thaw_plain_data(item.dispatch_handle.evidence, path="dispatch_handle.evidence")
+    evidence = thaw_plain_data(
+        item.dispatch_handle.evidence, path="dispatch_handle.evidence"
+    )
     if not isinstance(evidence, Mapping):
         raise QueueServiceError("SLURM dispatch evidence must be a mapping")
     return cast(Mapping[str, PlainData], evidence)
@@ -666,10 +672,16 @@ def _delegated_launch_verification_report(
     checks: list[Mapping[str, object]] = []
     if isinstance(raw, Mapping):
         for name, value in raw.items():
-            if name == "required_checks" and isinstance(value, Sequence) and not isinstance(value, str):
+            if (
+                name == "required_checks"
+                and isinstance(value, Sequence)
+                and not isinstance(value, str)
+            ):
                 for item_name in value:
                     if isinstance(item_name, str) and item_name:
-                        checks.append(_verification_check(item_name, False, "launch_contract"))
+                        checks.append(
+                            _verification_check(item_name, False, "launch_contract")
+                        )
                 continue
             if isinstance(name, str) and name:
                 checks.append(_verification_check(name, value, "launch_contract"))
@@ -698,9 +710,7 @@ def _delegated_launch_verification_report(
         ]
     )
     proven = [str(check["name"]) for check in checks if check["status"] == "proven"]
-    unproven = [
-        str(check["name"]) for check in checks if check["status"] == "unproven"
-    ]
+    unproven = [str(check["name"]) for check in checks if check["status"] == "unproven"]
     unsupported = [
         str(check["name"]) for check in checks if check["status"] == "unsupported"
     ]

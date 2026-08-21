@@ -236,9 +236,12 @@ Final commands:
 - Expanded planning: design review passed after one bounded
   `START_UNCERTAIN` correction; plan review correction locked invalid-work
   step/continuation behavior
-- Implementation: pending one `loom_phase_executor`
+- Implementation: complete in the assigned Phase 2 worktree; factual dispatch
+  results, controller transitions, built-in adapters, docs, and scoped tests are
+  ready for manager inspection
 - Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: pending
+- Pre-submit gate: source-relevant suites pass; the full gate remains blocked by
+  the reproduced, unrelated optional-config controller-lease-renewal timeout
 - Independent review: optional only for a material residual adapter-boundary
   risk after manager review
 - Blocker corrections: 0/3
@@ -248,9 +251,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
+| Implementation and changed paths | Replaced queue dispatch `DEFERRED` with factual dispositions and typed non-start/cleanup facts in `controller.py`; centralized queue transitions; mapped local and SLURM adapter boundaries; updated root exports and `queue.md`. |
+| Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Focused queue unit, contract, and integration command: 118 passed. |
+| Validated revision/tree state and evidence | `ruff check` passed. `make validate-pr` reached Ruff and Pyright successfully; `make test-summary` passed package (115), unit (1560), contract (280), integration (206), and e2e (54) suites. Its optional-config suite had one failure, reproduced in isolation: `tests/integration/pipeline/test_controller_lease_renewal.py::test_runner_renews_controller_lease_until_release` timed out before stage allocation. No queue source or test points to that pipeline failure. |
+| Validation-relevant changes after evidence | Only this completion record; implementation/test evidence remains current. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | `START_UNCERTAIN` is deliberately terminal queue-local `UNKNOWN` without external recovery. Full pre-submit approval awaits resolution or disposition of the unrelated optional-config test failure. |

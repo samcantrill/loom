@@ -16,8 +16,11 @@ from loom.pipeline.stores import (
 )
 from loom.queue import (
     LaunchContract,
+    QueueDispatchDisposition,
+    QueueDispatchNonStartCause,
     QueueItem,
     QueueItemStatus,
+    QueuePreStartCleanupStatus,
     RunIntent,
 )
 from loom.queue.assignments import (
@@ -43,7 +46,7 @@ def test_local_adapter_launches_observes_and_releases_resource_leases() -> None:
 
     result = adapter.dispatch(item)
 
-    assert result.complete is False
+    assert result.disposition is QueueDispatchDisposition.STARTED
     assert result.status is QueueItemStatus.DISPATCHED
     assert runner.argv == ("python", "-c", "print('ok')")
     assert _active_amount(store, "gpu") == 1
@@ -122,7 +125,8 @@ def test_local_adapter_redacts_released_leases_after_process_start_failure() -> 
 
     result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
 
-    assert result.status is QueueItemStatus.FAILED
+    assert result.disposition is QueueDispatchDisposition.START_UNCERTAIN
+    assert result.status is QueueItemStatus.UNKNOWN
     result_evidence = thaw_plain_data(result.evidence, path="evidence")
     assert isinstance(result_evidence, dict)
     assert result_evidence["released_resource_leases"] == [
@@ -350,7 +354,9 @@ def test_local_adapter_rejects_private_assignment_evidence_before_start() -> Non
 
     result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
 
-    assert result.status is QueueItemStatus.FAILED
+    assert result.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert result.non_start_cause is QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED
+    assert result.pre_start_cleanup_status is QueuePreStartCleanupStatus.CONFIRMED
     assert runner.argv is None
     assert provider.release_calls == 1
     assert _active_amount(store, "gpu") == 0
@@ -404,7 +410,8 @@ def test_local_adapter_rejects_conflicting_assignment_environment_binding() -> N
         _item("item-1", resources={"gpu": 1}, env={"VISIBLE_GPUS": "other"})
     )
 
-    assert result.status is QueueItemStatus.FAILED
+    assert result.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert result.non_start_cause is QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED
     assert runner.argv is None
     assert provider.release_calls == 1
     assert _active_amount(store, "gpu") == 0
@@ -521,8 +528,8 @@ def test_local_adapter_checks_drift_before_resource_admission() -> None:
 
     result = adapter.dispatch(item)
 
-    assert result.complete is True
-    assert result.status is QueueItemStatus.FAILED
+    assert result.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert result.non_start_cause is QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED
     assert result.evidence["drift_detected"] is True
     assert runner.argv is None
     assert _active_amount(store, "gpu") == 0
@@ -544,8 +551,10 @@ def test_local_adapter_reports_admission_rejection_without_launching_process() -
 
     result = adapter.dispatch(item)
 
-    assert result.complete is True
     assert result.status is QueueItemStatus.UNKNOWN
+    assert result.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert result.non_start_cause is QueueDispatchNonStartCause.CAPACITY
+    assert result.pre_start_cleanup_status is QueuePreStartCleanupStatus.NOT_REQUIRED
     assert result.evidence["local_process_started"] is False
     assert runner.argv is None
 

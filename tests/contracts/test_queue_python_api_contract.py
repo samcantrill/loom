@@ -10,6 +10,9 @@ from loom.queue import (
     QueueClient,
     QueueController,
     QueueCycleResult,
+    QueueDispatchDisposition,
+    QueueDispatchNonStartCause,
+    QueueDispatchResult,
     QueueEnqueueRequest,
     QueueService,
     QueueServiceError,
@@ -19,6 +22,7 @@ from loom.queue import (
     QueueSelectionDecision,
     QueueSelectionDisposition,
     QueueSelectionPolicy,
+    QueuePreStartCleanupStatus,
     SQLiteQueueRepository,
     normalize_queue_spec,
 )
@@ -103,6 +107,25 @@ def test_queue_selection_public_api_is_import_light_and_in_process_only() -> Non
     assert decision.disposition is QueueSelectionDisposition.SELECTED
     assert "QueueClaimResult" not in queue.__all__
     assert not hasattr(QueueService, "claim_next")
+
+
+def test_queue_dispatch_facts_are_public_and_legacy_deferred_is_not() -> None:
+    result = QueueDispatchResult(
+        disposition=QueueDispatchDisposition.NOT_STARTED,
+        reason="test.capacity",
+        non_start_cause=QueueDispatchNonStartCause.CAPACITY,
+        pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+    )
+
+    assert [value.value for value in QueueDispatchDisposition] == [
+        "started",
+        "completed",
+        "not_started",
+        "start_uncertain",
+    ]
+    assert result.is_safe_capacity_non_start is True
+    assert "QueueDispatchNonStartCause" in queue.__all__
+    assert "QueuePreStartCleanupStatus" in queue.__all__
 
 
 def test_queue_cycle_selection_evidence_contract_is_narrow_plain_data() -> None:

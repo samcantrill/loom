@@ -13,6 +13,7 @@ from loom.queue import (
     QueueDispatchCancellation,
     QueueDispatchDisposition,
     QueueDispatchInspection,
+    QueueDispatchNonStartCause,
     QueueDispatchResult,
     QueueEnqueueRequest,
     QueueItemStatus,
@@ -22,28 +23,32 @@ from loom.queue import (
     QueueService,
     QueueServiceError,
     QueueServiceSpec,
+    QueuePreStartCleanupStatus,
     SQLiteQueueRepository,
     normalize_queue_spec,
 )
 
 
-def test_dispatch_result_normalizes_legacy_and_explicit_dispositions() -> None:
-    completed = QueueDispatchResult(handle_id="completed")
+def test_dispatch_result_requires_explicit_factual_dispositions() -> None:
+    completed = QueueDispatchResult(
+        disposition="completed", handle_id="completed", status=QueueItemStatus.SUCCEEDED
+    )
     started = QueueDispatchResult(
+        disposition="started",
         handle_id="started",
         status=QueueItemStatus.DISPATCHED,
-        complete=False,
     )
-    deferred = QueueDispatchResult(
-        disposition="deferred",
-        status=QueueItemStatus.UNKNOWN,
+    not_started = QueueDispatchResult(
+        disposition="not_started",
         reason="capacity",
+        non_start_cause="capacity",
+        pre_start_cleanup_status="confirmed",
     )
 
     assert completed.disposition is QueueDispatchDisposition.COMPLETED
     assert started.disposition is QueueDispatchDisposition.STARTED
-    assert deferred.disposition is QueueDispatchDisposition.DEFERRED
-    assert deferred.handle_id is None
+    assert not_started.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert not_started.is_safe_capacity_non_start is True
 
 
 @pytest.mark.parametrize(
@@ -51,9 +56,8 @@ def test_dispatch_result_normalizes_legacy_and_explicit_dispositions() -> None:
     [
         (
             {
-                "handle_id": "deferred",
-                "status": QueueItemStatus.UNKNOWN,
-                "disposition": "deferred",
+                "disposition": "not_started",
+                "handle_id": "not-started",
             },
             "cannot have a handle_id",
         ),
@@ -61,10 +65,9 @@ def test_dispatch_result_normalizes_legacy_and_explicit_dispositions() -> None:
             {
                 "handle_id": "started",
                 "status": QueueItemStatus.SUCCEEDED,
-                "complete": False,
                 "disposition": "started",
             },
-            "active dispatch result status must be DISPATCHED",
+            "started dispatch result status must be DISPATCHED",
         ),
         (
             {
@@ -73,6 +76,10 @@ def test_dispatch_result_normalizes_legacy_and_explicit_dispositions() -> None:
                 "disposition": "completed",
             },
             "completed dispatch result status",
+        ),
+        (
+            {"disposition": "start_uncertain", "non_start_cause": "internal"},
+            "without non-start facts",
         ),
     ],
 )
@@ -197,9 +204,7 @@ def test_invalid_or_failing_selection_policy_does_not_claim_item(
         )
     )
     selection_policy = (
-        _InvalidSelectionPolicy()
-        if policy == "invalid"
-        else _FailingSelectionPolicy()
+        _InvalidSelectionPolicy() if policy == "invalid" else _FailingSelectionPolicy()
     )
 
     step = QueueController(
@@ -249,7 +254,9 @@ def test_controller_rejects_repository_without_private_selection_capabilities(
 ) -> None:
     service = QueueService(_spec(tmp_path), object())  # type: ignore[arg-type]
 
-    with pytest.raises(QueueServiceError, match="bounded selection and exact ownership"):
+    with pytest.raises(
+        QueueServiceError, match="bounded selection and exact ownership"
+    ):
         QueueController(service)
 
 
@@ -589,11 +596,11 @@ def test_cycle_defers_fifo_head_once_and_returns_serializable_capacity_result(
                 queue_item_id=item_id,
                 queue_name="gpu",
                 run_uri=f"file:///runs/{item_id}",
-                adapter="deferred",
+                adapter="capacity",
             )
         )
     controller = QueueController(
-        service, adapters={"deferred": _DeferredAdapter()}, clock=clock
+        service, adapters={"capacity": _CapacityAdapter()}, clock=clock
     )
 
     result = controller.run_cycle(pool_name="gpu-pool")
@@ -649,6 +656,120 @@ def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
     assert started is not None and started.status is QueueItemStatus.SUCCEEDED
     assert result.capacity_blocked is True
     assert result.selection_stop_reason is None
+
+
+@pytest.mark.parametrize(
+    ("result", "outcome", "status", "continues"),
+    [
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason="test.invalid",
+                non_start_cause="invalid_or_unsupported",
+                pre_start_cleanup_status="confirmed",
+            ),
+            "failed",
+            QueueItemStatus.FAILED,
+            True,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason="test.invalid_cleanup_uncertain",
+                non_start_cause="invalid_or_unsupported",
+                pre_start_cleanup_status="uncertain",
+            ),
+            "unknown",
+            QueueItemStatus.FAILED,
+            False,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason="test.authority",
+                non_start_cause="authority_unavailable",
+                pre_start_cleanup_status="not_required",
+            ),
+            "unknown",
+            QueueItemStatus.UNKNOWN,
+            False,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason="test.ownership",
+                non_start_cause="ownership_lost",
+                pre_start_cleanup_status="confirmed",
+            ),
+            "unknown",
+            QueueItemStatus.UNKNOWN,
+            False,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason="test.internal",
+                non_start_cause="internal",
+                pre_start_cleanup_status="confirmed",
+            ),
+            "unknown",
+            QueueItemStatus.UNKNOWN,
+            False,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason="test.capacity_cleanup_uncertain",
+                non_start_cause="capacity",
+                pre_start_cleanup_status="uncertain",
+            ),
+            "unknown",
+            QueueItemStatus.UNKNOWN,
+            False,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="start_uncertain", reason="test.start_uncertain"
+            ),
+            "unknown",
+            QueueItemStatus.UNKNOWN,
+            False,
+        ),
+    ],
+)
+def test_controller_transitions_factual_non_start_outcomes(
+    tmp_path: Path,
+    result: QueueDispatchResult,
+    outcome: str,
+    status: QueueItemStatus,
+    continues: bool,
+) -> None:
+    service = _started_service(
+        tmp_path,
+        clock=_clock(*[f"2020-01-01T00:00:{n:02d}Z" for n in range(12)]),
+        max_active_items=2,
+        max_dispatches_per_cycle=2,
+    )
+    for item_id in ("first", "second"):
+        service.enqueue(
+            QueueEnqueueRequest(
+                queue_item_id=item_id,
+                queue_name="gpu",
+                run_uri=f"file:///runs/{item_id}",
+                adapter="factual",
+            )
+        )
+    controller = QueueController(
+        service,
+        adapters={"factual": _FactualAdapter(result)},
+    )
+
+    cycle = controller.run_cycle(pool_name="gpu-pool")
+
+    assert cycle.dispatch_steps[0].outcome == outcome
+    first = service.read_item("first")
+    assert first is not None and first.status is status
+    assert len(cycle.dispatch_steps) == (2 if continues else 1)
 
 
 @pytest.mark.parametrize(
@@ -904,7 +1025,9 @@ def test_controller_current_session_reconciliation_does_not_fill(
             run_uri="file:///runs/queued",
         )
     )
-    controller = QueueController(service, adapters={"async": _AsyncAdapter()}, clock=clock)
+    controller = QueueController(
+        service, adapters={"async": _AsyncAdapter()}, clock=clock
+    )
     controller.run_once(pool_name="gpu-pool")
 
     result = controller.reconcile_current_session(pool_name="gpu-pool")
@@ -952,11 +1075,11 @@ class _AsyncAdapter:
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"async:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
             reason="async-dispatched",
             evidence={"queue_item_id": item.queue_item_id},
-            complete=False,
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -990,11 +1113,11 @@ class _DelegatedHandoffAdapter:
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"delegated:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
             reason="delegated-dispatched",
             evidence={"queue_item_id": item.queue_item_id},
-            complete=False,
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -1006,15 +1129,26 @@ class _DelegatedHandoffAdapter:
         )
 
 
-class _DeferredAdapter:
-    adapter_name = "deferred"
+class _CapacityAdapter:
+    adapter_name = "capacity"
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
-            disposition="deferred",
-            status=QueueItemStatus.UNKNOWN,
+            disposition="not_started",
             reason="resource_admission.capacity_unavailable",
+            non_start_cause=QueueDispatchNonStartCause.CAPACITY,
+            pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
         )
+
+
+class _FactualAdapter:
+    adapter_name = "factual"
+
+    def __init__(self, result: QueueDispatchResult) -> None:
+        self.result = result
+
+    def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
+        return self.result
 
 
 class _DeferFirstAdapter:
@@ -1027,11 +1161,13 @@ class _DeferFirstAdapter:
         self.dispatched.append(item.queue_item_id)
         if item.queue_item_id == "deferred-head":
             return QueueDispatchResult(
-                disposition="deferred",
-                status=QueueItemStatus.UNKNOWN,
+                disposition="not_started",
                 reason="resource_admission.capacity_unavailable",
+                non_start_cause=QueueDispatchNonStartCause.CAPACITY,
+                pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
             )
         return QueueDispatchResult(
+            disposition="completed",
             handle_id=f"defer-first:{item.queue_item_id}",
             status=QueueItemStatus.SUCCEEDED,
             reason="completed",
@@ -1043,10 +1179,10 @@ class _DegradingAdapter:
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"degrading:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
             reason="started",
-            complete=False,
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -1065,10 +1201,10 @@ class _ItemLocalFailureAdapter:
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"item-local-failure:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
             reason="started",
-            complete=False,
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -1097,11 +1233,11 @@ class _CountingAdapter:
             else {"managed_local": {"session_id": self.session_id}}
         )
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"counting:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
             reason="started",
             evidence=evidence,
-            complete=False,
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -1119,10 +1255,10 @@ class _CancellableStartedAdapter:
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"cancellable:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
             reason="started",
-            complete=False,
         )
 
     def cancel(self, item, *, requested_by, reason) -> QueueDispatchCancellation:  # noqa: ANN001
@@ -1155,6 +1291,7 @@ class _MutablePolicy:
             self.reason_code,
             context.candidates[0].queue_item_id,
         )
+
 
 class _InvalidSelectionPolicy:
     policy_id = "test.invalid"

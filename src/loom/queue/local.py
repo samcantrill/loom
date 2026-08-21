@@ -34,8 +34,11 @@ from loom.timestamps import parse_timestamp, utc_timestamp
 
 from .controller import (
     QueueDispatchCancellation,
+    QueueDispatchDisposition,
     QueueDispatchInspection,
+    QueueDispatchNonStartCause,
     QueueDispatchResult,
+    QueuePreStartCleanupStatus,
 )
 from .assignments import (
     NoOpResourceAssignmentProvider,
@@ -221,10 +224,11 @@ class LocalQueueDispatchAdapter:
         drift_evidence = self._drift_evidence(item)
         if drift_evidence is not None:
             return QueueDispatchResult(
-                handle_id=f"local-drift:{item.queue_item_id}:{item.dispatch_attempt}",
-                status=QueueItemStatus.FAILED,
-                reason="local launch contract drift detected",
+                disposition=QueueDispatchDisposition.NOT_STARTED,
+                reason="local.launch_contract_drift",
                 evidence=drift_evidence,
+                non_start_cause=QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED,
+                pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
             )
         command = _launch_command(item)
         admission_request = _resource_admission_request(
@@ -241,27 +245,29 @@ class LocalQueueDispatchAdapter:
         if admission.status is not ResourceAdmissionStatus.ADMITTED:
             if admission.failure_kind is CoordinationFailureKind.CAPACITY:
                 return QueueDispatchResult(
-                    handle_id=None,
-                    status=QueueItemStatus.UNKNOWN,
+                    disposition=QueueDispatchDisposition.NOT_STARTED,
                     reason="resource_admission.capacity_unavailable",
                     evidence={"local_process_started": False},
-                    disposition="deferred",
+                    non_start_cause=QueueDispatchNonStartCause.CAPACITY,
+                    pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
                 )
             if admission.failure_kind is CoordinationFailureKind.INVALID_OR_UNSUPPORTED:
                 return QueueDispatchResult(
-                    handle_id=f"local-admission:{item.queue_item_id}:{item.dispatch_attempt}",
-                    status=QueueItemStatus.FAILED,
+                    disposition=QueueDispatchDisposition.NOT_STARTED,
                     reason=admission.reason_code
                     or "resource_admission.unsupported_resource",
                     evidence={"local_process_started": False},
+                    non_start_cause=QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED,
+                    pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
                 )
             return QueueDispatchResult(
-                handle_id=f"local-admission:{item.queue_item_id}:{item.dispatch_attempt}",
-                status=QueueItemStatus.UNKNOWN,
+                disposition=QueueDispatchDisposition.NOT_STARTED,
                 reason=admission.reason_code or "local resource admission unavailable",
                 evidence={
                     "local_process_started": False,
                 },
+                non_start_cause=_non_start_cause(admission.failure_kind),
+                pre_start_cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
             )
         try:
             assignment_decision = self.assignment_provider.acquire(
@@ -292,7 +298,6 @@ class LocalQueueDispatchAdapter:
                 reason="local assignment acquisition failed",
                 exception=exc,
                 cleanup=cleanup,
-                uncertain=True,
             )
         if (
             assignment_decision.disposition
@@ -315,18 +320,19 @@ class LocalQueueDispatchAdapter:
                 is ResourceAssignmentDisposition.DEFERRED
             ):
                 return QueueDispatchResult(
-                    handle_id=None,
-                    status=QueueItemStatus.UNKNOWN,
+                    disposition=QueueDispatchDisposition.NOT_STARTED,
                     reason=assignment_decision.reason_code
                     or "resource_assignment.capacity_unavailable",
                     evidence={"local_process_started": False},
-                    disposition="deferred",
+                    non_start_cause=QueueDispatchNonStartCause.CAPACITY,
+                    pre_start_cleanup_status=QueuePreStartCleanupStatus.CONFIRMED,
                 )
             return QueueDispatchResult(
-                handle_id=f"local-assignment:{item.queue_item_id}:{item.dispatch_attempt}",
-                status=QueueItemStatus.FAILED,
+                disposition=QueueDispatchDisposition.NOT_STARTED,
                 reason=assignment_decision.reason_code or "resource assignment failed",
                 evidence={"local_process_started": False},
+                non_start_cause=QueueDispatchNonStartCause.INTERNAL,
+                pre_start_cleanup_status=QueuePreStartCleanupStatus.CONFIRMED,
             )
         assignment = assignment_decision.assignment
         assert assignment is not None
@@ -345,6 +351,7 @@ class LocalQueueDispatchAdapter:
                 reason="local assignment launch preparation failed",
                 exception=exc,
                 cleanup=cleanup,
+                non_start_cause=QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED,
             )
         try:
             process = self._start_process(
@@ -365,6 +372,7 @@ class LocalQueueDispatchAdapter:
                 reason="local process start failed",
                 exception=exc,
                 cleanup=cleanup,
+                start_uncertain=True,
             )
         handle_id = f"local:{item.queue_item_id}:{item.dispatch_attempt}:{process.pid}"
         next_renew_at, safety_deadline_at = _lease_maintenance_times(
@@ -382,6 +390,7 @@ class LocalQueueDispatchAdapter:
             assignment_safety_deadline_at=assignment_safety_deadline_at,
         )
         return QueueDispatchResult(
+            disposition=QueueDispatchDisposition.STARTED,
             handle_id=handle_id,
             status=QueueItemStatus.DISPATCHED,
             reason="local process dispatched",
@@ -399,8 +408,6 @@ class LocalQueueDispatchAdapter:
                     log_root=self.log_directory,
                 ),
             },
-            complete=False,
-            disposition="started",
             next_maintenance_at=_earliest_timestamp(
                 next_renew_at, assignment.next_maintenance_at
             ),
@@ -673,7 +680,8 @@ class LocalQueueDispatchAdapter:
         reason: str,
         exception: Exception | None,
         cleanup: _CleanupResult,
-        uncertain: bool = False,
+        start_uncertain: bool = False,
+        non_start_cause: QueueDispatchNonStartCause = QueueDispatchNonStartCause.INTERNAL,
     ) -> QueueDispatchResult:
         pending = bool(cleanup["pending"])
         evidence: dict[str, PlainData] = {
@@ -684,13 +692,22 @@ class LocalQueueDispatchAdapter:
         if exception is not None:
             evidence["exception_type"] = type(exception).__name__
         evidence.update(cleanup["evidence"])
+        if start_uncertain:
+            return QueueDispatchResult(
+                disposition=QueueDispatchDisposition.START_UNCERTAIN,
+                reason="local.process_start_exception",
+                evidence=evidence,
+            )
         return QueueDispatchResult(
-            handle_id=f"local-cleanup:{item.queue_item_id}:{item.dispatch_attempt}",
-            status=QueueItemStatus.UNKNOWN
-            if pending or uncertain
-            else QueueItemStatus.FAILED,
+            disposition=QueueDispatchDisposition.NOT_STARTED,
             reason=reason,
             evidence=evidence,
+            non_start_cause=non_start_cause,
+            pre_start_cleanup_status=(
+                QueuePreStartCleanupStatus.UNCERTAIN
+                if pending
+                else QueuePreStartCleanupStatus.CONFIRMED
+            ),
         )
 
     def _cleanup_active(
@@ -1086,6 +1103,18 @@ def _resource_admission_request(
         lease_ttl_seconds=lease_ttl_seconds,
         wait_timeout_seconds=wait_timeout_seconds,
     )
+
+
+def _non_start_cause(
+    failure_kind: CoordinationFailureKind | None,
+) -> QueueDispatchNonStartCause:
+    """Map authority admission facts into the queue's narrow factual vocabulary."""
+
+    if failure_kind is CoordinationFailureKind.UNAVAILABLE:
+        return QueueDispatchNonStartCause.AUTHORITY_UNAVAILABLE
+    if failure_kind is CoordinationFailureKind.OWNERSHIP_LOST:
+        return QueueDispatchNonStartCause.OWNERSHIP_LOST
+    return QueueDispatchNonStartCause.INTERNAL
 
 
 def _string(value: object, field: str) -> str:
