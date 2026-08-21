@@ -224,8 +224,11 @@ Final commands:
   immutable assignment evidence after the first full validation attempt
 - Validation correction: widened only the timing-sensitive controller-renewal
   test event budget after it reproduced as the sole config-extra gate failure
-- Pre-submit gate: pending
-- Independent review: optional only for a material residual member-release risk
+- Pre-submit gate: passed against current `origin/develop`; branch, scope,
+  contracts, tests, risks, domain neutrality, imports, and proportionality match
+  this plan
+- Independent review: not needed; manager review plus grouped cancellation and
+  all-member release-precedence coverage leave no material residual lifecycle risk
 - Blocker corrections: 3/3
 - PR and merge: pending
 
@@ -233,9 +236,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added GPU-local links, disjoint explicit/ordered/topology grouping, member-backed lifecycle handling, and focused docs in `src/loom/queue/gpu`, queue docs, and managed-local example guidance. |
-| Tests added or updated | Added grouped cancellation coverage proving process exit is observed before each member release and exact member cleanup, plus provider-release coverage proving every member is attempted with ownership-lost versus unfinished-error precedence. |
-| Validated revision/tree state and evidence | Executor targeted suite: 37 passed; refiner focused suite: 11 passed. Correction 2/3 passed targeted Pyright with zero errors and the grouped unit/contract/integration/e2e plus package import set with 40 passed. Correction 3/3 passed both controller-renewal tests, including the formerly failing test under coverage. The Stage 25-post integrated tree passed `make validate-pr` (Ruff, Pyright, 2,224 default, 132 config-extra/3 skipped, build), but that receipt is stale after the Stage 30 integration-example test merge. Final current-tree validation remains pending. |
-| Validation-relevant changes after evidence | The branch was rebased without conflict onto `4513da7`; Stage 30 adds example journeys and one integration-example test but does not touch GPU, queue runtime, dependency, build, or validation configuration. The test-set change still requires a fresh receipt. |
-| PR, review, and merge | pending |
+| Implementation and changed paths | Added GPU-local links, disjoint explicit/ordered/topology grouping, member-backed lifecycle handling, and focused docs in `src/loom/queue/gpu`, queue docs, and managed-local example guidance. Stabilized the pre-existing controller-renewal integration event budget required by the full gate. |
+| Tests added or updated | Added explicit/ordered/topology planner validation and determinism, provider decision/evidence/renewal/release contracts, partial-acquisition and individual-member SQLite contention, grouped managed-local cancellation with termination-before-release, fake grouped E2E launches, and import coverage. Release tests prove every member is attempted with ownership-lost versus unfinished-error precedence. |
+| Validated revision/tree state and evidence | Clean current tree at `de10411d12c032b6fe84fe8d26cb26146be248e2`; `make validate-pr` passed (Ruff, Pyright with zero errors, default 2,224 passed/114 deselected, config-extra 134 passed/3 skipped/2,227 deselected, and sdist/wheel build). `make test-summary` passed with `build/test-summary.md`: package 115, unit 1,561, contract 284, integration 209, e2e 55, and config-extra 134 passed/3 skipped; overall 2,358 passed/3 skipped. |
+| Validation-relevant changes after evidence | None. Current `origin/develop` remains `4513da7`, and no source, test, dependency, build, or validation configuration changed after the successful receipts. |
+| PR, review, and merge | Manager review and pre-submit gate passed with no blocker; PR publication, CI, and merge remain pending. |
 | Residual risk and cleanup | Greedy topology selection remains intentionally disjoint and non-optimal; worktree and branch retained for manager handoff. |
