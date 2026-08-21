@@ -244,6 +244,76 @@ def test_selection_policy_mapping_rejects_delegated_pool(tmp_path: Path) -> None
         QueueController(service, selection_policies={"delegated": _NewestPolicy()})
 
 
+def test_controller_rejects_repository_without_private_selection_capabilities(
+    tmp_path: Path,
+) -> None:
+    service = QueueService(_spec(tmp_path), object())  # type: ignore[arg-type]
+
+    with pytest.raises(QueueServiceError, match="bounded selection and exact ownership"):
+        QueueController(service)
+
+
+def test_controller_freezes_policy_identity_and_implementation(tmp_path: Path) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)])
+    service = _resource_service(tmp_path, clock=clock, capacity=1)
+    policy = _MutablePolicy()
+    controller = QueueController(
+        service,
+        selection_policies={"gpu-pool": policy},
+        clock=clock,
+    )
+    policy.policy_id = "test.mutated"
+    policy.select_next = policy.stop  # type: ignore[method-assign]
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+
+    step = controller.run_once(pool_name="gpu-pool")
+
+    assert step.item is not None and step.item.status is QueueItemStatus.SUCCEEDED
+    assert service.list_audit_events("item-1")[1].detail["selection"] == {
+        "preference_id": "test.original",
+        "reason_code": "test.original_selected",
+    }
+
+
+def test_delegated_selection_uses_shared_fifo_operation_without_resource_filtering(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)])
+    spec = normalize_queue_spec(
+        {
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [{"pool_name": "delegated", "mode": "delegated"}],
+            "queues": [{"queue_name": "delegated", "pool_name": "delegated"}],
+        }
+    )
+    service = QueueService(
+        spec,
+        SQLiteQueueRepository(tmp_path / "queue.sqlite", clock=clock),
+        clock=clock,
+    )
+    service.start()
+    for item_id in ("older", "younger"):
+        service.enqueue(
+            QueueEnqueueRequest(
+                queue_item_id=item_id,
+                queue_name="delegated",
+                run_uri=f"file:///runs/{item_id}",
+                resources={"gpu": 99},
+            )
+        )
+
+    step = QueueController(service, clock=clock).run_once(pool_name="delegated")
+
+    assert step.item is not None and step.item.queue_item_id == "older"
+
+
 def test_foreground_drain_completes_fake_work_without_orphaned_claims(
     tmp_path: Path,
 ) -> None:
@@ -640,9 +710,10 @@ def test_cycle_records_selection_limit_exhaustion_after_lost_claims(
         )
     )
     monkeypatch.setattr(queue_controller, "_SELECTION_LIMIT", 2)
-    monkeypatch.setattr(service, "_claim_selection_candidate", lambda *args, **kwargs: None)
+    controller = QueueController(service)
+    monkeypatch.setattr(controller, "_selection_claimer", lambda *args, **kwargs: None)
 
-    result = QueueController(service).run_cycle(pool_name="gpu-pool")
+    result = controller.run_cycle(pool_name="gpu-pool")
 
     assert result.dispatch_steps == ()
     assert result.selection_stop_reason == "queue_selection.selection_limit_exhausted"
@@ -1070,6 +1141,20 @@ class _NewestPolicy:
             "test.newest_selected",
             context.candidates[-1].queue_item_id,
         )
+
+
+class _MutablePolicy:
+    policy_id = "test.original"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        return QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED,
+            "test.original_selected",
+            context.candidates[0].queue_item_id,
+        )
+
+    def stop(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        return QueueSelectionDecision(QueueSelectionDisposition.STOPPED, "test.stop")
 
 
 class _InvalidSelectionPolicy:

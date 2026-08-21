@@ -210,10 +210,7 @@ def test_runtime_resolves_a_claimed_foreign_item_to_unknown(tmp_path: Path) -> N
     )
     runtime.start()
     runtime.service.enqueue(_request("claimed"))
-    claim = runtime.service.claim_next(
-        "local", owner_id="runtime-owner", claim_id="previous-session-claim"
-    )
-    assert claim is not None
+    _claim_fixture(runtime, "claimed", owner_id="runtime-owner", claim_id="previous-session-claim")
     assert runtime.start().state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
 
     resolved = runtime.resolve_recovery_unknown(
@@ -498,10 +495,7 @@ def test_runtime_explicit_cancel_only_finishes_current_work_after_cleanup(
 def test_runtime_cancel_does_not_touch_foreign_work(tmp_path: Path) -> None:
     runtime, _restarted, _store, process = _foreign_runtime_pair(tmp_path)
     runtime.service.enqueue(_request("foreign"))
-    foreign = runtime.service.claim_next(
-        "local", owner_id="other-owner", claim_id="other-session-claim"
-    )
-    assert foreign is not None
+    foreign = _claim_fixture(runtime, "foreign", owner_id="other-owner", claim_id="other-session-claim")
     stop = Event()
     stop.set()
 
@@ -516,7 +510,7 @@ def test_runtime_cancel_does_not_touch_foreign_work(tmp_path: Path) -> None:
     current = runtime.service.read_item("active")
     untouched = runtime.service.read_item("foreign")
     assert current is not None and current.status is QueueItemStatus.CANCELLED
-    assert untouched == foreign.item
+    assert untouched == foreign
     assert status.state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
 
 
@@ -580,10 +574,7 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
     runtime.service.enqueue(_request("queued"))
     runtime.service.enqueue(_request("foreign"))
     runtime.run_cycle()
-    foreign = runtime.service.claim_next(
-        "local", owner_id="other-owner", claim_id="other-session-claim"
-    )
-    assert foreign is not None
+    foreign = _claim_fixture(runtime, "foreign", owner_id="other-owner", claim_id="other-session-claim")
     active = runtime.service.read_item("active")
     assert active is not None and active.dispatch_handle is not None
     managed = active.dispatch_handle.evidence["managed_local"]
@@ -610,7 +601,7 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
     queued = runtime.service.read_item("queued")
     assert cancelled is not None and cancelled.status is QueueItemStatus.CANCELLED
     assert queued is not None and queued.status is QueueItemStatus.QUEUED
-    assert runtime.service.read_item("foreign") == foreign.item
+    assert runtime.service.read_item("foreign") == foreign
     assert status.state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
     counter = store.read_resource_limit("workspace-1", "gpu")
     assert counter is not None and counter.value == 0
@@ -621,10 +612,7 @@ def test_runtime_cancel_observes_real_process_exit_before_item_and_lease_release
 def test_runtime_recovery_rejects_a_current_session_item(tmp_path: Path) -> None:
     runtime, _restarted, _store, process = _foreign_runtime_pair(tmp_path)
     runtime.service.enqueue(_request("foreign"))
-    foreign = runtime.service.claim_next(
-        "local", owner_id="other-owner", claim_id="other-session-claim"
-    )
-    assert foreign is not None
+    foreign = _claim_fixture(runtime, "foreign", owner_id="other-owner", claim_id="other-session-claim")
     with pytest.raises(QueueServiceError, match="requires recovery"):
         runtime.run_cycle()
     current_before = runtime.service.read_item("active")
@@ -638,7 +626,7 @@ def test_runtime_recovery_rejects_a_current_session_item(tmp_path: Path) -> None
         )
 
     assert runtime.service.read_item("active") == current_before
-    assert runtime.service.read_item("foreign") == foreign.item
+    assert runtime.service.read_item("foreign") == foreign
     assert process.returncode is None
 
 
@@ -855,6 +843,22 @@ def _foreign_runtime_pair(tmp_path):  # noqa: ANN001, ANN202
     )
     assert restarted.start().state is ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
     return first, restarted, store, process
+
+
+def _claim_fixture(runtime, item_id, *, owner_id, claim_id):  # noqa: ANN001, ANN202
+    item = runtime.service.read_item(item_id)
+    assert item is not None
+    claimed = runtime.service.repository._claim_selection_candidate(
+        item_id,
+        pool_name=item.pool_name,
+        expected_dispatch_attempt=item.dispatch_attempt,
+        owner_id=owner_id,
+        claim_id=claim_id,
+        preference_id="test.fixture",
+        reason_code="test.fixture",
+    )
+    assert claimed is not None
+    return claimed
 
 
 def _two_slot_spec(tmp_path):  # noqa: ANN001, ANN202

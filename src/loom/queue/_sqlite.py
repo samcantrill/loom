@@ -22,7 +22,7 @@ from .models import (
     QueueRecoveryRecord,
     validate_queue_id,
 )
-from .repository import QueueClaimResult, QueuePoolSnapshot
+from .repository import QueuePoolSnapshot
 
 QUEUE_DB_SCHEMA_VERSION = 1
 _BUSY_TIMEOUT_MS = 5000
@@ -119,60 +119,6 @@ class SQLiteQueueRepository:
             items=tuple(_item_from_json(cast(str, row["item_json"])) for row in rows),
         )
 
-    def claim_next(
-        self,
-        pool_name: str,
-        *,
-        owner_id: str,
-        claim_id: str,
-    ) -> QueueClaimResult | None:
-        pool_name = validate_queue_id(pool_name, "pool_name")
-        owner_id = validate_queue_id(owner_id, "owner_id")
-        claim_id = validate_queue_id(claim_id, "claim_id")
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                """
-                SELECT item_json
-                FROM queue_items
-                WHERE pool_name = ? AND status = ?
-                ORDER BY enqueued_at, queue_item_id
-                LIMIT 1
-                """,
-                (pool_name, QueueItemStatus.QUEUED.value),
-            ).fetchone()
-            if row is None:
-                return None
-            current = _item_from_json(cast(str, row["item_json"]))
-            now = self._clock()
-            claim = QueueClaim(
-                claim_id=claim_id,
-                owner_id=owner_id,
-                claimed_at=now,
-                dispatch_attempt=current.dispatch_attempt,
-            )
-            claimed = replace(
-                current,
-                status=QueueItemStatus.CLAIMED,
-                claim=claim,
-                updated_at=now,
-            )
-            if _update_item(conn, claimed, expected=current) != 1:
-                raise QueueConflictError("queue item claim conflicted")
-            _append_audit_event(
-                conn,
-                queue_item_id=claimed.queue_item_id,
-                event_type="queue.item.claimed",
-                timestamp=now,
-                detail={
-                    "claim_id": claim.claim_id,
-                    "owner_id": claim.owner_id,
-                    "dispatch_attempt": claim.dispatch_attempt,
-                },
-            )
-            conn.commit()
-            return QueueClaimResult(item=claimed)
-
     def _read_selection_candidates(
         self, pool_name: str, *, limit: int
     ) -> tuple[QueueItem, ...]:
@@ -205,7 +151,7 @@ class SQLiteQueueRepository:
         claim_id: str,
         preference_id: str,
         reason_code: str,
-    ) -> QueueClaimResult | None:
+    ) -> QueueItem | None:
         """Atomically claim exactly one previously selected queued item."""
 
         queue_item_id = validate_queue_id(queue_item_id, "queue_item_id")
@@ -268,7 +214,7 @@ class SQLiteQueueRepository:
                 },
             )
             conn.commit()
-            return QueueClaimResult(item=claimed)
+            return claimed
 
     def record_dispatch_handle(
         self,

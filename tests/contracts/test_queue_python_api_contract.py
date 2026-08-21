@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import loom.queue as queue
+
 from pathlib import Path
 
 from loom.queue import (
@@ -99,6 +101,8 @@ def test_queue_selection_public_api_is_import_light_and_in_process_only() -> Non
     assert QueueSelectionPolicy
     assert context.candidates == (candidate,)
     assert decision.disposition is QueueSelectionDisposition.SELECTED
+    assert not hasattr(queue, "QueueClaim" "Result")
+    assert not hasattr(QueueService, "claim" "_next")
 
 
 def test_queue_cycle_selection_evidence_contract_is_narrow_plain_data() -> None:

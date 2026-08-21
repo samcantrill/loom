@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -132,6 +132,14 @@ class QueueSelectionPolicy(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class _QueueSelectionPolicyBinding:
+    """Construction-time snapshot of a custom preference implementation."""
+
+    policy_id: str
+    select_next: Callable[[QueueSelectionContext], QueueSelectionDecision]
+
+
+@dataclass(frozen=True, slots=True)
 class _QueueSelectionEvaluation:
     """Private evaluator result with stable evidence ownership."""
 
@@ -141,8 +149,8 @@ class _QueueSelectionEvaluation:
     has_eligible_candidates: bool
 
 
-def _validate_selection_policy(policy: object) -> QueueSelectionPolicy:
-    """Validate the small injected policy shape at controller construction."""
+def _bind_selection_policy(policy: object) -> _QueueSelectionPolicyBinding:
+    """Validate and freeze the small injected policy shape at construction."""
 
     try:
         policy_id = policy.policy_id  # type: ignore[union-attr]
@@ -151,10 +159,13 @@ def _validate_selection_policy(policy: object) -> QueueSelectionPolicy:
         raise QueueValidationError(
             "selection policy must define policy_id and select_next(context)"
         ) from exc
-    _safe_code(policy_id, "policy_id")
+    policy_id = _safe_code(policy_id, "policy_id")
     if not callable(selector):
         raise QueueValidationError("selection policy select_next must be callable")
-    return cast(QueueSelectionPolicy, policy)
+    return _QueueSelectionPolicyBinding(
+        policy_id=policy_id,
+        select_next=cast(Callable[[QueueSelectionContext], QueueSelectionDecision], selector),
+    )
 
 
 def _evaluate_selection(
@@ -162,7 +173,8 @@ def _evaluate_selection(
     *,
     pool_name: str,
     advisory_available_resources: Mapping[str, int],
-    policy: QueueSelectionPolicy | None,
+    policy: _QueueSelectionPolicyBinding | None,
+    filter_resources: bool = True,
 ) -> _QueueSelectionEvaluation:
     """Apply fixed eligibility and one default or injected preference."""
 
@@ -180,6 +192,7 @@ def _evaluate_selection(
                 item,
                 pool_name=pool_name,
                 advisory_available_resources=advisory_available_resources,
+                filter_resources=filter_resources,
             )
         ),
         advisory_available_resources=advisory_available_resources,
@@ -190,9 +203,7 @@ def _evaluate_selection(
                 QueueSelectionDisposition.STOPPED,
                 _NO_ELIGIBLE_REASON_CODE,
             ),
-            preference_id=_DEFAULT_PREFERENCE_ID
-            if policy is None
-            else _policy_id(policy),
+            preference_id=_DEFAULT_PREFERENCE_ID if policy is None else policy.policy_id,
             source_had_candidates=bool(items),
             has_eligible_candidates=False,
         )
@@ -207,7 +218,7 @@ def _evaluate_selection(
             source_had_candidates=True,
             has_eligible_candidates=True,
         )
-    preference_id = _policy_id(policy)
+    preference_id = policy.policy_id
     try:
         decision = policy.select_next(context)
     except Exception:  # policy failures are safe stop evidence, never mutation
@@ -240,27 +251,22 @@ def _evaluate_selection(
         source_had_candidates=True,
         has_eligible_candidates=True,
     )
-
-
-def _policy_id(policy: QueueSelectionPolicy) -> str:
-    try:
-        return _safe_code(policy.policy_id, "policy_id")
-    except (AttributeError, QueueValidationError):
-        return _INVALID_DECISION_REASON_CODE
-
-
 def _is_eligible(
     item: QueueItem,
     *,
     pool_name: str,
     advisory_available_resources: Mapping[str, int],
+    filter_resources: bool,
 ) -> bool:
     return (
         item.pool_name == pool_name
         and QueueItemStatus(item.status) is QueueItemStatus.QUEUED
-        and all(
-            amount <= advisory_available_resources.get(resource_name, 0)
-            for resource_name, amount in item.launch_contract.resources.items()
+        and (
+            not filter_resources
+            or all(
+                amount <= advisory_available_resources.get(resource_name, 0)
+                for resource_name, amount in item.launch_contract.resources.items()
+            )
         )
     )
 

@@ -6,7 +6,6 @@ from pathlib import Path
 
 from loom.queue import (
     LaunchContract,
-    QueueClaimResult,
     QueueItem,
     QueueItemStatus,
     QueueRepository,
@@ -21,25 +20,13 @@ def test_sqlite_queue_repository_satisfies_repository_protocol(tmp_path: Path) -
     assert isinstance(repository, QueueRepository)
 
 
-def test_queue_repository_claim_contract_returns_claimed_item(tmp_path: Path) -> None:
+def test_queue_repository_does_not_publish_implicit_fifo_ownership(tmp_path: Path) -> None:
     repository = SQLiteQueueRepository(
         tmp_path / "queue.sqlite",
         clock=lambda: "2020-01-01T00:00:01Z",
     )
-    repository.enqueue(_item("item-1", "2020-01-01T00:00:00Z"))
-
-    result = repository.claim_next(
-        "gpu-pool",
-        owner_id="controller-1",
-        claim_id="claim-1",
-    )
-
-    assert isinstance(result, QueueClaimResult)
-    assert result.item is not None
-    assert result.item.status is QueueItemStatus.CLAIMED
-    assert result.item.claim is not None
-    assert result.item.claim.claim_id == "claim-1"
-    assert result.item.dispatch_attempt == 1
+    assert not hasattr(QueueRepository, "claim" "_next")
+    assert not hasattr(repository, "claim" "_next")
 
 
 def test_queue_repository_deferral_preserves_fifo_identity(tmp_path: Path) -> None:
@@ -47,12 +34,7 @@ def test_queue_repository_deferral_preserves_fifo_identity(tmp_path: Path) -> No
         tmp_path / "queue.sqlite", clock=lambda: "2020-01-01T00:00:01Z"
     )
     repository.enqueue(_item("item-1", "2020-01-01T00:00:00Z"))
-    claim_result = repository.claim_next(
-        "gpu-pool", owner_id="controller-1", claim_id="claim-1"
-    )
-    assert isinstance(claim_result, QueueClaimResult)
-    assert claim_result.item is not None
-    claimed = claim_result.item
+    claimed = _claim(repository, "item-1", claim_id="claim-1")
 
     deferred = repository.defer_item("item-1", reason_code="capacity", expected=claimed)
 
@@ -86,16 +68,13 @@ def test_queue_repository_completion_evidence_is_optional_and_guarded(
         tmp_path / "queue.sqlite", clock=lambda: "2020-01-01T00:00:01Z"
     )
     repository.enqueue(_item("item-1", "2020-01-01T00:00:00Z"))
-    claim = repository.claim_next(
-        "gpu-pool", owner_id="controller-1", claim_id="claim-1"
-    )
-    assert claim is not None
+    claim = _claim(repository, "item-1", claim_id="claim-1")
 
     completed = repository.complete_item(
         "item-1",
         status=QueueItemStatus.UNKNOWN,
         reason="operator-recovery",
-        expected=claim.item,
+        expected=claim,
         evidence={"recovery": {"attested": True}},
     )
 
@@ -119,3 +98,19 @@ def _item(item_id: str, enqueued_at: str) -> QueueItem:
         enqueued_at=enqueued_at,
         updated_at=enqueued_at,
     )
+
+
+def _claim(repository: SQLiteQueueRepository, item_id: str, *, claim_id: str) -> QueueItem:
+    candidate = repository.read_item(item_id)
+    assert candidate is not None
+    claimed = repository._claim_selection_candidate(
+        item_id,
+        pool_name="gpu-pool",
+        expected_dispatch_attempt=candidate.dispatch_attempt,
+        owner_id="controller-1",
+        claim_id=claim_id,
+        preference_id="test.fixture",
+        reason_code="test.fixture",
+    )
+    assert claimed is not None
+    return claimed

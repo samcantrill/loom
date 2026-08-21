@@ -11,7 +11,7 @@ The v11 queue is intentionally narrow:
 
 ```text
 whole-run queue items
-one FIFO queue per pool
+one deterministic queue per pool
 SQLite-backed workspace queue repository
 managed local and delegated SLURM capacity modes
 Python-first enqueue/control surface
@@ -133,14 +133,15 @@ read-only authority limit reconciliation.
 
 ## Managed Selection
 
-Managed queues read a bounded deterministic FIFO window, remove requests that
-cannot fit the current advisory local opportunity, then use either the oldest
-eligible request or one Python `QueueSelectionPolicy` injected into
-`QueueController` (or `ManagedLocalQueueRuntime.from_spec`) by pool name. A
-policy receives only the immutable candidate ID, enqueue time, dispatch
-attempt, logical resource amounts, pool name, and advisory available amounts;
-it returns one supplied ID or stops. It cannot claim work, reserve capacity, or
-learn slot, process, agent, offer, or transport details.
+Every controller pool mode chooses before it acquires queue ownership. Managed
+queues read a bounded deterministic FIFO window, remove requests that cannot
+fit the current advisory local opportunity, then use either the oldest eligible
+request or one Python `QueueSelectionPolicy` injected into `QueueController`
+(or `ManagedLocalQueueRuntime.from_spec`) by pool name. A policy receives only
+the immutable candidate ID, enqueue time, dispatch attempt, logical resource
+amounts, pool name, and advisory available amounts; it returns one supplied ID
+or stops. It cannot claim work, reserve capacity, or learn slot, process,
+agent, offer, or transport details.
 
 Advisory capacity is not authority. Loom acquires exact local queue ownership
 after evaluating a policy, then local authority/provider admission decides
@@ -149,8 +150,12 @@ compensated, the controller may refresh and choose another eligible request in
 the same bounded opportunity without reacquiring the deferred ID. This enables
 head bypass but deliberately makes no fairness or starvation guarantee.
 
-Delegated SLURM pools retain external scheduler ownership and FIFO handoff;
-selection policy does not place delegated work. Stage 29 preserves the same
+Delegated SLURM pools use the same bounded choose-then-acquire operation with
+default FIFO preference and retain external scheduler ownership. Selection
+policy does not place delegated work. A custom repository used with a
+`QueueController` must provide Loom's private bounded-read and exact-acquire
+capabilities at controller construction; ordinary persistence-only repositories
+remain usable outside controller scheduling. Stage 29 preserves the same
 eligibility/evaluator behavior but moves managed ownership into durable
 assignment/offer records. See the dependency-free
 [managed-local policy example](../../examples/operations/managed-local-queue/README.md)
