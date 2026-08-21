@@ -27,6 +27,7 @@ from loom.pipeline.executors.slurm.status import (
 from loom.queue import (
     DispatchHandle,
     QueueEnqueueRequest,
+    QueueItem,
     QueueItemStatus,
     QueueService,
     normalize_queue_spec,
@@ -49,6 +50,42 @@ _SLURM_POOL = "slurm-pool"
 _SLURM_QUEUE = "slurm"
 _OWNER_ID = "demo-controller"
 _SESSION_ID = "demo-session"
+
+
+def _claim_demo_item(
+    service: QueueService,
+    pool_name: str,
+    *,
+    owner_id: str,
+    claim_id: str,
+) -> QueueItem | None:
+    """Claim the next demo fixture through the current exact-ownership seam."""
+
+    candidate = next(
+        (
+            item
+            for item in service.read_pool_snapshot(pool_name).items
+            if QueueItemStatus(item.status) is QueueItemStatus.QUEUED
+        ),
+        None,
+    )
+    if candidate is None:
+        return None
+    claimer = getattr(service.repository, "_claim_selection_candidate", None)
+    if not callable(claimer):
+        raise RuntimeError("demo queue repository cannot claim an exact selection")
+    claimed = claimer(
+        candidate.queue_item_id,
+        pool_name=pool_name,
+        expected_dispatch_attempt=candidate.dispatch_attempt,
+        owner_id=owner_id,
+        claim_id=claim_id,
+        preference_id="loom_monitor.demo",
+        reason_code="loom_monitor.demo.fixture",
+    )
+    if claimed is not None and not isinstance(claimed, QueueItem):
+        raise RuntimeError("demo queue repository returned an invalid claim")
+    return claimed
 
 
 @dataclass(slots=True)
@@ -385,17 +422,18 @@ class _DemoDriver:
 
         self._step_seed_clock()
         self._enqueue("demo-waiting-large", _LOCAL_QUEUE, adapter="local")
-        claimed = self.service.claim_next(
+        claimed = _claim_demo_item(
+            self.service,
             _LOCAL_POOL,
             owner_id=_OWNER_ID,
             claim_id="claim-demo-waiting-large-deferred",
         )
-        if claimed is None or claimed.item.queue_item_id != "demo-waiting-large":
+        if claimed is None or claimed.queue_item_id != "demo-waiting-large":
             raise RuntimeError("demo queue did not claim the deferred item")
         self.service.defer_item(
             "demo-waiting-large",
             reason_code="resource.capacity_unavailable",
-            expected=claimed.item,
+            expected=claimed,
         )
 
         self._step_seed_clock()
@@ -434,16 +472,16 @@ class _DemoDriver:
         *,
         activated_at: float | None = None,
     ) -> None:
-        claimed = self.service.claim_next(
+        item = _claim_demo_item(
+            self.service,
             pool_name,
             owner_id=_OWNER_ID,
             claim_id=f"claim-{item_id}",
         )
-        if claimed is None or claimed.item.queue_item_id != item_id:
+        if item is None or item.queue_item_id != item_id:
             raise RuntimeError(
                 f"demo queue claimed an unexpected item before {item_id}"
             )
-        item = claimed.item
         adapter = item.launch_contract.adapter
         evidence: Mapping[str, PlainData] = {}
         if adapter == "local":

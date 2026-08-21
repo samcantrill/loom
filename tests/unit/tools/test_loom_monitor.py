@@ -29,7 +29,7 @@ from loom.state_sources import (
 )
 from tools.loom_monitor.app import HelpScreen, LoomMonitorApp
 from tools.loom_monitor.collector import MonitorCollector
-from tools.loom_monitor.demo import create_demo_session
+from tools.loom_monitor.demo import _claim_demo_item, create_demo_session
 from tools.loom_monitor.__main__ import main as monitor_main
 from tools.loom_monitor.models import (
     ActiveAttempt,
@@ -291,7 +291,12 @@ def test_app_polls_selected_evidence_jobs_and_logs_without_opening_tabs(
             adapter="slurm",
         )
     )
-    service.claim_next("batch", owner_id="controller", claim_id="claim-1")
+    _claim_demo_item(
+        service,
+        "batch",
+        owner_id="controller",
+        claim_id="claim-1",
+    )
     calls = {
         "authority": 0,
         "run": 0,
@@ -570,7 +575,12 @@ def _queue_service(tmp_path: Path, *, claimed: bool = False) -> QueueService:
         )
     )
     if claimed:
-        service.claim_next("local", owner_id="controller", claim_id="claim-1")
+        _claim_demo_item(
+            service,
+            "local",
+            owner_id="controller",
+            claim_id="claim-1",
+        )
     return service
 
 
