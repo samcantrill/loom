@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 27, Phase 3
 - Manifest: docs/roadmap/stage-27/implementation-plan.md
 - Branch: agent/stage-27-p3-nvidia-auto-discovery
@@ -248,7 +248,8 @@ Final commands:
 - Blocker corrections: 1/3 — current bounded fix validates exact reciprocal
   topology tokens, rejects `NV0`, and normalizes positive NVLink counts into
   deterministic ranks before grouped planning
-- PR and merge: pending
+- PR and merge: [#226](https://github.com/samcantrill/loom/pull/226) open,
+  correctly targeting `develop`; required CI and merge pending
 
 ## Completion Record
 
@@ -258,5 +259,5 @@ Final commands:
 | Tests added or updated | Device/topology parser, import boundary, provider protocol, fake managed-local example, and opt-in real-host acceptance coverage. |
 | Validated revision/tree state and evidence | `make validate-pr` passed on the implementation tree at `73b87bc`: Ruff, Pyright, default 2,242 passed/1 opt-in GPU skip/115 deselected, config-extra 135 passed/3 container skips/2,246 deselected, and sdist/wheel build. `make test-summary` passed: package 116, unit 1,577, contract 285, integration 209, e2e 55, config-extra 135 with 3 skips. |
 | Validation-relevant changes after evidence | Roadmap-only gate/PR metadata follows; no source, test, dependency, build, or validation-configuration change. Correction 1/3 remains the final implementation change. |
-| PR, review, and merge | pending |
+| PR, review, and merge | Manager review passed; [#226](https://github.com/samcantrill/loom/pull/226) is open, non-draft, mergeable, and targets `develop`; required CI and merge pending. |
 | Residual risk and cleanup | Real host evidence remains explicit/opt-in; worktree and branch retained for manager validation. |

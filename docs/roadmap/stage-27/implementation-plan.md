@@ -6,7 +6,7 @@ Planning document: docs/roadmap/stage-27/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Worktree root: `/home/can134/work/active/loom-worktrees`
-Current phase: Phase 3 in_progress
+Current phase: Phase 3 pr_open
 Blockers: none
 
 ## Summary
@@ -91,7 +91,7 @@ Blockers: none
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `gpu-plans-safe-bootstrap` | merged | `docs/roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md` | `agent/stage-27-p1-gpu-plans-safe-bootstrap` | [#221](https://github.com/samcantrill/loom/pull/221) | GPU inventory/layout/plan API, atomic authority ensure, whole/share composition | Run a manually supplied whole/share GPU pool safely without authored slots. |
 | 2 | `grouped-gpu-placement` | merged | `docs/roadmap/stage-27/phases/grouped-gpu-placement.md` | `agent/stage-27-p2-grouped-gpu-placement` | [#225](https://github.com/samcantrill/loom/pull/225) | Deterministic disjoint groups and member-backed assignment lifecycle | Allocate N strongly connected GPUs as one logical unit without member overlap. |
-| 3 | `nvidia-auto-discovery` | in_progress | `docs/roadmap/stage-27/phases/nvidia-auto-discovery.md` | `agent/stage-27-p3-nvidia-auto-discovery` | pending | Explicit NVIDIA command adapter, diagnostics, docs, examples, acceptance | Turn installed NVIDIA hardware into the same reviewed plan automatically. |
+| 3 | `nvidia-auto-discovery` | pr_open | `docs/roadmap/stage-27/phases/nvidia-auto-discovery.md` | `agent/stage-27-p3-nvidia-auto-discovery` | [#226](https://github.com/samcantrill/loom/pull/226) | Explicit NVIDIA command adapter, diagnostics, docs, examples, acceptance | Turn installed NVIDIA hardware into the same reviewed plan automatically. |
 
 ## Quality Gate
 
@@ -116,4 +116,4 @@ Blockers: none
 | --- | --- | --- | --- | --- |
 | 1 | [#221](https://github.com/samcantrill/loom/pull/221) squash-merged as `f67d29c` | Implementation, manager review, `make validate-pr`, and required CI passed | Shares express scheduling capacity, not isolation | Phase worktree and local/remote branch removed |
 | 2 | [#225](https://github.com/samcantrill/loom/pull/225) squash-merged as `7922f8f` | Implementation, manager review, `make validate-pr`, `make test-summary`, and required CI passed | Greedy topology grouping is disjoint and deterministic, not globally optimal | Phase worktree and local/remote branch removed |
-| 3 | pending | pending | pending | pending |
+| 3 | [#226](https://github.com/samcantrill/loom/pull/226) open against `develop` | Implementation, manager review, `make validate-pr`, and `make test-summary` passed; required CI pending | Real NVIDIA hardware remains an explicit opt-in acceptance environment | Phase worktree and branch retained pending merge |
