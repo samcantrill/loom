@@ -6,7 +6,7 @@ Planning document: docs/roadmap/stage-27/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Worktree root: `/home/can134/work/active/loom-worktrees`
-Current phase: Phase 3 pending
+Current phase: Phase 3 in_progress
 Blockers: none
 
 ## Summary
@@ -91,7 +91,7 @@ Blockers: none
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `gpu-plans-safe-bootstrap` | merged | `docs/roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md` | `agent/stage-27-p1-gpu-plans-safe-bootstrap` | [#221](https://github.com/samcantrill/loom/pull/221) | GPU inventory/layout/plan API, atomic authority ensure, whole/share composition | Run a manually supplied whole/share GPU pool safely without authored slots. |
 | 2 | `grouped-gpu-placement` | merged | `docs/roadmap/stage-27/phases/grouped-gpu-placement.md` | `agent/stage-27-p2-grouped-gpu-placement` | [#225](https://github.com/samcantrill/loom/pull/225) | Deterministic disjoint groups and member-backed assignment lifecycle | Allocate N strongly connected GPUs as one logical unit without member overlap. |
-| 3 | `nvidia-auto-discovery` | pending | `docs/roadmap/stage-27/phases/nvidia-auto-discovery.md` | `agent/stage-27-p3-nvidia-auto-discovery` | pending | Explicit NVIDIA command adapter, diagnostics, docs, examples, acceptance | Turn installed NVIDIA hardware into the same reviewed plan automatically. |
+| 3 | `nvidia-auto-discovery` | in_progress | `docs/roadmap/stage-27/phases/nvidia-auto-discovery.md` | `agent/stage-27-p3-nvidia-auto-discovery` | pending | Explicit NVIDIA command adapter, diagnostics, docs, examples, acceptance | Turn installed NVIDIA hardware into the same reviewed plan automatically. |
 
 ## Quality Gate
 

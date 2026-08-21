@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 27, Phase 3
 - Manifest: docs/roadmap/stage-27/implementation-plan.md
 - Branch: agent/stage-27-p3-nvidia-auto-discovery
-- Worktree root and path: use the recorded Stage 27 worktree root and a dedicated
-  Phase 3 path
-- Base revision: current `origin/develop` after Phase 2 is remotely merged
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+  `/home/can134/work/active/loom-worktrees/stage-27-p3-nvidia-auto-discovery`
+- Base revision: `16a184912ca2aaa65fdcd73e046023c5466b0fa7`
 - PR target: develop
 - PR title: `feat(queue): discover and prepare local NVIDIA GPU pools`
 - Dependencies: Phase 2 remotely merged
 - Workflow path: fast; external parsing is fake-tested and real hardware remains
   an opt-in acceptance profile
-- Blockers: Phase 2
+- Blockers: none
 
 ## Objective And Context
 
@@ -232,9 +232,11 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: draft complete; approval pending
-- Expanded planning: not needed for this phase after earlier contracts land
-- Implementation: pending
+- Manager preparation: passed on `16a184912ca2aaa65fdcd73e046023c5466b0fa7`;
+  Phase 2 is merged and official NVIDIA query/topology contracts were verified
+- Expanded planning: not needed; the external parser boundary, normalized
+  output, failure modes, import behavior, and opt-in hardware gate are fixed
+- Implementation: pending one `loom_phase_executor`
 - Refiner: not needed
 - Pre-submit gate: pending
 - Independent review: not needed unless parser uncertainty creates a material
