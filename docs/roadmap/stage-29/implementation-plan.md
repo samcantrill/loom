@@ -1,6 +1,6 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: amended draft; plan consistency review pending
+Status: manager quality gate passed; maintainer implementation approval pending
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
@@ -187,11 +187,11 @@ the stage assignment/grant path.
   local-daemon and multi-machine consumers.
 - Optional design review: one expanded removal-first pass found seven boundary
   issues; one bounded correction resolved all seven in planning.
-- Optional plan review: pending after linked phase-plan rewrite.
-- Correction: design correction complete; plan correction pending only if the
-  bounded consistency review returns a concrete finding.
-- Ready for implementation: no; maintainer approval and plan consistency pass
-  remain.
+- Optional plan review: one expanded pass found a Phase 1 GPU-boundary mismatch
+  and an over-broad Phase 3 pre-grant cancellation statement; both were corrected.
+- Correction: design and plan corrections complete; no concrete finding remains.
+- Ready for implementation: after maintainer approval. Phase 1 preparation must
+  still rediscover exact contracts on current clean `origin/develop`.
 - Accepted risks: FIFO starvation, bounded-search delay, coordinator relay
   bottleneck, agent result retention, resident-project drift, capacity held by
   unknown work, and repeatable external effects after explicit recovery.

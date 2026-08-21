@@ -2438,9 +2438,9 @@ Status:
 
 - The maintainer confirmed the amendment from whole-run placement to
   dependency-aware per-stage managed scheduling. Earlier stages remain
-  implemented prerequisites. One expanded removal-first design review passed
-  after a bounded correction; the amended phase-plan consistency review and
-  maintainer implementation-plan approval remain pending. All three phases are
+  implemented prerequisites. One expanded removal-first design review and one
+  plan-consistency review passed after bounded corrections. Maintainer
+  implementation-plan approval remains pending, and all three phases are
   unimplemented.
 
 Goal:

@@ -78,9 +78,13 @@ In scope:
 - Complete run cancellation semantics at stage granularity:
   - coordinator commits run cancellation intent once and stops preparing or
     assigning new stage work immediately;
-  - prepared/ungranted executable attempts are exact-unbound and terminalized
-    under existing authority cancellation rules; never-ready descendants receive
-    a bounded cancellation/block reason without agent work;
+  - never-assigned prepared attempts are terminalized under existing authority
+    cancellation rules; never-ready descendants receive a bounded cancellation/
+    block reason without agent work;
+  - an assignment-bound pre-grant attempt is cleared only after an exact agent
+    acknowledgement proves grant/start cannot occur and its physical claim and
+    staged request/input ownership are released. Disconnected or ambiguous
+    acceptance remains bound/unknown with cancellation pending;
   - every active assignment receives an exact fenced control. Cancel-before-
     grant prevents grant/start; grant-before-cancel remains active until the
     agent proves process containment/exit, output-transfer disposition, cleanup,
@@ -301,7 +305,7 @@ Final commands:
 ## Workflow State
 
 - Manager preparation: pending Phase 2 remote merge/worktree/base recording
-- Expanded planning: required; design-review lifecycle corrections are incorporated
+- Expanded planning: Stage 29 design and plan reviews passed after bounded corrections
 - Implementation: pending one `loom_phase_executor`
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: pending

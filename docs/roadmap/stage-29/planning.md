@@ -1,15 +1,15 @@
 # Roadmap Stage 29 Planning: Durable Dependency-Aware Stage Scheduling
 
-Status: amended design review passed; detailed plan amendment in progress
+Status: manager quality gate passed; maintainer implementation approval pending
 Roadmap stage: 29
-Evidence tree: checked-out integration branch at `9ef224b8614d50cf773d24226bb4c301b4d05cbd`;
-the checkout contains pre-existing integration conflicts outside the authoritative
-Stage 29 artifact set
+Evidence tree: checked-out integration branch source lineage through
+`51ad12552a6569289a38ecb3523f6a8b1610ba09`; relevant dirty paths are this
+Stage 29 artifact set and its roadmap propagation
 Planning route: expanded because the amendment changes the managed execution
 unit from a whole run to an individual stage attempt and crosses durable,
 public, trust, data-transfer, and lifecycle boundaries
-Current gate: maintainer approved the per-stage direction; expanded design
-review passed after one bounded correction; detailed phase plans are being amended
+Current gate: maintainer approved the per-stage direction; expanded design and
+plan consistency reviews passed after bounded corrections
 Blockers: none in product design; Phase 1 must begin from a clean current
 `develop` worktree and recheck exact source names
 
@@ -26,7 +26,7 @@ different resources and useful placements.
 | Evidence | The queue is whole-run; `PipelineRunner` already computes dependency readiness in memory; prepared stage attempts and a reconstructable stage worker already exist. | Exact names must be rediscovered on the implementation branch. | Preserve owners and extract the existing path. |
 | Functionality | One run admission model, dependency-aware stage readiness, per-stage placement, integer CPUs, global agent capacity, hard constraints, and soft preferences. | None. | Review the amended design. |
 | Design | Separate orchestration from pure placement; per-run authority owns stage truth; coordinator owns scheduling work and assignments; agent owns physical binding and execution. | None; expanded removal-first correction is recorded. | Carry fixed contracts into phase plans. |
-| Validation | Causal lifecycle and store-boundary tests plus pure deterministic scheduler tests. | Detailed manifest consistency review pending. | Shape phases, then review. |
+| Validation | Causal lifecycle and store-boundary tests plus pure deterministic scheduler tests; phase coverage passed bounded consistency review after correction. | None. | Recheck exact commands during phase preparation. |
 | Approval | Maintainer approved the direction, not yet the amended implementation manifest. | Maintainer implementation approval. | Present the reviewed documents. |
 
 ## Evidence And Scope
@@ -81,19 +81,7 @@ runtime:
       resources:
         entries:
           cpu: {kind: cpu, amount: 4, unit: count, attributes: {}}
-          gpu:
-            kind: gpu
-            amount: 1
-            unit: count
-            attributes:
-              allocation_mode: exclusive
-              minimum_vram: {amount: 64, unit: GiB}
-      placement:
-        preferences:
-          - kind: resource_attribute_order
-            resource: gpu
-            attribute: model
-            values: [h200, h100, a100]
+          memory: {kind: memory, amount: 96, unit: GiB, attributes: {}}
 ```
 
 `preprocess` is scheduled first. `train` has no scheduling work until the
@@ -101,6 +89,27 @@ preprocess output is authoritatively committed. A local command may synchronousl
 wait for the run, while a daemon may admit other runs and use otherwise idle
 capacity. Both compositions use the same readiness, placement, assignment,
 binding, and finalization path.
+
+Phase 2 extends the same `train` stage with the accepted GPU attributes and
+placement preference; this is not part of the Phase 1 minimum:
+
+```yaml
+resources:
+  entries:
+    gpu:
+      kind: gpu
+      amount: 1
+      unit: count
+      attributes:
+        allocation_mode: exclusive
+        minimum_vram: {amount: 64, unit: GiB}
+placement:
+  preferences:
+    - kind: resource_attribute_order
+      resource: gpu
+      attribute: model
+      values: [h200, h100, a100]
+```
 
 The smallest new surfaces are a resolved stage placement value, a durable
 stage-work projection, one concrete pure placement engine, and coordinator/agent
@@ -424,11 +433,12 @@ gate and must remove the managed whole-run execution fork before Phase 2.
 | Complexity delta proportionate | Solver, fair-share, public scheduler/rule protocols, gang work, HA, and automatic redispatch remain deferred. | pass |
 | Contracts and private discretion clear | Identity, store ownership, hand-off, resource resolution, artifact access, and compatibility are fixed; local helpers remain private. | pass |
 | Invariant ownership and validation proportionate | Expanded review corrections establish one readiness predicate, reversible pre-grant binding, outage-safe execution fence, and authoritative relay refs. | pass |
-| Phases vertical and reviewable | Local managed path, remote pool, then control/recovery. | pass pending plan review |
+| Phases vertical and reviewable | Expanded plan review corrected the Phase 1 CPU/memory minimum and the Phase 3 ambiguous pre-grant cancellation boundary. | pass |
 | No unresolved blocker | Product choices are locked. | pass |
 
-Gate result: amended manager gate awaits the expanded design and plan reviews,
-then maintainer implementation-plan approval.
+Gate result: amended manager gate passed after one expanded design correction
+and one bounded two-item plan correction; maintainer implementation-plan
+approval remains.
 
 Accepted risks: initial FIFO-with-bypass can starve large jobs; the artifact
 relay can bottleneck on the coordinator; bounded search can delay work; a stale

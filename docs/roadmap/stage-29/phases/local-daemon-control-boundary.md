@@ -278,7 +278,7 @@ Final commands:
 ## Workflow State
 
 - Manager preparation: pending clean worktree/base and exact source-map record
-- Expanded planning: Stage 29 design review passed after one bounded seven-item correction
+- Expanded planning: Stage 29 design and plan reviews passed after bounded corrections
 - Implementation: pending one `loom_phase_executor`
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: pending
