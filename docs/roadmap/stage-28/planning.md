@@ -8,7 +8,7 @@ are preserved
 Planning route: expanded because public plugin/executor registration, durable
 worker reconstruction, resource-validation threading, and callback contracts
 interact
-Current gate: planning workflow complete; Phase 1 implementation in progress
+Current gate: Phase 1 remotely merged; Phase 2 pending
 Blockers: none; Stage 26's lifecycle-event dependency for Phase 3 is satisfied
 on current `origin/develop`
 
@@ -320,8 +320,9 @@ assembly, and callback behavior while each leaves a useful result.
 Gate result: planning, expanded design-safety review, implementation planning,
 independent plan review, one bounded design correction, and one bounded plan
 correction are complete. The maintainer removed the non-technical Stage 27
-sequencing gate on 2026-08-21; Phase 1 may proceed independently. Stage 26's
-lifecycle catalog and commit-before-observe correction remain the only
+sequencing gate on 2026-08-21, and Phase 1 remotely merged in
+[#222](https://github.com/samcantrill/loom/pull/222). Phase 2 may proceed. Stage
+26's lifecycle catalog and commit-before-observe correction remain the only
 cross-stage dependency, apply to Phase 3, and are already remotely merged.
 
 ## Decisions And Deferrals

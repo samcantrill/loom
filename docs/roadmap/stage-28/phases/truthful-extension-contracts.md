@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: v28 Phase 1
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p1-truthful-extension-contracts`
@@ -217,24 +217,22 @@ Final commands:
 - Manager preparation: complete; branch, worktree, base, target, title,
   dependency boundary, source seams, and targeted tests verified
 - Expanded planning: not needed; stage-level design review resolved report risk
-- Implementation: complete at `c4e3475`; phase source, tests, and canonical
-  documentation are committed; focused corrections end at `3bc35ec`
+- Implementation: complete in [#222](https://github.com/samcantrill/loom/pull/222)
 - Refiner: not needed; all qualified findings were manager-local
-- Pre-submit gate: complete with the local contention limitation recorded
-  below; isolated GitHub CI is required before merge
+- Pre-submit gate: complete; isolated GitHub CI passed
 - Independent review: manager-local fast path passed with no product blocker
 - Blocker corrections: 3/3; Pyright fixture typing, fail-closed checker coverage
   plus exact status vocabulary, and text-diagnostic coverage
-- PR and merge: [#222](https://github.com/samcantrill/loom/pull/222) open against
-  `develop`; title/base/head/draft state and diff scope verified; merge pending CI
+- PR and merge: [#222](https://github.com/samcantrill/loom/pull/222)
+  squash-merged to `develop` as `3b3c51f`
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `c4e3475`: `src/loom/plugins/diagnostics.py`, `src/loom/plugins/__init__.py`, and `src/loom/cli/plugins.py` add derived six-facet readiness and v2 CLI diagnostic payloads; `src/loom/testing/` adds report values and the four bounded public checkers; phase-scoped docs update `docs/features/plugins.md`, `docs/features/protocols.md`, `docs/features/testing.md`, and `docs/structure.md`. |
+| Implementation and changed paths | Merge `3b3c51f`: `src/loom/plugins/diagnostics.py`, `src/loom/plugins/__init__.py`, and `src/loom/cli/plugins.py` add derived six-facet readiness and v2 CLI diagnostic payloads; `src/loom/testing/` adds report values and the four bounded public checkers; phase-scoped docs update `docs/features/plugins.md`, `docs/features/protocols.md`, `docs/features/testing.md`, and `docs/structure.md`. |
 | Tests added or updated | `tests/unit/loom/testing/test_contracts.py`, `tests/package/test_testing_api.py`, `tests/unit/loom/cli/test_plugins.py`, `tests/unit/loom/plugins/test_diagnostics.py`, `tests/package/test_plugins_api.py`, and `tests/contracts/test_cli_plugins_contract.py`; the final targeted phase selections passed 45 tests, including fail-closed and no-import text diagnostics. |
-| Validated revision/tree state and evidence | Candidate `3bc35ec` / tree `2dddf27426d64f2476b30645d52bb82e11cc69cb` on base `3531860`: Ruff passed; repository-wide Pyright passed with 0 errors; final targeted selections passed 45 tests. The phase source passed a complete `make validate-pr` before later test-only review additions. A final-candidate attempt passed Ruff, Pyright, and all 2,185 default tests, then the unchanged `test_runner_renews_controller_lease_until_release` missed its fixed five-second wait while multiple roadmap suites saturated the host; 131 other config-extra tests passed and 3 skipped. The same timing-only failure prevented a fresh passing `make test-summary`; GitHub CI is the required isolated full gate. |
-| Validation-relevant changes after evidence | No runtime source, dependency, build, or validation-configuration change followed the complete source gate. Three test/doc-only corrections are committed and covered by the final targeted, Ruff, and full Pyright receipts above. |
-| PR, review, and merge | [#222](https://github.com/samcantrill/loom/pull/222) is open against `develop`, ready rather than draft, mergeable, and titled `Stage 28 phase 1: publish truthful extension contracts`. Manager-local review passed with no blocker; CI is pending and merge is not yet authorized. |
-| Residual risk and cleanup | No product or phase-design blocker. Local full-suite evidence is limited by a reproducible host-contention timeout in an unchanged controller-lease test; do not merge unless isolated GitHub CI passes. `loom.testing` intentionally proves only caller-supplied trusted cases and does not claim remote/backend behavior. |
+| Validated revision/tree state and evidence | Final targeted selections passed 45 tests; Ruff and repository-wide Pyright passed. Local full-suite attempts documented one unchanged controller-lease test missing its fixed five-second wait under concurrent roadmap validation; isolated GitHub `CI/checks` passed the published tree in 3m47s before merge. |
+| Validation-relevant changes after evidence | No validation-relevant change followed the passing isolated CI receipt; this post-merge record is documentation-only. |
+| PR, review, and merge | [#222](https://github.com/samcantrill/loom/pull/222) passed manager review and CI, then squash-merged to `develop` as `3b3c51f` on 2026-08-21. |
+| Residual risk and cleanup | `loom.testing` intentionally proves only caller-supplied trusted cases and does not claim remote/backend behavior. Phase worktree and local/remote branch were removed after verified remote merge. |
