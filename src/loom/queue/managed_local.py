@@ -334,6 +334,16 @@ class ManagedLocalQueueRuntime:
             self._state = ManagedLocalQueueRuntimeState.DEGRADED
             raise
         self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
+        current_item_ids = {item.queue_item_id for item in _current}
+        terminal_degraded = tuple(
+            item_id
+            for item_id in self._degraded_item_ids
+            if item_id not in current_item_ids
+        )
+        if terminal_degraded and not self._shutdown_active:
+            raise QueueServiceError(
+                "managed local runtime remains degraded after terminal dispatch uncertainty"
+            )
         if self._foreign_item_ids and not self._shutdown_active:
             self._state = ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED
             raise QueueServiceError(
@@ -403,16 +413,11 @@ class ManagedLocalQueueRuntime:
                 )
                 if self._state is ManagedLocalQueueRuntimeState.CANCELLING:
                     self._cancel_current_session_items()
-            if (
-                shutdown_started_at is not None
-                and self._shutdown_timed_out(
-                    shutdown_started_at, shutdown_timeout_seconds
-                )
+            if shutdown_started_at is not None and self._shutdown_timed_out(
+                shutdown_started_at, shutdown_timeout_seconds
             ):
                 current, foreign = self._classify_recovery()
-                self._foreign_item_ids = tuple(
-                    item.queue_item_id for item in foreign
-                )
+                self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
                 if current:
                     raise ManagedLocalShutdownTimeoutError(
                         tuple(item.queue_item_id for item in current)
@@ -430,9 +435,7 @@ class ManagedLocalQueueRuntime:
                 return self.status()
             if shutdown_started_at is not None:
                 current, foreign = self._classify_recovery()
-                self._foreign_item_ids = tuple(
-                    item.queue_item_id for item in foreign
-                )
+                self._foreign_item_ids = tuple(item.queue_item_id for item in foreign)
                 if not current:
                     if foreign:
                         self._state = ManagedLocalQueueRuntimeState.RECOVERY_REQUIRED

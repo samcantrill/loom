@@ -739,6 +739,10 @@ def test_runtime_records_dispatch_uncertainty_and_stops_refill(
     waiting = runtime.service.read_item("waiting")
     assert uncertain is not None and uncertain.status is QueueItemStatus.UNKNOWN
     assert waiting is not None and waiting.status is QueueItemStatus.QUEUED
+    with pytest.raises(QueueServiceError, match="terminal dispatch uncertainty"):
+        runtime.run_cycle()
+    waiting = runtime.service.read_item("waiting")
+    assert waiting is not None and waiting.status is QueueItemStatus.QUEUED
 
 
 def test_runtime_uses_spec_owner_and_authored_static_assignment(tmp_path: Path) -> None:

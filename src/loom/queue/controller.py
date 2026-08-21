@@ -70,10 +70,10 @@ class QueuePreStartCleanupStatus(StrEnum):
 class QueueDispatchResult:
     """Result returned by a queue dispatch adapter."""
 
-    disposition: QueueDispatchDisposition | str | None = None
+    disposition: QueueDispatchDisposition | str
+    reason_code: str
     handle_id: str | None = None
     status: QueueItemStatus = QueueItemStatus.UNKNOWN
-    reason_code: str = "queue_dispatch.result"
     evidence: Mapping[str, PlainData] = field(default_factory=dict)
     non_start_cause: QueueDispatchNonStartCause | str | None = None
     cleanup_status: QueuePreStartCleanupStatus | str | None = None
@@ -82,8 +82,6 @@ class QueueDispatchResult:
     def __post_init__(self) -> None:
         try:
             status = QueueItemStatus(self.status)
-            if self.disposition is None:
-                raise QueueServiceError("dispatch result disposition is required")
             disposition = QueueDispatchDisposition(self.disposition)
             cause = (
                 None
@@ -977,14 +975,21 @@ class QueueController:
     @staticmethod
     def _completion_evidence(result: QueueDispatchResult) -> Mapping[str, PlainData]:
         evidence = dict(_thaw_evidence(result.evidence))
-        evidence["queue_dispatch"] = {
-            "disposition": result.disposition.value,
-            "non_start_cause": None
+        disposition = QueueDispatchDisposition(result.disposition)
+        cause = (
+            None
             if result.non_start_cause is None
-            else result.non_start_cause.value,
-            "cleanup_status": None
+            else QueueDispatchNonStartCause(result.non_start_cause)
+        )
+        cleanup = (
+            None
             if result.cleanup_status is None
-            else result.cleanup_status.value,
+            else QueuePreStartCleanupStatus(result.cleanup_status)
+        )
+        evidence["queue_dispatch"] = {
+            "disposition": disposition.value,
+            "non_start_cause": None if cause is None else cause.value,
+            "cleanup_status": None if cleanup is None else cleanup.value,
         }
         return evidence
 

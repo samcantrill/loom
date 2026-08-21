@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -31,10 +32,14 @@ from loom.queue import (
 
 def test_dispatch_result_requires_explicit_factual_dispositions() -> None:
     completed = QueueDispatchResult(
-        disposition="completed", handle_id="completed", status=QueueItemStatus.SUCCEEDED
+        disposition="completed",
+        reason_code="test.completed",
+        handle_id="completed",
+        status=QueueItemStatus.SUCCEEDED,
     )
     started = QueueDispatchResult(
         disposition="started",
+        reason_code="test.started",
         handle_id="started",
         status=QueueItemStatus.DISPATCHED,
     )
@@ -51,6 +56,8 @@ def test_dispatch_result_requires_explicit_factual_dispositions() -> None:
     assert not_started.is_safe_capacity_non_start is True
     assert not hasattr(not_started, "reason")
     assert not hasattr(not_started, "pre_start_cleanup_status")
+    with pytest.raises(TypeError):
+        QueueDispatchResult()  # type: ignore[call-arg]
 
 
 @pytest.mark.parametrize(
@@ -59,6 +66,7 @@ def test_dispatch_result_requires_explicit_factual_dispositions() -> None:
         (
             {
                 "disposition": "not_started",
+                "reason_code": "test.not_started",
                 "handle_id": "not-started",
             },
             "cannot have a handle_id",
@@ -68,6 +76,7 @@ def test_dispatch_result_requires_explicit_factual_dispositions() -> None:
                 "handle_id": "started",
                 "status": QueueItemStatus.SUCCEEDED,
                 "disposition": "started",
+                "reason_code": "test.started",
             },
             "started dispatch result status must be DISPATCHED",
         ),
@@ -76,11 +85,16 @@ def test_dispatch_result_requires_explicit_factual_dispositions() -> None:
                 "handle_id": "completed",
                 "status": QueueItemStatus.DISPATCHED,
                 "disposition": "completed",
+                "reason_code": "test.completed",
             },
             "completed dispatch result status",
         ),
         (
-            {"disposition": "start_uncertain", "non_start_cause": "internal"},
+            {
+                "disposition": "start_uncertain",
+                "reason_code": "test.start_uncertain",
+                "non_start_cause": "internal",
+            },
             "without non-start facts",
         ),
         (
@@ -269,9 +283,9 @@ def test_controller_logs_safe_invalid_selection_categories(
 
     assert step.outcome == "idle"
     record = caplog.records[-1]
-    assert record.queue_pool_name == "gpu-pool"
-    assert record.queue_policy_id == selection_policy.policy_id
-    assert record.queue_selection_invalid_category == category
+    assert getattr(record, "queue_pool_name") == "gpu-pool"
+    assert getattr(record, "queue_policy_id") == selection_policy.policy_id
+    assert getattr(record, "queue_selection_invalid_category") == category
     assert [event.event_type for event in service.list_audit_events("item-1")] == [
         "queue.item.enqueued"
     ]
@@ -301,8 +315,8 @@ def test_controller_logs_policy_exception_without_raw_exception(
 
     record = caplog.records[-1]
     assert record.message == "queue selection policy exception"
-    assert record.queue_pool_name == "gpu-pool"
-    assert record.queue_policy_id == "test.failing"
+    assert getattr(record, "queue_pool_name") == "gpu-pool"
+    assert getattr(record, "queue_policy_id") == "test.failing"
     assert "private selection exception" not in caplog.text
 
 
@@ -473,7 +487,9 @@ def test_controller_fails_missing_adapter_as_invalid_unsupported(
     assert step.outcome == "failed"
     assert step.item.status is QueueItemStatus.FAILED
     completed = service.list_audit_events("item-1")[-1]
-    assert completed.detail["evidence"]["queue_dispatch"] == {
+    evidence = completed.detail["evidence"]
+    assert isinstance(evidence, Mapping)
+    assert evidence["queue_dispatch"] == {
         "disposition": "not_started",
         "non_start_cause": "invalid_or_unsupported",
         "cleanup_status": "not_required",

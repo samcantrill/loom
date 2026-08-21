@@ -329,7 +329,9 @@ class LocalQueueDispatchAdapter:
                 disposition=QueueDispatchDisposition.NOT_STARTED,
                 reason_code="resource_assignment.failed",
                 evidence={"local_process_started": False},
-                non_start_cause=QueueDispatchNonStartCause.INTERNAL,
+                non_start_cause=_assignment_non_start_cause(
+                    assignment_decision.reason_code
+                ),
                 cleanup_status=QueuePreStartCleanupStatus.CONFIRMED,
             )
         assignment = assignment_decision.assignment
@@ -1111,6 +1113,21 @@ def _non_start_cause(
     if failure_kind is CoordinationFailureKind.UNAVAILABLE:
         return QueueDispatchNonStartCause.AUTHORITY_UNAVAILABLE
     if failure_kind is CoordinationFailureKind.OWNERSHIP_LOST:
+        return QueueDispatchNonStartCause.OWNERSHIP_LOST
+    return QueueDispatchNonStartCause.INTERNAL
+
+
+def _assignment_non_start_cause(reason_code: str | None) -> QueueDispatchNonStartCause:
+    """Map only known assignment facts; unknown provider codes stay internal."""
+
+    if reason_code in {
+        "resource_assignment.request_exceeds_inventory",
+        "resource_assignment.invalid_or_unsupported",
+    }:
+        return QueueDispatchNonStartCause.INVALID_OR_UNSUPPORTED
+    if reason_code == "resource_assignment.unavailable":
+        return QueueDispatchNonStartCause.AUTHORITY_UNAVAILABLE
+    if reason_code == "resource_assignment.ownership_lost":
         return QueueDispatchNonStartCause.OWNERSHIP_LOST
     return QueueDispatchNonStartCause.INTERNAL
 

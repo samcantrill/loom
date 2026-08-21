@@ -8,7 +8,7 @@
 - Branch: `agent/stage-25-post-p2-factual-dispatch-outcomes`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`;
   `/home/can134/work/active/loom-worktrees/stage-25-post-p2-factual-dispatch-outcomes`
-- Base revision: `53dfe73a738cfabb039a4881ca4797144cf9ea78`
+- Base revision: `16a184912ca2aaa65fdcd73e046023c5466b0fa7`
 - PR target: develop
 - PR title: `Stage 25-post phase 2: make dispatch outcomes factual`
 - Dependencies: Phase 1 remote merge; planning `FR-7` through `FR-11`, `FQ-2`,
@@ -239,14 +239,18 @@ Final commands:
 - Implementation: corrected in the assigned Phase 2 worktree: factual results
   use safe `reason_code`/`cleanup_status` fields, safe policy diagnostics are
   logged, missing adapters fail as invalid, and managed runtime records dispatch
-  uncertainty as degraded
+  uncertainty as degraded; manager correction makes the core result fields
+  statically required, preserves known assignment causes, and keeps terminal
+  uncertainty fail-closed across later runtime cycles
 - Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: source-relevant suites pass; the full gate remains blocked by
-  the reproduced, unrelated optional-config controller-lease-renewal timeout
+- Pre-submit gate: focused source-relevant suites pass; full gate pending on the
+  current rebased tree
 - Independent review: optional only for a material residual adapter-boundary
   risk after manager review
-- Blocker corrections: 1/3 — accepted factual-interface, safe-policy-logging,
-  missing-adapter, and managed-runtime dispatch-outcome correction
+- Blocker corrections: 2/3 — one executor correction for the factual interface,
+  diagnostics, missing-adapter mapping, and runtime dispatch state; one manager
+  correction for required fields, known assignment causes, and cross-cycle
+  terminal-uncertainty blocking
 - PR and merge: pending
 
 ## Completion Record
@@ -254,8 +258,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Replaced queue dispatch `DEFERRED` with factual dispositions and typed non-start/cleanup facts in `controller.py`; centralized queue transitions; mapped local and SLURM adapter boundaries; updated root exports and `queue.md`. The correction hard-cuts result fields to `reason_code`/`cleanup_status`, validates fixed safe codes, adds safe selection logging, classifies missing adapters as invalid, and includes dispatch outcomes in managed-runtime degradation. |
-| Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. The correction adds safe logging-category and missing-adapter unit coverage plus managed-runtime dispatch-uncertainty integration coverage. Focused queue unit, contract, and integration command passed. |
-| Validated revision/tree state and evidence | Correction focused Ruff check, phase unit/contract/integration command, legacy dispatch audit, and `git diff --check` passed. Earlier `make test-summary` passed package (115), unit (1560), contract (280), integration (206), and e2e (54) suites. Its optional-config suite had one failure, reproduced in isolation: `tests/integration/pipeline/test_controller_lease_renewal.py::test_runner_renews_controller_lease_until_release` timed out before stage allocation. No queue source or test points to that pipeline failure. |
-| Validation-relevant changes after evidence | This correction changes result names, built-in mappings, selection logging, and managed-runtime cycle state; focused evidence above was run after those changes. |
+| Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Corrections add safe logging-category and missing-adapter unit coverage, known assignment-cause coverage, and managed-runtime dispatch-uncertainty integration coverage across the same and later cycles. Focused queue unit, contract, and integration command passed (130). |
+| Validated revision/tree state and evidence | Current rebased correction tree: focused Ruff and Pyright passed with zero errors/warnings; phase unit/contract/integration command passed (130); legacy dispatch audit and `git diff --check` passed. Full repository evidence remains pending. |
+| Validation-relevant changes after evidence | None; focused evidence is current for source and tests. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | `START_UNCERTAIN` is deliberately terminal queue-local `UNKNOWN` without external recovery. Full pre-submit approval awaits resolution or disposition of the unrelated optional-config test failure. |
+| Residual risk and cleanup | `START_UNCERTAIN` is deliberately terminal queue-local `UNKNOWN` without external recovery; managed-local operation remains degraded until explicit restart/operator action. Full pre-submit approval awaits the repository gate. |
