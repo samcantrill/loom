@@ -73,7 +73,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `unified-selection-ownership` | in_progress | `docs/roadmap/stage-25-post/phases/unified-selection-ownership.md` | `agent/stage-25-post-p1-unified-selection-ownership` | pending | Private scheduling operation, policy binding, repository capability/cut-over, controller and caller migration | Make every current path select and acquire through one bounded implementation. |
+| 1 | `unified-selection-ownership` | pr_open | `docs/roadmap/stage-25-post/phases/unified-selection-ownership.md` | `agent/stage-25-post-p1-unified-selection-ownership` | #223 | Private scheduling operation, policy binding, repository capability/cut-over, controller and caller migration | Make every current path select and acquire through one bounded implementation. |
 | 2 | `factual-dispatch-outcomes` | pending | `docs/roadmap/stage-25-post/phases/factual-dispatch-outcomes.md` | `agent/stage-25-post-p2-factual-dispatch-outcomes` | pending | Public dispatch facts, built-in adapters, controller transition table, diagnostics/evidence | Make retry impossible unless capacity non-start and cleanup are both proven safe. |
 
 ## Quality Gate
@@ -98,5 +98,5 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | implementation and manager review complete; required local validation passed at `3cd8759` | Hard removal may affect unknown external callers; private repository scheduling capability intentionally remains unstable until Stage 29. | pending remote merge and worktree cleanup |
+| 1 | PR #223 open; CI and squash merge pending | implementation and manager review complete; required local validation passed at `3cd8759` | Hard removal may affect unknown external callers; private repository scheduling capability intentionally remains unstable until Stage 29. | pending remote merge and worktree cleanup |
 | 2 | pending | pending | pending | pending |
