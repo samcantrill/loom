@@ -2,17 +2,17 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 30, Phase 2
 - Manifest: `docs/roadmap/stage-30/implementation-plan.md`
 - Branch: `agent/stage-30-p2-experiments-observers-and-apptainer`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; `/home/can134/work/active/loom-worktrees/stage-30-p2-experiments-observers-and-apptainer`
-- Base revision: current `origin/develop` after Phase 1 is remotely merged
+- Base revision: `4513da7`
 - PR target: develop
 - PR title: `Stage 30 phase 2: demonstrate sweeps observers and Apptainer`
 - Dependencies: Stage 30 Phase 1 remote merge and existing Stage 13/18/20/22 behavior.
 - Workflow path: fast
-- Blockers: Phase 1 must merge first.
+- Blockers: none
 
 ## Objective And Context
 
@@ -161,8 +161,8 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: approved; prepare from current `origin/develop` only
-  after Phase 1 remote merge.
+- Manager preparation: passed on `4513da7`; Phase 1 is remotely merged and its
+  completion metadata is current on `origin/develop`.
 - Expanded planning: not needed.
 - Implementation: pending.
 - Refiner: not needed / pending evidence.
