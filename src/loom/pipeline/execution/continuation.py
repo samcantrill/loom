@@ -34,7 +34,6 @@ from loom.serialization import PlainData, ensure_plain_data, json_loads, thaw_pl
 from loom.timestamps import utc_timestamp
 from loom.plugins import (
     LOOM_CODECS_GROUP,
-    LOOM_EVENT_SINKS_GROUP,
     LOOM_RESOURCE_VALIDATORS_GROUP,
     PluginRecord,
 )
@@ -314,7 +313,6 @@ def run_stage_job(
         allowed_groups=(
             LOOM_CODECS_GROUP,
             LOOM_RESOURCE_VALIDATORS_GROUP,
-            LOOM_EVENT_SINKS_GROUP,
         ),
     )
     lock = acquire_run_lock(
@@ -894,7 +892,6 @@ def _validate_worker_plugin_activation_evidence(
             {
                 LOOM_CODECS_GROUP,
                 LOOM_RESOURCE_VALIDATORS_GROUP,
-                LOOM_EVENT_SINKS_GROUP,
             }
         ),
         boundary="stage-job worker",
@@ -979,7 +976,6 @@ def _prepared_worker_plugin_activation_metadata(
         in {
             LOOM_CODECS_GROUP,
             LOOM_RESOURCE_VALIDATORS_GROUP,
-            LOOM_EVENT_SINKS_GROUP,
         }
     )
     if not records:

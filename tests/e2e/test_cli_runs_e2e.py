@@ -201,21 +201,25 @@ def test_cli_selected_executor_codec_and_validator_survive_subprocess(
     stderr = io.StringIO()
 
     with LocalAuthorityService.start() as service:
+        plugin_args = [
+            "--executor",
+            "stage28-subprocess",
+            "--plugin",
+            "loom.executors:stage28-subprocess",
+            "--plugin",
+            "loom.codecs:stage28.tagged-json.v1",
+            "--plugin",
+            "loom.resource_validators:stage28.device",
+        ]
+        authority_args = authority_config_to_cli_args(service.config())
         exit_code = main(
             [
                 "run",
                 str(config_path),
                 "--run-uri",
                 run_uri,
-                "--executor",
-                "stage28-subprocess",
-                "--plugin",
-                "loom.executors:stage28-subprocess",
-                "--plugin",
-                "loom.codecs:stage28.tagged-json.v1",
-                "--plugin",
-                "loom.resource_validators:stage28.device",
-                *authority_config_to_cli_args(service.config()),
+                *plugin_args,
+                *authority_args,
                 "--format",
                 "json",
             ],
@@ -223,7 +227,53 @@ def test_cli_selected_executor_codec_and_validator_survive_subprocess(
             stderr=stderr,
         )
 
+        resume_stdout = io.StringIO()
+        resume_stderr = io.StringIO()
+        resume_exit_code = main(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--resume",
+                *plugin_args,
+                *authority_args,
+                "--format",
+                "json",
+            ],
+            stdout=resume_stdout,
+            stderr=resume_stderr,
+        )
+
+        omitted_stdout = io.StringIO()
+        omitted_stderr = io.StringIO()
+        omitted_exit_code = main(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--resume",
+                *authority_args,
+                "--format",
+                "json",
+            ],
+            stdout=omitted_stdout,
+            stderr=omitted_stderr,
+        )
+
     assert exit_code == 0, f"stdout={stdout.getvalue()}\nstderr={stderr.getvalue()}"
+    assert resume_exit_code == 0, (
+        f"stdout={resume_stdout.getvalue()}\nstderr={resume_stderr.getvalue()}"
+    )
+    assert json.loads(resume_stdout.getvalue())["result"]["status"] == "SUCCEEDED"
+    assert resume_stderr.getvalue() == ""
+    assert omitted_exit_code == 4
+    assert omitted_stderr.getvalue() == ""
+    assert (
+        "missing plugin activation"
+        in json.loads(omitted_stdout.getvalue())["error"]["message"]
+    )
     payload = json.loads(stdout.getvalue())
     assert payload["result"]["status"] == "SUCCEEDED"
     store = LocalRunStore()
