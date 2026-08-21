@@ -298,7 +298,10 @@ def _placements_for_layout(
     candidates: list[tuple[int, int, tuple[str, ...]]] = []
     links = {(link.left_id, link.right_id): link for link in inventory.links}
     for group in combinations(device_ids, layout.gpus_per_slot):
-        pair_links = [links.get(tuple(sorted(pair))) for pair in combinations(group, 2)]
+        pair_links = [
+            links.get((left_id, right_id))
+            for left_id, right_id in combinations(group, 2)
+        ]
         if any(link is None for link in pair_links):
             continue
         ranks = [link.rank for link in pair_links if link is not None]

@@ -20,6 +20,7 @@ from loom.queue.gpu import (
     grouped,
     plan_local_gpu_pool,
 )
+from loom.serialization import thaw_plain_data
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
 
 
@@ -92,7 +93,12 @@ def test_grouped_provider_renews_and_releases_every_member() -> None:
     assert [lease.resource_key for lease in renewed.leases] == [
         lease.resource_key for lease in decision.assignment.leases
     ]
-    assert [slot["expires_at"] for slot in renewed.safe_evidence["slots"]] == [
+    evidence = thaw_plain_data(renewed.safe_evidence)
+    assert isinstance(evidence, dict)
+    slots = evidence["slots"]
+    assert isinstance(slots, list)
+    assert all(isinstance(slot, dict) for slot in slots)
+    assert [slot["expires_at"] for slot in slots if isinstance(slot, dict)] == [
         lease.lease.expires_at for lease in renewed.leases
     ]
     provider.release(renewed, reason=LifecycleReason(code="test_release"))
@@ -104,21 +110,21 @@ def test_grouped_provider_renews_and_releases_every_member() -> None:
 
 
 @pytest.mark.parametrize(
-    ("failures", "expected_error"),
+    ("failures", "expect_unfinished_error"),
     [
         (
             (CoordinationFailureKind.OWNERSHIP_LOST, None),
-            CoordinationFailureKind.OWNERSHIP_LOST,
+            False,
         ),
         (
             (CoordinationFailureKind.OWNERSHIP_LOST, "unfinished release"),
-            RuntimeError,
+            True,
         ),
     ],
 )
 def test_grouped_provider_release_attempts_every_member_with_existing_precedence(
     failures: tuple[CoordinationFailureKind, str | None],
-    expected_error: CoordinationFailureKind | type[RuntimeError],
+    expect_unfinished_error: bool,
 ) -> None:
     plan = plan_local_gpu_pool(
         LocalGpuInventory(
@@ -149,11 +155,11 @@ def test_grouped_provider_release_attempts_every_member_with_existing_precedence
     assert store.release_attempts == [
         lease.lease.lease_id for lease in reversed(decision.assignment.leases)
     ]
-    if expected_error is CoordinationFailureKind.OWNERSHIP_LOST:
-        assert isinstance(raised.value, CoordinationStoreError)
-        assert raised.value.kind is CoordinationFailureKind.OWNERSHIP_LOST
-    else:
-        assert isinstance(raised.value, expected_error)
+    if expect_unfinished_error:
+        assert isinstance(raised.value, RuntimeError)
+        return
+    assert isinstance(raised.value, CoordinationStoreError)
+    assert raised.value.kind is CoordinationFailureKind.OWNERSHIP_LOST
 
 
 def _plan_and_store():  # noqa: ANN201

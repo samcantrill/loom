@@ -220,9 +220,11 @@ Final commands:
   focused tests are ready for manager validation
 - Refiner: completed one qualified member-lifecycle correction; existing adapter
   ordering and GPU provider release behavior satisfied the added coverage
+- Manager correction: fixed static type narrowing for topology pair keys and
+  immutable assignment evidence after the first full validation attempt
 - Pre-submit gate: pending
 - Independent review: optional only for a material residual member-release risk
-- Blocker corrections: 1/3
+- Blocker corrections: 2/3
 - PR and merge: pending
 
 ## Completion Record
@@ -231,7 +233,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added GPU-local links, disjoint explicit/ordered/topology grouping, member-backed lifecycle handling, and focused docs in `src/loom/queue/gpu`, queue docs, and managed-local example guidance. |
 | Tests added or updated | Added grouped cancellation coverage proving process exit is observed before each member release and exact member cleanup, plus provider-release coverage proving every member is attempted with ownership-lost versus unfinished-error precedence. |
-| Validated revision/tree state and evidence | Executor targeted suite: 37 passed; refiner focused suite: 11 passed (`tests/contracts/test_local_gpu_assignment_provider.py`, `tests/integration/queue/test_managed_local_gpu_pool.py`); focused Ruff check/format and `git diff --check` passed. Manager `make validate-pr` and `make test-summary` remain pending. |
-| Validation-relevant changes after evidence | Refiner added lifecycle regression coverage only; production behavior was already conformant. |
+| Validated revision/tree state and evidence | Executor targeted suite: 37 passed; refiner focused suite: 11 passed. The first manager `make validate-pr` attempt passed Ruff and then found six Phase 2 Pyright errors before tests. Correction 2/3 then passed targeted Pyright with zero errors and the grouped unit/contract/integration/e2e plus package import set with 40 passed. Final manager validation remains pending. |
+| Validation-relevant changes after evidence | Correction 2/3 makes topology pair-key arity explicit and narrows frozen evidence and parametrized expected errors for Pyright; behavior is unchanged and final evidence is pending. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Greedy topology selection remains intentionally disjoint and non-optimal; worktree and branch retained for manager handoff. |
