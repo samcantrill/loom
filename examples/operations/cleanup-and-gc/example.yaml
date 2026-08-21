@@ -1,0 +1,25 @@
+id: operations.cleanup-and-gc
+title: Preview-First Cleanup And Garbage Collection
+summary: Use clean and gc previews before deleting only registered temporary payload candidates.
+capability: operations
+level: advanced
+introduced_in: v30
+status: runnable
+validation: full
+surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/operations/README.md
+owner_stages:
+  - v30
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_cleanup_and_gc_is_preview_first_and_candidate_only
+entrypoints:
+  - path: run_cleanup_and_gc.py
+    kind: python
+    description: Seed isolated cleanup candidates, then run public preview and delete commands.
+tags:
+  - cleanup
+  - gc
+  - preview
+  - lifecycle

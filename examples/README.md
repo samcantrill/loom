@@ -15,7 +15,7 @@ demonstrates. Later roadmap items can add `experiments/`, `storage/`, and
 | Group | Primary user-facing workflows |
 | --- | --- |
 | [Execution](execution/README.md) | Runtime-profile runs, subprocess execution, Docker container execution, offline-first import, and SLURM dry-run/live command flows. |
-| [Operations](operations/README.md) | Authority lifecycle, local diagnostics, failure inspection, resource preflight, offline import rejection, and live SLURM job commands. |
+| [Operations](operations/README.md) | Authority lifecycle, diagnostics, run catalog comparison, bundle portability, candidate-only cleanup, and live SLURM job commands. |
 
 ## Public Python API Workflows
 

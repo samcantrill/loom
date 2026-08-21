@@ -1,0 +1,26 @@
+id: operations.run-catalog-and-bundles
+title: Run Catalog And Bundle Portability
+summary: Compare two completed local runs, then export, inspect, import, and verify one payload.
+capability: operations
+level: intermediate
+introduced_in: v30
+status: runnable
+validation: full
+surface: cli
+public_surfaces:
+  - cli
+  - python_api
+owner_docs:
+  - examples/operations/README.md
+owner_stages:
+  - v30
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_run_catalog_and_bundles_compares_and_preserves_payload
+entrypoints:
+  - path: run_catalog_workflow.py
+    kind: python
+    description: Create comparable runs and transfer one payload through the runs CLI.
+tags:
+  - run-catalog
+  - comparison
+  - bundle
+  - portability
