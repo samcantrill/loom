@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: Stage 30, Phase 1
 - Manifest: `docs/roadmap/stage-30/implementation-plan.md`
 - Branch: `agent/stage-30-p1-operations-portability-and-cleanup`
@@ -179,9 +179,13 @@ Final commands:
   quality review passed, and the worktree was created from `origin/develop` at
   `e3968f7` with unrelated control-checkout work excluded.
 - Expanded planning: not needed.
-- Implementation: pending.
+- Implementation: complete in `44d9d88`; two runnable, output-root-aware
+  operations projects use existing public CLI/Python behavior only.
 - Refiner: not needed / pending evidence.
-- Pre-submit gate: pending.
+- Pre-submit gate: blocked. `make validate-pr` passed Ruff, Pyright, and the
+  default suite (2,175 passed, 114 deselected), but config-extra had one
+  unrelated failure in
+  `tests/integration/pipeline/test_controller_lease_renewal.py::test_runner_renews_controller_lease_until_release`.
 - Independent review: not needed / pending residual-risk check.
 - Blocker corrections: 0/3
 - PR and merge: pending.
@@ -190,9 +194,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
+| Implementation and changed paths | `44d9d88`: added `examples/operations/run-catalog-and-bundles/{README.md,example.yaml,pipeline.yaml,run_catalog_workflow.py,stages.py}` and `examples/operations/cleanup-and-gc/{README.md,example.yaml,run_cleanup_and_gc.py}`; routed both in `examples/README.md` and `examples/operations/README.md`; added focused workflow coverage in `tests/integration/examples/test_example_workflows.py`. |
+| Tests added or updated | New catalog/bundle workflow assertion covers two indexed/listed runs, non-empty diff, payload-bearing export/inspect/import, and equal bytes. New cleanup/GC assertion covers preview selection, delete counts, candidate removal, and preserved run paths. Targeted evidence: 5 passed in 8.97s; existing CLI E2E: 4 passed in 3.29s; Ruff passed. |
+| Validated revision/tree state and evidence | Implementation commit `44d9d88`; `make validate-pr` default leg passed (2,175 passed, 114 deselected) and config-extra ran 133 passed, 1 failed, 3 skipped. `make test-summary` wrote `build/test-summary.md`: package 113 passed, unit 1,530 passed, contract 275 passed, integration 203 passed, E2E 54 passed; config-extra 133 passed, 1 failed, 3 skipped. |
+| Validation-relevant changes after evidence | None after `44d9d88`; this completion record is documentation-only. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Blocked only by the reproducible, unrelated controller-lease test failure above (isolated rerun also failed before stage allocation). No runtime change was made or is in scope. Generated test outputs stay outside version control; the worktree and branch remain for manager diagnosis. |
