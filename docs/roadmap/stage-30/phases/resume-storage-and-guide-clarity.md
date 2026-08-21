@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 30, Phase 3
 - Manifest: `docs/roadmap/stage-30/implementation-plan.md`
 - Branch: `agent/stage-30-p3-resume-storage-and-guide-clarity`
@@ -198,8 +198,8 @@ Final commands:
   with the existing checksum-repair contract path, then isolated storage
   materialization paths per invocation after a same-root rerun reproduced an
   existing-target failure.
-- PR and merge: [#229](https://github.com/samcantrill/loom/pull/229) is open;
-  CI and merge are pending.
+- PR and merge: [#229](https://github.com/samcantrill/loom/pull/229) passed CI
+  and was squash-merged into `develop` as `4437a51` on 2026-08-21.
 
 ## Completion Record
 
@@ -209,5 +209,5 @@ Final commands:
 | Tests added or updated | Updated local example e2e journey and v0 catalog checks; added integration entrypoint assertions for local checksum repair and fake-backend local materialization. Correction 2 runs the storage entrypoint twice against identical configured roots. |
 | Validated revision/tree state and evidence | Corrected tree `499f2dc`: targeted executable docs/examples 41 passed; backend/materialization contracts 7 passed; resume/fingerprint/materialization integration 13 passed; Ruff and Pyright passed; `make validate-pr` default passed 2,242 with 1 expected skip, config-extra passed 141 with 3 expected skips, and package builds succeeded. The exact-tree `make test-summary` receipt passed package 116, unit 1,577, contract 285, integration 209, E2E 55, and config-extra 141 tests with zero failures/errors and 3 expected skips. |
 | Validation-relevant changes after evidence | None after `499f2dc`; this evidence update is documentation-only. |
-| PR, review, and merge | Manager fast-path review passed. [#229](https://github.com/samcantrill/loom/pull/229) is open against `develop`; CI and merge are pending. |
-| Residual risk and cleanup | Fake backend is project-local and explicitly unsupported for provider materialization; materialization remains explicit local-copy-only. Ordinary post-commit config changes remain fail closed by design. |
+| PR, review, and merge | Manager fast-path review passed. [#229](https://github.com/samcantrill/loom/pull/229) passed GitHub CI and was squash-merged into `develop` as `4437a51` on 2026-08-21. |
+| Residual risk and cleanup | Fake backend is project-local and explicitly unsupported for provider materialization; materialization remains explicit local-copy-only. Ordinary post-commit config changes remain fail closed by design. The phase branch and worktree were removed after merge. |
