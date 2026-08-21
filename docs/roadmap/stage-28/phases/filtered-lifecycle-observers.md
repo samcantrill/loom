@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: v28 Phase 3
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p3-filtered-lifecycle-observers`
@@ -389,7 +389,8 @@ Final commands:
 - Independent review: manager-local fast path
 - Blocker corrections: 1/3; `c059912` is the bounded lifecycle-owner selector
   propagation correction
-- PR and merge: pending
+- PR and merge: [#231](https://github.com/samcantrill/loom/pull/231) is
+  open against `develop`; CI and merge pending
 
 ## Completion Record
 
@@ -399,5 +400,5 @@ Final commands:
 | Tests added or updated | Package exports; subscription validation, exact filtering, ordering/failure compatibility, plugin registration factory, v2 conformance selection, run/stage-job group allowlists, committed stage-job observation, selected filtered-sink CLI E2E, and SLURM afterok stage-job selector propagation in the matching package, unit, integration, E2E, and Stage 28 test-support files. |
 | Validated revision/tree state and evidence | `c059912` (`fix(stage-28): propagate sinks to stage jobs`) was clean for validation. The combined manager-focused cluster passed 58 package/unit/contract/integration/E2E tests. `make validate-pr` passed: Ruff, Pyright, default 2,298 passed / 1 skipped / 121 deselected, config-extra 141 passed / 3 skipped / 2,302 deselected, and package build. `make test-summary` passed: 2,439 passed, 0 failed, 3 skipped; receipt `build/test-summary.md` generated 2026-08-21T07:22:58Z. |
 | Validation-relevant changes after evidence | None; this completion-record-only metadata commit follows the validated implementation revision. |
-| PR, review, and merge | pending |
+| PR, review, and merge | [#231](https://github.com/samcantrill/loom/pull/231) is a ready, mergeable PR targeting `develop`. Manager-local review found no blocker after the bounded SLURM stage-job selector correction; CI and merge are pending. |
 | Residual risk and cleanup | No blocker. Synchronous observer latency and crash-before-callback loss remain the accepted debt; retries, delivery state, and mutable hooks remain intentionally deferred. Worktree and branch remain for manager PR handling. |
