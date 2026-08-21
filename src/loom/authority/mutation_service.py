@@ -101,6 +101,7 @@ class AuthorityMutationOperation(StrEnum):
     SCAN_COORDINATION_RECOVERY = "scan_coordination_recovery"
     ACQUIRE_RESOURCE_LEASE = "acquire_resource_lease"
     SET_RESOURCE_LIMIT = "set_resource_limit"
+    ENSURE_RESOURCE_LIMITS = "ensure_resource_limits"
     READ_RESOURCE_LIMIT = "read_resource_limit"
 
 
@@ -217,6 +218,9 @@ _OPERATION_KIND_BY_MUTATION: Mapping[
         AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
     ),
     AuthorityMutationOperation.SET_RESOURCE_LIMIT: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.ENSURE_RESOURCE_LIMITS: (
         AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
     ),
     AuthorityMutationOperation.READ_RESOURCE_LIMIT: (
@@ -414,6 +418,8 @@ class AuthorityMutationService:
                 return self._acquire_resource_lease(request)
             case AuthorityMutationOperation.SET_RESOURCE_LIMIT:
                 return self._set_resource_limit(request)
+            case AuthorityMutationOperation.ENSURE_RESOURCE_LIMITS:
+                return self._ensure_resource_limits(request)
             case AuthorityMutationOperation.READ_RESOURCE_LIMIT:
                 return self._read_resource_limit(request)
 
@@ -928,6 +934,23 @@ class AuthorityMutationService:
             counter=counter,
         )
 
+    def _ensure_resource_limits(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        counters = self._repository.ensure_resource_limits(
+            _required_body_string(request, "workspace_id"),
+            _required_body_positive_int_mapping(request, "limits"),
+        )
+        return _result(
+            revision=max(
+                (counter.revision for counter in counters),
+                key=lambda item: item.sequence,
+                default=None,
+            ),
+            service_generation=self._service_generation,
+            body={"counters": [counter.to_dict() for counter in counters]},
+        )
+
     def _read_resource_limit(
         self, request: AuthorityProtocolRequest
     ) -> AuthorityProtocolResult:
@@ -1160,6 +1183,26 @@ def _optional_body_mapping(
     if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
         raise AuthorityMutationValidationError(f"{field} must be a mapping")
     return cast(Mapping[str, PlainData], value)
+
+
+def _required_body_positive_int_mapping(
+    request: AuthorityProtocolRequest, field: str
+) -> Mapping[str, int]:
+    value = _required_body_value(request, field)
+    if not isinstance(value, Mapping):
+        raise AuthorityMutationValidationError(f"{field} must be a mapping")
+    normalized: dict[str, int] = {}
+    for key, limit in value.items():
+        if not isinstance(key, str) or not key:
+            raise AuthorityMutationValidationError(
+                f"{field} keys must be non-empty strings"
+            )
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise AuthorityMutationValidationError(
+                f"{field} values must be positive integers"
+            )
+        normalized[key] = limit
+    return normalized
 
 
 def _required_positive_seconds(request: AuthorityProtocolRequest) -> int:

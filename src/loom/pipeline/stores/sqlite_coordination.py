@@ -499,6 +499,62 @@ class SQLiteWorkspaceCoordinationStore:
                 revision=revision,
             )
 
+    def ensure_resource_limits(
+        self, workspace_id: str, limits: Mapping[str, int]
+    ) -> tuple[ConcurrencyCounter, ...]:
+        """Atomically create missing resource limits or accept exact matches."""
+
+        normalized = _resource_limits_mapping(limits)
+        with self._transaction(initialize=True) as conn:
+            _require_workspace(conn, workspace_id)
+            rows = {
+                key: _resource_limit_row(conn, workspace_id, key) for key in normalized
+            }
+            mismatched = [
+                key
+                for key, row in rows.items()
+                if row is not None and cast(int, row["limit_value"]) != normalized[key]
+            ]
+            if mismatched:
+                raise CoordinationStoreError(
+                    "resource limits do not match existing authority limits: "
+                    + ", ".join(mismatched),
+                    kind=CoordinationFailureKind.INVALID_OR_UNSUPPORTED,
+                )
+            missing = [key for key, row in rows.items() if row is None]
+            if missing:
+                now = self._now()
+                revision = self._insert_revision(conn, now=now)
+                for key in missing:
+                    conn.execute(
+                        """
+                        INSERT INTO resource_limits (
+                            workspace_id, resource_key, limit_value, revision_sequence
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (workspace_id, key, normalized[key], revision.sequence),
+                    )
+                    rows[key] = _resource_limit_row(conn, workspace_id, key)
+            now = self._now()
+            counters: list[ConcurrencyCounter] = []
+            for key in normalized:
+                row = rows[key]
+                if row is None:
+                    raise CoordinationStoreError(
+                        "resource limit creation did not persist"
+                    )
+                counters.append(
+                    ConcurrencyCounter(
+                        counter_name=_resource_counter_name(key),
+                        value=_active_resource_amount(conn, workspace_id, key, now),
+                        limit=normalized[key],
+                        revision=_revision_for(
+                            conn, cast(int, row["revision_sequence"])
+                        ),
+                    )
+                )
+            return tuple(counters)
+
     def read_resource_limit(
         self, workspace_id: str, resource_key: str
     ) -> ConcurrencyCounter | None:
@@ -1421,9 +1477,20 @@ def _non_empty_string(value: object, field: str) -> str:
     return value
 
 
+def _resource_limits_mapping(limits: Mapping[str, int]) -> dict[str, int]:
+    if not isinstance(limits, Mapping):
+        raise CoordinationStoreError("limits must be a mapping")
+    normalized: dict[str, int] = {}
+    for key, value in limits.items():
+        normalized[_non_empty_string(key, "resource limit key")] = _positive_int(
+            value, f"resource limit for {key!r}"
+        )
+    return dict(sorted(normalized.items()))
+
+
 def _positive_int(value: object, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{field} must be a positive integer")
+        raise CoordinationStoreError(f"{field} must be a positive integer")
     return value
 
 
