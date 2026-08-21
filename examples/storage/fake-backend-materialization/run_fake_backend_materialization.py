@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
+from uuid import uuid4
 
 REPO_ROOT = next(
     parent
@@ -34,7 +35,7 @@ HERE = Path(__file__).resolve().parent
 
 def main() -> None:
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
-    journey_root = output_root / "fake-backend-materialization"
+    journey_root = output_root / f"fake-backend-materialization-{uuid4().hex[:8]}"
     source_path = journey_root / "source.bin"
     target_path = journey_root / "materialized" / "payload.bin"
     payload = b"local materialization example payload\n"

@@ -170,17 +170,18 @@ def test_example_fake_backend_and_local_materialization(tmp_path: Path) -> None:
         / "fake-backend-materialization"
         / "run_fake_backend_materialization.py"
     )
-    fields = _summary_fields(_run_example_script(script=script, tmp_path=tmp_path))
+    for _ in range(2):
+        fields = _summary_fields(_run_example_script(script=script, tmp_path=tmp_path))
 
-    assert fields["registered_backend_kind"] == "example-backend"
-    assert fields["materialize_capability"] == "unsupported"
-    assert fields["backend_operation_support"] == "unsupported"
-    assert fields["backend_operation"] == "materialize"
-    assert fields["materialization_status"] == "succeeded"
-    assert fields["materialization_operation"] == "artifact.materialize.local.copy"
-    assert fields["checksum_verified"] == "True"
-    assert fields["bytes_equal"] == "True"
-    assert int(fields["bytes_copied"]) > 0
+        assert fields["registered_backend_kind"] == "example-backend"
+        assert fields["materialize_capability"] == "unsupported"
+        assert fields["backend_operation_support"] == "unsupported"
+        assert fields["backend_operation"] == "materialize"
+        assert fields["materialization_status"] == "succeeded"
+        assert fields["materialization_operation"] == "artifact.materialize.local.copy"
+        assert fields["checksum_verified"] == "True"
+        assert fields["bytes_equal"] == "True"
+        assert int(fields["bytes_copied"]) > 0
 
 
 def test_example_deterministic_sweep_runs_two_trials_and_collects_artifacts(

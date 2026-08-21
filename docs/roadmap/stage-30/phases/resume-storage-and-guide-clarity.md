@@ -190,8 +190,10 @@ Final commands:
 - Pre-submit gate: passed — `make validate-pr` passed Ruff, Pyright, default
   (2,242 passed, 1 skipped), config-extra (141 passed, 3 skipped), and build.
 - Independent review: not needed / pending residual-risk check.
-- Blocker corrections: 1/3 — replaced the invalid config-change demonstration
-  with the existing checksum-repair contract path.
+- Blocker corrections: 2/3 — replaced the invalid config-change demonstration
+  with the existing checksum-repair contract path, then isolated storage
+  materialization paths per invocation after a same-root rerun reproduced an
+  existing-target failure.
 - PR and merge: pending.
 
 ## Completion Record
@@ -199,8 +201,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Refined `examples/execution/local`; added `examples/storage/fake-backend-materialization`; routed both catalogs; and added bounded support/quick-start/deferred summaries to the seven related feature docs. No `src/loom` changes. |
-| Tests added or updated | Updated local example e2e journey and v0 catalog checks; added integration entrypoint assertions for local checksum repair and fake-backend local materialization. |
+| Tests added or updated | Updated local example e2e journey and v0 catalog checks; added integration entrypoint assertions for local checksum repair and fake-backend local materialization. Correction 2 runs the storage entrypoint twice against identical configured roots. |
 | Validated revision/tree state and evidence | Targeted docs/example, backend/materialization contract, and resume/materialization integration checks passed; `make validate-pr` passed Ruff, Pyright, default 2,242 passed/1 skipped, config-extra 141 passed/3 skipped, and `uv build`; `make test-summary` wrote `build/test-summary.md`. |
-| Validation-relevant changes after evidence | None. |
+| Validation-relevant changes after evidence | Correction 2 isolates each storage invocation beneath a unique journey path; focused and final validation evidence must be refreshed. |
 | PR, review, and merge | Implementation commit pending; PR/review/merge remain manager-owned. |
 | Residual risk and cleanup | Fake backend is project-local and explicitly unsupported for provider materialization; materialization remains explicit local-copy-only. Ordinary post-commit config changes remain fail closed by design. |
