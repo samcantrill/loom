@@ -8,7 +8,7 @@
 - Branch: agent/stage-27-p2-grouped-gpu-placement
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`;
   `/home/can134/work/active/loom-worktrees/stage-27-p2-grouped-gpu-placement`
-- Base revision: `d4115c204bc7e297e1a9ab77fdde931fff0ba92d`
+- Base revision: `53dfe73a738cfabb039a4881ca4797144cf9ea78`
 - PR target: develop
 - PR title: `feat(queue): add member-backed grouped GPU placement`
 - Dependencies: Phase 1 remotely merged
@@ -212,7 +212,7 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: passed on `d4115c204bc7e297e1a9ab77fdde931fff0ba92d`;
+- Manager preparation: passed on `53dfe73a738cfabb039a4881ca4797144cf9ea78`;
   Phase 1 public keys, plan, provider, and runtime composition are present
 - Expanded planning: refinement not needed; this plan already fixes member
   ownership, compensation, ordering, evidence, and validation contracts
@@ -235,7 +235,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added GPU-local links, disjoint explicit/ordered/topology grouping, member-backed lifecycle handling, and focused docs in `src/loom/queue/gpu`, queue docs, and managed-local example guidance. |
 | Tests added or updated | Added grouped cancellation coverage proving process exit is observed before each member release and exact member cleanup, plus provider-release coverage proving every member is attempted with ownership-lost versus unfinished-error precedence. |
-| Validated revision/tree state and evidence | Executor targeted suite: 37 passed; refiner focused suite: 11 passed. The first manager `make validate-pr` attempt passed Ruff and then found six Phase 2 Pyright errors before tests. Correction 2/3 passed targeted Pyright with zero errors and the grouped unit/contract/integration/e2e plus package import set with 40 passed. The second full attempt passed Ruff, Pyright, and 2,222 default tests, then the known controller-renewal test alone exceeded its five-second event wait in config-extra (131 passed/3 skipped). Correction 3/3 passes both controller-renewal tests (2 passed), including the formerly failing test under coverage (1 passed in 9.10s). Final manager validation remains pending. |
-| Validation-relevant changes after evidence | Correction 3/3 replaces fixed five-second waits in the unrelated timing-sensitive controller-renewal integration test with one 15-second event budget; runtime behavior is unchanged and final evidence is pending. |
+| Validated revision/tree state and evidence | Executor targeted suite: 37 passed; refiner focused suite: 11 passed. Correction 2/3 passed targeted Pyright with zero errors and the grouped unit/contract/integration/e2e plus package import set with 40 passed. Correction 3/3 passed both controller-renewal tests, including the formerly failing test under coverage. A full pre-rebase tree then passed `make validate-pr` (Ruff, Pyright, 2,222 default, 132 config-extra/3 skipped, build) and `make test-summary` (2,354 passed/3 skipped), but that receipt is stale after rebasing onto the overlapping Stage 25-post queue-controller merge. Final integrated-tree validation remains pending. |
+| Validation-relevant changes after evidence | The branch was rebased without conflict onto `53dfe73`, which changes queue controller, selection, repository, service, and managed-runtime tests. No Phase 2 behavior changed, but the prior full receipt cannot be reused. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Greedy topology selection remains intentionally disjoint and non-optimal; worktree and branch retained for manager handoff. |
