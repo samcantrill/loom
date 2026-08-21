@@ -249,7 +249,9 @@ Final commands:
   target, title, ownership, source seams, and targeted tests verified
 - Expanded planning: not needed; the reviewed activation-manifest and worker
   trust boundary remains decision-complete on the current base
-- Implementation: pending one `loom_phase_executor`
+- Implementation: source and phase-scoped tests committed at `c2cfa12`; final
+  validation receipt is pending because this executor's command window ends
+  during repository-wide Pyright/test-harness runs
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: pending
 - Independent review: one expanded reviewer only if residual durable/trust risk
@@ -261,9 +263,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
+| Implementation and changed paths | `c2cfa12` adds instance-local executor registrations and executor/validator adapters; exact activation selection, manifest/readback/comparison, command plugin options, reserved request metadata, selected parser injection, codec artifact factory closure, and worker command/evidence checks. Changed paths: `src/loom/cli/{plugin_activation,run,validate,plan,preflight,stage}.py`, `src/loom/plugins/{activation,entrypoints,executors,resource_validators,diagnostics,__init__}.py`, `src/loom/pipeline/{executors,execution/{models,runner,stage_worker},specs,validation}.py`, and canonical `docs/features/plugins.md` / `docs/structure.md`. |
+| Tests added or updated | Added `tests/unit/loom/plugins/test_activation.py` and `tests/unit/loom/pipeline/executors/test_registry.py`; updated plugin readiness/known-group contracts. Focused run: `PYTHONPATH=src .venv/bin/pytest -q tests/unit/loom/plugins/test_activation.py tests/unit/loom/pipeline/executors/test_registry.py tests/unit/loom/cli/test_run.py tests/unit/loom/pipeline/execution/test_stage_worker.py` — 35 passed. Broader phase-targeted run reached 99 passed for CLI, worker, subprocess, plugin, and contract coverage before the command window limit. |
+| Validated revision/tree state and evidence | Clean committed tree at `c2cfa12` after focused tests and Ruff. `make validate-pr` and `make test-summary` were invoked on the stable tree, but this executor environment terminates both during repository-wide Pyright/test-harness execution after 30 seconds; no successful final receipt or `build/test-summary.md` was produced. |
+| Validation-relevant changes after evidence | none after `c2cfa12`; final gate remains required. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Residual blocker: rerun the two required final commands in an environment without the 30-second command limit, then have the manager inspect their receipts. No PR, review, merge, or cleanup performed. |
