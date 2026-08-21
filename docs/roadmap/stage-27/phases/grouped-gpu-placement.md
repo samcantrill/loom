@@ -8,7 +8,7 @@
 - Branch: agent/stage-27-p2-grouped-gpu-placement
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`;
   `/home/can134/work/active/loom-worktrees/stage-27-p2-grouped-gpu-placement`
-- Base revision: `35318601789703288db6b16ddd6fb80707e4959c`
+- Base revision: `d4115c204bc7e297e1a9ab77fdde931fff0ba92d`
 - PR target: develop
 - PR title: `feat(queue): add member-backed grouped GPU placement`
 - Dependencies: Phase 1 remotely merged
@@ -212,7 +212,7 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: passed on `35318601789703288db6b16ddd6fb80707e4959c`;
+- Manager preparation: passed on `d4115c204bc7e297e1a9ab77fdde931fff0ba92d`;
   Phase 1 public keys, plan, provider, and runtime composition are present
 - Expanded planning: refinement not needed; this plan already fixes member
   ownership, compensation, ordering, evidence, and validation contracts
