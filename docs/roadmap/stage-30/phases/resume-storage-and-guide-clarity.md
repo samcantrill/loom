@@ -182,7 +182,8 @@ Final commands:
 - Manager preparation: passed on `fd0fd80`; Phases 1 and 2 are remotely merged,
   their completion metadata is current, and the phase scope remains source-free.
 - Expanded planning: not needed.
-- Implementation: pending.
+- Implementation: blocked — the approved changed-config same-run branch case
+  reaches the existing authority-backed fail-closed output-commit boundary.
 - Refiner: not needed / pending evidence.
 - Pre-submit gate: pending.
 - Independent review: not needed / pending residual-risk check.
@@ -193,9 +194,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Blocked before durable implementation; no example, docs, or runtime paths changed. |
+| Tests added or updated | None; the required integration assertion cannot pass against the current same-run behavior. |
+| Validated revision/tree state and evidence | On `fd0fd80`, a four-stage fork with `input_values.left` recomposed through public `compose_config`/`RunRequest` produced `RUN` for the changed producer and `BLOCKED` for its consumer and independent branch, not the required reuse/run split. |
+| Validation-relevant changes after evidence | Only this blocker record; no validation-relevant source or test changes. |
+| PR, review, and merge | No PR; manager decision required. |
+| Residual risk and cleanup | Existing resume docs state ordinary fingerprint/config changes are fail-closed after an authoritative output commit. A planner/runtime contract decision is needed before this phase can teach branch-specific same-run invalidation. |
