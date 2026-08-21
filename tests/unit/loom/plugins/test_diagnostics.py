@@ -21,6 +21,7 @@ from loom.plugins import (
     PLUGIN_GROUP_READINESS,
     PluginRecord,
     PluginSelection,
+    READINESS_FACETS,
     check_plugin_records,
     plugin_group_readiness,
     summarize_plugin_records,
@@ -58,6 +59,20 @@ def test_group_readiness_classifies_registry_ready_groups() -> None:
         assert readiness.reason
         assert readiness.revisit_trigger
         assert readiness.to_summary()["status"] == "listing-only"
+
+
+def test_group_readiness_exposes_fixed_facet_evidence_and_derives_status() -> None:
+    readiness = plugin_group_readiness(LOOM_EXECUTORS_GROUP)
+
+    assert tuple(readiness.facets) == READINESS_FACETS
+    assert readiness.facets["contract"].status == "supported"
+    assert readiness.facets["registry"].status == "unsupported"
+    assert readiness.facets["plugin_loading"].status == "unsupported"
+    assert readiness.status == "listing-only"
+    assert readiness.to_summary()["facets"]["cli_selection"] == {
+        "status": "unsupported",
+        "evidence": "Run commands do not yet select executor plugins.",
+    }
 
 
 def test_summarize_plugin_records_keeps_metadata_plain_and_listing_only() -> None:

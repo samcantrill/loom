@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Literal
 
 from loom.serialization import PlainData
 
@@ -41,15 +42,61 @@ LISTING_ONLY_PLUGIN_GROUPS: tuple[str, ...] = tuple(
     group for group in KNOWN_PLUGIN_GROUPS if group not in LOADABLE_PLUGIN_GROUPS
 )
 
+READINESS_FACETS: tuple[str, ...] = (
+    "contract",
+    "python_injection",
+    "registry",
+    "plugin_loading",
+    "cli_selection",
+    "fresh_process_reconstruction",
+)
+ReadinessFacetStatus = Literal["supported", "unsupported", "not_applicable"]
+
+
+@dataclass(frozen=True, slots=True)
+class PluginReadinessFacet:
+    """One independently reported extension capability."""
+
+    status: ReadinessFacetStatus
+    evidence: str
+
+    def __post_init__(self) -> None:
+        if self.status not in {"supported", "unsupported", "not_applicable"}:
+            raise ValueError("readiness facet status must be supported, unsupported, or not_applicable")
+        if not isinstance(self.evidence, str) or not self.evidence:
+            raise ValueError("readiness facet evidence must be a non-empty string")
+
+    def to_summary(self) -> dict[str, PlainData]:
+        return {"status": self.status, "evidence": self.evidence}
+
 
 @dataclass(frozen=True, slots=True)
 class PluginGroupReadiness:
     """Diagnostic readiness classification for an entry point group."""
 
     group: str
-    status: str
     reason: str
     revisit_trigger: str
+    facets: Mapping[str, PluginReadinessFacet]
+
+    def __post_init__(self) -> None:
+        normalized = dict(self.facets)
+        if tuple(normalized) != READINESS_FACETS:
+            raise ValueError("readiness facets must use the fixed readiness facet order")
+        if not all(isinstance(facet, PluginReadinessFacet) for facet in normalized.values()):
+            raise TypeError("readiness facets must be PluginReadinessFacet values")
+        object.__setattr__(self, "facets", MappingProxyType(normalized))
+
+    @property
+    def status(self) -> str:
+        """Compatibility summary derived solely from registry and loading support."""
+
+        if (
+            self.facets["registry"].status == "supported"
+            and self.facets["plugin_loading"].status == "supported"
+        ):
+            return "registry-ready"
+        return "listing-only"
 
     def to_summary(self) -> dict[str, PlainData]:
         return {
@@ -57,63 +104,145 @@ class PluginGroupReadiness:
             "status": self.status,
             "reason": self.reason,
             "revisit_trigger": self.revisit_trigger,
+            "facets": {
+                name: facet.to_summary() for name, facet in self.facets.items()
+            },
         }
+
+
+def _facet(status: ReadinessFacetStatus, evidence: str) -> PluginReadinessFacet:
+    return PluginReadinessFacet(status=status, evidence=evidence)
+
+
+def _facets(
+    *,
+    contract: tuple[ReadinessFacetStatus, str],
+    python_injection: tuple[ReadinessFacetStatus, str],
+    registry: tuple[ReadinessFacetStatus, str],
+    plugin_loading: tuple[ReadinessFacetStatus, str],
+    cli_selection: tuple[ReadinessFacetStatus, str],
+    fresh_process_reconstruction: tuple[ReadinessFacetStatus, str],
+) -> dict[str, PluginReadinessFacet]:
+    return {
+        "contract": _facet(*contract),
+        "python_injection": _facet(*python_injection),
+        "registry": _facet(*registry),
+        "plugin_loading": _facet(*plugin_loading),
+        "cli_selection": _facet(*cli_selection),
+        "fresh_process_reconstruction": _facet(*fresh_process_reconstruction),
+    }
 
 
 _PLUGIN_GROUP_READINESS_DETAILS: dict[str, PluginGroupReadiness] = {
     LOOM_RECIPES_GROUP: PluginGroupReadiness(
         group=LOOM_RECIPES_GROUP,
-        status="registry-ready",
         reason="RecipeCatalog owns recipe name validation and replacement policy.",
         revisit_trigger="RecipeCatalog plugin registration policy changes.",
+        facets=_facets(
+            contract=("supported", "RecipeCatalog defines recipe registration behavior."),
+            python_injection=("supported", "Applications can register trusted recipes directly."),
+            registry=("supported", "RecipeCatalog owns recipe-name validation."),
+            plugin_loading=("supported", "Selected entry points load into a supplied RecipeCatalog."),
+            cli_selection=("unsupported", "Run commands do not yet select recipe plugins."),
+            fresh_process_reconstruction=("unsupported", "Prepared runs do not record plugin activations."),
+        ),
     ),
     LOOM_CODECS_GROUP: PluginGroupReadiness(
         group=LOOM_CODECS_GROUP,
-        status="registry-ready",
         reason="CodecRegistry owns codec object validation and duplicate key policy.",
         revisit_trigger="CodecRegistry replacement or adapter policy changes.",
+        facets=_facets(
+            contract=("supported", "Codec defines key, encode, and decode behavior."),
+            python_injection=("supported", "Applications can register codecs in a supplied CodecRegistry."),
+            registry=("supported", "CodecRegistry validates codec keys and duplicates."),
+            plugin_loading=("supported", "Selected entry points load into a supplied CodecRegistry."),
+            cli_selection=("unsupported", "Run commands do not yet select codec plugins."),
+            fresh_process_reconstruction=("unsupported", "Prepared runs do not record plugin activations."),
+        ),
     ),
     LOOM_SOURCES_GROUP: PluginGroupReadiness(
         group=LOOM_SOURCES_GROUP,
-        status="listing-only",
         reason="DataSource exists, but no source plugin registry or loader contract is stable.",
         revisit_trigger="A source-owned registry and plugin adapter contract lands.",
+        facets=_facets(
+            contract=("supported", "DataSource remains a subsystem protocol."),
+            python_injection=("not_applicable", "No source injection seam is owned by the runtime."),
+            registry=("not_applicable", "No source registry is defined."),
+            plugin_loading=("not_applicable", "No source entry-point adapter is defined."),
+            cli_selection=("not_applicable", "No source plugin selection exists."),
+            fresh_process_reconstruction=("not_applicable", "No source plugin activation is persisted."),
+        ),
     ),
     LOOM_EXECUTORS_GROUP: PluginGroupReadiness(
         group=LOOM_EXECUTORS_GROUP,
-        status="listing-only",
         reason=(
             "Executor descriptors cover capabilities, not third-party executor "
             "implementation loading."
         ),
         revisit_trigger="An executor implementation registry or descriptor loader lands.",
+        facets=_facets(
+            contract=("supported", "Executor defines stage execution behavior."),
+            python_injection=("supported", "PipelineRunner accepts an explicitly built executor."),
+            registry=("unsupported", "Descriptor registries do not register executor implementations."),
+            plugin_loading=("unsupported", "No executor entry-point adapter is defined."),
+            cli_selection=("unsupported", "Run commands do not yet select executor plugins."),
+            fresh_process_reconstruction=("unsupported", "Prepared runs do not record plugin activations."),
+        ),
     ),
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP: PluginGroupReadiness(
         group=LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
-        status="listing-only",
         reason=(
             "Stage 15 owns backend descriptors, config handoff, capabilities, "
             "credentials, URI policy, and operation semantics."
         ),
         revisit_trigger="Stage 15 defines a store-owned backend registry and descriptor contract.",
+        facets=_facets(
+            contract=("unsupported", "No backend extension contract is published by this group."),
+            python_injection=("not_applicable", "No backend injection seam is owned here."),
+            registry=("not_applicable", "No backend registry is defined for this group."),
+            plugin_loading=("not_applicable", "No backend entry-point adapter is defined."),
+            cli_selection=("not_applicable", "No backend plugin selection exists."),
+            fresh_process_reconstruction=("not_applicable", "No backend plugin activation is persisted."),
+        ),
     ),
     LOOM_RUN_EXPORTERS_GROUP: PluginGroupReadiness(
         group=LOOM_RUN_EXPORTERS_GROUP,
-        status="listing-only",
         reason="RunExporter/RunImporter protocols exist, but no plugin registry/loader is stable.",
         revisit_trigger="Run exchange defines supplied exporter/importer plugin registries.",
+        facets=_facets(
+            contract=("supported", "Run exchange defines exporter/importer protocols."),
+            python_injection=("not_applicable", "No exporter/importer injection seam is defined."),
+            registry=("not_applicable", "No exporter/importer registry is defined."),
+            plugin_loading=("not_applicable", "No exporter/importer entry-point adapter is defined."),
+            cli_selection=("not_applicable", "No exporter/importer plugin selection exists."),
+            fresh_process_reconstruction=("not_applicable", "No exporter/importer activation is persisted."),
+        ),
     ),
     LOOM_SWEEP_PROVIDERS_GROUP: PluginGroupReadiness(
         group=LOOM_SWEEP_PROVIDERS_GROUP,
-        status="listing-only",
         reason="Sweep provider protocols exist, but no plugin registry/loader is stable.",
         revisit_trigger="Sweep planning defines a supplied provider plugin registry.",
+        facets=_facets(
+            contract=("supported", "Sweep provider protocols define proposal behavior."),
+            python_injection=("not_applicable", "No provider injection seam is defined."),
+            registry=("not_applicable", "No provider registry is defined."),
+            plugin_loading=("not_applicable", "No provider entry-point adapter is defined."),
+            cli_selection=("not_applicable", "No provider plugin selection exists."),
+            fresh_process_reconstruction=("not_applicable", "No provider activation is persisted."),
+        ),
     ),
     LOOM_EVENT_SINKS_GROUP: PluginGroupReadiness(
         group=LOOM_EVENT_SINKS_GROUP,
-        status="registry-ready",
         reason="EventSinkRegistry owns explicit event sink registration and duplicate-name policy.",
         revisit_trigger="Event sink plugin constructor or registry policy changes.",
+        facets=_facets(
+            contract=("supported", "EventSink defines observe-only callback behavior."),
+            python_injection=("supported", "Applications can register sinks in a supplied EventSinkRegistry."),
+            registry=("supported", "EventSinkRegistry validates names and duplicate registration."),
+            plugin_loading=("supported", "Selected entry points load into a supplied EventSinkRegistry."),
+            cli_selection=("unsupported", "Run commands do not yet select event sink plugins."),
+            fresh_process_reconstruction=("unsupported", "Prepared runs do not record plugin activations."),
+        ),
     ),
 }
 PLUGIN_GROUP_READINESS_DETAILS: dict[str, PluginGroupReadiness] = dict(
@@ -265,9 +394,16 @@ def plugin_group_readiness(group: str) -> PluginGroupReadiness:
         group,
         PluginGroupReadiness(
             group=group,
-            status="listing-only",
             reason="No Stage 14 registry loader is defined for this entry point group.",
             revisit_trigger="An owning subsystem defines a stable registry and loader contract.",
+            facets=_facets(
+                contract=("not_applicable", "The group is not a known Loom extension contract."),
+                python_injection=("not_applicable", "The group has no owned injection seam."),
+                registry=("not_applicable", "The group has no owned registry."),
+                plugin_loading=("not_applicable", "The group has no entry-point adapter."),
+                cli_selection=("not_applicable", "The group has no CLI selection path."),
+                fresh_process_reconstruction=("not_applicable", "The group has no persisted activation."),
+            ),
         ),
     )
 

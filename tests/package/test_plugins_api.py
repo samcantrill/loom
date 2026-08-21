@@ -32,6 +32,7 @@ def test_import_loom_plugins_public_symbols() -> None:
     assert plugins.PluginSelection
     assert plugins.PluginDiagnosticResult
     assert plugins.PluginGroupReadiness
+    assert plugins.PluginReadinessFacet
     assert plugins.PluginMissingRequest
     assert plugins.PluginDiscoveryError
     assert plugins.PluginInvalidEntryPointError
@@ -50,6 +51,14 @@ def test_import_loom_plugins_public_symbols() -> None:
         plugins.LOOM_RECIPES_GROUP,
         plugins.LOOM_CODECS_GROUP,
         plugins.LOOM_EVENT_SINKS_GROUP,
+    )
+    assert plugins.READINESS_FACETS == (
+        "contract",
+        "python_injection",
+        "registry",
+        "plugin_loading",
+        "cli_selection",
+        "fresh_process_reconstruction",
     )
     assert (
         plugins.LOOM_ARTIFACT_STORE_BACKENDS_GROUP in plugins.LISTING_ONLY_PLUGIN_GROUPS
