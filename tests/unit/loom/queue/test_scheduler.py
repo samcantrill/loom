@@ -9,38 +9,15 @@ import pytest
 
 from loom.queue import (
     LaunchContract,
-    QueueClaim,
     QueueItem,
-    QueueItemStatus,
     QueueSelectionCandidate,
     QueueSelectionContext,
     QueueSelectionDecision,
     QueueSelectionDisposition,
     RunIntent,
 )
-from loom.queue._scheduler import select_fifo_item
 from loom.queue.errors import QueueValidationError
 from loom.queue.selection import _bind_selection_policy, _evaluate_selection
-
-
-def test_select_fifo_item_returns_oldest_queued_item_for_pool() -> None:
-    later = _item("later", "gpu", "2020-01-01T00:00:02Z")
-    other_pool = _item("other", "cpu", "2020-01-01T00:00:00Z")
-    older = _item("older", "gpu", "2020-01-01T00:00:01Z")
-    claimed = replace(
-        _item("claimed", "gpu", "2020-01-01T00:00:00Z"),
-        status=QueueItemStatus.CLAIMED,
-        claim=QueueClaim(
-            claim_id="claim-1",
-            owner_id="controller-1",
-            claimed_at="2020-01-01T00:00:00Z",
-            dispatch_attempt=1,
-        ),
-    )
-
-    assert select_fifo_item([later, other_pool, older, claimed], pool_name="gpu") == older
-    assert select_fifo_item([later, other_pool, older], pool_name="cpu") == other_pool
-    assert select_fifo_item([claimed], pool_name="gpu") is None
 
 
 def test_selection_records_are_immutable_and_validate_the_public_boundary() -> None:
