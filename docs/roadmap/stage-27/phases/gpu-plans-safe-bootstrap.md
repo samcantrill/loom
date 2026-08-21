@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 27, Phase 1
 - Manifest: docs/roadmap/stage-27/implementation-plan.md
 - Branch: agent/stage-27-p1-gpu-plans-safe-bootstrap
@@ -214,7 +214,7 @@ Final commands:
   tests, risks, domain neutrality, imports, and proportionality match this plan
 - Independent review: not needed; manager review found no residual blocker
 - Blocker corrections: 2/3
-- PR and merge: pending
+- PR and merge: PR #221 is open and manager-approved; CI and merge are pending
 
 ## Completion Record
 
@@ -224,5 +224,5 @@ Final commands:
 | Tests added or updated | `tests/unit/loom/queue/gpu/test_local.py`, `tests/integration/queue/test_managed_local_gpu_pool.py`, `tests/contracts/test_workspace_coordination_contract.py`, package/store export tests, and the in-memory coordination fake. Corrections add safe-evidence redaction, structured-fingerprint and comma-binding regressions, required `shares_per_gpu(1)` behavior, and a whole-GPU managed-runtime launch proving distinct CUDA bindings and exact release. |
 | Validated revision/tree state and evidence | Clean source tree at `67bdf982c96f014a813a9ce540cb3959cf186bfc`; `make validate-pr` passed (Ruff, Pyright with zero errors, default 2,193 passed/112 deselected, config-extra 132 passed/3 skipped, and sdist/wheel build). Focused GPU/runtime tests passed (15 passed). `make test-summary` produced `build/test-summary.md` twice with every package, unit, contract, integration, and e2e test passing; config-extra had 131 passed/3 skipped and one unrelated lease-renewal test time out at its five-second stage-allocation wait. The same test passes without coverage and reproduces only under the summary harness's coverage instrumentation, so summary evidence is unavailable for that timing-sensitive test and CI remains required. |
 | Validation-relevant changes after evidence | None. The full validation and summary diagnostics ran after correction 2/3 on the current source, test, dependency, build, and validation configuration. |
-| PR, review, and merge | Manager review and pre-submit gate passed with no blocker; PR publication, CI, and merge remain pending. |
+| PR, review, and merge | [PR #221](https://github.com/samcantrill/loom/pull/221) targets `develop`, is non-draft and mergeable, and has the verified phase title and head. Manager review and the pre-submit gate passed with no blocker; CI and merge remain pending. |
 | Residual risk and cleanup | No Phase 1 blocker. NVIDIA discovery, topology/grouping, and operator documentation remain deferred to later accepted phases; PR/review/merge and worktree cleanup remain manager-owned. |

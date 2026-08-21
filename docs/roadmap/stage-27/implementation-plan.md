@@ -6,7 +6,7 @@ Planning document: docs/roadmap/stage-27/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
 Worktree root: `/home/can134/work/active/loom-worktrees`
-Current phase: Phase 1 in_progress
+Current phase: Phase 1 pr_open
 Blockers: none
 
 ## Summary
@@ -89,7 +89,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `gpu-plans-safe-bootstrap` | in_progress | `docs/roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md` | `agent/stage-27-p1-gpu-plans-safe-bootstrap` | pending | GPU inventory/layout/plan API, atomic authority ensure, whole/share composition | Run a manually supplied whole/share GPU pool safely without authored slots. |
+| 1 | `gpu-plans-safe-bootstrap` | pr_open | `docs/roadmap/stage-27/phases/gpu-plans-safe-bootstrap.md` | `agent/stage-27-p1-gpu-plans-safe-bootstrap` | [#221](https://github.com/samcantrill/loom/pull/221) | GPU inventory/layout/plan API, atomic authority ensure, whole/share composition | Run a manually supplied whole/share GPU pool safely without authored slots. |
 | 2 | `grouped-gpu-placement` | pending | `docs/roadmap/stage-27/phases/grouped-gpu-placement.md` | `agent/stage-27-p2-grouped-gpu-placement` | pending | Deterministic disjoint groups and member-backed assignment lifecycle | Allocate N strongly connected GPUs as one logical unit without member overlap. |
 | 3 | `nvidia-auto-discovery` | pending | `docs/roadmap/stage-27/phases/nvidia-auto-discovery.md` | `agent/stage-27-p3-nvidia-auto-discovery` | pending | Explicit NVIDIA command adapter, diagnostics, docs, examples, acceptance | Turn installed NVIDIA hardware into the same reviewed plan automatically. |
 
@@ -114,6 +114,6 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | pending | pending |
+| 1 | [#221](https://github.com/samcantrill/loom/pull/221) open; merge pending | Implementation, manager review, and `make validate-pr` passed; CI pending | Shares express scheduling capacity, not isolation | Worktree and branch retained until merge |
 | 2 | pending | pending | pending | pending |
 | 3 | pending | pending | pending | pending |
