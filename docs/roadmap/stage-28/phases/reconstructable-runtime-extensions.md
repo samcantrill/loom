@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: v28 Phase 2
 - Manifest: `docs/roadmap/stage-28/implementation-plan.md`
 - Branch: `agent/stage-28-p2-reconstructable-runtime-extensions`
@@ -263,8 +263,8 @@ Final commands:
   and removal of event sinks from Phase 2 run/continuation worker applicability
 - Blocker corrections: 4/4; the maintainer explicitly authorized the fourth
   bounded correction to resolve both expanded-review findings
-- PR and merge: PR #228 is open; the rebased correction has passed local gates
-  and awaits refreshed CI before manager approval and merge
+- PR and merge: PR #228 passed refreshed CI and manager review, then squash
+  merged to `develop` as `1040be4`
 
 ## Completion Record
 
@@ -273,6 +273,6 @@ Final commands:
 | Implementation and changed paths | `12340f6` introduced the registries, adapters, activation evidence, and first worker wiring. `3070b71` completed validator threading across config/runtime/preflight/continuation roots, built-in factory composition, worker-only activation subsets, authored-resource preservation, and a real custom executor/codec/validator subprocess path. `9d007ff` removed an isolated pytest module-name collision. `37a6248` restored lazy imports and no-plugin compatibility. `e896e52` compares resume identity before target import and removes deferred event sinks from execution/worker allowlists. Changes stay within CLI composition, plugin adapters/diagnostics, runtime parsing/capabilities, execution reconstruction, executor command builders, tests, and the accepted docs. |
 | Tests added or updated | Added strict manifest/selector, executor registry/loader, direct validator, resource reparse, worker command, and synthetic installed-entry-point fixtures. The real CLI E2E selects a project subprocess executor plus non-built-in codec/resource kind, proves exact resume succeeds and omitted activation fails, asserts independent parent/child validator PIDs, loads the custom payload, and verifies the exact worker activation subset. The review correction's broad Stage 28 cluster passed 343 tests. |
 | Validated revision/tree state and evidence | Clean rebased source/test tree at `e896e52` plus this evidence-only roadmap commit. `make validate-pr` passed Ruff, Pyright, default 2,287 passed / 1 skipped / 121 deselected, config-extra 141 passed / 3 skipped / 2,291 deselected, and package build. `make test-summary` wrote `build/test-summary.md`: package 116, unit 1,619, contract 286, integration 210, E2E 56, and config-extra 141 passed with no failures or errors. |
-| Validation-relevant changes after evidence | none; only this phase execution-plan evidence is updated after the successful receipts. |
-| PR, review, and merge | PR [#228](https://github.com/samcantrill/loom/pull/228) is ready and targets `develop`; the rebased branch awaits refreshed CI and final manager merge verification. |
+| Validation-relevant changes after evidence | none; only roadmap evidence and post-merge status are updated after the successful receipts. |
+| PR, review, and merge | PR [#228](https://github.com/samcantrill/loom/pull/228) targeted `develop`, passed CI in 4m22s, had no remaining review blocker, and squash merged as `1040be4`. |
 | Residual risk and cleanup | No known blocker. Cross-host installation remains an operator responsibility; unavailable distribution evidence is reported as a warning while exact group/name/target identity remains mandatory. |
