@@ -129,6 +129,7 @@ def test_local_adapter_redacts_released_leases_after_process_start_failure() -> 
     assert result.status is QueueItemStatus.UNKNOWN
     result_evidence = thaw_plain_data(result.evidence, path="evidence")
     assert isinstance(result_evidence, dict)
+    assert "local_process_started" not in result_evidence
     assert result_evidence["released_resource_leases"] == [
         {
             "resource_key": "gpu",

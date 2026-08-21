@@ -687,7 +687,6 @@ class LocalQueueDispatchAdapter:
     ) -> QueueDispatchResult:
         pending = bool(cleanup["pending"])
         evidence: dict[str, PlainData] = {
-            "local_process_started": False,
             "released_resource_leases": cleanup["admission_released"],
             "released_assignment_leases": cleanup["assignment_released"],
         }
@@ -700,6 +699,7 @@ class LocalQueueDispatchAdapter:
                 reason_code="local.process_start_exception",
                 evidence=evidence,
             )
+        evidence["local_process_started"] = False
         return QueueDispatchResult(
             disposition=QueueDispatchDisposition.NOT_STARTED,
             reason_code=reason_code,

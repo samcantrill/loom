@@ -2,23 +2,21 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: in_progress
 - Roadmap stage and phase: 25-post, Phase 2
 - Manifest: `docs/roadmap/stage-25-post/implementation-plan.md`
 - Branch: `agent/stage-25-post-p2-factual-dispatch-outcomes`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`;
   `/home/can134/work/active/loom-worktrees/stage-25-post-p2-factual-dispatch-outcomes`
-- Base revision: `16a184912ca2aaa65fdcd73e046023c5466b0fa7`
+- Base revision: `cb84498cfd042ba2c2b0a460e5df248fbc2a6037`
 - PR target: develop
 - PR title: `Stage 25-post phase 2: make dispatch outcomes factual`
 - Dependencies: Phase 1 remote merge; planning `FR-7` through `FR-11`, `FQ-2`,
   `FQ-4`, and `DQ-4` through `DQ-7`
 - Workflow path: expanded plan; phase fast path unless Phase 1 refresh exposes a
   new material adapter-boundary risk
-- Blockers: independent review found contradictory durable evidence on the
-  supported local process-runner exception path: the result is correctly
-  `START_UNCERTAIN` but records `local_process_started: false`. The smallest fix
-  is known, but the phase's three scoped correction passes are exhausted.
+- Blockers: none; the maintainer authorized one explicit correction-budget
+  exception for the independent-review finding.
 
 ## Objective And Context
 
@@ -247,27 +245,27 @@ Final commands:
   uncertainty fail-closed across later runtime cycles; final implementation
   revision is `cd0b5dd`
 - Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: passed at `cd0b5dd`; manager scope/API audit, legacy usage
-  audit, required validation, and suite evidence are complete
-- Independent review: blocker found; `LocalQueueDispatchAdapter` persists a
-  definite non-start boolean inside `START_UNCERTAIN` evidence when process
-  start raises
-- Blocker corrections: 3/3 — one executor correction for the factual interface,
+- Pre-submit gate: prior evidence passed at `cd0b5dd`; full validation is being
+  refreshed after the authorized correction and rebase onto `cb84498`
+- Independent review: blocker resolved locally; `START_UNCERTAIN` no longer
+  persists the definite `local_process_started: false` non-start claim
+- Blocker corrections: 4 total with one maintainer-authorized exception — one
+  executor correction for the factual interface,
   diagnostics, missing-adapter mapping, and runtime dispatch state; one manager
   correction for required fields, known assignment causes, and cross-cycle
   terminal-uncertainty blocking; one manager correction preventing false
   cleanup confirmation when assignment acquisition raises without a provider
-  assignment handle
-- PR and merge: blocked before submission; no knowingly contradictory evidence
-  will be published
+  assignment handle; and the authorized manager correction removing
+  contradictory local possible-start evidence
+- PR and merge: pending refreshed validation and manager pre-submit review
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Replaced queue dispatch `DEFERRED` with factual dispositions and typed non-start/cleanup facts in `controller.py`; centralized queue transitions; mapped local and SLURM adapter boundaries; updated root exports and `queue.md`. Corrections hard-cut result fields to `reason_code`/`cleanup_status`, validate fixed safe codes, add safe selection logging, classify missing adapters as invalid, include dispatch outcomes in managed-runtime degradation, and keep provider-acquire cleanup uncertainty factual. |
-| Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Corrections add safe logging-category and missing-adapter unit coverage, known assignment-cause coverage, provider-exception cleanup uncertainty, and managed-runtime dispatch-uncertainty integration coverage across the same and later cycles. Phase unit/contract/integration command passed (130); final correction focus passed (91). |
+| Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Corrections add safe logging-category and missing-adapter unit coverage, known assignment-cause coverage, provider-exception cleanup uncertainty, managed-runtime dispatch-uncertainty integration coverage across the same and later cycles, and an assertion that possible-start evidence omits a definite non-start claim. Refreshed phase unit/contract/integration command passed (130). |
 | Validated revision/tree state and evidence | `cd0b5dd` clean tree on base `16a1849`: `TMPDIR=/dev/shm make validate-pr` passed (Ruff, Pyright, default 2245 passed/114 deselected, config-extra 134 passed/3 skipped, build); `TMPDIR=/dev/shm make test-summary` passed and wrote `build/test-summary.md` (package 115, unit 1580, contract 285, integration 210, e2e 55, config-extra 134). Legacy dispatch audit and `git diff --check` passed. |
-| Validation-relevant changes after evidence | None; focused evidence is current for source and tests. |
-| PR, review, and merge | Independent expanded-path review found one product blocker in local possible-start evidence; PR submission is blocked because the three scoped correction passes are exhausted. |
-| Residual risk and cleanup | `LocalQueueDispatchAdapter._pre_start_cleanup_result` records `local_process_started: false` for a process-runner exception while returning `START_UNCERTAIN`. The smallest fix is to omit that field from the uncertainty branch and add a focused regression assertion. Worktree and branch are retained for an authorized continuation. |
+| Validation-relevant changes after evidence | Authorized local possible-start evidence correction applied after rebasing onto `cb84498`; focused local adapter (28) and phase matrix (130) pass. Full evidence refresh is pending. |
+| PR, review, and merge | Independent expanded-path review blocker is resolved; manager pre-submit review, PR, CI, and merge remain. |
+| Residual risk and cleanup | `START_UNCERTAIN` deliberately remains terminal queue-local `UNKNOWN` without external recovery when no usable handle exists. Branch/worktree cleanup follows remote merge. |
