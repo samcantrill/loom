@@ -134,15 +134,19 @@ The authored static assignment binds both values to
 such as `CUDA_VISIBLE_DEVICES`). Loom does not discover, validate, or report
 vendor hardware.
 
-If two members must be allocated as one topology-specific placement, copy and
-adapt [`paired_assignment_provider.py`](paired_assignment_provider.py). It is
-project-owned placement code, not a stable Loom import. Its key rule is that
-bundle acquisition leases `accelerator-slot-a` and `accelerator-slot-b` -- the
-same physical coordination keys used by the individual static allocator -- and
-rolls back any first member if the second cannot be acquired. It implements
-acquire, renew, and release over every member and produces a two-value
-environment binding. It never uses a synthetic bundle key or accesses queue
-repositories/controller mutation.
+For local GPU groups, use the supported explicit
+[`loom.queue.gpu`](../../../src/loom/queue/gpu/__init__.py) planning helper with
+`LocalGpuPoolLayout.grouped(...)`; it leases every member GPU key together and
+supports only disjoint explicit, ordered, or caller-supplied topology groups.
+For another resource type with a topology-specific placement, copy and adapt
+[`paired_assignment_provider.py`](paired_assignment_provider.py). It remains
+project-owned placement code, not a stable generic bundle import. Its key rule
+is that bundle acquisition leases `accelerator-slot-a` and
+`accelerator-slot-b` -- the same physical coordination keys used by the
+individual static allocator -- and rolls back any first member if the second
+cannot be acquired. It implements acquire, renew, and release over every member
+and produces a two-value environment binding. It never uses a synthetic bundle
+key or accesses queue repositories/controller mutation.
 
 The controller's active limit is local to this runtime, not a distributed item
 quota. For broader candidate selection, generic scheduling, device health,

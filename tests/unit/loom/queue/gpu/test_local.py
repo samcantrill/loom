@@ -12,6 +12,8 @@ from loom.queue.assignments import (
 from loom.queue.gpu import (
     LocalGpuDevice,
     LocalGpuInventory,
+    LocalGpuLink,
+    grouped,
     plan_local_gpu_pool,
     shares_per_gpu,
     whole_gpus,
@@ -189,3 +191,118 @@ def test_assignment_safe_evidence_excludes_device_identity_and_binding() -> None
     }
     assert device_id not in repr(decision.assignment.safe_evidence)
     assert binding_value not in repr(decision.assignment.safe_evidence)
+
+
+def test_explicit_groups_are_disjoint_normalized_and_report_unused_devices() -> None:
+    plan = plan_local_gpu_pool(
+        _inventory(("gpu-c", "2"), ("gpu-a", "0"), ("gpu-b", "1")),
+        grouped(2, groups=(("gpu-b", "gpu-a"),)),
+    )
+
+    assert plan.capacity == 1
+    assert plan.resource_name == "gpu_group"
+    assert plan.queue_spec.pools[0].resources == {"gpu_group": 1}
+    assert plan.operator_summary()["groups"] == [("gpu-a", "gpu-b")]
+    assert plan.operator_summary()["unused_device_ids"] == ("gpu-c",)
+
+
+@pytest.mark.parametrize(
+    ("groups", "message"),
+    [
+        ((("gpu-a", "gpu-a"),), "disjoint"),
+        ((("gpu-a", "gpu-b"), ("gpu-b", "gpu-c")), "disjoint"),
+        ((("gpu-a",),), "exact-size"),
+    ],
+)
+def test_explicit_group_layout_rejects_duplicate_or_wrong_size_members(
+    groups: tuple[tuple[str, ...], ...], message: str
+) -> None:
+    with pytest.raises(QueueServiceError, match=message):
+        grouped(2, groups=groups)
+
+
+def test_explicit_groups_reject_unknown_devices_before_plan_is_created() -> None:
+    with pytest.raises(QueueServiceError, match="unknown inventory"):
+        plan_local_gpu_pool(
+            _inventory(("gpu-a", "0"), ("gpu-b", "1")),
+            grouped(2, groups=(("gpu-a", "gpu-missing"),)),
+        )
+
+
+def test_ordered_groups_chunk_normalized_inventory_order() -> None:
+    plan = plan_local_gpu_pool(
+        _inventory(
+            ("gpu-d", "3"),
+            ("gpu-b", "1"),
+            ("gpu-a", "0"),
+            ("gpu-c", "2"),
+            ("gpu-e", "4"),
+        ),
+        grouped(2, grouping="ordered"),
+    )
+
+    assert plan.operator_summary()["groups"] == [
+        ("gpu-a", "gpu-b"),
+        ("gpu-c", "gpu-d"),
+    ]
+    assert plan.operator_summary()["unused_device_ids"] == ("gpu-e",)
+
+
+def test_topology_groups_choose_ranked_disjoint_pairs_stably() -> None:
+    links = (
+        LocalGpuLink("gpu-a", "gpu-b", rank=0, kind="fast"),
+        LocalGpuLink("gpu-c", "gpu-d", rank=0, kind="fast"),
+        LocalGpuLink("gpu-a", "gpu-c", rank=2, kind="slow"),
+        LocalGpuLink("gpu-a", "gpu-d", rank=2, kind="slow"),
+        LocalGpuLink("gpu-b", "gpu-c", rank=2, kind="slow"),
+        LocalGpuLink("gpu-b", "gpu-d", rank=2, kind="slow"),
+    )
+    left = plan_local_gpu_pool(
+        LocalGpuInventory(
+            (
+                LocalGpuDevice("gpu-d", "3"),
+                LocalGpuDevice("gpu-b", "1"),
+                LocalGpuDevice("gpu-a", "0"),
+                LocalGpuDevice("gpu-c", "2"),
+            ),
+            links,
+        ),
+        grouped(2, grouping="topology"),
+    )
+    right = plan_local_gpu_pool(
+        LocalGpuInventory(
+            tuple(reversed(left.inventory.devices)), tuple(reversed(links))
+        ),
+        grouped(2, grouping="topology"),
+    )
+
+    assert left.operator_summary()["groups"] == [
+        ("gpu-a", "gpu-b"),
+        ("gpu-c", "gpu-d"),
+    ]
+    assert left.fingerprint == right.fingerprint
+
+
+def test_topology_requires_complete_pairwise_evidence() -> None:
+    with pytest.raises(QueueServiceError, match="cannot produce a complete group"):
+        plan_local_gpu_pool(
+            LocalGpuInventory(
+                (LocalGpuDevice("gpu-a", "0"), LocalGpuDevice("gpu-b", "1"))
+            ),
+            grouped(2, grouping="topology"),
+        )
+
+
+def test_inventory_rejects_unknown_or_duplicate_topology_pairs() -> None:
+    devices = (LocalGpuDevice("gpu-a", "0"), LocalGpuDevice("gpu-b", "1"))
+
+    with pytest.raises(QueueServiceError, match="inventory device"):
+        LocalGpuInventory(devices, (LocalGpuLink("gpu-a", "missing", 0, "fast"),))
+    with pytest.raises(QueueServiceError, match="pairs must be unique"):
+        LocalGpuInventory(
+            devices,
+            (
+                LocalGpuLink("gpu-a", "gpu-b", 0, "fast"),
+                LocalGpuLink("gpu-b", "gpu-a", 1, "slow"),
+            ),
+        )
