@@ -665,21 +665,29 @@ def build_slurm_dry_run_result(
     )
     validator_registry = None
     activation_manifest = None
-    worker_plugin_selectors: tuple[str, ...] = ()
+    stage_job_plugin_selectors: tuple[str, ...] = ()
     if plugin_records:
         from loom.cli.plugin_activation import (
             build_selected_registries,
             plugin_selectors_for_groups,
         )
-        from loom.plugins import LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
         from loom.plugins.entrypoints import PluginRecord
 
         _codecs, validator_registry, _executors, activation_manifest = (
             build_selected_registries(cast(Sequence[PluginRecord], plugin_records))
         )
-        worker_plugin_selectors = plugin_selectors_for_groups(
+        stage_job_plugin_selectors = plugin_selectors_for_groups(
             cast(Sequence[PluginRecord], plugin_records),
-            groups=(LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
+            groups=(
+                LOOM_CODECS_GROUP,
+                LOOM_EVENT_SINKS_GROUP,
+                LOOM_RESOURCE_VALIDATORS_GROUP,
+            ),
         )
     composed = _compose_config(
         config_options.config_path,
@@ -803,7 +811,7 @@ def build_slurm_dry_run_result(
             apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
             stage_apptainer_options=_stage_slurm_apptainer_options(runtime_options),
             container_build_results=container_build_results,
-            plugin_selectors=worker_plugin_selectors,
+            plugin_selectors=stage_job_plugin_selectors,
         )
     return _slurm_dry_run_cli_result(result, warnings=warnings), warnings
 
@@ -1772,21 +1780,29 @@ def build_slurm_live_submission_result(
     )
     validator_registry = None
     activation_manifest = None
-    worker_plugin_selectors: tuple[str, ...] = ()
+    stage_job_plugin_selectors: tuple[str, ...] = ()
     if plugin_records:
         from loom.cli.plugin_activation import (
             build_selected_registries,
             plugin_selectors_for_groups,
         )
-        from loom.plugins import LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
         from loom.plugins.entrypoints import PluginRecord
 
         _codecs, validator_registry, _executors, activation_manifest = (
             build_selected_registries(cast(Sequence[PluginRecord], plugin_records))
         )
-        worker_plugin_selectors = plugin_selectors_for_groups(
+        stage_job_plugin_selectors = plugin_selectors_for_groups(
             cast(Sequence[PluginRecord], plugin_records),
-            groups=(LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
+            groups=(
+                LOOM_CODECS_GROUP,
+                LOOM_EVENT_SINKS_GROUP,
+                LOOM_RESOURCE_VALIDATORS_GROUP,
+            ),
         )
     composed = _compose_config(
         config_options.config_path,
@@ -1929,7 +1945,7 @@ def build_slurm_live_submission_result(
             apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
             stage_apptainer_options=_stage_slurm_apptainer_options(runtime_options),
             container_build_results=container_build_results,
-            plugin_selectors=worker_plugin_selectors,
+            plugin_selectors=stage_job_plugin_selectors,
         )
         submit = submit_afterok_slurm
     try:
