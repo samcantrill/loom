@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 30, Phase 2
 - Manifest: `docs/roadmap/stage-30/implementation-plan.md`
 - Branch: `agent/stage-30-p2-experiments-observers-and-apptainer`
@@ -175,8 +175,8 @@ Final commands:
   scope, contract, truthfulness, test, dependency, or proportionality blocker.
 - Blocker corrections: 1/3 — deterministic sweep now scopes each invocation's
   run URIs beneath a unique child of the configured run root.
-- PR and merge: [#227](https://github.com/samcantrill/loom/pull/227) is open;
-  CI and merge are pending.
+- PR and merge: [#227](https://github.com/samcantrill/loom/pull/227) passed CI
+  and was squash-merged into `develop` as `1683662` on 2026-08-21.
 
 ## Completion Record
 
@@ -186,5 +186,5 @@ Final commands:
 | Tests added or updated | Added sweep and event-sink integration journeys, fake-Apptainer e2e coverage, and v30 catalog assertions; sweep coverage reruns the entrypoint against identical roots. |
 | Validated revision/tree state and evidence | Rebased tree `7bccb97`: targeted runtime regressions 12 passed; executable example/catalog coverage 44 passed; Ruff and Pyright passed; `make validate-pr` default passed 2,242 tests with 1 expected skip and config-extra passed 139 with 3 expected skips; package builds succeeded. The exact-tree `make test-summary` receipt passed package 116, unit 1,577, contract 285, integration 209, E2E 55, and config-extra 139 tests with zero failures/errors and 3 expected skips. |
 | Validation-relevant changes after evidence | None after `7bccb97`; this evidence refresh is documentation-only. |
-| PR, review, and merge | Manager fast-path review passed. [#227](https://github.com/samcantrill/loom/pull/227) is open against `develop`; CI and merge are pending. |
-| Residual risk and cleanup | Fake Apptainer proves command integration rather than live HPC/container isolation, and the README says so explicitly. Plugin packaging remains a secondary illustrative snippet. Correction 1 makes the sweep rerunnable against identical configured roots. Branch/worktree cleanup is pending remote merge. |
+| PR, review, and merge | Manager fast-path review passed. [#227](https://github.com/samcantrill/loom/pull/227) passed GitHub CI and was squash-merged into `develop` as `1683662` on 2026-08-21. |
+| Residual risk and cleanup | Fake Apptainer proves command integration rather than live HPC/container isolation, and the README says so explicitly. Plugin packaging remains a secondary illustrative snippet. Correction 1 makes the sweep rerunnable against identical configured roots. The phase branch and worktree were removed after merge. |
