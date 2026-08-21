@@ -187,22 +187,41 @@ def check_event_sink_contract(
     events: Iterable["PipelineEventRecord | EventReference"],
     context_factory: Callable[["PipelineEventRecord | EventReference"], "EventSinkContext"],
 ) -> ContractReport:
-    """Check a callable event sink against caller-provided event/context pairs."""
+    """Check a sink registration against caller-provided event/context pairs."""
+
+    from loom.pipeline.event_sinks import EventSinkRegistration, EventSinkSubscription
 
     event_values = tuple(events)
-    callable_check = _check(lambda: callable(sink), "event sink is callable")
+    registration = sink if isinstance(sink, EventSinkRegistration) else None
+    sink_value = registration.sink if registration is not None else sink
+    callable_check = _check(lambda: callable(sink_value), "event sink is callable")
     findings = [_finding("event_sink.callable", callable_check)]
-    sink_value = cast(Callable[[object, object], object], sink)
+    subscription_check = _check(
+        lambda: registration is None
+        or registration.subscription is None
+        or isinstance(registration.subscription, EventSinkSubscription),
+        "event sink subscription selects exact event names",
+    )
+    findings.append(_finding("event_sink.subscription", subscription_check))
+    callback = cast(Callable[[object, object], object], sink_value)
     for event in event_values:
-        if callable_check[0]:
+        event_type = getattr(event, "event_type", None)
+        should_dispatch = (
+            registration is None
+            or registration.subscription is None
+            or event_type in registration.subscription.event_types
+        )
+        if callable_check[0] and subscription_check[0] and should_dispatch:
             invocation = _check(
-                lambda event=event: sink_value(event, context_factory(event)),
+                lambda event=event: callback(event, context_factory(event)),
                 "event sink accepted event and context",
             )
             findings.append(_finding("event_sink.invoke", invocation))
-        else:
-            findings.append(_failed("event_sink.invoke", "event sink callable check failed; event was not invoked"))
-    return ContractReport("loom.event_sink", 1, tuple(findings))
+        elif should_dispatch:
+            findings.append(
+                _failed("event_sink.invoke", "event sink callable check failed; event was not invoked")
+            )
+    return ContractReport("loom.event_sink", 2, tuple(findings))
 
 
 def _check(operation: Callable[[], Any], message: str) -> tuple[bool, object | None, str]:

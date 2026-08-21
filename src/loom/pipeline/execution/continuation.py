@@ -9,6 +9,7 @@ from typing import cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.errors import StageContractError
+from loom.pipeline.event_sinks import EventSinkRegistry
 from loom.pipeline.planning import (
     ExecutionPlan,
     PlanAction,
@@ -34,6 +35,7 @@ from loom.serialization import PlainData, ensure_plain_data, json_loads, thaw_pl
 from loom.timestamps import utc_timestamp
 from loom.plugins import (
     LOOM_CODECS_GROUP,
+    LOOM_EVENT_SINKS_GROUP,
     LOOM_RESOURCE_VALIDATORS_GROUP,
     PluginRecord,
 )
@@ -43,7 +45,7 @@ from loom.plugins.activation import (
 )
 
 from .errors import OutputValidationError, PipelineExecutionError, PlanExecutionError
-from .eventing import emit_run_event, emit_stage_event
+from .eventing import RuntimeEventDispatcher, emit_run_event, emit_stage_event
 from .lifecycle import (
     commit_stage_execution_result,
     persist_stage_failure,
@@ -287,12 +289,20 @@ def run_stage_job(
     request: StageJobRunRequest,
     artifact_store_factory: ArtifactStoreFactory | None = None,
     resource_validator_registry: ResourceValidatorRegistry | None = None,
+    event_sink_registry: EventSinkRegistry | None = None,
     selected_plugin_records: tuple[PluginRecord, ...] = (),
     clock: Clock = utc_timestamp,
 ) -> StageJobRunResult:
     """Run and finalize one planned stage from durable prepared state."""
 
     _validate_executor(request.executor)
+    if event_sink_registry is not None and not isinstance(
+        event_sink_registry, EventSinkRegistry
+    ):
+        raise ContinuationStateError(
+            "run_stage_job event_sink_registry must be EventSinkRegistry when supplied",
+            code="execution.stage_job.invalid_event_sink_registry",
+        )
     if not isinstance(run_store, RunStore):
         raise ContinuationStateError(
             "run_stage_job requires RunStore",
@@ -313,7 +323,13 @@ def run_stage_job(
         allowed_groups=(
             LOOM_CODECS_GROUP,
             LOOM_RESOURCE_VALIDATORS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
         ),
+    )
+    event_dispatcher = (
+        RuntimeEventDispatcher(registry=event_sink_registry)
+        if event_sink_registry is not None
+        else None
     )
     lock = acquire_run_lock(
         run_store,
@@ -340,6 +356,7 @@ def run_stage_job(
             artifact_store_factory=artifact_store_factory or LocalArtifactStore,
             resource_validator_registry=resource_validator_registry,
             selected_plugin_records=selected_plugin_records,
+            event_dispatcher=event_dispatcher,
             clock=clock,
         )
     finally:
@@ -353,6 +370,7 @@ def _run_stage_job_locked(
     artifact_store_factory: ArtifactStoreFactory,
     resource_validator_registry: ResourceValidatorRegistry | None,
     selected_plugin_records: tuple[PluginRecord, ...],
+    event_dispatcher: RuntimeEventDispatcher | None,
     clock: Clock,
 ) -> StageJobRunResult:
     plan = _read_execution_plan(run_store=run_store, run_uri=request.run_uri)
@@ -488,6 +506,7 @@ def _run_stage_job_locked(
             executor_name=request.executor,
             allow_run_finalization=allow_run_finalization,
             clock=clock,
+            event_dispatcher=event_dispatcher,
         )
         return StageJobRunResult(
             schema_version=STAGE_JOB_RUN_RESULT_SCHEMA_VERSION,
@@ -524,6 +543,7 @@ def _run_stage_job_locked(
         event_type="stage.started",
         timestamp=running_at,
         payload={"attempt": attempt, "action": PlanAction.RUN.value, "stage_job": True},
+        event_dispatcher=event_dispatcher,
     )
 
     from loom.pipeline.executors import LocalExecutor
@@ -550,6 +570,7 @@ def _run_stage_job_locked(
             execution_result=execution_result,
             executor_name=request.executor,
             clock=clock,
+            event_dispatcher=event_dispatcher,
         )
     except Exception as exc:
         failure = _failure_from_stage_job_exception(
@@ -575,6 +596,7 @@ def _run_stage_job_locked(
             executor_name=request.executor,
             allow_run_finalization=allow_run_finalization,
             clock=clock,
+            event_dispatcher=event_dispatcher,
         )
         stage_result = StageRunResult(
             stage_name=request.stage_name,
@@ -596,6 +618,7 @@ def _run_stage_job_locked(
         started_at=run_status_before.started_at or run_status_before.updated_at,
         allow_run_finalization=allow_run_finalization,
         clock=clock,
+        event_dispatcher=event_dispatcher,
     )
     return StageJobRunResult(
         schema_version=STAGE_JOB_RUN_RESULT_SCHEMA_VERSION,
@@ -1584,6 +1607,7 @@ def _record_stage_job_failure(
     executor_name: str,
     allow_run_finalization: bool,
     clock: Clock,
+    event_dispatcher: RuntimeEventDispatcher | None,
 ) -> tuple[ExecutionFailure, RunStatus]:
     if allow_run_finalization:
         return (
@@ -1598,6 +1622,7 @@ def _record_stage_job_failure(
                 failure=failure,
                 executor_name=executor_name,
                 clock=clock,
+                event_dispatcher=event_dispatcher,
             ),
             RunStatus.FAILED,
         )
@@ -1610,6 +1635,7 @@ def _record_stage_job_failure(
             started_at=started_at,
             failure=failure,
             clock=clock,
+            event_dispatcher=event_dispatcher,
         )
     except Exception as exc:
         failure = ExecutionFailure(
@@ -1677,6 +1703,7 @@ def _update_stage_job_run_status(
     started_at: str,
     allow_run_finalization: bool,
     clock: Clock,
+    event_dispatcher: RuntimeEventDispatcher | None,
 ) -> RunStatus:
     if stage_result.status == StageStatus.FAILED:
         if not allow_run_finalization:
@@ -1691,6 +1718,7 @@ def _update_stage_job_run_status(
                 "status": RunStatus.FAILED.value,
                 "failed_stage": stage_result.stage_name,
             },
+            event_dispatcher=event_dispatcher,
         )
         return RunStatus.FAILED
     if not _all_planned_stages_terminal_success(
@@ -1720,6 +1748,7 @@ def _update_stage_job_run_status(
         event_type="run.completed",
         timestamp=finished_at,
         payload={"status": RunStatus.SUCCEEDED.value},
+        event_dispatcher=event_dispatcher,
     )
     return RunStatus.SUCCEEDED
 

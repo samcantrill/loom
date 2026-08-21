@@ -16,8 +16,10 @@ from loom.pipeline.event_sinks import (
     EventSinkContext,
     EventSinkError,
     EventSinkFailureRecord,
+    EventSinkRegistration,
     EventSinkRegistry,
     EventSinkRegistryError,
+    EventSinkSubscription,
 )
 from loom.pipeline.events import EventReference, EventScope, PipelineEventRecord
 from loom.serialization import PlainData
@@ -175,6 +177,57 @@ def test_registry_rejects_duplicates_and_dispatches_in_order() -> None:
     assert result.failures[0].sink_name == "audit.failing"
     assert context.failures == list(result.failures)
     assert [link.sink_name for link in context.links] == ["audit.one"]
+
+
+def test_subscription_filters_exact_event_types_without_dispatch_records() -> None:
+    registry = EventSinkRegistry()
+    calls: list[str] = []
+    context = RecordingContext(
+        run_uri=RUN_URI,
+        event_reference=_event_record().to_event_reference(),
+    )
+
+    registry.register("audit.all", lambda _event, _context: calls.append("all"))
+    registry.register(
+        "audit.completed",
+        lambda _event, _context: calls.append("completed"),
+        subscription=EventSinkSubscription(event_types=("stage.completed",)),
+    )
+    registry.register(
+        "audit.failed",
+        lambda _event, _context: calls.append("failed"),
+        subscription=EventSinkSubscription(event_types=("stage.failed",)),
+    )
+
+    result = registry.dispatch(_event_record(), context)
+
+    assert calls == ["all"]
+    assert [item.sink_name for item in result.sink_results] == ["audit.all"]
+    assert context.failures == []
+    assert registry.registration_items()[1][1].subscription == EventSinkSubscription(
+        event_types=("stage.completed",)
+    )
+
+
+@pytest.mark.parametrize(
+    "event_types, message",
+    [
+        ((), "non-empty"),
+        (("run.started", "run.started"), "duplicates"),
+        (("BadName",), "event_type"),
+        ("run.started", "iterable"),
+    ],
+)
+def test_subscription_validates_authoritative_event_names(
+    event_types: object, message: str
+) -> None:
+    with pytest.raises(EventSinkError, match=message):
+        EventSinkSubscription(event_types=cast(tuple[str, ...], event_types))
+
+
+def test_registration_is_frozen_and_requires_callable_sink() -> None:
+    with pytest.raises(EventSinkError, match="callable"):
+        EventSinkRegistration(sink=cast(object, object()))
 
 
 def test_sink_context_protocol_is_narrow() -> None:

@@ -14,6 +14,7 @@ from loom.pipeline.execution import (
     StageExecutionRequest,
     StageExecutionResult,
 )
+from loom.pipeline.event_sinks import EventSinkRegistration, EventSinkSubscription
 from loom.pipeline.executors import (
     ExecutorRegistration,
     LocalExecutor,
@@ -83,6 +84,22 @@ def validate_device(entry: ResourceEntry, path: str) -> None:
         marker_path.parent.mkdir(parents=True, exist_ok=True)
         with marker_path.open("a", encoding="utf-8") as handle:
             handle.write(f"{os.getpid()}\n")
+
+
+def filtered_event_sink() -> EventSinkRegistration:
+    """Return the opt-in E2E observer without changing execution behavior."""
+
+    marker = os.environ["LOOM_STAGE28_EVENT_SINK_MARKER"]
+
+    def sink(event: object, _context: object) -> None:
+        event_type = getattr(event, "event_type")
+        with Path(marker).open("a", encoding="utf-8") as handle:
+            handle.write(f"{event_type}\n")
+
+    return EventSinkRegistration(
+        sink=sink,
+        subscription=EventSinkSubscription(event_types=("stage.completed",)),
+    )
 
 
 class ProjectExecutor:
@@ -157,5 +174,6 @@ __all__ = [
     "ProjectSubprocessExecutor",
     "Stage28ProducerStage",
     "TaggedJsonCodec",
+    "filtered_event_sink",
     "validate_device",
 ]

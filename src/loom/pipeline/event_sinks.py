@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol, cast, runtime_checkable
 
-from loom.pipeline.events import EventReference, PipelineEventRecord
+from loom.pipeline.events import EventReference, PipelineEventRecord, _validate_event_type
 from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_timestamp
@@ -338,6 +338,48 @@ class EventSink(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class EventSinkSubscription:
+    """Exact event-type allowlist for an observe-only sink."""
+
+    event_types: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        values = self.event_types
+        if isinstance(values, str):
+            raise EventSinkError("event_types must be a non-empty iterable of event names")
+        try:
+            normalized = tuple(_validate_event_type(value) for value in values)
+        except (TypeError, ValueError) as exc:
+            raise EventSinkError(
+                "event_types must be a non-empty iterable of event names"
+            ) from exc
+        if not normalized:
+            raise EventSinkError("event_types must be a non-empty iterable of event names")
+        if len(set(normalized)) != len(normalized):
+            raise EventSinkError("event_types must not contain duplicates")
+        object.__setattr__(self, "event_types", tuple(sorted(normalized)))
+
+    def matches(self, event: PipelineEventRecord | EventReference) -> bool:
+        return _event_reference(event).event_type in self.event_types
+
+
+@dataclass(frozen=True, slots=True)
+class EventSinkRegistration:
+    """A sink and its optional exact event-type subscription."""
+
+    sink: EventSink
+    subscription: EventSinkSubscription | None = None
+
+    def __post_init__(self) -> None:
+        if not callable(self.sink):
+            raise EventSinkError("sink must be callable")
+        if self.subscription is not None and not isinstance(
+            self.subscription, EventSinkSubscription
+        ):
+            raise EventSinkError("subscription must be EventSinkSubscription when supplied")
+
+
+@dataclass(frozen=True, slots=True)
 class EventSinkCallbackResult:
     """Result for one sink callback in a registry dispatch."""
 
@@ -389,21 +431,39 @@ class EventSinkRegistry:
     """Instance-local registry for explicitly supplied event sinks."""
 
     def __init__(self) -> None:
-        self._sinks: dict[str, EventSink] = {}
+        self._registrations: dict[str, EventSinkRegistration] = {}
 
-    def register(self, name: str, sink: EventSink) -> None:
+    def register(
+        self,
+        name: str,
+        sink: EventSink,
+        *,
+        subscription: EventSinkSubscription | None = None,
+    ) -> None:
         sink_name = _validate_sink_name(name)
-        if sink_name in self._sinks:
+        if sink_name in self._registrations:
             raise EventSinkRegistryError(f"event sink {sink_name!r} is already registered")
-        if not callable(sink):
-            raise EventSinkRegistryError("event sink must be callable")
-        self._sinks[sink_name] = sink
+        try:
+            registration = EventSinkRegistration(sink=sink, subscription=subscription)
+        except EventSinkError as exc:
+            raise EventSinkRegistryError(str(exc)) from exc
+        self._registrations[sink_name] = registration
 
     def names(self) -> tuple[str, ...]:
-        return tuple(self._sinks)
+        return tuple(self._registrations)
 
     def items(self) -> tuple[tuple[str, EventSink], ...]:
-        return tuple(self._sinks.items())
+        """Return registered sinks in registration order (legacy inspection API)."""
+
+        return tuple(
+            (name, registration.sink)
+            for name, registration in self._registrations.items()
+        )
+
+    def registration_items(self) -> tuple[tuple[str, EventSinkRegistration], ...]:
+        """Return registrations, including exact subscriptions, in registration order."""
+
+        return tuple(self._registrations.items())
 
     def dispatch(
         self,
@@ -412,9 +472,14 @@ class EventSinkRegistry:
     ) -> EventSinkDispatchResult:
         event_reference = _event_reference(event)
         results: list[EventSinkCallbackResult] = []
-        for sink_name, sink in self._sinks.items():
+        for sink_name, registration in self._registrations.items():
+            if (
+                registration.subscription is not None
+                and not registration.subscription.matches(event_reference)
+            ):
+                continue
             try:
-                sink(event, context)
+                registration.sink(event, context)
             except Exception as exc:  # noqa: BLE001 - sink failures are captured.
                 failure = EventSinkFailureRecord.from_exception(
                     sink_name=sink_name,
@@ -444,7 +509,7 @@ class EventSinkRegistry:
         )
 
     def __len__(self) -> int:
-        return len(self._sinks)
+        return len(self._registrations)
 
     def __iter__(self) -> Iterable[tuple[str, EventSink]]:
         return iter(self.items())
@@ -550,6 +615,8 @@ __all__ = [
     "EventSinkFailureRecorder",
     "EventSinkContext",
     "EventSink",
+    "EventSinkSubscription",
+    "EventSinkRegistration",
     "EventSinkCallbackResult",
     "EventSinkDispatchResult",
     "EventSinkRegistry",

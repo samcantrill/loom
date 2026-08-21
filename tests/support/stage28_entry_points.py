@@ -28,6 +28,9 @@ stage28.device = tests.support.stage28_plugins:validate_device
 [loom.executors]
 stage28-project = tests.support.stage28_plugins:PROJECT_EXECUTOR_REGISTRATION
 stage28-subprocess = tests.support.stage28_plugins:PROJECT_SUBPROCESS_EXECUTOR_REGISTRATION
+
+[loom.event_sinks]
+stage28.completed = tests.support.stage28_plugins:filtered_event_sink
 """,
         encoding="utf-8",
     )

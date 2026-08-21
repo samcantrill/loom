@@ -6,6 +6,7 @@ from collections.abc import Iterable
 
 from loom.io.codecs import CodecRegistry, create_default_codec_registry
 from loom.pipeline.executors import ExecutorRegistry, create_default_executor_registry
+from loom.pipeline.event_sinks import EventSinkRegistry
 from loom.pipeline.resources import (
     DEFAULT_RESOURCE_VALIDATOR_REGISTRY,
     ResourceValidatorRegistry,
@@ -16,6 +17,7 @@ from loom.plugins import (
     PluginRecord,
     list_entry_points,
     load_codec_entry_points,
+    load_event_sink_entry_points,
     load_executor_entry_points,
     load_resource_validator_entry_points,
 )
@@ -67,6 +69,17 @@ def build_selected_registries(
     return codecs, validators, executors, PluginActivationManifest(plugins=selected)
 
 
+def build_selected_event_sink_registry(
+    records: Iterable[PluginRecord],
+) -> EventSinkRegistry:
+    """Load selected event sinks into the lifecycle owner's private registry."""
+
+    selected = tuple(records)
+    registry = EventSinkRegistry()
+    load_event_sink_entry_points(selected, registry, selected=selected, strict=True)
+    return registry
+
+
 def plugin_selectors_for_groups(
     records: Iterable[PluginRecord],
     *,
@@ -84,6 +97,7 @@ def plugin_selectors_for_groups(
 
 __all__ = [
     "build_selected_registries",
+    "build_selected_event_sink_registry",
     "plugin_selectors_for_groups",
     "selected_runtime_plugins",
 ]

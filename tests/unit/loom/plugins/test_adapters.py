@@ -15,7 +15,9 @@ from loom.io.codecs import CodecRegistry
 from loom.pipeline.event_sinks import (
     EventObserverLinkRecord,
     EventSinkContext,
+    EventSinkRegistration,
     EventSinkRegistry,
+    EventSinkSubscription,
 )
 from loom.pipeline.events import EventReference, PipelineEventRecord
 from loom.pipeline.executors import (
@@ -598,6 +600,42 @@ def test_load_event_sink_entry_points_supports_callable_class_and_factory(
     assert registry.names() == ("class", "factory", "function")
     assert dispatch.succeeded is True
     assert calls == ["class", "factory", "function"]
+
+
+def test_load_event_sink_entry_points_accepts_filtered_registration_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = EventSinkRegistry()
+    calls: list[str] = []
+
+    def registration_factory() -> EventSinkRegistration:
+        return EventSinkRegistration(
+            sink=lambda event, _context: calls.append(event.event_type),
+            subscription=EventSinkSubscription(event_types=("run.completed",)),
+        )
+
+    record = PluginRecord(
+        group=LOOM_EVENT_SINKS_GROUP,
+        name="completed",
+        value="loom.plugins._filtered_event_sink:registration_factory",
+    )
+    module = _module_with_attrs(
+        "loom.plugins._filtered_event_sink",
+        {"registration_factory": registration_factory},
+    )
+    monkeypatch.setattr(importlib, "import_module", lambda *_args: module)
+
+    load_event_sink_entry_points((record,), registry, selected=(record,), strict=True)
+    reference = _event_reference()
+    registry.dispatch(
+        reference,
+        _SinkContext(run_uri=reference.run_uri, event_reference=reference),
+    )
+
+    assert calls == []
+    assert registry.registration_items()[0][1].subscription == EventSinkSubscription(
+        event_types=("run.completed",)
+    )
 
 
 def test_load_event_sink_entry_points_reports_invalid_shapes(

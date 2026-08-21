@@ -220,6 +220,7 @@ def handle(namespace: argparse.Namespace) -> int:
     from loom.cli.plugin_activation import selected_runtime_plugins
     from loom.plugins import (
         LOOM_CODECS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
         LOOM_EXECUTORS_GROUP,
         LOOM_RESOURCE_VALIDATORS_GROUP,
     )
@@ -230,6 +231,7 @@ def handle(namespace: argparse.Namespace) -> int:
             LOOM_EXECUTORS_GROUP,
             LOOM_CODECS_GROUP,
             LOOM_RESOURCE_VALIDATORS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
         ),
     )
 
@@ -374,18 +376,31 @@ def _build_run_result_with_warnings(
     executor_registry: ExecutorRegistry | None = None
     activation_manifest: PluginActivationManifest | None = None
     worker_activation_manifest: PluginActivationManifest | None = None
+    event_sink_registry = None
     if plugin_records:
         from loom.cli.plugin_activation import (
+            build_selected_event_sink_registry,
             build_selected_registries,
             plugin_selectors_for_groups,
         )
-        from loom.plugins import LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
         from loom.plugins.activation import PluginActivationManifest
         from loom.plugins.entrypoints import PluginRecord
 
         codecs, validators, executor_registry, activation_manifest = (
             build_selected_registries(cast(Sequence[PluginRecord], plugin_records))
         )
+        if any(
+            record.group == LOOM_EVENT_SINKS_GROUP
+            for record in cast(Sequence[PluginRecord], plugin_records)
+        ):
+            event_sink_registry = build_selected_event_sink_registry(
+                cast(Sequence[PluginRecord], plugin_records)
+            )
         worker_selectors = frozenset(
             plugin_selectors_for_groups(
                 cast(Sequence[PluginRecord], plugin_records),
@@ -486,6 +501,7 @@ def _build_run_result_with_warnings(
             validator_registry=validators,
             activation_manifest=activation_manifest,
             worker_activation_manifest=worker_activation_manifest,
+            event_sink_registry=event_sink_registry,
         )
     )
     result = (
@@ -1028,6 +1044,7 @@ def _validate_run_plugin_record_groups(plugin_records: Sequence[object]) -> None
 
     from loom.plugins import (
         LOOM_CODECS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
         LOOM_EXECUTORS_GROUP,
         LOOM_RESOURCE_VALIDATORS_GROUP,
     )
@@ -1035,6 +1052,7 @@ def _validate_run_plugin_record_groups(plugin_records: Sequence[object]) -> None
     allowed = {
         LOOM_CODECS_GROUP,
         LOOM_EXECUTORS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
         LOOM_RESOURCE_VALIDATORS_GROUP,
     }
     for record in plugin_records:
@@ -1993,6 +2011,7 @@ def _build_run_request(
     validator_registry: "ResourceValidatorRegistry | None" = None,
     activation_manifest: "PluginActivationManifest | None" = None,
     worker_activation_manifest: "PluginActivationManifest | None" = None,
+    event_sink_registry: object | None = None,
 ) -> "RunRequest":
     from loom.pipeline.execution import RunRequest
 
@@ -2009,6 +2028,7 @@ def _build_run_request(
             if worker_activation_manifest is not None
             else None
         ),
+        event_sink_registry=event_sink_registry,
     )
 
 
