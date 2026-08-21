@@ -2,7 +2,13 @@
 
 from typing import TYPE_CHECKING
 
-from loom.pipeline.executors.base import Executor, ExecutorFactory, ExecutorRegistration, ExecutorRegistry
+from loom.pipeline.executors.base import (
+    Executor,
+    ExecutorFactory,
+    ExecutorRegistration,
+    ExecutorRegistry,
+    create_default_executor_registry,
+)
 
 if TYPE_CHECKING:
     from loom.pipeline.executors.apptainer import (
@@ -63,6 +69,7 @@ __all__ = [
     "ExecutorFactory",
     "ExecutorRegistration",
     "ExecutorRegistry",
+    "create_default_executor_registry",
     "DockerExecutor",
     "ExecutorError",
     "LocalExecutor",

@@ -123,6 +123,7 @@ class RunRequest:
     failure_policy: FailurePolicy = field(default_factory=FailurePolicy)
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
     plugin_activation_manifest: Mapping[str, PlainData] | None = None
+    worker_plugin_activation_manifest: Mapping[str, PlainData] | None = None
     resource_validator_registry: ResourceValidatorRegistry | None = None
     event_sink_registry: EventSinkRegistry | None = None
     event_persistence: str = "durable"
@@ -194,7 +195,18 @@ class RunRequest:
             object.__setattr__(
                 self,
                 "plugin_activation_manifest",
-                _plain_mapping(self.plugin_activation_manifest, "plugin_activation_manifest"),
+                _plain_mapping(
+                    self.plugin_activation_manifest, "plugin_activation_manifest"
+                ),
+            )
+        if self.worker_plugin_activation_manifest is not None:
+            object.__setattr__(
+                self,
+                "worker_plugin_activation_manifest",
+                _plain_mapping(
+                    self.worker_plugin_activation_manifest,
+                    "worker_plugin_activation_manifest",
+                ),
             )
         if self.resource_validator_registry is not None and not isinstance(
             self.resource_validator_registry, ResourceValidatorRegistry
@@ -219,7 +231,9 @@ class RunRequest:
         if idempotency_key is None:
             idempotency_key = uuid4().hex
         if not isinstance(idempotency_key, str) or not idempotency_key:
-            raise RunRequestError("RunRequest.idempotency_key must be a non-empty string")
+            raise RunRequestError(
+                "RunRequest.idempotency_key must be a non-empty string"
+            )
         object.__setattr__(self, "idempotency_key", idempotency_key)
 
 

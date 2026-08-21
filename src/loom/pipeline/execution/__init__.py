@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         UnsupportedContinuationExecutorError,
         continue_prepared_run,
         run_stage_job,
+        validate_prepared_run_plugin_activations,
     )
     from loom.pipeline.execution.models import (
         ConfigSnapshotInputs,
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
         infer_stage_worker_attempt,
         reconstruct_stage_execution_request,
         run_stage_worker,
+        validate_stage_worker_plugin_activations,
     )
 
 
@@ -131,9 +133,11 @@ def __getattr__(name: str) -> object:
         "release_resource_admission",
         "resource_requests_from_runtime",
         "run_stage_worker",
+        "validate_stage_worker_plugin_activations",
         "run_stage_job",
         "run_pipeline",
         "validate_stage_outputs",
+        "validate_prepared_run_plugin_activations",
     }:
         from loom.pipeline.execution.continuation import (
             ContinuationStateError,
@@ -145,6 +149,7 @@ def __getattr__(name: str) -> object:
             UnsupportedContinuationExecutorError,
             continue_prepared_run,
             run_stage_job,
+            validate_prepared_run_plugin_activations,
         )
         from loom.pipeline.execution.errors import (
             LifecycleError,
@@ -205,6 +210,7 @@ def __getattr__(name: str) -> object:
             infer_stage_worker_attempt,
             reconstruct_stage_execution_request,
             run_stage_worker,
+            validate_stage_worker_plugin_activations,
         )
 
         return {
@@ -263,9 +269,15 @@ def __getattr__(name: str) -> object:
             "release_resource_admission": release_resource_admission,
             "resource_requests_from_runtime": resource_requests_from_runtime,
             "run_stage_worker": run_stage_worker,
+            "validate_stage_worker_plugin_activations": (
+                validate_stage_worker_plugin_activations
+            ),
             "run_stage_job": run_stage_job,
             "run_pipeline": run_pipeline,
             "validate_stage_outputs": validate_stage_outputs,
+            "validate_prepared_run_plugin_activations": (
+                validate_prepared_run_plugin_activations
+            ),
         }[name]
     raise AttributeError(f"module 'loom.pipeline.execution' has no attribute {name!r}")
 
@@ -324,7 +336,9 @@ __all__ = [
     "release_resource_admission",
     "resource_requests_from_runtime",
     "run_stage_worker",
+    "validate_stage_worker_plugin_activations",
     "run_stage_job",
     "run_pipeline",
     "validate_stage_outputs",
+    "validate_prepared_run_plugin_activations",
 ]

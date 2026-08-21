@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import traceback
 from typing import cast
@@ -19,8 +19,17 @@ from loom.pipeline.planning import (
     StagePlan,
 )
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
-from loom.pipeline.specs import OutputSpec, StageFactorySpec, StageSpec
-from loom.plugins.activation import PluginActivationManifest, compare_plugin_activation_records
+from loom.pipeline.resources import ResourceValidatorRegistry
+from loom.pipeline.specs import (
+    OutputSpec,
+    StageFactorySpec,
+    StageSpec,
+    parse_pipeline_config,
+)
+from loom.plugins.activation import (
+    PluginActivationManifest,
+    compare_plugin_activation_records,
+)
 from loom.plugins.entrypoints import PluginRecord
 from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.status import StageStatus
@@ -31,7 +40,7 @@ from loom.pipeline.stores import (
     LocalRunStorePaths,
 )
 from loom.pipeline.stores.artifact_store import ArtifactStore
-from loom.serialization import PlainData, json_loads
+from loom.serialization import PlainData, json_loads, thaw_plain_data
 from loom.serialization.errors import DeserializationError
 from loom.timestamps import utc_timestamp
 
@@ -86,6 +95,7 @@ def run_stage_worker(
     artifact_store_factory: ArtifactStoreFactory | None = None,
     clock: Clock = utc_timestamp,
     selected_plugin_records: tuple[PluginRecord, ...] = (),
+    resource_validator_registry: ResourceValidatorRegistry | None = None,
 ) -> StageWorkerResult:
     """Run one prepared stage attempt and persist its worker result handoff."""
 
@@ -116,7 +126,10 @@ def run_stage_worker(
         stage_name=request.stage_name,
         attempt=attempt,
     )
-    _validate_plugin_activation_evidence(prepared, selected_plugin_records)
+    plugin_warnings = _validate_plugin_activation_evidence(
+        prepared,
+        selected_plugin_records,
+    )
     _validate_current_attempt_state(
         run_store=run_store,
         run_uri=run_uri,
@@ -150,6 +163,7 @@ def run_stage_worker(
             stage_plan=stage_plan,
             stage_index=stage_index,
             artifact_store_factory=artifact_factory,
+            resource_validator_registry=resource_validator_registry,
         )
         execution_result = worker_executor.execute(exec_request)
         worker_result = _result_from_execution_result(
@@ -163,6 +177,15 @@ def run_stage_worker(
             worker_request=prepared,
             exc=exc,
             clock=clock,
+        )
+
+    if plugin_warnings:
+        worker_result = replace(
+            worker_result,
+            executor_metadata={
+                **worker_result.executor_metadata,
+                "plugin_activation_warnings": list(plugin_warnings),
+            },
         )
 
     run_store.write_stage_worker_result(
@@ -192,7 +215,10 @@ def infer_stage_worker_attempt(
             f"cannot infer attempt for stage {stage_name!r}: current status is "
             f"{status.status.value}, not PENDING or RUNNING"
         )
-    if status.status == StageStatus.PENDING and status.metadata.get("prepared") is not True:
+    if (
+        status.status == StageStatus.PENDING
+        and status.metadata.get("prepared") is not True
+    ):
         raise StageWorkerStateError(
             f"cannot infer attempt for stage {stage_name!r}: PENDING status is not a prepared worker attempt"
         )
@@ -214,23 +240,75 @@ def infer_stage_worker_attempt(
     return status.attempt
 
 
+def validate_stage_worker_plugin_activations(
+    *,
+    run_store: LegacyRunStore,
+    request: StageWorkerRunRequest,
+    selected_plugin_records: tuple[PluginRecord, ...],
+) -> tuple[str, ...]:
+    """Compare current metadata authority before the CLI imports plugin targets."""
+
+    if not isinstance(run_store, LegacyRunStore):
+        raise StageWorkerStateError(
+            "validate_stage_worker_plugin_activations requires LegacyRunStore"
+        )
+    if not isinstance(request, StageWorkerRunRequest):
+        raise StageWorkerStateError(
+            "validate_stage_worker_plugin_activations.request must be StageWorkerRunRequest"
+        )
+    run_uri = run_store.resolve_run_uri(request.run_uri)
+    run_store.open_run(run_uri)
+    attempt = request.attempt
+    if attempt is None:
+        attempt = infer_stage_worker_attempt(
+            run_store=run_store,
+            run_uri=run_uri,
+            stage_name=request.stage_name,
+        )
+    prepared = _read_prepared_request(
+        run_store=run_store,
+        run_uri=run_uri,
+        stage_name=request.stage_name,
+        attempt=attempt,
+    )
+    return _validate_plugin_activation_evidence(prepared, selected_plugin_records)
+
+
 def _validate_plugin_activation_evidence(
-    request: StageWorkerRequest, current: tuple[PluginRecord, ...],
-) -> None:
+    request: StageWorkerRequest,
+    current: tuple[PluginRecord, ...],
+) -> tuple[str, ...]:
     """Require current command authority before any stage target is imported."""
     raw = request.metadata.get("plugin_activations")
     if raw is None:
         if current:
-            raise StageWorkerStateError("worker command selected plugins absent from activation evidence")
-        return
+            raise StageWorkerStateError(
+                "worker command selected plugins absent from activation evidence"
+            )
+        return ()
     try:
-        recorded = PluginActivationManifest.from_dict(raw).plugins
+        recorded = PluginActivationManifest.from_dict(
+            thaw_plain_data(raw, path="plugin_activations")
+        ).plugins
     except Exception as exc:
-        raise StageWorkerStateError("worker plugin activation evidence is invalid") from exc
+        raise StageWorkerStateError(
+            "worker plugin activation evidence is invalid"
+        ) from exc
     findings = compare_plugin_activation_records(recorded, current)
-    errors = [finding for finding in findings if "distribution evidence unavailable" not in finding]
+    errors = [
+        finding
+        for finding in findings
+        if "distribution evidence unavailable" not in finding
+    ]
     if errors:
-        raise StageWorkerStateError("worker plugin activation mismatch: " + "; ".join(errors))
+        raise StageWorkerStateError(
+            "worker plugin activation mismatch: " + "; ".join(errors)
+        )
+    return tuple(
+        finding
+        for finding in findings
+        if "distribution evidence unavailable" in finding
+    )
 
 
 def reconstruct_stage_execution_request(
@@ -240,6 +318,7 @@ def reconstruct_stage_execution_request(
     stage_plan: StagePlan,
     stage_index: int,
     artifact_store_factory: ArtifactStoreFactory | None = None,
+    resource_validator_registry: ResourceValidatorRegistry | None = None,
     allow_resolved_config_fallback: bool = True,
 ) -> StageExecutionRequest:
     """Reconstruct the local execution request for a prepared worker attempt."""
@@ -257,22 +336,38 @@ def reconstruct_stage_execution_request(
             f"prepared worker stage {worker_request.stage_name!r} is not planned to RUN"
         )
 
-    stage = _stage_spec_from_request(worker_request)
+    stage = _stage_spec_from_request(
+        worker_request,
+        registry=resource_validator_registry,
+    )
+    resolved_config = _resolved_config_context(
+        run_store,
+        worker_request,
+        stage,
+        allow_resolved_config_fallback=allow_resolved_config_fallback,
+    )
+    if resource_validator_registry is not None:
+        raw_pipeline = resolved_config.get("pipeline")
+        if raw_pipeline is None:
+            raise StageWorkerStateError(
+                "resolved worker config does not contain a pipeline definition"
+            )
+        parse_pipeline_config(
+            raw_pipeline,
+            registry=resource_validator_registry,
+        )
     stage_object = construct_stage(
         factory=stage.factory,
         stage_path=f"pipeline.stages[{stage_index}]",
     )
     artifact_factory = artifact_store_factory or LocalArtifactStore
-    artifact_store = artifact_factory(run_store.local_artifact_root(worker_request.run_uri))
+    artifact_store = artifact_factory(
+        run_store.local_artifact_root(worker_request.run_uri)
+    )
     context = StageContext(
         run_uri=worker_request.run_uri,
         stage_name=worker_request.stage_name,
-        resolved_config=_resolved_config_context(
-            run_store,
-            worker_request,
-            stage,
-            allow_resolved_config_fallback=allow_resolved_config_fallback,
-        ),
+        resolved_config=resolved_config,
         stage_config=stage.stage_config,
         inputs=worker_request.inputs,
         local_output_dir=run_store.local_stage_artifact_dir(
@@ -305,7 +400,10 @@ def reconstruct_stage_execution_request(
         stderr_path=Path(worker_request.stderr_path),
         traceback_path=Path(worker_request.traceback_path),
         metadata={"worker_request": True},
-        resolved_runtime=_resolved_runtime_for_execution(worker_request),
+        resolved_runtime=_resolved_runtime_for_execution(
+            worker_request,
+            registry=resource_validator_registry,
+        ),
     )
 
 
@@ -394,7 +492,9 @@ def _validate_worker_authority_if_supported(
 def _authority_attempt_metadata(metadata: Mapping[str, PlainData]) -> dict[str, str]:
     raw = metadata.get("authority_attempt")
     if not isinstance(raw, Mapping):
-        raise AuthorityStoreError("worker request is missing authority_attempt metadata")
+        raise AuthorityStoreError(
+            "worker request is missing authority_attempt metadata"
+        )
     values: dict[str, str] = {}
     for key in ("attempt_id", "lease_id", "owner_id", "fencing_token"):
         value = raw.get(key)
@@ -436,14 +536,10 @@ def _stage_index(
         ) from exc
 
 
-def _read_execution_plan(
-    *, run_store: LegacyRunStore, run_uri: str
-) -> ExecutionPlan:
+def _read_execution_plan(*, run_store: LegacyRunStore, run_uri: str) -> ExecutionPlan:
     raw_plan = run_store.read_plan(run_uri)
     if raw_plan is None:
-        raise StageWorkerStateError(
-            f"run {run_uri!r} has no persisted execution plan"
-        )
+        raise StageWorkerStateError(f"run {run_uri!r} has no persisted execution plan")
     try:
         plan = ExecutionPlan.from_dict(raw_plan)
     except Exception as exc:
@@ -457,9 +553,18 @@ def _read_execution_plan(
     return plan
 
 
-def _stage_spec_from_request(request: StageWorkerRequest) -> StageSpec:
+def _stage_spec_from_request(
+    request: StageWorkerRequest,
+    *,
+    registry: ResourceValidatorRegistry | None = None,
+) -> StageSpec:
     fingerprint = cast(StageFingerprintRecord, request.fingerprint)
     payload = fingerprint.payload
+    resources = request.metadata.get("stage_resources", {})
+    if not isinstance(resources, Mapping):
+        raise StageWorkerStateError(
+            "prepared worker stage_resources metadata must be a mapping"
+        )
     outputs: dict[str, OutputSpec] = {}
     for name, output in payload.declared_outputs.items():
         outputs[name] = OutputSpec.from_config(
@@ -476,8 +581,9 @@ def _stage_spec_from_request(request: StageWorkerRequest) -> StageSpec:
         stage_config=payload.stage_config,
         dependencies=(),
         inputs=payload.declared_inputs,
-        resources={},
+        resources=cast(Mapping[str, PlainData], resources),
         fingerprint_fields=payload.fingerprint_fields,
+        validator_registry=registry,
     )
 
 
@@ -507,11 +613,17 @@ def _resolved_config_context(
 
 def _resolved_runtime_for_execution(
     request: StageWorkerRequest,
+    *,
+    registry: ResourceValidatorRegistry | None = None,
 ) -> ResolvedStageRuntimeOptions:
     executor = request.resolved_runtime.get("executor", request.executor_name)
     if not isinstance(executor, str) or not executor:
         executor = request.executor_name
-    return ResolvedStageRuntimeOptions(stage_id=request.stage_name, executor=executor)
+    return ResolvedStageRuntimeOptions(
+        stage_id=request.stage_name,
+        executor=executor,
+        validator_registry=registry,
+    )
 
 
 def _minimal_resolved_config(stage: StageSpec) -> Mapping[str, PlainData]:
@@ -550,7 +662,9 @@ def _result_from_execution_result(
             "executor result stage_name does not match worker request"
         )
     if execution_result.attempt != worker_request.attempt:
-        raise StageWorkerStateError("executor result attempt does not match worker request")
+        raise StageWorkerStateError(
+            "executor result attempt does not match worker request"
+        )
     failure = execution_result.failure
     if execution_result.status == StageStatus.FAILED and failure is None:
         failure = ExecutionFailure(

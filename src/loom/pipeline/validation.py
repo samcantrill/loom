@@ -32,7 +32,9 @@ class PipelineTargetCheckResult:
 
 
 def validate_pipeline_config(
-    config: Mapping[str, object], *, registry: ResourceValidatorRegistry | None = None,
+    config: Mapping[str, object],
+    *,
+    registry: ResourceValidatorRegistry | None = None,
 ) -> PipelineValidationResult:
     """Validate a resolved top-level config and return pipeline facts."""
 
@@ -44,7 +46,8 @@ def validate_pipeline_config(
     spec = parse_pipeline_config(config["pipeline"], registry=registry)
     graph = build_stage_graph(spec)
     stage_factory_target_paths = tuple(
-        f"$.pipeline.stages[{index}].factory" for index, _stage in enumerate(spec.stages)
+        f"$.pipeline.stages[{index}].factory"
+        for index, _stage in enumerate(spec.stages)
     )
     return PipelineValidationResult(
         spec=spec,

@@ -12,7 +12,10 @@ from loom.pipeline.executors.containers import ContainerBuildResult, ContainerOp
 from loom.pipeline.planning import ExecutionPlan, PlanAction
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.stores import AuthorityConfig
-from loom.pipeline.stores.run_store import LegacyRunStore as RunStore, LocalRunStorePaths
+from loom.pipeline.stores.run_store import (
+    LegacyRunStore as RunStore,
+    LocalRunStorePaths,
+)
 from loom.serialization import PlainData
 from loom.timestamps import safe_timestamp_for_path, utc_timestamp
 
@@ -126,6 +129,7 @@ def plan_afterok_slurm_dry_run(
     container_build_results: Sequence[ContainerBuildResult] = (),
     planning_id: str | None = None,
     created_at: str | None = None,
+    plugin_selectors: Sequence[str] = (),
 ) -> SlurmDryRunPlanningResult:
     """Read persisted state and write afterok SLURM dry-run artifacts."""
 
@@ -154,6 +158,7 @@ def plan_afterok_slurm_dry_run(
         stage_container_options=prepared_stage_containers,
         apptainer_options=apptainer_options,
         stage_apptainer_options=stage_apptainer_options,
+        plugin_selectors=plugin_selectors,
     )
     jobs = cast(tuple[SlurmPlannedJob, ...], planned_submission.jobs)
     scripts = {
@@ -247,6 +252,7 @@ def build_afterok_planned_submission(
     stage_container_options: SlurmStageContainerInputs | None = None,
     apptainer_options: SlurmApptainerOptionInput | None = None,
     stage_apptainer_options: SlurmStageApptainerOptionInputs | None = None,
+    plugin_selectors: Sequence[str] = (),
 ) -> SlurmPlannedSubmission:
     """Build a deterministic afterok dry-run manifest in memory."""
 
@@ -282,6 +288,7 @@ def build_afterok_planned_submission(
             stage_plan.stage_name,
             launcher_argv=job_options.launcher_argv,
             authority_config=authority_config,
+            plugin_selectors=plugin_selectors,
         )
         command = _maybe_wrap_command(
             command,
@@ -389,7 +396,8 @@ def build_slurm_plan_metadata(
     }
     if container_build_results:
         metadata["container_build_results"] = [
-            dict(item) for item in container_build_results_metadata(container_build_results)
+            dict(item)
+            for item in container_build_results_metadata(container_build_results)
         ]
     return metadata
 
@@ -545,14 +553,20 @@ def _prepare_stage_container_options(
 
 def _stage_container_options(
     stage_name: str,
-    stage_container_options: SlurmStageContainerInputs | Mapping[str, ContainerOptions] | None,
+    stage_container_options: SlurmStageContainerInputs
+    | Mapping[str, ContainerOptions]
+    | None,
     *,
     fallback: SlurmContainerInput | None,
 ) -> SlurmContainerInput | None:
     if stage_container_options is None:
         return fallback
     logical_key = stage_job_key(stage_name)
-    return stage_container_options.get(stage_name) or stage_container_options.get(logical_key) or fallback
+    return (
+        stage_container_options.get(stage_name)
+        or stage_container_options.get(logical_key)
+        or fallback
+    )
 
 
 def _stage_apptainer_options(
@@ -564,7 +578,11 @@ def _stage_apptainer_options(
     if stage_apptainer_options is None:
         return fallback
     logical_key = stage_job_key(stage_name)
-    return stage_apptainer_options.get(stage_name) or stage_apptainer_options.get(logical_key) or fallback
+    return (
+        stage_apptainer_options.get(stage_name)
+        or stage_apptainer_options.get(logical_key)
+        or fallback
+    )
 
 
 def _maybe_wrap_command(

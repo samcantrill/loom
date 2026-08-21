@@ -144,7 +144,10 @@ class _Context:
 
             composed = self.config()
             resolved = cast(Any, composed).resolved
-            self._pipeline = validate_pipeline_config(resolved)
+            self._pipeline = validate_pipeline_config(
+                resolved,
+                registry=cast(Any, self.request.resource_validator_registry),
+            )
         except Exception as exc:  # noqa: BLE001
             self._pipeline_error = exc
             raise
@@ -162,6 +165,7 @@ class _Context:
             self._runtime_options = merge_config_run_options(
                 cast(Any, composed).resolved,
                 explicit=cast(Any, _request_runtime_source(self.request)),
+                registry=cast(Any, self.request.resource_validator_registry),
             )
         except Exception as exc:  # noqa: BLE001
             self._runtime_options_error = exc
@@ -177,7 +181,12 @@ class _Context:
             from loom.pipeline.runtime import validate_executor_capabilities
 
             self._capability_validation = validate_executor_capabilities(
-                cast(Any, self.runtime_options())
+                cast(Any, self.runtime_options()),
+                registry=cast(Any, self.request.executor_descriptor_registry),
+                resource_validator_registry=cast(
+                    Any,
+                    self.request.resource_validator_registry,
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             self._capability_validation_error = exc

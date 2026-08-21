@@ -72,6 +72,7 @@ class ApptainerExecutor:
         run_store: RunStore,
         apptainer_command_runner: ApptainerExecRunner | None = None,
         python_executable: str = "python",
+        plugin_selectors: Sequence[str] = (),
         clock: Clock = utc_timestamp,
         executor_name: str = "apptainer",
     ) -> None:
@@ -97,6 +98,7 @@ class ApptainerExecutor:
             apptainer_command_runner or SubprocessApptainerExecRunner(clock=clock)
         )
         self.python_executable = python_executable
+        self.plugin_selectors = tuple(plugin_selectors)
         self.clock = clock
         self.name = executor_name
 
@@ -113,6 +115,7 @@ class ApptainerExecutor:
                 run_store=self.run_store,
                 python_executable=self.python_executable,
                 executor_name=self.name,
+                plugin_selectors=self.plugin_selectors,
             )
         except Exception as exc:  # noqa: BLE001 - setup errors become failures.
             finished_at = self.clock()
@@ -327,12 +330,14 @@ class SingularityExecutor(ApptainerExecutor):
         run_store: RunStore,
         apptainer_command_runner: ApptainerExecRunner | None = None,
         python_executable: str = "python",
+        plugin_selectors: Sequence[str] = (),
         clock: Clock = utc_timestamp,
     ) -> None:
         super().__init__(
             run_store=run_store,
             apptainer_command_runner=apptainer_command_runner,
             python_executable=python_executable,
+            plugin_selectors=plugin_selectors,
             clock=clock,
             executor_name="singularity",
         )
@@ -352,6 +357,7 @@ def _prepare_apptainer_attempt(
     run_store: RunStore,
     python_executable: str,
     executor_name: str,
+    plugin_selectors: Sequence[str] = (),
 ) -> _PreparedApptainerAttempt:
     runtime = cast(ResolvedStageRuntimeOptions, request.resolved_runtime)
     adapter_options = runtime.adapter_options
@@ -388,6 +394,7 @@ def _prepare_apptainer_attempt(
         stage_name=request.stage.name,
         attempt=request.attempt,
         authority_config=_authority_config(run_store),
+        plugin_selectors=plugin_selectors,
     )
     command = build_apptainer_exec_command(
         container_options=container,

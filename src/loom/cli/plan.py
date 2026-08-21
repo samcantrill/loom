@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     from loom.pipeline.stores import AuthorityConfig
     from loom.pipeline.stores.run_store import LegacyRunStore
     from loom.pipeline.validation import PipelineValidationResult
+    from loom.pipeline.resources import ResourceValidatorRegistry
+    from loom.pipeline.runtime import ExecutorDescriptorRegistry
 
 
 PLAN_RESULT_SCHEMA_VERSION = "loom.cli.plan.v2"
@@ -49,7 +51,9 @@ class _UnavailableArtifactStore:
         raise AssertionError(f"fresh planning must not inspect artifacts via {name}")
 
 
-def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def register_subparser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     """Register the plan subcommand."""
 
     parser = subparsers.add_parser("plan", help="plan a pipeline run")
@@ -120,7 +124,12 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         metavar="STAGE",
         help="skip a selected stage",
     )
-    parser.add_argument("--explain", dest="explain_stage", metavar="STAGE", help="explain a planned stage")
+    parser.add_argument(
+        "--explain",
+        dest="explain_stage",
+        metavar="STAGE",
+        help="explain a planned stage",
+    )
     parser.add_argument(
         "--format",
         dest="output_format",
@@ -130,6 +139,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     )
     add_authority_options(parser)
     from loom.cli.plugin_activation import add_plugin_option
+
     add_plugin_option(parser)
     parser.add_argument(
         "--traceback",
@@ -147,17 +157,31 @@ def handle(namespace: argparse.Namespace) -> int:
     plan_options = PlanCliOptions.from_namespace(namespace)
     selector_options = SelectorCliOptions.from_namespace(namespace)
     output_format = output_format_from_namespace(namespace)
+    validator_registry: ResourceValidatorRegistry | None = None
+    descriptor_registry: ExecutorDescriptorRegistry | None = None
     if getattr(namespace, "plugin", None):
-        from loom.cli.plugin_activation import build_selected_registries, selected_runtime_plugins
+        from loom.cli.plugin_activation import (
+            build_selected_registries,
+            selected_runtime_plugins,
+        )
         from loom.plugins import LOOM_EXECUTORS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
-        records = selected_runtime_plugins(namespace.plugin, allowed_groups=(LOOM_EXECUTORS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP))
-        build_selected_registries(records)
+
+        records = selected_runtime_plugins(
+            namespace.plugin,
+            allowed_groups=(LOOM_EXECUTORS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
+        )
+        _codecs, validator_registry, executors, _manifest = build_selected_registries(
+            records
+        )
+        descriptor_registry = executors.descriptor_registry
 
     result = build_plan_result(
         config_options=config_options,
         plan_options=plan_options,
         selector_options=selector_options,
         authority_config=authority_config_from_namespace(namespace),
+        validator_registry=validator_registry,
+        descriptor_registry=descriptor_registry,
     )
     if output_format is OutputFormat.JSON:
         sys.stdout.write(
@@ -180,6 +204,8 @@ def build_plan_result(
     plan_options: PlanCliOptions,
     selector_options: SelectorCliOptions,
     authority_config: "AuthorityConfig | None" = None,
+    validator_registry: "ResourceValidatorRegistry | None" = None,
+    descriptor_registry: "ExecutorDescriptorRegistry | None" = None,
 ) -> PlanCliResult:
     """Build the CLI-specific plan view."""
 
@@ -188,13 +214,27 @@ def build_plan_result(
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    pipeline_result = _validate_pipeline_config(composed.resolved)
+    pipeline_result = (
+        _validate_pipeline_config(composed.resolved)
+        if validator_registry is None
+        else _validate_pipeline_config(
+            composed.resolved,
+            registry=validator_registry,
+        )
+    )
     runtime_options = _merge_runtime_options(
         composed.resolved,
         plan_options=plan_options,
         selector_options=selector_options,
         known_stage_ids=pipeline_result.spec.stage_names,
+        registry=validator_registry,
     )
+    if descriptor_registry is not None:
+        _validate_executor_capabilities(
+            runtime_options,
+            descriptor_registry=descriptor_registry,
+            validator_registry=validator_registry,
+        )
     if plan_options.resume:
         store = _create_default_run_store(authority_config=authority_config)
     elif runtime_options.run_uri is not None:
@@ -243,13 +283,19 @@ def _compose_config(
 ) -> "ComposedConfig":
     from weave import compose_config
 
-    return compose_config(config_path, overlays=tuple(overlays), overrides=tuple(overrides))
+    return compose_config(
+        config_path, overlays=tuple(overlays), overrides=tuple(overrides)
+    )
 
 
-def _validate_pipeline_config(config: Mapping[str, object]) -> "PipelineValidationResult":
+def _validate_pipeline_config(
+    config: Mapping[str, object],
+    *,
+    registry: "ResourceValidatorRegistry | None" = None,
+) -> "PipelineValidationResult":
     from loom.pipeline import validate_pipeline_config
 
-    return validate_pipeline_config(config)
+    return validate_pipeline_config(config, registry=registry)
 
 
 def _merge_runtime_options(
@@ -258,6 +304,7 @@ def _merge_runtime_options(
     plan_options: PlanCliOptions,
     selector_options: SelectorCliOptions,
     known_stage_ids: Sequence[str],
+    registry: "ResourceValidatorRegistry | None" = None,
 ) -> "RunOptions":
     from loom.pipeline.runtime import merge_config_run_options
 
@@ -265,7 +312,23 @@ def _merge_runtime_options(
         config,
         explicit=plan_options.to_runtime_source(selectors=selector_options),
         known_stage_ids=known_stage_ids,
+        registry=registry,
     )
+
+
+def _validate_executor_capabilities(
+    options: "RunOptions",
+    *,
+    descriptor_registry: "ExecutorDescriptorRegistry",
+    validator_registry: "ResourceValidatorRegistry | None",
+) -> None:
+    from loom.pipeline.runtime import validate_executor_capabilities
+
+    validate_executor_capabilities(
+        options,
+        registry=descriptor_registry,
+        resource_validator_registry=validator_registry,
+    ).raise_for_errors()
 
 
 def _build_plan_selectors(options: SelectorCliOptions) -> "PlanSelectors":
@@ -380,7 +443,9 @@ def _plan_pipeline(
     )
 
 
-def _explanation_payload(plan: "ExecutionPlan", explain_stage: str | None) -> dict[str, object] | None:
+def _explanation_payload(
+    plan: "ExecutionPlan", explain_stage: str | None
+) -> dict[str, object] | None:
     if explain_stage is None:
         return None
 
@@ -417,7 +482,9 @@ def _plan_result_from_execution_plan(
         resume=resume,
         selectors=plan.selectors.to_dict(),
         summary=dict(plan.summary),
-        stage_actions=tuple(_stage_action_view(stage) for stage in plan.ordered_stage_plans),
+        stage_actions=tuple(
+            _stage_action_view(stage) for stage in plan.ordered_stage_plans
+        ),
         explanation=explanation,
     )
 
@@ -433,7 +500,8 @@ def _stage_action_view(stage: object) -> dict[str, object]:
         "reasons": [reason.to_dict() for reason in getattr(stage, "reasons")],
         "pending_inputs": [item.to_dict() for item in getattr(stage, "pending_inputs")],
         "reusable_outputs": {
-            name: ref.to_dict() for name, ref in getattr(stage, "reusable_outputs").items()
+            name: ref.to_dict()
+            for name, ref in getattr(stage, "reusable_outputs").items()
         },
         "upstream_stages": list(getattr(stage, "upstream_stages")),
         "downstream_stages": list(getattr(stage, "downstream_stages")),
@@ -447,7 +515,9 @@ def _stage_explanation_view(payload: Mapping[str, object]) -> dict[str, object]:
         "action": payload["action"],
         "base_action": payload["base_action"],
         "fingerprint_status": payload["fingerprint_status"],
-        "reason_codes": _dedupe_strings(reason_codes if isinstance(reason_codes, Sequence) else ()),
+        "reason_codes": _dedupe_strings(
+            reason_codes if isinstance(reason_codes, Sequence) else ()
+        ),
         "reasons": payload["reasons"],
         "selector_reasons": payload["selector_reasons"],
         "invalidation_reasons": payload["invalidation_reasons"],
@@ -473,4 +543,9 @@ def _dedupe_strings(values: Sequence[object]) -> list[str]:
     return result
 
 
-__all__ = ["PLAN_RESULT_SCHEMA_VERSION", "build_plan_result", "handle", "register_subparser"]
+__all__ = [
+    "PLAN_RESULT_SCHEMA_VERSION",
+    "build_plan_result",
+    "handle",
+    "register_subparser",
+]

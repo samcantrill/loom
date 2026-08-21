@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loom.cli.formatting import format_json_envelope, format_validation_text
-from loom.cli.options import ConfigCliOptions, OutputFormat, ValidateCliOptions, output_format_from_namespace
+from loom.cli.options import (
+    ConfigCliOptions,
+    OutputFormat,
+    ValidateCliOptions,
+    output_format_from_namespace,
+)
 from loom.cli.results import CliWarning, ValidationCliResult
 
 if TYPE_CHECKING:
@@ -17,7 +22,10 @@ if TYPE_CHECKING:
     from weave.target_checks import TargetCheckResult
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.resources import ResourceValidatorRegistry
-    from loom.pipeline.validation import PipelineTargetCheckResult, PipelineValidationResult
+    from loom.pipeline.validation import (
+        PipelineTargetCheckResult,
+        PipelineValidationResult,
+    )
 
 
 VALIDATE_RESULT_SCHEMA_VERSION = "loom.cli.validate.v2"
@@ -28,7 +36,9 @@ TARGET_CHECK_WARNING = CliWarning(
 )
 
 
-def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def register_subparser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     """Register the validate subcommand."""
 
     parser = subparsers.add_parser("validate", help="validate a pipeline config")
@@ -61,6 +71,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         help="output format",
     )
     from loom.cli.plugin_activation import add_plugin_option
+
     add_plugin_option(parser)
     parser.add_argument(
         "--traceback",
@@ -81,10 +92,18 @@ def handle(namespace: argparse.Namespace) -> int:
 
     validator_registry: ResourceValidatorRegistry | None = None
     if getattr(namespace, "plugin", None):
-        from loom.cli.plugin_activation import build_selected_registries, selected_runtime_plugins
+        from loom.cli.plugin_activation import (
+            build_selected_registries,
+            selected_runtime_plugins,
+        )
         from loom.plugins import LOOM_RESOURCE_VALIDATORS_GROUP
-        records = selected_runtime_plugins(namespace.plugin, allowed_groups=(LOOM_RESOURCE_VALIDATORS_GROUP,))
-        _codecs, validator_registry, _executors, _manifest = build_selected_registries(records)
+
+        records = selected_runtime_plugins(
+            namespace.plugin, allowed_groups=(LOOM_RESOURCE_VALIDATORS_GROUP,)
+        )
+        _codecs, validator_registry, _executors, _manifest = build_selected_registries(
+            records
+        )
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -92,11 +111,13 @@ def handle(namespace: argparse.Namespace) -> int:
     )
     pipeline_result = (
         _validate_pipeline_config(composed.resolved, registry=validator_registry)
-        if validator_registry is not None else _validate_pipeline_config(composed.resolved)
+        if validator_registry is not None
+        else _validate_pipeline_config(composed.resolved)
     )
     _validate_runtime_options(
         composed.resolved,
         known_stage_ids=pipeline_result.spec.stage_names,
+        registry=validator_registry,
     )
     target_count: int | None = None
 
@@ -113,7 +134,9 @@ def handle(namespace: argparse.Namespace) -> int:
         except Exception as exc:
             _attach_cli_warnings(exc, warnings)
             raise
-        target_count = pipeline_target_result.target_count + generic_target_result.target_count
+        target_count = (
+            pipeline_target_result.target_count + generic_target_result.target_count
+        )
 
     result = ValidationCliResult(
         config_path=config_options.config_path,
@@ -145,11 +168,15 @@ def _compose_config(
 ) -> "ComposedConfig":
     from weave import compose_config
 
-    return compose_config(config_path, overlays=tuple(overlays), overrides=tuple(overrides))
+    return compose_config(
+        config_path, overlays=tuple(overlays), overrides=tuple(overrides)
+    )
 
 
 def _validate_pipeline_config(
-    config: Mapping[str, object], *, registry: "ResourceValidatorRegistry | None" = None,
+    config: Mapping[str, object],
+    *,
+    registry: "ResourceValidatorRegistry | None" = None,
 ) -> "PipelineValidationResult":
     from loom.pipeline import validate_pipeline_config
 
@@ -160,10 +187,15 @@ def _validate_runtime_options(
     config: Mapping[str, object],
     *,
     known_stage_ids: Sequence[str],
+    registry: "ResourceValidatorRegistry | None" = None,
 ) -> None:
     from loom.pipeline.runtime import merge_config_run_options
 
-    merge_config_run_options(config, known_stage_ids=known_stage_ids)
+    merge_config_run_options(
+        config,
+        known_stage_ids=known_stage_ids,
+        registry=registry,
+    )
 
 
 def _check_pipeline_stage_targets(spec: "PipelineSpec") -> "PipelineTargetCheckResult":
@@ -172,7 +204,9 @@ def _check_pipeline_stage_targets(spec: "PipelineSpec") -> "PipelineTargetCheckR
     return check_pipeline_stage_targets(spec)
 
 
-def _check_config_targets(config: Mapping[str, object], *, skip_paths: Sequence[str]) -> "TargetCheckResult":
+def _check_config_targets(
+    config: Mapping[str, object], *, skip_paths: Sequence[str]
+) -> "TargetCheckResult":
     from weave import check_config_targets
 
     return check_config_targets(config, skip_paths=tuple(skip_paths))
@@ -190,4 +224,9 @@ def _attach_cli_warnings(error: BaseException, warnings: Sequence[CliWarning]) -
         pass
 
 
-__all__ = ["TARGET_CHECK_WARNING", "VALIDATE_RESULT_SCHEMA_VERSION", "handle", "register_subparser"]
+__all__ = [
+    "TARGET_CHECK_WARNING",
+    "VALIDATE_RESULT_SCHEMA_VERSION",
+    "handle",
+    "register_subparser",
+]

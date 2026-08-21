@@ -21,12 +21,16 @@ from loom.cli.options import (
 if TYPE_CHECKING:
     from loom.diagnostics import PreflightRequest, PreflightResult
     from loom.pipeline.stores import AuthorityConfig
+    from loom.pipeline.resources import ResourceValidatorRegistry
+    from loom.pipeline.runtime import ExecutorDescriptorRegistry
 
 
 PREFLIGHT_RESULT_SCHEMA_VERSION = "loom.cli.preflight.v3"
 
 
-def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def register_subparser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     """Register the preflight subcommand."""
 
     parser = subparsers.add_parser("preflight", help="run local preflight diagnostics")
@@ -60,8 +64,12 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         metavar="NAME",
         help="executor name",
     )
-    parser.add_argument("--dry-run", action="store_true", help="mark runtime options as dry-run")
-    parser.add_argument("--resume", action="store_true", help="mark runtime options as resume")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="mark runtime options as dry-run"
+    )
+    parser.add_argument(
+        "--resume", action="store_true", help="mark runtime options as resume"
+    )
     parser.add_argument("--from-stage", metavar="STAGE", help="start at a stage")
     parser.add_argument(
         "--only-stage",
@@ -141,6 +149,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     )
     add_authority_options(parser)
     from loom.cli.plugin_activation import add_plugin_option
+
     add_plugin_option(parser)
     parser.add_argument(
         "--traceback",
@@ -158,17 +167,41 @@ def handle(namespace: argparse.Namespace) -> int:
     preflight_options = PreflightCliOptions.from_namespace(namespace)
     selector_options = SelectorCliOptions.from_namespace(namespace)
     output_format = output_format_from_namespace(namespace)
+    validator_registry: ResourceValidatorRegistry | None = None
+    descriptor_registry: ExecutorDescriptorRegistry | None = None
     if getattr(namespace, "plugin", None):
-        from loom.cli.plugin_activation import build_selected_registries, selected_runtime_plugins
-        from loom.plugins import LOOM_CODECS_GROUP, LOOM_EVENT_SINKS_GROUP, LOOM_EXECUTORS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
-        records = selected_runtime_plugins(namespace.plugin, allowed_groups=(LOOM_CODECS_GROUP, LOOM_EVENT_SINKS_GROUP, LOOM_EXECUTORS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP))
-        build_selected_registries(records)
+        from loom.cli.plugin_activation import (
+            build_selected_registries,
+            selected_runtime_plugins,
+        )
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_EXECUTORS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
+
+        records = selected_runtime_plugins(
+            namespace.plugin,
+            allowed_groups=(
+                LOOM_CODECS_GROUP,
+                LOOM_EVENT_SINKS_GROUP,
+                LOOM_EXECUTORS_GROUP,
+                LOOM_RESOURCE_VALIDATORS_GROUP,
+            ),
+        )
+        _codecs, validator_registry, executors, _manifest = build_selected_registries(
+            records
+        )
+        descriptor_registry = executors.descriptor_registry
 
     result = build_preflight_result(
         config_options=config_options,
         preflight_options=preflight_options,
         selector_options=selector_options,
         authority_config=authority_config_from_namespace(namespace),
+        validator_registry=validator_registry,
+        descriptor_registry=descriptor_registry,
     )
     exit_code = exit_code_for_preflight(result, strict=preflight_options.strict)
     ok = exit_code is ExitCode.SUCCESS
@@ -183,7 +216,9 @@ def handle(namespace: argparse.Namespace) -> int:
             )
         )
     else:
-        sys.stdout.write(format_preflight_text(result, config_path=config_options.config_path) + "\n")
+        sys.stdout.write(
+            format_preflight_text(result, config_path=config_options.config_path) + "\n"
+        )
     return int(exit_code)
 
 
@@ -193,6 +228,8 @@ def build_preflight_result(
     preflight_options: PreflightCliOptions,
     selector_options: SelectorCliOptions | None = None,
     authority_config: "AuthorityConfig | None" = None,
+    validator_registry: "ResourceValidatorRegistry | None" = None,
+    descriptor_registry: "ExecutorDescriptorRegistry | None" = None,
 ) -> "PreflightResult":
     """Run preflight diagnostics and return the diagnostics result."""
 
@@ -204,6 +241,8 @@ def build_preflight_result(
             preflight_options=preflight_options,
             selector_options=selector_options,
             authority_config=authority_config,
+            validator_registry=validator_registry,
+            descriptor_registry=descriptor_registry,
         )
         return _run_diagnostics_preflight(request)
     except PreflightError as exc:
@@ -227,6 +266,8 @@ def _build_preflight_request(
     preflight_options: PreflightCliOptions,
     selector_options: SelectorCliOptions | None,
     authority_config: "AuthorityConfig | None",
+    validator_registry: "ResourceValidatorRegistry | None" = None,
+    descriptor_registry: "ExecutorDescriptorRegistry | None" = None,
 ) -> "PreflightRequest":
     from loom.diagnostics import PreflightRequest
 
@@ -239,12 +280,16 @@ def _build_preflight_request(
         cwd=Path.cwd(),
         overlays=config_options.overlays,
         overrides=config_options.overrides,
-        selectors=None if selector_options is None else selector_options.to_runtime_source(),
+        selectors=None
+        if selector_options is None
+        else selector_options.to_runtime_source(),
         runtime_options=runtime_source or None,
         authority_config=authority_config,
         plugin_groups=preflight_options.plugin_groups,
         plugin_names=preflight_options.plugin_names,
         plugin_packages=preflight_options.plugin_packages,
+        resource_validator_registry=validator_registry,
+        executor_descriptor_registry=descriptor_registry,
     )
 
 

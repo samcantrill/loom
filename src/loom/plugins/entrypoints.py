@@ -58,11 +58,19 @@ class PluginRecord:
     package_version: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "group", _coerce_non_empty_str(self.group, field="group"))
+        object.__setattr__(
+            self, "group", _coerce_non_empty_str(self.group, field="group")
+        )
         object.__setattr__(self, "name", _coerce_non_empty_str(self.name, field="name"))
-        object.__setattr__(self, "value", _coerce_non_empty_str(self.value, field="value"))
+        object.__setattr__(
+            self, "value", _coerce_non_empty_str(self.value, field="value")
+        )
         package = None if self.package is None else _coerce_optional_str(self.package)
-        version = None if self.package_version is None else _coerce_optional_str(self.package_version)
+        version = (
+            None
+            if self.package_version is None
+            else _coerce_optional_str(self.package_version)
+        )
         object.__setattr__(self, "package", package)
         object.__setattr__(self, "package_version", version)
 
@@ -91,17 +99,28 @@ class PluginRecord:
             if unknown:
                 details.append("unknown field(s): " + ", ".join(sorted(unknown)))
             if missing:
-                details.append("missing required field(s): " + ", ".join(sorted(missing)))
-            raise PluginInvalidEntryPointError("PluginRecord summary " + "; ".join(details))
+                details.append(
+                    "missing required field(s): " + ", ".join(sorted(missing))
+                )
+            raise PluginInvalidEntryPointError(
+                "PluginRecord summary " + "; ".join(details)
+            )
         package = data.get("package")
         version = data.get("package_version")
         if package is not None and not isinstance(package, str):
-            raise PluginInvalidEntryPointError("PluginRecord summary package must be a string or null")
+            raise PluginInvalidEntryPointError(
+                "PluginRecord summary package must be a string or null"
+            )
         if version is not None and not isinstance(version, str):
-            raise PluginInvalidEntryPointError("PluginRecord summary package_version must be a string or null")
+            raise PluginInvalidEntryPointError(
+                "PluginRecord summary package_version must be a string or null"
+            )
         return cls(
-            group=data["group"], name=data["name"], value=data["value"],
-            package=package, package_version=version,
+            group=data["group"],
+            name=data["name"],
+            value=data["value"],
+            package=package,
+            package_version=version,
         )
 
 
@@ -127,7 +146,9 @@ class PluginDuplicate:
     records: tuple[PluginRecord, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "group", _coerce_non_empty_str(self.group, field="group"))
+        object.__setattr__(
+            self, "group", _coerce_non_empty_str(self.group, field="group")
+        )
         object.__setattr__(self, "name", _coerce_non_empty_str(self.name, field="name"))
         records = tuple(self.records)
         if len(records) < 2:
@@ -242,7 +263,9 @@ def list_entry_points(
     return tuple(sorted(records, key=_record_sort_key))
 
 
-def find_plugin_duplicates(records: Iterable[PluginRecord]) -> tuple[PluginDuplicate, ...]:
+def find_plugin_duplicates(
+    records: Iterable[PluginRecord],
+) -> tuple[PluginDuplicate, ...]:
     """Return duplicate plugin records keyed by group and name."""
 
     by_key: dict[tuple[str, str], list[PluginRecord]] = {}
@@ -283,7 +306,9 @@ def load_entry_points(
     )
 
     duplicate_records = find_plugin_duplicates(selected_records)
-    duplicates_by_key = {(duplicate.group, duplicate.name): duplicate for duplicate in duplicate_records}
+    duplicates_by_key = {
+        (duplicate.group, duplicate.name): duplicate for duplicate in duplicate_records
+    }
     if strict and duplicate_records:
         duplicate_result = PluginLoadResult(
             loaded=(),
@@ -306,7 +331,9 @@ def load_entry_points(
         try:
             value = _load_entrypoint_value(record.value)
         except Exception as exc:  # noqa: BLE001
-            failures.append(PluginFailure.from_exception(record, operation="load", exc=exc))
+            failures.append(
+                PluginFailure.from_exception(record, operation="load", exc=exc)
+            )
             continue
 
         if register is None:
@@ -346,8 +373,12 @@ def load_entry_points(
 
 def _entry_point_to_record(entry_point: object) -> PluginRecord:
     try:
-        group = _coerce_non_empty_str(getattr(entry_point, "group"), field="entry_point.group")
-        name = _coerce_non_empty_str(getattr(entry_point, "name"), field="entry_point.name")
+        group = _coerce_non_empty_str(
+            getattr(entry_point, "group"), field="entry_point.group"
+        )
+        name = _coerce_non_empty_str(
+            getattr(entry_point, "name"), field="entry_point.name"
+        )
         value = _coerce_non_empty_str(
             getattr(entry_point, "value"),
             field="entry_point.value",
@@ -428,7 +459,9 @@ def _coerce_plugin_records(
     field: str,
 ) -> tuple[PluginRecord, ...]:
     if not isinstance(records, Iterable):
-        raise PluginInvalidEntryPointError(f"{field} must be an iterable of PluginRecord")
+        raise PluginInvalidEntryPointError(
+            f"{field} must be an iterable of PluginRecord"
+        )
     value = tuple(records)
 
     for index, record in enumerate(value):
