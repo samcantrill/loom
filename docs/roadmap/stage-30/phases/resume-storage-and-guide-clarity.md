@@ -2,17 +2,17 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 30, Phase 3
 - Manifest: `docs/roadmap/stage-30/implementation-plan.md`
 - Branch: `agent/stage-30-p3-resume-storage-and-guide-clarity`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; `/home/can134/work/active/loom-worktrees/stage-30-p3-resume-storage-and-guide-clarity`
-- Base revision: current `origin/develop` after Phase 2 is remotely merged
+- Base revision: `fd0fd80`
 - PR target: develop
 - PR title: `Stage 30 phase 3: clarify resume storage and feature support`
 - Dependencies: Stage 30 Phases 1 and 2 remotely merged; existing Stage 0/15/16/22 behavior.
 - Workflow path: fast
-- Blockers: Phases 1 and 2 must merge first.
+- Blockers: none
 
 ## Objective And Context
 
@@ -179,8 +179,8 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: approved; prepare from current `origin/develop` only
-  after Phase 2 remote merge.
+- Manager preparation: passed on `fd0fd80`; Phases 1 and 2 are remotely merged,
+  their completion metadata is current, and the phase scope remains source-free.
 - Expanded planning: not needed.
 - Implementation: pending.
 - Refiner: not needed / pending evidence.

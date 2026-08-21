@@ -48,7 +48,7 @@ Blockers: none
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | operations-portability-and-cleanup | merged | docs/roadmap/stage-30/phases/operations-portability-and-cleanup.md | agent/stage-30-p1-operations-portability-and-cleanup | [#224](https://github.com/samcantrill/loom/pull/224) | operations examples, catalog, focused tests | Demonstrate multi-run comparison/transfer and safe candidate-only cleanup. |
 | 2 | experiments-observers-and-apptainer | merged | docs/roadmap/stage-30/phases/experiments-observers-and-apptainer.md | agent/stage-30-p2-experiments-observers-and-apptainer | [#227](https://github.com/samcantrill/loom/pull/227) | experiments/extensions/Apptainer examples, routing, tests | Demonstrate sweeps, observe-only sinks, and hermetic HPC container execution. |
-| 3 | resume-storage-and-guide-clarity | pending | docs/roadmap/stage-30/phases/resume-storage-and-guide-clarity.md | agent/stage-30-p3-resume-storage-and-guide-clarity | pending | local resume example, storage example, related feature docs, final validation | Explain reuse/invalidation, explicit materialization, and current/deferred support. |
+| 3 | resume-storage-and-guide-clarity | in_progress | docs/roadmap/stage-30/phases/resume-storage-and-guide-clarity.md | agent/stage-30-p3-resume-storage-and-guide-clarity | pending | local resume example, storage example, related feature docs, final validation | Explain reuse/invalidation, explicit materialization, and current/deferred support. |
 
 ## Quality Gate
 
