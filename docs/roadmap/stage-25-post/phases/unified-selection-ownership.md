@@ -203,7 +203,9 @@ Final commands:
   usage audit refreshed
 - Expanded planning: design review passed; plan review simplification removed
   the orphan public ownership-result export
-- Implementation: pending one `loom_phase_executor`
+- Implementation: complete at `53916ae`; unified private selection/ownership,
+  public cut-over, caller migration, tests, and queue feature documentation
+  recorded below
 - Refiner: not needed unless a qualified blocker is returned
 - Pre-submit gate: pending
 - Independent review: not needed unless implementation leaves a material
@@ -215,9 +217,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
+| Implementation and changed paths | Private immutable attempt and construction-bound repository capabilities in `controller.py`; frozen policy binding in `selection.py`; removed public implicit acquisition from service/repository/SQLite/root exports; migrated first-party fixtures and updated `docs/features/queue.md`. |
+| Tests added or updated | Controller coverage for unsupported repository construction, frozen policy ID/implementation, delegated FIFO without resource filtering, and lost-CAS bound; public API/repository cut-over coverage; SQLite exact-CAS fixtures/race coverage; lifecycle, runtime, and status fixture migration. |
+| Validated revision/tree state and evidence | `53916ae` clean implementation tree: targeted queue suites passed (71); `make validate-pr` passed (Ruff, Pyright, default 2178 passed/112 deselected, config-extra 132 passed/3 skipped, build); `make test-summary` passed and wrote `build/test-summary.md` (package 113, unit 1533, contract 275, integration 203, e2e 54, config-extra 132). |
+| Validation-relevant changes after evidence | None; this completion-record-only update does not alter source, tests, dependencies, build, or validation configuration. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Accepted hard cut-over may break unknown external callers; private custom-repository capability remains intentionally unstable until Stage 29. No executor cleanup required. |
