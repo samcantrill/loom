@@ -376,6 +376,8 @@ def test_local_adapter_compensates_scalar_admission_when_assignment_acquire_rais
     result = adapter.dispatch(_item("item-1", resources={"gpu": 1}))
 
     assert result.status is QueueItemStatus.UNKNOWN
+    assert result.non_start_cause is QueueDispatchNonStartCause.INTERNAL
+    assert result.cleanup_status is QueuePreStartCleanupStatus.UNCERTAIN
     assert _active_amount(store, "gpu") == 0
 
 

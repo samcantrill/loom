@@ -297,6 +297,7 @@ class LocalQueueDispatchAdapter:
                 reason_code="local.assignment_acquire_failed",
                 exception=exc,
                 cleanup=cleanup,
+                cleanup_uncertain=True,
             )
         if (
             assignment_decision.disposition
@@ -681,6 +682,7 @@ class LocalQueueDispatchAdapter:
         exception: Exception | None,
         cleanup: _CleanupResult,
         start_uncertain: bool = False,
+        cleanup_uncertain: bool = False,
         non_start_cause: QueueDispatchNonStartCause = QueueDispatchNonStartCause.INTERNAL,
     ) -> QueueDispatchResult:
         pending = bool(cleanup["pending"])
@@ -705,7 +707,7 @@ class LocalQueueDispatchAdapter:
             non_start_cause=non_start_cause,
             cleanup_status=(
                 QueuePreStartCleanupStatus.UNCERTAIN
-                if pending
+                if pending or cleanup_uncertain
                 else QueuePreStartCleanupStatus.CONFIRMED
             ),
         )

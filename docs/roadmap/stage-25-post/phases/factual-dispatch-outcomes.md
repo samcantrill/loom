@@ -247,17 +247,19 @@ Final commands:
   current rebased tree
 - Independent review: optional only for a material residual adapter-boundary
   risk after manager review
-- Blocker corrections: 2/3 — one executor correction for the factual interface,
+- Blocker corrections: 3/3 — one executor correction for the factual interface,
   diagnostics, missing-adapter mapping, and runtime dispatch state; one manager
   correction for required fields, known assignment causes, and cross-cycle
-  terminal-uncertainty blocking
+  terminal-uncertainty blocking; one manager correction preventing false
+  cleanup confirmation when assignment acquisition raises without a provider
+  assignment handle
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Replaced queue dispatch `DEFERRED` with factual dispositions and typed non-start/cleanup facts in `controller.py`; centralized queue transitions; mapped local and SLURM adapter boundaries; updated root exports and `queue.md`. The correction hard-cuts result fields to `reason_code`/`cleanup_status`, validates fixed safe codes, adds safe selection logging, classifies missing adapters as invalid, and includes dispatch outcomes in managed-runtime degradation. |
+| Implementation and changed paths | Replaced queue dispatch `DEFERRED` with factual dispositions and typed non-start/cleanup facts in `controller.py`; centralized queue transitions; mapped local and SLURM adapter boundaries; updated root exports and `queue.md`. Corrections hard-cut result fields to `reason_code`/`cleanup_status`, validate fixed safe codes, add safe selection logging, classify missing adapters as invalid, include dispatch outcomes in managed-runtime degradation, and keep provider-acquire cleanup uncertainty factual. |
 | Tests added or updated | Updated controller/local/SLURM migrations; added public API and controller cause-by-cause conformance coverage. Corrections add safe logging-category and missing-adapter unit coverage, known assignment-cause coverage, and managed-runtime dispatch-uncertainty integration coverage across the same and later cycles. Focused queue unit, contract, and integration command passed (130). |
 | Validated revision/tree state and evidence | Current rebased correction tree: focused Ruff and Pyright passed with zero errors/warnings; phase unit/contract/integration command passed (130); legacy dispatch audit and `git diff --check` passed. Full repository evidence remains pending. |
 | Validation-relevant changes after evidence | None; focused evidence is current for source and tests. |
