@@ -186,10 +186,14 @@ Final commands:
   checksum-invalid artifact repair path: the affected producer/consumer rerun
   with superseding commits while the independent branch reuses. The example also
   states that ordinary post-commit authored config changes remain fail closed.
-- Refiner: not needed / pending evidence.
-- Pre-submit gate: passed — `make validate-pr` passed Ruff, Pyright, default
-  (2,242 passed, 1 skipped), config-extra (141 passed, 3 skipped), and build.
-- Independent review: not needed / pending residual-risk check.
+- Refiner: not needed; correction 1 was completed by the healthy executor and
+  correction 2 was completed manager-locally.
+- Pre-submit gate: passed on corrected tree `499f2dc` — `make validate-pr`
+  passed Ruff, Pyright, default (2,242 passed, 1 expected skip), config-extra
+  (141 passed, 3 expected skips), and package builds.
+- Independent review: not needed; manager fast-path review found no remaining
+  scope, truthfulness, public-contract, test, dependency, or proportionality
+  blocker.
 - Blocker corrections: 2/3 — replaced the invalid config-change demonstration
   with the existing checksum-repair contract path, then isolated storage
   materialization paths per invocation after a same-root rerun reproduced an
@@ -202,7 +206,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Refined `examples/execution/local`; added `examples/storage/fake-backend-materialization`; routed both catalogs; and added bounded support/quick-start/deferred summaries to the seven related feature docs. No `src/loom` changes. |
 | Tests added or updated | Updated local example e2e journey and v0 catalog checks; added integration entrypoint assertions for local checksum repair and fake-backend local materialization. Correction 2 runs the storage entrypoint twice against identical configured roots. |
-| Validated revision/tree state and evidence | Targeted docs/example, backend/materialization contract, and resume/materialization integration checks passed; `make validate-pr` passed Ruff, Pyright, default 2,242 passed/1 skipped, config-extra 141 passed/3 skipped, and `uv build`; `make test-summary` wrote `build/test-summary.md`. |
-| Validation-relevant changes after evidence | Correction 2 isolates each storage invocation beneath a unique journey path; focused and final validation evidence must be refreshed. |
-| PR, review, and merge | Implementation commit pending; PR/review/merge remain manager-owned. |
+| Validated revision/tree state and evidence | Corrected tree `499f2dc`: targeted executable docs/examples 41 passed; backend/materialization contracts 7 passed; resume/fingerprint/materialization integration 13 passed; Ruff and Pyright passed; `make validate-pr` default passed 2,242 with 1 expected skip, config-extra passed 141 with 3 expected skips, and package builds succeeded. The exact-tree `make test-summary` receipt passed package 116, unit 1,577, contract 285, integration 209, E2E 55, and config-extra 141 tests with zero failures/errors and 3 expected skips. |
+| Validation-relevant changes after evidence | None after `499f2dc`; this evidence update is documentation-only. |
+| PR, review, and merge | Manager fast-path review passed; PR and merge remain pending. |
 | Residual risk and cleanup | Fake backend is project-local and explicitly unsupported for provider materialization; materialization remains explicit local-copy-only. Ordinary post-commit config changes remain fail closed by design. |
