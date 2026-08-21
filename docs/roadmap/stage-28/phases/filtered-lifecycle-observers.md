@@ -380,11 +380,15 @@ Final commands:
 - Expanded planning: not needed; the cross-stage correction confirmed this
   phase as the sole exact-filter owner
 - Implementation: complete; filtered registration, CLI activation, continuation
-  dispatch, docs, and phase-scoped proof committed at `4398545`
+  dispatch, docs, and phase-scoped proof committed through `c059912`
 - Refiner: not needed unless a qualified blocker is returned
-- Pre-submit gate: pending
+- Pre-submit gate: passed at `c059912`; manager review found and corrected the
+  missing event-sink selector propagation to SLURM afterok stage-job owners,
+  then Ruff, Pyright, both isolated matrices, package build, and the durable
+  test summary passed
 - Independent review: manager-local fast path
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3; `c059912` is the bounded lifecycle-owner selector
+  propagation correction
 - PR and merge: pending
 
 ## Completion Record
@@ -392,8 +396,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | `EventSinkSubscription`/`EventSinkRegistration` and filtered registry dispatch in `src/loom/pipeline/event_sinks.py`; plugin registration normalization in `src/loom/plugins/event_sinks.py`; selected lifecycle-owner registry construction in `src/loom/cli/plugin_activation.py`, `run.py`, and `stage_job.py`; stage-job dispatcher threading in `src/loom/pipeline/execution/continuation.py`; v2 sink conformance in `src/loom/testing/checks.py`; lifecycle/Slack-Discord/mutable-hook documentation in `examples/extensions/event-sink/README.md`. |
-| Tests added or updated | Package exports; subscription validation, exact filtering, ordering/failure compatibility, plugin registration factory, v2 conformance selection, run/stage-job group allowlists, committed stage-job observation, and selected filtered-sink CLI E2E in the matching package, unit, integration, E2E, and Stage 28 test-support files. |
-| Validated revision/tree state and evidence | `4398545` (`fix(stage-28): satisfy observer type contracts`) was clean for validation. Targeted isolated commands passed: 39 package/unit/plugin/conformance tests and 27 contract/integration/E2E tests. `make validate-pr` passed (Ruff, Pyright, default/config-extra tests, build). `make test-summary` passed: 2,438 passed, 0 failed, 3 skipped; receipt `build/test-summary.md` generated 2026-08-21T07:07:42Z. |
+| Tests added or updated | Package exports; subscription validation, exact filtering, ordering/failure compatibility, plugin registration factory, v2 conformance selection, run/stage-job group allowlists, committed stage-job observation, selected filtered-sink CLI E2E, and SLURM afterok stage-job selector propagation in the matching package, unit, integration, E2E, and Stage 28 test-support files. |
+| Validated revision/tree state and evidence | `c059912` (`fix(stage-28): propagate sinks to stage jobs`) was clean for validation. The combined manager-focused cluster passed 58 package/unit/contract/integration/E2E tests. `make validate-pr` passed: Ruff, Pyright, default 2,298 passed / 1 skipped / 121 deselected, config-extra 141 passed / 3 skipped / 2,302 deselected, and package build. `make test-summary` passed: 2,439 passed, 0 failed, 3 skipped; receipt `build/test-summary.md` generated 2026-08-21T07:22:58Z. |
 | Validation-relevant changes after evidence | None; this completion-record-only metadata commit follows the validated implementation revision. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | No blocker. Synchronous observer latency and crash-before-callback loss remain the accepted debt; retries, delivery state, and mutable hooks remain intentionally deferred. Worktree and branch remain for manager PR handling. |
