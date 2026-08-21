@@ -32,9 +32,13 @@ HERE = Path(__file__).resolve().parent
 def main() -> None:
     sys.path.insert(0, str(HERE))
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
-    run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
-    run_root.mkdir(parents=True, exist_ok=True)
+    configured_run_root = Path(
+        os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs")
+    )
     token = uuid4().hex[:8]
+    journey_root = output_root / f"run-catalog-and-bundles-{token}"
+    run_root = configured_run_root / f"run-catalog-and-bundles-{token}"
+    run_root.mkdir(parents=True, exist_ok=True)
     baseline_uri = path_to_run_uri(run_root / f"baseline-{token}")
     challenger_uri = path_to_run_uri(run_root / f"challenger-{token}")
     baseline = _runner(run_root).run(
@@ -68,7 +72,7 @@ def main() -> None:
             "json",
         ]
     )
-    bundle_path = output_root / "baseline.bundle.tar"
+    bundle_path = journey_root / "baseline.bundle.tar"
     exported = _result(
         [
             "runs",
@@ -88,7 +92,7 @@ def main() -> None:
             "runs",
             "import",
             str(bundle_path),
-            str(output_root / "imported-runs"),
+            str(journey_root / "imported-runs"),
             "--format",
             "json",
         ]
@@ -96,7 +100,7 @@ def main() -> None:
 
     source_payload = uri_to_path(baseline.artifact_index["produce.payload"].uri)
     imported_uri = _required_string(imported, "target_run_uri")
-    imported_refs = LocalRunStore(output_root / "imported-runs").read_artifact_index(
+    imported_refs = LocalRunStore(journey_root / "imported-runs").read_artifact_index(
         imported_uri
     )
     imported_payload = uri_to_path(imported_refs["produce.payload"].uri)

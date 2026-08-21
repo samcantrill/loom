@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 from typing import cast
+from uuid import uuid4
 
 REPO_ROOT = next(
     parent
@@ -39,8 +40,13 @@ HERE = Path(__file__).resolve().parent
 
 def main() -> None:
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
-    run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
-    fixture = _seed_cleanup_candidates_for_example(output_root, run_root)
+    configured_run_root = Path(
+        os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs")
+    )
+    token = uuid4().hex[:8]
+    journey_root = output_root / f"cleanup-and-gc-{token}"
+    run_root = configured_run_root / f"cleanup-and-gc-{token}"
+    fixture = _seed_cleanup_candidates_for_example(journey_root, run_root)
     store = fixture.authority_store
     _install_setup_only_cleanup_store(store)
 

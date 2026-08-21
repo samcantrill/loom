@@ -120,43 +120,43 @@ def test_example_offline_import_rejections_report_rejection_codes_and_acceptance
 def test_example_run_catalog_and_bundles_compares_and_preserves_payload(
     tmp_path: Path,
 ) -> None:
-    output = _run_example_script(
-        script=EXAMPLES_ROOT
+    script = (
+        EXAMPLES_ROOT
         / "operations"
         / "run-catalog-and-bundles"
-        / "run_catalog_workflow.py",
-        tmp_path=tmp_path / "run-catalog-and-bundles",
+        / "run_catalog_workflow.py"
     )
-    fields = _summary_fields(output)
-
-    assert fields["indexed_run_count"] == "2"
-    assert fields["listed_run_count"] == "2"
-    assert int(fields["different_entries"]) > 0
-    assert fields["exported_payload_count"] == "1"
-    assert fields["inspected_payload_count"] == "1"
-    assert fields["imported_payload_count"] == "1"
-    assert fields["payload_bytes_equal"] == "True"
-    imported_run = _run_uri_path(fields["imported_run_uri"])
-    assert (imported_run / "imported_payloads").is_dir()
+    for _ in range(2):
+        fields = _summary_fields(
+            _run_example_script(script=script, tmp_path=tmp_path / "run-catalog-and-bundles")
+        )
+        assert fields["indexed_run_count"] == "2"
+        assert fields["listed_run_count"] == "2"
+        assert int(fields["different_entries"]) > 0
+        assert fields["exported_payload_count"] == "1"
+        assert fields["inspected_payload_count"] == "1"
+        assert fields["imported_payload_count"] == "1"
+        assert fields["payload_bytes_equal"] == "True"
+        imported_run = _run_uri_path(fields["imported_run_uri"])
+        assert (imported_run / "imported_payloads").is_dir()
 
 
 def test_example_cleanup_and_gc_is_preview_first_and_candidate_only(
     tmp_path: Path,
 ) -> None:
-    output = _run_example_script(
-        script=EXAMPLES_ROOT / "operations" / "cleanup-and-gc" / "run_cleanup_and_gc.py",
-        tmp_path=tmp_path / "cleanup-and-gc",
-    )
-    fields = _summary_fields(output)
-
-    assert fields["clean_preview_selected"] == "1"
-    assert fields["clean_deleted"] == "1"
-    assert fields["gc_preview_selected"] == "1"
-    assert fields["gc_deleted"] == "1"
-    assert fields["candidate_paths_removed"] == "True"
-    assert fields["preserved_paths"] == "True"
-    assert _run_uri_path(fields["first_run_uri"]).is_dir()
-    assert _run_uri_path(fields["second_run_uri"]).is_dir()
+    script = EXAMPLES_ROOT / "operations" / "cleanup-and-gc" / "run_cleanup_and_gc.py"
+    for _ in range(2):
+        fields = _summary_fields(
+            _run_example_script(script=script, tmp_path=tmp_path / "cleanup-and-gc")
+        )
+        assert fields["clean_preview_selected"] == "1"
+        assert fields["clean_deleted"] == "1"
+        assert fields["gc_preview_selected"] == "1"
+        assert fields["gc_deleted"] == "1"
+        assert fields["candidate_paths_removed"] == "True"
+        assert fields["preserved_paths"] == "True"
+        assert _run_uri_path(fields["first_run_uri"]).is_dir()
+        assert _run_uri_path(fields["second_run_uri"]).is_dir()
 
 
 def _run_example_script(*, script: Path, tmp_path: Path) -> str:
