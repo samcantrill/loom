@@ -624,11 +624,11 @@ The compatibility `status` is derived: it is `registry-ready` only when both
 | --- | --- | --- | --- |
 | `loom.recipes` | supported / supported | supported / supported | unsupported / unsupported | registry-ready; add explicit run selection and activation evidence when a consumer needs them |
 | `loom.codecs` | supported / supported | supported / supported | unsupported / unsupported | registry-ready; add explicit run selection and activation evidence when a consumer needs them |
-| `loom.sources` | supported / not applicable | not applicable / not applicable | not applicable / not applicable | listing-only; add a source-owned registry and adapter contract |
+| `loom.sources` | supported / `not_applicable` | `not_applicable` / `not_applicable` | `not_applicable` / `not_applicable` | listing-only; add a source-owned registry and adapter contract |
 | `loom.executors` | supported / supported | unsupported / unsupported | unsupported / unsupported | listing-only; add an executor implementation registry and loader |
-| `loom.artifact_store_backends` | unsupported / not applicable | not applicable / not applicable | not applicable / not applicable | listing-only; publish a store-owned backend contract and registry |
-| `loom.run_exporters` | supported / not applicable | not applicable / not applicable | not applicable / not applicable | listing-only; define supplied exporter/importer registries |
-| `loom.sweep_providers` | supported / not applicable | not applicable / not applicable | not applicable / not applicable | listing-only; define a supplied provider registry |
+| `loom.artifact_store_backends` | unsupported / `not_applicable` | `not_applicable` / `not_applicable` | `not_applicable` / `not_applicable` | listing-only; publish a store-owned backend contract and registry |
+| `loom.run_exporters` | supported / `not_applicable` | `not_applicable` / `not_applicable` | `not_applicable` / `not_applicable` | listing-only; define supplied exporter/importer registries |
+| `loom.sweep_providers` | supported / `not_applicable` | `not_applicable` / `not_applicable` | `not_applicable` / `not_applicable` | listing-only; define a supplied provider registry |
 | `loom.event_sinks` | supported / supported | supported / supported | unsupported / unsupported | registry-ready; add explicit lifecycle selection and activation evidence when needed |
 
 `loom plugins list` and `loom plugins check` JSON use v2 envelopes so they can

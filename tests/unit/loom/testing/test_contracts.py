@@ -8,7 +8,7 @@ from typing import cast
 import pytest
 
 from loom.pipeline.event_sinks import EventSinkContext
-from loom.pipeline.events import EventReference
+from loom.pipeline.events import EventReference, PipelineEventRecord
 from loom.pipeline.execution.models import StageExecutionRequest, StageExecutionResult
 from loom.pipeline.resources import ResourceEntry
 from loom.pipeline.status import StageStatus
@@ -58,6 +58,20 @@ def test_codec_contract_reports_stable_cases_and_plain_data() -> None:
     assert report.to_dict()["contract_version"] == 1
 
 
+def test_codec_contract_reports_dependent_failures_without_invocation() -> None:
+    report = check_codec_contract(object(), roundtrip_values=("one",))
+
+    assert not report.ok
+    assert [finding.code for finding in report.findings] == [
+        "codec.protocol",
+        "codec.key",
+        "codec.encode",
+        "codec.decode",
+        "codec.roundtrip",
+    ]
+    assert {finding.status for finding in report.findings} == {"fail"}
+
+
 def test_resource_validator_contract_records_rejection_and_prerequisite_failures() -> None:
     def validator(entry: ResourceEntry, path: str) -> None:
         if entry.amount <= 0:
@@ -71,6 +85,32 @@ def test_resource_validator_contract_records_rejection_and_prerequisite_failures
     )
 
     assert report.ok
+    assert [finding.code for finding in report.findings] == [
+        "resource_validator.kind",
+        "resource_validator.callable",
+        "resource_validator.registration",
+        "resource_validator.accepts_valid",
+        "resource_validator.rejects_invalid",
+    ]
+
+
+def test_resource_validator_contract_does_not_invoke_after_invalid_kind() -> None:
+    invoked = False
+
+    def validator(entry: ResourceEntry, path: str) -> None:
+        nonlocal invoked
+        del entry, path
+        invoked = True
+
+    report = check_resource_validator_contract(
+        "",
+        validator,
+        valid_entries=(ResourceEntry(kind="test.accelerator", amount=1),),
+        invalid_entries=(ResourceEntry(kind="test.accelerator", amount=0),),
+    )
+
+    assert not report.ok
+    assert invoked is False
     assert [finding.code for finding in report.findings] == [
         "resource_validator.kind",
         "resource_validator.callable",
@@ -113,6 +153,24 @@ def test_executor_contract_reports_result_identity() -> None:
     ]
 
 
+def test_executor_contract_reports_each_dependent_failure_without_invocation() -> None:
+    request = cast(
+        StageExecutionRequest,
+        SimpleNamespace(stage=SimpleNamespace(name="stage"), attempt=1),
+    )
+
+    report = check_executor_contract(object(), requests=(request,))
+
+    assert not report.ok
+    assert [finding.code for finding in report.findings] == [
+        "executor.protocol",
+        "executor.name",
+        "executor.execute",
+        "executor.result_type",
+        "executor.result_identity",
+    ]
+
+
 def test_event_sink_contract_and_report_error_are_bounded() -> None:
     received: list[object] = []
 
@@ -136,3 +194,25 @@ def test_event_sink_contract_and_report_error_are_bounded() -> None:
     )
     with pytest.raises(AssertionError, match="example.failure"):
         failure.raise_for_errors()
+
+
+def test_event_sink_contract_does_not_build_context_for_non_callable_sink() -> None:
+    event = cast(EventReference, object())
+
+    def fail_context(
+        _event: PipelineEventRecord | EventReference,
+    ) -> EventSinkContext:
+        raise AssertionError("context factory must not be called")
+
+    report = check_event_sink_contract(
+        object(),
+        events=(event,),
+        context_factory=fail_context,
+    )
+
+    assert not report.ok
+    assert [finding.code for finding in report.findings] == [
+        "event_sink.callable",
+        "event_sink.invoke",
+    ]
+    assert {finding.status for finding in report.findings} == {"fail"}
