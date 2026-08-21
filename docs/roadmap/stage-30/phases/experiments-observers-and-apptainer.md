@@ -164,7 +164,8 @@ Final commands:
 - Manager preparation: passed on `4513da7`; Phase 1 is remotely merged and its
   completion metadata is current on `origin/develop`.
 - Expanded planning: not needed.
-- Implementation: pending.
+- Implementation: passed; added deterministic sweep, direct event-sink, and
+  fake-Apptainer examples with focused catalog and journey coverage.
 - Refiner: not needed / pending evidence.
 - Pre-submit gate: pending.
 - Independent review: not needed / pending residual-risk check.
@@ -175,9 +176,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none / pending |
+| Implementation and changed paths | Added `examples/experiments/deterministic-sweep/`, `examples/extensions/event-sink/`, and `examples/execution/containers/slurm-apptainer/`; routed their group/root catalogs and added focused example tests. |
+| Tests added or updated | Added sweep and event-sink integration journeys, fake-Apptainer e2e coverage, and v30 catalog assertions. |
+| Validated revision/tree state and evidence | Executor tree: focused examples/catalog suite 6 passed; sweep/Apptainer regression suite 3 passed; local execution suite 9 passed; `ruff check` passed. |
+| Validation-relevant changes after evidence | None. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

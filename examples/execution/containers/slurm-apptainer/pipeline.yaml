@@ -1,0 +1,29 @@
+name: slurm-apptainer-example
+schema_version: 1
+runtime:
+  profile: apptainer-example
+runtime_profiles:
+  apptainer-example:
+    executor: apptainer
+    adapter_options:
+      container:
+        image:
+          reference: analysis-example.sif
+        environment:
+          variables:
+            LOOM_CONTAINER_EXAMPLE: apptainer-pipeline
+      apptainer:
+        cleanenv: true
+        nv: true
+pipeline:
+  name: slurm-apptainer-example
+  stages:
+    - name: analyze
+      factory:
+        _target_: stages:AnalyzeStage
+      config:
+        values: [4, 9]
+      outputs:
+        summary:
+          artifact_type: json
+          codec_key: json.v1

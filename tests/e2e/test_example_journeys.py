@@ -103,6 +103,25 @@ def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(tmp_path: Pat
     assert _run_uri_path(failure_payload["run_uri"]).is_dir()
 
 
+def test_e2e_example_apptainer_executor_runs_with_fake_command(tmp_path: Path) -> None:
+    script = (
+        EXAMPLES_ROOT
+        / "execution"
+        / "containers"
+        / "slurm-apptainer"
+        / "run_apptainer_pipeline.py"
+    )
+    payload = _parse_summary(_run_example_script(script, tmp_path / "apptainer"))
+
+    assert payload["run_status"] == "SUCCEEDED"
+    assert payload["executor"] == "apptainer"
+    assert payload["image"] == "analysis-example.sif"
+    assert {"--cleanenv", "--nv"} <= set(str(payload["flags"]).split(","))
+    assert _require_int(payload["artifact_count"]) == 1
+    assert _require_int(payload["fake_call_count"]) >= 1
+    assert _run_uri_path(payload["run_uri"]).is_dir()
+
+
 def _run_example_script(
     script: Path,
     output_root: Path,

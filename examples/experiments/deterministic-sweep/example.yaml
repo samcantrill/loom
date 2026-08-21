@@ -1,0 +1,25 @@
+id: experiments.deterministic-sweep
+title: Deterministic Manual Sweep
+summary: Plan, run, inspect, and collect exactly two local manual sweep trials through the Loom CLI.
+capability: experiments
+level: introductory
+introduced_in: v30
+status: runnable
+validation: full
+surface: cli
+public_surfaces:
+  - cli
+owner_docs:
+  - examples/experiments/README.md
+owner_stages:
+  - v30
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_deterministic_sweep_runs_two_trials_and_collects_artifacts
+entrypoints:
+  - path: run_sweep.py
+    kind: python
+    description: Run the two-trial sweep lifecycle through the public Loom CLI.
+tags:
+  - experiments
+  - sweep
+  - deterministic
+  - collection

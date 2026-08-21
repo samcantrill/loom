@@ -141,6 +141,38 @@ def test_example_run_catalog_and_bundles_compares_and_preserves_payload(
         assert (imported_run / "imported_payloads").is_dir()
 
 
+def test_example_deterministic_sweep_runs_two_trials_and_collects_artifacts(
+    tmp_path: Path,
+) -> None:
+    script = (
+        EXAMPLES_ROOT
+        / "experiments"
+        / "deterministic-sweep"
+        / "run_sweep.py"
+    )
+    fields = _summary_fields(_run_example_script(script=script, tmp_path=tmp_path))
+
+    assert fields["planned_trials"] == "2"
+    assert fields["run_status"] == "succeeded"
+    assert fields["succeeded_trials"] == "2"
+    assert fields["collected_trials"] == "2"
+    assert fields["artifact_count"] == "2"
+
+
+def test_example_event_sink_observes_committed_events_and_isolates_failure(
+    tmp_path: Path,
+) -> None:
+    script = EXAMPLES_ROOT / "extensions" / "event-sink" / "run_event_sink.py"
+    fields = _summary_fields(_run_example_script(script=script, tmp_path=tmp_path))
+
+    assert fields["run_status"] == "SUCCEEDED"
+    assert {"run.started", "stage.completed", "run.completed"} <= set(
+        fields["observed_events"].split(",")
+    )
+    assert fields["failure_count"] == "1"
+    assert fields["failure_sink"] == "example.fail_completed"
+
+
 def test_example_cleanup_and_gc_is_preview_first_and_candidate_only(
     tmp_path: Path,
 ) -> None:
