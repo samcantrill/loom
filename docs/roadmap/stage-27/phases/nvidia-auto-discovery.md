@@ -239,11 +239,14 @@ Final commands:
 - Implementation: completed locally in `14a9156`; adapter, fake example,
   opt-in acceptance profile, scoped docs, and phase tests are ready for manager
   validation
-- Refiner: not needed
+- Refiner: correction 1/3 completed locally for topology-rank parsing: distinct
+  NVLink counts rank by directness and reciprocal matrix tokens match exactly
 - Pre-submit gate: pending
 - Independent review: not needed unless parser uncertainty creates a material
   supported-host blocker
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 — current bounded fix validates exact reciprocal
+  topology tokens, rejects `NV0`, and normalizes positive NVLink counts into
+  deterministic ranks before grouped planning
 - PR and merge: pending
 
 ## Completion Record
@@ -252,7 +255,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | `14a9156` adds `loom.queue.gpu.nvidia`, fake NVIDIA pool example, opt-in profile, scoped docs, and phase tests. |
 | Tests added or updated | Device/topology parser, import boundary, provider protocol, fake managed-local example, and opt-in real-host acceptance coverage. |
-| Validated revision/tree state and evidence | `ruff check` and `pyright` passed; phase-targeted pytest: 22 passed, 1 `gpu` test skipped without `LOOM_TEST_NVIDIA_GPU=1`. |
-| Validation-relevant changes after evidence | none recorded |
+| Validated revision/tree state and evidence | Correction 1/3: `uv run ruff check src/loom/queue/gpu/nvidia.py tests/unit/loom/queue/gpu/test_nvidia.py`, `uv run pyright src/loom/queue/gpu/nvidia.py tests/unit/loom/queue/gpu/test_nvidia.py`, and `uv run pytest tests/unit/loom/queue/gpu/test_nvidia.py` passed (16 tests). |
+| Validation-relevant changes after evidence | Correction 1/3: private topology ranks now prefer larger positive NVLink counts, reject `NV0`, require exact reciprocal tokens, and retain normalized inventory/fingerprint/placement stability across natural enumeration permutations. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Real host evidence remains explicit/opt-in; worktree and branch retained for manager validation. |

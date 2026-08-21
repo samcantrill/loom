@@ -25,7 +25,7 @@ _DEVICE_QUERY_ARGV = (
 )
 _TOPOLOGY_ARGV = ("nvidia-smi", "topo", "-m")
 _GPU_LABEL = re.compile(r"GPU(?P<index>[0-9]+)$")
-_NVLINK_TOKEN = re.compile(r"NV[0-9]+$")
+_NVLINK_TOKEN = re.compile(r"NV(?P<count>[1-9][0-9]*)$")
 _GPU_UUID = re.compile(r"GPU-[A-Za-z0-9-]+$")
 _TOPOLOGY_KINDS = {
     "PIX": (1, "pcie_same_switch"),
@@ -202,30 +202,43 @@ def _parse_topology(
     if set(rows) != expected_labels:
         raise _topology_error("topology_matrix_incomplete")
     by_label = {f"GPU{item.index}": item.uuid for item in observations}
-    parsed: list[LocalGpuLink] = []
+    pair_tokens: list[tuple[str, str, str]] = []
     for left_index, left_label in enumerate(labels):
         if rows[left_label][left_index] != "X":
             raise _topology_error("topology_matrix_inconsistent")
         for right_index in range(left_index + 1, len(labels)):
             right_label = labels[right_index]
-            forward = _topology_value(rows[left_label][right_index])
-            reverse = _topology_value(rows[right_label][left_index])
+            forward = rows[left_label][right_index]
+            reverse = rows[right_label][left_index]
             if forward != reverse:
                 raise _topology_error("topology_matrix_inconsistent")
-            rank, kind = forward
-            parsed.append(
-                LocalGpuLink(by_label[left_label], by_label[right_label], rank, kind)
-            )
+            pair_tokens.append((left_label, right_label, forward))
+    max_nvlink_count = max(
+        (_nvlink_count(token) for _, _, token in pair_tokens), default=0
+    )
+    parsed: list[LocalGpuLink] = []
+    for left_label, right_label, token in pair_tokens:
+        rank, kind = _topology_value(token, max_nvlink_count=max_nvlink_count)
+        parsed.append(
+            LocalGpuLink(by_label[left_label], by_label[right_label], rank, kind)
+        )
     return tuple(parsed)
 
 
-def _topology_value(token: str) -> tuple[int, str]:
-    if _NVLINK_TOKEN.fullmatch(token):
-        return 0, "nvlink"
+def _topology_value(token: str, *, max_nvlink_count: int) -> tuple[int, str]:
+    count = _nvlink_count(token)
+    if count:
+        return max_nvlink_count - count, "nvlink"
     value = _TOPOLOGY_KINDS.get(token)
     if value is None:
         raise _topology_error("topology_token_unknown")
-    return value
+    rank, kind = value
+    return max_nvlink_count + rank, kind
+
+
+def _nvlink_count(token: str) -> int:
+    match = _NVLINK_TOKEN.fullmatch(token)
+    return int(match["count"]) if match else 0
 
 
 def _topology_error(reason_code: str) -> _NvidiaSmiDiscoveryError:

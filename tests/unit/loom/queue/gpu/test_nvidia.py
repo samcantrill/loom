@@ -8,7 +8,11 @@ from collections.abc import Sequence
 import pytest
 
 from loom.queue import QueueServiceError
-from loom.queue.gpu import LocalGpuInventoryProvider
+from loom.queue.gpu import (
+    LocalGpuInventoryProvider,
+    LocalGpuPoolLayout,
+    plan_local_gpu_pool,
+)
 from loom.queue.gpu.nvidia import NvidiaSmiGpuInventoryProvider
 
 
@@ -59,6 +63,86 @@ Legend:
     assert [
         (link.left_id, link.right_id, link.rank, link.kind) for link in inventory.links
     ] == [("GPU-a", "GPU-b", 0, "nvlink")]
+
+
+def test_topology_prefers_more_direct_nvlink_evidence() -> None:
+    inventory = NvidiaSmiGpuInventoryProvider(
+        include_topology=True,
+        command_runner=_FakeRunner(
+            _result(
+                "0, GPU-a, 00000000:01:00.0\n"
+                "1, GPU-b, 00000000:02:00.0\n"
+                "2, GPU-c, 00000000:03:00.0\n"
+                "3, GPU-d, 00000000:04:00.0\n"
+            ),
+            _result(
+                "GPU0 GPU1 GPU2 GPU3\n"
+                "GPU0 X NV4 PIX PIX\n"
+                "GPU1 NV4 X PIX PIX\n"
+                "GPU2 PIX PIX X NV1\n"
+                "GPU3 PIX PIX NV1 X\n"
+            ),
+        ),
+    ).discover()
+
+    plan = plan_local_gpu_pool(
+        inventory, LocalGpuPoolLayout.grouped(2, grouping="topology")
+    )
+
+    assert plan.operator_summary()["groups"] == [("GPU-a", "GPU-b"), ("GPU-c", "GPU-d")]
+    ranks = {(link.left_id, link.right_id): link.rank for link in inventory.links}
+    assert ranks[("GPU-a", "GPU-b")] < ranks[("GPU-c", "GPU-d")]
+    assert ranks[("GPU-c", "GPU-d")] < ranks[("GPU-a", "GPU-c")]
+
+
+def test_topology_normalizes_natural_enumeration_permutations() -> None:
+    first = NvidiaSmiGpuInventoryProvider(
+        include_topology=True,
+        command_runner=_FakeRunner(
+            _result(
+                "0, GPU-a, 00000000:01:00.0\n"
+                "1, GPU-b, 00000000:02:00.0\n"
+                "2, GPU-c, 00000000:03:00.0\n"
+                "3, GPU-d, 00000000:04:00.0\n"
+            ),
+            _result(
+                "GPU0 GPU1 GPU2 GPU3\n"
+                "GPU0 X NV4 PIX PIX\n"
+                "GPU1 NV4 X PIX PIX\n"
+                "GPU2 PIX PIX X NV1\n"
+                "GPU3 PIX PIX NV1 X\n"
+            ),
+        ),
+    ).discover()
+    permuted = NvidiaSmiGpuInventoryProvider(
+        include_topology=True,
+        command_runner=_FakeRunner(
+            _result(
+                "0, GPU-c, 00000000:03:00.0\n"
+                "1, GPU-a, 00000000:01:00.0\n"
+                "2, GPU-d, 00000000:04:00.0\n"
+                "3, GPU-b, 00000000:02:00.0\n"
+            ),
+            _result(
+                "GPU0 GPU1 GPU2 GPU3\n"
+                "GPU0 X PIX NV1 PIX\n"
+                "GPU1 PIX X PIX NV4\n"
+                "GPU2 NV1 PIX X PIX\n"
+                "GPU3 PIX NV4 PIX X\n"
+            ),
+        ),
+    ).discover()
+
+    first_plan = plan_local_gpu_pool(
+        first, LocalGpuPoolLayout.grouped(2, grouping="topology")
+    )
+    permuted_plan = plan_local_gpu_pool(
+        permuted, LocalGpuPoolLayout.grouped(2, grouping="topology")
+    )
+
+    assert permuted == first
+    assert permuted_plan.fingerprint == first_plan.fingerprint
+    assert permuted_plan.operator_summary()["groups"] == first_plan.operator_summary()["groups"]
 
 
 @pytest.mark.parametrize(
@@ -124,6 +208,14 @@ def test_command_absence_and_nonzero_exit_are_safe_typed_failures() -> None:
         (
             "GPU0 GPU1\nGPU0 X NV4\nGPU1 PIX X\n",
             "nvidia_smi.topology_matrix_inconsistent",
+        ),
+        (
+            "GPU0 GPU1\nGPU0 X NV1\nGPU1 NV4 X\n",
+            "nvidia_smi.topology_matrix_inconsistent",
+        ),
+        (
+            "GPU0 GPU1\nGPU0 X NV0\nGPU1 NV0 X\n",
+            "nvidia_smi.topology_token_unknown",
         ),
         (
             "GPU0 GPU1\nGPU0 X NV4\n",
