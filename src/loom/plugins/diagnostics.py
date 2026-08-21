@@ -17,6 +17,7 @@ from .entrypoints import (
     LOOM_EVENT_SINKS_GROUP,
     LOOM_EXECUTORS_GROUP,
     LOOM_RECIPES_GROUP,
+    LOOM_RESOURCE_VALIDATORS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LoadedPlugin,
     LOOM_SOURCES_GROUP,
@@ -35,6 +36,8 @@ LOADABLE_PLUGIN_GROUPS: tuple[str, ...] = (
     LOOM_RECIPES_GROUP,
     LOOM_CODECS_GROUP,
     LOOM_EVENT_SINKS_GROUP,
+    LOOM_EXECUTORS_GROUP,
+    LOOM_RESOURCE_VALIDATORS_GROUP,
 )
 _ORIGINAL_IMPORT_MODULE = importlib.import_module
 
@@ -175,18 +178,28 @@ _PLUGIN_GROUP_READINESS_DETAILS: dict[str, PluginGroupReadiness] = {
     ),
     LOOM_EXECUTORS_GROUP: PluginGroupReadiness(
         group=LOOM_EXECUTORS_GROUP,
-        reason=(
-            "Executor descriptors cover capabilities, not third-party executor "
-            "implementation loading."
-        ),
-        revisit_trigger="An executor implementation registry or descriptor loader lands.",
+        reason="ExecutorRegistry pairs ordinary descriptors and factories instance-locally.",
+        revisit_trigger="CLI activation or submitted executor ownership changes.",
         facets=_facets(
             contract=("supported", "Executor defines stage execution behavior."),
             python_injection=("supported", "PipelineRunner accepts an explicitly built executor."),
-            registry=("unsupported", "Descriptor registries do not register executor implementations."),
-            plugin_loading=("unsupported", "No executor entry-point adapter is defined."),
+            registry=("supported", "ExecutorRegistry owns descriptor/factory/name pairing."),
+            plugin_loading=("supported", "Selected entry points load into a supplied ExecutorRegistry."),
             cli_selection=("unsupported", "Run commands do not yet select executor plugins."),
             fresh_process_reconstruction=("unsupported", "Prepared runs do not record plugin activations."),
+        ),
+    ),
+    LOOM_RESOURCE_VALIDATORS_GROUP: PluginGroupReadiness(
+        group=LOOM_RESOURCE_VALIDATORS_GROUP,
+        reason="ResourceValidatorRegistry owns resource-kind and duplicate validation.",
+        revisit_trigger="CLI activation or worker reconstruction policy changes.",
+        facets=_facets(
+            contract=("supported", "ResourceValidator is the existing direct callable contract."),
+            python_injection=("supported", "Applications pass a selected validator registry explicitly."),
+            registry=("supported", "ResourceValidatorRegistry owns kind and duplicate checks."),
+            plugin_loading=("supported", "Selected entry points load direct validators into a supplied registry."),
+            cli_selection=("unsupported", "Run commands do not yet select validator plugins."),
+            fresh_process_reconstruction=("unsupported", "Prepared runs do not record validator activations."),
         ),
     ),
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP: PluginGroupReadiness(

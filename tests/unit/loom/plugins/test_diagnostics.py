@@ -14,6 +14,7 @@ from loom.plugins import (
     LOOM_EVENT_SINKS_GROUP,
     LOOM_EXECUTORS_GROUP,
     LOOM_RECIPES_GROUP,
+    LOOM_RESOURCE_VALIDATORS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SOURCES_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
@@ -32,7 +33,6 @@ pytestmark = pytest.mark.unit
 
 _LISTING_ONLY_GROUPS = (
     LOOM_SOURCES_GROUP,
-    LOOM_EXECUTORS_GROUP,
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
@@ -44,10 +44,14 @@ def test_group_readiness_classifies_registry_ready_groups() -> None:
         LOOM_RECIPES_GROUP,
         LOOM_CODECS_GROUP,
         LOOM_EVENT_SINKS_GROUP,
+        LOOM_EXECUTORS_GROUP,
+        LOOM_RESOURCE_VALIDATORS_GROUP,
     )
     assert PLUGIN_GROUP_READINESS[LOOM_RECIPES_GROUP] == "registry-ready"
     assert PLUGIN_GROUP_READINESS[LOOM_CODECS_GROUP] == "registry-ready"
     assert PLUGIN_GROUP_READINESS[LOOM_EVENT_SINKS_GROUP] == "registry-ready"
+    assert PLUGIN_GROUP_READINESS[LOOM_EXECUTORS_GROUP] == "registry-ready"
+    assert PLUGIN_GROUP_READINESS[LOOM_RESOURCE_VALIDATORS_GROUP] == "registry-ready"
     assert plugin_group_readiness(LOOM_EVENT_SINKS_GROUP).to_summary()["status"] == (
         "registry-ready"
     )
@@ -66,9 +70,9 @@ def test_group_readiness_exposes_fixed_facet_evidence_and_derives_status() -> No
 
     assert tuple(readiness.facets) == READINESS_FACETS
     assert readiness.facets["contract"].status == "supported"
-    assert readiness.facets["registry"].status == "unsupported"
-    assert readiness.facets["plugin_loading"].status == "unsupported"
-    assert readiness.status == "listing-only"
+    assert readiness.facets["registry"].status == "supported"
+    assert readiness.facets["plugin_loading"].status == "supported"
+    assert readiness.status == "registry-ready"
     facets = cast(dict[str, Any], readiness.to_summary()["facets"])
     assert facets["cli_selection"] == {
         "status": "unsupported",

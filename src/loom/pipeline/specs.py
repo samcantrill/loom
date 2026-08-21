@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
 from typing import cast
 
@@ -12,7 +12,7 @@ from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data
 from loom.serialization.errors import PlainDataError
 
 from .errors import PipelineSpecError
-from .resources import ResourceRequest, parse_resource_request
+from .resources import ResourceRequest, ResourceValidatorRegistry, parse_resource_request
 
 
 _STAGE_DEFERRED_FIELDS = {
@@ -289,8 +289,10 @@ class StageSpec:
     inputs: Mapping[str, str] = field(default_factory=dict)
     resources: Mapping[str, PlainData] = field(default_factory=dict)
     fingerprint_fields: Mapping[str, PlainData] = field(default_factory=dict)
+    validator_registry: InitVar[ResourceValidatorRegistry | None] = None
+    _resource_request: ResourceRequest = field(init=False, repr=False, compare=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, validator_registry: ResourceValidatorRegistry | None) -> None:
         name = _validate_identifier(
             _require_non_empty_string(self.name, path="StageSpec.name"),
             kind="stage name",
@@ -332,12 +334,13 @@ class StageSpec:
             freeze_plain_data(_parse_inputs(self.inputs, stage_name=name, path="StageSpec.inputs"), path="StageSpec.inputs"),
         )
         resources = _plain_mapping(self.resources, path="StageSpec.resources")
-        parse_resource_request(resources)
+        resource_request = parse_resource_request(resources, registry=validator_registry)
         object.__setattr__(
             self,
             "resources",
             freeze_plain_data(resources, path="StageSpec.resources"),
         )
+        object.__setattr__(self, "_resource_request", resource_request)
         object.__setattr__(
             self,
             "fingerprint_fields",
@@ -353,10 +356,12 @@ class StageSpec:
 
     @property
     def resource_request(self) -> ResourceRequest:
-        return parse_resource_request(self.resources)
+        return self._resource_request
 
     @classmethod
-    def from_config(cls, config: object, *, path: str = "$.stage") -> "StageSpec":
+    def from_config(
+        cls, config: object, *, path: str = "$.stage", registry: ResourceValidatorRegistry | None = None,
+    ) -> "StageSpec":
         mapping = _require_mapping(config, path=path)
         if "_target_" in mapping:
             raise PipelineSpecError(
@@ -386,7 +391,7 @@ class StageSpec:
         inputs = _parse_inputs(mapping.get("inputs"), stage_name=name, path=f"{path}.inputs")
         outputs = _parse_outputs(mapping.get("outputs"), stage_name=name, path=f"{path}.outputs")
         resources = _plain_mapping(mapping.get("resources", {}), path=f"{path}.resources")
-        parse_resource_request(resources)
+        parse_resource_request(resources, registry=registry)
         fingerprint_fields = _plain_mapping(mapping.get("fingerprint", {}), path=f"{path}.fingerprint")
         return cls(
             name=name,
@@ -397,6 +402,7 @@ class StageSpec:
             inputs=inputs,
             resources=resources,
             fingerprint_fields=fingerprint_fields,
+            validator_registry=registry,
         )
 
 
@@ -443,7 +449,9 @@ class PipelineSpec:
         )
 
     @classmethod
-    def from_config(cls, config: object, *, path: str = "$.pipeline") -> "PipelineSpec":
+    def from_config(
+        cls, config: object, *, path: str = "$.pipeline", registry: ResourceValidatorRegistry | None = None,
+    ) -> "PipelineSpec":
         mapping = _require_mapping(config, path=path)
         _reject_unknown_fields(
             mapping,
@@ -464,7 +472,7 @@ class PipelineSpec:
         stages: list[StageSpec] = []
         stage_names: set[str] = set()
         for index, item in enumerate(stages_raw):
-            stage = StageSpec.from_config(item, path=f"{path}.stages[{index}]")
+            stage = StageSpec.from_config(item, path=f"{path}.stages[{index}]", registry=registry)
             if stage.name in stage_names:
                 raise PipelineSpecError(f"{path}.stages[{index}] has duplicate stage name '{stage.name}'")
             stage_names.add(stage.name)
@@ -491,8 +499,10 @@ class PipelineSpec:
         raise PipelineSpecError(f"pipeline has no stage named '{stage_id}'")
 
 
-def parse_pipeline_config(config: object) -> PipelineSpec:
-    return PipelineSpec.from_config(config)
+def parse_pipeline_config(
+    config: object, *, registry: ResourceValidatorRegistry | None = None,
+) -> PipelineSpec:
+    return PipelineSpec.from_config(config, registry=registry)
 
 
 __all__ = [

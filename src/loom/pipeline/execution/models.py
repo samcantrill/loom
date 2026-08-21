@@ -29,6 +29,7 @@ from loom.pipeline.runtime import (
     parse_run_options,
 )
 from loom.pipeline.specs import PipelineSpec, StageSpec
+from loom.pipeline.resources import ResourceValidatorRegistry
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.serialization import (
@@ -59,6 +60,7 @@ _VALID_FAILURE_TYPES = {
     "store_commit",
     "executor_infrastructure",
 }
+_PLUGIN_ACTIVATIONS_METADATA_KEY = "plugin_activations"
 
 
 class _ComposedConfigLike(Protocol):
@@ -120,6 +122,8 @@ class RunRequest:
     project_root: Path | None = None
     failure_policy: FailurePolicy = field(default_factory=FailurePolicy)
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    plugin_activation_manifest: Mapping[str, PlainData] | None = None
+    resource_validator_registry: ResourceValidatorRegistry | None = None
     event_sink_registry: EventSinkRegistry | None = None
     event_persistence: str = "durable"
     idempotency_key: str | None = None
@@ -180,7 +184,24 @@ class RunRequest:
         object.__setattr__(
             self, "failure_policy", _coerce_failure_policy(self.failure_policy)
         )
-        object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+        metadata = _plain_mapping(self.metadata, "metadata")
+        if _PLUGIN_ACTIVATIONS_METADATA_KEY in metadata:
+            raise RunRequestError(
+                "RunRequest.metadata may not supply reserved plugin_activations"
+            )
+        object.__setattr__(self, "metadata", metadata)
+        if self.plugin_activation_manifest is not None:
+            object.__setattr__(
+                self,
+                "plugin_activation_manifest",
+                _plain_mapping(self.plugin_activation_manifest, "plugin_activation_manifest"),
+            )
+        if self.resource_validator_registry is not None and not isinstance(
+            self.resource_validator_registry, ResourceValidatorRegistry
+        ):
+            raise RunRequestError(
+                "RunRequest.resource_validator_registry must be a ResourceValidatorRegistry"
+            )
         object.__setattr__(
             self,
             "event_sink_registry",

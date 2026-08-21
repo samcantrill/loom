@@ -61,6 +61,8 @@ def register_subparser(
         help="output format",
     )
     add_authority_options(run_parser)
+    from loom.cli.plugin_activation import add_plugin_option
+    add_plugin_option(run_parser)
     run_parser.add_argument(
         "--traceback",
         action="store_true",
@@ -83,6 +85,7 @@ def handle_run(namespace: argparse.Namespace) -> int:
             stage_name=str(namespace.stage),
             attempt=namespace.attempt,
             authority_config=authority_config_from_namespace(namespace),
+            plugin_selectors=tuple(getattr(namespace, "plugin", ()) or ()),
         )
     except StageWorkerStateError as exc:
         raise StageWorkerCliError(
@@ -116,6 +119,7 @@ def _run_stage_worker(
     stage_name: str,
     attempt: int | None,
     authority_config: "AuthorityConfig | None" = None,
+    plugin_selectors: tuple[str, ...] = (),
 ) -> "StageWorkerResult":
     from loom.pipeline.execution import (
         StageWorkerRunRequest,
@@ -123,6 +127,19 @@ def _run_stage_worker(
         run_stage_worker,
     )
 
+    selected_records = ()
+    artifact_store_factory = None
+    if plugin_selectors:
+        from loom.cli.plugin_activation import build_selected_registries, selected_runtime_plugins
+        from loom.plugins import LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
+        selected_records = selected_runtime_plugins(
+            plugin_selectors,
+            allowed_groups=(LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
+        )
+        codecs, _validators, _executors, _manifest = build_selected_registries(selected_records)
+        from loom.pipeline.stores import LocalArtifactStore
+        def artifact_store_factory(root: object) -> object:
+            return LocalArtifactStore(root, codec_registry=codecs)
     return run_stage_worker(
         run_store=create_authority_backed_serial_run_store(
             "runs",
@@ -134,6 +151,8 @@ def _run_stage_worker(
             stage_name=stage_name,
             attempt=attempt,
         ),
+        selected_plugin_records=selected_records,
+        artifact_store_factory=artifact_store_factory,
     )
 
 

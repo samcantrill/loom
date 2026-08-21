@@ -40,6 +40,10 @@ if TYPE_CHECKING:
     from loom.diagnostics import PreflightRequest, PreflightResult
     from weave.api import ComposedConfig
     from loom.pipeline.execution import RunRequest, RunResult
+    from loom.io.codecs import CodecRegistry
+    from loom.pipeline.executors import ExecutorRegistry
+    from loom.pipeline.resources import ResourceValidatorRegistry
+    from loom.plugins.activation import PluginActivationManifest
     from loom.pipeline.executors.slurm import (
         SlurmCommandRunner,
         SlurmDryRunPlanningResult,
@@ -188,6 +192,8 @@ def register_subparser(
         help="output format",
     )
     add_authority_options(parser, include_resolution_mode=True)
+    from loom.cli.plugin_activation import add_plugin_option
+    add_plugin_option(parser)
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -206,6 +212,15 @@ def handle(namespace: argparse.Namespace) -> int:
     output_format = output_format_from_namespace(namespace)
     authority_config = authority_config_from_namespace(namespace)
     authority_mode = authority_resolution_mode_from_namespace(namespace)
+    from loom.cli.plugin_activation import selected_runtime_plugins
+    from loom.plugins import (
+        LOOM_CODECS_GROUP, LOOM_EVENT_SINKS_GROUP, LOOM_EXECUTORS_GROUP,
+        LOOM_RESOURCE_VALIDATORS_GROUP,
+    )
+    plugin_records = selected_runtime_plugins(
+        getattr(namespace, "plugin", None),
+        allowed_groups=(LOOM_EXECUTORS_GROUP, LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP, LOOM_EVENT_SINKS_GROUP),
+    )
 
     if run_options.dry_run:
         return _handle_dry_run(
@@ -249,6 +264,7 @@ def handle(namespace: argparse.Namespace) -> int:
         selector_options=selector_options,
         authority_config=authority_config,
         authority_mode=authority_mode,
+        plugin_records=plugin_records,
     )
     ok = result.status == "SUCCEEDED"
     if output_format is OutputFormat.JSON:
@@ -273,21 +289,36 @@ def build_run_result(
     selector_options: SelectorCliOptions,
     authority_config: "AuthorityConfig | None" = None,
     authority_mode: "AuthorityResolutionMode | None" = None,
+    plugin_records: Sequence[object] = (),
 ) -> RunCliResult:
     """Execute a pipeline and build the CLI-specific run result."""
 
-    if run_options.executor_explicit and run_options.executor not in _RUN_EXECUTORS:
+    if run_options.executor_explicit and run_options.executor not in _RUN_EXECUTORS and not plugin_records:
         raise UnsupportedExecutorError(cast(str, run_options.executor))
     store = _create_default_run_store(
         authority_config=authority_config,
         authority_mode=authority_mode,
     )
+    codecs: CodecRegistry | None = None
+    validators: ResourceValidatorRegistry | None = None
+    executor_registry: ExecutorRegistry | None = None
+    activation_manifest: PluginActivationManifest | None = None
+    if plugin_records:
+        from loom.cli.plugin_activation import build_selected_registries
+        from loom.plugins.entrypoints import PluginRecord
+        codecs, validators, executor_registry, activation_manifest = build_selected_registries(
+            cast(Sequence[PluginRecord], plugin_records)
+        )
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    pipeline_result = _validate_pipeline_config(composed.resolved)
+    pipeline_result = (
+        _validate_pipeline_config(composed.resolved, registry=validators)
+        if validators is not None
+        else _validate_pipeline_config(composed.resolved)
+    )
     runtime_options = _merge_runtime_options(
         composed.resolved,
         run_options=run_options,
@@ -302,7 +333,11 @@ def build_run_result(
         open_existing=run_options.resume,
     )
     runtime_options = _with_resolved_run_uri(runtime_options, run_uri)
-    executor = _build_executor(runtime_options.executor or "local", store)
+    executor = (
+        _build_executor(runtime_options.executor or "local", store)
+        if executor_registry is None
+        else _build_executor(runtime_options.executor or "local", store, options=runtime_options, registry=executor_registry, plugin_records=plugin_records)
+    )
     _run_preflight_for_run(
         config_options=config_options,
         runtime_options=runtime_options,
@@ -310,12 +345,15 @@ def build_run_result(
         authority_config=authority_config,
         authority_mode=authority_mode,
     )
-    request = _build_run_request(
-        composed,
-        open_existing=run_options.resume,
-        options=runtime_options,
+    request = (
+        _build_run_request(composed, open_existing=run_options.resume, options=runtime_options)
+        if validators is None
+        else _build_run_request(composed, open_existing=run_options.resume, options=runtime_options, validator_registry=validators, activation_manifest=activation_manifest)
     )
-    result = _run_pipeline(request, store, executor=executor)
+    result = (
+        _run_pipeline(request, store, executor=executor)
+        if codecs is None else _run_pipeline(request, store, executor=executor, codec_registry=codecs)
+    )
     return _run_result_from_execution_result(
         result,
         offline_evidence=_offline_evidence_summary(store, result.run_uri),
@@ -566,10 +604,11 @@ def _compose_config(
 
 def _validate_pipeline_config(
     config: Mapping[str, object],
+    *, registry: object | None = None,
 ) -> "PipelineValidationResult":
     from loom.pipeline import validate_pipeline_config
 
-    return validate_pipeline_config(config)
+    return validate_pipeline_config(config, registry=cast(Any, registry))
 
 
 def _artifact_safe_config_for_plan(composed: "ComposedConfig") -> Mapping[str, object]:
@@ -1539,6 +1578,8 @@ def _build_run_request(
     *,
     open_existing: bool,
     options: "RunOptions",
+    validator_registry: "ResourceValidatorRegistry | None" = None,
+    activation_manifest: "PluginActivationManifest | None" = None,
 ) -> "RunRequest":
     from loom.pipeline.execution import RunRequest
 
@@ -1546,10 +1587,25 @@ def _build_run_request(
         config=config,
         open_existing=open_existing,
         options=options,
+        resource_validator_registry=validator_registry,
+        plugin_activation_manifest=(
+            activation_manifest.to_dict() if activation_manifest is not None else None
+        ),
     )
 
 
-def _build_executor(executor: str, store: Any) -> "Executor":
+def _build_executor(
+    executor: str, store: Any, *, options: "RunOptions | None" = None, registry: "ExecutorRegistry | None" = None,
+    plugin_records: Sequence[object] = (),
+) -> "Executor":
+    if registry is not None and executor in getattr(registry, "names", ()):
+        from loom.pipeline.execution import RuntimeServices
+        if options is None:
+            raise AssertionError("selected executor construction requires RunOptions")
+        return registry.build(
+            executor, services=RuntimeServices.from_legacy(getattr(store, "local_store", store)),
+            options=options,
+        )
     if executor == "local":
         from loom.pipeline.executors import LocalExecutor
 
@@ -1557,7 +1613,13 @@ def _build_executor(executor: str, store: Any) -> "Executor":
     if executor == "subprocess":
         from loom.pipeline.executors import SubprocessExecutor
 
-        return SubprocessExecutor(worker_results=store)
+        return SubprocessExecutor(
+            worker_results=store,
+            plugin_selectors=tuple(
+                f"{record.group}:{record.name}" for record in plugin_records
+                if getattr(record, "group", None) in {"loom.codecs", "loom.resource_validators"}
+            ),
+        )
     if executor == "docker":
         from loom.pipeline.executors import DockerExecutor
 
@@ -1584,17 +1646,20 @@ def _run_pipeline(
     store: Any,
     *,
     executor: "Executor",
+    codec_registry: "CodecRegistry | None" = None,
 ) -> "RunResult":
     from loom.pipeline.execution import (
         PipelineRunner,
         RuntimeServices,
         is_offline_evidence_run_store,
     )
+    from loom.pipeline.stores import LocalArtifactStore
 
     if is_offline_evidence_run_store(store):
-        return PipelineRunner(run_store=store, executor=executor).run(request)
+        return PipelineRunner(run_store=store, executor=executor, artifact_store_factory=lambda root: LocalArtifactStore(root, codec_registry=codec_registry)).run(request)
     return PipelineRunner(
-        services=RuntimeServices.from_legacy(store), executor=executor
+        services=RuntimeServices.from_legacy(store), executor=executor,
+        artifact_store_factory=lambda root: LocalArtifactStore(root, codec_registry=codec_registry),
     ).run(request)
 
 

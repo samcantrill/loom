@@ -920,7 +920,7 @@ registration hooks. The initial runtime should not require plugin discovery for
 normal imports.
 
 Plugin loading must be explicit enough to avoid surprising import side effects.
-Plugin code may register recipes, codecs, sources, executors, observe-only event
+Plugin code may explicitly register recipes, codecs, resource validators, ordinary executors, sources, observe-only event
 sinks, or CLI extensions through documented APIs. Runtime event semantics belong
 to the reliability and execution layers; plugin discovery only loads and
 registers event sink implementations.

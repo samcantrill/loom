@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from weave.api import ComposedConfig
     from weave.target_checks import TargetCheckResult
     from loom.pipeline.specs import PipelineSpec
+    from loom.pipeline.resources import ResourceValidatorRegistry
     from loom.pipeline.validation import PipelineTargetCheckResult, PipelineValidationResult
 
 
@@ -59,6 +60,8 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         default=OutputFormat.TEXT.value,
         help="output format",
     )
+    from loom.cli.plugin_activation import add_plugin_option
+    add_plugin_option(parser)
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -76,12 +79,21 @@ def handle(namespace: argparse.Namespace) -> int:
     output_format = output_format_from_namespace(namespace)
     warnings: list[CliWarning] = []
 
+    validator_registry: ResourceValidatorRegistry | None = None
+    if getattr(namespace, "plugin", None):
+        from loom.cli.plugin_activation import build_selected_registries, selected_runtime_plugins
+        from loom.plugins import LOOM_RESOURCE_VALIDATORS_GROUP
+        records = selected_runtime_plugins(namespace.plugin, allowed_groups=(LOOM_RESOURCE_VALIDATORS_GROUP,))
+        _codecs, validator_registry, _executors, _manifest = build_selected_registries(records)
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    pipeline_result = _validate_pipeline_config(composed.resolved)
+    pipeline_result = (
+        _validate_pipeline_config(composed.resolved, registry=validator_registry)
+        if validator_registry is not None else _validate_pipeline_config(composed.resolved)
+    )
     _validate_runtime_options(
         composed.resolved,
         known_stage_ids=pipeline_result.spec.stage_names,
@@ -136,10 +148,12 @@ def _compose_config(
     return compose_config(config_path, overlays=tuple(overlays), overrides=tuple(overrides))
 
 
-def _validate_pipeline_config(config: Mapping[str, object]) -> "PipelineValidationResult":
+def _validate_pipeline_config(
+    config: Mapping[str, object], *, registry: "ResourceValidatorRegistry | None" = None,
+) -> "PipelineValidationResult":
     from loom.pipeline import validate_pipeline_config
 
-    return validate_pipeline_config(config)
+    return validate_pipeline_config(config, registry=registry)
 
 
 def _validate_runtime_options(

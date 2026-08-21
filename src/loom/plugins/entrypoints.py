@@ -25,6 +25,7 @@ LOOM_ARTIFACT_STORE_BACKENDS_GROUP = "loom.artifact_store_backends"
 LOOM_RUN_EXPORTERS_GROUP = "loom.run_exporters"
 LOOM_SWEEP_PROVIDERS_GROUP = "loom.sweep_providers"
 LOOM_EVENT_SINKS_GROUP = "loom.event_sinks"
+LOOM_RESOURCE_VALIDATORS_GROUP = "loom.resource_validators"
 
 KNOWN_PLUGIN_GROUPS: tuple[str, ...] = (
     LOOM_RECIPES_GROUP,
@@ -35,6 +36,7 @@ KNOWN_PLUGIN_GROUPS: tuple[str, ...] = (
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
     LOOM_EVENT_SINKS_GROUP,
+    LOOM_RESOURCE_VALIDATORS_GROUP,
 )
 
 EntryPointProvider = Callable[[], Iterable[object]]
@@ -75,6 +77,32 @@ class PluginRecord:
         if self.package_version is not None:
             data["package_version"] = self.package_version
         return data
+
+    @classmethod
+    def from_summary(cls, data: object) -> "PluginRecord":
+        """Read the strict plain identity form used in activation evidence."""
+        if not isinstance(data, Mapping):
+            raise PluginInvalidEntryPointError("PluginRecord summary must be a mapping")
+        allowed = {"group", "name", "value", "package", "package_version"}
+        unknown = set(data) - allowed
+        missing = {"group", "name", "value"} - set(data)
+        if unknown or missing:
+            details: list[str] = []
+            if unknown:
+                details.append("unknown field(s): " + ", ".join(sorted(unknown)))
+            if missing:
+                details.append("missing required field(s): " + ", ".join(sorted(missing)))
+            raise PluginInvalidEntryPointError("PluginRecord summary " + "; ".join(details))
+        package = data.get("package")
+        version = data.get("package_version")
+        if package is not None and not isinstance(package, str):
+            raise PluginInvalidEntryPointError("PluginRecord summary package must be a string or null")
+        if version is not None and not isinstance(version, str):
+            raise PluginInvalidEntryPointError("PluginRecord summary package_version must be a string or null")
+        return cls(
+            group=data["group"], name=data["name"], value=data["value"],
+            package=package, package_version=version,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,6 +467,7 @@ __all__ = [
     "LOOM_EXECUTORS_GROUP",
     "LOOM_EVENT_SINKS_GROUP",
     "LOOM_RECIPES_GROUP",
+    "LOOM_RESOURCE_VALIDATORS_GROUP",
     "LOOM_RUN_EXPORTERS_GROUP",
     "LOOM_SOURCES_GROUP",
     "LOOM_SWEEP_PROVIDERS_GROUP",

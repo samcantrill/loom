@@ -178,9 +178,9 @@ Owns executor behavior and executor registry registration.
 Plugin responsibilities:
 
 ```text
-discover executor entry points, later
-load executor factories, later
-register executor names, later
+load selected ordinary executor registrations into a supplied instance-local registry
+pair each factory with its descriptor and name before execution
+leave submitted/queue executor ownership to the execution subsystem
 ```
 
 Plugin non-responsibilities:
@@ -190,6 +190,25 @@ submit jobs
 generate scheduler scripts
 run stages
 ```
+
+### 3.4.1 Explicit runtime activation
+
+Runtime commands select extensions only with repeated exact `--plugin GROUP:NAME`
+arguments. Selection resolves installed metadata before a target import and only
+for groups consumed by that command. `PluginActivationManifest` records sorted
+group, name, target, and available distribution identity in the reserved
+`plugin_activations` metadata entry; it never stores a callable, registry,
+credential, or plugin-private configuration. Stored evidence is comparison
+evidence only: a fresh worker still requires the applicable current command
+selection before loading a target.
+
+Ordinary executors register one `ExecutorRegistration(descriptor, factory)` in
+an instance-local `ExecutorRegistry`. Factories receive explicit runtime
+services and options, and the registry rejects duplicate descriptors and a
+built executor whose name differs from its descriptor. Resource validator entry
+points are direct existing `ResourceValidator` callables keyed by the entry
+point name; the supplied resource registry remains the sole kind and duplicate
+validator.
 
 ### 3.5 Runtime Event Sinks
 

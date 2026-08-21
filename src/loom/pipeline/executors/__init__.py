@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from loom.pipeline.executors.base import Executor
+from loom.pipeline.executors.base import Executor, ExecutorFactory, ExecutorRegistration, ExecutorRegistry
 
 if TYPE_CHECKING:
     from loom.pipeline.executors.apptainer import (
@@ -60,6 +60,9 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "ApptainerExecutor",
     "Executor",
+    "ExecutorFactory",
+    "ExecutorRegistration",
+    "ExecutorRegistry",
     "DockerExecutor",
     "ExecutorError",
     "LocalExecutor",

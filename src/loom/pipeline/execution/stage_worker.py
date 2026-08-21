@@ -20,6 +20,8 @@ from loom.pipeline.planning import (
 )
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.specs import OutputSpec, StageFactorySpec, StageSpec
+from loom.plugins.activation import PluginActivationManifest, compare_plugin_activation_records
+from loom.plugins.entrypoints import PluginRecord
 from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import (
@@ -83,6 +85,7 @@ def run_stage_worker(
     executor: Executor | None = None,
     artifact_store_factory: ArtifactStoreFactory | None = None,
     clock: Clock = utc_timestamp,
+    selected_plugin_records: tuple[PluginRecord, ...] = (),
 ) -> StageWorkerResult:
     """Run one prepared stage attempt and persist its worker result handoff."""
 
@@ -113,6 +116,7 @@ def run_stage_worker(
         stage_name=request.stage_name,
         attempt=attempt,
     )
+    _validate_plugin_activation_evidence(prepared, selected_plugin_records)
     _validate_current_attempt_state(
         run_store=run_store,
         run_uri=run_uri,
@@ -208,6 +212,25 @@ def infer_stage_worker_attempt(
             f"cannot infer attempt for stage {stage_name!r}: worker request is invalid: {exc}"
         ) from exc
     return status.attempt
+
+
+def _validate_plugin_activation_evidence(
+    request: StageWorkerRequest, current: tuple[PluginRecord, ...],
+) -> None:
+    """Require current command authority before any stage target is imported."""
+    raw = request.metadata.get("plugin_activations")
+    if raw is None:
+        if current:
+            raise StageWorkerStateError("worker command selected plugins absent from activation evidence")
+        return
+    try:
+        recorded = PluginActivationManifest.from_dict(raw).plugins
+    except Exception as exc:
+        raise StageWorkerStateError("worker plugin activation evidence is invalid") from exc
+    findings = compare_plugin_activation_records(recorded, current)
+    errors = [finding for finding in findings if "distribution evidence unavailable" not in finding]
+    if errors:
+        raise StageWorkerStateError("worker plugin activation mismatch: " + "; ".join(errors))
 
 
 def reconstruct_stage_execution_request(

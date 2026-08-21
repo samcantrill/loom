@@ -1600,7 +1600,14 @@ class PipelineRunner:
                 resolved_runtime=resolved_runtime,
                 executor_name=str(getattr(self.executor, "name", "unknown")),
                 executor_metadata={"worker_command": "loom stage run"},
-                metadata={"subprocess": True},
+                metadata={
+                    "subprocess": True,
+                    **(
+                        {"plugin_activations": dict(request.plugin_activation_manifest)}
+                        if request.plugin_activation_manifest is not None
+                        else {}
+                    ),
+                },
                 clock=self.clock,
             )
             attempt = prepared.attempt
@@ -2044,7 +2051,9 @@ class PipelineRunner:
             raise RunRequestError(
                 "config mapping must contain a top-level 'pipeline' key"
             )
-        return config_mapping, parse_pipeline_config(config_mapping["pipeline"])
+        return config_mapping, parse_pipeline_config(
+            config_mapping["pipeline"], registry=request.resource_validator_registry
+        )
 
     def _write_config_and_provenance(
         self,

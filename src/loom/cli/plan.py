@@ -129,6 +129,8 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         help="output format",
     )
     add_authority_options(parser)
+    from loom.cli.plugin_activation import add_plugin_option
+    add_plugin_option(parser)
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -145,6 +147,11 @@ def handle(namespace: argparse.Namespace) -> int:
     plan_options = PlanCliOptions.from_namespace(namespace)
     selector_options = SelectorCliOptions.from_namespace(namespace)
     output_format = output_format_from_namespace(namespace)
+    if getattr(namespace, "plugin", None):
+        from loom.cli.plugin_activation import build_selected_registries, selected_runtime_plugins
+        from loom.plugins import LOOM_EXECUTORS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP
+        records = selected_runtime_plugins(namespace.plugin, allowed_groups=(LOOM_EXECUTORS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP))
+        build_selected_registries(records)
 
     result = build_plan_result(
         config_options=config_options,
