@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -17,10 +18,15 @@ from loom.pipeline.execution import (
     continue_prepared_run,
 )
 from loom.pipeline.execution.lifecycle import write_run_status
+from loom.pipeline.execution.continuation import (
+    _prepared_worker_plugin_activation_metadata,
+)
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import RunOptions, build_runtime_metadata
 from loom.pipeline.status import RunStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.plugins import LOOM_CODECS_GROUP, LOOM_EVENT_SINKS_GROUP, PluginRecord
+from loom.plugins.activation import PluginActivationManifest
 
 
 def _stage() -> StageSpec:
@@ -73,6 +79,41 @@ def _prepared_run(tmp_path: Path) -> tuple[LocalRunStore, str]:
         ).to_dict(),
     )
     return store, run_uri
+
+
+def test_prepared_worker_activation_projection_excludes_event_sinks() -> None:
+    codec = PluginRecord(
+        group=LOOM_CODECS_GROUP,
+        name="example",
+        value="project.plugins:codec",
+    )
+    sink = PluginRecord(
+        group=LOOM_EVENT_SINKS_GROUP,
+        name="metrics",
+        value="project.plugins:metrics_sink",
+    )
+    prepared = PreparedRunRecord(
+        schema_version=PREPARED_RUN_SCHEMA_VERSION,
+        run_uri="file:///tmp/run",
+        prepared_at="2020-01-01T00:00:02Z",
+        executor_name="local",
+        continuation_type=PREPARED_RUN_CONTINUATION_WHOLE_RUN,
+        metadata={
+            "plugin_activations": PluginActivationManifest((codec, sink)).to_dict()
+        },
+    )
+
+    class PreparedStore:
+        def read_prepared_run(self, _run_uri: str) -> Mapping[str, object]:
+            return prepared.to_dict()
+
+    projected = _prepared_worker_plugin_activation_metadata(
+        PreparedStore(),  # type: ignore[arg-type]
+        prepared.run_uri,
+    )
+
+    manifest = PluginActivationManifest.from_dict(projected["plugin_activations"])
+    assert manifest.plugins == (codec,)
 
 
 def test_prepared_run_continue_fails_with_structured_insufficient_state(

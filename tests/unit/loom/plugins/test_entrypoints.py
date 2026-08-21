@@ -93,6 +93,7 @@ def test_known_group_constants_match_plan() -> None:
         "loom.run_exporters",
         "loom.sweep_providers",
         "loom.event_sinks",
+        "loom.resource_validators",
     )
 
     assert set(KNOWN_PLUGIN_GROUPS) == {
@@ -104,6 +105,7 @@ def test_known_group_constants_match_plan() -> None:
         "loom.run_exporters",
         "loom.sweep_providers",
         "loom.event_sinks",
+        "loom.resource_validators",
     }
 
 

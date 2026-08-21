@@ -71,6 +71,7 @@ class DockerExecutor:
         run_store: RunStore,
         docker_command_runner: DockerCommandRunner | None = None,
         python_executable: str = "python",
+        plugin_selectors: Sequence[str] = (),
         clock: Clock = utc_timestamp,
     ) -> None:
         if not isinstance(run_store, RunStore):
@@ -90,6 +91,7 @@ class DockerExecutor:
             docker_command_runner or SubprocessDockerCommandRunner(clock=clock)
         )
         self.python_executable = python_executable
+        self.plugin_selectors = tuple(plugin_selectors)
         self.clock = clock
 
     def execute(self, request: StageExecutionRequest) -> StageExecutionResult:
@@ -102,6 +104,7 @@ class DockerExecutor:
                 request=request,
                 run_store=self.run_store,
                 python_executable=self.python_executable,
+                plugin_selectors=self.plugin_selectors,
             )
         except Exception as exc:  # noqa: BLE001 - setup errors become structured failures.
             finished_at = self.clock()
@@ -119,7 +122,10 @@ class DockerExecutor:
                 exit_code=None,
                 signal=None,
                 metadata=metadata,
-                details={"setup_error": setup_error.message, **dict(setup_error.details)},
+                details={
+                    "setup_error": setup_error.message,
+                    **dict(setup_error.details),
+                },
             )
             return _failed_result(
                 request=request,
@@ -299,6 +305,7 @@ def _prepare_docker_attempt(
     request: StageExecutionRequest,
     run_store: RunStore,
     python_executable: str,
+    plugin_selectors: Sequence[str] = (),
 ) -> _PreparedDockerAttempt:
     runtime = cast(ResolvedStageRuntimeOptions, request.resolved_runtime)
     adapter_options = runtime.adapter_options
@@ -325,6 +332,7 @@ def _prepare_docker_attempt(
         stage_name=request.stage.name,
         attempt=request.attempt,
         authority_config=_authority_config(run_store),
+        plugin_selectors=plugin_selectors,
     )
     command = build_docker_run_command(
         container_options=container,
@@ -589,7 +597,9 @@ def _worker_failure(
         executor="docker",
         failure_type=failure_type,
         message=message,
-        exception_type=worker_failure.exception_type if worker_failure is not None else None,
+        exception_type=worker_failure.exception_type
+        if worker_failure is not None
+        else None,
         traceback_path=worker_result.traceback_path,
         stdout_path=worker_result.stdout_path,
         stderr_path=worker_result.stderr_path,

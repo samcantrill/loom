@@ -23,6 +23,7 @@ def test_import_loom_plugins_public_symbols() -> None:
     assert plugins.LOOM_RUN_EXPORTERS_GROUP == "loom.run_exporters"
     assert plugins.LOOM_SWEEP_PROVIDERS_GROUP == "loom.sweep_providers"
     assert plugins.LOOM_EVENT_SINKS_GROUP == "loom.event_sinks"
+    assert plugins.LOOM_RESOURCE_VALIDATORS_GROUP == "loom.resource_validators"
 
     assert plugins.PluginRecord
     assert plugins.LoadedPlugin
@@ -41,6 +42,8 @@ def test_import_loom_plugins_public_symbols() -> None:
     assert plugins.PluginLoadError
     assert plugins.load_recipe_entry_points
     assert plugins.load_codec_entry_points
+    assert plugins.load_executor_entry_points
+    assert plugins.load_resource_validator_entry_points
     assert plugins.list_entry_points
     assert plugins.find_plugin_duplicates
     assert plugins.filter_plugin_records
@@ -51,6 +54,8 @@ def test_import_loom_plugins_public_symbols() -> None:
         plugins.LOOM_RECIPES_GROUP,
         plugins.LOOM_CODECS_GROUP,
         plugins.LOOM_EVENT_SINKS_GROUP,
+        plugins.LOOM_EXECUTORS_GROUP,
+        plugins.LOOM_RESOURCE_VALIDATORS_GROUP,
     )
     assert plugins.READINESS_FACETS == (
         "contract",

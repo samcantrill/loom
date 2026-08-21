@@ -32,7 +32,11 @@ from loom.pipeline.executors import (
     SubprocessRunResult,
 )
 from loom.pipeline.executors.subprocess import build_stage_worker_command
-from loom.pipeline.planning import FingerprintContext, build_stage_fingerprint, plan_pipeline
+from loom.pipeline.planning import (
+    FingerprintContext,
+    build_stage_fingerprint,
+    plan_pipeline,
+)
 from loom.pipeline.reliability import ReliabilityPolicy, TimeoutPolicy
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
@@ -221,6 +225,28 @@ def test_build_stage_worker_command_propagates_authority_config() -> None:
     assert command[command.index("--authority-workspace") + 1] == "workspace-a"
     assert command[command.index("--authority-reference") + 1] == "worker-authority"
     assert command[-2:] == ("--format", "json")
+
+
+def test_build_stage_worker_command_propagates_only_explicit_plugin_selectors() -> None:
+    command = build_stage_worker_command(
+        python_executable="/usr/bin/python",
+        run_uri="file:///runs/demo",
+        stage_name="build",
+        attempt=3,
+        plugin_selectors=(
+            "loom.codecs:stage28.tagged-json.v1",
+            "loom.resource_validators:stage28.device",
+        ),
+    )
+
+    assert command[-6:] == (
+        "--plugin",
+        "loom.codecs:stage28.tagged-json.v1",
+        "--plugin",
+        "loom.resource_validators:stage28.device",
+        "--format",
+        "json",
+    )
 
 
 def test_subprocess_executor_reads_successful_worker_result(tmp_path: Path) -> None:
@@ -459,7 +485,10 @@ def test_subprocess_executor_process_failure_overrides_structured_success(
 
     assert result.status == StageStatus.FAILED
     assert result.failure is not None
-    assert result.failure.message == "subprocess worker reported success but process failed"
+    assert (
+        result.failure.message
+        == "subprocess worker reported success but process failed"
+    )
     assert result.failure.exit_code == 2
     assert result.outputs == {}
 

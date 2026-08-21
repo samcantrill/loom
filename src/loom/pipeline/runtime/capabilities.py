@@ -17,7 +17,11 @@ from loom.serialization import (
 from loom.serialization.errors import PlainDataError
 
 from loom.pipeline.errors import RuntimeResourceError
-from loom.pipeline.resources import ResourceRequest, validate_resource_kind
+from loom.pipeline.resources import (
+    ResourceRequest,
+    ResourceValidatorRegistry,
+    validate_resource_kind,
+)
 from loom.pipeline.runtime.options import (
     RunOptions,
     StageRuntimeOptions,
@@ -602,9 +606,12 @@ def validate_executor_capabilities(
     options: RunOptions | Mapping[str, object] | None = None,
     *,
     registry: ExecutorDescriptorRegistry | None = None,
+    resource_validator_registry: ResourceValidatorRegistry | None = None,
 ) -> CapabilityValidationResult:
     run_options = (
-        options if isinstance(options, RunOptions) else parse_run_options(options)
+        options
+        if isinstance(options, RunOptions)
+        else parse_run_options(options, registry=resource_validator_registry)
     )
     descriptor_registry = _coerce_registry(registry)
     try:

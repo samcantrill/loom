@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
 from typing import cast
 
@@ -12,7 +12,11 @@ from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data
 from loom.serialization.errors import PlainDataError
 
 from .errors import PipelineSpecError
-from .resources import ResourceRequest, parse_resource_request
+from .resources import (
+    ResourceRequest,
+    ResourceValidatorRegistry,
+    parse_resource_request,
+)
 
 
 _STAGE_DEFERRED_FIELDS = {
@@ -46,7 +50,9 @@ def _reject_unknown_fields(
     deferred_fields = set(data) & deferred
     if deferred_fields:
         fields = ", ".join(sorted(deferred_fields))
-        raise PipelineSpecError(f"{path} uses deferred field(s) not supported in v0: {fields}")
+        raise PipelineSpecError(
+            f"{path} uses deferred field(s) not supported in v0: {fields}"
+        )
 
     unknown = set(data) - allowed
     if unknown:
@@ -88,7 +94,9 @@ def _validate_identifier(value: str, *, kind: str, path: str) -> str:
     if "/" in value or "\\" in value:
         raise PipelineSpecError(f"{path} cannot contain path separators")
     if any(ch <= " " for ch in value):
-        raise PipelineSpecError(f"{path} cannot contain control or whitespace characters")
+        raise PipelineSpecError(
+            f"{path} cannot contain control or whitespace characters"
+        )
     return value
 
 
@@ -96,7 +104,9 @@ def _plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
     try:
         normalized = ensure_plain_data(value, path=path)
     except PlainDataError as exc:
-        raise PipelineSpecError(f"{path} must be plain-data-compatible mapping: {exc}") from exc
+        raise PipelineSpecError(
+            f"{path} must be plain-data-compatible mapping: {exc}"
+        ) from exc
     if not isinstance(normalized, Mapping):
         raise PipelineSpecError(f"{path} must be a mapping")
     return cast(Mapping[str, PlainData], normalized)
@@ -115,10 +125,16 @@ def _parse_dependencies(
     deps: list[StageID] = []
     for index, item in enumerate(value):
         identifier = _require_non_empty_string(item, path=f"{path}[{index}]")
-        deps.append(_validate_identifier(identifier, kind="stage identifier", path=f"{path}[{index}]"))
+        deps.append(
+            _validate_identifier(
+                identifier, kind="stage identifier", path=f"{path}[{index}]"
+            )
+        )
     for identifier in deps:
         if identifier == stage_name:
-            raise PipelineSpecError(f"{path} may not depend on the same stage '{stage_name}'")
+            raise PipelineSpecError(
+                f"{path} may not depend on the same stage '{stage_name}'"
+            )
     return tuple(deps)
 
 
@@ -133,28 +149,42 @@ def _parse_inputs(
     if not isinstance(value, Mapping):
         raise PipelineSpecError(f"{path} must be a mapping")
     for key in value:
-        _validate_identifier(_require_non_empty_string(key, path=f"{path} key"), kind="input name", path=f"{path}.{key}")
+        _validate_identifier(
+            _require_non_empty_string(key, path=f"{path} key"),
+            kind="input name",
+            path=f"{path}.{key}",
+        )
     inputs: dict[str, str] = {}
     for input_name, reference in value.items():
         if not isinstance(reference, str) or not reference:
-            raise PipelineSpecError(f"{path}.{input_name} must be a non-empty stage.output reference")
+            raise PipelineSpecError(
+                f"{path}.{input_name} must be a non-empty stage.output reference"
+            )
         if reference.count(".") != 1:
-            raise PipelineSpecError(f"{path}.{input_name} must be a strict stage.output reference")
+            raise PipelineSpecError(
+                f"{path}.{input_name} must be a strict stage.output reference"
+            )
         source_stage, source_output = reference.split(".", 1)
         if not source_stage or not source_output:
-            raise PipelineSpecError(f"{path}.{input_name} must be a strict stage.output reference")
+            raise PipelineSpecError(
+                f"{path}.{input_name} must be a strict stage.output reference"
+            )
         _validate_identifier(
             _require_non_empty_string(source_stage, path=f"{path}.{input_name}.stage"),
             kind="stage identifier",
             path=f"{path}.{input_name}.stage",
         )
         _validate_identifier(
-            _require_non_empty_string(source_output, path=f"{path}.{input_name}.output"),
+            _require_non_empty_string(
+                source_output, path=f"{path}.{input_name}.output"
+            ),
             kind="output name",
             path=f"{path}.{input_name}.output",
         )
         if source_stage == stage_name:
-            raise PipelineSpecError(f"{path}.{input_name} may not reference its own stage")
+            raise PipelineSpecError(
+                f"{path}.{input_name} may not reference its own stage"
+            )
         inputs[input_name] = reference
     return inputs
 
@@ -195,7 +225,9 @@ class StageFactorySpec:
         object.__setattr__(
             self,
             "target_path",
-            _require_non_empty_string(self.target_path, path="StageFactorySpec.target_path"),
+            _require_non_empty_string(
+                self.target_path, path="StageFactorySpec.target_path"
+            ),
         )
         object.__setattr__(
             self,
@@ -239,7 +271,9 @@ class OutputSpec:
         object.__setattr__(
             self,
             "artifact_type",
-            _require_non_empty_string(self.artifact_type, path="OutputSpec.artifact_type"),
+            _require_non_empty_string(
+                self.artifact_type, path="OutputSpec.artifact_type"
+            ),
         )
         object.__setattr__(
             self,
@@ -249,7 +283,9 @@ class OutputSpec:
         object.__setattr__(
             self,
             "schema_version",
-            _optional_schema_version(self.schema_version, path="OutputSpec.schema_version"),
+            _optional_schema_version(
+                self.schema_version, path="OutputSpec.schema_version"
+            ),
         )
         object.__setattr__(
             self,
@@ -267,9 +303,13 @@ class OutputSpec:
             path=path,
         )
 
-        artifact_type = _require_non_empty_string(mapping.get("artifact_type"), path=f"{path}.artifact_type")
+        artifact_type = _require_non_empty_string(
+            mapping.get("artifact_type"), path=f"{path}.artifact_type"
+        )
         codec_key = _optional_string(mapping.get("codec_key"), path=f"{path}.codec_key")
-        schema_version = _optional_schema_version(mapping.get("schema_version"), path=f"{path}.schema_version")
+        schema_version = _optional_schema_version(
+            mapping.get("schema_version"), path=f"{path}.schema_version"
+        )
         metadata = _plain_mapping(mapping.get("metadata", {}), path=f"{path}.metadata")
         return cls(
             artifact_type=artifact_type,
@@ -289,8 +329,12 @@ class StageSpec:
     inputs: Mapping[str, str] = field(default_factory=dict)
     resources: Mapping[str, PlainData] = field(default_factory=dict)
     fingerprint_fields: Mapping[str, PlainData] = field(default_factory=dict)
+    validator_registry: InitVar[ResourceValidatorRegistry | None] = None
+    _resource_request: ResourceRequest = field(init=False, repr=False, compare=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self, validator_registry: ResourceValidatorRegistry | None
+    ) -> None:
         name = _validate_identifier(
             _require_non_empty_string(self.name, path="StageSpec.name"),
             kind="stage name",
@@ -310,7 +354,9 @@ class StageSpec:
                 path=f"StageSpec.outputs['{output_name}']",
             )
             if not isinstance(output_spec, OutputSpec):
-                raise PipelineSpecError(f"StageSpec.outputs['{output_name}'] must be an OutputSpec")
+                raise PipelineSpecError(
+                    f"StageSpec.outputs['{output_name}'] must be an OutputSpec"
+                )
             outputs[normalized_name] = output_spec
         if not outputs:
             raise PipelineSpecError("StageSpec.outputs requires at least one output")
@@ -324,25 +370,35 @@ class StageSpec:
         object.__setattr__(
             self,
             "dependencies",
-            _parse_dependencies(self.dependencies, stage_name=name, path="StageSpec.dependencies"),
+            _parse_dependencies(
+                self.dependencies, stage_name=name, path="StageSpec.dependencies"
+            ),
         )
         object.__setattr__(
             self,
             "inputs",
-            freeze_plain_data(_parse_inputs(self.inputs, stage_name=name, path="StageSpec.inputs"), path="StageSpec.inputs"),
+            freeze_plain_data(
+                _parse_inputs(self.inputs, stage_name=name, path="StageSpec.inputs"),
+                path="StageSpec.inputs",
+            ),
         )
         resources = _plain_mapping(self.resources, path="StageSpec.resources")
-        parse_resource_request(resources)
+        resource_request = parse_resource_request(
+            resources, registry=validator_registry
+        )
         object.__setattr__(
             self,
             "resources",
             freeze_plain_data(resources, path="StageSpec.resources"),
         )
+        object.__setattr__(self, "_resource_request", resource_request)
         object.__setattr__(
             self,
             "fingerprint_fields",
             freeze_plain_data(
-                _plain_mapping(self.fingerprint_fields, path="StageSpec.fingerprint_fields"),
+                _plain_mapping(
+                    self.fingerprint_fields, path="StageSpec.fingerprint_fields"
+                ),
                 path="StageSpec.fingerprint_fields",
             ),
         )
@@ -353,10 +409,16 @@ class StageSpec:
 
     @property
     def resource_request(self) -> ResourceRequest:
-        return parse_resource_request(self.resources)
+        return self._resource_request
 
     @classmethod
-    def from_config(cls, config: object, *, path: str = "$.stage") -> "StageSpec":
+    def from_config(
+        cls,
+        config: object,
+        *,
+        path: str = "$.stage",
+        registry: ResourceValidatorRegistry | None = None,
+    ) -> "StageSpec":
         mapping = _require_mapping(config, path=path)
         if "_target_" in mapping:
             raise PipelineSpecError(
@@ -364,7 +426,16 @@ class StageSpec:
             )
         _reject_unknown_fields(
             mapping,
-            allowed={"name", "factory", "config", "depends_on", "inputs", "outputs", "resources", "fingerprint"},
+            allowed={
+                "name",
+                "factory",
+                "config",
+                "depends_on",
+                "inputs",
+                "outputs",
+                "resources",
+                "fingerprint",
+            },
             deferred=_STAGE_DEFERRED_FIELDS,
             path=path,
         )
@@ -376,18 +447,28 @@ class StageSpec:
             kind="stage name",
             path=f"{path}.name",
         )
-        factory = StageFactorySpec.from_config(mapping["factory"], path=f"{path}.factory")
+        factory = StageFactorySpec.from_config(
+            mapping["factory"], path=f"{path}.factory"
+        )
         stage_config = _plain_mapping(mapping.get("config", {}), path=f"{path}.config")
         dependencies = _parse_dependencies(
             mapping.get("depends_on"),
             stage_name=name,
             path=f"{path}.depends_on",
         )
-        inputs = _parse_inputs(mapping.get("inputs"), stage_name=name, path=f"{path}.inputs")
-        outputs = _parse_outputs(mapping.get("outputs"), stage_name=name, path=f"{path}.outputs")
-        resources = _plain_mapping(mapping.get("resources", {}), path=f"{path}.resources")
-        parse_resource_request(resources)
-        fingerprint_fields = _plain_mapping(mapping.get("fingerprint", {}), path=f"{path}.fingerprint")
+        inputs = _parse_inputs(
+            mapping.get("inputs"), stage_name=name, path=f"{path}.inputs"
+        )
+        outputs = _parse_outputs(
+            mapping.get("outputs"), stage_name=name, path=f"{path}.outputs"
+        )
+        resources = _plain_mapping(
+            mapping.get("resources", {}), path=f"{path}.resources"
+        )
+        parse_resource_request(resources, registry=registry)
+        fingerprint_fields = _plain_mapping(
+            mapping.get("fingerprint", {}), path=f"{path}.fingerprint"
+        )
         return cls(
             name=name,
             factory=factory,
@@ -397,6 +478,7 @@ class StageSpec:
             inputs=inputs,
             resources=resources,
             fingerprint_fields=fingerprint_fields,
+            validator_registry=registry,
         )
 
 
@@ -409,23 +491,31 @@ class PipelineSpec:
     schema_version: int | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.stages, Sequence) or isinstance(self.stages, (bytes, str)):
+        if not isinstance(self.stages, Sequence) or isinstance(
+            self.stages, (bytes, str)
+        ):
             raise PipelineSpecError("PipelineSpec.stages must be a non-empty sequence")
 
         stages: list[StageSpec] = []
         stage_names: set[str] = set()
         for index, stage in enumerate(self.stages):
             if not isinstance(stage, StageSpec):
-                raise PipelineSpecError(f"PipelineSpec.stages[{index}] must be a StageSpec")
+                raise PipelineSpecError(
+                    f"PipelineSpec.stages[{index}] must be a StageSpec"
+                )
             if stage.name in stage_names:
-                raise PipelineSpecError(f"PipelineSpec.stages[{index}] has duplicate stage name '{stage.name}'")
+                raise PipelineSpecError(
+                    f"PipelineSpec.stages[{index}] has duplicate stage name '{stage.name}'"
+                )
             stage_names.add(stage.name)
             stages.append(stage)
 
         if not stages:
             raise PipelineSpecError("PipelineSpec.stages must be a non-empty sequence")
         object.__setattr__(self, "stages", tuple(stages))
-        object.__setattr__(self, "name", _optional_string(self.name, path="PipelineSpec.name"))
+        object.__setattr__(
+            self, "name", _optional_string(self.name, path="PipelineSpec.name")
+        )
         object.__setattr__(
             self,
             "description",
@@ -439,11 +529,19 @@ class PipelineSpec:
         object.__setattr__(
             self,
             "schema_version",
-            _optional_schema_version(self.schema_version, path="PipelineSpec.schema_version"),
+            _optional_schema_version(
+                self.schema_version, path="PipelineSpec.schema_version"
+            ),
         )
 
     @classmethod
-    def from_config(cls, config: object, *, path: str = "$.pipeline") -> "PipelineSpec":
+    def from_config(
+        cls,
+        config: object,
+        *,
+        path: str = "$.pipeline",
+        registry: ResourceValidatorRegistry | None = None,
+    ) -> "PipelineSpec":
         mapping = _require_mapping(config, path=path)
         _reject_unknown_fields(
             mapping,
@@ -452,21 +550,31 @@ class PipelineSpec:
             path=path,
         )
         name = _optional_string(mapping.get("name"), path=f"{path}.name")
-        description = _optional_string(mapping.get("description"), path=f"{path}.description")
+        description = _optional_string(
+            mapping.get("description"), path=f"{path}.description"
+        )
         metadata = _plain_mapping(mapping.get("metadata", {}), path=f"{path}.metadata")
-        schema_version = _optional_schema_version(mapping.get("schema_version"), path=f"{path}.schema_version")
+        schema_version = _optional_schema_version(
+            mapping.get("schema_version"), path=f"{path}.schema_version"
+        )
 
         stages_raw = mapping.get("stages")
         if stages_raw is None:
             raise PipelineSpecError(f"{path}.stages is required")
-        if not isinstance(stages_raw, Sequence) or isinstance(stages_raw, (bytes, str, dict)):
+        if not isinstance(stages_raw, Sequence) or isinstance(
+            stages_raw, (bytes, str, dict)
+        ):
             raise PipelineSpecError(f"{path}.stages must be a non-empty sequence")
         stages: list[StageSpec] = []
         stage_names: set[str] = set()
         for index, item in enumerate(stages_raw):
-            stage = StageSpec.from_config(item, path=f"{path}.stages[{index}]")
+            stage = StageSpec.from_config(
+                item, path=f"{path}.stages[{index}]", registry=registry
+            )
             if stage.name in stage_names:
-                raise PipelineSpecError(f"{path}.stages[{index}] has duplicate stage name '{stage.name}'")
+                raise PipelineSpecError(
+                    f"{path}.stages[{index}] has duplicate stage name '{stage.name}'"
+                )
             stage_names.add(stage.name)
             stages.append(stage)
 
@@ -491,8 +599,12 @@ class PipelineSpec:
         raise PipelineSpecError(f"pipeline has no stage named '{stage_id}'")
 
 
-def parse_pipeline_config(config: object) -> PipelineSpec:
-    return PipelineSpec.from_config(config)
+def parse_pipeline_config(
+    config: object,
+    *,
+    registry: ResourceValidatorRegistry | None = None,
+) -> PipelineSpec:
+    return PipelineSpec.from_config(config, registry=registry)
 
 
 __all__ = [

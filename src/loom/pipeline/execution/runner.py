@@ -59,7 +59,12 @@ from loom.pipeline.stores import (
 from loom.pipeline.stores.config import authority_config_to_cli_args
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
-from loom.serialization import PlainData, ensure_plain_data, json_dumps_pretty
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    json_dumps_pretty,
+    thaw_plain_data,
+)
 from loom.timestamps import utc_timestamp
 
 from .errors import (
@@ -808,7 +813,7 @@ class PipelineRunner:
             stage_plan.stage_name: outcome.stage_results[stage_plan.stage_name]
             for stage_plan in plan.ordered_stage_plans
         }
-        result_metadata: dict[str, PlainData] = dict(request.metadata)
+        result_metadata = _request_durable_metadata(request)
         if outcome.cancellation_reason is not None:
             result_metadata["reason"] = outcome.cancellation_reason.to_dict()
             result_metadata["reason_code"] = outcome.cancellation_reason.code
@@ -1600,7 +1605,27 @@ class PipelineRunner:
                 resolved_runtime=resolved_runtime,
                 executor_name=str(getattr(self.executor, "name", "unknown")),
                 executor_metadata={"worker_command": "loom stage run"},
-                metadata={"subprocess": True},
+                metadata={
+                    "subprocess": True,
+                    **(
+                        {
+                            "stage_resources": thaw_plain_data(
+                                stage.resources, path="StageSpec.resources"
+                            )
+                        }
+                        if request.resource_validator_registry is not None
+                        else {}
+                    ),
+                    **(
+                        {
+                            "plugin_activations": dict(
+                                request.worker_plugin_activation_manifest
+                            )
+                        }
+                        if request.worker_plugin_activation_manifest is not None
+                        else {}
+                    ),
+                },
                 clock=self.clock,
             )
             attempt = prepared.attempt
@@ -1978,7 +2003,7 @@ class PipelineRunner:
         else:
             self.run_store.create_run(
                 run_uri,
-                metadata=request.metadata,
+                metadata=_request_durable_metadata(request),
                 idempotency_key=request.idempotency_key,
             )
 
@@ -2044,7 +2069,9 @@ class PipelineRunner:
             raise RunRequestError(
                 "config mapping must contain a top-level 'pipeline' key"
             )
-        return config_mapping, parse_pipeline_config(config_mapping["pipeline"])
+        return config_mapping, parse_pipeline_config(
+            config_mapping["pipeline"], registry=request.resource_validator_registry
+        )
 
     def _write_config_and_provenance(
         self,
@@ -2070,7 +2097,7 @@ class PipelineRunner:
             self.run_store.write_run_user_metadata(
                 run_uri,
                 {
-                    **request.metadata,
+                    **_request_durable_metadata(request),
                     "config_provenance": _plain_mapping_from_maybe_to_dict(
                         getattr(request.config, "provenance"),
                         path="config_provenance",
@@ -2900,6 +2927,13 @@ def _is_composed_config(value: object) -> bool:
             "recipe_manifest",
         )
     )
+
+
+def _request_durable_metadata(request: RunRequest) -> dict[str, PlainData]:
+    metadata = dict(request.metadata)
+    if request.plugin_activation_manifest is not None:
+        metadata["plugin_activations"] = dict(request.plugin_activation_manifest)
+    return metadata
 
 
 def _worker_authority_cli_args(services: RuntimeServices) -> tuple[str, ...]:

@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
 from typing import cast
 
 from loom.serialization import PlainData, freeze_plain_data
 
 from loom.pipeline.errors import RuntimeResourceError
-from loom.pipeline.resources import ResourceRequest
+from loom.pipeline.resources import ResourceRequest, ResourceValidatorRegistry
 from loom.pipeline.reliability import (
     ReliabilityPolicy,
     merge_reliability_options,
 )
-from loom.pipeline.runtime.environment import RunEnvironmentRequest, StageEnvironmentRequest
+from loom.pipeline.runtime.environment import (
+    RunEnvironmentRequest,
+    StageEnvironmentRequest,
+)
 from loom.pipeline.runtime.options import (
     ExecutionOptions,
     RunOptions,
@@ -66,13 +69,17 @@ _STAGE_RUNTIME_FIELDS = frozenset(
     {"resources", "execution", "environment", "reliability", "adapter_options"}
 )
 
+
 @dataclass(frozen=True, slots=True)
 class RuntimeProfile:
     """Sparse runtime option defaults preserved as immutable plain data."""
 
     options: Mapping[str, object] = field(default_factory=dict)
+    validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self, validator_registry: ResourceValidatorRegistry | None
+    ) -> None:
         object.__setattr__(
             self,
             "options",
@@ -81,6 +88,7 @@ class RuntimeProfile:
                     self.options,
                     path="RuntimeProfile",
                     profile_source=True,
+                    registry=validator_registry,
                 ),
                 path="RuntimeProfile",
             ),
@@ -93,8 +101,16 @@ class RuntimeProfile:
         )
 
     @classmethod
-    def from_dict(cls, data: object) -> "RuntimeProfile":
-        return cls(_object_mapping(data, path="RuntimeProfile"))
+    def from_dict(
+        cls,
+        data: object,
+        *,
+        registry: ResourceValidatorRegistry | None = None,
+    ) -> "RuntimeProfile":
+        return cls(
+            _object_mapping(data, path="RuntimeProfile"),
+            validator_registry=registry,
+        )
 
 
 RunOptionsSource = RunOptions | RuntimeProfile | Mapping[str, object]
@@ -104,9 +120,14 @@ RunOptionsSource = RunOptions | RuntimeProfile | Mapping[str, object]
 class RuntimeProfileCollection:
     """Named runtime profile collection with deterministic selection."""
 
-    profiles: Mapping[str, RuntimeProfile | Mapping[str, object]] = field(default_factory=dict)
+    profiles: Mapping[str, RuntimeProfile | Mapping[str, object]] = field(
+        default_factory=dict
+    )
+    validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self, validator_registry: ResourceValidatorRegistry | None
+    ) -> None:
         mapping = _object_mapping(self.profiles, path="RuntimeProfileCollection")
         normalized: dict[str, RuntimeProfile] = {}
         for key, value in mapping.items():
@@ -114,7 +135,10 @@ class RuntimeProfileCollection:
             if isinstance(value, RuntimeProfile):
                 normalized[name] = value
             else:
-                normalized[name] = RuntimeProfile.from_dict(value)
+                normalized[name] = RuntimeProfile.from_dict(
+                    value,
+                    registry=validator_registry,
+                )
         object.__setattr__(
             self,
             "profiles",
@@ -124,18 +148,26 @@ class RuntimeProfileCollection:
     def to_dict(self) -> dict[str, PlainData]:
         return {
             name: profile.to_dict()
-            for name, profile in cast(Mapping[str, RuntimeProfile], self.profiles).items()
+            for name, profile in cast(
+                Mapping[str, RuntimeProfile], self.profiles
+            ).items()
         }
 
     @classmethod
-    def from_dict(cls, data: object | None) -> "RuntimeProfileCollection":
+    def from_dict(
+        cls,
+        data: object | None,
+        *,
+        registry: ResourceValidatorRegistry | None = None,
+    ) -> "RuntimeProfileCollection":
         if data is None:
-            return cls()
+            return cls(validator_registry=registry)
         return cls(
             cast(
                 Mapping[str, RuntimeProfile | Mapping[str, object]],
                 _object_mapping(data, path="RuntimeProfileCollection"),
-            )
+            ),
+            validator_registry=registry,
         )
 
     def select(self, name: str | None) -> RuntimeProfile | None:
@@ -150,23 +182,33 @@ class RuntimeProfileCollection:
         return profile
 
 
-def parse_runtime_profile(data: object | None) -> RuntimeProfile:
+def parse_runtime_profile(
+    data: object | None,
+    *,
+    registry: ResourceValidatorRegistry | None = None,
+) -> RuntimeProfile:
     if data is None:
-        return RuntimeProfile()
-    return RuntimeProfile.from_dict(data)
+        return RuntimeProfile(validator_registry=registry)
+    return RuntimeProfile.from_dict(data, registry=registry)
 
 
-def parse_runtime_profiles(data: object | None) -> RuntimeProfileCollection:
-    return RuntimeProfileCollection.from_dict(data)
+def parse_runtime_profiles(
+    data: object | None,
+    *,
+    registry: ResourceValidatorRegistry | None = None,
+) -> RuntimeProfileCollection:
+    return RuntimeProfileCollection.from_dict(data, registry=registry)
 
 
 def select_runtime_profile(
     profiles: RuntimeProfileCollection | Mapping[str, object] | None,
     name: str | None,
+    *,
+    registry: ResourceValidatorRegistry | None = None,
 ) -> RuntimeProfile | None:
     if name is None:
         return None
-    collection = _coerce_profile_collection(profiles)
+    collection = _coerce_profile_collection(profiles, registry=registry)
     if collection is None:
         normalized_name = _profile_name(name, path="runtime profile selection")
         raise RuntimeResourceError(
@@ -182,22 +224,33 @@ def merge_run_options(
     explicit: RunOptionsSource | None = None,
     profile: str | None = None,
     known_stage_ids: Iterable[str] | None = None,
+    registry: ResourceValidatorRegistry | None = None,
 ) -> RunOptions:
     """Merge base, selected profile, and explicit runtime option sources."""
 
-    base_source = _normalize_run_source(base, path="base")
-    explicit_source = _normalize_run_source(explicit, path="explicit")
+    base_source = _normalize_run_source(base, path="base", registry=registry)
+    explicit_source = _normalize_run_source(
+        explicit, path="explicit", registry=registry
+    )
     direct_profile = _optional_profile_name(profile, path="profile")
     selected_profile = (
         direct_profile
         if direct_profile is not None
         else _selected_profile_name(base_source, explicit_source)
     )
-    profile_model = select_runtime_profile(profiles, selected_profile)
+    profile_model = select_runtime_profile(
+        profiles,
+        selected_profile,
+        registry=registry,
+    )
     profile_source = (
         {}
         if profile_model is None
-        else _normalize_run_source(profile_model, path=f"profiles[{selected_profile!r}]")
+        else _normalize_run_source(
+            profile_model,
+            path=f"profiles[{selected_profile!r}]",
+            registry=registry,
+        )
     )
 
     merged: dict[str, object] = {}
@@ -207,19 +260,21 @@ def merge_run_options(
     if direct_profile is not None:
         merged["profile"] = direct_profile
 
-    options = RunOptions.from_dict(merged)
+    options = RunOptions.from_dict(merged, registry=registry)
     validate_stage_runtime_options(options, known_stage_ids=known_stage_ids)
     return options
 
 
 def _coerce_profile_collection(
     profiles: RuntimeProfileCollection | Mapping[str, object] | None,
+    *,
+    registry: ResourceValidatorRegistry | None = None,
 ) -> RuntimeProfileCollection | None:
     if profiles is None:
         return None
     if isinstance(profiles, RuntimeProfileCollection):
         return profiles
-    return RuntimeProfileCollection.from_dict(profiles)
+    return RuntimeProfileCollection.from_dict(profiles, registry=registry)
 
 
 def _selected_profile_name(
@@ -243,6 +298,7 @@ def _normalize_run_source(
     *,
     path: str,
     profile_source: bool = False,
+    registry: ResourceValidatorRegistry | None = None,
 ) -> dict[str, object]:
     if source is None:
         return {}
@@ -271,7 +327,9 @@ def _normalize_run_source(
     else:
         _reject_unknown(mapping, allowed=_RUN_SOURCE_FIELDS, path=path)
         if "schema_version" in mapping:
-            _require_schema_version(mapping["schema_version"], path=f"{path}.schema_version")
+            _require_schema_version(
+                mapping["schema_version"], path=f"{path}.schema_version"
+            )
 
     normalized: dict[str, object] = {}
     adapter_sections: dict[str, PlainData] = {}
@@ -281,7 +339,12 @@ def _normalize_run_source(
         if profile_source and key not in _PROFILE_CORE_FIELDS:
             adapter_sections[key] = _plain_adapter_payload(value, path=f"{path}.{key}")
             continue
-        normalized[key] = _normalize_run_field(key, value, path=f"{path}.{key}")
+        normalized[key] = _normalize_run_field(
+            key,
+            value,
+            path=f"{path}.{key}",
+            registry=registry,
+        )
 
     if adapter_sections:
         existing = cast(dict[str, PlainData], normalized.get("adapter_options", {}))
@@ -296,7 +359,13 @@ def _normalize_run_source(
     return normalized
 
 
-def _normalize_run_field(key: str, value: object, *, path: str) -> object:
+def _normalize_run_field(
+    key: str,
+    value: object,
+    *,
+    path: str,
+    registry: ResourceValidatorRegistry | None = None,
+) -> object:
     if key in {"run_uri", "executor", "profile"}:
         return _optional_string(value, path=path)
     if key == "dry_run":
@@ -314,7 +383,7 @@ def _normalize_run_field(key: str, value: object, *, path: str) -> object:
     if key == "execution":
         return _normalize_execution(value, path=path)
     if key == "stage_options":
-        return _normalize_stage_options(value, path=path)
+        return _normalize_stage_options(value, path=path, registry=registry)
     if key == "environment":
         return _normalize_environment(value, path=path, stage=False)
     if key == "adapter_options":
@@ -381,7 +450,12 @@ def _normalize_environment(
     return {key: parsed_data[key] for key in mapping}
 
 
-def _normalize_stage_options(value: object, *, path: str) -> dict[str, object]:
+def _normalize_stage_options(
+    value: object,
+    *,
+    path: str,
+    registry: ResourceValidatorRegistry | None = None,
+) -> dict[str, object]:
     mapping = _object_mapping(value, path=path)
     normalized: dict[str, object] = {}
     for key, item in mapping.items():
@@ -389,11 +463,17 @@ def _normalize_stage_options(value: object, *, path: str) -> dict[str, object]:
         normalized[stage_id] = _normalize_stage_runtime(
             item,
             path=f"{path}[{stage_id!r}]",
+            registry=registry,
         )
     return normalized
 
 
-def _normalize_stage_runtime(value: object, *, path: str) -> dict[str, object]:
+def _normalize_stage_runtime(
+    value: object,
+    *,
+    path: str,
+    registry: ResourceValidatorRegistry | None = None,
+) -> dict[str, object]:
     if isinstance(value, StageRuntimeOptions):
         return _object_dict(value.to_dict())
     mapping = _object_mapping(value, path=path)
@@ -401,7 +481,11 @@ def _normalize_stage_runtime(value: object, *, path: str) -> dict[str, object]:
     normalized: dict[str, object] = {}
     for key, item in mapping.items():
         if key == "resources":
-            normalized[key] = _normalize_resources(item, path=f"{path}.resources")
+            normalized[key] = _normalize_resources(
+                item,
+                path=f"{path}.resources",
+                registry=registry,
+            )
         elif key == "execution":
             normalized[key] = _normalize_execution(item, path=f"{path}.execution")
         elif key == "environment":
@@ -420,8 +504,13 @@ def _normalize_stage_runtime(value: object, *, path: str) -> dict[str, object]:
     return normalized
 
 
-def _normalize_resources(value: object, *, path: str) -> dict[str, object]:
-    request = _coerce_resource_request(value, path=path)
+def _normalize_resources(
+    value: object,
+    *,
+    path: str,
+    registry: ResourceValidatorRegistry | None = None,
+) -> dict[str, object]:
+    request = _coerce_resource_request(value, path=path, registry=registry)
     return {
         "entries": {
             kind: entry.to_dict()
@@ -542,7 +631,9 @@ def _merge_mapping_members(
     target[key] = current
 
 
-def _merge_selector_field(target: dict[str, object], source: Mapping[str, object]) -> None:
+def _merge_selector_field(
+    target: dict[str, object], source: Mapping[str, object]
+) -> None:
     _merge_mapping_members(target, "selectors", source)
 
 

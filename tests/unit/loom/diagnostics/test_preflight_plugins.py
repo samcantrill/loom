@@ -9,11 +9,15 @@ from typing import Any, cast
 import pytest
 
 import loom.diagnostics.preflight as preflight
-from loom.diagnostics import PreflightCheckStatus, PreflightGroup, PreflightRequest, run_preflight
+from loom.diagnostics import (
+    PreflightCheckStatus,
+    PreflightGroup,
+    PreflightRequest,
+    run_preflight,
+)
 from loom.plugins import (
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
     LOOM_EVENT_SINKS_GROUP,
-    LOOM_EXECUTORS_GROUP,
     LOOM_RECIPES_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SOURCES_GROUP,
@@ -25,7 +29,6 @@ pytestmark = pytest.mark.unit
 
 _FUTURE_GROUPS = (
     LOOM_SOURCES_GROUP,
-    LOOM_EXECUTORS_GROUP,
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
@@ -48,10 +51,15 @@ def test_plugin_preflight_without_selectors_skips_without_discovery(
 
     monkeypatch.setattr(preflight, "_plugin_entry_point_provider", fail_provider)
 
-    result = run_preflight(PreflightRequest(config_path="base.yaml", groups=("plugins",)))
+    result = run_preflight(
+        PreflightRequest(config_path="base.yaml", groups=("plugins",))
+    )
 
     assert result.groups == (PreflightGroup.PLUGINS,)
-    assert [check.check_id for check in result.checks] == ["plugins.metadata", "plugins.load"]
+    assert [check.check_id for check in result.checks] == [
+        "plugins.metadata",
+        "plugins.load",
+    ]
     assert all(check.status is PreflightCheckStatus.SKIP for check in result.checks)
 
 

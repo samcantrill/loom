@@ -3,17 +3,30 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
-from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data, thaw_plain_data
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 from loom.serialization.errors import PlainDataError
 
 from loom.pipeline.errors import RuntimeResourceError
-from loom.pipeline.resources import ResourceEntry, ResourceRequest, parse_resource_request
+from loom.pipeline.resources import (
+    ResourceEntry,
+    ResourceRequest,
+    ResourceValidatorRegistry,
+    parse_resource_request,
+)
 from loom.pipeline.reliability import ReliabilityPolicy
-from loom.pipeline.runtime.environment import RunEnvironmentRequest, StageEnvironmentRequest
+from loom.pipeline.runtime.environment import (
+    RunEnvironmentRequest,
+    StageEnvironmentRequest,
+)
 
 if TYPE_CHECKING:
     from loom.pipeline.planning.models import PlanSelectors, ResumeOptions
@@ -82,13 +95,21 @@ class ExecutionOptions:
         )
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {"settings": _thaw_mapping(self.settings, path="ExecutionOptions.settings")}
+        return {
+            "settings": _thaw_mapping(self.settings, path="ExecutionOptions.settings")
+        }
 
     @classmethod
     def from_dict(cls, data: object) -> "ExecutionOptions":
         mapping = _object_mapping(data, path="ExecutionOptions")
-        _reject_unknown(mapping, allowed=_EXECUTION_OPTIONS_FIELDS, path="ExecutionOptions")
-        return cls(settings=_plain_mapping(mapping.get("settings", {}), path="ExecutionOptions.settings"))
+        _reject_unknown(
+            mapping, allowed=_EXECUTION_OPTIONS_FIELDS, path="ExecutionOptions"
+        )
+        return cls(
+            settings=_plain_mapping(
+                mapping.get("settings", {}), path="ExecutionOptions.settings"
+            )
+        )
 
     def to_safe_metadata(self) -> dict[str, PlainData]:
         return {"setting_keys": cast(list[PlainData], sorted(self.settings))}
@@ -132,24 +153,37 @@ class ParallelExecutionOptions:
 class StageRuntimeOptions:
     """Exact-stage runtime options."""
 
-    resources: ResourceRequest | Mapping[str, object] = field(default_factory=ResourceRequest)
-    execution: ExecutionOptions | Mapping[str, object] = field(default_factory=ExecutionOptions)
+    resources: ResourceRequest | Mapping[str, object] = field(
+        default_factory=ResourceRequest
+    )
+    execution: ExecutionOptions | Mapping[str, object] = field(
+        default_factory=ExecutionOptions
+    )
     environment: StageEnvironmentRequest | Mapping[str, object] = field(
         default_factory=StageEnvironmentRequest
     )
     reliability: ReliabilityPolicy | Mapping[str, object] | None = None
     adapter_options: Mapping[str, PlainData] = field(default_factory=dict)
+    validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self, validator_registry: ResourceValidatorRegistry | None
+    ) -> None:
         object.__setattr__(
             self,
             "resources",
-            _coerce_resource_request(self.resources, path="StageRuntimeOptions.resources"),
+            _coerce_resource_request(
+                self.resources,
+                path="StageRuntimeOptions.resources",
+                registry=validator_registry,
+            ),
         )
         object.__setattr__(
             self,
             "execution",
-            _coerce_execution_options(self.execution, path="StageRuntimeOptions.execution"),
+            _coerce_execution_options(
+                self.execution, path="StageRuntimeOptions.execution"
+            ),
         )
         object.__setattr__(
             self,
@@ -162,7 +196,9 @@ class StageRuntimeOptions:
         object.__setattr__(
             self,
             "reliability",
-            _coerce_reliability(self.reliability, path="StageRuntimeOptions.reliability"),
+            _coerce_reliability(
+                self.reliability, path="StageRuntimeOptions.reliability"
+            ),
         )
         object.__setattr__(
             self,
@@ -192,7 +228,12 @@ class StageRuntimeOptions:
         return payload
 
     @classmethod
-    def from_dict(cls, data: object) -> "StageRuntimeOptions":
+    def from_dict(
+        cls,
+        data: object,
+        *,
+        registry: ResourceValidatorRegistry | None = None,
+    ) -> "StageRuntimeOptions":
         mapping = _object_mapping(data, path="StageRuntimeOptions")
         _reject_unknown(
             mapping,
@@ -203,6 +244,7 @@ class StageRuntimeOptions:
             resources=_coerce_resource_request(
                 mapping.get("resources"),
                 path="StageRuntimeOptions.resources",
+                registry=registry,
             ),
             execution=_coerce_execution_options(
                 mapping.get("execution", {}),
@@ -220,6 +262,7 @@ class StageRuntimeOptions:
                 mapping.get("adapter_options", {}),
                 path="StageRuntimeOptions.adapter_options",
             ),
+            validator_registry=registry,
         )
 
     def to_safe_metadata(self) -> dict[str, PlainData]:
@@ -250,9 +293,15 @@ class RunOptions:
     profile: str | None = None
     tags: Mapping[str, str] = field(default_factory=dict)
     notes: Sequence[str] = ()
-    selectors: PlanSelectors | Mapping[str, object] = field(default_factory=_default_plan_selectors)
-    resume: ResumeOptions | Mapping[str, object] = field(default_factory=_default_resume_options)
-    execution: ExecutionOptions | Mapping[str, object] = field(default_factory=ExecutionOptions)
+    selectors: PlanSelectors | Mapping[str, object] = field(
+        default_factory=_default_plan_selectors
+    )
+    resume: ResumeOptions | Mapping[str, object] = field(
+        default_factory=_default_resume_options
+    )
+    execution: ExecutionOptions | Mapping[str, object] = field(
+        default_factory=ExecutionOptions
+    )
     stage_options: Mapping[str, StageRuntimeOptions | Mapping[str, object]] = field(
         default_factory=dict
     )
@@ -262,14 +311,21 @@ class RunOptions:
     adapter_options: Mapping[str, PlainData] = field(default_factory=dict)
     reliability: ReliabilityPolicy | Mapping[str, object] | None = None
     schema_version: int = RUN_OPTIONS_SCHEMA_VERSION
+    validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self, validator_registry: ResourceValidatorRegistry | None
+    ) -> None:
         object.__setattr__(
             self,
             "schema_version",
-            _require_schema_version(self.schema_version, path="RunOptions.schema_version"),
+            _require_schema_version(
+                self.schema_version, path="RunOptions.schema_version"
+            ),
         )
-        object.__setattr__(self, "run_uri", _optional_string(self.run_uri, path="RunOptions.run_uri"))
+        object.__setattr__(
+            self, "run_uri", _optional_string(self.run_uri, path="RunOptions.run_uri")
+        )
         object.__setattr__(
             self,
             "executor",
@@ -285,14 +341,20 @@ class RunOptions:
             "profile",
             _optional_string(self.profile, path="RunOptions.profile"),
         )
-        object.__setattr__(self, "tags", _str_mapping(self.tags, path="RunOptions.tags"))
-        object.__setattr__(self, "notes", _str_tuple(self.notes, path="RunOptions.notes"))
+        object.__setattr__(
+            self, "tags", _str_mapping(self.tags, path="RunOptions.tags")
+        )
+        object.__setattr__(
+            self, "notes", _str_tuple(self.notes, path="RunOptions.notes")
+        )
         object.__setattr__(
             self,
             "selectors",
             _coerce_selectors(self.selectors, path="RunOptions.selectors"),
         )
-        object.__setattr__(self, "resume", _coerce_resume(self.resume, path="RunOptions.resume"))
+        object.__setattr__(
+            self, "resume", _coerce_resume(self.resume, path="RunOptions.resume")
+        )
         object.__setattr__(
             self,
             "execution",
@@ -301,7 +363,11 @@ class RunOptions:
         object.__setattr__(
             self,
             "stage_options",
-            _coerce_stage_options(self.stage_options, path="RunOptions.stage_options"),
+            _coerce_stage_options(
+                self.stage_options,
+                path="RunOptions.stage_options",
+                registry=validator_registry,
+            ),
         )
         object.__setattr__(
             self,
@@ -311,7 +377,9 @@ class RunOptions:
         object.__setattr__(
             self,
             "adapter_options",
-            _freeze_plain_mapping(self.adapter_options, path="RunOptions.adapter_options"),
+            _freeze_plain_mapping(
+                self.adapter_options, path="RunOptions.adapter_options"
+            ),
         )
         object.__setattr__(
             self,
@@ -349,11 +417,18 @@ class RunOptions:
                 if reliability is not None
                 else {}
             ),
-            "adapter_options": _thaw_mapping(self.adapter_options, path="RunOptions.adapter_options"),
+            "adapter_options": _thaw_mapping(
+                self.adapter_options, path="RunOptions.adapter_options"
+            ),
         }
 
     @classmethod
-    def from_dict(cls, data: object) -> "RunOptions":
+    def from_dict(
+        cls,
+        data: object,
+        *,
+        registry: ResourceValidatorRegistry | None = None,
+    ) -> "RunOptions":
         mapping = _object_mapping(data, path="RunOptions")
         _reject_unknown(mapping, allowed=_RUN_OPTIONS_FIELDS, path="RunOptions")
         return cls(
@@ -362,8 +437,12 @@ class RunOptions:
                 path="RunOptions.schema_version",
             ),
             run_uri=_optional_string(mapping.get("run_uri"), path="RunOptions.run_uri"),
-            executor=_optional_string(mapping.get("executor"), path="RunOptions.executor"),
-            dry_run=_bool_value(mapping.get("dry_run", False), path="RunOptions.dry_run"),
+            executor=_optional_string(
+                mapping.get("executor"), path="RunOptions.executor"
+            ),
+            dry_run=_bool_value(
+                mapping.get("dry_run", False), path="RunOptions.dry_run"
+            ),
             profile=_optional_string(mapping.get("profile"), path="RunOptions.profile"),
             tags=_str_mapping(mapping.get("tags", {}), path="RunOptions.tags"),
             notes=_str_tuple(mapping.get("notes", ()), path="RunOptions.notes"),
@@ -379,6 +458,7 @@ class RunOptions:
             stage_options=_coerce_stage_options(
                 mapping.get("stage_options", {}),
                 path="RunOptions.stage_options",
+                registry=registry,
             ),
             environment=_coerce_run_environment(
                 mapping.get("environment", {}),
@@ -392,6 +472,7 @@ class RunOptions:
                 mapping.get("adapter_options", {}),
                 path="RunOptions.adapter_options",
             ),
+            validator_registry=registry,
         )
 
     def to_plan_selectors(self) -> PlanSelectors:
@@ -430,12 +511,16 @@ class RunOptions:
         }
 
 
-def parse_run_options(data: object | None) -> RunOptions:
+def parse_run_options(
+    data: object | None,
+    *,
+    registry: ResourceValidatorRegistry | None = None,
+) -> RunOptions:
     if data is None:
-        return RunOptions()
+        return RunOptions(validator_registry=registry)
     if isinstance(data, RunOptions):
         return data
-    return RunOptions.from_dict(data)
+    return RunOptions.from_dict(data, registry=registry)
 
 
 def parallel_execution_options(options: RunOptions) -> ParallelExecutionOptions:
@@ -468,22 +553,32 @@ def validate_stage_runtime_options(
         stage_options = _coerce_stage_options(options, path="stage_options")
     if known_stage_ids is None:
         return
-    known = {_validate_stage_id(stage_id, path="known_stage_ids") for stage_id in known_stage_ids}
+    known = {
+        _validate_stage_id(stage_id, path="known_stage_ids")
+        for stage_id in known_stage_ids
+    }
     unknown = sorted(set(stage_options) - known)
     if unknown:
         fields = ", ".join(unknown)
-        raise RuntimeResourceError(f"stage_options target unknown stage id(s): {fields}")
+        raise RuntimeResourceError(
+            f"stage_options target unknown stage id(s): {fields}"
+        )
 
 
-def _coerce_resource_request(value: object, *, path: str) -> ResourceRequest:
+def _coerce_resource_request(
+    value: object,
+    *,
+    path: str,
+    registry: ResourceValidatorRegistry | None = None,
+) -> ResourceRequest:
     if value is None:
-        return ResourceRequest()
+        return ResourceRequest(validator_registry=registry)
     if isinstance(value, ResourceRequest):
         return value
     mapping = _object_mapping(value, path=path)
     if "schema_version" in mapping:
-        return ResourceRequest.from_dict(mapping)
-    return parse_resource_request(mapping)
+        return ResourceRequest.from_dict(mapping, registry=registry)
+    return parse_resource_request(mapping, registry=registry)
 
 
 def _coerce_execution_options(value: object, *, path: str) -> ExecutionOptions:
@@ -536,6 +631,7 @@ def _coerce_stage_options(
     value: object,
     *,
     path: str,
+    registry: ResourceValidatorRegistry | None = None,
 ) -> Mapping[str, StageRuntimeOptions]:
     if not isinstance(value, Mapping):
         raise RuntimeResourceError(f"{path} must be a mapping")
@@ -546,7 +642,8 @@ def _coerce_stage_options(
             normalized[stage_id] = item
         else:
             normalized[stage_id] = StageRuntimeOptions.from_dict(
-                _object_mapping(item, path=f"{path}[{stage_id!r}]")
+                _object_mapping(item, path=f"{path}[{stage_id!r}]"),
+                registry=registry,
             )
     return MappingProxyType(dict(sorted(normalized.items())))
 
@@ -560,7 +657,9 @@ def _validate_stage_id(value: object, *, path: str) -> str:
     if "/" in text or "\\" in text:
         raise RuntimeResourceError(f"{path} cannot contain path separators")
     if any(ch <= " " for ch in text):
-        raise RuntimeResourceError(f"{path} cannot contain control or whitespace characters")
+        raise RuntimeResourceError(
+            f"{path} cannot contain control or whitespace characters"
+        )
     return text
 
 
@@ -576,7 +675,9 @@ def _plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
     try:
         normalized = ensure_plain_data(value, path=path)
     except PlainDataError as exc:
-        raise RuntimeResourceError(f"{path} must be plain-data-compatible mapping: {exc}") from exc
+        raise RuntimeResourceError(
+            f"{path} must be plain-data-compatible mapping: {exc}"
+        ) from exc
     if not isinstance(normalized, Mapping):
         raise RuntimeResourceError(f"{path} must be a mapping")
     return cast(Mapping[str, PlainData], normalized)
@@ -613,15 +714,15 @@ def _normalize_failure_policy(value: object, *, path: str) -> str:
         choices = ", ".join(
             sorted({DEFAULT_FAILURE_POLICY, CONTINUE_INDEPENDENT_FAILURE_POLICY})
         )
-        raise RuntimeResourceError(
-            f"{path} must be one of: {choices}"
-        ) from exc
+        raise RuntimeResourceError(f"{path} must be one of: {choices}") from exc
 
 
 def _freeze_plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
     return cast(
         Mapping[str, PlainData],
-        freeze_plain_data(_sorted_plain_mapping(_plain_mapping(value, path=path)), path=path),
+        freeze_plain_data(
+            _sorted_plain_mapping(_plain_mapping(value, path=path)), path=path
+        ),
     )
 
 
@@ -682,7 +783,9 @@ def _safe_resource_entry_metadata(entry: ResourceEntry) -> dict[str, PlainData]:
     }
 
 
-def _safe_adapter_metadata(adapter_options: Mapping[str, PlainData]) -> dict[str, PlainData]:
+def _safe_adapter_metadata(
+    adapter_options: Mapping[str, PlainData],
+) -> dict[str, PlainData]:
     return {
         "namespace_count": len(adapter_options),
         "namespaces": cast(list[PlainData], sorted(adapter_options)),

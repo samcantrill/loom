@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
@@ -16,6 +16,7 @@ from loom.pipeline.planning import (
     build_stage_fingerprint,
 )
 from loom.pipeline.specs import parse_pipeline_config
+from loom.pipeline.resources import ResourceValidatorRegistry
 from loom.pipeline.submitted import (
     SUBMITTED_OPERATION_METADATA_KEY,
     SubmittedOperationRecord,
@@ -29,8 +30,17 @@ from loom.pipeline.stores import (
 )
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
-from loom.serialization import PlainData, ensure_plain_data, json_loads
+from loom.serialization import PlainData, ensure_plain_data, json_loads, thaw_plain_data
 from loom.timestamps import utc_timestamp
+from loom.plugins import (
+    LOOM_CODECS_GROUP,
+    LOOM_RESOURCE_VALIDATORS_GROUP,
+    PluginRecord,
+)
+from loom.plugins.activation import (
+    PluginActivationManifest,
+    compare_plugin_activation_records,
+)
 
 from .errors import OutputValidationError, PipelineExecutionError, PlanExecutionError
 from .eventing import emit_run_event, emit_stage_event
@@ -276,6 +286,8 @@ def run_stage_job(
     run_store: RunStore,
     request: StageJobRunRequest,
     artifact_store_factory: ArtifactStoreFactory | None = None,
+    resource_validator_registry: ResourceValidatorRegistry | None = None,
+    selected_plugin_records: tuple[PluginRecord, ...] = (),
     clock: Clock = utc_timestamp,
 ) -> StageJobRunResult:
     """Run and finalize one planned stage from durable prepared state."""
@@ -294,6 +306,15 @@ def run_stage_job(
 
     run_uri = run_store.resolve_run_uri(request.run_uri)
     run_store.open_run(run_uri)
+    validate_prepared_run_plugin_activations(
+        run_store=run_store,
+        run_uri=run_uri,
+        selected_plugin_records=selected_plugin_records,
+        allowed_groups=(
+            LOOM_CODECS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        ),
+    )
     lock = acquire_run_lock(
         run_store,
         run_uri,
@@ -317,6 +338,8 @@ def run_stage_job(
                 authority_fencing_token=request.authority_fencing_token,
             ),
             artifact_store_factory=artifact_store_factory or LocalArtifactStore,
+            resource_validator_registry=resource_validator_registry,
+            selected_plugin_records=selected_plugin_records,
             clock=clock,
         )
     finally:
@@ -328,6 +351,8 @@ def _run_stage_job_locked(
     run_store: RunStore,
     request: StageJobRunRequest,
     artifact_store_factory: ArtifactStoreFactory,
+    resource_validator_registry: ResourceValidatorRegistry | None,
+    selected_plugin_records: tuple[PluginRecord, ...],
     clock: Clock,
 ) -> StageJobRunResult:
     plan = _read_execution_plan(run_store=run_store, run_uri=request.run_uri)
@@ -390,6 +415,7 @@ def _run_stage_job_locked(
         stage_plan=stage_plan,
         runtime=runtime,
         continuation_executor=request.executor,
+        resource_validator_registry=resource_validator_registry,
         clock=clock,
     )
     worker_request = _read_worker_request(
@@ -405,6 +431,10 @@ def _run_stage_job_locked(
         attempt=attempt,
     )
     _validate_executor(worker_request.executor_name)
+    plugin_warnings = _validate_worker_plugin_activation_evidence(
+        worker_request,
+        selected_plugin_records,
+    )
     _validate_worker_attempt_state(
         run_store=run_store,
         run_uri=request.run_uri,
@@ -430,6 +460,7 @@ def _run_stage_job_locked(
             stage_plan=stage_plan,
             stage_index=stage_index,
             artifact_store_factory=artifact_store_factory,
+            resource_validator_registry=resource_validator_registry,
             allow_resolved_config_fallback=False,
         )
     except StageContractError as exc:
@@ -577,7 +608,14 @@ def _run_stage_job_locked(
         failure=stage_result.failure,
         started_at=stage_result.started_at,
         finished_at=stage_result.finished_at,
-        executor_metadata=stage_result.executor_metadata,
+        executor_metadata={
+            **stage_result.executor_metadata,
+            **(
+                {"plugin_activation_warnings": list(plugin_warnings)}
+                if plugin_warnings
+                else {}
+            ),
+        },
     )
 
 
@@ -596,6 +634,7 @@ def _materialize_submitted_worker_request_if_needed(
     stage_plan,
     runtime: Mapping[str, PlainData],
     continuation_executor: str,
+    resource_validator_registry: ResourceValidatorRegistry | None,
     clock: Clock,
 ) -> None:
     status = run_store.read_stage_status(run_uri, stage_name)
@@ -639,7 +678,12 @@ def _materialize_submitted_worker_request_if_needed(
         attempt=attempt,
     )
 
-    stage = _stage_spec_from_config_snapshot(run_store, run_uri, stage_name)
+    stage = _stage_spec_from_config_snapshot(
+        run_store,
+        run_uri,
+        stage_name,
+        registry=resource_validator_registry,
+    )
     inputs = _bind_stage_job_inputs(
         run_store=run_store,
         run_uri=run_uri,
@@ -682,7 +726,19 @@ def _materialize_submitted_worker_request_if_needed(
             continuation_executor=continuation_executor,
         ),
         executor_metadata={"worker_command": "loom stage-job run"},
-        metadata=dict(status.metadata),
+        metadata={
+            **dict(status.metadata),
+            **(
+                {
+                    "stage_resources": thaw_plain_data(
+                        stage.resources, path="StageSpec.resources"
+                    )
+                }
+                if resource_validator_registry is not None
+                else {}
+            ),
+            **_prepared_worker_plugin_activation_metadata(run_store, run_uri),
+        },
     )
     run_store.write_stage_inputs(run_uri, stage_name, inputs, attempt=attempt)
     run_store.write_stage_fingerprint(
@@ -701,7 +757,11 @@ def _materialize_submitted_worker_request_if_needed(
 
 
 def _stage_spec_from_config_snapshot(
-    run_store: RunStore, run_uri: str, stage_name: str
+    run_store: RunStore,
+    run_uri: str,
+    stage_name: str,
+    *,
+    registry: ResourceValidatorRegistry | None = None,
 ):
     snapshot = run_store.read_config_snapshot(run_uri, "resolved")
     if snapshot is None:
@@ -725,7 +785,10 @@ def _stage_spec_from_config_snapshot(
             context={"run_uri": run_uri, "stage": stage_name},
         )
     try:
-        return parse_pipeline_config(decoded["pipeline"]).get_stage(stage_name)
+        return parse_pipeline_config(
+            decoded["pipeline"],
+            registry=registry,
+        ).get_stage(stage_name)
     except Exception as exc:
         raise ContinuationStateError(
             f"submitted stage cannot be reconstructed from config snapshot: {exc}",
@@ -778,6 +841,146 @@ def _stage_runtime_metadata(
         "stage_id": stage_name,
         "executor": continuation_executor,
     }
+
+
+def validate_prepared_run_plugin_activations(
+    *,
+    run_store: RunStore,
+    run_uri: str,
+    selected_plugin_records: tuple[PluginRecord, ...],
+    allowed_groups: Iterable[str],
+) -> tuple[str, ...]:
+    """Compare explicit current selectors to applicable durable identity."""
+
+    applicable = frozenset(allowed_groups)
+    current = tuple(
+        record for record in selected_plugin_records if record.group in applicable
+    )
+    raw_prepared = run_store.read_prepared_run(run_uri)
+    if raw_prepared is None:
+        if current:
+            raise ContinuationStateError(
+                "prepared run selected plugins absent from activation evidence",
+                code="execution.plugin_activation.missing_evidence",
+            )
+        return ()
+    try:
+        prepared = PreparedRunRecord.from_dict(raw_prepared)
+    except Exception as exc:
+        raise ContinuationStateError(
+            f"run {run_uri!r} has invalid prepared-run metadata: {exc}",
+            code="execution.prepared_run.invalid_prepared_run",
+            context={"run_uri": run_uri},
+        ) from exc
+    raw = prepared.metadata.get("plugin_activations")
+    return _compare_plugin_activation_evidence(
+        raw,
+        current,
+        applicable_groups=applicable,
+        boundary="prepared run",
+    )
+
+
+def _validate_worker_plugin_activation_evidence(
+    request: StageWorkerRequest,
+    current: tuple[PluginRecord, ...],
+) -> tuple[str, ...]:
+    return _compare_plugin_activation_evidence(
+        request.metadata.get("plugin_activations"),
+        current,
+        applicable_groups=frozenset(
+            {
+                LOOM_CODECS_GROUP,
+                LOOM_RESOURCE_VALIDATORS_GROUP,
+            }
+        ),
+        boundary="stage-job worker",
+    )
+
+
+def _compare_plugin_activation_evidence(
+    raw: object,
+    current: tuple[PluginRecord, ...],
+    *,
+    applicable_groups: frozenset[str],
+    boundary: str,
+) -> tuple[str, ...]:
+    if raw is None:
+        if current:
+            raise ContinuationStateError(
+                f"{boundary} selected plugins absent from activation evidence",
+                code="execution.plugin_activation.missing_evidence",
+            )
+        return ()
+    try:
+        recorded = tuple(
+            record
+            for record in PluginActivationManifest.from_dict(
+                thaw_plain_data(raw, path="plugin_activations")
+            ).plugins
+            if record.group in applicable_groups
+        )
+    except Exception as exc:
+        raise ContinuationStateError(
+            f"{boundary} plugin activation evidence is invalid",
+            code="execution.plugin_activation.invalid_evidence",
+        ) from exc
+    findings = compare_plugin_activation_records(recorded, current)
+    errors = tuple(
+        finding
+        for finding in findings
+        if "distribution evidence unavailable" not in finding
+    )
+    if errors:
+        raise ContinuationStateError(
+            f"{boundary} plugin activation mismatch: " + "; ".join(errors),
+            code="execution.plugin_activation.identity_mismatch",
+        )
+    return tuple(
+        finding
+        for finding in findings
+        if "distribution evidence unavailable" in finding
+    )
+
+
+def _prepared_worker_plugin_activation_metadata(
+    run_store: RunStore,
+    run_uri: str,
+) -> dict[str, PlainData]:
+    raw_prepared = run_store.read_prepared_run(run_uri)
+    if raw_prepared is None:
+        return {}
+    try:
+        prepared = PreparedRunRecord.from_dict(raw_prepared)
+    except Exception as exc:
+        raise ContinuationStateError(
+            "prepared run plugin activation evidence is invalid",
+            code="execution.plugin_activation.invalid_evidence",
+        ) from exc
+    raw = prepared.metadata.get("plugin_activations")
+    if raw is None:
+        return {}
+    try:
+        manifest = PluginActivationManifest.from_dict(
+            thaw_plain_data(raw, path="plugin_activations")
+        )
+    except Exception as exc:
+        raise ContinuationStateError(
+            "prepared run plugin activation evidence is invalid",
+            code="execution.plugin_activation.invalid_evidence",
+        ) from exc
+    records = tuple(
+        record
+        for record in manifest.plugins
+        if record.group
+        in {
+            LOOM_CODECS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        }
+    )
+    if not records:
+        return {}
+    return {"plugin_activations": PluginActivationManifest(plugins=records).to_dict()}
 
 
 def _read_prepared_run(run_store: RunStore, run_uri: str) -> PreparedRunRecord:

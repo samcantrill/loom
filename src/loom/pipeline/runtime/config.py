@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
 from typing import cast
 
 from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.resources import ResourceValidatorRegistry
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.runtime.profiles import (
     RunOptionsSource,
@@ -26,8 +27,11 @@ class RuntimeConfigSections:
 
     options: Mapping[str, object] = field(default_factory=dict)
     profiles: RuntimeProfileCollection | Mapping[str, object] | None = None
+    validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self, validator_registry: ResourceValidatorRegistry | None
+    ) -> None:
         object.__setattr__(
             self,
             "options",
@@ -48,7 +52,7 @@ class RuntimeConfigSections:
             (
                 self.profiles
                 if isinstance(self.profiles, RuntimeProfileCollection)
-                else parse_runtime_profiles(self.profiles)
+                else parse_runtime_profiles(self.profiles, registry=validator_registry)
             ),
         )
 
@@ -58,6 +62,7 @@ class RuntimeConfigSections:
         explicit: RunOptionsSource | None = None,
         profile: str | None = None,
         known_stage_ids: Iterable[str] | None = None,
+        registry: ResourceValidatorRegistry | None = None,
     ) -> RunOptions:
         """Merge config runtime sections with an explicit runtime source."""
 
@@ -67,6 +72,7 @@ class RuntimeConfigSections:
             explicit=explicit,
             profile=profile,
             known_stage_ids=known_stage_ids,
+            registry=registry,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -79,7 +85,11 @@ class RuntimeConfigSections:
         }
 
 
-def parse_runtime_config_sections(config: Mapping[str, object]) -> RuntimeConfigSections:
+def parse_runtime_config_sections(
+    config: Mapping[str, object],
+    *,
+    registry: ResourceValidatorRegistry | None = None,
+) -> RuntimeConfigSections:
     """Extract optional top-level runtime sections from a resolved config."""
 
     mapping = _object_mapping(config, path="config")
@@ -93,6 +103,7 @@ def parse_runtime_config_sections(config: Mapping[str, object]) -> RuntimeConfig
             RuntimeProfileCollection | Mapping[str, object] | None,
             profiles,
         ),
+        validator_registry=registry,
     )
 
 
@@ -102,13 +113,15 @@ def merge_config_run_options(
     explicit: RunOptionsSource | None = None,
     profile: str | None = None,
     known_stage_ids: Iterable[str] | None = None,
+    registry: ResourceValidatorRegistry | None = None,
 ) -> RunOptions:
     """Merge config-authored runtime options with explicit runtime options."""
 
-    return parse_runtime_config_sections(config).merge(
+    return parse_runtime_config_sections(config, registry=registry).merge(
         explicit=explicit,
         profile=profile,
         known_stage_ids=known_stage_ids,
+        registry=registry,
     )
 
 
