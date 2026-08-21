@@ -63,7 +63,7 @@ from .models import (
     RunIntent,
     validate_one_queue_per_pool,
 )
-from .repository import QueueClaimResult, QueuePoolSnapshot, QueueRepository
+from .repository import QueuePoolSnapshot, QueueRepository
 from .service import (
     QueueEnqueueRequest,
     QueueItemInspection,
@@ -97,7 +97,6 @@ __all__ = [
     "QueueAuditEvent",
     "QueueCancellableDispatchAdapter",
     "QueueClaim",
-    "QueueClaimResult",
     "QueueClient",
     "QueueConfigError",
     "QueueController",

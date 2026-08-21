@@ -23,10 +23,12 @@ from .models import (
     QueueRecoveryRecord,
 )
 from .selection import (
+    _QueueSelectionPolicyBinding,
+    _bind_selection_policy,
     QueueSelectionDisposition,
+    QueueSelectionDecision,
     QueueSelectionPolicy,
     _evaluate_selection,
-    _validate_selection_policy,
 )
 from .service import QueueService
 
@@ -298,6 +300,17 @@ class QueueRecoveryClassification:
     foreign_items: tuple[QueueItem, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _QueueSelectionAttempt:
+    """One bounded select-then-own result for either pool mode."""
+
+    item: QueueItem | None
+    decision: QueueSelectionDecision
+    steps_used: int
+    capacity_blocked: bool
+    stop_reason: str | None
+
+
 class QueueController:
     """Claim queued items and dispatch them through injected adapters."""
 
@@ -322,9 +335,9 @@ class QueueController:
         self._owned_handle_ids: set[str] = set()
         self._pending_start_compensations: dict[str, QueueItem] = {}
         self._selection_policies = self._selection_policies_by_pool(selection_policies)
-        self._last_selection_capacity_blocked = False
-        self._last_selection_steps = 0
-        self._last_selection_stop_reason: str | None = None
+        self._selection_reader, self._selection_claimer = (
+            self._bind_selection_repository_capabilities()
+        )
 
     def run_cycle(self, *, pool_name: str) -> QueueCycleResult:
         """Reconcile one pool then fill it within its controller-local budgets."""
@@ -344,19 +357,17 @@ class QueueController:
                 if selection_steps_remaining <= 0:
                     selection_stop_reason = _SELECTION_LIMIT_EXHAUSTED_REASON_CODE
                     break
-                claim = self._claim_next_for_pool(
+                selection = self._select_and_acquire_for_pool(
                     pool_name,
                     selection_limit=selection_steps_remaining,
                     attempted_item_ids=attempted_item_ids,
                 )
-                selection_steps_remaining -= self._last_selection_steps
-                if claim is None:
-                    capacity_blocked = (
-                        capacity_blocked or self._last_selection_capacity_blocked
-                    )
-                    selection_stop_reason = self._last_selection_stop_reason
+                selection_steps_remaining -= selection.steps_used
+                if selection.item is None:
+                    capacity_blocked = capacity_blocked or selection.capacity_blocked
+                    selection_stop_reason = selection.stop_reason
                     break
-                item = claim.item
+                item = selection.item
                 attempted_item_ids.add(item.queue_item_id)
                 result = self._safe_dispatch(item)
                 if result.disposition is QueueDispatchDisposition.DEFERRED:
@@ -451,10 +462,10 @@ class QueueController:
         else:
             handoff = None
         for candidate_pool in self._candidate_pools(pool_name):
-            claim = self._claim_next_for_pool(candidate_pool)
-            if claim is None:
+            selection = self._select_and_acquire_for_pool(candidate_pool)
+            if selection.item is None:
                 continue
-            item = claim.item
+            item = selection.item
             result = self._safe_dispatch(item)
             if result.disposition is QueueDispatchDisposition.DEFERRED:
                 deferred = self._service.defer_item(
@@ -624,12 +635,12 @@ class QueueController:
 
     def _selection_policies_by_pool(
         self, policies: Mapping[str, QueueSelectionPolicy] | None
-    ) -> Mapping[str, QueueSelectionPolicy]:
+    ) -> Mapping[str, _QueueSelectionPolicyBinding]:
         if policies is None:
             return {}
         if not isinstance(policies, Mapping):
             raise QueueServiceError("selection_policies must be a mapping")
-        validated: dict[str, QueueSelectionPolicy] = {}
+        validated: dict[str, _QueueSelectionPolicyBinding] = {}
         pools_by_name = {pool.pool_name: pool for pool in self._service.spec.pools}
         for pool_name, policy in policies.items():
             if not isinstance(pool_name, str) or pool_name not in pools_by_name:
@@ -639,76 +650,85 @@ class QueueController:
                     f"selection policy pool is not managed: {pool_name}"
                 )
             try:
-                validated[pool_name] = _validate_selection_policy(policy)
+                validated[pool_name] = _bind_selection_policy(policy)
             except Exception as exc:
                 raise QueueServiceError(
                     f"invalid selection policy for pool: {pool_name}"
                 ) from exc
         return validated
 
-    def _claim_next_for_pool(
+    def _bind_selection_repository_capabilities(
+        self,
+    ) -> tuple[Callable[..., object], Callable[..., object]]:
+        """Bind the private bounded-read and exact-ownership seam once."""
+
+        reader = getattr(self._service.repository, "_read_selection_candidates", None)
+        claimer = getattr(self._service.repository, "_claim_selection_candidate", None)
+        if not callable(reader) or not callable(claimer):
+            raise QueueServiceError(
+                "repository does not support bounded selection and exact ownership"
+            )
+        return reader, claimer
+
+    def _select_and_acquire_for_pool(
         self,
         pool_name: str,
         *,
         selection_limit: int = _SELECTION_LIMIT,
         attempted_item_ids: set[str] | None = None,
-    ):
+    ) -> _QueueSelectionAttempt:
         pool = self._pool(pool_name)
-        self._last_selection_capacity_blocked = False
-        self._last_selection_steps = 0
-        self._last_selection_stop_reason = None
-        if pool.mode is QueuePoolMode.DELEGATED:
-            return self._service.claim_next(
-                pool_name,
-                owner_id=self._owner_id,
-                claim_id=self._next_claim_id(),
-            )
-        return self._claim_next_managed(
-            pool,
-            selection_limit=selection_limit,
-            attempted_item_ids=attempted_item_ids or set(),
-        )
-
-    def _claim_next_managed(
-        self,
-        pool: QueuePool,
-        *,
-        selection_limit: int,
-        attempted_item_ids: set[str],
-    ):
+        self._service._ensure_running()
+        if selection_limit <= 0:
+            raise QueueServiceError("selection_limit must be a positive integer")
+        attempted_item_ids = attempted_item_ids or set()
         policy = self._selection_policies.get(pool.pool_name)
-        for _ in range(selection_limit):
-            self._last_selection_steps += 1
+        decision = QueueSelectionDecision(
+            QueueSelectionDisposition.STOPPED,
+            _SELECTION_LIMIT_EXHAUSTED_REASON_CODE,
+        )
+        for step in range(1, selection_limit + 1):
             candidates = tuple(
                 candidate
-                for candidate in self._service._read_selection_candidates(
-                    pool.pool_name, limit=_SELECTION_LIMIT
-                )
+                for candidate in self._read_selection_candidates(pool.pool_name)
                 if candidate.queue_item_id not in attempted_item_ids
             )
             evaluation = _evaluate_selection(
                 candidates,
                 pool_name=pool.pool_name,
-                advisory_available_resources=self._advisory_available_resources(pool),
+                advisory_available_resources=(
+                    self._advisory_available_resources(pool)
+                    if pool.mode is QueuePoolMode.MANAGED
+                    else {}
+                ),
                 policy=policy,
+                filter_resources=pool.mode is QueuePoolMode.MANAGED,
             )
             decision = evaluation.decision
             if decision.disposition is QueueSelectionDisposition.STOPPED:
-                self._last_selection_capacity_blocked = (
-                    evaluation.source_had_candidates
-                    and not evaluation.has_eligible_candidates
+                return _QueueSelectionAttempt(
+                    item=None,
+                    decision=decision,
+                    steps_used=step,
+                    capacity_blocked=(
+                        pool.mode is QueuePoolMode.MANAGED
+                        and evaluation.source_had_candidates
+                        and not evaluation.has_eligible_candidates
+                    ),
+                    stop_reason=(
+                        (
+                            decision.reason_code
+                            if decision.reason_code
+                            in {
+                                "queue_selection.invalid_decision",
+                                "queue_selection.policy_error",
+                            }
+                            else _POLICY_STOPPED_REASON_CODE
+                        )
+                        if evaluation.has_eligible_candidates
+                        else None
+                    ),
                 )
-                if evaluation.has_eligible_candidates:
-                    self._last_selection_stop_reason = (
-                        decision.reason_code
-                        if decision.reason_code
-                        in {
-                            "queue_selection.invalid_decision",
-                            "queue_selection.policy_error",
-                        }
-                        else _POLICY_STOPPED_REASON_CODE
-                    )
-                return None
             queue_item_id = decision.queue_item_id
             if queue_item_id is None:
                 raise QueueServiceError("selected queue decision lost its queue_item_id")
@@ -717,7 +737,7 @@ class QueueController:
                 for candidate in candidates
                 if candidate.queue_item_id == queue_item_id
             )
-            claim = self._service._claim_selection_candidate(
+            claimed = self._claim_selection_candidate(
                 queue_item_id,
                 pool_name=pool.pool_name,
                 expected_dispatch_attempt=candidate.dispatch_attempt,
@@ -726,10 +746,53 @@ class QueueController:
                 preference_id=evaluation.preference_id,
                 reason_code=decision.reason_code,
             )
-            if claim is not None:
-                return claim
-        self._last_selection_stop_reason = _SELECTION_LIMIT_EXHAUSTED_REASON_CODE
-        return None
+            if claimed is not None:
+                return _QueueSelectionAttempt(
+                    item=claimed,
+                    decision=decision,
+                    steps_used=step,
+                    capacity_blocked=False,
+                    stop_reason=None,
+                )
+        return _QueueSelectionAttempt(
+            item=None,
+            decision=decision,
+            steps_used=selection_limit,
+            capacity_blocked=False,
+            stop_reason=_SELECTION_LIMIT_EXHAUSTED_REASON_CODE,
+        )
+
+    def _read_selection_candidates(self, pool_name: str) -> tuple[QueueItem, ...]:
+        candidates = self._selection_reader(pool_name, limit=_SELECTION_LIMIT)
+        if not isinstance(candidates, tuple) or not all(
+            isinstance(candidate, QueueItem) for candidate in candidates
+        ):
+            raise QueueServiceError("repository returned invalid selection candidates")
+        return candidates
+
+    def _claim_selection_candidate(
+        self,
+        queue_item_id: str,
+        *,
+        pool_name: str,
+        expected_dispatch_attempt: int,
+        owner_id: str,
+        claim_id: str,
+        preference_id: str,
+        reason_code: str,
+    ) -> QueueItem | None:
+        item = self._selection_claimer(
+            queue_item_id,
+            pool_name=pool_name,
+            expected_dispatch_attempt=expected_dispatch_attempt,
+            owner_id=owner_id,
+            claim_id=claim_id,
+            preference_id=preference_id,
+            reason_code=reason_code,
+        )
+        if item is not None and not isinstance(item, QueueItem):
+            raise QueueServiceError("repository returned invalid selection claim")
+        return item
 
     @staticmethod
     def _require_compensated_pre_start_deferral(
