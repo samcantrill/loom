@@ -2,12 +2,14 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 1
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p1-scheduling-kernel-ready-stage-work`
-- Worktree root and path: record during phase preparation
-- Base revision: current clean `origin/develop`
+- Worktree root: `/home/can134/work/active/loom-worktrees`; phase path:
+  `stage-29-p1-scheduling-kernel-ready-stage-work`
+- Base revision: `24b5d210a258bed2a7ab87973aadefecefd6d753` (clean
+  `origin/develop`)
 - PR target: `develop`
 - PR title: `feat(scheduling): add kernel and durable ready-stage work`
 - Dependencies: implemented pipeline planner, per-run authority, runtime resource
@@ -16,7 +18,7 @@
 - Workflow path: expanded because this phase establishes subsystem-public
   extension contracts, one authority-owned attempt-preparation transition, and
   one new durable coordinator projection
-- Blockers: none; rediscover exact source names and current tests before editing
+- Blockers: none
 
 ## Objective And Context
 
@@ -58,6 +60,36 @@ readiness predicate rather than retain a second DAG interpretation.
   - queue ordering and injected-policy result validation;
   - Stage 28 instance-local registries, activation manifests, and
     `loom.testing` reports.
+- Rediscovery at base `24b5d21` found these exact source owners:
+  - `src/loom/pipeline/execution/runner.py` owns the serial/parallel execution
+    loops, controller-only `PlanAction` transitions, and the current parallel
+    `_next_ready_stage` dependency check;
+  - `src/loom/pipeline/execution/stage_attempts.py` owns the current local-only
+    `prepare_stage_attempt`, while `src/loom/pipeline/stores/authority.py`,
+    `src/loom/pipeline/stores/sqlite_authority.py`,
+    `src/loom/authority/_repository.py`, and
+    `src/loom/authority/mutation_service.py` own the present allocation
+    protocols and adapters;
+  - `src/loom/pipeline/resources.py` owns the existing authored/runtime resource
+    codec and validator registry; exact-stage options are resolved under
+    `src/loom/pipeline/runtime/`;
+  - `src/loom/queue/selection.py` is the current fixed-eligibility/injected-
+    preference validation precedent, while
+    `src/loom/pipeline/executors/base.py` and
+    `src/loom/pipeline/runtime/capabilities.py` provide the Stage 28
+    instance-local registry/descriptor patterns; and
+  - `src/loom/testing/checks.py` and `src/loom/testing/reports.py` own current
+    bounded conformance checks and immutable reports.
+- Existing focused regression suites are
+  `tests/unit/loom/pipeline/execution/test_runner.py`,
+  `tests/unit/loom/pipeline/execution/test_stage_attempts.py`,
+  `tests/unit/loom/pipeline/planning/`,
+  `tests/unit/loom/pipeline/test_runtime_resources.py`,
+  `tests/unit/loom/pipeline/stores/test_sqlite_authority.py`,
+  `tests/unit/loom/authority/test_repository_stage_lifecycle.py`,
+  `tests/contracts/test_authority_store_contract.py`,
+  `tests/contracts/test_authority_repository_contract.py`,
+  `tests/unit/loom/testing/test_contracts.py`, and the package import/API suites.
 - Current `prepare_stage_attempt` is not the Phase 1 authority operation: it
   requires local run-store path helpers and combines attempt numbering, bound
   inputs/fingerprint, workspace creation, worker-request persistence, and
@@ -456,7 +488,16 @@ effect boundary.
 | Integration | Required | Authority preparation, readiness, and durable projection | Train/evaluate, diamond, blocked-first-branch visibility, reuse/skip/failure/retry, concurrent/replayed preparation, restart/rebuild with no duplicate attempt and the exact same `stage_work_id`; referenced projections remain joinable; no projection-time parallel-slot suppression |
 | E2E / opt-in | Deferred | No process or external system is allowed in Phase 1 | Phase 2 owns the first execution E2E; assert launcher/provider/transport sentinels remain untouched |
 
-Targeted commands are fixed during phase preparation from discovered tests.
+Targeted development commands use the repository's locked development
+environment and the exact affected suites, with new Stage 29 paths added beside
+their owning behavior:
+
+    uv run --locked --group dev pytest tests/unit/loom/scheduling tests/unit/loom/pipeline/test_runtime_resources.py tests/unit/loom/pipeline/planning tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/pipeline/execution/test_stage_attempts.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/unit/loom/authority/test_repository_stage_lifecycle.py tests/unit/loom/testing/test_contracts.py
+    uv run --locked --group dev pytest tests/contracts/test_authority_store_contract.py tests/contracts/test_authority_repository_contract.py tests/package/test_import_boundaries.py tests/package/test_pipeline_planning_api.py tests/package/test_pipeline_store_api.py tests/package/test_testing_api.py
+
+The executor may split these commands while developing and must update paths if
+new tests are placed at a more specific existing owner. The stable final gate is
+unchanged.
 Final commands:
 
     make validate-pr
@@ -506,15 +547,18 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning complete; record worktree/base and rediscover
-  exact source/test commands before spawning the executor
-- Expanded planning: required by public extension and durable projection risks;
-  the stage-level design and plan reviews are complete
+- Manager preparation: complete at base `24b5d21`; worktree, exact source owners,
+  focused regressions, and harness commands recorded
+- Expanded planning: one phase-planner refinement pending for the subsystem-
+  public scheduling protocols, new durable stage-work projection, and distinct
+  authority-owned `PENDING` transition; stage-level design and plan review are
+  already complete and behavior must not reopen
 - Implementation: pending
 - Refiner: not used
 - Pre-submit gate: pending
-- Independent review: decide during phase preparation from the remaining public
-  protocol/migration risk
+- Independent review: required after manager validation because the phase adds
+  subsystem-public protocols, a durable projection, and an authority lifecycle
+  transition whose dependency and migration boundaries materially interact
 - Blocker corrections: 0/3
 - PR and merge: pending
 
