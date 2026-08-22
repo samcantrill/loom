@@ -449,12 +449,24 @@ if its name does not match the selected directories or expression. Final command
 - Expanded planning: required by durable cross-owner side effects; phase plan
   finalized. No additional planner pass used because the fixed saga, ownership,
   stop conditions, and causal test matrix already resolve the identified risk
-- Implementation: ready for the dedicated phase executor
-- Refiner: not used
+- Implementation: foundational executor pass committed as `af74d6f`; durable
+  agent journaling, logical reservation, provider lifecycle, and their focused
+  tests are present, but the required authority bind/grant fence and
+  execution-only worker integration are not yet connected into the complete
+  reservation-to-release saga
+- Refiner: one bounded correction required to complete the existing Phase 2
+  saga without adding another abstraction or broadening scope
 - Pre-submit gate: pending
 - Independent review: required because launch fencing and cross-store recovery
   remain material residual risks
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 in progress. The supported bounded local execution
+  path cannot grant, launch, commit, or release a prepared attempt end to end;
+  this violates the fixed assignment saga and would permit no usable Phase 2
+  consumer. Evidence is the absence of authority bind/grant operations and a
+  managed execution-only worker/composition at `af74d6f`. The smallest fix is
+  to connect those owners to the already committed reservation, journal,
+  provider, artifact, and worker primitives and prove the fixed transition and
+  crash matrix
 - PR and merge: pending
 
 ## Completion Record
