@@ -623,9 +623,10 @@ Final commands:
   revalidates projections against full readiness evidence, preserves durable
   ready time, enforces pool/target eligibility, and validates planner output.
 - Refiner: completed one qualified blocker correction at `671fc89`
-- Pre-submit gate: prior evidence is stale after the authorized repair; focused
-  Ruff and Pyright checks passed, followed by 294 affected tests; the full gate
-  and summary remain pending
+- Pre-submit gate: complete; `make validate-pr` passed Ruff, Pyright, the
+  isolated default suite (2,349 passed, one skipped), the config-extra suite
+  (141 passed, three skipped), and package builds; `make test-summary` recorded
+  2,490 passing tests across the categorized evidence suites
 - Independent review: complete; four product blockers and one localized
   correction made the prior attempt ineligible to merge despite green CI
 - Blocker corrections: prior attempt stopped at 3/3; maintainer-authorized
@@ -639,7 +640,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Pure scheduling values/protocols/registries/kernel/defaults; runtime placement and CPU/memory adapters; planning-owned readiness; narrow expected-state authority preparation with frozen receipts and v2-to-v3 migration; semantic in-memory/SQLite coordinator stage-work stores; bounded replay-safe `RunOrchestrator`; compatibility runner routed through shared readiness. No assignment, execution lease, provider, artifact transfer, launcher, process, or transport behavior added. |
 | Tests added or updated | Scheduling completeness/exhaustion, atom bounds, hard/soft/policy failure, preference tiers/fallback/overflow, registry retention, placement route/fingerprint/rebuild, conformance, readiness cancellation/retry/action behavior, authority receipt serialization/revision/terminal/retry/concurrency/migration behavior, store parity/reopen/schema failure, lost-response repair, monotonic revision replay, changed-time restart replay, cancellation and superseded-upstream retirement, mandatory pool/target selection, malformed planner output, all-ready-branch projection, controller-action ownership, authority-wins eligibility, pure decision integration, and public/import boundaries. |
-| Validated revision/tree state and evidence | Final correction-pass-3 tree: `make validate-pr` passed Ruff and Pyright; isolated default 2,342 passed/one skipped/121 deselected; config-extra 141 passed/three skipped/2,346 deselected; sdist and wheel built. `make test-summary` passed package 118, unit 1,669, contract 286, integration 211, e2e 58, and config-extra 141. |
-| Validation-relevant changes after evidence | Authorized repair pass 1 changes scheduling values/kernel eligibility, placement output validation, orchestrator replay/readiness refresh, and their tests. Focused Ruff, Pyright, and 294 affected tests pass; full validation evidence remains pending. |
+| Validated revision/tree state and evidence | Authorized repair-pass-1 tree: `make validate-pr` passed Ruff and Pyright; isolated default 2,349 passed/one skipped/121 deselected; config-extra 141 passed/three skipped/2,353 deselected; sdist and wheel built. `make test-summary` passed package 118, unit 1,676, contract 286, integration 211, e2e 58, and config-extra 141, for 2,490 total passes. |
+| Validation-relevant changes after evidence | None; this execution-plan evidence update does not change source, tests, dependencies, build, or validation configuration. |
 | PR, review, and merge | [PR #233](https://github.com/samcantrill/loom/pull/233) targeted `develop`, was non-draft and mechanically mergeable, passed CI, then closed without merge after independent review. |
 | Residual risk and cleanup | Fresh full validation and independent review must confirm the five repaired boundaries before PR #233 reopens. Phase 2 still owns every reservation, assignment, resource acquisition, worker materialization, and launch side effect. |
