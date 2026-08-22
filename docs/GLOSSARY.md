@@ -111,7 +111,8 @@ users can also use it as a quick map to stable repository terms.
 | assignment | The coordinator-owned durable handoff joining one exact prepared stage attempt to one agent/session and selected resource claim through fenced lifecycle states. | An ungranted offer is not execution authority; distinguish assignment from queue dispatch, stage attempt, and process execution. |
 | execution grant | The coordinator's durable authorization for one accepted assignment and process-execution identity to pass the agent start fence. | It is not a promise of exactly-once external effects. |
 | execution fence | The authority-owned durable binding that permits results only from the current granted assignment until terminal commit or explicit fencing. | Not an expiring liveness lease; coordinator outage alone does not invalidate it. |
-| work request | One outbound agent request for work bound to one exact current availability revision. | Not a daemon-local queue or prefetched backlog; at most one remains unresolved per availability revision. |
+| coordinator authority view | The narrow authenticated least-privilege adapter through which the coordinator invokes per-run authority expected-state operations after verifying service/workspace/generation identity and, on generation change, retained-run continuity. | Not direct database access, a broad authority client handed to agents/workers, or trust in loopback location. A pristine empty authority is valid only when the coordinator has no retained admitted run. |
+| work request | One outbound agent request for work bound to one exact current availability revision. | Not a daemon-local queue or prefetched backlog; at most one admission remains unresolved for that revision, but a fresh revision may expose disjoint remaining capacity while prior work executes. |
 
 ## Naming heuristics
 

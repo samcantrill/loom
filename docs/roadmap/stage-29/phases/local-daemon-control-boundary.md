@@ -40,13 +40,21 @@ persistent mode -> long-lived coordinator + local agent -> serve many clients
 Both use the same application service, stores, readiness predicate, kernel,
 assignment saga, agent journal/provider, worker, and finalization path.
 
+Here, an ordinary Phase 3 restart means reopening intact state and safely
+continuing pending/unassigned or already-terminal reconciliation. Any assignment
+that might still own an accepted/granted process remains bound, unknown, and
+withheld from availability; Phase 3 neither adopts it nor launches it again.
+Phase 8 later adds exact same-session process recovery and guarded closure.
+
 ## Current Source And Harness
 
 - Reuse Phase 2 semantic coordinator and agent services/stores, embedded
   composition, stage status facts, and exact cancellation/containment seams.
 - Rediscover current `ManagedLocalQueueRuntime`, queue/controller services,
   `PipelineRunner`, Python API, CLI commands, local process adapter, queue SQLite
-  schema, old queue-record fixtures, and service test utilities.
+  schema, old queue-record fixtures, authority supervisor/FastAPI/client paths,
+  and service test utilities. The current authority HTTP service is
+  loopback-oriented; do not mistake that location for Stage 29 authentication.
 - Reuse existing CLI/API compatibility tests, SQLite migration tests, process
   barriers, fake clocks, subprocess helpers, and safe status/error fixtures.
 - Deployment/config wiring remains above domain modules. Public imports must stay
@@ -72,14 +80,48 @@ In scope:
   Duplicate start against an actively locked state root fails clearly. A stale
   local endpoint is replaced only after ownership/type/root checks prove it is
   safe; never unlink an arbitrary caller-selected path.
+- Restart at zero availability. Reconcile pending/unassigned and definitively
+  terminal facts, but keep any pre-restart accepted/granted/running assignment
+  and its resources unknown when exact containment/result cannot be established.
+  Service readiness may be degraded with that bounded unknown set; it never
+  implies process adoption, release, or permission to relaunch.
 - Prefer an owner-only local IPC endpoint with peer-credential checks. If the
   implementation instead exposes persistent HTTP, including loopback HTTP, it
   must use the same mTLS/authorization model planned for Phase 4; binding to
   loopback is not authentication.
+- Preserve per-run authority as the sole lifecycle owner behind its service/API
+  boundary. Add a narrow coordinator authority adapter with a captured
+  least-privilege principal. It must authenticate the authority service (or
+  verified owner-only IPC peer), verify workspace/generation/schema/capability
+  identity, and authorize exact run/lifecycle operations with expected state and
+  idempotency. The current unauthenticated loopback HTTP surface is not eligible
+  for Stage 29 production composition.
+- Treat authority outage as a degraded service state. Pause ready-work
+  preparation, assignment binding, grant/delivery, and terminal commit; do not
+  stop an already-granted local process or discard its retained result. On
+  reconnect, an unchanged generation resumes after ordinary snapshot checks. A
+  rotated generation is adopted in one coordinator transaction only after the
+  authenticated configured workspace/schema/capabilities and complete retained-
+  run continuity set agree: every coordinator-retained admitted run reproduces
+  its last-acknowledged authority revision and canonical full-snapshot
+  fingerprint, and each nonterminal attempt/execution fence matches exactly.
+  Coordinator checkpoints are comparison evidence only and cannot reconstruct
+  missing authority truth. A pristine empty authority is valid only when the
+  coordinator has no retained admitted run. Missing, divergent, or incomplete
+  expected authority truth remains degraded and contributes no new work.
+- Keep the coordinator-to-authority credential and endpoint reference in
+  protected daemon configuration. Client, local-agent, operator, and stage-
+  worker identities cannot invoke the authority view, and worker environments
+  receive no authority endpoint, credential, state root, or direct database
+  access.
 - Add durable multi-run admission and coordinator wake-up. Submission returns a
   stable queue item/run identity after intent is committed. The daemon
   reconciles ready work and JIT assignments without creating a daemon-local
   whole-run execution backlog.
+- Drive the local agent as a bounded supervisor of multiple assignment flows,
+  not a serial “run one stage to completion” loop. After each accepted claim is
+  reflected in a fresh availability revision, remaining disjoint capacity may
+  receive another JIT assignment while existing processes continue.
 - Route current managed Python and CLI submission/status/wait/cancel operations
   through the application service. A synchronous bounded API may construct an
   embedded service and wait; a daemon client may return immediately. Observable
@@ -103,6 +145,14 @@ In scope:
   runner readiness as execution owners. Delegated SLURM remains unchanged.
 - Preserve `continue_prepared_run` import, validation, and its structured
   insufficient-state failure; do not invent a successful legacy replay payload.
+- Quarantine the current
+  `ManagedLocalQueueRuntime.resolve_recovery_unknown(...,
+  previous_processes_confirmed_stopped=True, ...)` boolean-attestation API. It
+  must never accept a Stage 29 assignment/session or mutate new authority,
+  coordinator, or agent records. If compatibility requires retaining it for
+  exact historical whole-run queue rows, keep it on an explicitly legacy path
+  with its existing warning/semantics until a later removal decision. Phase 8's
+  evidence-resolved operation is the only recovery path for Stage 29 work.
 - Add protected, abstract daemon configuration for state roots, endpoint,
   coordinator/local-agent identities, configured pools/resources, project/
   executor composition, and authorization. Examples use only `machine-A` and
@@ -118,8 +168,8 @@ Out of scope:
 - Remote network protocol, remote principals/certificates, registration,
   expiring offers, cross-host artifact bytes, GPU placement, or long polling.
 - Drain/resume/reload, disconnected cancellation completion, manual containment
-  recovery, different-session replacement, automatic service provisioning, or
-  coordinator HA.
+  recovery, active-process adoption, different-session replacement, automatic
+  service provisioning, or coordinator HA.
 - Reinterpreting or deleting old queue data, changing delegated executor
   behavior, arbitrary shell submission, or exposing internal paths/commands in
   status.
@@ -157,6 +207,42 @@ actor. The direct/IPC adapter derives it and invokes the same application
 authorizer used by later HTTP adapters. Routes and CLI parsing own no policy or
 state transition.
 
+### Authority remains a separate authenticated owner
+
+The coordinator does not absorb authority tables or hand authority access to a
+worker. Conceptually, its only lifecycle dependency is a scoped adapter:
+
+```python
+class CoordinatorAuthorityView(Protocol):
+    def prepare_attempt(
+        self, request: PrepareAttempt, *, expected: AuthorityVersion
+    ) -> PreparedAttempt: ...
+
+    def bind_assignment(
+        self, request: BindAssignment, *, expected: AuthorityVersion
+    ) -> BindResult: ...
+
+    def commit_fenced_result(
+        self, request: CommitResult, *, expected: AuthorityVersion
+    ) -> CommitResult: ...
+```
+
+The adapter captures the coordinator principal when constructed. A direct or
+owner-only IPC implementation and an HTTP implementation must reach the same
+authority authorizer and expected-state operations. The latter additionally
+requires mutual TLS and expected authority service identity. Request bodies do
+not choose a principal, workspace, credential, endpoint, or database path.
+
+Service generation is a connection epoch, not lifecycle truth. An explicit
+authority supervisor restart may rotate it while retaining the authority
+repository. The coordinator rejects old-generation messages but may record the
+new generation after comparing the complete retained-run set: each retained
+run reproduces the last-acknowledged revision and canonical full-snapshot
+fingerprint, and nonterminal attempts/fences match exactly. A matching workspace
+name alone is insufficient, and coordinator checkpoint/projection data cannot
+repopulate missing authority rows. A pristine empty authority may initialize
+only beside a coordinator with no retained admitted run.
+
 ### Persistent startup
 
 Startup order is fixed at the behavioral level:
@@ -166,6 +252,8 @@ validate protected configuration
   -> acquire coordinator and local-agent role locks
   -> open and migrate required SQLite stores
   -> reconstruct component registries and verify fingerprints
+  -> authenticate authority and verify workspace/schema/capabilities
+  -> reconcile generation and complete retained-run continuity
   -> reconcile coordinator/authority/agent facts
   -> publish local availability
   -> mark service ready and accept clients
@@ -227,22 +315,30 @@ second scheduler, readiness loop, or local-only lifecycle semantics.
 | One active writer per state root | Role lock/startup owner | Duplicate daemon or stale endpoint | Split state/duplicate launch | Multi-process duplicate-start tests |
 | Required state never falls back to memory | Composition root | SQLite open/schema failure | Lost jobs/false restart | Failure-injection tests |
 | All clients use one application owner | Direct/IPC adapters | CLI/facade shortcut | Divergent policy/lifecycle | Adapter conformance tests |
+| Only the scoped coordinator reaches authority | Authority adapter/authorizer | Bare loopback, worker/client credential, wrong service/workspace/generation | Unauthorized lifecycle mutation or false readiness | Direct/IPC/HTTP identity, scope, mismatch, and credential-exclusion tests |
+| Rotated authority generation preserves all retained truth | Authority-generation reconciler + per-run revision/snapshot-fingerprint checkpoint | Restarted, missing, stale, or divergent service | Lost terminal history, forged lifecycle, or duplicate launch | Same-repository restart plus pristine-bootstrap and missing/divergent retained-run matrix |
 | Principal cannot come from request body | Adapter + authorizer | Crafted local request | Unauthorized action | Actor-mismatch tests |
 | New managed work uses stage assignments | Compatibility router | Legacy whole-run dispatcher | Duplicate semantic paths | Launcher sentinel and trace-equivalence tests |
 | Cancellation remains truthful | Coordinator/authority/agent reconciliation | Client timeout or daemon loss | False terminal/released resources | Cancel/restart barrier tests |
+| Ordinary restart cannot adopt or relaunch uncertain work | Startup reconciler | Intact journal with unresolved accepted/granted assignment | Duplicate process or capacity reuse | Zero-availability/unknown-set/launcher-sentinel tests |
+| Legacy boolean recovery cannot reach Stage 29 state | Compatibility boundary | Existing managed-local recovery call | Weak-evidence fence/requeue | New-record rejection and historical-record compatibility tests |
 | Historical rows retain meaning | Queue migration adapter | Schema migration | Data corruption/false facts | Old-record fixtures |
 | Status is bounded and redacted | Status projector | Exceptions/provider data | Secret/path disclosure | Redaction and size tests |
 
 ## Implementation Slices
 
-1. Add scoped application views, shared authorizer, trusted direct adapters, and
-   application-level submit/status/wait/cancel conformance over the Phase 2
-   service operations.
+1. Add scoped application views, shared authorizer, trusted direct adapters,
+   and the least-privilege coordinator authority adapter/authorization path;
+   prove application and authority direct-transport conformance over Phase 2
+   operations.
 2. Add protected local configuration, separate role locks, store startup/
    migration/reconciliation, owner-only IPC or equivalently authenticated local
-   transport, readiness, graceful stop, and duplicate-start behavior.
-3. Add persistent multi-run scheduling loop, safe wake-up/backpressure, joined
-   status, and conservative connected-local cancellation with restart barriers.
+   transport, authority outage/generation-continuity reconciliation, readiness,
+   graceful stop, and duplicate-start behavior.
+3. Add persistent multi-run scheduling/supervision loop, safe wake-up and
+   backpressure, concurrent disjoint assignments from fresh availability,
+   joined status, conservative connected-local cancellation, and fail-closed
+   ordinary restart with zero-availability/unknown-work barriers.
 4. Migrate managed Python/CLI/runner/queue facades, preserve historical records
    and delegated SLURM, add warnings/docs/examples, and prove bounded versus
    persistent trace equivalence.
@@ -253,8 +349,8 @@ second scheduler, readiness loop, or local-only lifecycle semantics.
 | --- | --- | --- | --- |
 | Package | Required | Public facade/import compatibility | Cheap imports and retained call signatures |
 | Unit | Required | Config, authorizer, locks, status/redaction | Invalid permissions/config, role/action denial, bounded output |
-| Contract | Required | Direct and IPC/application equivalence | Same normalized operation, identity, idempotency, error and state result |
-| Integration | Required | SQLite restart, multi-run service, migration | Duplicate start, crash/reopen, old rows, conservative cancel |
+| Contract | Required | Direct and IPC/application/authority equivalence | Same normalized operation, derived identity, scope, idempotency, expected-state error, and result; non-coordinator principals denied |
+| Integration | Required | SQLite/authority restart, multi-run service, migration | Authority outage pauses new lifecycle work but not granted process; valid rotated generation with complete retained-run continuity resumes; pristine-empty bootstrap works only when both sides have no retained run; wrong/stale/missing/divergent authority and bare HTTP fail closed; authority credential absent from worker; duplicate start, crash/reopen, unresolved work remains unknown/no-relaunch, old rows, Stage 29 rejection by legacy recovery, conservative cancel |
 | E2E / opt-in | Required local | Standalone local job server | Submit different runs over time, queue/stage interleave, monitor, cancel, restart; no network/GPU required |
 
 Targeted commands are fixed during phase preparation. Final commands:
@@ -265,26 +361,34 @@ Targeted commands are fixed during phase preparation. Final commands:
 ## Risks, Review, And Stops
 
 - Main risks: retaining a hidden whole-run dispatcher; treating local IPC as
-  automatically trusted; duplicate role ownership; silent old-row
-  reinterpretation; reporting cancellation complete before containment.
-- Review focus: facade trace equivalence, process/store ownership, identity
-  derivation, migrations, readiness, cancellation, and safe diagnostics.
+  automatically trusted; treating the current loopback authority as
+  authenticated; adopting a new authority generation without complete
+  continuity; leaking authority access to a worker; duplicate role ownership;
+  silent old-row
+  reinterpretation; letting boolean legacy recovery fence Stage 29 work;
+  relaunching uncertain work after restart; or reporting cancellation complete
+  before containment.
+- Review focus: facade trace equivalence, process/store ownership, application
+  and authority identity derivation/scopes, credential exclusion, migrations,
+  readiness, cancellation, and safe diagnostics.
 - Stop if: a public facade cannot route through the Phase 2 path without a
   material compatibility choice; role locks cannot identify exact roots safely;
-  local transport would expose an unauthenticated mutation surface; or existing
-  delegated behavior would change.
+  local transport or the authority client would expose an unauthenticated
+  mutation surface; workers would need authority credentials/direct database
+  access; or existing delegated behavior would change.
 - Accepted debt: remote/disconnected cancellation and service auto-restart are
   incomplete until Phases 7–8. This limitation must be visible, not hidden.
 
 ## Executor Handoff
 
 - Read this file, Phase 2 completion record, manifest shared constraints, and
-  planning FR-1, FR-3, FR-13, FR-14, FR-18–FR-20, and FR-25.
+  planning FR-1, FR-3, FR-9, FR-13, FR-14, FR-17–FR-20, FR-25, and DQ-14.
 - Preserve one local E2E trace while adding lifetime and facade slices. Do not
   implement the Phase 4 remote protocol early.
 - Decisions not to revisit: one application owner, narrow views, derived
-  principal, separate role stores/locks, conservative cancellation, explicit
-  compatibility, and one stage execution path.
+  principal, separate authenticated authority owner, no worker authority access,
+  separate role stores/locks, conservative cancellation, explicit compatibility,
+  and one stage execution path.
 - Escalate material public/durable compatibility choices to the manager.
 
 ## Workflow State

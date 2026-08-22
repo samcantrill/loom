@@ -102,7 +102,13 @@ In scope:
   - for assignment-bound pre-grant work, clear binding only after an exact agent
     acknowledgement proves grant/start cannot occur and staged inputs/claims are
     released;
-  - for granted/running/transferring work, deliver an assignment/fence-scoped
+  - for granted work with no start intent, durably revoke start and obtain an
+    exact agent acknowledgement that the launcher was never invoked before
+    abort/release;
+  - for granted work with durable start intent but no confirmed process, keep it
+    unknown and reconcile the same `process_execution_id`; cancellation cannot
+    infer never-started from a missing `PROCESS_STARTED` event;
+  - for confirmed-running/transferring work, deliver an assignment/fence-scoped
     cancel and wait for process containment/exit, output disposition, cleanup,
     and resource release;
   - if success/output commit wins, retain truthful success but do not unlock a
@@ -113,7 +119,9 @@ In scope:
 
   ```text
   cancellation control durable before grant -> grant/start prohibited
-  grant fence durable before cancellation   -> control active process, wait
+  grant durable, no start intent             -> revoke start, prove never launched
+  start intent durable, outcome unknown      -> reconcile/contain; never relaunch
+  process start confirmed                    -> control active process, wait
   terminal success commit before cancel CAS -> retain success, stop descendants
   ambiguous/disconnected                    -> remain cancelling/unknown
   ```
@@ -201,7 +209,9 @@ descriptor/config revision. Failure never yields partially replaced offers.
 | No assignment | Close/cancel prepared work under authority | After authority commit |
 | Bound, not accepted | Revoke delivery and prove agent cannot accept | After exact acknowledgement and cleanup |
 | Accepted, not granted | Persist control; prevent grant; abort/reconcile claim | After exact abort/release |
-| Granted/running | Deliver fenced control and contain process | After terminal/containment and cleanup |
+| Granted, no start intent | Revoke start and prove launcher was never invoked | After exact never-started acknowledgement and claim cleanup |
+| Start intent, outcome unknown | Reconcile exact process identity; do not infer or relaunch | After terminal or positive containment and cleanup |
+| Confirmed running | Deliver fenced control and contain process | After terminal/containment and cleanup |
 | Output transfer | Decide truthful success/cancel disposition; retain evidence | After authority acknowledgement and transfer cleanup |
 | Terminal committed | Preserve terminal truth | Already governed by normal release |
 | Disconnected/ambiguous | Keep bound unknown and cancellation pending | Never from timeout alone |
@@ -233,6 +243,7 @@ privileged Phase 8 recovery.
 | Remote control cannot supply config | Codec/application authorizer | Crafted payload | Code/secret/config injection | Unknown/extra/path/import-field tests |
 | Cancellation stops descendants immediately | Coordinator/orchestrator | Upstream success race | Work after cancel | Readiness/cancel barriers |
 | Pre-grant unbind needs exact proof | Authority/agent reconciliation | Disconnection/ambiguous control | Duplicate later launch | Cancel/grant/reconnect tests |
+| Post-grant cancellation distinguishes never-started from start-unknown | Agent start journal/process owner | Grant/start/control race | Duplicate or uncontained process | Barriers before start intent, launcher return, and start event |
 | Running capacity releases only after containment | Agent process/resource owner | Client timeout/control send | Resource collision | Real-process cancellation tests |
 | Success remains truthful | Authority terminal CAS | Cancel/result race | False history | Success-before/after-cancel table |
 | Control/status is scoped and redacted | Authorizer/projector | Operator/client request | Unauthorized mutation/leak | Role/object/pool and redaction tests |
@@ -258,7 +269,7 @@ privileged Phase 8 recovery.
 | Package | Required | Control models/views remain narrow and cheap | Import and public-operation surface |
 | Unit | Required | Expected versions, config validation, state transitions | Replay/change conflicts, full validation, no partial swap |
 | Contract | Required | Direct/HTTP/operator and provider retention behavior | Role/scope/body actor negatives; old/new provider lifecycle |
-| Integration | Required | Control delivery, cancellation and live process/resource races | Barrier at withdraw, grant, start, exit, upload, commit, release |
+| Integration | Required | Control delivery, cancellation and live process/resource races | Barrier at withdraw, grant, before/after start intent, launcher outcome/event, exit, upload, commit, release |
 | E2E / opt-in | Required loopback | Operable multi-agent pool | Drain/reload/resume resources and cancel multi-stage run while another continues |
 
 Targeted commands are fixed during phase preparation. Final commands:
@@ -270,9 +281,11 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 - Main risks: mutating a live provider, accepting config from network, mixed
   inventory, treating a sent cancel as containment, losing truthful success, or
-  allowing credentials/generation to act as process fences.
+  treating granted-without-observed-start as never launched, or allowing
+  credentials/generation to act as process fences.
 - Review focus: withdraw-first ordering, complete affected-set calculation,
-  provider retention, cancellation state table, role scopes, and race tests.
+  provider retention, cancellation/start state table, role scopes, and race
+  tests.
 - Stop if: providers cannot retain/reconcile old claims; reload would require
   partial hot mutation; cancellation cannot identify exact assignment/fence; or
   current authority cannot preserve success while blocking descendants.

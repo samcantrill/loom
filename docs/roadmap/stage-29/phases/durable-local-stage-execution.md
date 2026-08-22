@@ -11,8 +11,8 @@
 - PR target: `develop`
 - PR title: `feat(scheduling): add durable local stage execution`
 - Dependencies: Phase 1 merged with resolved stage placement, fixed scheduling
-  kernel, shared readiness, durable stage work, component contracts, and
-  conformance support
+  kernel, shared readiness, exact idempotently prepared `PENDING` attempts,
+  durable stage work, component contracts, and conformance support
 - Workflow path: expanded because coordinator, per-run authority, agent journal,
   physical resources, artifacts, and process launch form a causal crash boundary
 - Blockers: Phase 1 remote merge
@@ -26,9 +26,10 @@
   fence, launches one root worker, commits authoritative outputs/result, and
   releases the claim. Independent diamond branches can run concurrently within
   `max_parallel_stages`.
-- Earlier dependency: Phase 1 owns readiness and pure placement. This phase must
-  consume its decision as staleable data and revalidate every mutable fact at
-  commit.
+- Earlier dependency: Phase 1 owns readiness, semantic preparation of the exact
+  authority `PENDING` attempt, and pure placement. This phase consumes that
+  attempt without reallocating it, treats the placement decision as staleable
+  data, and revalidates every mutable fact at commit.
 - Later work explicitly out of scope: Phase 3 exposes the path as a persistent
   multi-job daemon and migrates public facades. Phase 4 adds remote trust;
   Phase 5 adds remote data/execution; later phases add GPU, controls, and
@@ -47,6 +48,16 @@ be less reviewable and less safe than this indivisible vertical boundary.
   construction, `StageJobRunRequest`, `run_stage_job`/stage worker, local
   resource lease/GPU-provider seams, artifact materialization/finalization, and
   reliability retry behavior on the phase branch.
+- Phase 1 will have split authority-owned semantic attempt preparation from the
+  current local-path-dependent `prepare_stage_attempt` helper. Reuse or refactor
+  the helper's input/fingerprint/request/workspace pieces here, but do not call
+  an allocator that creates a second attempt or advances it to `RUNNING`.
+- Current `run_stage_job` is also not the managed worker boundary unchanged: it
+  acquires the whole-run lock, independently validates upstream readiness,
+  materializes request state, executes code, and writes stage/run authority
+  results. Extract or adapt the existing execution-only stage-worker seam so a
+  managed worker returns durable fenced result facts while coordinator/
+  authority operations perform short exact-stage commits.
 - Reuse existing SQLite transaction/schema patterns, fake clocks/processes,
   barrier-controlled runner tests, stage attempt/output commit tests, resource
   provider tests, and artifact-store fixtures.
@@ -58,6 +69,10 @@ be less reviewable and less safe than this indivisible vertical boundary.
 
 In scope:
 
+- Consume the exact Phase 1 `PENDING` attempt and its immutable bound-input/
+  readiness evidence. Materialize the assignment-scoped worker request,
+  workspace, and locally accessible inputs around that identity; never allocate
+  or silently renumber an attempt in the coordinator, agent, or worker path.
 - Extend the semantic coordinator-state protocol and SQLite adapter with atomic
   domain operations for current stage-work scheduling state, logical capacity
   reservations, assignment identity/state, delivery/grant facts, event
@@ -103,7 +118,14 @@ In scope:
 - Refactor the stage worker/request path so an agent executes one already
   prepared and `SUBMITTED` assignment. The worker must not allocate a new
   attempt, interpret the DAG, reacquire coordinator-managed resources, or commit
-  authority state without the assignment fence.
+  run/stage authority truth. It durably returns assignment-fenced execution and
+  output facts to the agent/coordinator path; the authority owner validates and
+  commits them.
+- Remove the whole-run lock from the new managed stage-worker path. Independent
+  ready stages in the same run may execute concurrently; only short authority/
+  coordinator expected-state transactions serialize their own mutations. Keep
+  any legacy `run_stage_job` lock behavior behind an explicit compatibility
+  wrapper rather than using it for managed scheduling.
 - Persist the immutable work request and required inputs before physical
   acceptance/grant. After grant, journal the grant and start fence before at
   most one root launcher invocation. On a crash, reconcile the same assignment;
@@ -153,8 +175,10 @@ READY stage work
   -> agent ACCEPTED
   -> authority SUBMITTED + EXECUTION_FENCE
   -> agent GRANT_DURABLE
-  -> agent ACTIVE + START_DURABLE
+  -> agent ACTIVE + START_INTENT_DURABLE
   -> one launcher call
+  -> agent PROCESS_STARTED | START_FAILED | START_UNKNOWN
+  -> authority RUNNING only for exact current-fence PROCESS_STARTED
   -> agent RESULT_AND_OUTPUT_DURABLE
   -> authority TERMINAL_COMMIT
   -> coordinator/agent RELEASED
@@ -165,6 +189,22 @@ transaction. Reconciliation observes durable facts and repeats the same
 operation identity until it reaches the already-recorded result or a typed
 conflict. A socket return, callback completion, or process exit alone is not a
 durable transition.
+
+`SUBMITTED` means execution was granted; it does not prove a process started.
+The agent persists start intent before the single launcher invocation, then
+persists a confirmed, failed, or unknown start outcome. Only a durable confirmed
+process identity for the current fence may advance authority to `RUNNING`.
+During coordinator outage or an ambiguous start, authority may remain
+`SUBMITTED`; that is not permission to invoke the launcher again. A fenced
+terminal result may commit from either `SUBMITTED` or `RUNNING`.
+
+`START_FAILED` is definitive only when the launcher boundary proves that no
+managed process was created and none can later run for that invocation. That
+fenced failure may terminalize the attempt from `SUBMITTED`, release after
+cleanup, and enter ordinary reliability policy. A timeout, lost response,
+exception after an unobserved spawn, or incomplete containment proof is
+`START_UNKNOWN`; it stays bound/reserved and cannot consume retry budget or
+authorize another launch.
 
 ### Provider commands and outcomes
 
@@ -206,6 +246,12 @@ availability revision, then require the agent to reconcile and publish a new
 revision. Inconsistent reflected-claim evidence yields zero/ineligible
 capacity, not optimistic reuse.
 
+This is an admission-serialization rule, not a one-stage-per-agent limit. Once
+an accepted claim is durable and reflected in a new net-availability revision,
+the local agent may admit another assignment against the remaining atoms while
+the first process continues. Concurrent assignments never consume the same
+atom, and configured agent/process limits remain hard eligibility checks.
+
 ### Activation and launch
 
 All resource components must be durably ACTIVE as one composite before the
@@ -244,6 +290,10 @@ write another owner's truth.
 | Definitive ungranted decline only unbinds itself | Authority unbind CAS | Delayed/ambiguous decline | Duplicate launch or lost ownership | Decline/grant race table |
 | Physical claim is complete before accept | Agent journal/composite admission | Provider partial failure | Hidden resource collision | Crash-after-each-component tests |
 | Launch follows durable grant and activation | Agent journal/start fence | Crash/retry/duplicate delivery | Duplicate or unauthorized launch | Process sentinel tests |
+| RUNNING requires a confirmed current-fence process start | Agent process fact + authority CAS | Start-intent crash, delayed event, or stale agent | False running status or duplicate relaunch | Confirmed/failed/unknown/delayed-start transition tests |
+| START_FAILED proves no process can exist | Launcher/containment result owner | Exception or lost spawn response | Release/retry beside a live process | Definitive pre-spawn failure versus post-spawn/timeout unknown matrix |
+| Independent stages do not share a long-lived run lock | Managed worker/authority boundary | Legacy `run_stage_job` wrapper | False serialization or deadlock of diamond branches | Real overlap barrier plus short-commit CAS tests |
+| One unresolved admission revision still permits disjoint active claims | Agent availability journal + coordinator atoms | Serial control loop or stale revision reuse | Idle capacity or oversubscription | Two concurrent disjoint claims and same-atom race tests |
 | Output commit uses accessible refs and current fence | Authority output transaction | Stale agent result | Corrupt lineage or late mutation | Result/output/fence tests |
 | Logical and physical release follows terminal truth | Coordinator and agent reconcilers | Early cleanup | Reuse while process/output active | Release ordering tests |
 | Retry creates a fresh attempt | Reliability owner | Scheduler/reconciler | Reused stale claims/identity | Failure/retry integration tests |
@@ -256,9 +306,11 @@ write another owner's truth.
 2. Add agent-journal protocol/SQLite adapter, `AgentResourceProvider` contract
    and conformance, CPU/memory providers, exact command/result types, composite
    prepare/abort/reconcile/activate/release, and availability accounting.
-3. Add local request/input durability and artifact hand-off; adapt the prepared
-   stage worker to exact granted assignments and implement grant/start/process/
-   outbox facts with one-launch fault injection.
+3. Add local request/input durability and artifact hand-off around the exact
+   Phase 1 attempt; adapt the worker-materialization portion of the existing
+   preparation path and extract an execution-only, no-whole-run-lock worker seam
+   for exact granted assignments; implement grant/start/process/outbox facts
+   with one-launch fault injection.
 4. Complete result/output commit, release, retry/descendant reconciliation, and
    bounded embedded composition; prove two-stage, diamond, parallel-run, crash,
    and compatibility of the retained lower-level worker imports.
@@ -270,8 +322,8 @@ write another owner's truth.
 | Package | Required | Public provider imports remain intentional/cheap | Import and protocol shape; no daemon/network dependency |
 | Unit | Required | Store transitions, commands, composite accounting | Every legal/illegal transition, exact atom conservation, idempotent replay |
 | Contract | Required | Provider lifecycle and authority expected-state behavior | Synthetic provider partials, malformed outcomes, current/stale fence matrices |
-| Integration | Required | Cross-store crash recovery and worker/artifact hand-off | Crash before/after every durable step; decline/grant/result/release races |
-| E2E / opt-in | Required local | Final bounded local stage path | Train/evaluate and diamond, parallel branches, failure/retry, one launch; no external network/GPU required |
+| Integration | Required | Cross-store crash recovery and worker/artifact hand-off | Crash before/after every durable step; decline/grant/result/release races; two same-run workers overlap without a whole-run lock |
+| E2E / opt-in | Required local | Final bounded local stage path | Train/evaluate and diamond with real parallel-branch overlap, failure/retry, one launch; no external network/GPU required |
 
 Targeted commands are fixed during phase preparation. Final commands:
 
@@ -282,13 +334,17 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 - Main risks: claiming atomicity across stores; unbinding ambiguous acceptance;
   double-subtracting availability; launching before full activation; committing
-  an agent-local or stale output; accidentally reacquiring resources in worker.
+  an agent-local or stale output; allocating a second attempt during request
+  materialization; retaining the whole-run lock/authority committer in the
+  managed worker; or accidentally reacquiring resources in worker.
 - Review focus: state-transition table, transaction owners, operation identity,
   failure injection, one-launch evidence, and authority/output ordering.
 - Stop if: the authority cannot bind/grant an exact attempt without moving retry
-  ownership; local artifacts cannot produce authority-accessible refs; current
-  process containment cannot support an assignment start fence; or a provider
-  requires hidden capacity outside exact atoms.
+  ownership; Phase 1's `PENDING` attempt cannot be materialized without
+  reallocating or renumbering it; local artifacts cannot produce authority-
+  accessible refs; current process containment cannot support an assignment
+  start fence; same-run independent stages cannot execute without a long-lived
+  run lock; or a provider requires hidden capacity outside exact atoms.
 - Accepted debt: Phase 2 recovery is same-process/restart reconciliation only.
   Persistent role startup and user-facing unknown-work recovery are later.
 
@@ -297,7 +353,8 @@ Targeted commands are fixed during phase preparation. Final commands:
 - Read this file, manifest shared constraints and trace, Phase 1 completion
   record, and planning FR-3, FR-9–FR-13, FR-15, FR-20, FR-23, and FR-26.
 - Implement the four slices in order. Keep launcher disabled until all preceding
-  state/claim tests pass.
+  state/claim tests pass, and preserve the exact Phase 1 attempt identity
+  throughout request materialization.
 - Do not add a remote protocol, persistent daemon CLI, GPU implementation,
   timeout takeover, or automatic reassignment.
 - Stop for the manager on any contract/ownership divergence or if the phase

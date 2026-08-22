@@ -271,6 +271,9 @@ src/loom/
       injection.py
       errors.py
 
+  scheduling/
+    __init__.py
+
   pipeline/
     __init__.py
     specs.py
@@ -430,7 +433,7 @@ refs / records / artifacts / protocols
 serialization / fingerprints / provenance
         |
         v
-io / config / pipeline stores
+io / config / scheduling values and kernel / pipeline stores
         |
         v
 pipeline planning / pipeline execution / sweeps / plugins
@@ -703,23 +706,40 @@ registries, explicitly composed public
 `SchedulingPolicy` protocols, deterministic defaults, and one fixed concrete
 pure `SchedulingKernel`. It must not import queue repositories, authority
 implementations, SQLite, routes, artifacts, processes, executors, vendors,
-project code, or CLI. The kernel owns mandatory checks, budgets, extension-
-result validation, and mutation exclusion; there is no root-level or full
-lifecycle scheduler protocol.
+project code, CLI, or `loom.pipeline` at runtime. The kernel owns mandatory
+checks, budgets, extension-result validation, and mutation exclusion; there is
+no root-level or full lifecycle scheduler protocol. Scheduling protocols consume
+their own immutable views of already-validated resource data. Higher-level
+`loom.pipeline.runtime` adapters own conversion from the existing
+`ResourceEntry`/`ResourceRequest` codec and compose concrete CPU/memory planners,
+preventing a `scheduling -> pipeline -> runtime -> scheduling` import cycle and
+avoiding a second authored resource schema.
 
 Dependency readiness does not move into `loom.scheduling`. One planning-owned,
 authority-side predicate over the persisted plan, stage state, and committed
 upstream outputs is shared by durable orchestration and assignment revalidation.
-The coordinator application owns stage-work projections and logical assignments;
-per-run authority owns attempts/status/output commits; the agent application
-owns physical binding and execution through a separate versioned
-`AgentResourceProvider` lifecycle. Coordinator/agent stores and separately
-scoped client/agent/operator application views are infrastructure protocols with
-SQLite/in-memory and direct/HTTP implementations, not root plugin surfaces.
-Deployment adapters explicitly compose these owners and freeze scheduling/
-provider registries above their import-light contracts; stored or wire data
-contains implementation identity plus negotiated data-contract identity only
-and never loads code.
+The per-run authority idempotently prepares the exact unassigned `PENDING`
+attempt and owns attempts/status/bound-input/output truth; the coordinator
+application owns rebuildable stage-work projections and logical assignments.
+The agent application owns physical binding and execution through a separate
+versioned `AgentResourceProvider` lifecycle. Coordinator/agent stores and
+separately scoped client/agent/operator application views are infrastructure
+protocols with SQLite/in-memory and direct/HTTP implementations, not root plugin
+surfaces. Per-run authority remains behind its service/API owner: a narrow
+authenticated coordinator adapter verifies authority service/workspace/
+generation identity and exposes only expected-state lifecycle operations.
+Agents and workers never receive that adapter, its credentials, or direct
+authority database access. A changed authority generation is accepted only by
+the coordinator's infrastructure reconciler after complete retained-run
+continuity: each retained run reproduces its last-acknowledged authority
+revision and canonical full-snapshot fingerprint, and nonterminal attempt/fence
+state matches exactly. The coordinator checkpoint is evidence, not authority
+truth. Pristine-empty bootstrap is valid only when the coordinator also has no
+retained admitted run. This is not a scheduling-kernel concern.
+Deployment adapters explicitly compose these owners
+and freeze scheduling/provider registries above their import-light contracts;
+stored or wire data contains implementation identity plus negotiated data-
+contract identity only and never loads code.
 
 ### 6.6 Execution and Executors
 

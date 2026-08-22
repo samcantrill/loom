@@ -65,6 +65,42 @@ dashboard delivery
 Executor and store implementations enforce parts of the policy, but the policy
 model should stay shared.
 
+## Stage 29 Managed Recovery Direction
+
+Stage 29 makes reliability assignment- and stage-aware for the managed local/
+multi-agent path. This section records planned behavior; the authoritative
+contracts and phase ownership remain in
+[Stage 29 planning](../roadmap/stage-29/planning.md).
+
+- A granted assignment receives an authority-owned execution fence that does
+  not expire merely because coordinator connectivity is lost. The agent may
+  finish and durably retain its result while coordinator or authority is down.
+- `SUBMITTED` means granted. Only a confirmed exact-current-fence process fact
+  advances to `RUNNING`. A lost or ambiguous launcher outcome is
+  `START_UNKNOWN`, remains bound, and never licenses relaunch or retry.
+- Disconnect, timeout, missing PID, expired offer, or credential change does not
+  prove failure or containment. Accepted unknown work is not automatically
+  reassigned and does not consume retry budget.
+- Coordinator/authority restart reconciles durable state before new work.
+  Authority generation change requires every retained run to reproduce its
+  last-acknowledged revision/canonical full-snapshot fingerprint plus exact
+  nonterminal fence state; coordinator checkpoints remain evidence rather than
+  authority truth. A pristine empty authority is valid only when the coordinator
+  has no retained admitted run. Agent restart begins at zero availability and
+  preserves unknown claims until exact reconciliation.
+- Manual recovery requires an authenticated expected-state operation and
+  positive containment tied to the exact agent/session/process boundary.
+  Recovery intent freezes ordinary mutation but still durably retains terminal
+  facts for the current execution fence. Immediately before close, reachable
+  complete success is finalized or blocks recovery. Authority success commit
+  and recovery close compete on the same expected fence: success winning
+  supersedes recovery; close winning makes only later results stale.
+- Only after definitive close may the existing reliability policy consider a
+  fresh attempt, with newly resolved placement and no copied claim, device,
+  offer, session, or provider token. Loom does not claim exactly-once authored
+  external effects; an explicit requeue after proven containment may repeat
+  effects that occurred before observation was lost.
+
 ## Design Goals
 
 Reliability behavior should:

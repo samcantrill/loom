@@ -19,8 +19,9 @@
 
 ## Objective And Context
 
-- Vertical outcome: a coordinator or agent can restart from its own intact
-  durable state without duplicating a managed launch. Granted work continues or
+- Vertical outcome: an agent can restart from its intact durable state without
+  duplicating a managed launch, while the Phase 5 coordinator/authority-restart
+  contract remains compatible with the new recovery records. Granted work continues or
   remains explicitly unknown until reconciled. When ordinary reconciliation
   cannot establish terminal truth, a separately authorized operator can close
   one exact positively contained assignment and allow existing reliability
@@ -60,16 +61,19 @@ In scope:
   - query the configured process supervisor/containment boundary where exact
     recovery is supported;
   - never repeat an existing start fence;
-  - authenticate/reconcile with coordinator and authority, replay events, finish
-    output publication/cleanup, then observe and publish a fresh offer.
+  - authenticate/reconcile with the coordinator, replay events, finish output
+    publication/cleanup, then observe and publish a fresh offer. The coordinator
+    alone invokes the authenticated authority view; the agent receives no
+    authority credential or direct access.
 - Distinguish process restart from database loss. Missing, corrupt, incompatible,
   or copied required state is not an empty restart and must not produce fresh
   capacity. Return a safe blocked diagnostic for operator action.
-- Complete coordinator restart from its intact SQLite state with a new
-  coordinator generation but the same durable coordinator identity. Rebuild
-  scheduling projections, retain assignments/reservations/receipts/controls,
-  accept reconnecting agent reconciliation, and never invalidate a current
-  authority execution fence merely because generation changed.
+- Retain Phase 5 as the sole implementation owner of coordinator and authority
+  outage/restart from intact state. Phase 8 adds no second coordinator- or
+  authority-restart state machine; its regression coverage proves the new
+  recovery decisions, evidence, receipts, and session-replacement facts survive
+  those established restarts and that a correctly reconciled generation change
+  still cannot invalidate a current authority execution fence.
 - Provide abstract user-level service auto-restart guidance for coordinator and
   agent roles, including protected configuration, dependency/start ordering,
   restart backoff, separate state roots/locks, and safe readiness checks. Do not
@@ -92,12 +96,21 @@ In scope:
   coordinator generation, or plain “mark failed” never qualifies alone.
 - Persist a recovery decision in one coordinator transaction after revalidating
   the complete expected assignment/session/control/transfer state and confirming
-  no authoritative success/output commit. Fence the old coordinator assignment
-  so late events cannot mutate it.
+  no authoritative success/output commit. Any complete current-fence success
+  result/output manifest already retained by the coordinator or reachable live
+  agent must first be finalized and offered to authority, or must block recovery
+  with an explicit unresolved-result reason; recovery cannot discard known
+  committable success merely because it arrived late. Recovery intent freezes
+  ordinary assignment/control/retry/release mutation but continues to durably
+  retain exact-current-fence terminal facts in a bounded quarantine. Recheck
+  that quarantine immediately before authority close.
 - Close the exact authority execution fence/attempt through a separate
   idempotent expected-state operation. Because coordinator and authority stores
   are independent, model this as a reconciliable recovery saga keyed by the same
-  recovery ID; never claim a distributed transaction.
+  recovery ID; never claim a distributed transaction. Authority success commit
+  and recovery close use the same expected execution fence. If success commits
+  first, recovery becomes `SUPERSEDED_BY_SUCCESS`; if close commits first, the
+  coordinator fences the assignment and any later result is stale audit data.
 - Only after the old attempt is definitively closed may the existing reliability
   policy decide whether one fresh attempt is permitted. The fresh attempt keeps
   authored run/stage requirements and hard target, but freshly resolves current
@@ -123,9 +136,9 @@ In scope:
   direct/HTTP operations showing expected/current identities, evidence kind,
   actor/principal reference, decision/result, retry disposition, and residual
   unknown set through bounded safe fields only.
-- Add operational examples for coordinator restart, agent restart, unknown-work
-  inspection, rejected weak recovery, positively contained recovery, and session
-  replacement using only `machine-A` and `machine-B`.
+- Add operational examples for coordinator/authority restart, agent restart,
+  unknown-work inspection, rejected weak recovery, positively contained
+  recovery, and session replacement using only `machine-A` and `machine-B`.
 - Run complete Stage 29 compatibility, security, resource, execution, outage,
   cancellation, recovery, package, validation, and test-summary gates.
 
@@ -202,16 +215,22 @@ boundary, or the operation fails without mutation.
 ### Cross-store recovery saga
 
 ```text
-coordinator RECOVERY_INTENT + OLD_ASSIGNMENT_FENCED
-  -> authority exact execution fence CLOSED with outcome
-  -> coordinator RECOVERY_CLOSED
-  -> reliability owner considers one next attempt
-  -> orchestrator materializes fresh ready work if allowed
+coordinator RECOVERY_INTENT + ORDINARY_MUTATION_FROZEN
+  -> retain/recheck exact-current-fence terminal facts
+  -> authority SUCCESS_COMMITTED
+       -> coordinator RECOVERY_SUPERSEDED (stop)
+  or authority exact execution fence CLOSED
+       -> coordinator OLD_ASSIGNMENT_FENCED + RECOVERY_CLOSED
+       -> reliability owner considers one next attempt
+       -> orchestrator materializes fresh ready work if allowed
 ```
 
-Crashes repeat the same `recovery_id`. Authority success discovered at any point
-wins and prevents failed/cancelled replacement. A later old event is stale
-because its assignment/fence is no longer current.
+Crashes repeat the same `recovery_id`. Authority expected-state CAS is the
+arbitration boundary: success discovered before close wins and prevents failed/
+cancelled replacement; close winning makes later facts stale. A complete
+verified success retained at a reachable Stage 29 owner before or during intent
+is reconciled before close. An unobservable result on an unavailable machine
+remains part of the operator's explicit residual risk.
 
 ### Session replacement
 
@@ -251,19 +270,22 @@ make recovery automatically periodic.
 | Restart never repeats start fence | Agent journal/supervisor reconciler | Crash after journal/spawn | Duplicate process | Crash at every start edge with launcher sentinel |
 | Restart begins at zero availability | Agent startup owner | Stale offer/config | Resource collision | Startup/reconnect tests |
 | DB loss is not empty state | Composition/store owner | Missing/corrupt/copied DB | Duplicate ownership | Failure/identity/schema tests |
-| Coordinator generation does not revoke execution fence | Authority | Coordinator restart | Lost valid result | Restart/result replay test |
+| Coordinator or reconciled authority generation does not revoke execution fence | Authority + generation reconciler | Coordinator/authority restart | Lost valid result or stale service adoption | Restart/result replay and authority-continuity tests |
+| Known committable success wins until authority close | Coordinator result quarantine/transfer reconciler + authority CAS | Result retained before/during recovery intent | Valid output discarded and duplicate retry | Before-intent, during-intent, and success-versus-close barrier tests |
 | Only positive exact containment permits manual close | Evidence resolver + authorizer | Timeout/PID/body assertion | Duplicate effects | Weak-evidence negative matrix |
 | Recovery is idempotent across stores | Coordinator/authority recovery saga | Crash/replay | Two closures/retries | Crash-after-each-step tests |
-| Known success prevents requeue | Authority terminal owner | Stale recovery snapshot | Duplicate attempt after success | Success/recovery race tests |
+| Authority CAS gives one success-or-close outcome | Authority terminal owner | Concurrent success and recovery close | Duplicate attempt after success or ambiguous recovery | Both CAS orderings, crash/replay, and post-close stale-result tests |
 | Fresh attempt has fresh placement | Reliability/orchestrator | Recovery code | Stale resource/session reuse | Claim/offer/device non-copy assertions |
 | Session replacement covers complete unresolved set | Session recovery owner | Partial evidence | Orphan live work | Multi-assignment complete-set tests |
 | Late old facts cannot mutate new work | Assignment/fence validation | Reconnected old agent/upload | Corrupt new attempt/output | Stale event/output/release tests |
 
 ## Implementation Slices
 
-1. Complete same-session agent/coordinator restart, zero-availability startup,
-   supervisor/journal/outbox/output reconciliation, duplicate-start rejection,
-   required-store fail-closed behavior, and user-service operation guidance.
+1. Complete same-session agent restart, zero-availability startup, supervisor/
+   journal/outbox/output reconciliation, duplicate-start rejection,
+   required-store fail-closed behavior, and user-service operation guidance;
+   add regression coverage for the Phase 5 coordinator/authority-restart
+   contract with the new recovery records.
 2. Add privileged recovery request/status/audit and trusted positive-containment
    evidence projection with exact scope/version checks and comprehensive weak-
    evidence negatives.
@@ -282,7 +304,7 @@ make recovery automatically periodic.
 | Unit | Required | Evidence classification, expected states, complete-set logic | Timeout/PID/reboot/credential negatives; exact identity and idempotency |
 | Contract | Required | Direct/HTTP recovery authorization and authority/store CAS | Same operation/error semantics; body actor/evidence cannot authorize |
 | Integration | Required | Real process restart, output replay, cross-store recovery crashes | Barrier at journal/start/exit/upload/commit/fence/retry/session replacement |
-| E2E / opt-in | Required | Full Stage 29 lifecycle | Coordinator and agent restarts; unknown containment/requeue; stale old agent; multi-machine simulation; optional site receipts |
+| E2E / opt-in | Required | Full Stage 29 lifecycle | Coordinator, authority, and agent restarts; authority continuity negatives; unknown containment/requeue; stale old agent; multi-machine simulation; optional site receipts |
 
 Targeted commands are fixed during phase preparation. Final commands:
 
@@ -308,7 +330,7 @@ Targeted commands are fixed during phase preparation. Final commands:
 ## Executor Handoff
 
 - Read this file, Phase 7 completion record, the complete manifest trace, and
-  planning FR-9, FR-10, FR-14–FR-16, FR-19–FR-21, FR-25, and FR-26.
+  planning FR-9, FR-10, FR-14–FR-17, FR-19–FR-21, FR-25, FR-26, and DQ-14.
 - Use real process barriers and fault injection for every irreversible edge.
   Finish phase-specific gates before full Stage 29 validation.
 - Decisions not to revisit: zero availability on restart, no repeat start,

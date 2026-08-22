@@ -162,6 +162,16 @@ not access hardware, stores, networks, discover plugins, enforce termination,
 or certify safety. The scheduling kernel separately validates every extension
 result before mutation even when conformance has previously passed.
 
+Stage 29 transport and lifecycle integration tests separately prove the
+coordinator-authority trust boundary: direct/owner-only IPC/HTTP adapters have
+the same scoped semantics, the wrong authority service/workspace/generation or
+principal fails before mutation, a rotated generation resumes only after the
+complete retained-run continuity set agrees, pristine-empty bootstrap is
+accepted only when the coordinator has no retained run, and agent/worker
+environments contain neither authority credentials nor direct database access.
+Real loopback TLS fixtures are Stage 29 test assets; they are not assumed to
+exist in the current source.
+
 ---
 
 ## 3. Package Boundary

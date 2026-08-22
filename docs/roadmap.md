@@ -97,7 +97,7 @@ written.
 - Keep `loom` domain-neutral. Project code owns concrete stages, codecs,
   datasets, models, metrics, reports, recipes, and domain schemas.
 - Preserve the source-tree and import boundaries in
-  [`docs/structure.md`](../structure.md).
+  [`docs/structure.md`](structure.md).
 - Treat v0 as the local, inspectable runtime kernel: config composition,
   primitives, local I/O, static pipeline DAGs, local stores, conservative
   same-run-directory resume, and local in-process execution.
@@ -167,7 +167,7 @@ written.
 
 Status:
 
-- Covered by [`docs/roadmap/stage-0/implementation-plan.md`](docs/roadmap/stage-0/implementation-plan.md).
+- Covered by [`docs/roadmap/stage-0/implementation-plan.md`](roadmap/stage-0/implementation-plan.md).
 
 Goal:
 
@@ -2477,12 +2477,16 @@ Implement:
   `ResourceRequest`, treating authored stage resources as semantic minima and
   exact-stage runtime resources as non-weakening refinements. Run/pool policy
   supplies defaults, concurrency, and optional hard pinning; stage policy
-  supplies stage-specific hard rules, preferences, and fallback.
+  supplies stage-specific hard rules, preferences, and fallback. Per-run
+  `max_parallel_stages` remains an orchestrator limit rather than part of one
+  stage's placement fingerprint.
 - Positive integer CPUs, memory/VRAM normalized to integer bytes, discrete
   device instances, categorical attributes, and explicit GPU modes. Exclusive
   GPU claims bind exact devices; VRAM-share and fractional requests are valid
-  only when a named provider advertises enforceable accounting/binding. Binary
-  floating point never owns resource arithmetic.
+  only when a named provider advertises enforceable accounting/binding. A GPU
+  fraction uses an integer numerator in `amount`, `unit: share`, and a bounded
+  positive integer `share_denominator` attribute; binary floating point never
+  owns resource arithmetic.
 - Import-light `loom.scheduling` values, scheduling-component descriptors,
   instance-local frozen registries, explicitly composed subsystem-public
   `ResourcePlanner`, `HardConstraintEvaluator`, `PreferenceScorer`, and
@@ -2490,8 +2494,11 @@ Implement:
   `SchedulingKernel`. The kernel owns mandatory checks/search/result validation;
   custom hard rules only remove, preferences add bounded integer scores, and a
   policy selects only an existing validated candidate ID. Stable identities
-  break ties. There is no full replaceable lifecycle scheduler, payload-loaded
-  callable, unrestricted DSL, or general solver.
+  break ties. Scheduling never imports `loom.pipeline` at runtime; the
+  higher-level pipeline-runtime adapter converts existing validated resource
+  entries to scheduling-owned immutable views and rebuilds the existing codec.
+  There is no second authored schema, full replaceable lifecycle scheduler,
+  payload-loaded callable, unrestricted DSL, or general solver.
 - A separate public agent-side `AgentResourceProvider` lifecycle for physical
   observe/prepare/reconcile/activate/abort/release. Planner and provider retain
   distinct immutable component descriptors and negotiate a versioned resource-
@@ -2510,6 +2517,15 @@ Implement:
   evidence and resolved-placement fingerprint, but no stage terminal truth.
   Per-run authority continues to own plans, attempts, statuses, bound inputs,
   output commits, and retry decisions.
+- An authority-owned idempotent expected-state preparation operation that
+  creates or returns one exact unassigned `PENDING` attempt for a readiness
+  generation. It records bound-input/readiness evidence without using the
+  current `RUNNING`/lease allocation semantics; local worker request, workspace,
+  and input materialization remain part of the later assignment saga.
+- A managed execution-only stage-worker seam that preserves the exact prepared
+  attempt and writes fenced result facts without acquiring the legacy whole-run
+  lock, independently interpreting the DAG, or committing run/stage authority
+  truth. This permits real same-run independent-branch concurrency.
 - Separate production `SQLiteCoordinatorStateStore` and
   `SQLiteAgentJournal` roots with one active process lock per role. The
   coordinator owns run admission, stage-work projections, offers, logical
@@ -2522,7 +2538,12 @@ Implement:
   binds the still-ready `PENDING` attempt without advancing lifecycle; the agent
   stages request/inputs and binds reality; exact decline clears only that
   ungranted binding; accepted grant promotion writes `SUBMITTED` plus the
-  execution fence; agent records grant/start before one root launch. Ambiguous
+  execution fence; agent records grant/start intent before one root launch and
+  then a confirmed, failed, or unknown start fact. Only exact current-fence
+  confirmed process evidence advances authority to `RUNNING`; an ambiguous
+  start remains `SUBMITTED` and cannot be relaunched. `START_FAILED` is
+  terminal/retryable only when the launcher proves no managed process was
+  created or can later run; otherwise it is `START_UNKNOWN`. Ambiguous
   acceptance remains bound.
 - An authority execution fence that remains valid across coordinator outage and
   liveness expiry until terminal commit or explicit fencing. This permits a
@@ -2532,8 +2553,9 @@ Implement:
 - Phases 1–3 migrate `PipelineRunner`, `ManagedLocalQueueRuntime`, the managed
   queue/controller, local process/resource admission, prepared attempt, and
   stage worker into one dependency-aware bounded/persistent local path. Phase 1
-  establishes pure scheduling and ready work, Phase 2 the complete local
-  assignment saga, and Phase 3 persistent lifetime/public compatibility.
+  establishes pure scheduling, authority-owned `PENDING` preparation, and ready
+  work; Phase 2 adds worker materialization and the complete local assignment
+  saga; Phase 3 adds persistent lifetime/public compatibility.
   Historical queue rows remain inspectable/cancellable; public facades remain
   callable; managed whole-run resources/argv/direct dispatch and in-memory
   ready-loop ownership are deprecated rather than silently reinterpreted.
@@ -2546,8 +2568,10 @@ Implement:
   exact net revision naming live claims
   already reflected in it. The coordinator subtracts only unreflected
   reservations and permits one unresolved admission before a fresh revision, so
-  logical ownership is not double-counted. Offer expiry removes future capacity
-  only.
+  logical ownership is not double-counted. This serializes admission against one
+  snapshot, not execution: after an accepted claim is reflected, another
+  disjoint assignment may use the same agent's remaining atoms concurrently.
+  Offer expiry removes future capacity only.
 - One coordinator application owner with separately scoped client, agent, and
   operator protocol views and direct/HTTP adapters. Persistent HTTP uses mutual
   TLS with expected peer/service identity plus configured least-privilege
@@ -2562,24 +2586,45 @@ Implement:
   configuration/environment and are excluded from worker environments by
   default, with abstract `machine-A`/`machine-B` examples. Same-user project code
   remains trusted; cloned-state coordinator HA/split brain is not supported.
+- Per-run authority remains a separate service/API owner. The coordinator uses
+  one authenticated least-privilege authority view that verifies authority
+  service/workspace/generation/schema/capability identity and exact expected
+  state. Owner-contained local IPC may derive verified peer identity;
+  persistent HTTP, even loopback, requires mutual TLS. Agents, clients,
+  operators, and workers receive neither authority credentials nor direct
+  database access. Authority outage pauses all new lifecycle-dependent work but
+  not an already-granted process. A rotated service generation is adopted only
+  after complete retained-run continuity: each retained run reproduces its
+  last-acknowledged authority revision/canonical full-snapshot fingerprint and
+  nonterminal attempt/fence state matches exactly. The checkpoint is evidence,
+  not lifecycle truth. Pristine-empty bootstrap is valid only when the
+  coordinator has no retained admitted run; missing or divergent expected
+  authority truth remains degraded.
 - Resident-project remote execution and a bounded first artifact data path.
   Before grant, the agent durably materializes the immutable request and all
-  required inputs. After execution it durably records names/digests/sizes,
-  requests idempotent assignment/fence/manifest-bound upload grants, and retains
-  output until an authenticated coordinator relay verifies content and publishes coordinator/backend-visible
-  `ArtifactRef` values. Authority commits only those final refs; agent-local
-  file URIs never unlock a remote descendant. A later direct object backend can
-  implement the same boundary.
+  required inputs. The initial relay advertises immutable regular-file payloads
+  only; directory/tree, special-file, or ambiguous forms make that remote
+  candidate ineligible while eligible local execution remains available. After
+  execution the agent durably records names/digests/sizes, requests idempotent
+  assignment/fence/manifest-bound upload grants, and retains output until an
+  authenticated coordinator relay verifies content and publishes coordinator/
+  backend-visible `ArtifactRef` values. Authority commits only those final refs;
+  agent-local file URIs never unlock a remote descendant. A later explicit tree
+  or direct object-backend contract can implement the same boundary.
 - Coordinator outage stops new/downstream assignment but not granted execution.
-  Agents journal and retain result/output, reconnect, reconcile, replay, finish
+  Authority outage also stops preparation, binding, grant, delivery, and commit
+  until authenticated generation/snapshot reconciliation succeeds. Agents
+  journal and retain result/output, reconnect, reconcile, replay, finish
   publication, and only then advertise fresh capacity. Agent outage removes
   capacity but leaves accepted work unknown/reserved; it is never automatically
   assigned elsewhere. Independent work on other agents may continue.
 - Stage-granular run cancellation: commit intent and stop new work first;
   cancel/unbind prepared work; fan out exact controls to every active
-  assignment; retain truthful success that wins a race; finalize only after
-  terminal or positive-containment evidence. No descendant starts after run
-  cancellation.
+  assignment. A granted assignment with no start intent needs exact never-
+  launched acknowledgement; a durable but unresolved start intent remains
+  unknown; a confirmed process needs containment. Retain truthful success that
+  wins a race and finalize only after terminal or positive-containment evidence.
+  No descendant starts after run cancellation.
 - Agent drain/resume/reload with availability withdrawn before mutation.
   Reload reads complete trusted local config, waits for affected live claims,
   and atomically publishes one new configuration/inventory fingerprint.
@@ -2588,8 +2633,14 @@ Implement:
   agent/session/process boundary may fence/close the old execution. Existing
   reliability policy alone may create one fresh attempt with current placement
   and no stale claim/score. Timeout, PID absence, reboot, or plain “mark failed”
-  is rejected. Different-session replacement requires proof for the complete
-  unresolved old-session set.
+  is rejected. Recovery intent freezes ordinary mutation but continues to
+  retain exact-current-fence terminal facts. Immediately before authority
+  close, complete reachable success/result must finalize/commit or block;
+  success commit and close compete on the same expected fence. Success winning
+  aborts recovery, while close winning makes only later facts stale. An
+  unobservable result on an unavailable machine remains explicit operator risk.
+  Different-session replacement requires proof for the complete unresolved old-
+  session set.
 
 Exit criteria:
 
@@ -2624,13 +2675,17 @@ Exit criteria:
   select arbitrary command, code, provider, host path, or fetch URL. Input
   transfer is complete before grant; traversal/symlink/oversize/quota and
   interrupted output cases expose no partial artifact; downstream receives only
-  accessible finalized refs.
+  accessible finalized refs. A wrong authority service/workspace/generation or
+  non-coordinator authority principal also fails closed, and authority access is
+  absent from worker environments.
 - The authenticated no-mutation capability handshake passes direct/HTTP tests
   and an opt-in abstract two-machine connectivity receipt before remote launch
   is enabled. Worker environments do not inherit daemon service credentials.
-- Coordinator loss during execution yields no new work but the stage continues,
-  buffers output, and commits/reconciles after restart. Agent loss never causes
-  automatic duplication. Same-session restart begins at zero availability.
+- Coordinator or authority loss during execution yields no new work but the
+  stage continues, buffers output, and commits/reconciles after restart; a new
+  authority generation first proves complete retained-run continuity. Agent loss
+  never causes automatic duplication. Same-session restart begins at zero
+  availability.
 - Run cancellation, drain/reload, stale-event replay, and manual recovery pass
   controlled race tests. Weak containment cannot fence work; known authoritative
   success prevents requeue; different-session replacement requires complete-set
@@ -2781,7 +2836,7 @@ Before turning any roadmap version into a full implementation plan:
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
 | `runtime-resources.md` | v4, v6, v7, v11, v17, v18, v23, v27, v28, v29 | Shared runtime/resource objects arrive before executor-specific mapping; v11 adds queue pool reconciliation over authority resource leases; v23 adds concrete local assignment; v27 documents GPU share/group meanings; v28 preserves custom validation across reconstruction; v29 resolves existing stage resource requests into per-attempt placement, adds exact resource-owned inventory/claim envelopes and explicit GPU modes, and compares global fresh offers while final binding remains agent-local. |
 | `execution.md` | v0, v4, v5, v6, v7, v9, v9-post, v10, v11, v17, v18, v19, v23, v28, v29 | Local execution in v0; options in v4; subprocess in v5; later stages add schedulers, concurrency, authority, reliability, managed-local lifecycle, and reconstructable extensions; v29 places work through the common generic scheduler and inserts a journalled fenced assignment handoff before reusing the same local process/resource path. |
-| `run-store.md` | v0, v3, v5, v8, v9, v9-post, v10, v11, v12, v19, v20, v21, v23, v29 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence; v10 adds DB-backed authority service/offline import; v11 links queue and authority facts; v23 adds local attempt logs/evidence; v29 keeps run authority distinct in joined status and lets known committed success resolve an otherwise missing agent report before any manual recovery. |
+| `run-store.md` | v0, v3, v5, v8, v9, v9-post, v10, v11, v12, v19, v20, v21, v23, v29 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence; v10 adds DB-backed authority service/offline import; v11 links queue and authority facts; v23 adds local attempt logs/evidence; v29 keeps run authority distinct in joined status and makes known committed or reachable committable success precede manual recovery. |
 | `state.md` | v0, v5, v7, v9, v9-post, v10, v11, v19, v23, v29 | Basic statuses in v0; attempts/failures, scheduler state, authority-backed lifecycle, queue status, and reliability mature later; v23 adds deferred dispatch/pool-cycle outcomes; v29 adds versioned placement/claim evidence, safe pending reasons, separate assignment/control/connectivity/process/recovery projections, preserves timeout/search ambiguity, and records containment-gated operator resolution without treating offer expiry as run/process truth. |
 | `provenance.md` | v0, v1, v6, v7, v10, v11, v14, v17, v18, v20, v28 | Generic provenance in v0; config composition provenance in v1; submission, offline import evidence, queue dispatch facts, plugin, container, event, and event-sink facts added with those capabilities; v28 records exact safe activation identity for reconstruction. |
 | `resume.md` | v0, v2, v3, v9, v9-post, v10, v13, v19 | Same-run-directory resume in v0; CLI/preflight expose it; v9 clarifies interrupted attempts and leases; v9-post authority-backs continuation entrypoints; v10 adds offline import/equivalence policy; sweeps and retry policies build later. |

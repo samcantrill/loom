@@ -2101,7 +2101,10 @@ class StageWork:
 ```
 
 `StageWork` is illustrative internal data, not a new public API. It identifies
-one already planned and prepared attempt. It carries the resolved resource and
+one already planned attempt that authority has idempotently prepared in
+`PENDING` for an exact readiness generation. That authority transaction records
+bound-input/readiness evidence but creates no worker request, workspace,
+assignment, execution lease, or process. It carries the resolved resource and
 preference policy for that exact stage; it does not carry arbitrary command
 text, invent a new attempt, or reinterpret the pipeline graph.
 
@@ -2115,7 +2118,9 @@ coordinator reconciles authoritative plan and statuses
         |
         +-- resolve REUSE / SKIP / BLOCKED without agent capacity
         |
-        +-- expose each ready RUN attempt as StageWork
+        +-- authority prepares exact ready PENDING RUN attempt
+        |
+        +-- expose its rebuildable StageWork projection
                          |
                          v
           fixed scheduling kernel + selected policy
@@ -2190,7 +2195,9 @@ class AssignedStageRequest:
 Before launch, the agent verifies that this assignment has the current grant,
 that the grant has not been fenced, that its exact inputs are durably staged,
 and that the claimed physical resources are bound. The worker then executes
-only the named attempt:
+only the named attempt. The managed worker path is extracted from the current
+stage-worker pieces and does not take the legacy whole-run execution lock or
+write authority directly:
 
 ```python
 def execute_assigned_stage(request: AssignedStageRequest) -> StageWorkerResult:
@@ -2222,6 +2229,37 @@ assignment and execution fence to per-run authority. Authority validates and
 commits outputs before it marks success. Repeated delivery is idempotent, and a
 coordinator outage leaves the agent free to finish and retain the result for
 later replay.
+
+`SUBMITTED` means the accepted assignment has a durable execution grant, not
+that a process is known to be running. The agent records grant/start intent
+before its one root launcher invocation and then records `PROCESS_STARTED`,
+`START_FAILED`, or `START_UNKNOWN`. Only exact current-fence confirmed process
+evidence may advance authority to `RUNNING`; unknown start remains `SUBMITTED`
+and cannot be launched again. `START_FAILED` is definitive only when the
+launcher proves no managed process was created or can later run; every timeout,
+lost response, or uncertain spawn is `START_UNKNOWN`. A fenced terminal result
+can commit from either `SUBMITTED` or `RUNNING`.
+
+Per-run authority remains a distinct service/API owner. The coordinator calls a
+narrow least-privilege authority view after authenticating the service and
+verifying workspace/generation/schema/capability identity. Persistent HTTP,
+including loopback, uses mutual TLS; owner-contained local IPC may use verified
+peer identity. Agents and workers receive neither authority credentials nor
+direct database access. If authority is unavailable, the coordinator pauses
+preparation, binding, grant/delivery, and terminal commit while already-granted
+agents continue and retain results. A restarted authority generation becomes
+current only after the coordinator proves complete retained-run continuity:
+every retained admitted run reproduces its last-acknowledged authority revision
+and canonical full-snapshot fingerprint, and each nonterminal attempt/fence
+matches exactly. The checkpoint is comparison evidence, not lifecycle truth. A
+pristine empty authority is valid only when the coordinator has no retained
+admitted run; missing or divergent expected truth remains degraded.
+
+The first remote artifact relay accepts immutable regular-file payloads only.
+Directory/tree, special-file, or ambiguous payload forms make that remote
+candidate ineligible without blocking an otherwise eligible local execution.
+No implicit archive format is invented; a later explicit tree or direct-backend
+contract may extend the data boundary.
 
 Managed whole-run `LaunchContract.resources`, synthetic whole-run command
 snapshots, and `claim_next -> dispatch(item)` cease to be execution inputs for

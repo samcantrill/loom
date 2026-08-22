@@ -214,6 +214,11 @@ nor renews/releases foreign leases. For the POSIX built-in runner, a small
 systemd deployment can use `KillMode=control-group` and a stop timeout. This is
 an operational pattern, not a Loom daemon or a required default test service.
 
+This boolean-attestation operation is historical whole-run behavior only. Stage
+29 assignments and agent sessions must reject it at the compatibility boundary;
+only Stage 29's later authenticated positive-containment recovery may fence,
+close, or retry new managed work.
+
 For independent devices, request the ordinary generic amount:
 
 ```python
@@ -250,9 +255,12 @@ run orchestrator   interprets the persisted plan and authoritative output state
 placement engine   chooses where an already-ready executable attempt should run
 ```
 
-One shared authority-side readiness predicate is used when stage work is exposed
-and again when the exact attempt is bound to an assignment. The placement engine
-never interprets DAG edges. For `preprocess -> train -> evaluate`, only
+One shared authority-side readiness predicate is used when authority
+idempotently prepares an exact unassigned `PENDING` attempt, when its rebuildable
+stage work is exposed, and again when that exact attempt is bound to an
+assignment. Preparation records bound-input/readiness evidence but creates no
+worker request, workspace, assignment, execution lease, or process. The
+placement engine never interprets DAG edges. For `preprocess -> train -> evaluate`, only
 `preprocess` initially appears in a placement snapshot. `train` appears only
 after the preprocess output commit, and `evaluate` appears only after train
 commits. Reuse, skip, blocked descendants, and retry remain planner/reliability
@@ -307,7 +315,10 @@ Availability names the live claim summaries already subtracted from its net
 remaining atoms. Coordinator logical reservations for those claims remain
 ownership evidence but are not subtracted again. Only an unreflected admission
 against the current revision consumes that baseline; one unresolved admission
-is permitted before accepted/declined reconciliation publishes a fresh revision.
+is permitted before accepted/declined reconciliation publishes a fresh
+revision. This serializes admission against one snapshot, not process execution:
+once an accepted claim appears in fresh net availability, another disjoint
+claim may run concurrently on the remaining atoms.
 
 An offer binds agent/session/configuration, project and executor capabilities,
 inventory and availability revisions, pool, resource-contract versions, and
@@ -356,8 +367,9 @@ discovered or sandboxed.
 Cross-store correctness is a recoverable protocol, not one imaginary
 transaction:
 
-1. Authority prepares an exact ready attempt; coordinator materializes stage
-   work.
+1. Authority idempotently prepares or returns the exact unassigned `PENDING`
+   attempt for its readiness generation; coordinator materializes rebuildable
+   stage work.
 2. Coordinator transaction reserves current logical claims and creates an
    assignment intent.
 3. The shared readiness predicate is rechecked and authority CAS binds that
@@ -369,8 +381,13 @@ transaction:
    acceptance remains bound.
 5. After acceptance, grant promotion changes the bound attempt to `SUBMITTED`
    and creates an authority execution fence independent of coordinator
-   liveness. Agent records grant and start fences before at most one root
-   launcher invocation.
+   liveness. `SUBMITTED` means granted, not proven started. The agent records
+   grant/start intent before at most one root launcher invocation and then
+   journals confirmed, failed, or unknown start. Only exact current-fence
+   confirmed process evidence advances authority to `RUNNING`; unknown start
+   remains `SUBMITTED` and cannot be relaunched. `START_FAILED` is definitive
+   only when no managed process was created or can later run; an uncertain
+   spawn is `START_UNKNOWN`.
 6. Agent retains output until an authenticated transfer/backend finalizer
    returns coordinator-accessible `ArtifactRef` values. Output upload grants are
    issued only after an authenticated durable manifest binds exact names,
@@ -403,24 +420,47 @@ support restart from one durable state root, not HA from cloned databases/keys.
 Configured principal/pool admission quotas bound pending work; site policy owns
 accepted priority ranges and preference weights/tiers rather than job payloads.
 
+Per-run authority remains a separate service/API owner. A narrow authenticated
+coordinator principal is the only Stage 29 role allowed to invoke its expected-
+state lifecycle operations; the coordinator also verifies authority service,
+workspace, generation, schema, and capabilities. Owner-contained local IPC may
+use verified peer identity, while persistent HTTP—including loopback—uses
+mutual TLS. Agent, client, operator, and worker credentials cannot call this
+view, and workers receive no authority endpoint or direct database access.
+Authority loss pauses preparation, binding, grant/delivery, and terminal commit
+without stopping already-granted work. A rotated generation is adopted only
+after complete retained-run continuity: every retained admitted run reproduces
+its last-acknowledged authority revision/canonical full-snapshot fingerprint and
+each nonterminal attempt/fence matches exactly. The checkpoint is comparison
+evidence, not lifecycle truth. Pristine-empty bootstrap is valid only when the
+coordinator has no retained admitted run; missing or divergent expected truth
+leaves it degraded.
+
 Agents connect outbound using bounded long polling and own no prefetched durable
 queue. Coordinator policy authorizes pool membership, while one exact agent
 availability domain backs every allowed pool view so capacity is not duplicated
 per pool. Work names a prepared resident stage and safe versioned values, not
 arbitrary shell text or implementation targets. Worker environments exclude
 daemon service credentials and role internals by default, while same-user
-project code remains trusted. A bounded initial coordinator
-relay provides network-only input/output movement through coordinator-issued
+project code remains trusted. A bounded initial coordinator relay accepts
+immutable regular-file payloads only and provides network-only input/output
+movement through coordinator-issued
 assignment-scoped transfer IDs, derived traversal/symlink-safe staging roots,
 quotas, digests, temporary-first promotion, and manifest-last publication.
 Payload paths or arbitrary fetch URLs do not select host/network access, and
-agent-local file paths are never committed as remote output refs.
+agent-local file paths are never committed as remote output refs. Directory/
+tree, special-file, and ambiguous payload forms make a remote candidate
+ineligible but do not block an eligible local placement; no implicit archive
+contract is assumed.
 
 Queue status joins but labels queue admission, dependency waiting, placement
 waiting, active/unknown assignment, authority stage truth, artifact publication,
 retry, cancellation, and terminal outcome. Cancellation first stops new stage
-work, then controls every exact active assignment; it becomes terminal only
-after terminal or positive-containment evidence. Existing whole-run queue rows
+work, then controls every exact active assignment. After grant, an exact agent
+acknowledgement may prove no start intent/launcher invocation; once start intent
+exists without a known outcome, work remains unknown until reconciliation or
+containment. Cancellation becomes terminal only after terminal or positive-
+containment evidence. Existing whole-run queue rows
 remain readable and cancellable. New managed work uses a distinct orchestration
 state rather than silently reinterpreting historical `DISPATCHED`.
 

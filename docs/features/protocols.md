@@ -587,6 +587,14 @@ Validation owns authored/runtime entry shape and canonicalization; the planner
 receives those accepted values and owns scheduling merge, feasibility, and
 claims. Reconstruction preserves their separate identities.
 
+The dependency direction is deliberate: `loom.scheduling` does not import
+`loom.pipeline` at runtime. Its protocols consume scheduling-owned immutable
+views of already-validated resource entries. The higher-level
+`loom.pipeline.runtime` adapter converts the existing canonical
+`ResourceEntry`/`ResourceRequest` values into those views, composes the built-in
+CPU and memory planners, and rebuilds the existing durable codec. This avoids an
+import cycle without introducing a second authored resource schema.
+
 Reason:
 
 ```text
@@ -637,6 +645,21 @@ protocols remain subsystem infrastructure boundaries. They have current SQLite,
 in-memory-test, direct, and HTTP implementations, but are not package-root
 plugin APIs. Their methods express semantic atomic transitions and least-
 privilege views rather than generic CRUD or one broad service object.
+
+Per-run authority remains a separate service/API owner. Stage 29 adds only a
+narrow coordinator authority adapter whose construction captures an
+authenticated least-privilege coordinator principal and expected authority
+service/workspace/generation identity. Direct or verified owner-only IPC and
+persistent mTLS HTTP adapters invoke the same authority authorization and
+expected-state operations. This is infrastructure, not a downstream plugin
+protocol; agents and workers never receive it or direct authority database
+access. A separate coordinator infrastructure reconciler may adopt a rotated
+service generation only after complete retained-run continuity: every retained
+run reproduces its last-acknowledged authority revision/canonical full-snapshot
+fingerprint and each nonterminal attempt/execution fence matches exactly. The
+coordinator checkpoint is comparison evidence, not authority truth. A pristine
+empty authority is valid only when the coordinator has no retained admitted
+run. Neither the scheduling kernel nor an agent may make that decision.
 
 Dependency readiness is not another resource or scheduler protocol: one
 authority-side planning predicate is shared by orchestration and assignment CAS,

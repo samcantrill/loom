@@ -38,14 +38,23 @@ reachability, certificate/service identity, role mapping, request bounds,
 session revisions, and pool authorization before a remote peer can execute code
 or move artifacts.
 
+Existing client submission and cancellation operations still invoke their Phase
+3 semantics and may mutate admitted-run/authority state. The Phase 4 gate is
+specifically that agent-session, offer, and work-request operations cannot
+prepare, bind, grant, transfer, or launch remote stage execution.
+
 ## Current Source And Harness
 
 - Reuse Phase 3 client/local-agent/operator application views, shared
-  authorizer, direct adapter conformance, coordinator SQLite ownership, safe
-  status/errors, and protected configuration patterns.
-- Rediscover existing authority HTTP/client codecs, TLS test fixtures,
+  authorizer, authenticated scoped coordinator-authority adapter, direct adapter
+  conformance, coordinator SQLite ownership, safe status/errors, and protected
+  configuration patterns.
+- Rediscover existing authority HTTP/client codecs, service test utilities,
   idempotency/version envelopes, payload limits, fake clocks/networks, and
-  application error normalization.
+  application error normalization. Add or extend the real TLS fixtures and
+  verification harness needed here; the pre-Stage-29 source does not already
+  provide them, though Phase 3 may have introduced a bounded local subset if it
+  selected HTTP instead of owner-only IPC.
 - Standard-library/existing HTTP dependencies are preferred. Do not add a
   broker, service mesh, streaming platform, certificate authority, or
   heavyweight networking dependency.
@@ -82,6 +91,11 @@ In scope:
   principal captured at construction; an HTTP adapter derives the principal
   from verified transport. Both normalize to the same request values,
   authorizer, idempotency logic, store transitions, limits, errors, and audit.
+- Reuse the Phase 3 peer/service-identity and authorization primitives for
+  transport consistency, but keep the authority view distinct from client,
+  agent, and operator views. Agent/client/operator certificates cannot call
+  authority operations, and authority/coordinator credentials never enter an
+  offer, work request, response, audit payload, or future worker environment.
 - Add agent registration policy mapping an authenticated agent principal to one
   stable agent ID, allowed pools, allowed project/environment/executor
   capabilities, permitted resource contracts, and credential IDs. Intersect
@@ -145,7 +159,9 @@ In scope:
 Out of scope:
 
 - Returning an assignment from a work request, transferring request/input/output
-  bytes, granting or starting a process, or changing authority lifecycle.
+  bytes, granting or starting a process, or allowing an agent transport operation
+  to change stage-attempt/assignment lifecycle. Existing authorized client run
+  admission/cancellation remains in scope through the Phase 3 application view.
 - GPU/device inventory and placement, remote controls, cancellation delivery,
   session takeover, artifact URLs, peer-to-peer agents, broker infrastructure,
   internet-facing hosting, or coordinator HA.
@@ -244,8 +260,8 @@ decoding, idempotency, or the no-launch gate.
 
 ## Proportionality
 
-- Reuses Phase 3 application views/authorizer and existing HTTP/TLS/codec test
-  patterns.
+- Reuses Phase 3 application views/authorizer and current HTTP/codec/service
+  patterns; this phase completes the TLS harness required for remote peers.
 - Adds only the remote identity/session/offer boundary needed to test network
   communication before execution.
 - Defers data plane, GPU, control, PKI automation, and HA. This makes the first
@@ -262,7 +278,7 @@ decoding, idempotency, or the no-launch gate.
 | Pool membership is coordinator policy | Registration policy | Agent offer text | Self-authorized capacity | Allowed/intersection/denied pool tests |
 | One delivery-active request per session/revision | Work-request owner | Concurrent/stale polls | Duplicate delivery | Barrier and supersession tests |
 | Offer data is safe and bounded | Offer codec/projector | Agent observation/error | Secret leak/resource abuse | Field allowlist, oversize, redaction tests |
-| Phase 4 cannot launch or transfer | Capability/application gate | Accidental route enablement | Premature remote side effect | Launcher/artifact sentinels in all remote tests |
+| Phase 4 agent operations cannot prepare, assign, launch, or transfer | Capability/application gate | Accidental route enablement | Premature remote execution side effect | Attempt/assignment/launcher/artifact sentinels in all agent-connectivity tests |
 
 ## Implementation Slices
 
@@ -286,7 +302,7 @@ decoding, idempotency, or the no-launch gate.
 | Package | Required | Transport remains outside domain/scheduling imports | Import boundaries and optional configuration behavior |
 | Unit | Required | Codecs, limits, principal map, idempotency, sessions/offers | Boundary values, downgrade, duplicate keys, safe errors, TTL/revisions |
 | Contract | Required | Direct/HTTP semantic equivalence | Identical authz/state/idempotency/error outcomes for each operation |
-| Integration | Required | Real TLS loopback and durable reconnect | Wrong CA/service/role/scope; restart/replay; stale poll; one pool domain |
+| Integration | Required | Real TLS loopback and durable reconnect | Wrong CA/service/role/scope; authority view inaccessible to agent credentials; restart/replay; stale poll; one pool domain |
 | E2E / opt-in | Required loopback; optional two-machine | No-mutation connectivity | Authenticated register/offer/wait on loopback; abstract two-machine receipt when credentials exist; launch/artifact sentinels untouched |
 
 Targeted commands are fixed during phase preparation. Final commands:
@@ -300,8 +316,8 @@ Targeted commands are fixed during phase preparation. Final commands:
   interface; replay after receipt pruning; stale session delivery; credentials
   in logs/worker env; accidentally enabling launch before the gate passes.
 - Review focus: TLS verification, role/scope table, derived identity, request
-  limits, idempotency persistence, session revisions, offer safety, and negative
-  no-side-effect evidence.
+  limits, idempotency persistence, authority-view isolation, session revisions,
+  offer safety, and negative no-side-effect evidence.
 - Stop if: the existing HTTP stack cannot enforce mutual peer/service identity;
   principal mapping would depend on body fields; session state cannot survive
   restart; local/direct behavior diverges; or the transport cannot guarantee no

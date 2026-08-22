@@ -67,7 +67,10 @@ In scope:
     described devices only when a named provider advertises enforceable
     isolation, accounting, granularity, preparation, binding, and release;
   - provider-defined fractional mode: accept an exact normalized rational value
-    only for a named compatible provider and advertised granularity.
+    only for a named compatible provider and advertised granularity. Preserve
+    the existing numeric `ResourceEntry` shape by using the positive integer
+    numerator in `amount`, `unit: share`, and a bounded positive integer
+    `share_denominator` attribute; reduce it canonically before matching.
 - Never infer sharing from observed free VRAM. Never satisfy one device's 64 GiB
   minimum by summing several 12 GiB devices. A multi-GPU request must state its
   device count and per-device/relationship requirements explicitly.
@@ -177,6 +180,29 @@ The second request is invalid unless the selected agent/provider advertises the
 matching contract and exact granularity. It is not treated as 0.125 of an 80 GiB
 device by generic arithmetic.
 
+```yaml
+# One half of a provider-defined enforceable share; never authored as 0.5.
+resources:
+  entries:
+    gpu:
+      kind: gpu
+      amount: 1
+      unit: share
+      attributes:
+        allocation_mode: provider_fraction
+        share_denominator: 2
+        provider: configured-fraction-provider
+```
+
+Here `amount / share_denominator` is the exact requested rational. Numerator and
+denominator must be bounded positive integers, reduced to canonical form, and a
+multiple of the provider's advertised rational granularity. A different unit,
+missing provider, zero/negative denominator, binary float, or an equivalent but
+off-granularity encoding is rejected during resource validation/resolution
+before admission; a reducible rational is persisted in canonical reduced form.
+This encoding is local to the named GPU mode; it does not widen CPU or every
+`ResourceEntry` into an unrestricted fractional quantity language.
+
 ### Hard then soft
 
 ```python
@@ -234,7 +260,7 @@ kernel branches, or allow preferences to change feasibility.
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
 | Per-device VRAM is not aggregate VRAM | GPU planner | Ambiguous request/inventory | OOM placement | 12/80 GiB and multi-device tests |
-| Sharing requires enforceable named provider | Validator/planner/provider negotiation | Free-VRAM observation or request text | Unsafe oversubscription | Unsupported/mismatch/granularity tests |
+| Sharing requires enforceable named provider | Validator/planner/provider negotiation | Free-VRAM observation, float, malformed rational, or request text | Unsafe oversubscription | Unsupported/mismatch/canonical-rational/granularity tests |
 | Exact selected devices/shares conserve | Coordinator atoms + agent provider | Concurrent assignments/pool views | Device collision | Barrier/property/release tests |
 | Planner/provider/contract identities agree | Composition and assignment validation | Restart/config drift | Wrong binding semantics | Version/fingerprint/restart tests |
 | Hard rules precede preferences | Scheduling kernel | Scorer/policy | Preference bypasses feasibility | Invalid/scoring mutation tests |
@@ -245,8 +271,9 @@ kernel branches, or allow preferences to change feasibility.
 ## Implementation Slices
 
 1. Add GPU request/inventory/availability/claim schemas, exact exclusive and
-   provider-gated share/fraction semantics, safe offer projection, claim-contract
-   negotiation, and validation/unit/conformance coverage.
+   provider-gated share/fraction semantics including the integer numerator/
+   denominator encoding, safe offer projection, claim-contract negotiation, and
+   validation/unit/conformance coverage.
 2. Implement GPU planner and agent provider adapters with exact device/share
    bind/reconcile/activate/release, composite CPU/memory/GPU admission, and
    concurrency/drift/crash tests.

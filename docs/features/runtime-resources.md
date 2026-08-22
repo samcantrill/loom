@@ -277,8 +277,8 @@ class ResourcePlanner(Protocol):
 
     def resolve_request(
         self,
-        authored: ResourceEntry | None,
-        runtime: ResourceEntry | None,
+        authored: ValidatedResourceEntryView | None,
+        runtime: ValidatedResourceEntryView | None,
     ) -> ResourceRequestResolution: ...
     def propose_claims(
         self,
@@ -294,12 +294,15 @@ class ResourcePlanner(Protocol):
 ```
 
 The existing resource validator remains authoritative for authored/runtime
-entry shape and canonicalization. `resolve_request` receives entries already
-accepted by that validator; it owns scheduling-specific non-weakening merge and
-normalization, not a second schema-validation path. Custom resolved resources
-retain validator activation identity separately from planner/provider and
-resource-claim-contract identity so fresh processes can reconstruct the exact
-accepted boundary.
+entry shape and canonicalization. `ValidatedResourceEntryView` is an immutable
+scheduling input, not another authored or durable format.
+`loom.pipeline.runtime` converts accepted `ResourceEntry` values into this view,
+calls `resolve_request`, and rebuilds the canonical existing `ResourceRequest`.
+The planner therefore owns scheduling-specific non-weakening merge and
+normalization without importing `loom.pipeline` or creating a second schema-
+validation path. Custom resolved resources retain validator activation identity
+separately from planner/provider and resource-claim-contract identity so fresh
+processes can reconstruct the exact accepted boundary.
 
 `ClaimSearchResult` carries bounded claims, an explicit `COMPLETE` or
 `EXHAUSTED` state, and optionally a sound resource-specific winner proof or
@@ -389,6 +392,15 @@ unit and granularity. Binary floating point never owns availability, reservation
 or release. Unsupported contract version, unit, mode, or granularity rejects the
 request before mutation.
 
+The Phase 6 provider-defined GPU fraction has one exact encoding that preserves
+the current numeric `ResourceEntry` field: `amount` is a positive integer
+numerator, `unit` is `share`, and validated attributes contain a bounded
+positive integer `share_denominator` plus the named provider. The GPU planner
+reduces and checks this rational against advertised granularity. It rejects
+floats, missing providers, zero/negative values, and off-granularity forms
+before admission; reducible values persist in canonical reduced form. This is
+not a generic fraction DSL and does not make CPU fractional.
+
 The accepted authored shape remains `resources.entries`; Stage 29 extends the
 GPU entry's validated attributes instead of adding a shorthand parser:
 
@@ -426,6 +438,21 @@ mean one whole GPU, and requesting 0.5 GPU is not accepted merely because the
 number is fractional. A provider must advertise compatible inventory,
 availability, claim, admission, binding, accounting, and release semantics.
 
+For example, one half of a named enforceable provider share is explicit:
+
+```yaml
+resources:
+  entries:
+    gpu:
+      kind: gpu
+      amount: 1
+      unit: share
+      attributes:
+        allocation_mode: provider_fraction
+        share_denominator: 2
+        provider: configured-fraction-provider
+```
+
 Each agent publishes configured inventory separately from current availability:
 
 ```python
@@ -443,8 +470,10 @@ The coordinator retains logical ownership records for reflected claims but does
 not subtract them twice. It subtracts only an unreflected reservation created
 against the current revision, permits one unresolved admission for that
 revision, and requires accepted/declined reconciliation plus a fresh revision
-before another assignment. A fresh offer inconsistent with a still-live claim
-contributes no capacity.
+before another admission against that snapshot. This does not serialize process
+execution: after an accepted claim is reflected in fresh net availability, a
+new disjoint claim may use remaining atoms while the earlier process continues.
+A fresh offer inconsistent with a still-live claim contributes no capacity.
 
 The scheduler works only with safe projections and proposes a versioned
 `ResourceClaim`. The selected agent remains authoritative for physical binding:
@@ -465,6 +494,9 @@ longer matches. The pre-grant authority binding leaves the prepared attempt
 binding, then publishes a new availability revision. Only accepted grant
 promotion writes `SUBMITTED` and the execution fence. A decline is not stage
 execution failure, while ambiguous acceptance remains bound and unknown.
+`SUBMITTED` means granted, not proven running: only an exact current-fence
+confirmed process-start fact advances authority to `RUNNING`; failed or
+ambiguous start remains `SUBMITTED` and cannot license another launch.
 
 The placement engine does not interpret dependencies. One authority-side
 planning predicate exposes only ready `PlanAction.RUN` attempts and revalidates
@@ -601,10 +633,11 @@ class StageRuntimeOptions:
 
 Stage 29 plans one typed `placement` field on this exact-stage surface for
 versioned hard constraints, soft preferences, and fallback. Run-level managed
-policy supplies pool/concurrency/defaults and optional hard pinning; it does not
-turn resources into one run-wide claim. The resolved stage placement and its
-fingerprint are persisted scheduling inputs independently of semantic stage
-fingerprints.
+policy supplies pool/defaults and optional hard pinning; separate orchestrator
+policy supplies concurrency. Neither turns resources into one run-wide claim.
+`max_parallel_stages` is not part of a stage placement fingerprint.
+The resolved stage placement and its fingerprint are persisted scheduling
+inputs independently of semantic stage fingerprints.
 
 Stage option keys are exact stage identifiers. Runtime models validate basic
 identifier shape and expose a helper that checks supplied known-stage sets, but
