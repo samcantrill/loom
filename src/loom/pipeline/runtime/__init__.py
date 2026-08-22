@@ -73,6 +73,11 @@ from loom.pipeline.runtime.profiles import (
     parse_runtime_profiles,
     select_runtime_profile,
 )
+from loom.pipeline.runtime.scheduling_resources import (
+    CpuResourcePlanner,
+    MemoryResourcePlanner,
+    scheduling_entry_view,
+)
 
 __all__ = [
     "DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY",
@@ -82,6 +87,7 @@ __all__ = [
     "RUN_OPTIONS_SCHEMA_VERSION",
     "RUNTIME_SCHEMA_VERSION",
     "CONTINUE_INDEPENDENT_FAILURE_POLICY",
+    "CpuResourcePlanner",
     "CapabilityDiagnostic",
     "CapabilitySeverity",
     "CapabilityValidationResult",
@@ -102,6 +108,7 @@ __all__ = [
     "RuntimeKind",
     "RuntimeConfigSections",
     "RuntimeMetadata",
+    "MemoryResourcePlanner",
     "RuntimeRequest",
     "StageEnvironmentRequest",
     "StageRuntimeOptions",
@@ -130,6 +137,7 @@ __all__ = [
     "resolve_executor_descriptor",
     "resolve_run_runtime",
     "select_runtime_profile",
+    "scheduling_entry_view",
     "validate_executor_capabilities",
     "validate_stage_runtime_options",
 ]

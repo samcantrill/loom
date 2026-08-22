@@ -26,6 +26,8 @@ from loom.scheduling import (
     ValidatedResourceOpportunity,
     WorkItem,
 )
+from loom.pipeline.resources import ResourceEntry
+from loom.pipeline.runtime import CpuResourcePlanner, scheduling_entry_view
 
 
 class CpuPlanner:
@@ -124,3 +126,17 @@ def test_exhausted_search_is_not_infeasibility_or_a_policy_candidate() -> None:
     )
     decision = kernel.decide(work=(_work(),), candidates=(_candidate("a"),), as_of=1)
     assert decision.state is PolicyDecisionState.WAIT
+
+
+def test_runtime_resource_adapter_preserves_cpu_minimum_and_normalizes_memory() -> None:
+    assert scheduling_entry_view(
+        ResourceEntry("cpu", 2, "count")
+    ).amount == ExactQuantity(2)
+    memory = scheduling_entry_view(ResourceEntry("memory", 2, "MiB"))
+    assert (memory.amount, memory.unit) == (ExactQuantity(2 * 1024**2), "B")
+    planner = CpuResourcePlanner()
+    result = planner.resolve_request(
+        ValidatedResourceEntryView("cpu", ExactQuantity(2), "count"),
+        ValidatedResourceEntryView("cpu", ExactQuantity(1), "count"),
+    )
+    assert result.state is ResourceResolutionState.INVALID
