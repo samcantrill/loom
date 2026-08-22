@@ -696,18 +696,30 @@ should not contain domain-specific stage subclasses.
 
 Stage 29 plans a top-level import-light `loom.scheduling` subsystem for managed
 placement of already dependency-ready stage attempts. It owns versioned safe
-inventory/claim/candidate/decision values, explicitly composed resource
-planners, and one concrete pure scheduler. It must not import queue repositories,
-authority implementations, SQLite, routes, artifacts, processes, executors,
-vendors, project code, or CLI.
+exact-quantity/inventory/capacity-atom/claim/candidate/decision values,
+scheduling-component and resource-claim-contract descriptors, instance-local
+registries, explicitly composed public
+`ResourcePlanner`, `HardConstraintEvaluator`, `PreferenceScorer`, and
+`SchedulingPolicy` protocols, deterministic defaults, and one fixed concrete
+pure `SchedulingKernel`. It must not import queue repositories, authority
+implementations, SQLite, routes, artifacts, processes, executors, vendors,
+project code, or CLI. The kernel owns mandatory checks, budgets, extension-
+result validation, and mutation exclusion; there is no root-level or full
+lifecycle scheduler protocol.
 
 Dependency readiness does not move into `loom.scheduling`. One planning-owned,
 authority-side predicate over the persisted plan, stage state, and committed
 upstream outputs is shared by durable orchestration and assignment revalidation.
 The coordinator application owns stage-work projections and logical assignments;
 per-run authority owns attempts/status/output commits; the agent application
-owns physical binding and execution. Deployment adapters compose these owners
-above their import-light contracts.
+owns physical binding and execution through a separate versioned
+`AgentResourceProvider` lifecycle. Coordinator/agent stores and separately
+scoped client/agent/operator application views are infrastructure protocols with
+SQLite/in-memory and direct/HTTP implementations, not root plugin surfaces.
+Deployment adapters explicitly compose these owners and freeze scheduling/
+provider registries above their import-light contracts; stored or wire data
+contains implementation identity plus negotiated data-contract identity only
+and never loads code.
 
 ### 6.6 Execution and Executors
 

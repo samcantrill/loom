@@ -2078,6 +2078,160 @@ finalize run state
 SLURM afterok may not need a long-running controller, while controller mode
 does. That distinction belongs in the SLURM design document.
 
+### 18.4 Stage 29 Managed Stage Scheduling
+
+Stage 29 changes managed execution from whole-run dispatch to durable scheduling
+of individual ready stage attempts. This is a planned evolution of the current
+runner contract, not a description of behavior available before Stage 29 lands.
+Delegated SLURM remains separate because the external scheduler owns its
+placement and lifecycle.
+
+The run remains what a user submits, monitors, and cancels. The unit offered to
+the managed scheduler is narrower:
+
+```python
+@dataclass(frozen=True)
+class StageWork:
+    stage_work_id: str
+    run_uri: str
+    stage_name: str
+    attempt: int
+    upstream_commit_ids: tuple[str, ...]
+    placement: ResolvedStagePlacement
+```
+
+`StageWork` is illustrative internal data, not a new public API. It identifies
+one already planned and prepared attempt. It carries the resolved resource and
+preference policy for that exact stage; it does not carry arbitrary command
+text, invent a new attempt, or reinterpret the pipeline graph.
+
+The execution flow becomes:
+
+```text
+client submits run
+        |
+        v
+coordinator reconciles authoritative plan and statuses
+        |
+        +-- resolve REUSE / SKIP / BLOCKED without agent capacity
+        |
+        +-- expose each ready RUN attempt as StageWork
+                         |
+                         v
+          fixed scheduling kernel + selected policy
+                         |
+                         v
+               assignment and authority grant
+                         |
+                         v
+              local or remote managed agent
+                         |
+                         v
+                 one prepared stage worker
+                         |
+                         v
+          result retention -> authority output commit
+                         |
+                         v
+            reconcile newly ready downstream work
+```
+
+One import-light readiness function interprets the persisted plan, current
+stage/attempt statuses, and committed upstream outputs. The coordinator uses it
+both when exposing work and again during the expected-state assignment
+mutation. This prevents a queue loop, runner, and worker from each maintaining a
+slightly different DAG interpreter. Only an authoritative output commit makes a
+dependent stage ready; an agent process exit, local output file, or retained
+result is not enough.
+
+The current `PipelineRunner` remains the synchronous public facade, but managed
+calls no longer own an in-memory ready loop or a full-run execution lock. It
+composes or connects to the same coordinator and agent services used by a
+persistent daemon, submits the run, waits for authoritative terminal state, and
+returns the existing `RunResult` shape:
+
+```python
+class PipelineRunner:
+    def run(self, request: RunRequest) -> RunResult:
+        admitted = self._managed_runtime.submit(request)
+        terminal = self._managed_runtime.wait_for_run(admitted.run_uri)
+        return self._results.from_authority(terminal)
+```
+
+The sketch fixes delegation, not private member names. A one-command local run,
+a local daemon accepting many runs, and an authenticated multi-machine pool all
+therefore use the same stage scheduler. Their differences are composition and
+transport rather than scheduling semantics.
+
+The kernel is fixed, pure, and mutation-free. Trusted downstream code may be
+explicitly composed behind narrow subsystem protocols to plan one resource
+kind, add a hard rejection, add a bounded integer preference score, or select
+one existing validated candidate ID. A separate agent resource provider owns
+physical prepare/reconcile/activate/release. None of these protocols can inspect
+the DAG, write coordinator/authority state, launch a process, or commit a result;
+invalid/exceptional output fails before assignment mutation. Implementation
+identity/version is durable plain data, while live objects remain local.
+
+The adapted worker accepts one exact assigned attempt. Its request is closer to:
+
+```python
+@dataclass(frozen=True)
+class AssignedStageRequest:
+    assignment_id: str
+    stage_work_id: str
+    run_uri: str
+    stage_name: str
+    attempt: int
+    execution_fence: str
+    input_manifest: Mapping[str, ArtifactRef]
+    resolved_runtime: ResolvedStageRuntimeOptions
+```
+
+Before launch, the agent verifies that this assignment has the current grant,
+that the grant has not been fenced, that its exact inputs are durably staged,
+and that the claimed physical resources are bound. The worker then executes
+only the named attempt:
+
+```python
+def execute_assigned_stage(request: AssignedStageRequest) -> StageWorkerResult:
+    context = build_context_from_assigned_request(request)
+    return selected_executor(request).execute(context)
+```
+
+The worker must not:
+
+```text
+allocate or advance an attempt
+decide whether upstream stages are complete
+schedule a downstream stage
+reacquire resources already bound by the agent
+commit authoritative stage or run success
+release an assignment it does not own
+```
+
+These restrictions give each correctness decision one owner. Pipeline planning
+owns graph meaning. The coordinator owns readiness orchestration and logical
+placement. Per-run authority owns attempt/lifecycle/output truth. The agent owns
+physical admission, process containment, retained results, and resource
+release. The executor only invokes project stage code.
+
+Result handling preserves that split. The agent durably records the worker
+result and, for remote execution, transfers outputs into coordinator- or
+backend-accessible artifact references. The coordinator presents the exact
+assignment and execution fence to per-run authority. Authority validates and
+commits outputs before it marks success. Repeated delivery is idempotent, and a
+coordinator outage leaves the agent free to finish and retain the result for
+later replay.
+
+Managed whole-run `LaunchContract.resources`, synthetic whole-run command
+snapshots, and `claim_next -> dispatch(item)` cease to be execution inputs for
+new managed runs. Historical queue rows remain readable and delegated adapters
+remain supported. `ManagedLocalQueueRuntime` and `PipelineRunner` keep their
+intentional public surfaces while their managed internals converge on the new
+coordinator/agent path. The detailed state transitions and migration sequence
+are authoritative in [Stage 29 planning](../roadmap/stage-29/planning.md) and
+its linked phase execution plans.
+
 ---
 
 ## 19. Integration With Stores

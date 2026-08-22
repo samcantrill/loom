@@ -238,9 +238,10 @@ Stage 29 changes managed execution from one whole-run launch to scheduling each
 dependency-ready executable stage attempt. The queue item and `run_uri` remain
 the user-facing submission, status, and cancellation identities. Command-scoped
 local execution, `ManagedLocalQueueRuntime`, a persistent local daemon, and
-several remote agents compose one durable run orchestrator, one concrete
-placement engine, one assignment lifecycle, and one agent runtime. Delegated
-SLURM keeps external scheduler ownership.
+several remote agents compose one durable run orchestrator, one fixed placement
+correctness kernel with explicitly composed pure policy/resource interfaces,
+one assignment lifecycle, and one agent runtime. Delegated SLURM keeps external
+scheduler ownership.
 
 The scheduling subsystem has two deliberately separate decisions:
 
@@ -302,6 +303,12 @@ inventory     resources trusted local configuration permits Loom to manage
 availability  exact resources assignable in this versioned offer revision
 ```
 
+Availability names the live claim summaries already subtracted from its net
+remaining atoms. Coordinator logical reservations for those claims remain
+ownership evidence but are not subtracted again. Only an unreflected admission
+against the current revision consumes that baseline; one unresolved admission
+is permitted before accepted/declined reconciliation publishes a fresh revision.
+
 An offer binds agent/session/configuration, project and executor capabilities,
 inventory and availability revisions, pool, resource-contract versions, and
 coordinator receipt-time expiry. Expiry removes only future schedulability. It
@@ -310,13 +317,41 @@ One stage claim fits wholly on one agent; CPU from `machine-A` is not combined
 with a GPU from `machine-B` for one stage.
 
 Resource-specific matching is explicitly composed trusted code behind
-`ResourcePlanner`; stored and wire values never load callables. The one
-concrete scheduler owns candidate orchestration and deterministic rule order.
-CPU/memory planners propose exact scalar claims. A GPU planner proposes exact
-devices and supports only explicit exclusive, provider-enforced VRAM-share, or
-named provider-defined fractional modes. Stage 29 adds no public replaceable
-scheduler, submitted callable rule protocol, unrestricted constraint language,
-or general solver.
+`ResourcePlanner`; stored and wire values never load callables. A fixed concrete
+`SchedulingKernel` owns bounded candidate orchestration, mandatory checks,
+extension-result validation, and mutation exclusion. Subsystem-public
+`HardConstraintEvaluator`, `PreferenceScorer`, and `SchedulingPolicy` protocols
+respectively add rejection, bounded integer scores, and selection of one
+existing kernel-validated candidate ID. They cannot reserve, bind, launch, or
+commit lifecycle truth. CPU/memory planners propose exact scalar claims. A GPU
+planner proposes exact devices and supports only explicit exclusive, provider-
+enforced VRAM-share, or named provider-defined fractional modes. Stage 29 adds
+no full replaceable lifecycle scheduler, payload-loaded callable, unrestricted
+constraint language, or general solver.
+
+Registered hard/preference components validate and canonicalize bounded tagged
+specs during admission; only resolved immutable specs enter scheduling. A bad or
+unknown spec fails admission instead of becoming indefinite queued work. Jobs
+cannot select the scheduling policy or its weights/tier configuration.
+
+Every claim exposes exact agent-local capacity atoms which the coordinator can
+reserve atomically at the expected availability revision. Provider-specific
+claim data remains separate and is contractually forbidden from hiding
+additional consumption; trusted provider code is not sandboxed. Planner and
+provider keep distinct implementation descriptors and negotiate a versioned
+resource-claim contract; the assignment records all of them, while final local
+provider admission remains authoritative.
+
+Every scheduling/provider implementation has an immutable descriptor and is
+explicitly supplied through an instance-local registry frozen before service
+readiness. The descriptor has distinct implementation and non-secret canonical
+configuration fingerprints. Durable records keep identity/version/fingerprint only; unknown or
+changed contracts fail before scheduling/launch. A separate agent-side
+`AgentResourceProvider` observes and performs assignment-scoped prepare,
+reconcile, activate, abort, and release through idempotent commands and closed
+typed outcomes. Public bounded conformance checks cover custom examples, but
+in-process implementations remain trusted code and are not automatically
+discovered or sandboxed.
 
 Cross-store correctness is a recoverable protocol, not one imaginary
 transaction:
@@ -337,8 +372,12 @@ transaction:
    liveness. Agent records grant and start fences before at most one root
    launcher invocation.
 6. Agent retains output until an authenticated transfer/backend finalizer
-   returns coordinator-accessible `ArtifactRef` values. Only their authority
-   output commit unlocks descendants and releases the assignment.
+   returns coordinator-accessible `ArtifactRef` values. Output upload grants are
+   issued only after an authenticated durable manifest binds exact names,
+   digests, sizes, assignment, and execution fence. Only their authority
+   output commit unlocks descendants and releases the coordinator's logical
+   reservation. The agent releases its physical claim only after process
+   containment and durable terminal-result retention.
 
 The coordinator and each agent use separate SQLite state and process locks.
 A granted stage continues while the coordinator is unavailable because its
@@ -348,13 +387,34 @@ returns and authority commits the result. Agent loss removes capacity but does
 not fail or reassign accepted work. Exact reconciliation or
 positive-containment operator recovery is required.
 
-All persistent HTTP peers use mutual TLS and scoped principals; direct
-composition invokes the same authorizer. Agents connect outbound using bounded
-long polling and own no prefetched durable queue. Work names a prepared resident
-stage and safe versioned values, not arbitrary shell text. A bounded initial
-coordinator relay provides network-only input/output movement with digest,
-temporary-first, and manifest-last behavior; agent-local file paths are never
-committed as remote output refs.
+All persistent HTTP peers use mutual TLS with expected service/client identity,
+but authentication is followed by per-operation role, object, agent/session,
+and pool authorization. One coordinator application owner presents separate
+client, agent, and operator views. HTTP derives actor identity from the verified
+connection; direct adapters capture a trusted principal at construction and
+invoke the same authorizer. Body/path identity cannot expand authority.
+Mutations use principal/content-bound idempotency plus expected generations,
+revisions, and fences; codecs impose method/content-type/schema/version/size/
+cardinality bounds and safe errors before mutation. One connection is delivery-
+active per agent/session; reconnect fences only the old connection's future
+protocol mutations, never its granted process. Actionable idempotency receipts
+cannot be pruned without an unusable terminal/expired tombstone. Role locks
+support restart from one durable state root, not HA from cloned databases/keys.
+Configured principal/pool admission quotas bound pending work; site policy owns
+accepted priority ranges and preference weights/tiers rather than job payloads.
+
+Agents connect outbound using bounded long polling and own no prefetched durable
+queue. Coordinator policy authorizes pool membership, while one exact agent
+availability domain backs every allowed pool view so capacity is not duplicated
+per pool. Work names a prepared resident stage and safe versioned values, not
+arbitrary shell text or implementation targets. Worker environments exclude
+daemon service credentials and role internals by default, while same-user
+project code remains trusted. A bounded initial coordinator
+relay provides network-only input/output movement through coordinator-issued
+assignment-scoped transfer IDs, derived traversal/symlink-safe staging roots,
+quotas, digests, temporary-first promotion, and manifest-last publication.
+Payload paths or arbitrary fetch URLs do not select host/network access, and
+agent-local file paths are never committed as remote output refs.
 
 Queue status joins but labels queue admission, dependency waiting, placement
 waiting, active/unknown assignment, authority stage truth, artifact publication,
@@ -368,6 +428,7 @@ Delegated pools retain their existing boundary: Loom submits according to the
 delegated adapter and the external scheduler owns ordering, resource placement,
 and dependency submission. Stage 29 does not emulate SLURM policy inside the
 managed stage scheduler.
+
 ## Delegated SLURM Pools
 
 Delegated SLURM pools use the existing fakeable SLURM command-runner boundary.

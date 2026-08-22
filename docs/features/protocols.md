@@ -575,28 +575,72 @@ recipe semantics depend on config expansion, recipe catalogs, provenance, and
 validation.
 ```
 
-### 12.6 Stage 29 Scheduling Resources
+### 12.6 Stage 29 Scheduling And Agent Extensions
 
-`ResourcePlanner` belongs in the import-light `loom.scheduling` subsystem beside
-the concrete managed stage-placement engine, rather than in `loom.protocols` or
+`ResourcePlanner`, `HardConstraintEvaluator`, `PreferenceScorer`, and
+`SchedulingPolicy` belong in the import-light `loom.scheduling` subsystem beside
+the fixed managed stage-placement kernel, rather than in `loom.protocols` or
 under the whole-run queue package.
+
+`ResourcePlanner` does not replace the existing resource-validator protocol.
+Validation owns authored/runtime entry shape and canonicalization; the planner
+receives those accepted values and owns scheduling merge, feasibility, and
+claims. Reconstruction preserves their separate identities.
 
 Reason:
 
 ```text
-its semantics depend on resolving authored and exact-stage `ResourceRequest`
-values, versioned agent inventory/availability, bounded candidate claims, exact
-reservation units, and scheduler-safe failure explanations
+their semantics depend on resolved stage placement, versioned agent inventory/
+availability, bounded candidate claims, mandatory-versus-additive feasibility,
+integer preference vectors, exact reservation units, and scheduler-safe
+explanations/proposals
 ```
 
-Stage 29 has one accepted scheduler implementation, so it adds no public
-`Scheduler` protocol. Its current hard constraints and soft preferences are
-versioned tagged data with built-in dispatch, so it also adds no public callable
-protocol for submitted rules. These choices keep the extension surface attached
-to a real consumer and prevent wire or stored data from authorizing code
-loading. Dependency readiness is not another resource or scheduler protocol: one
+The fixed `SchedulingKernel` is concrete rather than a public full-scheduler
+protocol. It owns component/version validation, bounded candidate construction,
+non-overridable system checks, additive-rule/score ordering, proposal validation,
+and the guarantee that scheduling returns data without mutation. A custom hard
+evaluator may only remove a candidate, a preference may only add a bounded
+integer score, and a policy may select only an existing kernel-validated
+candidate ID or a typed wait. None may reserve, bind, launch, or commit stage
+truth.
+
+Hard evaluators and preference scorers also validate/canonicalize their own
+bounded tagged specs at admission. Only resolved immutable specs enter a
+scheduling snapshot; invalid, unknown, or nondeterministically reconstructed
+specs fail before queueing. `SchedulingPolicy` is selected/configured only by
+trusted deployment composition and is validated before readiness.
+
+Each implementation has a scheduling-subsystem descriptor and is supplied
+through an instance-local registry frozen by trusted deployment composition.
+The descriptor separates implementation fingerprint from a non-secret canonical
+configuration fingerprint; changing configured semantics creates a new identity
+even when package code is unchanged.
+Tagged stored/wire specs select only an allowed kind/version already present in
+that registry; they never carry callables or import targets. Stage 29 supports
+direct Python composition and public bounded `loom.testing` conformance checks,
+not automatic plugin discovery. A full scheduler/lifecycle plugin, universal
+service registry, and payload-selected rule remain excluded.
+
+`AgentResourceProvider` belongs with the agent application surface, not in
+`loom.scheduling` or root `loom.protocols`, because it owns local observation,
+durable prepare/reconcile/activate/abort/release, and private live provider
+tokens. It is paired with a pure `ResourcePlanner` through a negotiated
+resource-claim contract; wire claims contain only safe versioned evidence.
+Planner and provider keep distinct implementation descriptors; compatible data
+is not permission for a replacement implementation to adopt old live state.
+Existing queue assignment/GPU providers may be compatibility-adapted behind
+this stronger lifecycle.
+
+Coordinator-state, agent-journal, and client/agent/operator application-port
+protocols remain subsystem infrastructure boundaries. They have current SQLite,
+in-memory-test, direct, and HTTP implementations, but are not package-root
+plugin APIs. Their methods express semantic atomic transitions and least-
+privilege views rather than generic CRUD or one broad service object.
+
+Dependency readiness is not another resource or scheduler protocol: one
 authority-side planning predicate is shared by orchestration and assignment CAS,
-while the pure placement engine receives only already-ready stage attempts.
+while the pure kernel receives only already-ready stage attempts.
 
 ---
 

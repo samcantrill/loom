@@ -235,10 +235,13 @@ than creating a second durable request codec:
 class ResolvedStagePlacement:
     schema_version: int
     resources: ResourceRequest
-    hard_constraints: tuple[TaggedConstraintSpec, ...] = ()
-    preferences: tuple[TaggedPreferenceSpec, ...] = ()
+    hard_constraints: tuple[ResolvedHardConstraintSpec, ...] = ()
+    preferences: tuple[ResolvedPreferenceSpec, ...] = ()
     fallback: PreferenceFallbackSpec = field(
         default_factory=PreferenceFallbackSpec.immediate
+    )
+    component_manifest: SchedulingComponentManifest = field(
+        default_factory=SchedulingComponentManifest.defaults
     )
     fingerprint: str = ""
 ```
@@ -248,33 +251,55 @@ value. The coordinator associates the placement fingerprint with its rebuildable
 stage-work projection. Versioned inventory and claim envelopes are separate
 because they cross the agent transport boundary.
 
+Per-kind `ResolvedResourceRequest` values fold their canonical `ResourceEntry`
+back into this existing `ResourceRequest` and record validator/planner identity
+and resolution fingerprints in `component_manifest`. They are resolution
+evidence, not another authored resource schema. Reconstruction must reproduce
+the same canonical entries/fingerprint before scheduling.
+
 Resource-specific implementations are trusted code composed explicitly by the
 deployment:
 
 ```python
-class ResourcePlanner(Protocol):
-    kind: str
+@dataclass(frozen=True)
+class ResourceClaimContractDescriptor:
+    resource_kind: str
+    contract_id: str
     contract_version: int
+    inventory_data_versions: tuple[int, ...]
+    claim_data_versions: tuple[int, ...]
+
+
+class ResourcePlanner(Protocol):
+    descriptor: SchedulingComponentDescriptor
+    resource_kind: str
+    claim_contracts: tuple[ResourceClaimContractDescriptor, ...]
 
     def resolve_request(
         self,
         authored: ResourceEntry | None,
         runtime: ResourceEntry | None,
-    ) -> ResourceEntry | None: ...
-    def normalize_inventory(self, value: PlainData) -> PlainData: ...
+    ) -> ResourceRequestResolution: ...
     def propose_claims(
         self,
-        request: ResourceEntry,
-        available: PlainData,
-        *,
-        limit: int,
+        request: ResolvedResourceRequest,
+        available: ResourceAvailabilityView,
+        budget: ClaimSearchBudget,
     ) -> ClaimSearchResult: ...
-    def explain_failure(
+    def validate_claim(
         self,
-        request: ResourceEntry,
-        available: PlainData,
-    ) -> FailureReason: ...
+        request: ResolvedResourceRequest,
+        claim: ResourceClaim,
+    ) -> ClaimValidationResult: ...
 ```
+
+The existing resource validator remains authoritative for authored/runtime
+entry shape and canonicalization. `resolve_request` receives entries already
+accepted by that validator; it owns scheduling-specific non-weakening merge and
+normalization, not a second schema-validation path. Custom resolved resources
+retain validator activation identity separately from planner/provider and
+resource-claim-contract identity so fresh processes can reconstruct the exact
+accepted boundary.
 
 `ClaimSearchResult` carries bounded claims, an explicit `COMPLETE` or
 `EXHAUSTED` state, and optionally a sound resource-specific winner proof or
@@ -282,14 +307,72 @@ dominance bound. A complete empty result proves that resource infeasible; an
 exhausted result is indeterminate. The scheduler cannot mutate from an
 indeterminate result unless it can compose the supplied bound with all other
 resource and preference bounds to prove the final winner.
+`ClaimValidationResult` is the closed pure result `VALID` or `INVALID(reason)`;
+an exception is a component failure, not another validation outcome.
+`ResourceRequestResolution` is `ABSENT`,
+`RESOLVED(resolved_request)`, or `INVALID(reason)` so omission and
+an ambiguous/invalid merge cannot be conflated.
 
-The registry is immutable and passed into scheduler composition. Remote and
-durable values may name a supported kind/version but never load a callable,
-constructor, or plugin. The protocol lives in import-light `loom.scheduling`
-rather than root `loom.protocols`, because placement is its only accepted current
-consumer.
-Stage 29 uses one concrete scheduler; it does not add a public scheduler
-replacement protocol.
+Each `ResourceClaim` separates generic accounting from provider semantics. Its
+bounded envelope carries descriptor and agent/session/revision identity, a
+deterministic claim ID, exact capacity atoms, and versioned provider data. A
+capacity atom consumes an exact quantity from one offered agent-local capacity
+key. The fixed kernel and coordinator can therefore validate granularity,
+identity, conservation, and atomic overlap without decoding provider data;
+the trusted planner/provider pair owns resource-specific meaning and final
+admission. Provider data is contractually forbidden from declaring or acquiring
+hidden consumption; the kernel does not sandbox a dishonest trusted provider.
+
+This boundary supports agent-local scalar and discrete resources whose
+consumption can be expressed as capacity atoms. Attributes/locality remain
+constraints or preferences. A globally consumed licence, quota, or bandwidth
+resource still needs a clear transactional owner and is not made safe merely by
+registering a planner.
+
+Component identity is not used as a wire-compatibility shortcut. A planner and
+provider keep separate implementation descriptors and negotiate a shared
+`ResourceClaimContractDescriptor`; the assignment persists both component
+identities and the selected contract/data versions. This allows independent
+implementations to interoperate while preventing a compatible replacement from
+silently adopting an old provider's live state.
+
+The resource registry is instance-local, duplicate-safe, immutable before
+service readiness, and passed into scheduling composition. Remote and durable
+values may name an allowed supported kind/contract/data version and descriptor
+fingerprint but never load a callable, constructor, or plugin. The protocol
+lives in import-light `loom.scheduling` rather than root `loom.protocols`,
+because placement is its only accepted current consumer.
+
+Component descriptors keep implementation and non-secret canonical
+configuration fingerprints distinct. A policy/provider parameter change is a
+new configured identity even when its package implementation is unchanged;
+credentials are never part of that fingerprint.
+
+The same subsystem publishes three other narrow pure protocols:
+
+```text
+HardConstraintEvaluator  add one candidate rejection after mandatory checks
+PreferenceScorer         add one bounded integer score to a feasible candidate
+SchedulingPolicy         select one existing validated candidate ID or wait
+```
+
+A fixed concrete `SchedulingKernel` owns mandatory compatibility, pool/target,
+capacity, completeness and data-access checks; search budgets; ordering of
+additive checks/scores; and validation of every extension result before
+mutation. It is not a replaceable lifecycle scheduler. Custom hard constraints
+cannot make a candidate feasible, preferences cannot alter feasibility, and a
+policy cannot create resource claims. Direct trusted Python composition and
+bounded conformance checks are supported; automatic loading and payload-
+selected implementations are not.
+
+Physical acquisition uses the separate agent-side `AgentResourceProvider`
+lifecycle. A planner describes safe exact claims; a compatible provider
+observes, prepares, reconciles, activates, aborts, and releases them locally.
+Every mutation is an assignment/claim-scoped idempotent command with an expected
+state and a closed typed result; an indeterminate result must be reconciled and
+cannot imply success or released capacity. Provider private tokens never enter
+inventory, claims, assignments, or status; only bounded safe reconstruction
+records may be journalled.
 
 Quantity arithmetic is exact and owned by the resource contract:
 
@@ -352,8 +435,16 @@ AgentOffer(
     availability_revision=19,
     inventory={...},      # trusted manageable resources and attributes
     availability={...},   # exact resources assignable for the next claim
+    reflected_claims=(...),  # live claims already subtracted from availability
 )
 ```
+
+The coordinator retains logical ownership records for reflected claims but does
+not subtract them twice. It subtracts only an unreflected reservation created
+against the current revision, permits one unresolved admission for that
+revision, and requires accepted/declined reconciliation plus a fresh revision
+before another assignment. A fresh offer inconsistent with a still-live claim
+contributes no capacity.
 
 The scheduler works only with safe projections and proposes a versioned
 `ResourceClaim`. The selected agent remains authoritative for physical binding:

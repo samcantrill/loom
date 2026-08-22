@@ -2439,9 +2439,12 @@ Status:
 - The maintainer confirmed the amendment from whole-run placement to
   dependency-aware per-stage managed scheduling. Earlier stages remain
   implemented prerequisites. One expanded removal-first design review and one
-  plan-consistency review passed after bounded corrections. Maintainer
-  implementation-plan approval remains pending, and all three phases are
-  unimplemented.
+  plan-consistency review passed after bounded corrections. A maintainer-
+  requested second manager pass has now specified narrow downstream extension
+  interfaces, implementation reconstruction, a remote threat model, pool-safe
+  accounting, and privileged lifecycle security. The maintainer approved the
+  refined design and balanced eight-phase implementation plan; all eight phases
+  remain unimplemented.
 
 Goal:
 
@@ -2450,8 +2453,9 @@ Goal:
   and preferences. A downstream stage is not eligible until its required
   upstream output commits.
 - Compose bounded local execution, a persistent single-machine daemon, and
-  outbound agents on several machines from the same run orchestrator, concrete
-  placement engine, assignment lifecycle, agent runtime, and application port.
+  outbound agents on several machines from the same run orchestrator, fixed
+  placement correctness kernel with narrow replaceable pure policies/resources,
+  assignment lifecycle, agent runtime, and separately scoped application views.
 - Compare ready stages from several admitted runs against the global set of
   fresh authenticated agent capacity so otherwise idle CPU/GPU resources remain
   useful without turning Loom into SLURM.
@@ -2479,12 +2483,23 @@ Implement:
   GPU claims bind exact devices; VRAM-share and fractional requests are valid
   only when a named provider advertises enforceable accounting/binding. Binary
   floating point never owns resource arithmetic.
-- Import-light `loom.scheduling` values, an explicitly composed
-  `ResourcePlanner` protocol/registry at the resource-kind boundary, and one
-  concrete pure bounded scheduler. Hard rules filter, soft rules rank only
-  feasible candidates, irrelevant resource preferences contribute nothing,
-  and stable identities break ties. There is no public replaceable scheduler,
-  submitted callable rule, unrestricted DSL, or general solver.
+- Import-light `loom.scheduling` values, scheduling-component descriptors,
+  instance-local frozen registries, explicitly composed subsystem-public
+  `ResourcePlanner`, `HardConstraintEvaluator`, `PreferenceScorer`, and
+  `SchedulingPolicy` protocols, and one fixed concrete pure bounded
+  `SchedulingKernel`. The kernel owns mandatory checks/search/result validation;
+  custom hard rules only remove, preferences add bounded integer scores, and a
+  policy selects only an existing validated candidate ID. Stable identities
+  break ties. There is no full replaceable lifecycle scheduler, payload-loaded
+  callable, unrestricted DSL, or general solver.
+- A separate public agent-side `AgentResourceProvider` lifecycle for physical
+  observe/prepare/reconcile/activate/abort/release. Planner and provider retain
+  distinct immutable component descriptors and negotiate a versioned resource-
+  claim contract. Claims expose exact coordinator-reservable capacity atoms;
+  provider data is contractually forbidden from hiding consumption, while
+  trusted provider code is not sandboxed. Durable records contain those
+  identities rather than live objects; direct trusted composition and bounded
+  conformance checks are supported, while automatic plugin loading is not.
 - A deterministic bounded global snapshot of ready attempts and fresh agent
   opportunities. Default order is run priority/enqueue order, ready time,
   topological order, stage name, and attempt; then choose that stage's best
@@ -2514,9 +2529,11 @@ Implement:
   result from the same granted assignment to commit after reconnection while
   rejecting late output after guarded recovery. Loom guarantees at most one
   managed root launch per assignment, not exactly-once authored effects.
-- Phase 1 migration of `PipelineRunner`, `ManagedLocalQueueRuntime`, the
-  managed queue/controller, local process/resource admission, prepared attempt,
-  and stage worker into one dependency-aware bounded/persistent local path.
+- Phases 1–3 migrate `PipelineRunner`, `ManagedLocalQueueRuntime`, the managed
+  queue/controller, local process/resource admission, prepared attempt, and
+  stage worker into one dependency-aware bounded/persistent local path. Phase 1
+  establishes pure scheduling and ready work, Phase 2 the complete local
+  assignment saga, and Phase 3 persistent lifetime/public compatibility.
   Historical queue rows remain inspectable/cancellable; public facades remain
   callable; managed whole-run resources/argv/direct dispatch and in-memory
   ready-loop ownership are deprecated rather than silently reinterpreted.
@@ -2524,20 +2541,32 @@ Implement:
   failure, not a fictitious successful legacy path.
 - Versioned expiring offers from outbound agents. Inventory reports only
   configured manageable CPU, memory, GPU instances/VRAM/mode, safe attributes,
-  resident project/environment/executor fingerprints, and resource-contract
-  versions; availability is a separate exact revision after live claims. Offer
-  expiry removes future capacity only.
-- One application port with direct and HTTP adapters for client and agent
-  operations. Persistent HTTP uses mutual TLS and configured least-privilege
-  client/agent/operator scopes; direct calls use the same authorizer. Payload
-  actor, code/provider names, commands, paths, or credentials never confer
-  authority. Endpoint and secret locations come from protected deployment
-  configuration/environment, with abstract `machine-A`/`machine-B`
-  examples.
+  resident project/environment/executor and selected runtime-activation
+  fingerprints, and resource-contract versions; availability is a separate
+  exact net revision naming live claims
+  already reflected in it. The coordinator subtracts only unreflected
+  reservations and permits one unresolved admission before a fresh revision, so
+  logical ownership is not double-counted. Offer expiry removes future capacity
+  only.
+- One coordinator application owner with separately scoped client, agent, and
+  operator protocol views and direct/HTTP adapters. Persistent HTTP uses mutual
+  TLS with expected peer/service identity plus configured least-privilege
+  operation/object/pool scopes; direct adapters capture a trusted principal and
+  use the same authorizer. Principal/content-bound idempotency, expected
+  generation/session/revisions/fences, and strict method/content-type/schema/
+  version/size/cardinality limits reject replay and abuse before mutation.
+  One connection is delivery-active per agent/session and actionable
+  idempotency receipts cannot be pruned without a terminal/expired tombstone.
+  Payload actor, code/provider names, commands, paths, URLs, or credentials never
+  confer authority. Endpoint and secret locations come from protected deployment
+  configuration/environment and are excluded from worker environments by
+  default, with abstract `machine-A`/`machine-B` examples. Same-user project code
+  remains trusted; cloned-state coordinator HA/split brain is not supported.
 - Resident-project remote execution and a bounded first artifact data path.
   Before grant, the agent durably materializes the immutable request and all
-  required inputs. After execution it retains output until an authenticated
-  coordinator relay verifies content and publishes coordinator/backend-visible
+  required inputs. After execution it durably records names/digests/sizes,
+  requests idempotent assignment/fence/manifest-bound upload grants, and retains
+  output until an authenticated coordinator relay verifies content and publishes coordinator/backend-visible
   `ArtifactRef` values. Authority commits only those final refs; agent-local
   file URIs never unlock a remote descendant. A later direct object backend can
   implement the same boundary.
@@ -2571,6 +2600,13 @@ Exit criteria:
 - Several admitted runs can expose independent ready stages. A GPU-waiting stage
   does not waste CPU capacity that a later proven-feasible preprocess stage can
   use, and per-run parallel limits remain enforced.
+- A synthetic downstream resource planner/provider, additive hard rule,
+  preference, and scheduling policy compose explicitly and pass public bounded
+  conformance. Validator/planner identities remain separate; planner/provider
+  identities negotiate a distinct claim contract; exact capacity atoms conserve
+  under concurrency; rule specs resolve before queueing. Invalid/raising/
+  oversized/unknown-candidate output causes no assignment mutation; restart
+  rejects a changed implementation or safe configuration fingerprint.
 - If `machine-A` has only 12 GiB devices and `machine-B` has an 80 GiB
   device, a one-GPU stage requiring 64 GiB VRAM can run only on
   `machine-B`. GPU/model and agent preferences deterministically rank feasible
@@ -2580,10 +2616,18 @@ Exit criteria:
   it remains `PENDING`;
   grant/start crashes invoke at most one managed launcher; an expired liveness
   lease cannot invalidate a valid current-fence result.
-- Wrong certificate/role/scope/session/version/nonce/replay fails before
-  mutation. A remote assignment cannot select arbitrary command or code.
-  Input transfer is complete before grant; interrupted output transfer exposes
-  no partial artifact; downstream receives only accessible finalized refs.
+- Wrong certificate/service identity/role/action/object/pool/session/version/
+  nonce/replay or changed idempotent body fails before mutation. One resource
+  offer visible to several pools is counted once; reflected claims are not
+  subtracted twice; admission/priority bounds hold. A stale delivery connection
+  cannot receive work. A remote assignment cannot
+  select arbitrary command, code, provider, host path, or fetch URL. Input
+  transfer is complete before grant; traversal/symlink/oversize/quota and
+  interrupted output cases expose no partial artifact; downstream receives only
+  accessible finalized refs.
+- The authenticated no-mutation capability handshake passes direct/HTTP tests
+  and an opt-in abstract two-machine connectivity receipt before remote launch
+  is enabled. Worker environments do not inherit daemon service credentials.
 - Coordinator loss during execution yields no new work but the stage continues,
   buffers output, and commits/reconciles after restart. Agent loss never causes
   automatic duplication. Same-session restart begins at zero availability.
@@ -2602,10 +2646,11 @@ Defer:
   broker/streaming infrastructure, coordinator election/HA/federation, and
   automatic agent discovery/provisioning.
 - Distributed/gang stages, cross-agent resource combination, preemption,
-  fair-share/account quotas, optimal packing/general solver, arbitrary topology
+  fair-share/resource-account quotas, optimal packing/general solver, arbitrary topology
   optimization, and globally consumed resources without one transactional owner.
-- Implicit fractional CPU/GPU, GPU sharing without provider proof, unrestricted
-  constraint/plugin loading, or public scheduler/rule substitution.
+- Implicit fractional CPU/GPU, GPU sharing without provider proof, a full
+  replaceable lifecycle scheduler, automatic/untrusted extension loading,
+  stateful or payload-selected rules, or a universal plugin/service registry.
 - Automatic retry/failover of unknown accepted work, timeout/PID takeover,
   process adoption, live migration/checkpointing, node power fencing, or hidden
   force cancellation.
@@ -2613,9 +2658,10 @@ Defer:
   selected vendor object-store SDK, and automatic dataset replication. The
   initial coordinator relay is intentionally bounded and may be replaced after
   measured throughput or a selected backend.
-- Internet-facing hosting, credential issuance/identity federation, general
-  telemetry/log service, coordinator/agent disaster recovery, and mandatory
-  real-network/GPU CI.
+- Internet-facing hosting, credential issuance/identity federation,
+  application-layer message signing, at-rest encryption/key management,
+  hostile-workload sandboxing, general telemetry/log service, coordinator/agent
+  disaster recovery, and mandatory real-network/GPU CI.
 
 Primary feature docs:
 
@@ -2640,9 +2686,14 @@ Implementation plan:
 
 Phase execution plans:
 
+- [`docs/roadmap/stage-29/phases/scheduling-kernel-ready-stage-work.md`](roadmap/stage-29/phases/scheduling-kernel-ready-stage-work.md)
+- [`docs/roadmap/stage-29/phases/durable-local-stage-execution.md`](roadmap/stage-29/phases/durable-local-stage-execution.md)
 - [`docs/roadmap/stage-29/phases/local-daemon-control-boundary.md`](roadmap/stage-29/phases/local-daemon-control-boundary.md)
-- [`docs/roadmap/stage-29/phases/jit-multi-agent-pool.md`](roadmap/stage-29/phases/jit-multi-agent-pool.md)
-- [`docs/roadmap/stage-29/phases/safe-agent-reconfiguration-recovery.md`](roadmap/stage-29/phases/safe-agent-reconfiguration-recovery.md)
+- [`docs/roadmap/stage-29/phases/authenticated-agent-sessions.md`](roadmap/stage-29/phases/authenticated-agent-sessions.md)
+- [`docs/roadmap/stage-29/phases/remote-stage-data-execution.md`](roadmap/stage-29/phases/remote-stage-data-execution.md)
+- [`docs/roadmap/stage-29/phases/gpu-preference-placement.md`](roadmap/stage-29/phases/gpu-preference-placement.md)
+- [`docs/roadmap/stage-29/phases/agent-controls-cancellation.md`](roadmap/stage-29/phases/agent-controls-cancellation.md)
+- [`docs/roadmap/stage-29/phases/restart-guarded-recovery.md`](roadmap/stage-29/phases/restart-guarded-recovery.md)
 ## Deferred Integration Candidates
 
 The items below are intentionally deferred until their owning contracts exist
@@ -2719,7 +2770,7 @@ Before turning any roadmap version into a full implementation plan:
 | --- | --- | --- |
 | `core-model.md` | v0 | Foundational vocabulary for refs, records, manifests, filters, identifiers, timestamps, and hashing terminology. |
 | `timestamps.md` | v0 | UTC helpers are needed by status, stores, provenance, logs, and generated IDs. |
-| `protocols.md` | v0, v28, v29 | Tiny shared protocols and import-boundary rules come before subsystem contracts; v28 publishes bounded downstream conformance support; v29 keeps the resource-planner protocol queue-local, uses one concrete scheduler, and keeps agent wire values and direct/HTTP clients on explicit module surfaces with revision-bound work requests, independent control delivery, execution-grant/event acknowledgements, scoped principals, and no root protocol expansion. |
+| `protocols.md` | v0, v28, v29 | Tiny shared protocols and import-boundary rules come before subsystem contracts; v28 publishes bounded downstream conformance support; v29 keeps planner/additive-rule/preference/policy protocols in import-light `loom.scheduling`, physical providers with the agent application, and semantic store/application views in their owning subsystems. A fixed kernel retains correctness, direct trusted composition and conformance support downstream implementations, wire data remains inert, and no root protocol or universal registry is added. |
 | `errors.md` | v0, v1, v2, v3 | Shared roots land in v0; composition directive errors mature in v1; CLI formatting and local diagnostics mature in v2 and v3. |
 | `serialization.md` | v0, v1 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and composition manifests. |
 | `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots. |
@@ -2744,7 +2795,7 @@ Before turning any roadmap version into a full implementation plan:
 | `plugins.md` | v14, v15, v16, v20, v28 | Explicit discovery in v14; remote backend, exporter, and event sink integration later; v28 makes readiness capability-specific and explicitly activates ordinary executors, codecs, validators, and filtered sinks through their applicable process roots. |
 | `queue.md` | v11, v23, v25, v27, v29 | V11 establishes the durable whole-run queue and local/SLURM adapters; v23 adds safe pool cycles, concrete assignment, logs, and redacted status; v25 adds bounded oldest-eligible ordering; v27 adds local GPU pools; v29 keeps run admission but schedules each dependency-ready managed stage through one global hard/soft placement, assignment, agent-session, reconciliation, reconfiguration, and containment-gated recovery path. |
 | `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21, v23, v28, v29 | Core CLI grows only with owning features; authority and queue commands arrive with their services; v28 adds explicit plugin activation; v29 adds thin daemon and endpoint-backed submit/status/cancel/agent-control/recovery presentation for versioned placement requests and safe scheduler diagnostics, consuming environment-resolved deployment values without owning scheduling, auth, config, or lifecycle policy. |
-| `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
+| `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version; v28 introduces bounded downstream reports and v29 adds caller-sampled conformance for pure scheduling and agent-provider contracts without discovery, hardware access, isolation, or certification claims. |
 | `examples/` and `*-example-coverage.md` | v22 | Cross-roadmap example inventory, runnable/manual status, validation tiers, integration/e2e behavior, and documentation refinement are consolidated after the runtime surface through v21 exists. |
 
 ## Functionality Not Encompassed By This Roadmap

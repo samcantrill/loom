@@ -144,6 +144,24 @@ It catches ordinary supplied-object exceptions into deterministic findings but
 does not construct, discover, isolate, retry, time out, or otherwise admit an
 extension. A passing report is evidence only for its supplied cases.
 
+Stage 29 plans bounded checks for its explicitly composed scheduling seams:
+
+```text
+resource planner          validator separation, claim-contract/versioning,
+                          exact capacity atoms, conservation, bounds
+hard constraint evaluator spec resolution, additive rejection, immutability
+preference scorer         spec resolution, bounded score, feasibility neutrality
+scheduling policy         existing-candidate-only selection and determinism
+agent resource provider   idempotent closed prepare/activate/abort/reconcile/
+                          release and partial-composite cases
+```
+
+Exact exported check names are fixed during Phase 1 with package tests. These
+checks accept caller semantic samples and fake provider observations; they do
+not access hardware, stores, networks, discover plugins, enforce termination,
+or certify safety. The scheduling kernel separately validates every extension
+result before mutation even when conformance has previously passed.
+
 ---
 
 ## 3. Package Boundary
