@@ -2,13 +2,14 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 1
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p1-scheduling-kernel-ready-stage-work`
-- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+- Worktree root: `/home/can134/work/active/loom-worktrees`; phase path:
   `stage-29-p1-scheduling-kernel-ready-stage-work`
-- Base revision: `24b5d210a258bed2a7ab87973aadefecefd6d753`
+- Base revision: `24b5d210a258bed2a7ab87973aadefecefd6d753` (clean
+  `origin/develop`)
 - PR target: `develop`
 - PR title: `feat(scheduling): add kernel and durable ready-stage work`
 - Dependencies: implemented pipeline planner, per-run authority, runtime resource
@@ -62,6 +63,36 @@ readiness predicate rather than retain a second DAG interpretation.
   - queue ordering and injected-policy result validation;
   - Stage 28 instance-local registries, activation manifests, and
     `loom.testing` reports.
+- Rediscovery at base `24b5d21` found these exact source owners:
+  - `src/loom/pipeline/execution/runner.py` owns the serial/parallel execution
+    loops, controller-only `PlanAction` transitions, and the current parallel
+    `_next_ready_stage` dependency check;
+  - `src/loom/pipeline/execution/stage_attempts.py` owns the current local-only
+    `prepare_stage_attempt`, while `src/loom/pipeline/stores/authority.py`,
+    `src/loom/pipeline/stores/sqlite_authority.py`,
+    `src/loom/authority/_repository.py`, and
+    `src/loom/authority/mutation_service.py` own the present allocation
+    protocols and adapters;
+  - `src/loom/pipeline/resources.py` owns the existing authored/runtime resource
+    codec and validator registry; exact-stage options are resolved under
+    `src/loom/pipeline/runtime/`;
+  - `src/loom/queue/selection.py` is the current fixed-eligibility/injected-
+    preference validation precedent, while
+    `src/loom/pipeline/executors/base.py` and
+    `src/loom/pipeline/runtime/capabilities.py` provide the Stage 28
+    instance-local registry/descriptor patterns; and
+  - `src/loom/testing/checks.py` and `src/loom/testing/reports.py` own current
+    bounded conformance checks and immutable reports.
+- Existing focused regression suites are
+  `tests/unit/loom/pipeline/execution/test_runner.py`,
+  `tests/unit/loom/pipeline/execution/test_stage_attempts.py`,
+  `tests/unit/loom/pipeline/planning/`,
+  `tests/unit/loom/pipeline/test_runtime_resources.py`,
+  `tests/unit/loom/pipeline/stores/test_sqlite_authority.py`,
+  `tests/unit/loom/authority/test_repository_stage_lifecycle.py`,
+  `tests/contracts/test_authority_store_contract.py`,
+  `tests/contracts/test_authority_repository_contract.py`,
+  `tests/unit/loom/testing/test_contracts.py`, and the package import/API suites.
 - Current `prepare_stage_attempt` is not the Phase 1 authority operation: it
   requires local run-store path helpers and combines attempt numbering, bound
   inputs/fingerprint, workspace creation, worker-request persistence, and
@@ -72,6 +103,15 @@ readiness predicate rather than retain a second DAG interpretation.
   distinct expected-state/idempotent preparation operation that leaves the
   exact attempt `PENDING` and unassigned; the existing allocation semantics must
   not be reused unchanged.
+- Both authority implementations use versioned SQLite schemas and already
+  contain historical attempt rows created by the current execution paths. Any
+  schema change needed for preparation identity/readiness evidence must preserve
+  those rows and the existing allocation path. A historical `PENDING` attempt
+  that lacks Stage 29 preparation identity is not silently adopted or
+  backfilled as schedulable work; it remains with its current compatibility or
+  recovery owner unless an explicit authority operation can reconcile it under
+  the fixed expected state. No generic migration registry or placeholder
+  coordinator history is required for this phase.
 - Existing tests to reuse include planner DAG tests, runner dependency/reuse/
   failure tests, runtime-resource validation, queue ordering, protocol import
   tests, and extension conformance tests.
@@ -285,6 +325,14 @@ None receives a store, live clock, network client, authority, or launcher.
 codec; `loom.pipeline.runtime` owns conversion from and back to the existing
 validated `ResourceEntry`/`ResourceRequest` values.
 
+This is the first `loom.scheduling` public surface, so there is no legacy
+scheduler API to migrate or alias. Export only the approved protocols, their
+required immutable boundary values, and the fixed kernel from that subsystem;
+do not add a root-package facade, compatibility shim, abstract lifecycle
+scheduler, or public registry base. Method decomposition, helper classes, and
+intermediate candidate/search representations that are not needed in protocol
+annotations or durable codecs remain private.
+
 All ambiguity is represented explicitly:
 
 ```text
@@ -390,6 +438,34 @@ REUSE/SKIP/BLOCKED reconciliation may still perform the pre-existing
 authority-owned controller transitions and output-reference commits required by
 the execution plan; those are not new scheduler-owned lifecycle mutations.
 
+Preparation is the one Phase 1 cross-store causal chain:
+
+1. The coordinator durably creates or returns a narrow preparation intent with
+   one stable operation ID and request digest derived from the admitted run,
+   stage, readiness generation, expected authority state, and bound-input
+   evidence.
+2. The authority revalidates that expected state and, in one transaction,
+   creates or returns the exact `PENDING` attempt and commits the matching
+   operation receipt. Exact replay returns the same attempt; the same operation
+   ID with a different digest, a changed generation, a terminal fact, or a
+   retry not authorized by authority facts fails closed.
+3. Only the confirmed authority result may create or refresh the
+   `StageWorkRecord`; its semantic key uses that exact attempt and readiness
+   generation. A crash after either durable commit is repaired by replaying the
+   same operation, never by allocating a new attempt or deriving identity from
+   coordinator projection state.
+
+This requires only semantic intent/create-or-return operations in the Phase 1
+coordinator-store subset, not a generic outbox, saga framework, transport
+adapter, or lifecycle service. Phase 1 uses an internal direct composition and
+exposes no caller-controlled identity; Phase 3 owns the captured-principal,
+authorizer, and scoped coordinator-authority application boundary, and Phase 4
+adds authenticated remote transport. Likewise, later-phase assignment/control/
+event references constrain future deletion and re-keying, but Phase 1 must not
+add placeholder tables or a generic reference registry for them. Its store
+simply exposes no operation that re-keys an existing semantic record, and it
+retains descriptor references that current Phase 1 work actually records.
+
 ### Private discretion
 
 The executor may choose private module names, indexes, batching strategy,
@@ -417,8 +493,9 @@ effect boundary.
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
 | One readiness interpretation | Shared authority-side predicate | Existing runner and new orchestrator | Dependency bypass or divergent restart | DAG, reuse, failure, retry, and cancellation tests call both consumers |
-| One exact prepared attempt per readiness generation | Per-run authority preparation transaction | Replayed reconciliation, restart, or concurrent orchestrators | Duplicate attempts or skipped retry ownership | Expected-revision, idempotency, concurrency, and restart tests |
+| One exact prepared attempt per readiness generation | Coordinator preparation-intent transaction plus per-run authority preparation/receipt transaction | Crash before send, response loss after authority commit, replay, restart, or concurrent reconcilers | Duplicate attempts, unexplained authority mutation, or skipped retry ownership | Persist-before-call, expected-state/digest conflict, post-commit response-loss, concurrency, and restart tests |
 | Rebuild preserves stage-work identity | Coordinator stage-work transaction | Projection refresh, store reopen, or changed diagnostics | Orphan assignment/event or duplicate work | Deterministic/create-or-return identity, referenced-retention, and rebuild tests |
+| Historical attempts are not reinterpreted as prepared work | Authority schema migration and preparation operation | Existing `PENDING`/`RUNNING` rows without a readiness-generation receipt | An old execution becomes newly schedulable or changes lifecycle ownership | Pre-migration fixture/open, unchanged-row, compatibility-allocation, and no-implicit-backfill tests |
 | Controller-only actions retain authority ownership | Existing plan-action/authority operations | New orchestrator projection | Reuse/skip/block truth duplicated or descendant unlocked early | Existing runner/orchestrator trace-equivalence and output-commit tests |
 | Authored minima cannot be weakened | Runtime placement resolver and resource planner | Exact-stage runtime policy | Under-requested execution | Merge/property/boundary tests |
 | Resource opportunity and intrinsic feasibility have one owner | Resource planner plus kernel envelope checks | Custom inventory/availability and planner result | Repeated parser failure, unit disagreement, or duplicate GPU/resource rules | Malformed-opportunity, intrinsic-semantics, and claim-validation conformance tests |
@@ -444,8 +521,10 @@ effect boundary.
    explanations, and proposal validation.
 3. Extract the shared readiness predicate and route existing runner readiness
    through it; split semantic `PENDING` attempt preparation from the current
-   local worker-materialization helper; add controller-action reconciliation
-   and durable `StageWorkRecord`/store operations.
+   local worker-materialization helper; add the minimal coordinator preparation-
+   intent operation, atomic authority receipt, controller-action reconciliation,
+   and durable `StageWorkRecord`/store operations. Preserve historical attempts
+   without inventing preparation evidence or later-phase reference tables.
 4. Integrate orchestrator-to-snapshot-to-decision without reservation or launch;
    add restart/rebuild, downstream custom-component, import, and no-mutation
    evidence plus canonical documentation/public exports.
@@ -454,13 +533,23 @@ effect boundary.
 
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
-| Package | Required | Cheap intentional exports and dependency direction | Import `loom.scheduling` and `loom.testing` without loading `loom.pipeline`, runtime/network/database modules; no root re-export; pipeline-runtime adapter imports scheduling in the allowed direction |
+| Package | Required | Cheap intentional exports and dependency direction | In a fresh interpreter import and resolve the public `loom.scheduling` protocol annotations without loading `loom.pipeline`, runtime/network/database modules; no root re-export; pipeline-runtime adapter imports scheduling in the allowed direction |
 | Unit | Required | Quantities, resolution, search completeness, rule order, preference algebra, bounds, deterministic selection | Integer CPU, byte memory, invalid fractions, namespaced atoms, hard-before-soft, tier dominance, checked overflow, bands/fallback at durable `as_of`, stable ties, `EXHAUSTED` versus infeasible |
 | Contract | Required | Downstream protocol authority and fail-closed output | Synthetic planner/rule/scorer/policy; malformed opportunity/claim, incomplete search, invalid work/candidate pair, exceptions, oversize, mutation sentinels, descriptor drift, retained-binding reconstruction |
-| Integration | Required | Authority preparation, readiness, and durable projection | Train/evaluate, diamond, blocked-first-branch visibility, reuse/skip/failure/retry, concurrent/replayed preparation, restart/rebuild with no duplicate attempt and the exact same `stage_work_id`; referenced projections remain joinable; no projection-time parallel-slot suppression |
+| Integration | Required | Authority preparation, readiness, and durable projection | Train/evaluate, diamond, blocked-first-branch visibility, reuse/skip/failure/retry; persist intent then inject failure before authority call, after authority commit/before the caller receives the result, and after receipt of that result/before projection, with replay producing one `PENDING` attempt, one matching receipt, and the exact same `stage_work_id`; concurrent changed-state/digest conflict; no projection-time parallel-slot suppression |
+| Migration/reopen | Required | Existing authority data and new projection durability | Open a pre-change authority fixture without changing historical attempt identity/status or manufacturing preparation evidence; current allocation remains compatible; create/reopen/rebuild the new coordinator store with stable IDs and strict unsupported-version failure. Do not synthesize assignment/control/event references that Phase 1 does not own |
 | E2E / opt-in | Deferred | No process or external system is allowed in Phase 1 | Phase 2 owns the first execution E2E; assert launcher/provider/transport sentinels remain untouched |
 
-Targeted commands are fixed during phase preparation from discovered tests.
+Targeted development commands use the repository's locked development
+environment and the exact affected suites, with new Stage 29 paths added beside
+their owning behavior:
+
+    uv run --locked --group dev pytest tests/unit/loom/scheduling tests/unit/loom/pipeline/test_runtime_resources.py tests/unit/loom/pipeline/planning tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/pipeline/execution/test_stage_attempts.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/unit/loom/authority/test_repository_stage_lifecycle.py tests/unit/loom/testing/test_contracts.py
+    uv run --locked --group dev pytest tests/contracts/test_authority_store_contract.py tests/contracts/test_authority_repository_contract.py tests/package/test_import_boundaries.py tests/package/test_pipeline_planning_api.py tests/package/test_pipeline_store_api.py tests/package/test_testing_api.py
+
+The executor may split these commands while developing and must update paths if
+new tests are placed at a more specific existing owner. The stable final gate is
+unchanged.
 Final commands:
 
     make validate-pr
@@ -473,20 +562,27 @@ Final commands:
   custom output to bypass mandatory checks; duplicating intrinsic resource
   semantics in hard rules; using undefined scalar preference precedence;
   comparing scores across work items; making stage work authoritative or
-  re-keying it during rebuild;
+  re-keying it during rebuild; projecting before the authority preparation
+  receipt is durable; retrying preparation under a fresh operation identity
+  after an indeterminate result; manufacturing readiness evidence for legacy
+  attempts or scaffolding later-phase reference owners;
   importing pipeline resources into the pure subsystem and creating a cycle; or
   reusing the current `RUNNING`/lease allocation semantics for preparation.
 - Review focus: import direction, immutable closed values, explicit registry
   epochs/retention, opportunity/claim validation, complete search, preference/
   fallback algebra, grouped policy result validation, readiness extraction,
-  exact-attempt/stage-work identity idempotency, and absence of execution side
-  effects.
+  persist-intent/authority-receipt/projection ordering, exact-attempt/stage-work
+  identity idempotency, preservation of historical attempts, and absence of
+  execution side effects or later-phase placeholder machinery.
 - Stop if: canonical runtime requests cannot be composed without weakening;
   readiness cannot be shared without a public behavior change; stage work would
   need to own lifecycle truth; an exact `PENDING` attempt cannot be prepared
-  atomically without taking an execution lease; a pure protocol requires a live
-  store/launcher or runtime import of `loom.pipeline`; or a required quantity
-  cannot be represented exactly.
+  atomically with its operation receipt and without taking an execution lease;
+  preserving historical attempts requires inventing readiness/preparation
+  evidence; the stage-work semantic key cannot be reproduced solely from the
+  confirmed authority result and admitted-run identity; a pure protocol requires
+  a live store/launcher or runtime import of `loom.pipeline`; or a required
+  quantity cannot be represented exactly.
 - Accepted debt: complete bounded enumeration can leave a large work item
   `EXHAUSTED`, and FIFO-with-safe-bypass may be suboptimal. Revisit proof-
   carrying partial search or fairness only with measured workloads.
@@ -503,33 +599,49 @@ Final commands:
   active/retained epoch composition, separate validator/planner identity,
   exact quantities and namespaced capacity, one
   readiness predicate, authority-owned idempotent `PENDING` preparation,
-  authority-owned existing controller actions, rebuildable stage work, and no
-  execution side effects.
+  coordinator intent before authority mutation, authority-owned existing
+  controller actions, rebuildable stage work, preservation without implicit
+  legacy backfill, and no execution side effects.
 - Manager action required if any stop condition is met or a public/durable shape
   must differ materially from the manifest.
 
 ## Workflow State
 
-- Manager preparation and expanded planning: complete
-- Implementation: complete on the phase branch but not accepted
-- Refiner: one qualified blocker correction used
-- Pre-submit gate: passed at branch revision `ba29963`; `make validate-pr`
-  recorded 2,342 default-suite passes and 141 config-extra passes, and
-  `make test-summary` recorded 2,483 total passes
-- Independent review: complete; four product blockers and one localized
-  correction make the branch ineligible to merge despite green CI
+- Manager preparation: complete at base `24b5d21`; worktree, exact source owners,
+  focused regressions, and harness commands recorded
+- Expanded planning: complete at evidence revision `8db4ae6`; the bounded
+  refinement fixed the causal intent/authority-receipt/projection order,
+  preserved historical attempts without implicit backfill, made the fresh-
+  process public import check explicit, and excluded generic saga, transport,
+  and later-phase reference scaffolding; approved behavior/design unchanged
+- Implementation: complete; the final bounded correction extracted the shared
+  persisted-fact readiness predicate, added exact expected-state authority
+  preparation and immutable receipts, migrated the run-local authority schema
+  without legacy backfill, and replaced the prototype projection with semantic
+  in-memory/SQLite stores plus bounded `RunOrchestrator` reconciliation. The
+  authorized repair now keeps the authority revision cursor monotonic,
+  revalidates projections against full readiness evidence, preserves durable
+  ready time, enforces pool/target eligibility, and validates planner output.
+- Refiner: completed one qualified blocker correction at `671fc89`
+- Pre-submit gate: complete; `make validate-pr` passed Ruff, Pyright, the
+  isolated default suite (2,349 passed, one skipped), the config-extra suite
+  (141 passed, three skipped), and package builds; `make test-summary` recorded
+  2,490 passing tests across the categorized evidence suites
+- Independent review: fresh re-review complete at repaired head `56fa5f2`; no
+  product blocker, localized correction, or required hardening remains, and 90
+  focused boundary tests passed
 - Blocker corrections: prior attempt stopped at 3/3; maintainer-authorized
-  repair attempt reset to 0/3 with the independent findings as its fixed scope
-- PR and merge: PR #233 remains closed pending repair, fresh validation, and
-  independent review; Phase 2 remains pending
+  repair attempt is 1/3 with every fixed-scope review finding addressed
+- PR and merge: PR #233 reopened at repaired head `56fa5f2`; GitHub CI pending;
+  Phase 2 remains pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Phase branch `agent/stage-29-p1-scheduling-kernel-ready-stage-work` contains the proposed pure scheduling boundary, runtime placement integration, shared readiness, authority preparation, durable stage-work stores, and orchestrator. |
-| Tests added or updated | Branch tests cover scheduling, placement, readiness, authority preparation/migration, orchestration/store replay, and import/public boundaries, but omit the four independently reproduced contract failures. |
-| Validated revision/tree state and evidence | At `ba29963`, `make validate-pr`, `make test-summary`, and GitHub CI passed; the evidence is insufficient because independent review reproduced reachable failures outside those suites. |
-| Validation-relevant changes after evidence | The dedicated worktree preserves an uncommitted, focused revision-cursor mitigation and regression test. It is not a validated or mergeable correction. |
-| PR, review, and merge | [PR #233](https://github.com/samcantrill/loom/pull/233) targeted `develop`, was non-draft and mechanically mergeable, passed CI, then closed without merge after independent review. |
-| Residual risk and cleanup | Four product blockers remain: monotonic replay revision, full authority-owned projection eligibility, durable original `ready_at`, and mandatory resolved pool/target enforcement. Planner-result type validation is a localized correction. The worktree and branch are retained for diagnosis; later phases are not started. |
+| Implementation and changed paths | Pure scheduling values/protocols/registries/kernel/defaults; runtime placement and CPU/memory adapters; planning-owned readiness; narrow expected-state authority preparation with frozen receipts and v2-to-v3 migration; semantic in-memory/SQLite coordinator stage-work stores; bounded replay-safe `RunOrchestrator`; compatibility runner routed through shared readiness. No assignment, execution lease, provider, artifact transfer, launcher, process, or transport behavior added. |
+| Tests added or updated | Scheduling completeness/exhaustion, atom bounds, hard/soft/policy failure, preference tiers/fallback/overflow, registry retention, placement route/fingerprint/rebuild, conformance, readiness cancellation/retry/action behavior, authority receipt serialization/revision/terminal/retry/concurrency/migration behavior, store parity/reopen/schema failure, lost-response repair, monotonic revision replay, changed-time restart replay, cancellation and superseded-upstream retirement, mandatory pool/target selection, malformed planner output, all-ready-branch projection, controller-action ownership, authority-wins eligibility, pure decision integration, and public/import boundaries. |
+| Validated revision/tree state and evidence | Authorized repair-pass-1 tree: `make validate-pr` passed Ruff and Pyright; isolated default 2,349 passed/one skipped/121 deselected; config-extra 141 passed/three skipped/2,353 deselected; sdist and wheel built. `make test-summary` passed package 118, unit 1,676, contract 286, integration 211, e2e 58, and config-extra 141, for 2,490 total passes. |
+| Validation-relevant changes after evidence | None; this execution-plan evidence update does not change source, tests, dependencies, build, or validation configuration. |
+| PR, review, and merge | [PR #233](https://github.com/samcantrill/loom/pull/233) targets `develop`, is non-draft, and reopened at repaired head `56fa5f2` after fresh independent review found no blocker; repaired-head CI and merge remain. |
+| Residual risk and cleanup | Repaired-head GitHub CI, merge, metadata finalization, and worktree cleanup remain. Phase 2 still owns every reservation, assignment, resource acquisition, worker materialization, and launch side effect. |

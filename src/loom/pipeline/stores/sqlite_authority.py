@@ -38,6 +38,8 @@ from .authority import (
     AttemptAllocation,
     AuthorityStoreError,
     OutputCommit,
+    PreparedAttemptReceipt,
+    PreparedAttemptRequest,
     StatusTransition,
 )
 from .capabilities import (
@@ -149,6 +151,18 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "created_at",
             "revision_sequence",
             "reason_json",
+        }
+    ),
+    "prepared_attempt_receipts": frozenset(
+        {
+            "operation_id",
+            "request_digest",
+            "readiness_generation",
+            "stage_name",
+            "attempt_id",
+            "request_json",
+            "receipt_json",
+            "revision_sequence",
         }
     ),
     "leases": frozenset(
@@ -627,6 +641,195 @@ class SQLitePerRunAuthorityStore:
                 owner=owner_id,
             )
             return AttemptAllocation(attempt=attempt, lease=lease)
+
+    def ensure_prepared_attempt(
+        self, run_uri: str, request: PreparedAttemptRequest
+    ) -> PreparedAttemptReceipt:
+        """Validate and create one receipt/PENDING attempt atomically."""
+        self._bind_run_uri(run_uri)
+        if not isinstance(request, PreparedAttemptRequest):
+            raise AuthorityStoreError("request must be a PreparedAttemptRequest")
+        request_json = _json_dumps(request.to_dict())
+        with self._transaction(run_uri) as conn:
+            row = conn.execute(
+                """
+                SELECT request_json, receipt_json, attempt_id
+                FROM prepared_attempt_receipts
+                WHERE operation_id = ?
+                """,
+                (request.operation_id,),
+            ).fetchone()
+            if row is not None:
+                existing_request = PreparedAttemptRequest.from_dict(
+                    _json_loads(cast(str, row["request_json"]))
+                )
+                if existing_request != request:
+                    raise AuthorityStoreError(
+                        "prepared attempt operation conflicts with its receipt"
+                    )
+                attempt_row = conn.execute(
+                    "SELECT 1 FROM attempts WHERE attempt_id = ?",
+                    (row["attempt_id"],),
+                ).fetchone()
+                if attempt_row is None:
+                    raise AuthorityStoreError("prepared attempt receipt has no attempt")
+                receipt = PreparedAttemptReceipt.from_dict(
+                    _json_loads(cast(str, row["receipt_json"]))
+                )
+                if receipt.request != request:
+                    raise AuthorityStoreError(
+                        "prepared attempt operation conflicts with its receipt"
+                    )
+                return receipt
+            existing = conn.execute(
+                """
+                SELECT 1 FROM prepared_attempt_receipts
+                WHERE stage_name = ? AND readiness_generation = ?
+                """,
+                (request.stage_name, request.readiness_generation),
+            ).fetchone()
+            if existing is not None:
+                raise AuthorityStoreError(
+                    "readiness generation was prepared by another operation"
+                )
+
+            current_revision = _current_run_revision(conn)
+            _require_expected_revision(current_revision, request.expected_revision)
+            run_status = _require_run_status(conn)
+            if run_status in {
+                RunStatus.SUCCEEDED,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+                RunStatus.INTERRUPTED,
+            }:
+                raise AuthorityStoreError("run is terminal or cancelling")
+
+            stage_row = conn.execute(
+                "SELECT status FROM stages WHERE stage_name = ?",
+                (request.stage_name,),
+            ).fetchone()
+            stage_status = (
+                None
+                if stage_row is None
+                else StageStatus(cast(str, stage_row["status"]))
+            )
+            if stage_status is not request.expected_stage_status:
+                raise AuthorityStoreError("prepared attempt stage state is stale")
+            if stage_status not in {None, StageStatus.STALE, StageStatus.FAILED}:
+                raise AuthorityStoreError(
+                    "stage state does not permit semantic attempt preparation"
+                )
+            attempt_row = conn.execute(
+                """
+                SELECT attempt_id, attempt_number
+                FROM attempts
+                WHERE stage_name = ?
+                ORDER BY attempt_number DESC
+                LIMIT 1
+                """,
+                (request.stage_name,),
+            ).fetchone()
+            current_attempt_id = (
+                None if attempt_row is None else cast(str, attempt_row["attempt_id"])
+            )
+            if current_attempt_id != request.expected_attempt_id:
+                raise AuthorityStoreError("prepared attempt identity is stale")
+            attempt_number = _next_attempt_number(conn, request.stage_name)
+            if attempt_number != request.next_attempt:
+                raise AuthorityStoreError("prepared attempt number is stale")
+
+            for upstream_stage, commit_id in request.upstream_commits.items():
+                commit_row = conn.execute(
+                    """
+                    SELECT commit_id FROM commits
+                    WHERE stage_name = ?
+                    ORDER BY revision_sequence DESC
+                    LIMIT 1
+                    """,
+                    (upstream_stage,),
+                ).fetchone()
+                if commit_row is None or cast(str, commit_row["commit_id"]) != commit_id:
+                    raise AuthorityStoreError("upstream commit evidence is stale")
+
+            if request.expected_stage_status is StageStatus.FAILED:
+                if request.retry_decision_id is None:
+                    raise AuthorityStoreError("failed stage retry is not authorized")
+                decision_row = conn.execute(
+                    """
+                    SELECT record_json FROM retry_decisions
+                    WHERE decision_id = ? AND stage_name = ?
+                    """,
+                    (request.retry_decision_id, request.stage_name),
+                ).fetchone()
+                if decision_row is None:
+                    raise AuthorityStoreError("failed stage retry is not authorized")
+                decision = RetryDecisionRecord.from_dict(
+                    _json_loads(cast(str, decision_row["record_json"]))
+                )
+                if not decision.should_retry or decision.next_attempt != attempt_number:
+                    raise AuthorityStoreError("failed stage retry is not authorized")
+            elif request.retry_decision_id is not None:
+                raise AuthorityStoreError("retry evidence requires a failed stage")
+
+            now = self._now()
+            revision = self._next_revision(conn)
+            attempt_id = f"{request.stage_name}-{attempt_number}"
+            conn.execute(
+                """
+                INSERT INTO attempts (
+                    attempt_id, stage_name, attempt_number, status, owner_id,
+                    created_at, revision_sequence, reason_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    attempt_id,
+                    request.stage_name,
+                    attempt_number,
+                    StageStatus.PENDING.value,
+                    request.owner_id,
+                    now,
+                    revision.sequence,
+                ),
+            )
+            _upsert_stage(
+                conn,
+                stage_name=request.stage_name,
+                status=StageStatus.PENDING,
+                revision=revision,
+                reason=None,
+            )
+            attempt = StageAttempt(
+                run_uri=run_uri,
+                stage_name=request.stage_name,
+                attempt=attempt_number,
+                attempt_id=attempt_id,
+                status=StageStatus.PENDING,
+                revision=revision,
+                created_at=now,
+                owner=request.owner_id,
+            )
+            receipt = PreparedAttemptReceipt(request, attempt)
+            conn.execute(
+                """
+                INSERT INTO prepared_attempt_receipts (
+                    operation_id, request_digest, readiness_generation,
+                    stage_name, attempt_id, request_json, receipt_json,
+                    revision_sequence
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request.operation_id,
+                    request.request_digest,
+                    request.readiness_generation,
+                    request.stage_name,
+                    attempt_id,
+                    request_json,
+                    _json_dumps(receipt.to_dict()),
+                    revision.sequence,
+                ),
+            )
+            _touch_run(conn, revision)
+            return receipt
 
     def acquire_controller_lease(
         self,
@@ -1793,7 +1996,10 @@ class SQLitePerRunAuthorityStore:
         if not database_path.exists():
             raise AuthoritySchemaError("SQLite authority database is missing")
         with self._connect(database_path) as conn:
-            needs_migration = _stored_schema_version(conn) == 1
+            version = _stored_schema_version(conn)
+            needs_migration = (
+                version is not None and version < AUTHORITY_SCHEMA_VERSION
+            )
         if needs_migration:
             with self._write_connection(database_path, initialize=False) as conn:
                 _migrate_schema(conn)
@@ -1916,6 +2122,16 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             revision_sequence INTEGER NOT NULL,
             reason_json TEXT,
             UNIQUE(stage_name, attempt_number)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS prepared_attempt_receipts (
+            operation_id TEXT PRIMARY KEY, request_digest TEXT NOT NULL,
+            readiness_generation TEXT NOT NULL, stage_name TEXT NOT NULL,
+            attempt_id TEXT NOT NULL, request_json TEXT NOT NULL,
+            receipt_json TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            UNIQUE(stage_name, readiness_generation)
         )
         """,
         """
@@ -2142,20 +2358,25 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         version = int(cast(str, row["value"]))
     except (TypeError, ValueError):
         return
-    if version != 1:
-        return
     tables = {
         cast(str, table["name"])
         for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
     }
-    if set(_REQUIRED_SCHEMA_COLUMNS) - tables:
+    historical_columns = {
+        name: columns
+        for name, columns in _REQUIRED_SCHEMA_COLUMNS.items()
+        if name != "prepared_attempt_receipts"
+    }
+    if version not in {1, 2}:
+        return
+    if set(historical_columns) - tables:
         raise AuthoritySchemaError(
-            "SQLite authority v1 schema is incomplete or invalid"
+            f"SQLite authority v{version} schema is incomplete or invalid"
         )
-    for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+    for table_name, expected_columns in historical_columns.items():
         v1_columns = (
             expected_columns - {"supersedes_commit_id"}
-            if table_name == "commits"
+            if version == 1 and table_name == "commits"
             else expected_columns
         )
         actual_columns = {
@@ -2164,25 +2385,57 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         }
         if not v1_columns.issubset(actual_columns):
             raise AuthoritySchemaError(
-                "SQLite authority v1 schema is incomplete or invalid"
+                f"SQLite authority v{version} schema is incomplete or invalid"
             )
-    conn.execute("ALTER TABLE commits RENAME TO commits_v1")
+    if version == 1:
+        conn.execute("ALTER TABLE commits RENAME TO commits_v1")
+        conn.execute("""
+            CREATE TABLE commits (
+                commit_id TEXT PRIMARY KEY, stage_name TEXT NOT NULL,
+                attempt_id TEXT NOT NULL, committed_at TEXT NOT NULL,
+                revision_sequence INTEGER NOT NULL, output_names_json TEXT NOT NULL,
+                materialized_refs_json TEXT NOT NULL, supersedes_commit_id TEXT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO commits (
+                commit_id, stage_name, attempt_id, committed_at, revision_sequence,
+                output_names_json, materialized_refs_json, supersedes_commit_id
+            ) SELECT commit_id, stage_name, attempt_id, committed_at, revision_sequence,
+                     output_names_json, materialized_refs_json, NULL FROM commits_v1
+        """)
+        conn.execute("DROP TABLE commits_v1")
+        version = 2
+
+    if "prepared_attempt_receipts" in tables:
+        columns = {
+            cast(str, row["name"])
+            for row in conn.execute(
+                "PRAGMA table_info(prepared_attempt_receipts)"
+            )
+        }
+        if not {"request_json", "receipt_json"}.issubset(columns):
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM prepared_attempt_receipts"
+            ).fetchone()
+            if row is not None and cast(int, row["count"]) != 0:
+                raise AuthoritySchemaError(
+                    "legacy prepared attempts cannot be assigned synthetic evidence"
+                )
+            conn.execute("DROP TABLE prepared_attempt_receipts")
     conn.execute("""
-        CREATE TABLE commits (
-            commit_id TEXT PRIMARY KEY, stage_name TEXT NOT NULL,
-            attempt_id TEXT NOT NULL, committed_at TEXT NOT NULL,
-            revision_sequence INTEGER NOT NULL, output_names_json TEXT NOT NULL,
-            materialized_refs_json TEXT NOT NULL, supersedes_commit_id TEXT
+        CREATE TABLE IF NOT EXISTS prepared_attempt_receipts (
+            operation_id TEXT PRIMARY KEY,
+            request_digest TEXT NOT NULL,
+            readiness_generation TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            receipt_json TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            UNIQUE(stage_name, readiness_generation)
         )
     """)
-    conn.execute("""
-        INSERT INTO commits (
-            commit_id, stage_name, attempt_id, committed_at, revision_sequence,
-            output_names_json, materialized_refs_json, supersedes_commit_id
-        ) SELECT commit_id, stage_name, attempt_id, committed_at, revision_sequence,
-                 output_names_json, materialized_refs_json, NULL FROM commits_v1
-    """)
-    conn.execute("DROP TABLE commits_v1")
     conn.execute(
         "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
         (str(AUTHORITY_SCHEMA_VERSION),),
@@ -2285,7 +2538,10 @@ def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
             }
         except sqlite3.DatabaseError:
             tables = set()
-        if set(_REQUIRED_SCHEMA_COLUMNS) - tables:
+        required_tables = set(_REQUIRED_SCHEMA_COLUMNS)
+        if version < 3:
+            required_tables.discard("prepared_attempt_receipts")
+        if required_tables - tables:
             return AuthoritySchemaCheck(
                 current_version=AUTHORITY_SCHEMA_VERSION,
                 found_version=version,

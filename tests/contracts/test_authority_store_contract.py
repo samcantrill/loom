@@ -28,6 +28,7 @@ from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.stores import (
+    AUTHORITY_SCHEMA_VERSION,
     BackendCapability,
     CapabilityScope,
     LeaseState,
@@ -380,7 +381,7 @@ def test_per_run_authority_contract_records_revisioned_lifecycle_facts(
 
     snapshot = store.snapshot(run_uri)
     assert snapshot.status is RunStatus.RUNNING
-    assert snapshot.schema_version == 2
+    assert snapshot.schema_version == AUTHORITY_SCHEMA_VERSION
     assert snapshot.submitted_operations == (submitted_record,)
     assert snapshot.stages[0].status is StageStatus.SUCCEEDED
     assert snapshot.stages[0].attempts[0].status is StageStatus.SUCCEEDED

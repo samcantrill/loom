@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from threading import RLock
 from typing import cast
 
 from loom.artifacts import ArtifactRef
@@ -48,6 +49,8 @@ from loom.pipeline.stores import (
     OutputCommit,
     OutputCommitRecord,
     PerRunAuthorityStore,
+    PreparedAttemptReceipt,
+    PreparedAttemptRequest,
     RecoveryKind,
     RecoveryRecord,
     ReliabilityPolicyFact,
@@ -114,6 +117,7 @@ class _RunState:
     )
     retry_decisions: dict[str, RetryDecisionRecord] = field(default_factory=dict)
     timeout_outcomes: dict[str, TimeoutOutcomeRecord] = field(default_factory=dict)
+    prepared_attempts: dict[str, PreparedAttemptReceipt] = field(default_factory=dict)
 
 
 class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
@@ -122,6 +126,7 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         self._revision = 0
         self._tick = 0
         self._lease_expiry_ticks: dict[str, int] = {}
+        self._preparation_lock = RLock()
 
     def capabilities(self) -> BackendCapabilitySet:
         return BackendCapabilitySet(
@@ -288,6 +293,91 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
                 attempt_id=attempt.attempt_id,
             )
         return AttemptAllocation(attempt=attempt, lease=lease)
+
+    def ensure_prepared_attempt(
+        self, run_uri: str, request: PreparedAttemptRequest
+    ) -> PreparedAttemptReceipt:
+        if not isinstance(request, PreparedAttemptRequest):
+            raise ValueError("request must be a PreparedAttemptRequest")
+        with self._preparation_lock:
+            state = self._require_run(run_uri)
+            existing = state.prepared_attempts.get(request.operation_id)
+            if existing is not None:
+                if existing.request != request:
+                    raise ValueError(
+                        "prepared attempt operation conflicts with its receipt"
+                    )
+                return existing
+            if any(
+                receipt.request.stage_name == request.stage_name
+                and receipt.request.readiness_generation
+                == request.readiness_generation
+                for receipt in state.prepared_attempts.values()
+            ):
+                raise ValueError(
+                    "readiness generation was prepared by another operation"
+                )
+            _require_expected_revision(state.revision, request.expected_revision)
+            if state.status in {
+                RunStatus.SUCCEEDED,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+                RunStatus.INTERRUPTED,
+            }:
+                raise ValueError("run is terminal or cancelling")
+            if state.stage_statuses.get(request.stage_name) is not request.expected_stage_status:
+                raise ValueError("prepared attempt stage state is stale")
+            if request.expected_stage_status not in {
+                None,
+                StageStatus.STALE,
+                StageStatus.FAILED,
+            }:
+                raise ValueError(
+                    "stage state does not permit semantic attempt preparation"
+                )
+            attempts = state.attempts.get(request.stage_name, ())
+            current_attempt_id = attempts[-1].attempt_id if attempts else None
+            if current_attempt_id != request.expected_attempt_id:
+                raise ValueError("prepared attempt identity is stale")
+            attempt_number = len(attempts) + 1
+            if attempt_number != request.next_attempt:
+                raise ValueError("prepared attempt number is stale")
+            for upstream_stage, commit_id in request.upstream_commits.items():
+                commit = state.commits.get(upstream_stage)
+                if commit is None or commit.commit_id != commit_id:
+                    raise ValueError("upstream commit evidence is stale")
+            if request.expected_stage_status is StageStatus.FAILED:
+                decision = (
+                    None
+                    if request.retry_decision_id is None
+                    else state.retry_decisions.get(request.retry_decision_id)
+                )
+                if (
+                    decision is None
+                    or not decision.should_retry
+                    or decision.next_attempt != attempt_number
+                    or decision.status.stage_id != request.stage_name
+                ):
+                    raise ValueError("failed stage retry is not authorized")
+            elif request.retry_decision_id is not None:
+                raise ValueError("retry evidence requires a failed stage")
+            revision = self._next_revision()
+            attempt = StageAttempt(
+                run_uri=run_uri,
+                stage_name=request.stage_name,
+                attempt=attempt_number,
+                attempt_id=f"{request.stage_name}-{attempt_number}",
+                status=StageStatus.PENDING,
+                revision=revision,
+                created_at=self._now(),
+                owner=request.owner_id,
+            )
+            state.attempts.setdefault(request.stage_name, []).append(attempt)
+            state.stage_statuses[request.stage_name] = StageStatus.PENDING
+            state.revision = revision
+            receipt = PreparedAttemptReceipt(request=request, attempt=attempt)
+            state.prepared_attempts[request.operation_id] = receipt
+            return receipt
 
     def acquire_controller_lease(
         self,

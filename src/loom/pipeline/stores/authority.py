@@ -20,7 +20,7 @@ from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.submitted import SubmittedOperationRecord
-from loom.serialization import PlainData
+from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from .capabilities import BackendCapabilitySet
 from .config import AuthorityConfig
@@ -144,6 +144,205 @@ class AttemptAllocation:
             attempt=StageAttempt.from_dict(_required(mapping, "attempt")),
             lease=None if lease is None else LeaseRecord.from_dict(lease),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAttemptRequest:
+    """Expected-state request for one idempotent semantic preparation."""
+
+    operation_id: str
+    request_digest: str
+    admission_id: str
+    stage_name: str
+    readiness_generation: str
+    expected_revision: BackendRevision
+    expected_stage_status: StageStatus | None
+    expected_attempt_id: str | None
+    next_attempt: int
+    owner_id: str
+    plan_fingerprint: str
+    bound_inputs: Mapping[str, PlainData]
+    upstream_commits: Mapping[str, str]
+    retry_decision_id: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "operation_id",
+            "request_digest",
+            "admission_id",
+            "stage_name",
+            "readiness_generation",
+            "owner_id",
+            "plan_fingerprint",
+        ):
+            _non_empty(getattr(self, field_name), field_name)
+        if not isinstance(self.expected_revision, BackendRevision):
+            raise AuthorityStoreError("expected_revision must be a BackendRevision")
+        if self.expected_stage_status is not None:
+            object.__setattr__(
+                self,
+                "expected_stage_status",
+                StageStatus(self.expected_stage_status),
+            )
+        if self.expected_attempt_id is not None:
+            _non_empty(self.expected_attempt_id, "expected_attempt_id")
+        if isinstance(self.next_attempt, bool) or self.next_attempt < 1:
+            raise AuthorityStoreError("next_attempt must be a positive integer")
+        if self.retry_decision_id is not None:
+            _non_empty(self.retry_decision_id, "retry_decision_id")
+        object.__setattr__(
+            self,
+            "bound_inputs",
+            _plain_mapping(self.bound_inputs, "bound_inputs"),
+        )
+        object.__setattr__(
+            self,
+            "upstream_commits",
+            _string_mapping(self.upstream_commits, "upstream_commits"),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "request_digest": self.request_digest,
+            "admission_id": self.admission_id,
+            "stage_name": self.stage_name,
+            "readiness_generation": self.readiness_generation,
+            "expected_revision": self.expected_revision.to_dict(),
+            "expected_stage_status": (
+                None
+                if self.expected_stage_status is None
+                else self.expected_stage_status.value
+            ),
+            "expected_attempt_id": self.expected_attempt_id,
+            "next_attempt": self.next_attempt,
+            "owner_id": self.owner_id,
+            "plan_fingerprint": self.plan_fingerprint,
+            "bound_inputs": thaw_plain_data(self.bound_inputs, path="bound_inputs"),
+            "upstream_commits": dict(self.upstream_commits),
+            "retry_decision_id": self.retry_decision_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "PreparedAttemptRequest":
+        mapping = _mapping(data, "PreparedAttemptRequest")
+        allowed = {
+            "operation_id",
+            "request_digest",
+            "admission_id",
+            "stage_name",
+            "readiness_generation",
+            "expected_revision",
+            "expected_stage_status",
+            "expected_attempt_id",
+            "next_attempt",
+            "owner_id",
+            "plan_fingerprint",
+            "bound_inputs",
+            "upstream_commits",
+            "retry_decision_id",
+        }
+        _reject_unknown(mapping, allowed, "PreparedAttemptRequest")
+        status = mapping.get("expected_stage_status")
+        next_attempt = _required(mapping, "next_attempt")
+        if isinstance(next_attempt, bool) or not isinstance(next_attempt, int):
+            raise AuthorityStoreError("next_attempt must be an integer")
+        return cls(
+            operation_id=_non_empty(
+                _required(mapping, "operation_id"), "operation_id"
+            ),
+            request_digest=_non_empty(
+                _required(mapping, "request_digest"), "request_digest"
+            ),
+            admission_id=_non_empty(
+                _required(mapping, "admission_id"), "admission_id"
+            ),
+            stage_name=_non_empty(_required(mapping, "stage_name"), "stage_name"),
+            readiness_generation=_non_empty(
+                _required(mapping, "readiness_generation"), "readiness_generation"
+            ),
+            expected_revision=BackendRevision.from_dict(
+                _required(mapping, "expected_revision")
+            ),
+            expected_stage_status=(
+                None if status is None else StageStatus(_non_empty(status, "status"))
+            ),
+            expected_attempt_id=_optional_string(
+                mapping.get("expected_attempt_id"), "expected_attempt_id"
+            ),
+            next_attempt=next_attempt,
+            owner_id=_non_empty(_required(mapping, "owner_id"), "owner_id"),
+            plan_fingerprint=_non_empty(
+                _required(mapping, "plan_fingerprint"), "plan_fingerprint"
+            ),
+            bound_inputs=_plain_mapping(
+                _mapping(_required(mapping, "bound_inputs"), "bound_inputs"),
+                "bound_inputs",
+            ),
+            upstream_commits=_string_mapping(
+                _mapping(
+                    _required(mapping, "upstream_commits"), "upstream_commits"
+                ),
+                "upstream_commits",
+            ),
+            retry_decision_id=_optional_string(
+                mapping.get("retry_decision_id"), "retry_decision_id"
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAttemptReceipt:
+    """Immutable authority acknowledgement for one preparation request."""
+
+    request: PreparedAttemptRequest
+    attempt: StageAttempt
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, PreparedAttemptRequest):
+            raise AuthorityStoreError("request must be a PreparedAttemptRequest")
+        if not isinstance(self.attempt, StageAttempt):
+            raise AuthorityStoreError("attempt must be a StageAttempt")
+        if (
+            self.attempt.stage_name != self.request.stage_name
+            or self.attempt.attempt != self.request.next_attempt
+            or self.attempt.status is not StageStatus.PENDING
+            or self.attempt.owner != self.request.owner_id
+        ):
+            raise AuthorityStoreError("prepared attempt does not match its request")
+
+    @property
+    def operation_id(self) -> str:
+        return self.request.operation_id
+
+    @property
+    def request_digest(self) -> str:
+        return self.request.request_digest
+
+    @property
+    def readiness_generation(self) -> str:
+        return self.request.readiness_generation
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {"request": self.request.to_dict(), "attempt": self.attempt.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: object) -> "PreparedAttemptReceipt":
+        mapping = _mapping(data, "PreparedAttemptReceipt")
+        _reject_unknown(mapping, {"request", "attempt"}, "PreparedAttemptReceipt")
+        return cls(
+            request=PreparedAttemptRequest.from_dict(_required(mapping, "request")),
+            attempt=StageAttempt.from_dict(_required(mapping, "attempt")),
+        )
+
+
+@runtime_checkable
+class PreparedAttemptAuthority(Protocol):
+    """Narrow authority operation used by the Phase 1 coordinator."""
+
+    def ensure_prepared_attempt(
+        self, run_uri: str, request: PreparedAttemptRequest
+    ) -> PreparedAttemptReceipt: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -674,6 +873,30 @@ def _mapping(value: object, field: str) -> Mapping[str, object]:
     return cast(Mapping[str, object], value)
 
 
+def _plain_mapping(
+    value: Mapping[str, object], field: str
+) -> Mapping[str, PlainData]:
+    try:
+        frozen = freeze_plain_data(value, path=field)
+    except ValueError as exc:
+        raise AuthorityStoreError(f"{field} must be plain data: {exc}") from exc
+    if not isinstance(frozen, Mapping):
+        raise AuthorityStoreError(f"{field} must be a mapping")
+    return frozen
+
+
+def _string_mapping(value: Mapping[str, object], field: str) -> Mapping[str, str]:
+    if any(
+        not isinstance(key, str)
+        or not key
+        or not isinstance(item, str)
+        or not item
+        for key, item in value.items()
+    ):
+        raise AuthorityStoreError(f"{field} must contain non-empty string pairs")
+    return dict(sorted(cast(Mapping[str, str], value).items()))
+
+
 def _required(mapping: Mapping[str, object], field: str) -> object:
     if field not in mapping:
         raise AuthorityStoreError(f"{field} is required")
@@ -741,6 +964,9 @@ __all__ = [
     "AuthorityStoreError",
     "StatusTransition",
     "AttemptAllocation",
+    "PreparedAttemptAuthority",
+    "PreparedAttemptRequest",
+    "PreparedAttemptReceipt",
     "OutputCommit",
     "PerRunAuthorityStore",
     "RunStore",

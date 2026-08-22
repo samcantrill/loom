@@ -44,10 +44,14 @@ class ContractReport:
             or isinstance(self.contract_version, bool)
             or self.contract_version <= 0
         ):
-            raise ValueError("ContractReport.contract_version must be a positive integer")
+            raise ValueError(
+                "ContractReport.contract_version must be a positive integer"
+            )
         findings = tuple(self.findings)
         if not all(isinstance(finding, ContractFinding) for finding in findings):
-            raise TypeError("ContractReport.findings must contain ContractFinding values")
+            raise TypeError(
+                "ContractReport.findings must contain ContractFinding values"
+            )
         object.__setattr__(self, "findings", findings)
 
     @property
@@ -65,7 +69,11 @@ class ContractReport:
     def raise_for_errors(self) -> None:
         """Raise ``AssertionError`` when one or more checks failed."""
 
-        failures = tuple(finding for finding in self.findings if finding.status == "fail")
+        failures = tuple(
+            finding for finding in self.findings if finding.status == "fail"
+        )
         if failures:
-            summary = "; ".join(f"{finding.code}: {finding.message}" for finding in failures)
+            summary = "; ".join(
+                f"{finding.code}: {finding.message}" for finding in failures
+            )
             raise AssertionError(summary)
