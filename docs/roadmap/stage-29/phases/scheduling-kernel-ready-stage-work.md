@@ -100,6 +100,15 @@ readiness predicate rather than retain a second DAG interpretation.
   distinct expected-state/idempotent preparation operation that leaves the
   exact attempt `PENDING` and unassigned; the existing allocation semantics must
   not be reused unchanged.
+- Both authority implementations use versioned SQLite schemas and already
+  contain historical attempt rows created by the current execution paths. Any
+  schema change needed for preparation identity/readiness evidence must preserve
+  those rows and the existing allocation path. A historical `PENDING` attempt
+  that lacks Stage 29 preparation identity is not silently adopted or
+  backfilled as schedulable work; it remains with its current compatibility or
+  recovery owner unless an explicit authority operation can reconcile it under
+  the fixed expected state. No generic migration registry or placeholder
+  coordinator history is required for this phase.
 - Existing tests to reuse include planner DAG tests, runner dependency/reuse/
   failure tests, runtime-resource validation, queue ordering, protocol import
   tests, and extension conformance tests.
@@ -313,6 +322,14 @@ None receives a store, live clock, network client, authority, or launcher.
 codec; `loom.pipeline.runtime` owns conversion from and back to the existing
 validated `ResourceEntry`/`ResourceRequest` values.
 
+This is the first `loom.scheduling` public surface, so there is no legacy
+scheduler API to migrate or alias. Export only the approved protocols, their
+required immutable boundary values, and the fixed kernel from that subsystem;
+do not add a root-package facade, compatibility shim, abstract lifecycle
+scheduler, or public registry base. Method decomposition, helper classes, and
+intermediate candidate/search representations that are not needed in protocol
+annotations or durable codecs remain private.
+
 All ambiguity is represented explicitly:
 
 ```text
@@ -418,6 +435,34 @@ REUSE/SKIP/BLOCKED reconciliation may still perform the pre-existing
 authority-owned controller transitions and output-reference commits required by
 the execution plan; those are not new scheduler-owned lifecycle mutations.
 
+Preparation is the one Phase 1 cross-store causal chain:
+
+1. The coordinator durably creates or returns a narrow preparation intent with
+   one stable operation ID and request digest derived from the admitted run,
+   stage, readiness generation, expected authority state, and bound-input
+   evidence.
+2. The authority revalidates that expected state and, in one transaction,
+   creates or returns the exact `PENDING` attempt and commits the matching
+   operation receipt. Exact replay returns the same attempt; the same operation
+   ID with a different digest, a changed generation, a terminal fact, or a
+   retry not authorized by authority facts fails closed.
+3. Only the confirmed authority result may create or refresh the
+   `StageWorkRecord`; its semantic key uses that exact attempt and readiness
+   generation. A crash after either durable commit is repaired by replaying the
+   same operation, never by allocating a new attempt or deriving identity from
+   coordinator projection state.
+
+This requires only semantic intent/create-or-return operations in the Phase 1
+coordinator-store subset, not a generic outbox, saga framework, transport
+adapter, or lifecycle service. Phase 1 uses an internal direct composition and
+exposes no caller-controlled identity; Phase 3 owns the captured-principal,
+authorizer, and scoped coordinator-authority application boundary, and Phase 4
+adds authenticated remote transport. Likewise, later-phase assignment/control/
+event references constrain future deletion and re-keying, but Phase 1 must not
+add placeholder tables or a generic reference registry for them. Its store
+simply exposes no operation that re-keys an existing semantic record, and it
+retains descriptor references that current Phase 1 work actually records.
+
 ### Private discretion
 
 The executor may choose private module names, indexes, batching strategy,
@@ -445,8 +490,9 @@ effect boundary.
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
 | One readiness interpretation | Shared authority-side predicate | Existing runner and new orchestrator | Dependency bypass or divergent restart | DAG, reuse, failure, retry, and cancellation tests call both consumers |
-| One exact prepared attempt per readiness generation | Per-run authority preparation transaction | Replayed reconciliation, restart, or concurrent orchestrators | Duplicate attempts or skipped retry ownership | Expected-revision, idempotency, concurrency, and restart tests |
+| One exact prepared attempt per readiness generation | Coordinator preparation-intent transaction plus per-run authority preparation/receipt transaction | Crash before send, response loss after authority commit, replay, restart, or concurrent reconcilers | Duplicate attempts, unexplained authority mutation, or skipped retry ownership | Persist-before-call, expected-state/digest conflict, post-commit response-loss, concurrency, and restart tests |
 | Rebuild preserves stage-work identity | Coordinator stage-work transaction | Projection refresh, store reopen, or changed diagnostics | Orphan assignment/event or duplicate work | Deterministic/create-or-return identity, referenced-retention, and rebuild tests |
+| Historical attempts are not reinterpreted as prepared work | Authority schema migration and preparation operation | Existing `PENDING`/`RUNNING` rows without a readiness-generation receipt | An old execution becomes newly schedulable or changes lifecycle ownership | Pre-migration fixture/open, unchanged-row, compatibility-allocation, and no-implicit-backfill tests |
 | Controller-only actions retain authority ownership | Existing plan-action/authority operations | New orchestrator projection | Reuse/skip/block truth duplicated or descendant unlocked early | Existing runner/orchestrator trace-equivalence and output-commit tests |
 | Authored minima cannot be weakened | Runtime placement resolver and resource planner | Exact-stage runtime policy | Under-requested execution | Merge/property/boundary tests |
 | Resource opportunity and intrinsic feasibility have one owner | Resource planner plus kernel envelope checks | Custom inventory/availability and planner result | Repeated parser failure, unit disagreement, or duplicate GPU/resource rules | Malformed-opportunity, intrinsic-semantics, and claim-validation conformance tests |
@@ -472,8 +518,10 @@ effect boundary.
    explanations, and proposal validation.
 3. Extract the shared readiness predicate and route existing runner readiness
    through it; split semantic `PENDING` attempt preparation from the current
-   local worker-materialization helper; add controller-action reconciliation
-   and durable `StageWorkRecord`/store operations.
+   local worker-materialization helper; add the minimal coordinator preparation-
+   intent operation, atomic authority receipt, controller-action reconciliation,
+   and durable `StageWorkRecord`/store operations. Preserve historical attempts
+   without inventing preparation evidence or later-phase reference tables.
 4. Integrate orchestrator-to-snapshot-to-decision without reservation or launch;
    add restart/rebuild, downstream custom-component, import, and no-mutation
    evidence plus canonical documentation/public exports.
@@ -482,10 +530,11 @@ effect boundary.
 
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
-| Package | Required | Cheap intentional exports and dependency direction | Import `loom.scheduling` and `loom.testing` without loading `loom.pipeline`, runtime/network/database modules; no root re-export; pipeline-runtime adapter imports scheduling in the allowed direction |
+| Package | Required | Cheap intentional exports and dependency direction | In a fresh interpreter import and resolve the public `loom.scheduling` protocol annotations without loading `loom.pipeline`, runtime/network/database modules; no root re-export; pipeline-runtime adapter imports scheduling in the allowed direction |
 | Unit | Required | Quantities, resolution, search completeness, rule order, preference algebra, bounds, deterministic selection | Integer CPU, byte memory, invalid fractions, namespaced atoms, hard-before-soft, tier dominance, checked overflow, bands/fallback at durable `as_of`, stable ties, `EXHAUSTED` versus infeasible |
 | Contract | Required | Downstream protocol authority and fail-closed output | Synthetic planner/rule/scorer/policy; malformed opportunity/claim, incomplete search, invalid work/candidate pair, exceptions, oversize, mutation sentinels, descriptor drift, retained-binding reconstruction |
-| Integration | Required | Authority preparation, readiness, and durable projection | Train/evaluate, diamond, blocked-first-branch visibility, reuse/skip/failure/retry, concurrent/replayed preparation, restart/rebuild with no duplicate attempt and the exact same `stage_work_id`; referenced projections remain joinable; no projection-time parallel-slot suppression |
+| Integration | Required | Authority preparation, readiness, and durable projection | Train/evaluate, diamond, blocked-first-branch visibility, reuse/skip/failure/retry; persist intent then inject failure before authority call, after authority commit/before the caller receives the result, and after receipt of that result/before projection, with replay producing one `PENDING` attempt, one matching receipt, and the exact same `stage_work_id`; concurrent changed-state/digest conflict; no projection-time parallel-slot suppression |
+| Migration/reopen | Required | Existing authority data and new projection durability | Open a pre-change authority fixture without changing historical attempt identity/status or manufacturing preparation evidence; current allocation remains compatible; create/reopen/rebuild the new coordinator store with stable IDs and strict unsupported-version failure. Do not synthesize assignment/control/event references that Phase 1 does not own |
 | E2E / opt-in | Deferred | No process or external system is allowed in Phase 1 | Phase 2 owns the first execution E2E; assert launcher/provider/transport sentinels remain untouched |
 
 Targeted development commands use the repository's locked development
@@ -510,20 +559,27 @@ Final commands:
   custom output to bypass mandatory checks; duplicating intrinsic resource
   semantics in hard rules; using undefined scalar preference precedence;
   comparing scores across work items; making stage work authoritative or
-  re-keying it during rebuild;
+  re-keying it during rebuild; projecting before the authority preparation
+  receipt is durable; retrying preparation under a fresh operation identity
+  after an indeterminate result; manufacturing readiness evidence for legacy
+  attempts or scaffolding later-phase reference owners;
   importing pipeline resources into the pure subsystem and creating a cycle; or
   reusing the current `RUNNING`/lease allocation semantics for preparation.
 - Review focus: import direction, immutable closed values, explicit registry
   epochs/retention, opportunity/claim validation, complete search, preference/
   fallback algebra, grouped policy result validation, readiness extraction,
-  exact-attempt/stage-work identity idempotency, and absence of execution side
-  effects.
+  persist-intent/authority-receipt/projection ordering, exact-attempt/stage-work
+  identity idempotency, preservation of historical attempts, and absence of
+  execution side effects or later-phase placeholder machinery.
 - Stop if: canonical runtime requests cannot be composed without weakening;
   readiness cannot be shared without a public behavior change; stage work would
   need to own lifecycle truth; an exact `PENDING` attempt cannot be prepared
-  atomically without taking an execution lease; a pure protocol requires a live
-  store/launcher or runtime import of `loom.pipeline`; or a required quantity
-  cannot be represented exactly.
+  atomically with its operation receipt and without taking an execution lease;
+  preserving historical attempts requires inventing readiness/preparation
+  evidence; the stage-work semantic key cannot be reproduced solely from the
+  confirmed authority result and admitted-run identity; a pure protocol requires
+  a live store/launcher or runtime import of `loom.pipeline`; or a required
+  quantity cannot be represented exactly.
 - Accepted debt: complete bounded enumeration can leave a large work item
   `EXHAUSTED`, and FIFO-with-safe-bypass may be suboptimal. Revisit proof-
   carrying partial search or fairness only with measured workloads.
@@ -540,8 +596,9 @@ Final commands:
   active/retained epoch composition, separate validator/planner identity,
   exact quantities and namespaced capacity, one
   readiness predicate, authority-owned idempotent `PENDING` preparation,
-  authority-owned existing controller actions, rebuildable stage work, and no
-  execution side effects.
+  coordinator intent before authority mutation, authority-owned existing
+  controller actions, rebuildable stage work, preservation without implicit
+  legacy backfill, and no execution side effects.
 - Manager action required if any stop condition is met or a public/durable shape
   must differ materially from the manifest.
 
@@ -549,10 +606,11 @@ Final commands:
 
 - Manager preparation: complete at base `24b5d21`; worktree, exact source owners,
   focused regressions, and harness commands recorded
-- Expanded planning: one phase-planner refinement pending for the subsystem-
-  public scheduling protocols, new durable stage-work projection, and distinct
-  authority-owned `PENDING` transition; stage-level design and plan review are
-  already complete and behavior must not reopen
+- Expanded planning: complete at evidence revision `8db4ae6`; the bounded
+  refinement fixed the causal intent/authority-receipt/projection order,
+  preserved historical attempts without implicit backfill, made the fresh-
+  process public import check explicit, and excluded generic saga, transport,
+  and later-phase reference scaffolding; approved behavior/design unchanged
 - Implementation: pending
 - Refiner: not used
 - Pre-submit gate: pending
