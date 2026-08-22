@@ -599,3 +599,24 @@ def test_output_commit_rejects_terminal_stage_state(tmp_path: Path) -> None:
                 )
             },
         )
+
+
+def test_prepared_attempt_is_pending_and_replays_the_authority_receipt(tmp_path: Path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "prepared-run")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    first = store.ensure_prepared_attempt(
+        run_uri, "build", operation_id="prepare-1", request_digest="digest-1",
+        readiness_generation="generation-1", owner_id="coordinator",
+    )
+    replay = store.ensure_prepared_attempt(
+        run_uri, "build", operation_id="prepare-1", request_digest="digest-1",
+        readiness_generation="generation-1", owner_id="coordinator",
+    )
+    assert first.attempt.status is StageStatus.PENDING
+    assert replay.attempt == first.attempt
+    with pytest.raises(AuthorityStoreError, match="conflicts"):
+        store.ensure_prepared_attempt(
+            run_uri, "build", operation_id="prepare-1", request_digest="changed",
+            readiness_generation="generation-1", owner_id="coordinator",
+        )

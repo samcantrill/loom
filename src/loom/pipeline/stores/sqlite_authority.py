@@ -38,6 +38,7 @@ from .authority import (
     AttemptAllocation,
     AuthorityStoreError,
     OutputCommit,
+    PreparedAttemptReceipt,
     StatusTransition,
 )
 from .capabilities import (
@@ -627,6 +628,53 @@ class SQLitePerRunAuthorityStore:
                 owner=owner_id,
             )
             return AttemptAllocation(attempt=attempt, lease=lease)
+
+    def ensure_prepared_attempt(
+        self, run_uri: str, stage_name: str, *, operation_id: str,
+        request_digest: str, readiness_generation: str, owner_id: str,
+    ) -> PreparedAttemptReceipt:
+        """Create one PENDING attempt and its receipt in one authority transaction."""
+        self._bind_run_uri(run_uri)
+        for value, name in ((stage_name, "stage_name"), (operation_id, "operation_id"),
+                            (request_digest, "request_digest"), (readiness_generation, "readiness_generation"),
+                            (owner_id, "owner_id")):
+            _non_empty(value, name)
+        with self._transaction(run_uri) as conn:
+            row = conn.execute(
+                "SELECT request_digest, readiness_generation, attempt_id FROM prepared_attempt_receipts WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if row is not None:
+                if (cast(str, row["request_digest"]) != request_digest or
+                    cast(str, row["readiness_generation"]) != readiness_generation):
+                    raise AuthorityStoreError("prepared attempt operation conflicts with its receipt")
+                attempt_row = conn.execute("SELECT * FROM attempts WHERE attempt_id = ?", (row["attempt_id"],)).fetchone()
+                if attempt_row is None:
+                    raise AuthorityStoreError("prepared attempt receipt has no attempt")
+                return PreparedAttemptReceipt(operation_id, request_digest, readiness_generation,
+                    _attempt_from_row(attempt_row, run_uri=run_uri, conn=conn))
+            existing = conn.execute(
+                "SELECT 1 FROM prepared_attempt_receipts WHERE stage_name = ? AND readiness_generation = ?",
+                (stage_name, readiness_generation),
+            ).fetchone()
+            if existing is not None:
+                raise AuthorityStoreError("readiness generation was prepared by another operation")
+            stage_row = conn.execute("SELECT status FROM stages WHERE stage_name = ?", (stage_name,)).fetchone()
+            if stage_row is not None and StageStatus(cast(str, stage_row["status"])) in {StageStatus.SUCCEEDED, StageStatus.CANCELLED}:
+                raise AuthorityStoreError("stage is terminal")
+            now = self._now()
+            revision = self._next_revision(conn)
+            attempt_number = _next_attempt_number(conn, stage_name)
+            attempt_id = f"{stage_name}-{attempt_number}"
+            conn.execute("INSERT INTO attempts (attempt_id, stage_name, attempt_number, status, owner_id, created_at, revision_sequence, reason_json) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+                (attempt_id, stage_name, attempt_number, StageStatus.PENDING.value, owner_id, now, revision.sequence))
+            _upsert_stage(conn, stage_name=stage_name, status=StageStatus.PENDING, revision=revision, reason=None)
+            conn.execute("INSERT INTO prepared_attempt_receipts (operation_id, request_digest, readiness_generation, stage_name, attempt_id, revision_sequence) VALUES (?, ?, ?, ?, ?, ?)",
+                (operation_id, request_digest, readiness_generation, stage_name, attempt_id, revision.sequence))
+            _touch_run(conn, revision)
+            return PreparedAttemptReceipt(operation_id, request_digest, readiness_generation,
+                StageAttempt(run_uri=run_uri, stage_name=stage_name, attempt=attempt_number, attempt_id=attempt_id,
+                             status=StageStatus.PENDING, revision=revision, created_at=now, owner=owner_id))
 
     def acquire_controller_lease(
         self,
@@ -1916,6 +1964,14 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             revision_sequence INTEGER NOT NULL,
             reason_json TEXT,
             UNIQUE(stage_name, attempt_number)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS prepared_attempt_receipts (
+            operation_id TEXT PRIMARY KEY, request_digest TEXT NOT NULL,
+            readiness_generation TEXT NOT NULL, stage_name TEXT NOT NULL,
+            attempt_id TEXT NOT NULL, revision_sequence INTEGER NOT NULL,
+            UNIQUE(stage_name, readiness_generation)
         )
         """,
         """

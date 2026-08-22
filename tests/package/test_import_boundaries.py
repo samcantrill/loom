@@ -1190,6 +1190,7 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "CapabilityDiagnostic",
             "CapabilitySeverity",
             "CapabilityValidationResult",
+            "CpuResourcePlanner",
             "ExecutionOptions",
             "ExecutorDescriptor",
             "ExecutorDescriptorRegistry",
@@ -1202,6 +1203,7 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "ResourceSupportLevel",
             "RuntimeConfigSections",
             "RuntimeMetadata",
+            "MemoryResourcePlanner",
             "RuntimeProfile",
             "RuntimeProfileCollection",
             "RuntimeKind",
@@ -1233,6 +1235,7 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "resolve_executor_descriptor",
             "resolve_run_runtime",
             "select_runtime_profile",
+            "scheduling_entry_view",
             "validate_executor_capabilities",
             "validate_stage_runtime_options",
         }

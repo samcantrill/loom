@@ -147,6 +147,23 @@ class AttemptAllocation:
 
 
 @dataclass(frozen=True, slots=True)
+class PreparedAttemptReceipt:
+    """Idempotent authority acknowledgement for scheduler preparation."""
+
+    operation_id: str
+    request_digest: str
+    readiness_generation: str
+    attempt: StageAttempt
+
+    def __post_init__(self) -> None:
+        _non_empty(self.operation_id, "operation_id")
+        _non_empty(self.request_digest, "request_digest")
+        _non_empty(self.readiness_generation, "readiness_generation")
+        if not isinstance(self.attempt, StageAttempt):
+            raise AuthorityStoreError("attempt must be a StageAttempt")
+
+
+@dataclass(frozen=True, slots=True)
 class OutputCommit:
     commit: OutputCommitRecord
     artifact_facts: tuple[ArtifactFactRecord, ...] = ()
@@ -254,6 +271,11 @@ class PerRunAuthorityStore(Protocol):
         owner_id: str,
         lease_ttl_seconds: int | None = None,
     ) -> AttemptAllocation: ...
+
+    def ensure_prepared_attempt(
+        self, run_uri: str, stage_name: str, *, operation_id: str,
+        request_digest: str, readiness_generation: str, owner_id: str,
+    ) -> PreparedAttemptReceipt: ...
 
     def acquire_controller_lease(
         self,

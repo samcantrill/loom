@@ -611,22 +611,22 @@ Final commands:
   preserved historical attempts without implicit backfill, made the fresh-
   process public import check explicit, and excluded generic saga, transport,
   and later-phase reference scaffolding; approved behavior/design unchanged
-- Implementation: pending
-- Refiner: not used
-- Pre-submit gate: pending
+- Implementation: complete through the bounded blocker correction; shared readiness, atomic prepared-attempt receipts, and rebuildable ready-stage work projection added without assignment or launch
+- Refiner: completed one qualified blocker correction at `671fc89`
+- Pre-submit gate: running final validation
 - Independent review: required after manager validation because the phase adds
   subsystem-public protocols, a durable projection, and an authority lifecycle
   transition whose dependency and migration boundaries materially interact
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Shared readiness evaluation and runner consumer; authority `PENDING` preparation receipt; SQLite ready-stage projection/orchestrator; intentional runtime facade expectation. No assignment, lease, provider, or launch behavior added. |
+| Tests added or updated | Authority receipt replay/conflict and durable stage-work replay identity; runtime facade export expectation updated. |
+| Validated revision/tree state and evidence | Focused tests pass: orchestration, prepared-attempt receipt, and runtime facade import boundary. Final gates running. |
+| Validation-relevant changes after evidence | Qualified correction after `671fc89`; no other phase-plan or manifest changes. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

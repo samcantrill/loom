@@ -23,6 +23,7 @@ from loom.pipeline.planning import (
     build_stage_fingerprint,
     plan_pipeline,
 )
+from loom.pipeline.planning.readiness import evaluate_attempt_readiness
 from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.offline_evidence import write_offline_evidence_manifest
 from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy
@@ -1315,10 +1316,11 @@ class PipelineRunner:
             if stage_name in submitted or stage_name in stage_results:
                 continue
             stage_plan = plan_by_stage[stage_name]
-            if all(
-                upstream in stage_results for upstream in stage_plan.upstream_stages
-            ):
-                return stage_plan
+            readiness = evaluate_attempt_readiness(
+                stage_plan, completed_stages=stage_results
+            )
+            if readiness is not None:
+                return readiness.stage_plan
         return None
 
     def _block_first_unresolved_stage(
