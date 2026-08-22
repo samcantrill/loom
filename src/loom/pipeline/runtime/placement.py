@@ -21,6 +21,7 @@ from loom.scheduling import (
     PreferenceSpec,
     ResolvedResourceRequest,
     ResourcePlanner,
+    ResourceRequestResolution,
     ResourceResolutionState,
     SchedulingComponentDescriptor,
     SchedulingLimits,
@@ -383,6 +384,10 @@ def resolve_stage_placement(
             raise RuntimeResourceError(
                 f"resource planner {kind!r} failed request resolution: {type(exc).__name__}"
             ) from exc
+        if not isinstance(result, ResourceRequestResolution):
+            raise RuntimeResourceError(
+                f"resource planner {kind!r} returned an invalid request resolution"
+            )
         if result.state is ResourceResolutionState.INVALID:
             raise RuntimeResourceError(
                 result.explanation or f"resource request {kind!r} is invalid"

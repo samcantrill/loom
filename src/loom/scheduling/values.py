@@ -587,6 +587,7 @@ class Candidate:
     availability: Mapping[str, ResourceAvailabilityEnvelope]
     attributes: Mapping[str, PlainData] = field(default_factory=dict)
     mandatory_eligibility: tuple[MandatoryEligibility, ...] = ()
+    pool_names: tuple[str, ...] = ("default",)
 
     def __post_init__(self) -> None:
         _text(self.candidate_id, "candidate_id")
@@ -616,6 +617,13 @@ class Candidate:
             raise SchedulingError(
                 "candidate mandatory eligibility codes must be unique"
             )
+        pool_names = tuple(self.pool_names)
+        if not pool_names or any(
+            not isinstance(pool_name, str) or not pool_name for pool_name in pool_names
+        ):
+            raise SchedulingError("candidate pool names must be non-empty strings")
+        if len(pool_names) != len(set(pool_names)):
+            raise SchedulingError("candidate pool names must be unique")
         object.__setattr__(self, "inventory", MappingProxyType(inventory))
         object.__setattr__(self, "availability", MappingProxyType(availability))
         object.__setattr__(
@@ -624,6 +632,7 @@ class Candidate:
             _plain_mapping(self.attributes, "candidate attributes", bounded=True),
         )
         object.__setattr__(self, "mandatory_eligibility", eligibility)
+        object.__setattr__(self, "pool_names", tuple(sorted(pool_names)))
 
 
 class HardEvaluationState(StrEnum):
@@ -763,6 +772,8 @@ class WorkItem:
     topological_order: int = 0
     stage_name: str = ""
     attempt: int = 1
+    pool_name: str = "default"
+    target: str | None = None
 
     def __post_init__(self) -> None:
         _text(self.stage_work_id, "stage_work_id")
@@ -775,6 +786,9 @@ class WorkItem:
         _non_negative_int(self.enqueue_order, "enqueue_order")
         _non_negative_int(self.topological_order, "topological_order")
         _positive_int(self.attempt, "attempt")
+        _text(self.pool_name, "pool_name")
+        if self.target is not None:
+            _text(self.target, "target")
         requests = dict(self.requests)
         if any(
             not isinstance(request, ResolvedResourceRequest)

@@ -31,6 +31,7 @@ from loom.pipeline.stores.authority import (
 from loom.pipeline.stores.read_models import (
     AuthoritativeRunSnapshot,
     BackendRevision,
+    StageLifecycleSnapshot,
 )
 from loom.scheduling import (
     Candidate,
@@ -122,13 +123,9 @@ class StageWorkRecord:
         if self.schema_version != COORDINATOR_STAGE_WORK_SCHEMA_VERSION:
             raise CoordinatorStoreError("unsupported stage-work schema version")
         if not isinstance(self.authority_revision, BackendRevision):
-            raise CoordinatorStoreError(
-                "authority_revision must be a BackendRevision"
-            )
+            raise CoordinatorStoreError("authority_revision must be a BackendRevision")
         if not isinstance(self.placement, ResolvedStagePlacement):
-            raise CoordinatorStoreError(
-                "placement must be a ResolvedStagePlacement"
-            )
+            raise CoordinatorStoreError("placement must be a ResolvedStagePlacement")
         object.__setattr__(
             self,
             "bound_inputs",
@@ -147,9 +144,7 @@ class StageWorkRecord:
         object.__setattr__(
             self,
             "scheduling_diagnostics",
-            _plain_mapping(
-                self.scheduling_diagnostics, "scheduling_diagnostics"
-            ),
+            _plain_mapping(self.scheduling_diagnostics, "scheduling_diagnostics"),
         )
         if self.stage_work_id != stage_work_identity(
             self.admission_id,
@@ -176,6 +171,8 @@ class StageWorkRecord:
             topological_order=self.ready_order,
             stage_name=self.stage_name,
             attempt=self.attempt,
+            pool_name=self.placement.pool_name,
+            target=self.placement.target,
         )
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -244,9 +241,7 @@ class StageWorkRecord:
             plan_fingerprint=_non_empty(
                 mapping["plan_fingerprint"], "plan_fingerprint"
             ),
-            authority_revision=BackendRevision.from_dict(
-                mapping["authority_revision"]
-            ),
+            authority_revision=BackendRevision.from_dict(mapping["authority_revision"]),
             bound_inputs=_plain_mapping(
                 _mapping(mapping["bound_inputs"], "bound_inputs"), "bound_inputs"
             ),
@@ -259,9 +254,7 @@ class StageWorkRecord:
                 _non_empty(mapping["scheduling_state"], "scheduling_state")
             ),
             scheduling_diagnostics=_plain_mapping(
-                _mapping(
-                    mapping["scheduling_diagnostics"], "scheduling_diagnostics"
-                ),
+                _mapping(mapping["scheduling_diagnostics"], "scheduling_diagnostics"),
                 "scheduling_diagnostics",
             ),
             projection_revision=_integer(
@@ -293,9 +286,7 @@ class InMemoryStageWorkStore:
         self._intents: dict[str, PreparationIntent] = {}
         self._work: dict[str, StageWorkRecord] = {}
 
-    def create_or_return_intent(
-        self, intent: PreparationIntent
-    ) -> PreparationIntent:
+    def create_or_return_intent(self, intent: PreparationIntent) -> PreparationIntent:
         existing = self._intents.get(intent.request.operation_id)
         if existing is None:
             semantic = self.find_intent(
@@ -333,7 +324,9 @@ class InMemoryStageWorkStore:
             self._work[record.stage_work_id] = record
             return record
         _require_same_projection_identity(existing, record)
-        refreshed = replace(record, projection_revision=existing.projection_revision + 1)
+        refreshed = replace(
+            record, projection_revision=existing.projection_revision + 1
+        )
         self._work[record.stage_work_id] = refreshed
         return refreshed
 
@@ -347,9 +340,7 @@ class SQLiteStageWorkStore:
     def __init__(self, database_path: str | Path) -> None:
         self.path = Path(database_path)
 
-    def create_or_return_intent(
-        self, intent: PreparationIntent
-    ) -> PreparationIntent:
+    def create_or_return_intent(self, intent: PreparationIntent) -> PreparationIntent:
         payload = _json_dumps(intent.to_dict())
         with self._transaction() as conn:
             row = conn.execute(
@@ -419,9 +410,7 @@ class SQLiteStageWorkStore:
         return (
             None
             if row is None
-            else PreparationIntent.from_dict(
-                _json_loads(cast(str, row["intent_json"]))
-            )
+            else PreparationIntent.from_dict(_json_loads(cast(str, row["intent_json"])))
         )
 
     def create_or_refresh(self, record: StageWorkRecord) -> StageWorkRecord:
@@ -568,7 +557,11 @@ class RunOrchestrator:
         self._refresh_projection_eligibility(
             admission_id=admission_id,
             run_uri=plan.run_uri,
+            plan=plan,
             stage_facts=stage_facts,
+            completed_stages=completed,
+            committed_outputs=commits,
+            run_cancelled=cancelled,
         )
         current_revision = authority_snapshot.revision
         projected: list[StageWorkRecord] = []
@@ -608,6 +601,10 @@ class RunOrchestrator:
             )
             if readiness is None:
                 continue
+            if prior_intent is not None and not _intent_matches_readiness(
+                prior_intent, readiness
+            ):
+                continue
             if readiness.action is not PlanAction.RUN:
                 if controller_action is not None:
                     controller_action(stage_plan, readiness)
@@ -628,7 +625,9 @@ class RunOrchestrator:
                 prior_intent=prior_intent,
             )
             projected.append(record)
-            current_revision = receipt.attempt.revision
+            current_revision = _advance_revision_cursor(
+                current_revision, receipt.attempt.revision
+            )
         return tuple(projected)
 
     def decide(
@@ -653,18 +652,60 @@ class RunOrchestrator:
         *,
         admission_id: str,
         run_uri: str,
-        stage_facts: Mapping[str, object],
+        plan: ExecutionPlan,
+        stage_facts: Mapping[str, StageLifecycleSnapshot],
+        completed_stages: set[str],
+        committed_outputs: Mapping[str, str],
+        run_cancelled: bool,
     ) -> None:
+        stage_plans = {stage.stage_name: stage for stage in plan.stage_plans}
         for record in self.store.list_stage_work():
             if record.admission_id != admission_id or record.run_uri != run_uri:
                 continue
             stage = stage_facts.get(record.stage_name)
-            attempts = () if stage is None else getattr(stage, "attempts", ())
-            status = None if stage is None else getattr(stage, "status", None)
+            stage_plan = stage_plans.get(record.stage_name)
+            attempts = () if stage is None else stage.attempts
+            status = None if stage is None else stage.status
+            current_attempt = (
+                None
+                if stage is None or not attempts
+                else replace(attempts[-1], status=stage.status)
+            )
             current_attempt_id = attempts[-1].attempt_id if attempts else None
+            intent = self.store.find_intent(
+                admission_id=admission_id,
+                stage_name=record.stage_name,
+                next_attempt=record.attempt,
+            )
+            readiness = (
+                None
+                if stage_plan is None
+                else evaluate_attempt_readiness(
+                    stage_plan,
+                    completed_stages=completed_stages,
+                    committed_outputs={
+                        upstream: committed_outputs[upstream]
+                        for upstream in stage_plan.upstream_stages
+                        if upstream in committed_outputs
+                    },
+                    current_attempt=current_attempt,
+                    run_cancelled=run_cancelled,
+                    retry_authorization=_retry_authorization(stage),
+                    prepared_generation=(
+                        None if intent is None else intent.request.readiness_generation
+                    ),
+                )
+            )
             eligible = (
                 status is StageStatus.PENDING
                 and current_attempt_id == record.attempt_id
+                and current_attempt is not None
+                and current_attempt.attempt == record.attempt
+                and intent is not None
+                and _record_matches_intent(record, intent)
+                and readiness is not None
+                and readiness.action is PlanAction.RUN
+                and _intent_matches_readiness(intent, readiness)
             )
             desired_state = (
                 SchedulingProjectionState.READY
@@ -720,8 +761,7 @@ class RunOrchestrator:
         else:
             intent = prior_intent
             if (
-                intent.request.readiness_generation
-                != readiness.readiness_generation
+                intent.request.readiness_generation != readiness.readiness_generation
                 or intent.request.next_attempt != readiness.next_attempt
             ):
                 raise CoordinatorStoreError(
@@ -743,7 +783,7 @@ class RunOrchestrator:
             attempt=receipt.attempt.attempt,
             attempt_id=receipt.attempt.attempt_id,
             readiness_generation=readiness.readiness_generation,
-            ready_at=ready_at,
+            ready_at=intent.ready_at,
             ready_order=ready_order,
             plan_fingerprint=intent.request.plan_fingerprint,
             authority_revision=receipt.attempt.revision,
@@ -783,9 +823,7 @@ def _preparation_request(
         "owner_id": owner_id,
         "readiness": evidence,
     }
-    request_digest = hashlib.sha256(
-        _json_dumps(digest_payload).encode()
-    ).hexdigest()
+    request_digest = hashlib.sha256(_json_dumps(digest_payload).encode()).hexdigest()
     return PreparedAttemptRequest(
         operation_id=f"prepare-{request_digest}",
         request_digest=request_digest,
@@ -812,6 +850,47 @@ def _retry_authorization(stage: object) -> RetryAuthorization | None:
         if decision.should_retry and decision.next_attempt is not None:
             return RetryAuthorization(decision.decision_id, decision.next_attempt)
     return None
+
+
+def _advance_revision_cursor(
+    current: BackendRevision, observed: BackendRevision
+) -> BackendRevision:
+    if observed.sequence > current.sequence:
+        return observed
+    if observed.sequence == current.sequence and observed.token != current.token:
+        raise CoordinatorStoreError(
+            "authority revision token changed without monotonic progress"
+        )
+    return current
+
+
+def _record_matches_intent(record: StageWorkRecord, intent: PreparationIntent) -> bool:
+    request = intent.request
+    return (
+        request.admission_id == record.admission_id
+        and request.stage_name == record.stage_name
+        and request.next_attempt == record.attempt
+        and request.readiness_generation == record.readiness_generation
+        and request.plan_fingerprint == record.plan_fingerprint
+        and request.bound_inputs == record.bound_inputs
+        and request.upstream_commits == record.upstream_commits
+    )
+
+
+def _intent_matches_readiness(
+    intent: PreparationIntent, readiness: AttemptReadiness
+) -> bool:
+    request = intent.request
+    evidence = readiness.evidence_dict()
+    return (
+        readiness.action is PlanAction.RUN
+        and request.stage_name == readiness.stage_plan.stage_name
+        and request.next_attempt == readiness.next_attempt
+        and request.readiness_generation == readiness.readiness_generation
+        and request.plan_fingerprint == evidence["plan_fingerprint"]
+        and request.bound_inputs == readiness.bound_inputs
+        and request.upstream_commits == readiness.upstream_commits
+    )
 
 
 def _require_same_projection_identity(
@@ -911,9 +990,7 @@ def _raise_for_store_schema(conn: sqlite3.Connection) -> None:
     required = {"preparation_intents", "stage_work"}
     tables = {
         cast(str, row["name"])
-        for row in conn.execute(
-            "SELECT name FROM sqlite_schema WHERE type = 'table'"
-        )
+        for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
     }
     if not required.issubset(tables):
         raise CoordinatorStoreError("coordinator store schema is incomplete")
@@ -935,9 +1012,7 @@ def _mapping(value: object, name: str) -> Mapping[str, object]:
     return cast(Mapping[str, object], value)
 
 
-def _exact_fields(
-    mapping: Mapping[str, object], allowed: set[str], name: str
-) -> None:
+def _exact_fields(mapping: Mapping[str, object], allowed: set[str], name: str) -> None:
     missing = allowed - set(mapping)
     unknown = set(mapping) - allowed
     if missing or unknown:
@@ -956,9 +1031,7 @@ def _integer(value: object, name: str, *, minimum: int) -> int:
     return value
 
 
-def _plain_mapping(
-    value: Mapping[str, object], name: str
-) -> Mapping[str, PlainData]:
+def _plain_mapping(value: Mapping[str, object], name: str) -> Mapping[str, PlainData]:
     frozen = freeze_plain_data(value, path=name)
     if not isinstance(frozen, Mapping):
         raise CoordinatorStoreError(f"{name} must be a mapping")
@@ -967,10 +1040,7 @@ def _plain_mapping(
 
 def _string_mapping(value: Mapping[str, object], name: str) -> Mapping[str, str]:
     if any(
-        not isinstance(key, str)
-        or not key
-        or not isinstance(item, str)
-        or not item
+        not isinstance(key, str) or not key or not isinstance(item, str) or not item
         for key, item in value.items()
     ):
         raise CoordinatorStoreError(f"{name} must contain non-empty string pairs")

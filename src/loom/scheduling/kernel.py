@@ -213,6 +213,10 @@ class SchedulingKernel:
     def _evaluate_candidate(
         self, work: WorkItem, candidate: Candidate, as_of: int
     ) -> _CandidateResult:
+        if work.pool_name not in candidate.pool_names:
+            return _CandidateResult(WorkSearchState.COMPLETE)
+        if work.target is not None and work.target != candidate.candidate_id:
+            return _CandidateResult(WorkSearchState.COMPLETE)
         for check in candidate.mandatory_eligibility:
             if check.state is EligibilityState.INDETERMINATE:
                 return _CandidateResult(

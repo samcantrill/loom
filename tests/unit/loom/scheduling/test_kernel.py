@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import cast
 
 import pytest
 
@@ -396,6 +397,29 @@ def test_hard_rules_and_policy_result_validation_cannot_be_bypassed() -> None:
     assert unknown.explanations[0].code == "scheduling.policy_selection_invalid"
 
 
+def test_pool_and_target_are_mandatory_kernel_checks() -> None:
+    decision = SchedulingKernel(planners={}, policy=FifoSchedulingPolicy()).decide(
+        work=(
+            WorkItem(
+                "work",
+                1,
+                {},
+                pool_name="pool-b",
+                target="machine-b",
+            ),
+        ),
+        candidates=(
+            Candidate("machine-0", {}, {}, pool_names=("pool-a",)),
+            Candidate("machine-a", {}, {}, pool_names=("pool-b",)),
+            Candidate("machine-b", {}, {}, pool_names=("pool-b",)),
+        ),
+        as_of=1,
+    )
+
+    assert decision.state is PolicyDecisionState.SELECT
+    assert decision.candidate_id == "machine-b"
+
+
 def test_site_tiers_dominate_lower_tiers_and_fallback_uses_snapshot_time() -> None:
     scorer = _ScorePreference()
     tier_zero = PreferenceSpec(
@@ -528,6 +552,21 @@ def test_runtime_placement_preserves_minima_route_and_fingerprint() -> None:
     assert ResolvedStagePlacement.from_dict(managed.to_dict()) == managed
     with pytest.raises(RuntimeResourceError, match="explicit profile"):
         ExecutionRoute(ExecutionRouteKind.SLURM)
+
+
+def test_runtime_placement_rejects_malformed_planner_resolution() -> None:
+    class MalformedResolutionPlanner(CpuResourcePlanner):
+        def resolve_request(self, authored, runtime) -> ResourceRequestResolution:
+            del authored, runtime
+            return cast(ResourceRequestResolution, object())
+
+    with pytest.raises(RuntimeResourceError, match="invalid request resolution"):
+        resolve_stage_placement(
+            authored=ResourceRequest(entries={"cpu": ResourceEntry("cpu", 1, "count")}),
+            runtime=None,
+            policy=StagePlacementPolicy(),
+            planners={"cpu": MalformedResolutionPlanner()},
+        )
 
 
 def test_runtime_resource_adapter_normalizes_memory_and_preserves_attributes() -> None:
