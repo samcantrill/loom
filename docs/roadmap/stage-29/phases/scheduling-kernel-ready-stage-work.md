@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 1
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p1-scheduling-kernel-ready-stage-work`
@@ -17,11 +17,10 @@
 - Workflow path: expanded because this phase establishes subsystem-public
   extension contracts, one authority-owned attempt-preparation transition, and
   one new durable coordinator projection
-- Blockers: independent review found four reachable product failures after the
-  inclusive correction budget reached 3/3: non-monotonic authority-revision
-  replay, stale READY work after cancellation or upstream supersession,
-  non-durable `ready_at` replay, and unenforced resolved pool/target placement.
-  PR #233 is closed and not merge-eligible.
+- Blockers: none; the maintainer authorized a fresh bounded repair attempt for
+  non-monotonic authority-revision replay, stale READY work after cancellation
+  or upstream supersession, non-durable `ready_at` replay, unenforced resolved
+  pool/target placement, and malformed planner-result validation
 
 ## Objective And Context
 
@@ -519,10 +518,10 @@ Final commands:
   `make test-summary` recorded 2,483 total passes
 - Independent review: complete; four product blockers and one localized
   correction make the branch ineligible to merge despite green CI
-- Blocker corrections: 3/3 consumed; repository policy forbids an unbounded
-  fourth correction pass
-- PR and merge: PR #233 closed without merge; Phase 2 remains pending because
-  routine stacked continuation cannot skip this blocker
+- Blocker corrections: prior attempt stopped at 3/3; maintainer-authorized
+  repair attempt reset to 0/3 with the independent findings as its fixed scope
+- PR and merge: PR #233 remains closed pending repair, fresh validation, and
+  independent review; Phase 2 remains pending
 
 ## Completion Record
 
