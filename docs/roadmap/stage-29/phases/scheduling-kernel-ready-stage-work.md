@@ -18,7 +18,10 @@
 - Workflow path: expanded because this phase establishes subsystem-public
   extension contracts, one authority-owned attempt-preparation transition, and
   one new durable coordinator projection
-- Blockers: none
+- Blockers: none; the maintainer authorized a fresh bounded repair attempt for
+  non-monotonic authority-revision replay, stale READY work after cancellation
+  or upstream supersession, non-durable `ready_at` replay, unenforced resolved
+  pool/target placement, and malformed planner-result validation
 
 ## Objective And Context
 
@@ -621,15 +624,12 @@ Final commands:
   isolated default suite (2,342 passed, one skipped), the config-extra suite
   (141 passed, three skipped), and package builds; `make test-summary` recorded
   2,483 passing tests across the categorized evidence suites
-- Independent review: required after manager validation because the phase adds
-  subsystem-public protocols, a durable projection, and an authority lifecycle
-  transition whose dependency and migration boundaries materially interact
-- Blocker corrections: 3/3 complete; pass 2 replaced the thin scheduling
-  prototype with the accepted pure kernel/placement contracts, and pass 3
-  completed readiness, atomic authority preparation/replay/migration,
-  authority-wins projection eligibility, coordinator durability, and causal
-  failure/concurrency evidence
-- PR and merge: pending
+- Independent review: complete; four product blockers and one localized
+  correction made the prior attempt ineligible to merge despite green CI
+- Blocker corrections: prior attempt stopped at 3/3; maintainer-authorized
+  repair attempt reset to 0/3 with the independent findings as its fixed scope
+- PR and merge: PR #233 remains closed pending repair, fresh validation, and
+  independent review; Phase 2 remains pending
 
 ## Completion Record
 
@@ -638,6 +638,6 @@ Final commands:
 | Implementation and changed paths | Pure scheduling values/protocols/registries/kernel/defaults; runtime placement and CPU/memory adapters; planning-owned readiness; narrow expected-state authority preparation with frozen receipts and v2-to-v3 migration; semantic in-memory/SQLite coordinator stage-work stores; bounded replay-safe `RunOrchestrator`; compatibility runner routed through shared readiness. No assignment, execution lease, provider, artifact transfer, launcher, process, or transport behavior added. |
 | Tests added or updated | Scheduling completeness/exhaustion, atom bounds, hard/soft/policy failure, preference tiers/fallback/overflow, registry retention, placement route/fingerprint/rebuild, conformance, readiness cancellation/retry/action behavior, authority receipt serialization/revision/terminal/retry/concurrency/migration behavior, store parity/reopen/schema failure, lost-response repair, all-ready-branch projection, controller-action ownership, authority-wins eligibility, pure decision integration, and public/import boundaries. |
 | Validated revision/tree state and evidence | Final correction-pass-3 tree: `make validate-pr` passed Ruff and Pyright; isolated default 2,342 passed/one skipped/121 deselected; config-extra 141 passed/three skipped/2,346 deselected; sdist and wheel built. `make test-summary` passed package 118, unit 1,669, contract 286, integration 211, e2e 58, and config-extra 141. |
-| Validation-relevant changes after evidence | None. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | Independent expanded-path review, PR/CI, merge, metadata finalization, and worktree cleanup remain. Phase 2 still owns every reservation, assignment, resource acquisition, worker materialization, and launch side effect. |
+| Validation-relevant changes after evidence | The dedicated worktree preserves an uncommitted, focused revision-cursor mitigation and regression test. It is not a validated or mergeable correction. |
+| PR, review, and merge | [PR #233](https://github.com/samcantrill/loom/pull/233) targeted `develop`, was non-draft and mechanically mergeable, passed CI, then closed without merge after independent review. |
+| Residual risk and cleanup | The authorized repair must close monotonic replay revision, full authority-owned projection eligibility, durable original `ready_at`, mandatory resolved pool/target enforcement, and planner-result type validation before fresh validation/review. Phase 2 still owns every reservation, assignment, resource acquisition, worker materialization, and launch side effect. |

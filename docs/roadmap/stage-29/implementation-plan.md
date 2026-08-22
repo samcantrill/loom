@@ -1,13 +1,13 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: maintainer approved; ready for Phase 1 preparation
+Status: implementation in progress
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: none
-Blockers: none before Phase 1 preparation; each later phase must begin from
-current clean `origin/develop` after its predecessor merges
+Current phase: Phase 1 repair
+Blockers: none; the maintainer authorized a fresh bounded Phase 1 repair attempt
+for the four independently reproduced scheduling and replay contract failures
 
 ## Summary
 
@@ -626,7 +626,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `scheduling-kernel-ready-stage-work` | pending | `docs/roadmap/stage-29/phases/scheduling-kernel-ready-stage-work.md` | `agent/stage-29-p1-scheduling-kernel-ready-stage-work` | pending | Resolved stage placement and closed default-managed/explicit-SLURM route value; opportunity/claim contracts; active/retained component registries/conformance; complete-only fixed kernel; site-tier/fallback aggregation; grouped default policy; shared readiness; idempotent authority `PENDING` attempt preparation; controller-action reconciliation; identity-stable rebuildable stage work independent of concurrency slots | Produce every authoritative dependency-ready exact attempt in the window and deterministic explainable complete managed placement/route identity without reservation, external mapping, or launch. |
+| 1 | `scheduling-kernel-ready-stage-work` | in_progress | `docs/roadmap/stage-29/phases/scheduling-kernel-ready-stage-work.md` | `agent/stage-29-p1-scheduling-kernel-ready-stage-work` | [#233](https://github.com/samcantrill/loom/pull/233) closed pending repair | Resolved stage placement and closed default-managed/explicit-SLURM route value; opportunity/claim contracts; active/retained component registries/conformance; complete-only fixed kernel; site-tier/fallback aggregation; grouped default policy; shared readiness; idempotent authority `PENDING` attempt preparation; controller-action reconciliation; identity-stable rebuildable stage work independent of concurrency slots | Produce every authoritative dependency-ready exact attempt in the window and deterministic explainable complete managed placement/route identity without reservation, external mapping, or launch. |
 | 2 | `durable-local-stage-execution` | pending | `docs/roadmap/stage-29/phases/durable-local-stage-execution.md` | `agent/stage-29-p2-durable-local-stage-execution` | pending | Coordinator reservation/tagged-assignment operations with atomic run concurrency and decision receipts; managed-agent target first; authority bind/unbind/grant fence; local agent journal/provider with ordered assignment events; composite CPU/memory admission; local artifact hand-off; execution-only worker; explicit terminal/logical-release/provider-release/fresh-availability order | Run bounded local stages through the complete durable reservation-to-release saga with at most one managed root launch per assignment, causal replay, and real same-run branch concurrency while leaving the closed target seam for Phase 7. |
 | 3 | `local-daemon-control-boundary` | pending | `docs/roadmap/stage-29/phases/local-daemon-control-boundary.md` | `agent/stage-29-p3-local-daemon-control-boundary` | pending | Unique digest-bound pending/active admission including pending-cancel ordering; stable coordinator ID/process epoch; authority owner binding and durable mutation intents/receipts; receipt-aware consistent-cut reconciliation; scoped local views; explicit initialize/open-only crash-durable local SQLite roots and lost-state handling; protected role configuration and order-independent degraded startup behavior; retained embedded state/active-owner routing; coordinator accepted-time high-water/anomaly health; persistent daemon/client; non-atomic receipt-time status; public compatibility; durable cancellation request | Submit, observe, and conservatively cancel multiple uniquely admitted runs through one persistent single-machine system using the Phase 2 stage path. |
 | 4 | `authenticated-agent-sessions` | pending | `docs/roadmap/stage-29/phases/authenticated-agent-sessions.md` | `agent/stage-29-p4-authenticated-agent-sessions` | pending | Outbound-only agent topology; protected endpoint/trust configuration; mTLS identity; current-policy per-operation authorization; agent-persisted pre-send registration operation and coordinator-issued persisted session identity versus process/connection epochs; complete cooperative clean retirement/tombstones; current-epoch fresh remote registration/reconcile/offer/work envelopes after coordinator restart; idempotent indeterminate-outcome handling, limits, audit, and connectivity gate | Prove authenticated outbound agent connectivity and capacity publication across `machine-A` and `machine-B` before remote launch or transfer is enabled. |
