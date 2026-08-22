@@ -14,13 +14,28 @@ from loom.pipeline.resources import (
     validate_resource_kind,
 )
 from loom.scheduling import (
+    ClaimSearchBudget,
+    ClaimSearchResult,
+    ClaimSearchState,
+    ClaimValidationResult,
+    HardConstraintEvaluator,
     HardConstraintResult,
+    OpportunityState,
+    OpportunityValidationResult,
     PolicyDecision,
+    PolicyDecisionState,
     PolicyContext,
+    PreferenceScorer,
     PreferenceResult,
+    ResourcePlanner,
+    ResourceRequestResolution,
+    ResourceResolutionState,
     ResourceAvailabilityEnvelope,
     ResourceInventoryEnvelope,
+    SchedulingComponentDescriptor,
+    SchedulingPolicy,
     ValidatedResourceEntryView,
+    WorkSearchState,
     WorkItem,
 )
 
@@ -34,14 +49,21 @@ def check_resource_planner_contract(
     runtime: ValidatedResourceEntryView | None,
     inventory: ResourceInventoryEnvelope,
     availability: ResourceAvailabilityEnvelope,
+    claim_budget: ClaimSearchBudget = ClaimSearchBudget(16),
 ) -> ContractReport:
     """Boundedly exercise a planner with caller-supplied semantic samples."""
 
+    protocol = _check(
+        lambda: isinstance(planner, ResourcePlanner),
+        "planner satisfies ResourcePlanner",
+    )
     descriptor = _check(
         lambda: (
-            getattr(planner, "descriptor").kind == getattr(planner, "resource_kind")
+            isinstance(getattr(planner, "descriptor"), SchedulingComponentDescriptor)
+            and getattr(planner, "descriptor").kind == getattr(planner, "resource_kind")
+            and bool(getattr(planner, "claim_contracts"))
         ),
-        "planner descriptor and resource kind agree",
+        "planner descriptor, resource kind, and claim contracts agree",
     )
     resolution = _check(
         lambda: planner.resolve_request(authored, runtime),  # type: ignore[attr-defined]
@@ -52,10 +74,76 @@ def check_resource_planner_contract(
         "planner validated opportunity",
     )
     findings = [
+        _finding("resource_planner.protocol", protocol),
         _finding("resource_planner.descriptor", descriptor),
-        _finding("resource_planner.resolve", resolution),
-        _finding("resource_planner.opportunity", opportunity),
+        _finding(
+            "resource_planner.resolve",
+            resolution,
+            require_type=ResourceRequestResolution,
+        ),
+        _finding(
+            "resource_planner.opportunity",
+            opportunity,
+            require_type=OpportunityValidationResult,
+        ),
     ]
+    resolution_value = (
+        resolution[1] if isinstance(resolution[1], ResourceRequestResolution) else None
+    )
+    opportunity_value = (
+        opportunity[1]
+        if isinstance(opportunity[1], OpportunityValidationResult)
+        else None
+    )
+    if (
+        resolution[0]
+        and resolution_value is not None
+        and resolution_value.state is ResourceResolutionState.RESOLVED
+        and resolution_value.request is not None
+        and opportunity[0]
+        and opportunity_value is not None
+        and opportunity_value.state is OpportunityState.VALID
+        and opportunity_value.opportunity is not None
+    ):
+        resolved_request = resolution_value.request
+        validated_opportunity = opportunity_value.opportunity
+        search = _check(
+            lambda: planner.propose_claims(  # type: ignore[attr-defined]
+                resolved_request,
+                validated_opportunity,
+                claim_budget,
+            ),
+            "planner proposed bounded claims",
+        )
+        findings.append(
+            _finding("resource_planner.search", search, require_type=ClaimSearchResult)
+        )
+        if (
+            search[0]
+            and isinstance(search[1], ClaimSearchResult)
+            and search[1].state is ClaimSearchState.COMPLETE
+        ):
+            for claim in search[1].claims:
+                validation = _check(
+                    lambda claim=claim: planner.validate_claim(  # type: ignore[attr-defined]
+                        resolved_request, claim
+                    ),
+                    "planner validated a proposed claim",
+                )
+                findings.append(
+                    _finding(
+                        "resource_planner.claim",
+                        validation,
+                        require_type=ClaimValidationResult,
+                    )
+                )
+    else:
+        findings.append(
+            _failed(
+                "resource_planner.search",
+                "resolved request and valid opportunity samples are required",
+            )
+        )
     return ContractReport("loom.scheduling.resource_planner", 1, tuple(findings))
 
 
@@ -67,6 +155,16 @@ def check_hard_constraint_contract(
     claims: tuple[object, ...],
     spec: object,
 ) -> ContractReport:
+    protocol = _check(
+        lambda: isinstance(evaluator, HardConstraintEvaluator),
+        "hard evaluator satisfies HardConstraintEvaluator",
+    )
+    descriptor = _check(
+        lambda: isinstance(
+            getattr(evaluator, "descriptor"), SchedulingComponentDescriptor
+        ),
+        "hard evaluator exposes a descriptor",
+    )
     result = _check(
         lambda: evaluator.evaluate(work, candidate, claims, spec),  # type: ignore[attr-defined]
         "hard evaluator accepted supplied complete placement",
@@ -76,6 +174,8 @@ def check_hard_constraint_contract(
         "loom.scheduling.hard_constraint",
         1,
         (
+            _finding("hard_constraint.protocol", protocol),
+            _finding("hard_constraint.descriptor", descriptor),
             _finding("hard_constraint.evaluate", result),
             ContractFinding(
                 "hard_constraint.result",
@@ -96,6 +196,16 @@ def check_preference_scorer_contract(
     claims: tuple[object, ...],
     spec: object,
 ) -> ContractReport:
+    protocol = _check(
+        lambda: isinstance(scorer, PreferenceScorer),
+        "preference scorer satisfies PreferenceScorer",
+    )
+    descriptor = _check(
+        lambda: isinstance(
+            getattr(scorer, "descriptor"), SchedulingComponentDescriptor
+        ),
+        "preference scorer exposes a descriptor",
+    )
     result = _check(
         lambda: scorer.evaluate(work, candidate, claims, spec),  # type: ignore[attr-defined]
         "preference scorer accepted supplied complete placement",
@@ -105,6 +215,8 @@ def check_preference_scorer_contract(
         "loom.scheduling.preference_scorer",
         1,
         (
+            _finding("preference_scorer.protocol", protocol),
+            _finding("preference_scorer.descriptor", descriptor),
             _finding("preference_scorer.evaluate", result),
             ContractFinding(
                 "preference_scorer.result",
@@ -120,15 +232,44 @@ def check_preference_scorer_contract(
 def check_scheduling_policy_contract(
     policy: object, *, context: PolicyContext
 ) -> ContractReport:
+    protocol = _check(
+        lambda: isinstance(policy, SchedulingPolicy),
+        "policy satisfies SchedulingPolicy",
+    )
+    descriptor = _check(
+        lambda: isinstance(
+            getattr(policy, "descriptor"), SchedulingComponentDescriptor
+        ),
+        "policy exposes a descriptor",
+    )
     result = _check(
         lambda: policy.select(context),  # type: ignore[attr-defined]
         "policy accepted bounded grouped evaluations",
     )
     typed = result[0] and isinstance(result[1], PolicyDecision)
+    decision = result[1] if isinstance(result[1], PolicyDecision) else None
+    valid_selection = (
+        typed
+        and decision is not None
+        and (
+            decision.state is PolicyDecisionState.WAIT
+            or any(
+                evaluation.state is WorkSearchState.COMPLETE
+                and evaluation.stage_work_id == decision.stage_work_id
+                and any(
+                    candidate.candidate_id == decision.candidate_id
+                    for candidate in evaluation.candidates
+                )
+                for evaluation in context.evaluations
+            )
+        )
+    )
     return ContractReport(
         "loom.scheduling.policy",
         1,
         (
+            _finding("scheduling_policy.protocol", protocol),
+            _finding("scheduling_policy.descriptor", descriptor),
             _finding("scheduling_policy.select", result),
             ContractFinding(
                 "scheduling_policy.result",
@@ -136,6 +277,13 @@ def check_scheduling_policy_contract(
                 "policy returned PolicyDecision"
                 if typed
                 else "policy returned an invalid result",
+            ),
+            ContractFinding(
+                "scheduling_policy.selection",
+                "pass" if valid_selection else "fail",
+                "policy selected wait or an existing grouped candidate"
+                if valid_selection
+                else "policy selected an unknown grouped candidate",
             ),
         ),
     )

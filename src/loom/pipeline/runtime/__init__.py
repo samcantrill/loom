@@ -78,6 +78,14 @@ from loom.pipeline.runtime.scheduling_resources import (
     MemoryResourcePlanner,
     scheduling_entry_view,
 )
+from loom.pipeline.runtime.placement import (
+    RESOLVED_STAGE_PLACEMENT_SCHEMA_VERSION,
+    ExecutionRoute,
+    ExecutionRouteKind,
+    ResolvedStagePlacement,
+    StagePlacementPolicy,
+    resolve_stage_placement,
+)
 
 __all__ = [
     "DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY",
@@ -94,12 +102,16 @@ __all__ = [
     "DEFAULT_FAILURE_POLICY",
     "DEFAULT_MAX_PARALLEL_STAGES",
     "ExecutionOptions",
+    "ExecutionRoute",
+    "ExecutionRouteKind",
     "ExecutorDescriptor",
     "ExecutorDescriptorRegistry",
     "RunEnvironmentRequest",
     "RunOptions",
     "ParallelExecutionOptions",
     "ResolvedStageRuntimeOptions",
+    "ResolvedStagePlacement",
+    "RESOLVED_STAGE_PLACEMENT_SCHEMA_VERSION",
     "ResourceCapability",
     "ResourceEnforcementExpectation",
     "ResourceSupportLevel",
@@ -111,6 +123,7 @@ __all__ = [
     "MemoryResourcePlanner",
     "RuntimeRequest",
     "StageEnvironmentRequest",
+    "StagePlacementPolicy",
     "StageRuntimeOptions",
     "FailureClassification",
     "ReliabilityPolicy",
@@ -135,6 +148,7 @@ __all__ = [
     "parse_runtime_profiles",
     "parse_runtime_request",
     "resolve_executor_descriptor",
+    "resolve_stage_placement",
     "resolve_run_runtime",
     "select_runtime_profile",
     "scheduling_entry_view",

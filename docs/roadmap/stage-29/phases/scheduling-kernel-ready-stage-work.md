@@ -611,22 +611,28 @@ Final commands:
   preserved historical attempts without implicit backfill, made the fresh-
   process public import check explicit, and excluded generic saga, transport,
   and later-phase reference scaffolding; approved behavior/design unchanged
-- Implementation: complete through the bounded blocker correction; shared readiness, atomic prepared-attempt receipts, and rebuildable ready-stage work projection added without assignment or launch
+- Implementation: scheduling/placement correction complete; shared readiness,
+  authority preparation, and stage-work persistence require the final bounded
+  correction before the phase is complete
 - Refiner: completed one qualified blocker correction at `671fc89`
-- Pre-submit gate: running final validation
+- Pre-submit gate: blocked locally; the green repository summary did not cover
+  the missing accepted authority/store/orchestration contracts
 - Independent review: required after manager validation because the phase adds
   subsystem-public protocols, a durable projection, and an authority lifecycle
   transition whose dependency and migration boundaries materially interact
-- Blocker corrections: 1/3
+- Blocker corrections: 2/3; pass 2 replaced the thin scheduling prototype with
+  exact immutable values, frozen active/retained registries, complete bounded
+  claim/product evaluation, grouped policy validation, typed diagnostics,
+  resolved route/placement persistence, conformance checks, and causal tests
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Shared readiness evaluation and runner consumer; authority `PENDING` preparation receipt; SQLite ready-stage projection/orchestrator; intentional runtime facade expectation. No assignment, lease, provider, or launch behavior added. |
-| Tests added or updated | Authority receipt replay/conflict and durable stage-work replay identity; runtime facade export expectation updated. |
-| Validated revision/tree state and evidence | Focused tests pass: orchestration, prepared-attempt receipt, and runtime facade import boundary. Final gates running. |
-| Validation-relevant changes after evidence | Qualified correction after `671fc89`; no other phase-plan or manifest changes. |
+| Implementation and changed paths | Pure scheduling values/protocols/registries/kernel/defaults and runtime placement/CPU-memory adapters corrected; shared readiness, authority preparation, and stage-work orchestration remain under the final correction. No assignment, lease, provider, or launch behavior added. |
+| Tests added or updated | Scheduling completeness/exhaustion, atom bounds, hard/soft/policy failure, preference tiers/fallback/overflow, registry retention, placement route/fingerprint/rebuild, conformance, and exact public import coverage; authority/orchestrator causal matrix pending. |
+| Validated revision/tree state and evidence | Correction-pass-2 focused evidence: 141 affected scheduling/runtime/testing/package tests pass; scoped Ruff and Pyright pass. Earlier full summary is stale after this validation-relevant change. |
+| Validation-relevant changes after evidence | Corrections after `671fc89`: pass 2 scheduling/placement rewrite; pass 3 authority/store/orchestration pending. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

@@ -6,6 +6,8 @@ module translates its already-validated values to scheduling's immutable view.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from fractions import Fraction
 
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.resources import ResourceEntry
@@ -43,7 +45,9 @@ def scheduling_entry_view(entry: ResourceEntry) -> ValidatedResourceEntryView:
             raise RuntimeResourceError(
                 "managed CPU resources require a positive integer"
             )
-        return ValidatedResourceEntryView("cpu", ExactQuantity(entry.amount), "count")
+        return ValidatedResourceEntryView(
+            "cpu", ExactQuantity(entry.amount), "count", entry.attributes
+        )
     if entry.kind == "memory":
         if not isinstance(entry.amount, int) or isinstance(entry.amount, bool):
             raise RuntimeResourceError(
@@ -55,7 +59,28 @@ def scheduling_entry_view(entry: ResourceEntry) -> ValidatedResourceEntryView:
                 "managed memory resources require a binary byte unit"
             )
         return ValidatedResourceEntryView(
-            "memory", ExactQuantity(entry.amount * multiplier), "B"
+            "memory",
+            ExactQuantity(entry.amount * multiplier),
+            "B",
+            entry.attributes,
+        )
+    if entry.unit == "share":
+        denominator = entry.attributes.get("share_denominator")
+        if (
+            not isinstance(entry.amount, int)
+            or isinstance(entry.amount, bool)
+            or not isinstance(denominator, int)
+            or isinstance(denominator, bool)
+            or denominator <= 0
+        ):
+            raise RuntimeResourceError(
+                "share resources require an integer amount and share_denominator"
+            )
+        return ValidatedResourceEntryView(
+            entry.kind,
+            ExactQuantity(entry.amount, denominator),
+            entry.unit,
+            entry.attributes,
         )
     if isinstance(entry.amount, float):
         raise RuntimeResourceError(
@@ -95,6 +120,18 @@ class _CountPlanner:
                 ResourceResolutionState.INVALID,
                 explanation="runtime refinement weakens authored minimum",
             )
+        if (
+            authored is not None
+            and runtime is not None
+            and any(
+                runtime.attributes.get(key) != expected
+                for key, expected in authored.attributes.items()
+            )
+        ):
+            return ResourceRequestResolution(
+                ResourceResolutionState.INVALID,
+                explanation="runtime refinement weakens authored attributes",
+            )
         return ResourceRequestResolution(
             ResourceResolutionState.RESOLVED,
             ResolvedResourceRequest(self.resource_kind, value),
@@ -120,17 +157,13 @@ class _CountPlanner:
                 OpportunityState.INVALID,
                 explanation="opportunity snapshots do not match",
             )
-        amount = availability.data.get("amount")
-        key = availability.data.get("capacity_key", self.resource_kind)
-        if (
-            not isinstance(amount, int)
-            or isinstance(amount, bool)
-            or amount < 0
-            or not isinstance(key, str)
-            or not key
+        if any(
+            atom.owner_resource_kind != self.resource_kind or atom.unit != self.unit
+            for atom in availability.atoms
         ):
             return OpportunityValidationResult(
-                OpportunityState.INVALID, explanation="invalid available capacity"
+                OpportunityState.INVALID,
+                explanation="availability atom kind or unit is invalid",
             )
         return OpportunityValidationResult(
             OpportunityState.VALID,
@@ -138,7 +171,8 @@ class _CountPlanner:
                 inventory.candidate_id,
                 self.resource_kind,
                 inventory.snapshot_revision,
-                {"amount": amount, "capacity_key": key},
+                availability.data,
+                availability.atoms,
             ),
         )
 
@@ -148,24 +182,23 @@ class _CountPlanner:
         opportunity: ValidatedResourceOpportunity,
         budget: ClaimSearchBudget,
     ) -> ClaimSearchResult:
-        if request.entry.amount.fraction > opportunity.data["amount"]:
-            return ClaimSearchResult(ClaimSearchState.COMPLETE)
-        claim = ResourceClaim(
-            self.resource_kind,
-            self.claim_contracts[0],
-            (
-                CapacityAtom(
-                    self.resource_kind,
-                    opportunity.data["capacity_key"],
-                    request.entry.amount,
-                    self.unit,
-                    ExactQuantity(1),
-                ),
-            ),
-            1,
-            {"snapshot_revision": opportunity.snapshot_revision},
+        claims, exhausted = _complete_exact_claims(
+            resource_kind=self.resource_kind,
+            contract=self.claim_contracts[0],
+            requested=request.entry.amount.fraction,
+            atoms=opportunity.available_atoms,
+            snapshot_revision=opportunity.snapshot_revision,
+            max_claims=budget.max_claims,
+            max_expansions=budget.max_expansions,
         )
-        return ClaimSearchResult(ClaimSearchState.COMPLETE, (claim,))
+        if exhausted:
+            return ClaimSearchResult(
+                ClaimSearchState.EXHAUSTED,
+                explanation="built-in exact claim search exceeded its bound",
+            )
+        if not claims:
+            return ClaimSearchResult(ClaimSearchState.COMPLETE)
+        return ClaimSearchResult(ClaimSearchState.COMPLETE, tuple(claims))
 
     def validate_claim(
         self, request: ResolvedResourceRequest, claim: ResourceClaim
@@ -177,7 +210,12 @@ class _CountPlanner:
             return ClaimValidationResult(
                 ClaimValidationState.INVALID, "wrong claim contract"
             )
-        if len(claim.atoms) != 1 or claim.atoms[0].amount != request.entry.amount:
+        if any(atom.unit != self.unit for atom in claim.atoms):
+            return ClaimValidationResult(
+                ClaimValidationState.INVALID, "claim atom unit is invalid"
+            )
+        claimed = sum((atom.amount.fraction for atom in claim.atoms), Fraction(0))
+        if claimed != request.entry.amount.fraction:
             return ClaimValidationResult(
                 ClaimValidationState.INVALID, "claim does not exactly meet request"
             )
@@ -204,3 +242,69 @@ class MemoryResourcePlanner(_CountPlanner):
     claim_contracts = (
         ResourceClaimContractDescriptor("memory", 1, "builtin-memory-claim-v1"),
     )
+
+
+def _complete_exact_claims(
+    *,
+    resource_kind: str,
+    contract: ResourceClaimContractDescriptor,
+    requested: Fraction,
+    atoms: Sequence[CapacityAtom],
+    snapshot_revision: str,
+    max_claims: int,
+    max_expansions: int,
+) -> tuple[list[ResourceClaim], bool]:
+    ordered = tuple(sorted(atoms, key=lambda atom: atom.local_capacity_key))
+    claims: list[ResourceClaim] = []
+    expansions = 0
+
+    def visit(index: int, remaining: Fraction, selected: list[CapacityAtom]) -> bool:
+        nonlocal expansions
+        expansions += 1
+        if expansions > max_expansions:
+            return True
+        if index == len(ordered):
+            if remaining == 0:
+                claims.append(
+                    ResourceClaim(
+                        resource_kind=resource_kind,
+                        contract=contract,
+                        atoms=tuple(selected),
+                        provider_data_version=1,
+                        provider_data={"snapshot_revision": snapshot_revision},
+                    )
+                )
+            return len(claims) > max_claims
+        atom = ordered[index]
+        maximum = min(atom.amount.fraction, remaining)
+        step = atom.granularity.fraction
+        if index == len(ordered) - 1:
+            amounts = (remaining,) if remaining > 0 else (Fraction(0),)
+        else:
+            amounts = tuple(
+                step * units for units in range(int(maximum / step), -1, -1)
+            )
+        for amount in amounts:
+            if amount < 0 or amount > maximum or amount % step:
+                continue
+            if amount:
+                selected.append(
+                    CapacityAtom(
+                        atom.owner_resource_kind,
+                        atom.local_capacity_key,
+                        ExactQuantity(amount.numerator, amount.denominator),
+                        atom.unit,
+                        atom.granularity,
+                    )
+                )
+            exhausted = visit(index + 1, remaining - amount, selected)
+            if amount:
+                selected.pop()
+            if exhausted:
+                return True
+        return False
+
+    exhausted = visit(0, requested, [])
+    if exhausted:
+        return [], True
+    return claims, False

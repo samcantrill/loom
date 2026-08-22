@@ -19,11 +19,99 @@ from loom.testing import (
     check_codec_contract,
     check_event_sink_contract,
     check_executor_contract,
+    check_hard_constraint_contract,
+    check_preference_scorer_contract,
+    check_resource_planner_contract,
     check_resource_validator_contract,
+    check_scheduling_policy_contract,
+)
+from loom.pipeline.runtime import CpuResourcePlanner
+from loom.scheduling import (
+    Candidate,
+    CandidateEvaluation,
+    CapacityAtom,
+    ClaimSearchBudget,
+    ExactQuantity,
+    FifoSchedulingPolicy,
+    HardConstraintSpec,
+    NeutralPreferenceScorer,
+    PolicyContext,
+    PreferenceSpec,
+    ResolvedResourceRequest,
+    ResourceAvailabilityEnvelope,
+    ResourceInventoryEnvelope,
+    TargetConstraintEvaluator,
+    ValidatedResourceEntryView,
+    WorkEvaluation,
+    WorkItem,
+    WorkSearchState,
 )
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_scheduling_contract_checks_cover_complete_caller_samples() -> None:
+    atom = CapacityAtom("cpu", "shared", ExactQuantity(2), "count", ExactQuantity(1))
+    inventory = ResourceInventoryEnvelope("agent", "cpu", "one", atoms=(atom,))
+    availability = ResourceAvailabilityEnvelope("agent", "cpu", "one", atoms=(atom,))
+    request = ValidatedResourceEntryView("cpu", ExactQuantity(1), "count")
+    planner = CpuResourcePlanner()
+    planner_report = check_resource_planner_contract(
+        planner,
+        authored=request,
+        runtime=None,
+        inventory=inventory,
+        availability=availability,
+    )
+    assert planner_report.ok
+    assert "resource_planner.claim" in {
+        finding.code for finding in planner_report.findings
+    }
+
+    work = WorkItem("work", 1, {"cpu": ResolvedResourceRequest("cpu", request)})
+    candidate = Candidate(
+        "agent",
+        {"cpu": inventory},
+        {"cpu": availability},
+        attributes={"target": "agent"},
+    )
+    claim = planner.propose_claims(
+        ResolvedResourceRequest("cpu", request),
+        planner.validate_opportunity(inventory, availability).opportunity,  # type: ignore[arg-type]
+        ClaimSearchBudget(4),
+    ).claims[0]
+    hard = TargetConstraintEvaluator()
+    hard_spec = HardConstraintSpec(
+        "target", "target", {"target": "agent"}, hard.descriptor
+    )
+    scorer = NeutralPreferenceScorer()
+    preference_spec = PreferenceSpec("neutral", "neutral", descriptor=scorer.descriptor)
+    assert check_hard_constraint_contract(
+        hard,
+        work=work,
+        candidate=candidate,
+        claims=(claim,),
+        spec=hard_spec,
+    ).ok
+    assert check_preference_scorer_contract(
+        scorer,
+        work=work,
+        candidate=candidate,
+        claims=(claim,),
+        spec=preference_spec,
+    ).ok
+    context = PolicyContext(
+        1,
+        (
+            WorkEvaluation(
+                work,
+                WorkSearchState.COMPLETE,
+                (CandidateEvaluation("work", "agent", (claim,), (0,)),),
+            ),
+        ),
+    )
+    assert check_scheduling_policy_contract(FifoSchedulingPolicy(), context=context).ok
 
 
 class _Codec:
@@ -73,7 +161,9 @@ def test_codec_contract_reports_dependent_failures_without_invocation() -> None:
     assert {finding.status for finding in report.findings} == {"fail"}
 
 
-def test_resource_validator_contract_records_rejection_and_prerequisite_failures() -> None:
+def test_resource_validator_contract_records_rejection_and_prerequisite_failures() -> (
+    None
+):
     def validator(entry: ResourceEntry, path: str) -> None:
         if entry.amount <= 0:
             raise ValueError(path)

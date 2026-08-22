@@ -1,13 +1,35 @@
-"""Deterministic pure default evaluators and FIFO-with-safe-bypass policy."""
+"""Deterministic hard rules, neutral scoring, and FIFO safe-bypass policy."""
 
-# ruff: noqa: F403, F405
 from __future__ import annotations
-from .values import *
+
+from collections.abc import Mapping
+
+from .values import (
+    Candidate,
+    HardConstraintResult,
+    HardConstraintSpec,
+    HardEvaluationState,
+    PolicyContext,
+    PolicyDecision,
+    PolicyDecisionState,
+    PreferenceEvaluationState,
+    PreferenceResult,
+    PreferenceScore,
+    PreferenceSpec,
+    ResourceClaim,
+    SchedulingComponentDescriptor,
+    WorkItem,
+    WorkSearchState,
+)
 
 
 def _descriptor(kind: str) -> SchedulingComponentDescriptor:
     return SchedulingComponentDescriptor(
-        kind, 1, "1", f"builtin:{kind}:v1", "builtin", (1,)
+        kind=kind,
+        contract_version=1,
+        implementation_version="1",
+        implementation_fingerprint=f"builtin:{kind}:v1",
+        configuration_fingerprint="builtin",
     )
 
 
@@ -21,13 +43,17 @@ class TargetConstraintEvaluator:
         claims: tuple[ResourceClaim, ...],
         spec: HardConstraintSpec,
     ) -> HardConstraintResult:
-        target = candidate.attributes.get("target")
-        required = candidate.attributes.get("required_target")
+        del work, claims
+        required = spec.data.get("target")
+        if not isinstance(required, str) or not required:
+            return HardConstraintResult(
+                HardEvaluationState.INDETERMINATE,
+                "target constraint requires non-empty data.target",
+            )
+        if candidate.attributes.get("target") == required:
+            return HardConstraintResult(HardEvaluationState.PASS)
         return HardConstraintResult(
-            HardEvaluationState.PASS
-            if required is None or target == required
-            else HardEvaluationState.REJECT,
-            None if required is None or target == required else "target does not match",
+            HardEvaluationState.REJECT, "candidate target does not match"
         )
 
 
@@ -41,16 +67,20 @@ class AttributeConstraintEvaluator:
         claims: tuple[ResourceClaim, ...],
         spec: HardConstraintSpec,
     ) -> HardConstraintResult:
-        required = candidate.attributes.get("required_attributes", {})
-        if not isinstance(required, dict):
+        del work, claims
+        required = spec.data.get("attributes")
+        if not isinstance(required, Mapping):
             return HardConstraintResult(
-                HardEvaluationState.INDETERMINATE, "invalid attribute rule"
+                HardEvaluationState.INDETERMINATE,
+                "attribute constraint requires data.attributes",
             )
+        if all(
+            candidate.attributes.get(str(key)) == value
+            for key, value in required.items()
+        ):
+            return HardConstraintResult(HardEvaluationState.PASS)
         return HardConstraintResult(
-            HardEvaluationState.PASS
-            if all(candidate.attributes.get(k) == v for k, v in required.items())
-            else HardEvaluationState.REJECT,
-            "attribute requirement not met",
+            HardEvaluationState.REJECT, "candidate attributes do not match"
         )
 
 
@@ -64,26 +94,51 @@ class NeutralPreferenceScorer:
         claims: tuple[ResourceClaim, ...],
         spec: PreferenceSpec,
     ) -> PreferenceResult:
-        return PreferenceResult(PreferenceEvaluationState.SCORE, PreferenceScore(0))
+        del work, candidate, claims, spec
+        return PreferenceResult(
+            PreferenceEvaluationState.SCORE,
+            PreferenceScore(utility=0, quality_band="preferred"),
+        )
 
 
 class FifoSchedulingPolicy:
+    """Select the earliest feasible work, bypassing exhausted/infeasible work."""
+
     descriptor = _descriptor("fifo_safe_bypass")
 
     def select(self, context: PolicyContext) -> PolicyDecision:
-        if not context.evaluations:
-            return PolicyDecision(
-                PolicyDecisionState.WAIT, explanation="no complete feasible work"
+        for evaluation in context.evaluations:
+            if evaluation.state is WorkSearchState.INVALID:
+                return PolicyDecision(
+                    PolicyDecisionState.WAIT,
+                    explanation="an earlier work evaluation is invalid",
+                )
+            if (
+                evaluation.state is not WorkSearchState.COMPLETE
+                or not evaluation.candidates
+            ):
+                continue
+            selected = min(
+                evaluation.candidates,
+                key=lambda item: (
+                    tuple(-value for value in item.preference_vector),
+                    item.candidate_id,
+                    item.stable_claim_key,
+                ),
             )
-        selected = min(
-            context.evaluations,
-            key=lambda item: (
-                item.ready_at,
-                item.stage_work_id,
-                tuple(-value for value in item.preference_vector),
-                item.candidate_id,
-            ),
-        )
+            return PolicyDecision(
+                PolicyDecisionState.SELECT,
+                stage_work_id=selected.stage_work_id,
+                candidate_id=selected.candidate_id,
+            )
         return PolicyDecision(
-            PolicyDecisionState.SELECT, selected.stage_work_id, selected.candidate_id
+            PolicyDecisionState.WAIT, explanation="no complete feasible work"
         )
+
+
+__all__ = [
+    "AttributeConstraintEvaluator",
+    "FifoSchedulingPolicy",
+    "NeutralPreferenceScorer",
+    "TargetConstraintEvaluator",
+]

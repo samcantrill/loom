@@ -1,9 +1,32 @@
-"""Structural extension protocols for the pure scheduling subsystem."""
+"""Structural protocols for explicitly composed pure scheduling components."""
 
-# ruff: noqa: F403, F405
 from __future__ import annotations
+
 from typing import Protocol, runtime_checkable
-from .values import *
+
+from .values import (
+    Candidate,
+    ClaimSearchBudget,
+    ClaimSearchResult,
+    ClaimValidationResult,
+    HardConstraintResult,
+    HardConstraintSpec,
+    OpportunityValidationResult,
+    PolicyContext,
+    PolicyDecision,
+    PreferenceResult,
+    PreferenceSpec,
+    ResolvedResourceRequest,
+    ResourceAvailabilityEnvelope,
+    ResourceClaim,
+    ResourceClaimContractDescriptor,
+    ResourceInventoryEnvelope,
+    ResourceRequestResolution,
+    SchedulingComponentDescriptor,
+    ValidatedResourceEntryView,
+    ValidatedResourceOpportunity,
+    WorkItem,
+)
 
 
 @runtime_checkable
@@ -17,17 +40,20 @@ class ResourcePlanner(Protocol):
         authored: ValidatedResourceEntryView | None,
         runtime: ValidatedResourceEntryView | None,
     ) -> ResourceRequestResolution: ...
+
     def validate_opportunity(
         self,
         inventory: ResourceInventoryEnvelope,
         availability: ResourceAvailabilityEnvelope,
     ) -> OpportunityValidationResult: ...
+
     def propose_claims(
         self,
         request: ResolvedResourceRequest,
         opportunity: ValidatedResourceOpportunity,
         budget: ClaimSearchBudget,
     ) -> ClaimSearchResult: ...
+
     def validate_claim(
         self, request: ResolvedResourceRequest, claim: ResourceClaim
     ) -> ClaimValidationResult: ...
@@ -64,3 +90,11 @@ class SchedulingPolicy(Protocol):
     descriptor: SchedulingComponentDescriptor
 
     def select(self, context: PolicyContext) -> PolicyDecision: ...
+
+
+__all__ = [
+    "HardConstraintEvaluator",
+    "PreferenceScorer",
+    "ResourcePlanner",
+    "SchedulingPolicy",
+]
