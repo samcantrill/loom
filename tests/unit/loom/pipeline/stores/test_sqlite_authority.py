@@ -1,7 +1,8 @@
 """Unit coverage for the private SQLite authority backend."""
 
 import sqlite3
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -28,10 +29,13 @@ from loom.pipeline.stores import (
     AuthorityStoreError,
     AuthoritySchemaFailureKind,
     BackendCapability,
+    BackendRevision,
     CapabilityScope,
     CapabilitySupport,
     LeaseState,
     LifecycleReason,
+    PreparedAttemptReceipt,
+    PreparedAttemptRequest,
     ReliabilityPolicyFact,
     ReliabilityPolicyScope,
     path_to_run_uri,
@@ -51,6 +55,33 @@ class FrozenClock:
 
     def __call__(self) -> str:
         return self.value
+
+
+def _prepared_request(
+    revision: BackendRevision,
+    *,
+    operation_id: str = "prepare-1",
+    stage_status: StageStatus | None = None,
+    attempt_id: str | None = None,
+    next_attempt: int = 1,
+    retry_decision_id: str | None = None,
+) -> PreparedAttemptRequest:
+    return PreparedAttemptRequest(
+        operation_id=operation_id,
+        request_digest=f"digest-{operation_id}",
+        admission_id="admission-1",
+        stage_name="build",
+        readiness_generation=f"generation-{next_attempt}",
+        expected_revision=revision,
+        expected_stage_status=stage_status,
+        expected_attempt_id=attempt_id,
+        next_attempt=next_attempt,
+        owner_id="coordinator",
+        plan_fingerprint="plan-1",
+        bound_inputs={},
+        upstream_commits={},
+        retry_decision_id=retry_decision_id,
+    )
 
 
 def _reliability_status(run_uri: str) -> ReliabilityStatusDetail:
@@ -604,19 +635,152 @@ def test_output_commit_rejects_terminal_stage_state(tmp_path: Path) -> None:
 def test_prepared_attempt_is_pending_and_replays_the_authority_receipt(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "prepared-run")
     store = SQLitePerRunAuthorityStore(clock=FrozenClock())
-    store.create_run(run_uri)
-    first = store.ensure_prepared_attempt(
-        run_uri, "build", operation_id="prepare-1", request_digest="digest-1",
-        readiness_generation="generation-1", owner_id="coordinator",
+    revision = store.create_run(run_uri)
+    request = PreparedAttemptRequest(
+        operation_id="prepare-1",
+        request_digest="digest-1",
+        admission_id="admission-1",
+        stage_name="build",
+        readiness_generation="generation-1",
+        expected_revision=revision,
+        expected_stage_status=None,
+        expected_attempt_id=None,
+        next_attempt=1,
+        owner_id="coordinator",
+        plan_fingerprint="plan-1",
+        bound_inputs={},
+        upstream_commits={},
     )
-    replay = store.ensure_prepared_attempt(
-        run_uri, "build", operation_id="prepare-1", request_digest="digest-1",
-        readiness_generation="generation-1", owner_id="coordinator",
-    )
+    first = store.ensure_prepared_attempt(run_uri, request)
+    replay = store.ensure_prepared_attempt(run_uri, request)
     assert first.attempt.status is StageStatus.PENDING
     assert replay.attempt == first.attempt
+    assert PreparedAttemptReceipt.from_dict(first.to_dict()) == first
     with pytest.raises(AuthorityStoreError, match="conflicts"):
+        store.ensure_prepared_attempt(run_uri, replace(request, request_digest="changed"))
+
+
+def test_prepared_attempt_revalidates_revision_and_terminal_run(tmp_path: Path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "stale-preparation")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    initial = store.create_run(run_uri)
+    store.transition_run(
+        run_uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING
+    )
+    with pytest.raises(AuthorityStoreError, match="stale authority revision"):
+        store.ensure_prepared_attempt(run_uri, _prepared_request(initial))
+
+    terminal_uri = path_to_run_uri(tmp_path / "terminal-preparation")
+    terminal = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    revision = terminal.create_run(terminal_uri, status=RunStatus.CANCELLED)
+    with pytest.raises(AuthorityStoreError, match="terminal or cancelling"):
+        terminal.ensure_prepared_attempt(
+            terminal_uri, _prepared_request(revision)
+        )
+
+
+def test_prepared_attempt_requires_authority_retry_decision(tmp_path: Path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "retry-preparation")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri, status=RunStatus.RUNNING)
+    allocation = store.allocate_stage_attempt(run_uri, "build", owner_id="worker")
+    failed = store.transition_stage(
+        run_uri,
+        "build",
+        from_status=StageStatus.RUNNING,
+        to_status=StageStatus.FAILED,
+    )
+    unauthorized = _prepared_request(
+        failed.revision,
+        stage_status=StageStatus.FAILED,
+        attempt_id=allocation.attempt.attempt_id,
+        next_attempt=2,
+    )
+    with pytest.raises(AuthorityStoreError, match="retry is not authorized"):
+        store.ensure_prepared_attempt(run_uri, unauthorized)
+
+    status = _reliability_status(run_uri)
+    decision = RetryDecisionRecord(
+        decision_id="retry-authorized",
+        transaction_id="tx-authorized",
+        should_retry=True,
+        next_attempt=2,
+        decision_reason="transient",
+        policy_max_attempts=2,
+        attempt_count=1,
+        status=status,
+        failure=FailureClassification(
+            reason_code="runtime_error",
+            status=status,
+            retriable=True,
+        ),
+    )
+    revision = store.write_retry_decision(run_uri, decision)
+    prepared = store.ensure_prepared_attempt(
+        run_uri,
+        _prepared_request(
+            revision,
+            stage_status=StageStatus.FAILED,
+            attempt_id=allocation.attempt.attempt_id,
+            next_attempt=2,
+            retry_decision_id=decision.decision_id,
+        ),
+    )
+    assert prepared.attempt.attempt == 2
+    assert prepared.attempt.status is StageStatus.PENDING
+
+
+def test_concurrent_prepared_attempt_replay_creates_one_attempt(tmp_path: Path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "concurrent-preparation")
+    first_store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    revision = first_store.create_run(run_uri, status=RunStatus.RUNNING)
+    request = _prepared_request(revision)
+
+    def prepare() -> PreparedAttemptReceipt:
+        return SQLitePerRunAuthorityStore(clock=FrozenClock()).ensure_prepared_attempt(
+            run_uri, request
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        receipts = tuple(pool.map(lambda _: prepare(), range(2)))
+    assert receipts[0] == receipts[1]
+    snapshot = first_store.open_run(run_uri)
+    assert len(snapshot.stages[0].attempts) == 1
+
+
+def test_v2_migration_preserves_legacy_pending_attempt_without_backfill(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "legacy-pending")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri, status=RunStatus.RUNNING)
+    allocation = store.allocate_stage_attempt(run_uri, "build", owner_id="legacy")
+    database_path = _authority_database_path(run_uri)
+    with sqlite3.connect(database_path) as conn:
+        conn.execute(
+            "UPDATE attempts SET status = 'PENDING' WHERE attempt_id = ?",
+            (allocation.attempt.attempt_id,),
+        )
+        conn.execute("UPDATE stages SET status = 'PENDING' WHERE stage_name = 'build'")
+        conn.execute("DROP TABLE prepared_attempt_receipts")
+        conn.execute("UPDATE metadata SET value = '2' WHERE key = 'schema_version'")
+
+    snapshot = store.open_run(run_uri)
+    attempt = snapshot.stages[0].attempts[0]
+    assert attempt.attempt_id == allocation.attempt.attempt_id
+    assert attempt.status is StageStatus.PENDING
+    with sqlite3.connect(database_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM prepared_attempt_receipts"
+        ).fetchone()
+    assert count == (0,)
+    with pytest.raises(AuthorityStoreError, match="does not permit"):
         store.ensure_prepared_attempt(
-            run_uri, "build", operation_id="prepare-1", request_digest="changed",
-            readiness_generation="generation-1", owner_id="coordinator",
+            run_uri,
+            _prepared_request(
+                snapshot.revision,
+                stage_status=StageStatus.PENDING,
+                attempt_id=attempt.attempt_id,
+                next_attempt=2,
+            ),
         )

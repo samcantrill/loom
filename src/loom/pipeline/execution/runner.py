@@ -870,6 +870,31 @@ class PipelineRunner:
                     blocked_by=failed_stage or cancelled_stage or "cancelled",
                 )
                 continue
+            readiness = evaluate_attempt_readiness(
+                stage_plan,
+                completed_stages=stage_results,
+                successful_stages={
+                    name
+                    for name, prior in stage_results.items()
+                    if prior.status in {StageStatus.SUCCEEDED, StageStatus.SKIPPED}
+                },
+            )
+            if readiness is None:
+                stage_results[stage.name] = self._block_stage_after_failure(
+                    run_uri=run_uri,
+                    stage_plan=stage_plan,
+                    blocked_by=next(
+                        (
+                            upstream
+                            for upstream in stage_plan.upstream_stages
+                            if upstream not in stage_results
+                            or stage_results[upstream].status
+                            not in {StageStatus.SUCCEEDED, StageStatus.SKIPPED}
+                        ),
+                        "unresolved",
+                    ),
+                )
+                continue
             try:
                 result = self._run_controller_stage_action(
                     request=request,
@@ -1317,7 +1342,13 @@ class PipelineRunner:
                 continue
             stage_plan = plan_by_stage[stage_name]
             readiness = evaluate_attempt_readiness(
-                stage_plan, completed_stages=stage_results
+                stage_plan,
+                completed_stages=stage_results,
+                successful_stages={
+                    name
+                    for name, result in stage_results.items()
+                    if result.status in {StageStatus.SUCCEEDED, StageStatus.SKIPPED}
+                },
             )
             if readiness is not None:
                 return readiness.stage_plan

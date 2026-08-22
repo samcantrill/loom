@@ -611,28 +611,33 @@ Final commands:
   preserved historical attempts without implicit backfill, made the fresh-
   process public import check explicit, and excluded generic saga, transport,
   and later-phase reference scaffolding; approved behavior/design unchanged
-- Implementation: scheduling/placement correction complete; shared readiness,
-  authority preparation, and stage-work persistence require the final bounded
-  correction before the phase is complete
+- Implementation: complete; the final bounded correction extracted the shared
+  persisted-fact readiness predicate, added exact expected-state authority
+  preparation and immutable receipts, migrated the run-local authority schema
+  without legacy backfill, and replaced the prototype projection with semantic
+  in-memory/SQLite stores plus bounded `RunOrchestrator` reconciliation
 - Refiner: completed one qualified blocker correction at `671fc89`
-- Pre-submit gate: blocked locally; the green repository summary did not cover
-  the missing accepted authority/store/orchestration contracts
+- Pre-submit gate: complete; `make validate-pr` passed Ruff, Pyright, the
+  isolated default suite (2,342 passed, one skipped), the config-extra suite
+  (141 passed, three skipped), and package builds; `make test-summary` recorded
+  2,483 passing tests across the categorized evidence suites
 - Independent review: required after manager validation because the phase adds
   subsystem-public protocols, a durable projection, and an authority lifecycle
   transition whose dependency and migration boundaries materially interact
-- Blocker corrections: 2/3; pass 2 replaced the thin scheduling prototype with
-  exact immutable values, frozen active/retained registries, complete bounded
-  claim/product evaluation, grouped policy validation, typed diagnostics,
-  resolved route/placement persistence, conformance checks, and causal tests
+- Blocker corrections: 3/3 complete; pass 2 replaced the thin scheduling
+  prototype with the accepted pure kernel/placement contracts, and pass 3
+  completed readiness, atomic authority preparation/replay/migration,
+  authority-wins projection eligibility, coordinator durability, and causal
+  failure/concurrency evidence
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Pure scheduling values/protocols/registries/kernel/defaults and runtime placement/CPU-memory adapters corrected; shared readiness, authority preparation, and stage-work orchestration remain under the final correction. No assignment, lease, provider, or launch behavior added. |
-| Tests added or updated | Scheduling completeness/exhaustion, atom bounds, hard/soft/policy failure, preference tiers/fallback/overflow, registry retention, placement route/fingerprint/rebuild, conformance, and exact public import coverage; authority/orchestrator causal matrix pending. |
-| Validated revision/tree state and evidence | Correction-pass-2 focused evidence: 141 affected scheduling/runtime/testing/package tests pass; scoped Ruff and Pyright pass. Earlier full summary is stale after this validation-relevant change. |
-| Validation-relevant changes after evidence | Corrections after `671fc89`: pass 2 scheduling/placement rewrite; pass 3 authority/store/orchestration pending. |
+| Implementation and changed paths | Pure scheduling values/protocols/registries/kernel/defaults; runtime placement and CPU/memory adapters; planning-owned readiness; narrow expected-state authority preparation with frozen receipts and v2-to-v3 migration; semantic in-memory/SQLite coordinator stage-work stores; bounded replay-safe `RunOrchestrator`; compatibility runner routed through shared readiness. No assignment, execution lease, provider, artifact transfer, launcher, process, or transport behavior added. |
+| Tests added or updated | Scheduling completeness/exhaustion, atom bounds, hard/soft/policy failure, preference tiers/fallback/overflow, registry retention, placement route/fingerprint/rebuild, conformance, readiness cancellation/retry/action behavior, authority receipt serialization/revision/terminal/retry/concurrency/migration behavior, store parity/reopen/schema failure, lost-response repair, all-ready-branch projection, controller-action ownership, authority-wins eligibility, pure decision integration, and public/import boundaries. |
+| Validated revision/tree state and evidence | Final correction-pass-3 tree: `make validate-pr` passed Ruff and Pyright; isolated default 2,342 passed/one skipped/121 deselected; config-extra 141 passed/three skipped/2,346 deselected; sdist and wheel built. `make test-summary` passed package 118, unit 1,669, contract 286, integration 211, e2e 58, and config-extra 141. |
+| Validation-relevant changes after evidence | None. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Independent expanded-path review, PR/CI, merge, metadata finalization, and worktree cleanup remain. Phase 2 still owns every reservation, assignment, resource acquisition, worker materialization, and launch side effect. |

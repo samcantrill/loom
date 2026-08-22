@@ -1270,6 +1270,43 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_orchestration_import_has_no_execution_side_effect_boundary() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.orchestration as orchestration
+
+        assert set(orchestration.__all__) == {
+            "COORDINATOR_STAGE_WORK_SCHEMA_VERSION",
+            "CoordinatorStageWorkStore",
+            "CoordinatorStoreError",
+            "InMemoryStageWorkStore",
+            "PreparationIntent",
+            "ReadyStageOrchestrator",
+            "RunOrchestrator",
+            "SQLiteStageWorkStore",
+            "SchedulingProjectionState",
+            "StageWorkRecord",
+            "stage_work_identity",
+        }
+        for forbidden in (
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "subprocess",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through orchestration")
+        print("ok")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_executors_does_not_import_project_layers() -> None:
     script = dedent(
         """
