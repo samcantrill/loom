@@ -496,11 +496,16 @@ class WorkEvaluation:
     candidate_id: str
     claims: tuple[ResourceClaim, ...]
     preference_vector: tuple[int, ...]
+    ready_at: int = 0
     explanations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _text(self.stage_work_id, "evaluation stage_work_id")
         _text(self.candidate_id, "evaluation candidate_id")
+        if not isinstance(self.ready_at, int):
+            raise SchedulingError(
+                "evaluation ready_at must be an integer snapshot time"
+            )
         object.__setattr__(self, "claims", tuple(self.claims))
         object.__setattr__(self, "preference_vector", tuple(self.preference_vector))
 

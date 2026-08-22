@@ -78,6 +78,7 @@ class FifoSchedulingPolicy:
         selected = min(
             context.evaluations,
             key=lambda item: (
+                item.ready_at,
                 item.stage_work_id,
                 tuple(-value for value in item.preference_vector),
                 item.candidate_id,

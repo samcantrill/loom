@@ -151,7 +151,11 @@ class SchedulingKernel:
                 scores.get(index, 0) for index in range(max(scores, default=-1) + 1)
             )
             return WorkEvaluation(
-                work.stage_work_id, candidate.candidate_id, claim_tuple, vector
+                work.stage_work_id,
+                candidate.candidate_id,
+                claim_tuple,
+                vector,
+                work.ready_at,
             )
         return None
 
