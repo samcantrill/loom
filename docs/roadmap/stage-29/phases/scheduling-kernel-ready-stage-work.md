@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 1
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p1-scheduling-kernel-ready-stage-work`
@@ -627,12 +627,13 @@ Final commands:
   isolated default suite (2,349 passed, one skipped), the config-extra suite
   (141 passed, three skipped), and package builds; `make test-summary` recorded
   2,490 passing tests across the categorized evidence suites
-- Independent review: complete; four product blockers and one localized
-  correction made the prior attempt ineligible to merge despite green CI
+- Independent review: fresh re-review complete at repaired head `56fa5f2`; no
+  product blocker, localized correction, or required hardening remains, and 90
+  focused boundary tests passed
 - Blocker corrections: prior attempt stopped at 3/3; maintainer-authorized
   repair attempt is 1/3 with every fixed-scope review finding addressed
-- PR and merge: PR #233 remains closed pending repair, fresh validation, and
-  independent review; Phase 2 remains pending
+- PR and merge: PR #233 reopened at repaired head `56fa5f2`; GitHub CI pending;
+  Phase 2 remains pending
 
 ## Completion Record
 
@@ -642,5 +643,5 @@ Final commands:
 | Tests added or updated | Scheduling completeness/exhaustion, atom bounds, hard/soft/policy failure, preference tiers/fallback/overflow, registry retention, placement route/fingerprint/rebuild, conformance, readiness cancellation/retry/action behavior, authority receipt serialization/revision/terminal/retry/concurrency/migration behavior, store parity/reopen/schema failure, lost-response repair, monotonic revision replay, changed-time restart replay, cancellation and superseded-upstream retirement, mandatory pool/target selection, malformed planner output, all-ready-branch projection, controller-action ownership, authority-wins eligibility, pure decision integration, and public/import boundaries. |
 | Validated revision/tree state and evidence | Authorized repair-pass-1 tree: `make validate-pr` passed Ruff and Pyright; isolated default 2,349 passed/one skipped/121 deselected; config-extra 141 passed/three skipped/2,353 deselected; sdist and wheel built. `make test-summary` passed package 118, unit 1,676, contract 286, integration 211, e2e 58, and config-extra 141, for 2,490 total passes. |
 | Validation-relevant changes after evidence | None; this execution-plan evidence update does not change source, tests, dependencies, build, or validation configuration. |
-| PR, review, and merge | [PR #233](https://github.com/samcantrill/loom/pull/233) targeted `develop`, was non-draft and mechanically mergeable, passed CI, then closed without merge after independent review. |
-| Residual risk and cleanup | Fresh full validation and independent review must confirm the five repaired boundaries before PR #233 reopens. Phase 2 still owns every reservation, assignment, resource acquisition, worker materialization, and launch side effect. |
+| PR, review, and merge | [PR #233](https://github.com/samcantrill/loom/pull/233) targets `develop`, is non-draft, and reopened at repaired head `56fa5f2` after fresh independent review found no blocker; repaired-head CI and merge remain. |
+| Residual risk and cleanup | Repaired-head GitHub CI, merge, metadata finalization, and worktree cleanup remain. Phase 2 still owns every reservation, assignment, resource acquisition, worker materialization, and launch side effect. |
