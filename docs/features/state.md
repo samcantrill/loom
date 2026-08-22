@@ -694,6 +694,79 @@ be safe for CLI status without importing project code
 
 ---
 
+### 11.5 Stage 29 Owner-Labelled Managed Status
+
+Stage 29 does not add coordinator/agent observations to `RunStatus` or
+`StageStatus` as last-writer lifecycle values. Per-run authority remains the
+only owner of lifecycle and terminal state. The coordinator instead returns a
+joined read model whose axes retain their source:
+
+```python
+@dataclass(frozen=True)
+class OwnedStatusAxis:
+    owner: Literal[
+        "coordinator", "authority", "agent", "slurm", "bootstrap"
+    ]
+    revision: str
+    observed_at: str
+    freshness: Literal["current", "stale", "degraded", "unavailable"]
+    code: str
+    safe_details: Mapping[str, PlainData]
+
+
+@dataclass(frozen=True)
+class ManagedRunStatusView:
+    admission_control: OwnedStatusAxis
+    lifecycle_cancellation: OwnedStatusAxis
+    scheduling_route: OwnedStatusAxis
+    assignment_execution: OwnedStatusAxis
+    external_scheduler: OwnedStatusAxis | None
+    transfer_result: OwnedStatusAxis
+    service_health: tuple[OwnedStatusAxis, ...]
+    summary_code: str
+    as_of: str
+```
+
+The exact private type names may differ, but those axes, owner revisions,
+coordinator-accepted observation/receipt time, and freshness are fixed behavior. This is
+not a globally atomic snapshot across coordinator, authority, and agent stores:
+`as_of` is the coordinator join boundary, while each axis identifies the exact
+owner revision observed. Remote wall-clock timestamps may be displayed as
+untrusted source metadata but never establish ordering, expiry, or freshness.
+The coordinator time owner persists a nondecreasing high-water shared by status,
+offer expiry, and fallback. A detected local regression or out-of-policy jump
+makes time health degraded and pauses new scheduling instead of relabelling
+stale evidence as fresh.
+For an explicitly SLURM-routed stage, the coordinator retains one separate
+dispatch record (`INTENT`, `SUBMITTING`, `ACCEPTED`, definitely rejected, or
+unknown), SLURM contributes exact-handle observations, and the restricted
+bootstrap contributes registration/grant/start/result evidence. None becomes
+authority lifecycle truth. The durable submission operation, scheduler job,
+bootstrap incarnation, and authority process fence are separate identities and
+remain joinable rather than being collapsed into `stage_id`.
+
+If an owner is unavailable, its last-known fact is labelled stale/degraded; the
+join never infers terminal state, containment, or resource release. Operational
+`unknown` belongs to the assignment/execution axis and does not silently become
+a new authority `StageStatus`.
+
+The summary is a display projection with documented fixed precedence, not a
+persisted transition owner. Authority terminal truth wins. Otherwise effective
+cancellation/settling, unknown accepted execution, running/granted execution,
+transfer publication, placement/readiness waiting, and admission may explain
+the most useful current condition. Machine output retains every axis so, for
+example, a successfully committed stage can still show pending transfer cleanup
+or an offline agent without its lifecycle success being overwritten.
+Likewise, SLURM `COMPLETED` without a current-fence Loom result and accessible
+output commit remains an explicit disagreement, not success. A valid committed
+Loom result is not undone by delayed scheduler accounting.
+
+Cancellation also stays multi-step. The coordinator may show a durable client
+request while authority is unavailable. Only the authority-owned cancellation
+epoch is `effective` and blocks readiness, bind, grant, descendants, and retry;
+fan-out then becomes `settling`, and terminal cancellation requires authoritative
+terminal/containment reconciliation.
+
 ## 12. Old RUNNING State
 
 ### 12.1 Conservative Handling
@@ -733,7 +806,10 @@ scheduler queue state when available
 submission manifest as last known state
 ```
 
-Scheduler state remains supplementary.
+Scheduler state remains supplementary. For Stage 29 ready-stage SLURM work,
+`scancel` success is only a control request, missing queue/accounting data is
+unknown, and manual lifecycle close/retry requires positive containment tied to
+the exact profile/submission/job/bootstrap/fence identity.
 
 ---
 

@@ -31,9 +31,10 @@
   request. It deliberately cannot deliver an assignment. Phase 5 enables remote
   side effects by reusing the Phase 2 saga over that authenticated boundary.
 - Later work explicitly out of scope: Phase 6 adds GPU/VRAM inventory, device
-  binding, and advanced placement preferences. Phase 7 adds drain/reload and
-  complete cancellation. Phase 8 adds same-session process recovery and
-  containment-gated takeover.
+  binding, and advanced placement preferences. Phase 7 reuses the execution-
+  only worker and relay for an assignment-scoped SLURM bootstrap. Phase 8 adds
+  drain/reload and complete cancellation. Phase 9 adds same-session process
+  recovery and containment-gated takeover.
 
 ## Current Source And Harness
 
@@ -58,11 +59,15 @@
 In scope:
 
 - Build immutable global scheduling snapshots from admitted runs' ready stage
-  work and every fresh authorized CPU/memory offer. Preserve deterministic work
-  order, per-run concurrency, hard-before-soft evaluation, and stable candidate
-  IDs from Phase 1.
-- Add built-in hard feasibility for authorized pool, exact/hard agent target,
-  session/offer freshness, CPU count, memory bytes, project/environment/executor
+  work and every fresh authorized CPU/memory offer. Validate/canonicalize each
+  resource opportunity once through its planner, require complete per-resource
+  and composite search, and preserve deterministic grouped work order,
+  hard-before-soft evaluation, and stable candidate IDs from Phase 1. Semantic
+  ready-work projection remains independent of per-run concurrency; the
+  assignment transaction owns the limit.
+- CPU count and memory bytes are intrinsic planner-owned feasibility. Add
+  built-in complete-placement hard feasibility for authorized pool, exact/hard
+  agent target, session/offer freshness, project/environment/executor
   compatibility, resource claim contract, and artifact-transfer capability.
   An unsupported resource remains pending with a bounded reason; it is not sent
   speculatively.
@@ -85,10 +90,18 @@ In scope:
   disjoint assignment against remaining atoms while earlier processes continue.
   Agent/process concurrency limits and transfer quotas remain hard bounds.
 - Keep scheduling decision and mutation separate. The coordinator selects one
-  validated candidate outside its transaction, then atomically revalidates and
+  validated work/candidate pair outside its transaction, then atomically revalidates and
   persists assignment/reservation against exact work, authority, coordinator
-  generation, agent/session/config/inventory/availability/work-request, pool,
-  claim-contract, and capacity revisions.
+  stable ID/current process epoch, agent/session/config/inventory/availability/work-request, pool,
+  claim-contract, and capacity revisions. The same CAS rechecks
+  `max_parallel_stages` against all active assignment states and records the
+  bounded policy-epoch decision receipt established in Phase 2.
+- Persist the stable coordinator ID, current process epoch, and immutable
+  assignment issuer epoch separately. Current epoch is required for new
+  delivery, grant, control, and transfer authorization. A later coordinator
+  epoch may accept old-issuer facts only inside explicit reconciliation for the
+  exact retained assignment/session/fence; it cannot manufacture a new mutation
+  under the old epoch.
 - Use outbound revision-bound long polling as delivery transport. The
   coordinator owns the queue and scheduling choice, persists the targeted
   assignment first, then wakes the exact agent request. Agents keep no
@@ -100,8 +113,10 @@ In scope:
   worker reconstructs only an explicitly configured resident project.
 - Implement one bounded coordinator-mediated artifact relay over the existing
   assignment-scoped artifact port:
-  - coordinator issues opaque transfer IDs bound to assignment, fence,
-    direction, logical artifact names, digests, sizes, principal, and expiry;
+  - coordinator issues an opaque stable transfer ID bound to assignment, fence,
+    direction, immutable logical artifact names/digests/sizes, and separately
+    issues renewable short-lived authorization IDs/revisions bound to principal,
+    current coordinator epoch, and expiry;
   - staging locations are derived under role-owned roots, never supplied by a
     request;
   - no operation accepts an arbitrary fetch URL or host path;
@@ -113,6 +128,15 @@ In scope:
   - data is written no-follow to a temporary file, flushed, verified, safely
     permissioned, atomically renamed, and reconciled with the journal before it
     is considered durable.
+  - authorization expiry rejects later chunks under that authorization but does
+    not delete durable progress, change transfer/assignment state, or permit
+    cleanup. Reauthorization resumes the same transfer; exact offset/content and
+    finalize replay is idempotent, while conflicting overlap/content fails.
+  Relay authorization is based on a narrow authenticated assignment principal,
+  not on agent offers or pool identity internally. This phase composes the agent
+  principal. Phase 7 may compose its separate restricted SLURM-bootstrap
+  principal for the same exact assignment/fence/manifest operations, without
+  gaining an arbitrary path/URL, agent session, or broader service authority.
 - The Phase 5 relay transfers regular files only. A future directory/tree
   contract requires an explicit bounded manifest/archive format, path and link
   rules, quotas, digest semantics, and a real consumer; it is not inferred from
@@ -129,10 +153,17 @@ In scope:
   publishes a fresh net-availability revision and may request another disjoint
   assignment immediately; it does not wait for an accepted process to finish
   before using remaining capacity.
+- Journal every critical assignment event before send with its stable event ID
+  and monotonic assignment sequence. Replay sends from the first unacknowledged
+  sequence. Coordinator accepts next-or-exact-replay, returns typed gaps, and
+  acknowledges only durably persisted contiguous evidence. Timeout, disconnect,
+  cancelled poll, or 5xx after send is indeterminate and retries the same
+  operation identity/digest; transport completion is never a lifecycle fact.
 - Do not pre-issue output upload capabilities. After containment/execution the
   agent durably records a manifest of expected logical names, digests, and
-  sizes, then requests idempotent short-lived grants bound to that manifest and
-  current assignment fence.
+  sizes, then creates/reuses the immutable transfer and requests idempotent
+  short-lived authorization revisions bound to that manifest and current
+  assignment fence.
 - Publish output through coordinator-owned durable staging/backend operations.
   Finalize individual content first and publish the complete manifest last.
   Authority terminal commit receives only coordinator/backend-accessible final
@@ -149,31 +180,45 @@ In scope:
   directly. After authority restart, Phase 3's authenticated generation-
   continuity reconciliation must complete before the coordinator resumes any
   lifecycle operation or acknowledges terminal output.
-- On coordinator restart, authenticate the new generation, reconcile exact
-  durable session/assignment/fence/event facts, finish output publication, and
+- On coordinator restart, authenticate the same stable coordinator ID and new
+  process epoch, reconcile exact
+  durable stable coordinator identity, new process epoch, and old-issuer
+  session/assignment/fence/ordered-event facts, finish output publication, and
   only then advertise fresh capacity. A valid authority execution fence remains
   usable across coordinator liveness/generation change.
 - On authority restart, authenticate its service principal, verify configured
-  workspace/schema/capabilities, and compare the complete retained-run
-  continuity set. Every coordinator-retained admitted run must reproduce its
+  workspace/schema/capabilities, and compare one authority-owned consistent cut
+  of the complete authority-relevant continuity set. Every retained admission or
+  tombstone must reproduce its
   last-acknowledged authority revision and canonical full-snapshot fingerprint;
-  each nonterminal attempt and execution fence must match exactly. Atomically
-  record the rotated authority generation only when all facts agree. A pristine
-  empty authority is valid only when the coordinator has no retained admitted
-  run. Old-generation calls, missing expected truth, a replacement service,
-  partial reads, and divergent snapshots fail closed while retained agent
-  results remain unacknowledged.
+  or its ordered forward changes must be explained by authority receipts for
+  coordinator-durable operation IDs/digests/principals/expected states. Each
+  resulting nonterminal attempt and execution fence must match exactly.
+  Atomically record the verified receipt chain and rotated authority generation
+  only when all facts agree; actionable receipts remain retained under their
+  safety policy. A pristine empty authority is valid only when the
+  coordinator has no authority-relevant retained admission/tombstone. The
+  authority holds a mutation barrier for the cut or returns an equivalent
+  atomically changing token. Old-generation calls, missing receipts/truth, a
+  replacement service, regression/unexplained change, torn/partial reads, and
+  divergent snapshots fail closed while retained agent results remain
+  unacknowledged.
 - On agent disconnection, expire future capacity but retain accepted assignments
   and reservations as unknown. Never automatically allocate that stage elsewhere
   or consume retry budget. Other independent work may run on other agents.
 - If the agent process restarts in this phase, it starts at zero availability,
   replays known terminal/outbox facts, and refuses to repeat an uncertain start.
-  Phase 8 owns full process recovery/adoption and privileged closure; uncertainty
+  Phase 9 owns full process recovery/adoption and privileged closure; uncertainty
   remains visible until then.
-- Add joined status/diagnostics for target offline, no compatible project,
+- Add owner-labelled joined status/diagnostics for target offline, no compatible project,
   unsupported resource, stale offer, transfer pending/failure/quota, active
   remote assignment, coordinator disconnected, retained output, and unknown
-  execution. Keep codes bounded and redacted.
+  execution. Preserve admission/control, authority lifecycle/cancellation,
+  scheduling/placement, assignment/execution, transfer, and service-health axes
+  with owner revisions, coordinator-accepted receipt times, freshness, and a join
+  `as_of`. The read is not globally atomic and remote wall clocks establish no
+  order/freshness. Keep codes bounded and redacted; stale operational facts
+  cannot overwrite authority terminal truth.
 - Add client/agent HTTP operations for assignment delivery, accept/decline,
   grant, transfer authorization/chunks/finalization, event/result/output report,
   acknowledgements, and reconciliation. Reuse Phase 4 authentication,
@@ -222,6 +267,32 @@ A newly submitted high-priority run can wake an already waiting agent as soon as
 the coordinator commits an assignment. There is no need to preload daemon
 queues, and an agent cannot choose arbitrary work from the global queue.
 
+The versioned application exchange is conceptually:
+
+```text
+agent -> coordinator: Offer(session, config/inventory/availability revisions)
+agent -> coordinator: RequestWork(work_request_id, availability_revision)
+coordinator -> agent: Wait | Assignment(issuer epoch, stage work, claim, inputs)
+agent -> coordinator: DefinitiveDecline | Prepared(composite claim receipt)
+coordinator -> agent: Grant(execution fence, process_execution_id)
+agent -> coordinator: Event(event_id, assignment sequence, fenced fact)
+coordinator -> agent: Ack(highest durably contiguous sequence)
+```
+
+The agent initiates each exchange over its authenticated session; remote agents
+need no inbound port. A control or new assignment may complete the current
+outstanding request, after which the agent renews the revision-bound poll. Every
+mutation verifies current principal policy, coordinator/process/session/fence
+identity, expected revisions, and canonical request digest. Timeout or 5xx after
+send leaves the result unknown and retries the same operation identity; an HTTP
+response class alone never authorizes bind, grant, relaunch, cleanup, or retry.
+
+After one prepared/accepted claim is reflected in a new net availability
+revision, the agent may publish remaining disjoint capacity and hold another
+work request while the first process continues. Before that refresh, at most one
+admission may remain unresolved against the old revision, preventing two
+assignments from consuming the same stale atoms.
+
 ### Transfer capability
 
 Conceptually:
@@ -230,6 +301,8 @@ Conceptually:
 @dataclass(frozen=True)
 class TransferGrant:
     transfer_id: str
+    authorization_id: str
+    authorization_revision: int
     assignment_id: str
     execution_fence: str
     direction: Literal["input", "output"]
@@ -239,30 +312,39 @@ class TransferGrant:
     expires_at: Timestamp
 ```
 
-The grant contains no filesystem location or arbitrary URL. The authenticated
-adapter verifies principal/session and the application revalidates assignment,
-fence, manifest, quota, and expiry on every mutating operation.
+`transfer_id` is the durable content/progress identity; authorization ID,
+revision, and expiry are temporary permission to mutate it. The grant contains
+no filesystem location or arbitrary URL. The authenticated adapter verifies
+principal/session/current coordinator epoch and the application revalidates
+assignment, fence, immutable manifest, quota, and authorization expiry on every
+mutating operation. Expiry requires a new authorization revision for the same
+transfer and never disposes its journal/staged bytes.
 
 ### Output sequencing
 
 ```text
 process contained/finished
   -> output manifest durable on agent
-  -> request manifest-bound upload grants
+  -> create/reconcile stable transfer + request short-lived authorization
   -> content streamed and verified into coordinator staging
   -> backend/final refs durable
   -> complete output manifest published
   -> authority terminal/output commit
-  -> coordinator ack
-  -> agent may clean output and release
+  -> coordinator durably persists/acks the contiguous assignment event
+  -> coordinator releases logical reservation
+  -> agent releases exact provider claim and publishes fresh availability
+  -> agent may clean retained output after its acknowledgement contract
 ```
 
-No preissued broad upload token survives to accept unexpected files. A transfer
-retry with the same digest/size is idempotent; changed content conflicts.
+No preissued broad upload token survives to accept unexpected files. Exact
+offset/content/finalize replay for the immutable transfer is idempotent;
+changed or overlapping conflicting content fails. Authorization expiry, a lost
+response, or coordinator restart retains progress and output until renewed,
+finalized, authority-committed, and durably acknowledged.
 
 ### Outage truth
 
-Connection, coordinator generation, and authority service-generation facts
+Connection, coordinator process epoch, and authority service-generation facts
 govern communication/current mutations only. They do not by themselves revoke
 an accepted assignment, execution fence, physical claim, or result:
 
@@ -274,8 +356,12 @@ if assignment.accepted and not reconciled:
     keep_reserved_unknown(assignment)
 ```
 
-Only authoritative terminal truth or the Phase 8 guarded containment flow can
+Only authoritative terminal truth or the Phase 9 guarded containment flow can
 fence and optionally replace unknown accepted work.
+
+An assignment retains its issuer epoch. After coordinator restart, the new
+epoch may reconcile exact sequenced facts for that assignment, but an old
+connection cannot request new work, grant, control, or transfer capability.
 
 ### Private discretion
 
@@ -300,44 +386,52 @@ URLs, grant before inputs, publish partial outputs, or infer failure from loss.
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
 | Capacity is not duplicated across pools | Registration policy + availability domain | Same offer projected to several pools | Oversubscription | Cross-pool concurrent assignment tests |
+| Remote opportunity is canonical and complete before selection | Resource planner + scheduling kernel | Malformed authenticated offer or exhausted search | Repeated failure, wrong quantity, or unproven winner | Opportunity-invalid, complete/exhausted, no-mutation, and later-work bypass tests |
 | Admission serialization does not serialize disjoint execution | Agent control loop + availability revisions | Single blocking work loop | Idle CPUs/GPUs and misleading pool behavior | Two same-agent disjoint assignments overlap; same-atom requests cannot |
-| Assignment targets exact current work/request/revisions | Coordinator transaction | Stale kernel result/poll | Wrong/duplicate delivery | Version/CAS barrier matrix |
+| Assignment targets exact current work/request/revisions and run slot | Coordinator transaction | Stale kernel result/poll or concurrent cycle | Wrong/duplicate delivery or concurrency overflow | Version/final-slot CAS barrier matrix plus decision-receipt round trip |
 | Inputs and request are durable before grant | Agent journal + transfer adapter | Interrupted/partial transfer | Worker sees incomplete data | Crash/chunk/digest tests |
 | Transfer cannot select storage/network target | Capability and derived staging owner | Crafted path/URL/name | Traversal/SSRF/data overwrite | Negative path, URL, symlink, type tests |
+| Transfer progress outlives temporary authorization safely | Transfer journal + authorizer | Expiry, response loss, or coordinator epoch change mid-stream | Lost/duplicated bytes, stale capability use, or orphan staging | Exact chunk/finalize replay, conflicting overlap, expiry rejection, renewed authorization, and restart tests |
 | Unsupported payload forms never enter the relay | Transfer capability matcher | Directory/ambiguous input or output | Truncation, traversal, or false artifact publication | Local-fallback/pending diagnostics and no-transfer sentinel tests |
 | One remote root launch | Agent grant/start fence | Redelivery/reconnect/crash | Duplicate work | Real process barrier tests |
+| Event/result replay is ordered and survives coordinator epoch change | Agent journal/outbox + coordinator event transaction | Gap, duplicate, timeout-after-commit, or old issuer | Lost terminal fact, duplicate mutation, or stale new operation | Sequence/gap/contiguous-ack and old-issuer-reconcile/current-operation tests |
 | Only complete accessible refs commit | Relay/backend + authority transaction | Partial/local output | Broken lineage/downstream failure | Manifest-last and ref-access tests |
 | Coordinator loss does not cancel granted work | Authority fence + agent journal | TTL/generation/connection loss | Lost valid result | Disconnect/restart replay E2E |
-| Authority loss pauses mutation but not a grant | Authority adapter/generation reconciler + agent journal | Service outage or rotated generation | Duplicate launch, lost terminal history/result, or attachment to false truth | Same-repository restart plus pristine-bootstrap and missing/divergent retained-run E2E |
+| Authority loss pauses mutation but not a grant | Authority adapter/durable operation intents/receipt-aware consistent-cut reconciler + agent journal | Commit-before-response plus dual restart, rotated generation, or torn continuity read | Permanent false degradation, duplicate launch, lost terminal history/result, or attachment to false truth | Exact and receipt-explained same-repository restart plus mutation-barrier, pristine-bootstrap, and regressed/missing/unexplained negatives |
+| Status keeps owner facts and freshness without trusting remote clocks | Joined status projector | Partial outage, interleaved read, stale event, or clock skew | False terminal/healthy/released view | Owner revision/coordinator-accepted receipt-time/`as_of`, precedence, and stale/degraded tests |
 | Agent loss does not duplicate unknown work | Coordinator recovery policy | Offer expiry/timeout | Duplicate authored effects | Multi-agent outage tests |
 | Secrets/errors stay bounded | Adapter/status/audit | Worker/provider/network exception | Credential/path disclosure | Worker-env and redaction tests |
 
 ## Implementation Slices
 
-1. Add cross-agent CPU/memory snapshots, one cross-pool availability/reservation
-   domain, JIT targeted assignment delivery, exact revision revalidation,
+1. Add cross-agent CPU/memory snapshots with opportunity validation and
+   complete search, one cross-pool availability/reservation domain, JIT targeted
+   assignment delivery, exact revision/run-slot revalidation and decision receipt,
    fresh-revision concurrency for disjoint claims, and remote definitive
    decline/accept conformance without enabling launch.
-2. Implement regular-file transfer capability matching, assignment-scoped input
-   relay, derived safe staging, quotas, temporary-first/digest verification,
+2. Implement regular-file transfer capability matching, stable transfer identity
+   plus renewable authorization, assignment-scoped input relay, derived safe
+   staging, quotas, temporary-first/digest verification,
    resident-project capability matching, and request/input-before-grant fault
    tests.
-3. Implement remote grant/start/worker loop, result/outbox persistence, post-run
-   output manifest/grants, manifest-last finalization, authority commit, release,
+3. Implement remote grant/start/worker loop, monotonic event/result/outbox
+   persistence and contiguous acknowledgement, post-run
+   output manifest/transfer authorization, manifest-last finalization, authority commit, release,
    and one-launch/process barriers.
-4. Implement coordinator-disconnect/generation reconciliation, authority-outage
-   and rotated-generation continuity barriers, agent zero-availability fail-
-   closed restart, unknown-work retention, joined status, Python/CLI operations,
-   abstract deployment docs, and multi-run/two-agent E2E.
+4. Implement same-coordinator/new-epoch reconnect with exact old-issuer replay,
+   authority-outage and receipt-aware rotated-generation consistent-cut barriers, agent zero-
+   availability fail-closed restart, unknown-work retention, owner-labelled
+   joined status, Python/CLI operations, abstract deployment docs, and multi-run/
+   two-agent E2E.
 
 ## Test And Validation Plan
 
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | Required | No artifact/network dependency enters scheduling core | Import direction and optional transport composition |
-| Unit | Required | Capacity merge, transfer grants/limits, staging, output manifests | Exact revisions/atoms, regular-file capability, directory/ambiguous rejection, path/type/digest/size/quota boundaries |
-| Contract | Required | Direct/HTTP agent and artifact operations | Same authz/idempotency/state/errors; invalid fence/session/version no mutation |
-| Integration | Required | Remote saga, real process, transfer and outage crash points | Barrier before/after input, accept, fresh availability, grant, start, result, upload, commit, ack; coordinator/authority outage; rotated authority retained-run continuity, pristine-bootstrap, and missing/divergent negatives; disjoint same-agent overlap and same-atom exclusion |
+| Unit | Required | Opportunity validation/search, capacity merge, stable transfer/authorization/limits, staging, output manifests | Malformed offers, complete/exhausted outcomes, exact revisions/atoms, regular-file capability, directory/ambiguous rejection, path/type/digest/size/quota boundaries, authorization expiry/renewal, exact/conflicting chunk replay |
+| Contract | Required | Direct/HTTP agent and artifact operations | Same authz/idempotency/definite-versus-indeterminate/state/errors; invalid fence/session/epoch/version no mutation; ordered gap response |
+| Integration | Required | Remote saga, assignment concurrency, ordered replay, real process, transfer and outage crash points | Final run-slot race and decision receipt; barrier before/after input, accept, fresh availability, grant, start, result, authorization expiry/renewal, upload, commit, ack; duplicate/gap and timeout-after-commit; same coordinator/new epoch accepts exact old-issuer facts but rejects old new-work operations; coordinator/authority outage; exact or receipt-explained rotated authority cut including commit-then-timeout dual restart, pristine-bootstrap, torn/missing/regressed/unexplained negatives; disjoint same-agent overlap and same-atom exclusion |
 | E2E / opt-in | Required loopback; optional two-machine | CPU/memory multi-agent execution | Two runs on logical agents, including concurrent use of remaining capacity; coordinator and authority outage/replay; agent loss no reassign; optional abstract network receipt |
 
 Targeted commands are fixed during phase preparation. Final commands:
@@ -349,12 +443,15 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 - Main risks: double-counted pool capacity; grant before durable inputs;
   traversal/SSRF or quota bypass; partial output commit; stale delivery; treating
-  a directory as a regular file; disconnect as failure; or leaking daemon
-  credentials to worker; or accepting a rotated authority without complete
-  retained-run continuity.
+  a directory as a regular file; disconnect as failure; event-gap acceptance;
+  rejecting valid old-issuer facts or accepting stale new operations; leaking
+  daemon credentials to worker; conflating transfer authorization expiry with
+  content disposal; or accepting a rotated authority from a torn, unexplained,
+  or incomplete authority-relevant cut.
 - Review focus: full remote trace, transfer capability scope, filesystem safety,
   output ordering, revision/idempotency checks, coordinator/authority outage and
-  generation barriers, and status redaction.
+  stable-ID/process-epoch boundaries, event sequencing/ack durability,
+  consistent-cut generation barriers, and owner-labelled status/redaction.
 - Stop if: the existing artifact abstraction cannot return accessible refs;
   HTTP streaming cannot enforce bounded temporary-first writes; resident-project
   identity is not reconstructable; coordinator or correctly reconciled authority
@@ -368,12 +465,14 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 - Read this file, Phase 4 completion record, manifest trace/security constraints,
   and planning FR-1, FR-8–FR-13, FR-15–FR-17, FR-19, FR-20, FR-25, FR-26, and
-  DQ-14.
+  DQ-14, DQ-20, DQ-23, and DQ-24.
 - Keep remote launch disabled until slices 1–2 and the Phase 4 gate pass. Use
   real process barriers for grant/start/outage rather than mocks alone.
 - Decisions not to revisit: coordinator chooses JIT, outbound polling, inputs
   before grant, output grants after manifest, accessible refs before commit, and
-  no automatic unknown-work reassign.
+  monotonic durable event replay, current-epoch new operations with exact old-
+  issuer reconciliation, consistent authority continuity cuts, owner-labelled
+  status, and no automatic unknown-work reassign.
 - Escalate any need for arbitrary URLs/paths, code shipment, new heavyweight
   dependency, weakened quota, or changed authority ownership.
 

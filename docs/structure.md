@@ -701,13 +701,16 @@ Stage 29 plans a top-level import-light `loom.scheduling` subsystem for managed
 placement of already dependency-ready stage attempts. It owns versioned safe
 exact-quantity/inventory/capacity-atom/claim/candidate/decision values,
 scheduling-component and resource-claim-contract descriptors, instance-local
-registries, explicitly composed public
+configuration-epoch registries with active and exact descriptor-retained
+bindings, explicitly composed public
 `ResourcePlanner`, `HardConstraintEvaluator`, `PreferenceScorer`, and
 `SchedulingPolicy` protocols, deterministic defaults, and one fixed concrete
 pure `SchedulingKernel`. It must not import queue repositories, authority
 implementations, SQLite, routes, artifacts, processes, executors, vendors,
-project code, CLI, or `loom.pipeline` at runtime. The kernel owns mandatory
-checks, budgets, extension-result validation, and mutation exclusion; there is
+project code, CLI, or `loom.pipeline` at runtime. The kernel owns opportunity/
+claim validation orchestration, complete bounded per-resource and composite
+search, mandatory checks, site-tier preference/fallback aggregation, grouped-
+work proposal validation, and mutation exclusion; there is
 no root-level or full lifecycle scheduler protocol. Scheduling protocols consume
 their own immutable views of already-validated resource data. Higher-level
 `loom.pipeline.runtime` adapters own conversion from the existing
@@ -715,31 +718,101 @@ their own immutable views of already-validated resource data. Higher-level
 preventing a `scheduling -> pipeline -> runtime -> scheduling` import cycle and
 avoiding a second authored resource schema.
 
+Each resource planner is the sole owner of its intrinsic quantity, unit, mode,
+per-instance, and same-resource topology feasibility. Additive hard evaluators
+see only complete placements and own cross-resource/agent/site constraints.
+Every capacity atom is namespaced by the owning resource kind and has exact
+unit/granularity. Scheduling policy receives bounded grouped work evaluations,
+selects only an existing work/candidate pair or wait, and belongs to a
+coordinator policy epoch; the assignment transaction records its descriptor and
+bounded decision evidence. Partial search never authorizes assignment.
+
 Dependency readiness does not move into `loom.scheduling`. One planning-owned,
 authority-side predicate over the persisted plan, stage state, and committed
 upstream outputs is shared by durable orchestration and assignment revalidation.
 The per-run authority idempotently prepares the exact unassigned `PENDING`
 attempt and owns attempts/status/bound-input/output truth; the coordinator
-application owns rebuildable stage-work projections and logical assignments.
+application owns digest-bound unique run admissions, stable coordinator/process-
+epoch identity, identity-stable rebuildable stage-work projections, and logical
+assignments. Admission may be durably `PENDING_AUTHORITY`; only an exact
+authority owner/intent/operation receipt promotes it to `ACTIVE` and exposes
+work. Authority binds each managed run to the stable coordinator ID and
+owns the canonical cancellation epoch; coordinator owns the durable client
+request and assignment-control fan-out.
+Ready projections do not consume `max_parallel_stages`; the assignment CAS
+atomically enforces that limit across reserved, bound, accepted, granted,
+running, and unknown work. Assignment target is a closed managed-agent or
+explicit named-SLURM value. The coordinator owns SLURM profile admission,
+durable submission operation, exact scheduler-handle reconciliation, restricted
+bootstrap authorization, and the joined external status axis. It does not put
+SLURM command/process code into `loom.scheduling` or turn cluster nodes into
+agent offers.
 The agent application owns physical binding and execution through a separate
 versioned `AgentResourceProvider` lifecycle. Coordinator/agent stores and
 separately scoped client/agent/operator application views are infrastructure
 protocols with SQLite/in-memory and direct/HTTP implementations, not root plugin
-surfaces. Per-run authority remains behind its service/API owner: a narrow
+surfaces. Agent-journal operations own monotonic per-assignment event sequencing
+and coordinator acknowledgements cover only durable contiguous evidence. Session
+reconnect/clean retirement and old-session tombstones are likewise application-
+infrastructure behavior, not scheduling or extension protocols. Per-run
+authority remains behind its service/API owner: a narrow
 authenticated coordinator adapter verifies authority service/workspace/
 generation identity and exposes only expected-state lifecycle operations.
 Agents and workers never receive that adapter, its credentials, or direct
-authority database access. A changed authority generation is accepted only by
-the coordinator's infrastructure reconciler after complete retained-run
-continuity: each retained run reproduces its last-acknowledged authority
-revision and canonical full-snapshot fingerprint, and nonterminal attempt/fence
-state matches exactly. The coordinator checkpoint is evidence, not authority
-truth. Pristine-empty bootstrap is valid only when the coordinator also has no
-retained admitted run. This is not a scheduling-kernel concern.
-Deployment adapters explicitly compose these owners
-and freeze scheduling/provider registries above their import-light contracts;
+authority database access. Before an authority mutation, the coordinator
+persists its operation ID, intent digest, principal, and expected state;
+authority stores the matching receipt with the domain mutation. A changed
+authority generation is accepted only by the coordinator's infrastructure
+reconciler after one authority-owned consistent authority-relevant cut. Each
+retained admission/tombstone either matches its checkpoint or advances through
+an ordered chain of matching receipts; regression, missing receipts,
+owner/intent mismatch, unexplained change, and torn reads fail closed. The
+coordinator checkpoint is evidence, not authority truth. Pristine-empty
+bootstrap is valid only when the coordinator also has no authority-relevant
+retained admission/tombstone. This is not a scheduling-kernel concern.
+Deployment adapters explicitly compose these owners and freeze scheduling/
+provider/profile registries above their import-light contracts for one epoch. Reload is
+not distributed: the coordinator independently swaps planners/rules/scorers/
+policy and protected SLURM profiles, while each agent swaps pools/providers/
+inventory/resident capabilities.
+Any descriptor referenced by that owner's nonterminal work or live claim remains
+retained, or reload fails before swap;
 stored or wire data contains implementation identity plus negotiated data-
 contract identity only and never loads code.
+
+Production coordinator and agent SQLite roots are role-distinct local-
+filesystem state, never shared/NFS cross-machine signalling. Composition owns
+root/permission/lock/schema/headroom preflight and fails closed without an in-
+memory fallback. Explicit initialization alone creates a verified absent/empty
+target and stable role identity; ordinary start is open-only, so a missing/
+corrupt/identity-mismatched expected root is lost state, not an empty restart.
+Joined status lives above stores as an owner-
+labelled, non-atomic read model with lifecycle, scheduling/route, assignment/
+execution, external-scheduler, transfer/result, cancellation, and health
+revisions, coordinator-accepted receipt times, and freshness.
+Its `as_of` is the coordinator join boundary and remote clocks are not ordering
+evidence. It does not move authority status ownership into queue or transport
+modules.
+
+Coordinator infrastructure, not `loom.scheduling`, owns the accepted-time
+source and persisted nondecreasing high-water used for offer expiry, fallback,
+and status freshness. The pure kernel receives only snapshot `as_of`. A local
+clock anomaly yields degraded health and no new scheduling rather than an
+extension callback or trust in agent timestamps.
+
+The bounded local composition uses these production owners too. Its embedded
+coordinator/agent state is retained beyond one command; it may route to a
+compatible active daemon or acquire the same role locks, but cannot use a
+temporary root to bypass an existing coordinator identity. In-memory stores are
+test composition only.
+
+Agent transport separates durable work identity from renewable permission. The
+agent persists registration identity before send; the coordinator idempotently
+allocates session identity, which the agent persists before offering capacity.
+Current credential policy is rechecked on every operation. Transfer identity/
+progress remains stable while a short-lived
+authorization ID/revision may be renewed. Expiry fences the next operation but
+does not retire a session, erase transfer progress, or release an assignment.
 
 ### 6.6 Execution and Executors
 
@@ -773,13 +846,22 @@ errors.py      execution-specific errors
 base.py        Executor protocol and request/result types
 local.py       in-process execution
 subprocess.py  process-isolated execution, deferred until needed
-slurm.py       SLURM script/submission scaffolding, deferred until needed
+slurm/         SLURM request/directive mapping, deterministic scripts,
+               fakeable command/status/cancel mechanics, and historical live models
 registry.py    executor lookup by name
 errors.py      executor-specific errors
 ```
 
 Executors adapt where and how a stage invocation runs. They should not own DAG
 semantics, resume policy, config composition, or artifact indexes.
+
+Stage 29 ready-stage SLURM orchestration remains above that executor-mechanics
+package. A coordinator dispatcher persists intent and `SUBMITTING` before the
+single `sbatch` boundary; a restricted scheduler-started bootstrap obtains the
+authority fence before reusing the execution-only stage worker and artifact
+relay. Historical whole-run/single-job/`afterok` controllers remain separate
+owners. No generic external-scheduler package or protocol is added for this one
+consumer.
 
 When Stage 29 is implemented, `PipelineRunner` remains the synchronous public
 facade but managed execution delegates readiness/progress to the durable

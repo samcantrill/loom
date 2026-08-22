@@ -2083,8 +2083,11 @@ does. That distinction belongs in the SLURM design document.
 Stage 29 changes managed execution from whole-run dispatch to durable scheduling
 of individual ready stage attempts. This is a planned evolution of the current
 runner contract, not a description of behavior available before Stage 29 lands.
-Delegated SLURM remains separate because the external scheduler owns its
-placement and lifecycle.
+Historical whole-run delegated SLURM remains separate because its existing
+controller owns that run. Stage 29 also permits one exact ready attempt inside a
+managed-stage run to target an explicitly selected SLURM profile; the
+coordinator retains run/readiness/lifecycle orchestration while SLURM owns node
+placement and external job state.
 
 The run remains what a user submits, monitors, and cancels. The unit offered to
 the managed scheduler is narrower:
@@ -2093,9 +2096,11 @@ the managed scheduler is narrower:
 @dataclass(frozen=True)
 class StageWork:
     stage_work_id: str
+    admission_id: str
     run_uri: str
     stage_name: str
     attempt: int
+    readiness_generation: str
     upstream_commit_ids: tuple[str, ...]
     placement: ResolvedStagePlacement
 ```
@@ -2104,9 +2109,22 @@ class StageWork:
 one already planned attempt that authority has idempotently prepared in
 `PENDING` for an exact readiness generation. That authority transaction records
 bound-input/readiness evidence but creates no worker request, workspace,
-assignment, execution lease, or process. It carries the resolved resource and
-preference policy for that exact stage; it does not carry arbitrary command
-text, invent a new attempt, or reinterpret the pipeline graph.
+assignment, execution lease, or process. It carries the resolved resource,
+preference, and immutable execution route/profile for that exact stage; it does
+not carry arbitrary command text, invent a new attempt, or reinterpret the
+pipeline graph.
+
+For new managed work, `(coordinator_id, run_uri)` has one digest-bound
+admission and one execution owner. Exact submit replay returns that admission;
+changed intent/owner conflicts, resume addresses it, and rerun needs a new
+`run_uri`. Admission first commits as `PENDING_AUTHORITY` with a durable
+authority-operation intent. It becomes `ACTIVE` and may expose stage work only
+after per-run authority returns or reconciliation proves the exact owner,
+normalized intent digest, and operation receipt. An outage leaves a visible
+accepted-but-not-runnable admission; a conflict blocks rather than creating a
+second execution owner. The stage-work semantic key includes admission, stage,
+attempt, and readiness generation and therefore rebuilds to the same
+`stage_work_id` even if its projection revision or diagnostics change.
 
 The execution flow becomes:
 
@@ -2123,16 +2141,23 @@ coordinator reconciles authoritative plan and statuses
         +-- expose its rebuildable StageWork projection
                          |
                          v
-          fixed scheduling kernel + selected policy
+              resolve exact tagged target
+                         |
+             +-----------+-----------+
+             |                       |
+             v                       v
+     managed-agent kernel       explicit SLURM profile
+     + exact resource claim     + durable submit operation
+             |                       |
+             v                       v
+        managed agent          restricted bootstrap
+             +-----------+-----------+
                          |
                          v
-               assignment and authority grant
+              authority grant/fence
                          |
                          v
-              local or remote managed agent
-                         |
-                         v
-                 one prepared stage worker
+             one execution-only stage worker
                          |
                          v
           result retention -> authority output commit
@@ -2140,6 +2165,55 @@ coordinator reconciles authoritative plan and statuses
                          v
             reconcile newly ready downstream work
 ```
+
+The assignment target is a closed tagged value. A managed target retains exact
+agent/session/offer/resource-claim identities. A SLURM target retains exactly
+one named profile, request fingerprint, and stable submission operation while
+holding no agent claim. Both consume the run's atomic stage-concurrency slot and
+bind the same authority-owned `PENDING` attempt. A missing agent offer never
+changes an explicit SLURM route, and an unavailable profile never falls back to
+an agent or another profile.
+
+The SLURM route persists immutable request/script evidence and `SUBMITTING`
+before invoking `sbatch` at most once. Its only submission outcomes are accepted
+with an exact job ID, definitely rejected with positive non-acceptance evidence,
+or unknown. Crash, timeout, malformed output, or lost response after
+`SUBMITTING` stays unknown and reconciles by a stable scheduler-visible
+operation ID; it never invokes `sbatch` again automatically.
+
+The submitted script runs a fixed assignment-scoped Loom bootstrap rather than
+authored code directly. It authenticates the exact assignment/submission/job/
+incarnation, stages inputs, and requests the authority grant. Only after the
+grant creates the current fence may it consume one start permit and call the
+same execution-only stage worker. A duplicate or scheduler-requeued bootstrap
+cannot receive a second permit. The bootstrap is not an agent, owns no offer or
+agent session, and has no direct authority credential.
+
+The flow can place successive or independent pipeline stages on different
+agents or explicit targets, but one managed-agent stage attempt remains wholly
+on one agent. A SLURM job choosing one node is still a single delegated attempt,
+not Loom gang scheduling. A multi-node training
+attempt is a distributed stage and would require gang admission: all required
+agents reserved together, one rendezvous/rank plan, coordinated launch and
+cancellation, and group failure/retry semantics. Stage 29 introduces none of
+those multi-agent execution states.
+
+For either target, authority success requires an exact current-fence Loom result
+and coordinator/backend-accessible output refs. Agent process exit and SLURM
+`COMPLETED` are observations, not lifecycle commits. `scancel` success is only a
+control request. Unknown external work stays bound until exact reconciliation,
+authoritative terminal truth, or Phase 9 positive containment; it is not
+automatically retried or assigned elsewhere.
+
+Managed execution is also non-preemptive. Run priority and placement
+preferences affect only which unstarted work is selected next. They never
+checkpoint, stop, or release a granted lower-priority assignment. Fair-share
+would be a separate durable user/project usage and entitlement policy; it is not
+another placement score. A general solver would normally select a snapshot-
+bound batch across several jobs and agents, while the Stage 29 policy chooses
+one already validated `(stage_work_id, candidate_id)` or waits. Those features
+need new lifecycle/accounting/batch-reservation owners rather than broader
+executor behavior.
 
 One import-light readiness function interprets the persisted plan, current
 stage/attempt statuses, and committed upstream outputs. The coordinator uses it
@@ -2168,14 +2242,40 @@ a local daemon accepting many runs, and an authenticated multi-machine pool all
 therefore use the same stage scheduler. Their differences are composition and
 transport rather than scheduling semantics.
 
+Command lifetime is not state lifetime. A production embedded command opens
+retained explicitly initialized coordinator/agent roots and leaves safety state
+after return. If a compatible daemon owns those roots, the facade uses its
+client view when configured/reachable; a held but unreachable/conflicting owner
+fails closed. Temporary or in-memory role state is test-only and cannot be used
+to mint a different coordinator identity for a production run.
+
 The kernel is fixed, pure, and mutation-free. Trusted downstream code may be
 explicitly composed behind narrow subsystem protocols to plan one resource
-kind, add a hard rejection, add a bounded integer preference score, or select
-one existing validated candidate ID. A separate agent resource provider owns
+kind from a validated opportunity through a complete claim result, add a hard
+rejection to a complete placement, add bounded utility/quality-band preference
+evidence, or select one existing grouped work/candidate pair. The kernel owns
+search completeness, site-tier aggregation, durable-time fallback, and result
+validation. A separate agent resource provider owns
 physical prepare/reconcile/activate/release. None of these protocols can inspect
 the DAG, write coordinator/authority state, launch a process, or commit a result;
 invalid/exceptional output fails before assignment mutation. Implementation
-identity/version is durable plain data, while live objects remain local.
+identity/version is durable plain data, while live objects remain local. Exact
+descriptor bindings remain retained while nonterminal work or live claims name
+them; a configuration epoch cannot silently reinterpret those records.
+
+Configuration reload is intentionally not distributed. The coordinator swaps
+its planners, rules, scorers, and policy in one owner-local transaction while
+retaining referenced descriptors. Each agent separately swaps its pools,
+providers, manageable inventory, and resident capabilities under the same
+retained-reference rule. A temporary claim-contract mismatch makes that
+opportunity ineligible; neither service rolls back the other.
+
+Ready-work projection does not consume `max_parallel_stages`. When a pure
+decision becomes an assignment, one coordinator transaction revalidates the
+work/snapshot/offer, atomically checks the run's active assignment count,
+reserves every namespaced capacity atom, and stores bounded policy-epoch,
+score/fallback, and reason evidence. This is the final concurrency and audit
+boundary; two scheduling cycles cannot both consume the same last run slot.
 
 The adapted worker accepts one exact assigned attempt. Its request is closer to:
 
@@ -2228,7 +2328,19 @@ backend-accessible artifact references. The coordinator presents the exact
 assignment and execution fence to per-run authority. Authority validates and
 commits outputs before it marks success. Repeated delivery is idempotent, and a
 coordinator outage leaves the agent free to finish and retain the result for
-later replay.
+later replay. Authority terminal commit permits coordinator logical release;
+the agent's physical provider release is a later exact idempotent operation
+after containment and retained-result acknowledgement. Capacity becomes
+schedulable only through a fresh availability revision, so terminal lifecycle
+never masquerades as physical release.
+
+Critical agent facts are journalled with stable event IDs and monotonic per-
+assignment sequence. Coordinator acknowledgements cover only durably persisted
+contiguous evidence; a gap stays pending. Stable coordinator identity survives
+restart while its process epoch rotates and the assignment retains its issuer
+epoch. A new epoch may reconcile exact old-issuer facts for that assignment but
+old connections cannot create new work/control. Transport timeout or disconnect
+after send is indeterminate and retries the same operation identity/digest.
 
 `SUBMITTED` means the accepted assignment has a durable execution grant, not
 that a process is known to be running. The agent records grant/start intent
@@ -2248,18 +2360,41 @@ peer identity. Agents and workers receive neither authority credentials nor
 direct database access. If authority is unavailable, the coordinator pauses
 preparation, binding, grant/delivery, and terminal commit while already-granted
 agents continue and retain results. A restarted authority generation becomes
-current only after the coordinator proves complete retained-run continuity:
-every retained admitted run reproduces its last-acknowledged authority revision
-and canonical full-snapshot fingerprint, and each nonterminal attempt/fence
-matches exactly. The checkpoint is comparison evidence, not lifecycle truth. A
-pristine empty authority is valid only when the coordinator has no retained
-admitted run; missing or divergent expected truth remains degraded.
+current only after receipt-aware continuity over one consistent authority-
+relevant cut. Before each coordinator-originated authority mutation, the
+coordinator durably records its operation ID, canonical intent digest,
+principal, and expected state/revision; authority stores the matching receipt
+atomically with its mutation. Each retained admission/tombstone must either
+match the last acknowledged checkpoint or advance through an ordered chain of
+those receipts. This accepts a committed request whose response was lost before
+both services restarted, while regression, missing receipts, unexplained
+mutation, owner/intent mismatch, or torn per-run reads fail closed. The
+checkpoint is comparison evidence, not lifecycle truth. A pristine empty
+authority is valid only when the coordinator has no authority-relevant retained
+admission/tombstone; missing or divergent expected truth remains degraded.
+
+Cancellation follows the same ownership split: coordinator durably records the
+client request, authority installs the canonical cancellation epoch, and only
+that effective epoch blocks readiness, bind, grant, descendants, and retry.
+Assignment controls are fan-out, not cancellation truth. Joined status preserves
+owner-labelled lifecycle, scheduling, execution, transfer, cancellation, and
+health axes with owner revisions, coordinator-accepted receipt times, and freshness
+rather than flattening them into one lifecycle enum. It is not a globally atomic
+snapshot; top-level `as_of` is the coordinator join boundary, and remote clocks
+are never used for ordering, expiry, or freshness. A detected coordinator clock
+regression/out-of-policy jump pauses scheduling and reports degraded time health
+rather than extending stale capacity or resetting deadline semantics.
 
 The first remote artifact relay accepts immutable regular-file payloads only.
 Directory/tree, special-file, or ambiguous payload forms make that remote
 candidate ineligible without blocking an otherwise eligible local execution.
-No implicit archive format is invented; a later explicit tree or direct-backend
-contract may extend the data boundary.
+One stable transfer identity retains exact byte/finalize progress while a
+separate short-lived authorization ID/revision may expire and be renewed.
+Authorization expiry blocks only the next transfer operation: it does not erase
+bytes, release the assignment, or change lifecycle. Exact offset/content replay
+is idempotent and conflicting overlap fails closed. No implicit archive format
+is invented; a later explicit tree or direct-backend contract may extend the
+data boundary.
 
 Managed whole-run `LaunchContract.resources`, synthetic whole-run command
 snapshots, and `claim_next -> dispatch(item)` cease to be execution inputs for

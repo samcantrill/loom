@@ -1099,6 +1099,58 @@ stored as status metadata, event-log payloads, or executor-log annotations.
 Readers should use store/read-model APIs or diagnostics helpers rather than
 private file paths.
 
+### 8.13 Stage 29 Managed-Stage Authority Facts
+
+Stage 29 keeps managed-stage lifecycle facts in per-run authority rather than moving
+them into queue/coordinator or external-scheduler status tables. For each newly managed run, authority
+durably records:
+
+```text
+stable coordinator-owner binding
+canonical run cancellation intent and epoch
+prepared PENDING attempt readiness generation and bound inputs
+assignment binding and execution fence
+fenced terminal/output commits
+retry decisions and terminal history
+coordinator-operation receipts committed with their authority mutations
+```
+
+The stable coordinator ID survives an ordinary coordinator restart; its process
+epoch does not become the run owner. A different coordinator state root or
+historical whole-run delegated execution mode cannot attach to the run by
+presenting only the same workspace or endpoint. An explicitly SLURM-routed
+stage remains inside this managed-stage owner: authority binds the same exact
+`PENDING` attempt, creates the same grant/fence, and accepts the same fenced
+result/output commit used for an agent target.
+
+SLURM profile, submission operation, scheduler handle, bootstrap incarnation,
+external observation, and `scancel` evidence belong to the coordinator's tagged
+assignment/submission store, not to authority stage status. Authority does not
+infer success from `COMPLETED`, failure from missing accounting, or cancellation
+from a control request. It receives terminal mutation only through the exact
+current execution fence after result/output verification or the Phase 9
+positive-containment recovery operation.
+
+Authority generation adoption requires a service-owned consistent continuity
+cut over every authority-relevant coordinator admission/tombstone. Each exact
+checkpoint may instead advance through an ordered chain of receipts matching a
+coordinator operation that was durably recorded before send. Authority stores
+each receipt atomically with its lifecycle mutation, including stable operation
+ID, canonical intent digest, principal, and expected/committed revisions. This
+accepts the committed-response-lost case across a dual restart without letting
+the coordinator reconstruct authority truth. Regression, a missing receipt,
+unexplained mutation, owner/intent mismatch, or torn cut fails closed. The
+service holds a mutation barrier for the cut or supplies an equivalent token
+that changes atomically with all included mutations. Coordinator snapshots and
+operation intents are comparison evidence only and never reconstruct missing
+authority truth.
+
+Stage 29 does not add independent age-based deletion of these facts. A compact
+coordinator admission/ownership tombstone remains needed to reject duplicate
+submission and unsafe authority bootstrap. A future run-forget operation must
+coordinate authority, coordinator, agent, and any retained SLURM submission/
+bootstrap safety references before removing them.
+
 ---
 
 ## 9. RunStore Protocol

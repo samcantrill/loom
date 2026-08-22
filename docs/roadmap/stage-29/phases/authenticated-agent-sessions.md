@@ -21,7 +21,7 @@
 
 - Vertical outcome: outbound daemons on `machine-A` and `machine-B` can
   authenticate a coordinator, establish or resume an authorized agent session,
-  reconcile journal identity, publish bounded CPU/memory inventory and
+  safely retire an empty old session, reconcile journal identity, publish bounded CPU/memory inventory and
   availability offers, and hold one long-poll work request. The coordinator can
   authenticate and authorize clients and operators over the same application
   boundary. No remote assignment, artifact byte, or process launch is possible
@@ -31,7 +31,9 @@
   it must not introduce alternative lifecycle or policy owners.
 - Later work explicitly out of scope: Phase 5 enables CPU/memory assignment,
   artifact relay, and remote launch only after this transport gate passes. Phase
-  6 adds GPU offers/claims and preferences. Phases 7–8 add controls and recovery.
+  6 adds GPU offers/claims and preferences. Phase 7 adds the separate restricted
+  SLURM-bootstrap application view, Phase 8 adds controls, and Phase 9 adds
+  recovery.
 
 The no-launch boundary is intentional. It allows Loom to validate network
 reachability, certificate/service identity, role mapping, request bounds,
@@ -71,8 +73,8 @@ In scope:
   reconciliation, critical-event replay acknowledgement, inventory/availability
   offer publication, and one revision-bound long-poll work request.
 - The handshake authenticates both peers and returns only protocol version,
-  coordinator ID/generation, verified peer role, and bounded supported
-  capabilities. It performs no admission, offer, assignment, or control
+  stable coordinator ID/current process epoch, verified peer role, and bounded
+  supported capabilities. It performs no admission, offer, assignment, or control
   mutation and exposes no paths, process details, config contents, or broad
   unauthenticated health data.
 - Require mutual TLS for persistent HTTP. Verify the expected coordinator
@@ -81,9 +83,16 @@ In scope:
   platform supports it; disable TLS early data for mutations; do not follow
   redirects across service identity.
 - Map certificate/transport identity to one configured stable principal. Keep
-  credential ID, principal, role, agent ID, session ID, and coordinator
-  ID/generation distinct. Certificate subject text and body/path actor values do
-  not directly grant identity or authorization.
+  credential ID, principal, role, stable agent ID, durable session ID, stable
+  coordinator ID, coordinator process epoch, and connection ID distinct.
+  Certificate subject text and body/path actor values do not directly grant
+  identity or authorization.
+- Recheck the connection-derived credential against the current principal-policy
+  revision on every operation and long-poll renewal. Removing a credential
+  fences future protocol operations even on an established connection, but does
+  not retire its durable session, cancel a granted assignment, or prove process
+  containment. An overlapping credential mapped to the same principal may
+  resume the same session after reconciliation.
 - Apply per-operation authorization after authentication. Check role, action,
   run/object, pool, agent, and session scope from current coordinator policy.
   Authentication alone grants no method.
@@ -104,24 +113,44 @@ In scope:
 - Add durable agent session and offer identities:
 
   ```text
-  coordinator_id + coordinator_generation
+  coordinator_id + coordinator_epoch
   agent_id + agent_session_id
   config_revision
   inventory_revision
   availability_revision
-  offer_id + receipt_time + expiry
+  offer_id + coordinator_accepted_receipt_time + expiry
   work_request_id
   ```
 
   A reconnect resumes the same session only when durable identity and expected
   revisions agree. Connectivity loss does not create a new session or retire
-  old work.
+  old work. A coordinator restart keeps `coordinator_id` and rotates only its
+  process epoch after reopening/reconciling the same state root.
+- The coordinator, not a request body, allocates an opaque session ID in the
+  idempotent registration/rollover transaction. The agent journals that
+  operation ID and canonical digest before send, so a crash or lost registration
+  response replays and returns the same recorded ID; the agent journals the
+  returned session before publishing an offer. A caller-proposed or copied
+  session ID cannot become current.
+- Permit a clean new agent session only through authenticated cooperative
+  retirement of the old session: fence its delivery-active connection, withdraw
+  its offer, reconcile both journals, and prove the complete assignment,
+  provider preparation/claim, delivery/work-request, control, transfer,
+  result/output, sequenced-event, and outbox reference set is empty before one
+  coordinator transaction records `RETIRED_CLEAN` and a tombstone. Initial registration is
+  allowed when no prior session exists. If old state is lost/unavailable or any
+  reference is unresolved, reject the new session until Phase 9 positive-
+  containment replacement. Offer expiry, a new connection, or credential
+  rotation alone is never session retirement.
 - Add safe CPU/memory offer projection. Inventory reports configured manageable
   capacity and safe project/environment/executor/resource-contract
   fingerprints; availability reports exact net remaining capacity and the live
   claim identities already reflected. Offers contain no commands, host paths,
   URLs, credentials, provider tokens, raw hardware handles, or unsafe exception
-  text.
+  text. Expiry uses coordinator-accepted receipt time. After a coordinator
+  process-epoch change, session reconciliation and a newly received current-
+  epoch offer/work request are required before delivery; a retained old offer
+  cannot authorize a new assignment.
 - Back all authorized pool views for one agent with one inventory/availability
   domain and exact capacity keys. Pool membership comes from coordinator policy
   intersection. This phase does not reserve capacity, but its schema must make
@@ -134,6 +163,16 @@ In scope:
   canonical request digest. Exact replay returns the recorded result; reuse with
   different content conflicts. Retain actionable receipts or terminal/expired
   tombstones long enough that pruning cannot make a replay actionable again.
+- Wire the Phase 2 critical-event stream with stable event IDs and monotonic
+  per-assignment sequence. Accept only the next expected sequence or exact
+  replay; return a typed gap response without advancing later facts. An
+  acknowledgement names only an event/contiguous range durably committed by the
+  coordinator, so the agent retains unacknowledged outbox rows.
+- Classify a transport timeout, disconnect, caller cancellation, or 5xx after
+  send as indeterminate. The caller retries the same principal/operation/key/
+  digest and waits for the recorded domain result or conflict. Connection close
+  never rolls back or cancels a server mutation; only explicit cancellation is
+  a domain operation.
 - Enforce expected method, service host/identity, content type, protocol/schema
   version, duplicate-key rejection, finite numeric forms, and strict limits for
   body size/depth, identifiers, collections, offers, capabilities, concurrent
@@ -175,9 +214,10 @@ Assumptions:
   key/config file permissions under the user's account.
 - Network messages are untrusted even on an internal network. Authored local
   daemon configuration remains trusted deployment state.
-- One coordinator generation is authoritative. A copied database/key used by
-  two live coordinators is unsupported split brain and must not be presented as
-  high availability.
+- One stable coordinator identity and one current process epoch are
+  authoritative for a durable root. A copied database/key used by two live
+  coordinators is unsupported split brain and must not be presented as high
+  availability.
 
 ## Fixed Contracts And Private Discretion
 
@@ -202,11 +242,18 @@ return application.apply(request, principal=principal)
 ```
 
 Decoding validates inert data; it cannot load code or override `principal`.
-Every mutation also checks expected generation/session/revision and
-digest-bound idempotency. TLS secrecy and peer authentication do not replace
-those lifecycle checks.
+Every mutation also checks its expected coordinator process epoch, agent
+session, object revision, current credential-policy revision, and digest-bound
+idempotency. TLS secrecy and peer authentication do not replace those lifecycle
+checks.
 
 ### Session and reconnect
+
+The remote topology is outbound-only. The coordinator exposes authenticated
+client, agent, and operator views; an agent opens the connection and never
+listens for coordinator callbacks. Agents do not discover or contact peers. A
+long poll is a coordinator-addressed delivery channel, not permission for the
+agent to choose a queue item.
 
 An agent starts or reconnects in this order:
 
@@ -214,13 +261,42 @@ An agent starts or reconnects in this order:
 authenticate coordinator service identity
   -> no-mutation capability handshake
   -> authenticate agent principal and register/resume session
-  -> reconcile durable event/outbox/session facts
+  -> reconcile durable ordered event/outbox/session facts
   -> publish fresh inventory and zero/current availability as appropriate
   -> issue one revision-bound work request
 ```
 
 A new TCP connection is transport only. It does not change session identity,
 acknowledge events, create availability, or imply that previous work stopped.
+
+No inter-service startup order is required after explicit role-root bootstrap:
+
+- an agent started before the coordinator opens its existing journal at zero
+  availability and reconnects with bounded backoff;
+- a coordinator started without this agent retains admissions/work but sees no
+  capacity from it;
+- after coordinator restart the stable coordinator ID must match, the process
+  epoch changes, and the agent must reconcile and publish a fresh current-epoch
+  offer/work request before delivery; and
+- a client request while the coordinator is down receives unavailability and
+  reuses its exact idempotency identity if delivery was ambiguous.
+
+Authority then coordinator then agents is the recommended operational order
+only because it minimizes degraded intervals. It is not a safety dependency.
+
+Clean rollover is a separate transition initiated by the authenticated old
+session after complete reconciliation. The coordinator allocates the new
+session identity; the request does not choose it:
+
+```text
+withdraw offer and fence delivery channel
+  -> coordinator and old journal both report empty unresolved set
+  -> commit RETIRED_CLEAN + old-session tombstone
+  -> idempotently allocate/register new session at zero availability
+```
+
+A newly installed daemon with no old journal cannot assert that proof. It uses
+the Phase 9 replacement path if the coordinator retains any old-session fact.
 
 ### Idempotency receipt
 
@@ -235,9 +311,41 @@ Receipts for operations that can still influence current state cannot be simply
 deleted. Retention may compact them to a terminal/expired tombstone that rejects
 reuse but contains no secret payload.
 
+An HTTP status is not itself a lifecycle outcome. A definite decoded domain
+result such as `DENIED`, `INVALID`, `CONFLICT`, or recorded success may be acted
+on. Timeout/unavailable after send remains `OUTCOME_UNKNOWN` and is reconciled
+with the same idempotency identity.
+
 ### Transport configuration
 
-Examples may use names such as:
+Protected deployment configuration must contain enough information for each
+role to verify, rather than merely locate, its peer. Conceptually:
+
+```yaml
+coordinator:
+  local_state_root: <protected-local-root>
+  listen_endpoint: <coordinator-endpoint>
+  tls_server_identity: <certificate-and-key-references>
+  principal_policy: <policy-reference>
+
+agent:
+  local_state_root: <protected-local-root>
+  stable_agent_id: machine-A
+  coordinator_endpoint: <coordinator-endpoint>
+  expected_coordinator_identity: <service-identity>
+  tls_client_identity: <certificate-and-key-references>
+  declared_pools: [research]
+  manageable_resources: <provider-backed-inventory>
+```
+
+The coordinator policy maps the authenticated agent principal to the stable
+agent ID, allowed pools, resident capabilities, and resource contracts; the
+effective offer is the intersection with trusted local declarations. Neither
+the body nor certificate subject text creates those permissions. The
+coordinator, not deployment config or the request, allocates the durable session
+ID.
+
+Examples may use environment-reference names such as:
 
 ```text
 LOOM_COORDINATOR_ENDPOINT
@@ -250,6 +358,10 @@ LOOM_PRINCIPAL_POLICY_FILE
 Names remain deployment-facing decisions during implementation. Values are
 protected process configuration, not job configuration. Logs/status show only
 whether a value is configured and a safe credential ID where authorized.
+Endpoint and non-secret values may be supplied by protected config/environment
+references, but private key material must not be committed in `.env` or copied
+into queue rows, offers, assignment payloads, audit output, or worker
+environments.
 
 ### Private discretion
 
@@ -273,25 +385,34 @@ decoding, idempotency, or the no-launch gate.
 | --- | --- | --- | --- | --- |
 | Peer identity comes from verified transport | TLS adapter/principal map | Body/path actor or wrong certificate | Unauthorized execution/control | Certificate/service/body mismatch matrix |
 | Authentication is not authorization | Application authorizer | Valid but over-scoped principal | Cross-run/pool mutation | Role/action/object/pool matrix |
+| Credential policy is current per operation | Application authorizer | Removed credential on an established connection/long poll | Continued unauthorized mutation after rotation | Policy-revision removal, poll renewal, overlapping-credential resume tests |
 | Replay cannot change intent | Idempotency store | Duplicate/reordered request | Repeated mutation | Same/different digest and pruning tests |
-| Reconnect does not replace session | Session store | New connection or stale daemon | Lost/duplicated ownership | Reconnect/generation/revision tests |
+| Reconnect does not replace session and request bodies do not allocate it | Agent registration journal + coordinator session store | Crash/lost registration response, caller-proposed ID, new connection, or stale daemon | Lost/duplicated ownership | Pre-send operation persistence, idempotent coordinator-issued ID, and reconnect/generation/revision tests |
+| Stable coordinator identity is not its process epoch | Coordinator identity/session handshake | Coordinator restart or stale connection | Valid retained facts rejected or stale process made current | Same-ID/new-epoch and stale-current-operation tests |
+| Clean session rollover proves the full extensible reference set empty | Session retirement transaction | New install, credential change, offer expiry, or a later phase adding a reference kind without extending retirement | Orphan live work/capacity | Assignment/provider/delivery/control/transfer/result/event/outbox empty success, unresolved/lost-journal rejection, and late-old-message tombstone tests |
+| Critical event acknowledgement is causal and durable | Agent outbox + coordinator event store | Reorder, gap, restart, or response loss | Missing lifecycle fact or premature deletion | Sequence gap/exact replay/contiguous ack tests |
+| Transport loss is indeterminate | Adapter + idempotency store | Timeout/5xx after commit | Duplicate mutation or false rollback | Commit-then-timeout/retry-same-key tests |
 | Pool membership is coordinator policy | Registration policy | Agent offer text | Self-authorized capacity | Allowed/intersection/denied pool tests |
 | One delivery-active request per session/revision | Work-request owner | Concurrent/stale polls | Duplicate delivery | Barrier and supersession tests |
 | Offer data is safe and bounded | Offer codec/projector | Agent observation/error | Secret leak/resource abuse | Field allowlist, oversize, redaction tests |
+| Coordinator restart cannot reuse a retained offer | Session/offer reconciler | Process-epoch change before agent reconnect | Assignment from stale availability or time | Retained-offer ineligibility and current-epoch re-offer tests |
 | Phase 4 agent operations cannot prepare, assign, launch, or transfer | Capability/application gate | Accidental route enablement | Premature remote execution side effect | Attempt/assignment/launcher/artifact sentinels in all agent-connectivity tests |
 
 ## Implementation Slices
 
-1. Add TLS/service-identity configuration and capability handshake, principal
+1. Add protected coordinator/agent configuration, explicit outbound topology,
+   TLS/service-identity configuration and capability handshake, principal
    mapping, HTTP adapters for scoped application views, bounded codecs, and
    direct/HTTP conformance with the negative authentication/authorization matrix.
-2. Add durable coordinator generation, agent registration/session/reconcile,
-   principal/content-bound idempotency, receipt retention/tombstones, and safe
-   audit/status with restart/replay/version tests.
+2. Add durable stable coordinator identity/process epochs, coordinator-issued
+   agent registration/session/reconcile, cooperative complete-reference
+   retirement/tombstones, principal/
+   content-bound idempotency, indeterminate-outcome replay, ordered event
+   acknowledgement, and safe audit/status with restart/replay/version tests.
 3. Add CPU/memory inventory and availability offers, coordinator-controlled
    pool mapping, one cross-pool availability identity, offer TTL/revisions, and
    one delivery-active long-poll request that can return only wait.
-4. Add protected deployment/overlap-rotation documentation, worker-environment
+4. Add protected deployment/overlap-rotation and current-policy enforcement documentation, worker-environment
    credential exclusion, loopback E2E, and opt-in `machine-A`/`machine-B`
    no-mutation connectivity receipt.
 
@@ -300,9 +421,9 @@ decoding, idempotency, or the no-launch gate.
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | Required | Transport remains outside domain/scheduling imports | Import boundaries and optional configuration behavior |
-| Unit | Required | Codecs, limits, principal map, idempotency, sessions/offers | Boundary values, downgrade, duplicate keys, safe errors, TTL/revisions |
-| Contract | Required | Direct/HTTP semantic equivalence | Identical authz/state/idempotency/error outcomes for each operation |
-| Integration | Required | Real TLS loopback and durable reconnect | Wrong CA/service/role/scope; authority view inaccessible to agent credentials; restart/replay; stale poll; one pool domain |
+| Unit | Required | Codecs, limits, principal map, idempotency, identities/epochs, sessions/offers/events | Boundary values, downgrade, duplicate keys, safe errors, TTL/revisions, pre-send registration operation and coordinator-issued session replay, gap/contiguous ack, clean-retirement complete set |
+| Contract | Required | Direct/HTTP semantic equivalence | Identical authz/state/idempotency/definite-versus-indeterminate/error outcomes for each operation |
+| Integration | Required | Real TLS loopback, service-order behavior, and durable reconnect/rollover | Agent-before-coordinator bounded reconnect at zero availability; coordinator-without-agent no-capacity wait; wrong CA/service/role/scope; removal on established connection/poll; overlapping-credential same-session resume; authority view inaccessible to agent credentials; same coordinator ID/new epoch rejects retained offer until reconcile/re-offer; crash after persisted registration intent and commit-then-timeout replay to the same session; stale poll; cooperative-empty rollover; unresolved/lost-journal refusal and late-old tombstone; one pool domain; no inbound agent listener |
 | E2E / opt-in | Required loopback; optional two-machine | No-mutation connectivity | Authenticated register/offer/wait on loopback; abstract two-machine receipt when credentials exist; launch/artifact sentinels untouched |
 
 Targeted commands are fixed during phase preparation. Final commands:
@@ -313,27 +434,36 @@ Targeted commands are fixed during phase preparation. Final commands:
 ## Risks, Review, And Stops
 
 - Main risks: trusting network location or body identity; broad service
-  interface; replay after receipt pruning; stale session delivery; credentials
+  interface; treating a timeout as rollback; accepting event gaps; replay after
+  receipt pruning; confusing process epoch with stable owner; caller-selected
+  session identity; incomplete retirement reference enumeration; unsafe clean
+  session replacement; removed credentials surviving on a live connection;
+  stale session delivery; credentials
   in logs/worker env; accidentally enabling launch before the gate passes.
 - Review focus: TLS verification, role/scope table, derived identity, request
   limits, idempotency persistence, authority-view isolation, session revisions,
-  offer safety, and negative no-side-effect evidence.
+  cooperative retirement/tombstones, event ordering/ack durability, outcome
+  classification, offer safety, and negative no-side-effect evidence.
 - Stop if: the existing HTTP stack cannot enforce mutual peer/service identity;
   principal mapping would depend on body fields; session state cannot survive
   restart; local/direct behavior diverges; or the transport cannot guarantee no
   remote assignment during this phase.
 - Accepted debt: credential provisioning and internet-facing hardening are
-  deployment concerns outside Stage 29; coordinator generation is not HA.
+  deployment concerns outside Stage 29; a rotating coordinator process epoch
+  is not HA or a leadership/fencing service.
 
 ## Executor Handoff
 
 - Read this file, Phase 3 completion record, manifest security constraints, and
-  planning FR-11, FR-17, FR-19, FR-20, FR-25, and FR-26.
+  planning FR-10, FR-11, FR-16, FR-17, FR-19, FR-20, FR-21, FR-25, FR-26,
+  DQ-20, and DQ-22.
 - Complete loopback negative/conformance gates before the optional two-machine
   receipt. Never require site credentials in default CI.
 - Decisions not to revisit: outbound agents, mTLS plus scoped authorization,
-  derived principal, distinct session/generation identities, one pool-backed
-  availability domain, bounded messages, and no launch/data in Phase 4.
+  derived principal, stable identities distinct from process/connection epochs,
+  same-session reconnect, cooperative-empty clean rollover otherwise guarded
+  replacement, ordered replay, indeterminate transport outcomes, one pool-
+  backed availability domain, bounded messages, and no launch/data in Phase 4.
 - Escalate any change to trust model, principal scope, durable session identity,
   or external dependency.
 

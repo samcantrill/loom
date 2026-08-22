@@ -154,19 +154,182 @@ service credentials. Live SLURM still requires backend capability admission:
 development co-located service authority is suitable for local and subprocess
 proof paths, but it is not advertised as a multi-host SLURM authority.
 
+### 0.2 Stage 29 Managed-Scheduler Boundary
+
+Stage 29 adds one explicit ready-stage route while preserving every existing
+whole-run delegated SLURM owner and record. A managed-stage run may resolve
+different execution targets per stage, but the coordinator remains the one run
+owner:
+
+```text
+preprocess -> managed agent
+train      -> explicit SLURM profile "training"
+evaluate   -> managed agent
+```
+
+`managed_agent` remains the default. A SLURM stage names exactly one protected
+site-owned profile. No lack of agent capacity, wait, preference, command error,
+or scheduler status changes that route or selects another profile. This avoids
+silently submitting externally and avoids comparing exact Loom offers with an
+unknown SLURM queue delay.
+
+```yaml
+runtime:
+  stages:
+    train:
+      placement:
+        execution_route:
+          kind: slurm
+          profile: training
+```
+
+The profile, not authored stage data, supplies allowlisted account/partition/
+QoS, resource/directive mappings, submission limits, resident bootstrap
+environment, command adapter, credential delivery, data path, reconciliation,
+and retention behavior. Authored data cannot inject raw `SBATCH` directives,
+commands, preludes, submit hosts, or credentials.
+
+SLURM is a target, not a Loom resource pool. Unallocated cluster nodes are not
+agent offers and a pending SLURM job holds no agent claim. Route feasibility
+means the named profile can map every canonical hard requirement without
+weakening it and is operationally admitted. SLURM still chooses the node and
+enforces the submitted resource request. Unsupported VRAM, model, topology,
+custom-resource, agent-target, or artifact semantics reject that route with a
+safe reason; they are never silently omitted.
+
+The assignment retains distinct identities:
+
+```text
+run / stage attempt / stage work
+  -> tagged SLURM assignment target
+  -> stable submission operation
+  -> SLURM cluster/job handle
+  -> bootstrap incarnation
+  -> process execution ID + authority fence
+```
+
+It consumes the run's `max_parallel_stages` slot and a configured profile
+outstanding-submission slot, but no agent capacity. Submission uses a deliberate
+at-most-one automatic invocation boundary:
+
+```text
+exact authority attempt PENDING and ready
+  -> reserve assignment/run/profile slot
+  -> bind exact attempt (still PENDING)
+  -> prepare immutable request/script/input-access evidence
+  -> persist SUBMISSION_INTENT
+  -> persist SUBMITTING
+  -> invoke sbatch at most once
+  -> ACCEPTED(job_id) | DEFINITELY_REJECTED | OUTCOME_UNKNOWN
+```
+
+Loom cannot commit SQLite and call `sbatch` atomically. Therefore any crash,
+timeout, interruption, unusable success output, or failure to durably retain a
+returned handle after `SUBMITTING` is unknown and never automatically calls
+`sbatch` again. The stable operation ID is placed in bounded scheduler-visible
+metadata. Exactly one discovered match repairs the handle, zero unproven
+matches remain unknown, and multiple matches are a conflict. This can sacrifice
+liveness when the command was never actually invoked, but it prevents a blind
+duplicate job.
+
+The generated job does not immediately run authored stage code. It starts a
+fixed restricted Loom bootstrap:
+
+```text
+SLURM starts bootstrap
+  -> authenticate assignment/submission/job/incarnation
+  -> reconcile the exact handle
+  -> stage and verify request + inputs
+  -> request the exact authority grant
+  -> authority changes PENDING -> SUBMITTED and creates the fence
+  -> record grant/start intent
+  -> invoke at most one execution-only stage-worker root
+  -> upload exact-fence result and outputs
+```
+
+Bootstrap identity is assignment-scoped and least-privilege. It is not an agent:
+it publishes no offer, receives no arbitrary work, owns no durable agent
+session, and has no direct authority credential. Secret bytes must not appear in
+the generated script, arguments, scheduler metadata, logs, or authored worker
+environment. Duplicate or scheduler-requeued bootstrap incarnations reconcile
+the same assignment but cannot obtain a second start permit. Transparent requeue
+or checkpoint resume is not claimed.
+
+Lifecycle and observation remain separate:
+
+```text
+authority lifecycle | Loom dispatch | SLURM observation
+bootstrap/process    | transfer/result | cancellation/control
+```
+
+SLURM `COMPLETED` alone is not Loom success. Success requires an authenticated
+current-fence Loom result and verified coordinator/backend-accessible outputs
+committed by the authority. Missing `squeue`/`sacct` evidence is unknown. A
+successful `scancel` call means only cancellation requested. Run cancellation
+first installs the authority cancellation epoch so an ungranted bootstrap
+cannot start, then fans out exact Loom and SLURM controls. Manual close/retry of
+unknown work requires positive containment tied to the exact profile,
+submission, job, bootstrap, and fence; queue absence, timeout, or operator text
+is insufficient.
+
+Coordinator startup does not require SLURM to be up. An unavailable named
+profile leaves explicitly routed work visibly pending/blocked. Restart reopens
+known and unknown submission records, retains the exact profile descriptor,
+inspects/reconciles the same stable operation, and never resubmits. A bootstrap
+that starts while the coordinator is unavailable waits with no authored effects
+until it can obtain the grant. Granted work may continue through coordinator
+loss and later replay its result within the profile's bounded retention model.
+
+Current `SlurmCommandRunner`, resource/directive mapping, deterministic script,
+job-ID parsing, `squeue`/`sacct`, and `scancel` seams are reused where their
+semantics fit. The existing whole-run queue adapter and live single-job/
+`afterok` controllers remain separate historical lifecycle owners; their
+failure classifications are not reused blindly for the new submission state
+machine.
+
+Allocation-fed agents remain a later, distinct integration:
+
+Allocation-fed agents would first obtain a bounded SLURM allocation, then start
+a Loom agent inside it:
+
+```text
+SLURM grants allocation
+  -> allocation-bound Loom credential/session starts
+  -> agent publishes only resources granted to that allocation
+  -> Stage 29 schedules one-agent stages inside the allocation
+  -> agent reconciles/retires before allocation release
+```
+
+This is a possible later route when already-granted SLURM capacity should
+join the managed pool. It needs allocation-bound ephemeral identity, lifetime/
+expiry and clean-retirement behavior, exact prevention of double publication,
+and a decision about multi-node distributed stages. SLURM remains authoritative
+for the enclosing allocation; Loom owns only the exact capacity handed to its
+agent provider. A physical resource must never be advertised simultaneously by
+a standalone Loom agent and through a SLURM allocation.
+
+Stage 29 does not implement allocation-fed agents, automatic allocation
+provisioning, automatic managed-agent/SLURM fallback, multiple-profile ranking,
+or a generic external-scheduler plugin. Those capabilities are not implied by
+`ResourcePlanner`, `SchedulingPolicy`, the ready-stage route, or the historical
+`SlurmExecutor`.
+
 ## 1. Purpose
 
-`loom.pipeline.executors.slurm` is the optional cluster execution layer for
-running `loom` pipelines on SLURM-managed systems.
+`loom.pipeline.executors.slurm` is the optional cluster mechanics layer for
+running `loom` pipelines on SLURM-managed systems. It owns request/directive
+mapping, scripts, command invocation/parsing, and scheduler observations. Stage
+29's ready-stage coordinator owns durable route/submission/bootstrap lifecycle
+around those mechanics; the package does not become a second run authority.
 
 It translates a validated pipeline plan and generic runtime/resource metadata
 into SLURM-oriented scripts, dependency edges, logs, and manifests. It should
 not change pipeline semantics. The same stage contracts, artifact references,
 run-store state, resume rules, and generic execution-owned continuation
 commands should apply whether work runs locally, under subprocess execution, or
-through a future submitted backend.
+through a submitted backend.
 
-The design should support two practical modes first:
+The historical v6/v7 design supports two practical whole-run planning modes:
 
 ```text
 single-job:
@@ -191,7 +354,11 @@ library.
 
 ## 2. Core Position
 
-SLURM support is an executor concern.
+SLURM-specific mapping/script/command mechanics are an executor concern.
+Durable Stage 29 ready-stage admission, at-most-one submission, bootstrap grant,
+result join, cancellation ordering, and recovery are coordinator application
+concerns because they cross authority, coordinator SQLite, artifacts, and the
+external scheduler.
 
 It should use this architecture:
 
@@ -216,6 +383,11 @@ The SLURM executor should not implement a separate pipeline model. V6 generated
 scripts use `loom prepared-run continue` for whole-run single-job scripts and
 `loom stage-job run` for afterok stage scripts. `loom stage run` remains the
 v5 parent-managed subprocess worker and is not the generated afterok command.
+
+Stage 29 does not extend `afterok` to become its DAG owner. It submits only one
+already-ready attempt at a time and runs the fixed restricted bootstrap before
+the execution-only worker. This reuses the mechanics above while keeping the
+dependency/readiness and lifecycle owners described in section 0.2.
 
 ---
 
@@ -387,6 +559,12 @@ submitted-job cancellation through loom cancel RUN_URI --jobs
 The first implementation should assume a shared filesystem visible to the submit
 host and compute nodes. This matches common HPC usage and keeps remote artifact
 transfer out of the first design.
+
+This paragraph describes the v6/v7 whole-run/single-job/`afterok` implementation,
+not the Stage 29 ready-stage route. Stage 29 requires its named profile to
+declare a supported authenticated artifact path and initially reuses the bounded
+coordinator relay; shared-filesystem signalling is not its communication or
+correctness mechanism.
 
 Automatic retries, cleanup policies, exact submitted-operation selection, and
 remote artifact transfer remain later scope.
@@ -600,6 +778,11 @@ standard SLURM commands.
 
 Initial SLURM support should assume the run directory is visible from both the
 submit host and compute nodes.
+
+That remains historical executor behavior. The Stage 29 restricted bootstrap
+does not gain authority by seeing a run directory and does not commit compute-
+node-local `file:` refs. It stages/verifies inputs and publishes accessible
+outputs through its configured authenticated data-path contract.
 
 This keeps the first implementation focused on:
 

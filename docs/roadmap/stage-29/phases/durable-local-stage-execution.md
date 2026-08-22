@@ -32,8 +32,9 @@
   data, and revalidates every mutable fact at commit.
 - Later work explicitly out of scope: Phase 3 exposes the path as a persistent
   multi-job daemon and migrates public facades. Phase 4 adds remote trust;
-  Phase 5 adds remote data/execution; later phases add GPU, controls, and
-  recovery.
+  Phase 5 adds remote data/execution; Phase 6 adds GPU placement; Phase 7 adds
+  the explicit SLURM target using this phase's fence/worker; Phases 8–9 add
+  controls and recovery.
 
 This phase deliberately keeps the complete reservation-to-release saga in one
 PR. A partial production path that reserves without final admission, grants
@@ -75,12 +76,29 @@ In scope:
   or silently renumber an attempt in the coordinator, agent, or worker path.
 - Extend the semantic coordinator-state protocol and SQLite adapter with atomic
   domain operations for current stage-work scheduling state, logical capacity
-  reservations, assignment identity/state, delivery/grant facts, event
+  reservations, tagged assignment identity/state, delivery/grant facts, event
   acknowledgement, and reconciliation queries. Do not expose generic table CRUD.
+  The assignment target is a closed discriminated value. This phase implements
+  only `ManagedAgentTarget` with exact agent/session/offer/claim identities and
+  rejects an unsupported target before mutation. Phase 7 adds
+  `SlurmStageTarget` without changing assignment, run-concurrency, authority
+  bind/grant/fence, or result ownership.
 - Run pure scheduling outside the write transaction. The assignment commit CAS
   revalidates exact stage-work revision, shared readiness evidence, selected
-  component/contract identities, snapshot/order version, local inventory/
-  availability revision, claim atoms, and absence of another live assignment.
+  component/contract identities, coordinator policy epoch, snapshot/order
+  version, local inventory/availability revision, claim atoms, absence of
+  another live assignment for the work, and the run's current active-assignment
+  count. Reserved, bound, accepted, granted, running, and unknown assignments
+  consume `max_parallel_stages`; unassigned `PENDING` attempts and terminal/
+  released assignments do not. The limit check and reservation are one atomic
+  transaction so concurrent scheduling cycles cannot consume the same final
+  slot.
+- In that same assignment transaction, persist a bounded decision receipt with
+  the policy epoch/descriptor, exact work/candidate IDs, stage-work/snapshot/
+  offer revisions, score contribution/tier-vector summary, fallback eligibility
+  and `as_of`, stable reason codes, and selected component/claim-contract
+  descriptors. The receipt supports reconstruction and audit; it is not a
+  second scheduler input and contains no arbitrary extension payload or secret.
 - Reserve every capacity atom in one coordinator transaction. The transaction
   either owns the complete composite logical claim or owns none of it. Search
   output never directly changes capacity.
@@ -96,12 +114,21 @@ In scope:
 - Add a separate semantic agent-journal protocol and SQLite adapter. It owns
   configured local inventory, current availability, work receipt, request/input
   durability, physical claim lifecycle, accept/decline, grant/start,
-  `process_execution_id`, containment/result/output facts, outbox acknowledgement,
-  cleanup, and release.
+  `process_execution_id`, containment/result/output facts, ordered assignment
+  events, outbox acknowledgement, cleanup, and release. Each critical fact is
+  journalled before send with a stable event ID and next monotonic per-assignment
+  sequence. The coordinator persists only the next expected event or exact
+  replay, retains a gap for reconciliation, and acknowledges only durably stored
+  contiguous evidence.
 - Add the public versioned `AgentResourceProvider` lifecycle for physical
   resources. Initial built-ins adapt current CPU and memory admission. The
   provider observes, prepares, reconciles, activates, aborts, and releases exact
   assignment-scoped claims through idempotent commands and closed results.
+  These initial claims coordinate configured capacity among Loom assignments;
+  unless the concrete provider advertises real OS isolation, they do not cap a
+  process or prove its authored CPU/memory peak. External use that cannot be
+  conservatively accounted for must be excluded from configured manageable
+  capacity.
 - Prepare multi-resource claims in deterministic order and journal a complete
   composite admission. If a later component declines, abort or reconcile only
   the exact earlier preparations. A partial or ambiguous prepare is never
@@ -132,8 +159,11 @@ In scope:
   never infer permission to start from an absent response.
 - Finalize output into coordinator/authority-accessible local `ArtifactRef`
   values, then commit terminal truth through the authority fence. Only after
-  terminal reconciliation may the coordinator and agent release logical and
-  physical claims and allow the orchestrator to expose descendants.
+  that commit may the coordinator release logical ownership and expose
+  descendants. Agent physical provider release is a later exact idempotent
+  operation after process containment and retained-result acknowledgement;
+  only a fresh availability revision returns its atoms to scheduling. Authority
+  terminality never by itself asserts that physical release occurred.
 - Feed definitive failure/cancellation into the existing reliability owner.
   The reliability policy alone decides whether to prepare a new attempt; the
   scheduler cannot silently reuse an old assignment or claim.
@@ -147,7 +177,8 @@ Out of scope:
   locks, multi-client submission, public facade migration, historical queue
   compatibility, or full user-facing cancellation. Phase 3 owns them.
 - Network authentication, remote registration/offers, cross-host artifact
-  transfer, GPU claims, agent controls, or manual recovery.
+  transfer, GPU claims, SLURM submission/bootstrap, agent controls, or manual
+  recovery.
 - Distributed transactions, timeout-based unbind, exactly-once authored side
   effects, automatic reassignment of ambiguous work, or a replaceable lifecycle
   scheduler.
@@ -190,6 +221,13 @@ operation identity until it reaches the already-recorded result or a typed
 conflict. A socket return, callback completion, or process exit alone is not a
 durable transition.
 
+Local direct composition still follows remote-safe delivery semantics. A call
+that raises after the server-side operation may have committed is indeterminate;
+the caller repeats the same operation ID and digest. It does not compensate or
+advance from an exception. Event `N+1` cannot advance coordinator state while
+event `N` is absent, and an acknowledgement means the named event/contiguous
+range is durable in coordinator state, not merely received by an adapter.
+
 `SUBMITTED` means execution was granted; it does not prove a process started.
 The agent persists start intent before the single launcher invocation, then
 persists a confirmed, failed, or unknown start outcome. Only a durable confirmed
@@ -200,8 +238,9 @@ terminal result may commit from either `SUBMITTED` or `RUNNING`.
 
 `START_FAILED` is definitive only when the launcher boundary proves that no
 managed process was created and none can later run for that invocation. That
-fenced failure may terminalize the attempt from `SUBMITTED`, release after
-cleanup, and enter ordinary reliability policy. A timeout, lost response,
+fenced failure may terminalize the attempt from `SUBMITTED`, then follow the
+same logical-release/provider-cleanup/fresh-availability order and enter
+ordinary reliability policy. A timeout, lost response,
 exception after an unobserved spawn, or incomplete containment proof is
 `START_UNKNOWN`; it stays bound/reserved and cannot consume retry budget or
 authorize another launch.
@@ -286,23 +325,29 @@ write another owner's truth.
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
 | One live logical claim per stage work | Coordinator reservation transaction | Concurrent scheduling cycles | Oversubscription/duplicate assignment | Barrier-controlled CAS tests |
+| CPU/memory claims state only their enforced/accounted guarantee | Agent configuration + providers | External occupancy or under-declared process use | Overpromised isolation or known overcommit | Manageable-capacity/external-use and no-enforcement-claim tests |
+| Per-run concurrency is enforced at assignment mutation | Coordinator reservation transaction | Concurrent cycles selecting distinct ready work from one run | More active assignments than `max_parallel_stages` | Final-slot barrier tests across active states, terminal release, and restart |
+| Assignment decision is reconstructable without re-running policy | Coordinator assignment transaction | Policy/config change or restart after selection | Unexplainable or semantically reinterpreted assignment | Bounded receipt round-trip, policy-epoch drift, redaction, and replay tests |
 | Only a ready PENDING attempt binds | Authority bind CAS using shared predicate | Stale scheduler decision | Dependency bypass | Readiness-change race tests |
 | Definitive ungranted decline only unbinds itself | Authority unbind CAS | Delayed/ambiguous decline | Duplicate launch or lost ownership | Decline/grant race table |
 | Physical claim is complete before accept | Agent journal/composite admission | Provider partial failure | Hidden resource collision | Crash-after-each-component tests |
 | Launch follows durable grant and activation | Agent journal/start fence | Crash/retry/duplicate delivery | Duplicate or unauthorized launch | Process sentinel tests |
+| Event replay is causal and durable | Agent journal + coordinator event transaction | Lost/reordered response, gap, or restart | Missing start/result fact or premature outbox deletion | Sequence-gap, exact replay, ack-after-commit, and timeout-after-commit tests |
 | RUNNING requires a confirmed current-fence process start | Agent process fact + authority CAS | Start-intent crash, delayed event, or stale agent | False running status or duplicate relaunch | Confirmed/failed/unknown/delayed-start transition tests |
 | START_FAILED proves no process can exist | Launcher/containment result owner | Exception or lost spawn response | Release/retry beside a live process | Definitive pre-spawn failure versus post-spawn/timeout unknown matrix |
 | Independent stages do not share a long-lived run lock | Managed worker/authority boundary | Legacy `run_stage_job` wrapper | False serialization or deadlock of diamond branches | Real overlap barrier plus short-commit CAS tests |
 | One unresolved admission revision still permits disjoint active claims | Agent availability journal + coordinator atoms | Serial control loop or stale revision reuse | Idle capacity or oversubscription | Two concurrent disjoint claims and same-atom race tests |
 | Output commit uses accessible refs and current fence | Authority output transaction | Stale agent result | Corrupt lineage or late mutation | Result/output/fence tests |
-| Logical and physical release follows terminal truth | Coordinator and agent reconcilers | Early cleanup | Reuse while process/output active | Release ordering tests |
+| Terminal, logical release, physical release, and fresh availability are separate ordered facts | Authority, coordinator, and agent/provider reconcilers | Crash or early cleanup at any boundary | Descendant exposure before commit or capacity reuse while process/output/claim remains | Four-boundary release ordering and restart tests |
 | Retry creates a fresh attempt | Reliability owner | Scheduler/reconciler | Reused stale claims/identity | Failure/retry integration tests |
 
 ## Implementation Slices
 
 1. Extend coordinator semantic-store operations and SQLite schema for logical
-   reservations/assignments; add authority bind/unbind/grant-fence CAS and the
-   idempotent reconciliation skeleton with crash-point tests before launch.
+   reservations/assignments, atomic per-run active-count admission, and bounded
+   policy-decision receipts; add authority bind/unbind/grant-fence CAS and the
+   idempotent reconciliation skeleton with concurrency/crash-point tests before
+   launch.
 2. Add agent-journal protocol/SQLite adapter, `AgentResourceProvider` contract
    and conformance, CPU/memory providers, exact command/result types, composite
    prepare/abort/reconcile/activate/release, and availability accounting.
@@ -311,18 +356,19 @@ write another owner's truth.
    preparation path and extract an execution-only, no-whole-run-lock worker seam
    for exact granted assignments; implement grant/start/process/outbox facts
    with one-launch fault injection.
-4. Complete result/output commit, release, retry/descendant reconciliation, and
-   bounded embedded composition; prove two-stage, diamond, parallel-run, crash,
-   and compatibility of the retained lower-level worker imports.
+4. Complete result/output commit, coordinator logical release, agent provider
+   release/fresh availability, retry/descendant reconciliation, and bounded
+   embedded composition; prove two-stage, diamond, parallel-run, crash, and
+   compatibility of the retained lower-level worker imports.
 
 ## Test And Validation Plan
 
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | Required | Public provider imports remain intentional/cheap | Import and protocol shape; no daemon/network dependency |
-| Unit | Required | Store transitions, commands, composite accounting | Every legal/illegal transition, exact atom conservation, idempotent replay |
+| Unit | Required | Store transitions, assignment concurrency, decision receipts, commands, composite accounting, provider guarantee, ordered events | Every legal/illegal transition, active-state count, exact atom conservation, configured manageable/external-use behavior, no unsupported enforcement claim, receipt bounds/redaction, exact replay, gap rejection, contiguous acknowledgement |
 | Contract | Required | Provider lifecycle and authority expected-state behavior | Synthetic provider partials, malformed outcomes, current/stale fence matrices |
-| Integration | Required | Cross-store crash recovery and worker/artifact hand-off | Crash before/after every durable step; decline/grant/result/release races; two same-run workers overlap without a whole-run lock |
+| Integration | Required | Cross-store crash recovery, concurrent assignment CAS, ordered replay, and worker/artifact hand-off | Crash before/after every durable step; timeout after coordinator commit; out-of-order and duplicate events; two cycles race for the final run slot; decline/grant/result/terminal/logical-release/provider-release/fresh-availability races; two allowed same-run workers overlap without a whole-run lock |
 | E2E / opt-in | Required local | Final bounded local stage path | Train/evaluate and diamond with real parallel-branch overlap, failure/retry, one launch; no external network/GPU required |
 
 Targeted commands are fixed during phase preparation. Final commands:
@@ -333,12 +379,16 @@ Targeted commands are fixed during phase preparation. Final commands:
 ## Risks, Review, And Stops
 
 - Main risks: claiming atomicity across stores; unbinding ambiguous acceptance;
-  double-subtracting availability; launching before full activation; committing
+  enforcing `max_parallel_stages` only in the stale pure snapshot; persisting
+  an unbounded/secret policy trace; treating adapter return as commit or
+  accepting an event gap; double-subtracting availability; launching before full activation; committing
   an agent-local or stale output; allocating a second attempt during request
   materialization; retaining the whole-run lock/authority committer in the
   managed worker; or accidentally reacquiring resources in worker.
-- Review focus: state-transition table, transaction owners, operation identity,
-  failure injection, one-launch evidence, and authority/output ordering.
+- Review focus: state-transition table, assignment-time active-state predicate,
+  decision-receipt bounds, transaction owners, operation identity, failure
+  injection, monotonic event/ack behavior, indeterminate-call replay,
+  one-launch evidence, and authority/output ordering.
 - Stop if: the authority cannot bind/grant an exact attempt without moving retry
   ownership; Phase 1's `PENDING` attempt cannot be materialized without
   reallocating or renumbering it; local artifacts cannot produce authority-

@@ -28,9 +28,11 @@
   behavior. This phase must demonstrate that the Phase 1 generic interfaces can
   add a real discrete/provider-bound resource without changing kernel,
   coordinator lifecycle, transport, or authority ownership.
-- Later work explicitly out of scope: Phase 7 controls/reconfiguration and Phase
-  8 recovery. This phase may expose safe GPU diagnostics but cannot mutate live
-  providers/configurations remotely.
+- Later work explicitly out of scope: Phase 7 maps an explicitly routed stage's
+  already-canonical hard requirements to one named SLURM profile; Phase 8 owns
+  controls/reconfiguration and Phase 9 owns recovery. This phase may expose safe
+  GPU diagnostics but cannot submit SLURM work or mutate live providers/
+  configurations remotely.
 
 ## Current Source And Harness
 
@@ -54,10 +56,16 @@ In scope:
   topology attributes, health/eligibility state, and planner/provider/
   claim-contract identities. Exclude raw vendor handles, device paths, commands,
   live tokens, serials not required for stable local binding, and unsafe errors.
+- Validate and canonicalize the whole GPU inventory/availability opportunity
+  once per offer revision through the GPU planner before claim search. Invalid
+  device IDs, duplicate capacity, contradictory mode/attributes, bad units/
+  granularity, or malformed topology produce a typed ineligible opportunity and
+  never reach partial candidate generation.
 - Keep configured inventory distinct from current availability. Exclusive
   devices are discrete capacity atoms. Share-capable providers expose exact
   provider-defined VRAM/fraction atoms and live claims already reflected in net
-  availability.
+  availability. Provider observation may conservatively withdraw unhealthy or
+  externally occupied capacity; raw free-memory sampling never creates a share.
 - Add a built-in GPU resource planner and corresponding agent provider adapters
   for explicit modes only:
   - `exclusive`: request a positive integer device count; select exact device
@@ -74,9 +82,17 @@ In scope:
 - Never infer sharing from observed free VRAM. Never satisfy one device's 64 GiB
   minimum by summing several 12 GiB devices. A multi-GPU request must state its
   device count and per-device/relationship requirements explicitly.
+- Define the guarantee honestly: the planner proves advertised capacity and
+  claim feasibility for the declared request, while the provider proves the
+  selected binding/isolation mode. Loom does not infer the workload's true peak
+  VRAM or guarantee against an under-declared job OOM. Exclusive allocation
+  grants the device, not a VRAM usage cap; share/fraction modes may claim caps
+  only when the named provider enforces them.
 - Normalize all VRAM to integer bytes. Reject binary floating point, implicit
   fractional GPU, unsupported mode, invalid granularity, incompatible planner/
   provider contract, and ambiguous count-versus-capacity requests at admission.
+  The `provider` field is a site-allowlisted semantic capability alias; it cannot
+  name/import/activate implementation code.
 - Bind exact selected device/share identities in the claim, assignment, agent
   journal, worker environment/binding plan, output provenance where already
   appropriate, and release operation. Do not expose unsafe device details to
@@ -86,10 +102,13 @@ In scope:
   rejects an offer or candidate when contract/data versions or fingerprints are
   unavailable/incompatible. A restarted/reconfigured provider cannot adopt an
   old live token under a different identity.
-- Add built-in hard constraint specs for exact target, allowed/prohibited agent
-  attributes, GPU count, allocation mode, per-device minimum VRAM, model/
-  feature requirements, and the bounded topology relationships currently
-  consumed by Stage 29 (for example same advertised fabric group when supported).
+- Keep intrinsic GPU requirements in the GPU planner: device count, allocation
+  mode, per-device minimum VRAM/model/features, and relationships among the
+  selected GPU instances (for example same advertised fabric group). Do not
+  duplicate these semantics as built-in hard evaluators. Built-in additive hard
+  constraints are for the complete placement: exact agent target,
+  allowed/prohibited agent or site attributes, and genuine cross-resource
+  relationships.
 - Keep hard target distinct from preference:
   - a stage/run hard target makes every other agent infeasible;
   - an ordered preferred-agent rule ranks feasible agents and may fall back;
@@ -100,18 +119,29 @@ In scope:
   resources plus deterministic stable tie-breaking. Preferences are attached to
   resolved stage placement, so a training-stage GPU preference does not affect
   preprocess/evaluate stages that do not request that resource.
-- Separate preference score from waiting behavior. An explicit bounded
-  wait-then-fallback policy may keep a stage pending for a preferred placement,
-  then allow lower-ranked feasible candidates. Site policy owns allowed tiers,
-  weight bounds, maximum wait, and whether a client may request them.
-- Apply preference precedence deterministically. Site-defined mandatory
-  preference tiers/weights are not overridden by arbitrary client numbers;
-  client values are normalized and bounded at admission. Scores use exact
-  bounded integers and reasons are safe/structured.
+- Keep pack/fill and agent/model preference distinct from cluster policy.
+  They rank feasible placements for one ready stage; they do not account for
+  historical user shares, preempt a running assignment, jointly optimize a
+  batch, or combine several agents for one distributed/gang stage.
+- Separate preference score from waiting behavior. Each resolved preference has
+  an immutable ID, site-owned tier/weight, bounded utility range, and declared
+  `PREFERRED`/`FALLBACK`/optional `NEUTRAL` quality-band schema. The kernel uses
+  checked integer arithmetic to form one total per ordered tier and compares
+  vectors lexicographically before a stable identity tie-break; registration
+  order and a large lower-tier score cannot change higher-tier precedence.
+- An explicit bounded wait-then-fallback gate names one guarded preference. Its
+  deadline is `stage_work.ready_at + wait_duration`, and eligibility is
+  evaluated from the immutable snapshot `as_of`: only the `PREFERRED` band may
+  be selected before the deadline, while declared `FALLBACK` candidates re-enter
+  afterward. Restart does not reset the wait. Site policy owns allowed tiers,
+  weight bounds, maximum wait, band schemas, and whether a client may request
+  them; clients cannot submit raw tiers or weights.
 - Preserve default scheduler work ordering across runs. Preferences rank only
-  candidates for the selected stage; they do not reorder DAG readiness or make
-  an infeasible candidate valid. An earlier proven-infeasible stage may still be
-  bypassed for other usable capacity.
+  complete feasible candidates for the same stage; their vectors are not
+  comparable across unrelated work, do not reorder DAG readiness, and cannot
+  make an infeasible candidate valid. An earlier proven-infeasible or exhausted
+  work item may be bypassed for later complete feasible work, but partial GPU
+  search output is never assignable and exhaustion is never infeasibility.
 - Extend public conformance coverage with GPU and a synthetic downstream
   resource/provider demonstrating exact custom capacity atoms and contract
   negotiation. Prove the kernel itself required no resource-specific branch.
@@ -128,17 +158,27 @@ Out of scope:
   free-VRAM guessing, combining VRAM across devices for one-device minima,
   arbitrary topology graph optimization, multi-agent/gang stages, preemption,
   fair-share, power/cost policy, or a general solver.
+- SLURM directive mapping, external queue capacity, automatic agent/SLURM
+  fallback, or pretending managed-agent GPU/model preferences influence SLURM's
+  eventual node choice. Phase 7 must map every applicable hard semantic or
+  reject its explicit route; soft agent/device preferences are not silently
+  transferred.
 - Floating licences or globally consumed resources without one explicit
   transactional owner. Future resource kinds may use the generic interfaces but
   are not Stage 29 deliverables.
 - Vendor provisioning, driver installation, automatic hardware discovery into
   policy, remote provider loading, or claiming performance/health beyond the
   configured provider evidence.
+- General host telemetry/load prediction or treating unaccounted external GPU
+  processes as schedulable capacity. Sites must withhold capacity a provider
+  cannot safely observe/control.
 
 Assumptions:
 
 - An exclusive provider can bind stable local device identities for the lifetime
   of an inventory revision and assignment.
+- Authored resource estimates and project code are trusted workload input; the
+  scheduler prevents known impossible placement but does not infer peak usage.
 - VRAM-share/fractional support is enabled only when a real selected provider can
   enforce its advertised semantics; otherwise those modes fail closed.
 - Site configuration defines any default model/agent order. Loom ships neutral
@@ -206,16 +246,19 @@ This encoding is local to the named GPU mode; it does not widen CPU or every
 ### Hard then soft
 
 ```python
-candidates = kernel.generate_candidates(stage, snapshot, budget)
-feasible = kernel.apply_mandatory_and_hard_rules(candidates)
-scored = kernel.apply_preferences(feasible)
-selection = policy.select(scored)
+search = kernel.generate_complete_candidates(stage, snapshot, budget)
+if search.outcome is COMPLETE:
+    feasible = kernel.apply_mandatory_and_hard_rules(search.candidates)
+    scored = kernel.apply_checked_tier_preferences(feasible)
+    eligible = kernel.apply_fallback_gate(scored, as_of=snapshot.as_of)
+    work_evaluation = kernel.group_work(stage, eligible)
 ```
 
-The kernel validates that every scored/selected ID came from the current
-candidate set and that all required evaluators ran. Preferences can add bounded
-scores only after feasibility. `wait_for_preferred` is a policy result with a
-deadline/fallback state, not an infinite score.
+The policy later selects only an existing work/candidate pair from grouped work
+evaluations. The kernel validates that every scored/selected ID came from the
+same complete current candidate set and that all required evaluators ran.
+Preferences contribute bounded utility/band evidence only after feasibility;
+the kernel owns weights, tier totals, fallback eligibility, and stable ties.
 
 ### Example placement
 
@@ -259,11 +302,14 @@ kernel branches, or allow preferences to change feasibility.
 
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
-| Per-device VRAM is not aggregate VRAM | GPU planner | Ambiguous request/inventory | OOM placement | 12/80 GiB and multi-device tests |
+| Per-device VRAM is not aggregate VRAM | GPU planner | Ambiguous request/inventory | Placement known not to satisfy the declared minimum | 12/80 GiB and multi-device tests; no broader OOM claim |
+| Offered capacity is provider-accounted manageable capacity | Agent configuration + provider observation | Unaccounted external occupancy or best-effort telemetry | Overcommit beside non-Loom use | External occupancy withdrawal, withheld-capacity, and raw-free-memory negative tests |
+| GPU intrinsic semantics have one owner | GPU planner | Duplicate hard evaluator or malformed opportunity | Planner/rule disagreement about count, mode, model, or topology | Opportunity validation and no-duplicate-rule tests |
 | Sharing requires enforceable named provider | Validator/planner/provider negotiation | Free-VRAM observation, float, malformed rational, or request text | Unsafe oversubscription | Unsupported/mismatch/canonical-rational/granularity tests |
 | Exact selected devices/shares conserve | Coordinator atoms + agent provider | Concurrent assignments/pool views | Device collision | Barrier/property/release tests |
 | Planner/provider/contract identities agree | Composition and assignment validation | Restart/config drift | Wrong binding semantics | Version/fingerprint/restart tests |
-| Hard rules precede preferences | Scheduling kernel | Scorer/policy | Preference bypasses feasibility | Invalid/scoring mutation tests |
+| Complete intrinsic feasibility and hard rules precede preferences | GPU planner + scheduling kernel | Exhausted search, scorer, or policy | Omitted/bad device or preference bypasses feasibility | Exhaustion, invalid-output, and scoring mutation tests |
+| Preference precedence and fallback are restart-stable | Kernel tier aggregation and durable-time gate | Client weights, registration order, overflow, or restart clock | Wrong device/agent or premature fallback | Tier/weight overflow, band, stable-tie, and restart-`as_of` tests |
 | Preference applies only to relevant stage/resource | Placement resolver/scorer | Run-wide default | CPU work unnecessarily constrained | CPU preprocess/GPU train tests |
 | Target and preference are distinct | Hard evaluator versus scorer/policy | User config | Silent fallback or unnecessary pending | Offline target/preferred fallback tests |
 | Kernel remains resource-neutral | Scheduling package boundary | GPU implementation | Core coupling | Import/source contract plus synthetic resource test |
@@ -277,9 +323,10 @@ kernel branches, or allow preferences to change feasibility.
 2. Implement GPU planner and agent provider adapters with exact device/share
    bind/reconcile/activate/release, composite CPU/memory/GPU admission, and
    concurrency/drift/crash tests.
-3. Add hard GPU/target rules, stage-relevant agent/model/attribute/packing
-   preferences, bounded site/client precedence, wait/fallback policy, safe
-   explanations, and deterministic permutation tests.
+3. Keep GPU-intrinsic requirements in the planner; add complete-placement
+   target/agent/cross-resource hard rules, stage-relevant agent/model/attribute/
+   packing preferences, checked site-tier vectors, quality bands, durable-time
+   fallback, safe explanations, and deterministic permutation tests.
 4. Integrate multi-agent GPU stage execution, synthetic downstream resource,
    status/docs/config examples, simulated E2E, and optional real-GPU receipt.
 
@@ -288,9 +335,9 @@ kernel branches, or allow preferences to change feasibility.
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | Required | GPU adapters do not pollute generic imports | Scheduling core remains vendor/driver free |
-| Unit | Required | Request modes, exact units, candidate feasibility/scoring | Count/bytes/rational boundaries; per-device VRAM; target/preference/fallback |
-| Contract | Required | Planner/provider and custom resource behavior | Negotiated contract, stable atoms, partial prepare, malformed/unknown versions |
-| Integration | Required | Global capacity and exact bind | Concurrent device claims, pool overlap, drift decline, release and retry |
+| Unit | Required | Request modes, exact units, complete candidate feasibility/scoring | Count/bytes/rational boundaries; malformed opportunity; per-device VRAM; tier dominance/overflow; target/preference/band/fallback restart |
+| Contract | Required | Planner/provider and custom resource behavior | Negotiated contract, stable namespaced atoms, complete/exhausted search, validated claims, partial prepare, malformed/unknown versions |
+| Integration | Required | Global capacity and exact bind | Concurrent device claims, pool overlap, external occupancy withdrawal, drift decline, release and retry |
 | E2E / opt-in | Required simulated; optional GPU | Stage-specific placement | CPU preprocess/GPU train across logical agents; optional configured hardware receipt |
 
 Targeted commands are fixed during phase preparation. Final commands:
@@ -301,8 +348,11 @@ Targeted commands are fixed during phase preparation. Final commands:
 ## Risks, Review, And Stops
 
 - Main risks: treating total VRAM as per-device, inferring isolation from free
-  VRAM, hidden provider consumption, score overflow/client policy abuse,
-  preference leakage to unrelated stages, or provider identity drift.
+  VRAM, hidden provider consumption, duplicating planner semantics in hard
+  rules, assigning from incomplete search, score overflow/client policy abuse,
+  restart-relative fallback, preference leakage to unrelated stages, or
+  provider identity drift; or implying that a declared request guarantees actual
+  peak use or prevents OOM.
 - Review focus: exact mode semantics, atom conservation, final binding,
   planner/provider/contract separation, hard-before-soft, and generic core
   independence.
@@ -310,8 +360,9 @@ Targeted commands are fixed during phase preparation. Final commands:
   device identity cannot be made stable for one inventory revision; a resource
   needs hidden capacity outside atoms; or implementing GPU requires database/
   provider logic inside `loom.scheduling`.
-- Accepted debt: bounded heuristics may not find globally optimal packing and
-  default FIFO can starve large jobs. Revisit with measured demand.
+- Accepted debt: complete bounded heuristics may report `EXHAUSTED` rather than
+  assign from an unproven partial prefix, and default FIFO can starve large
+  jobs. Revisit proof contracts or fairness only with measured demand.
 
 ## Executor Handoff
 
@@ -320,8 +371,9 @@ Targeted commands are fixed during phase preparation. Final commands:
 - Prove exact simulated behavior before optional hardware tests. Do not make
   default CI depend on a GPU or vendor library.
 - Decisions not to revisit: integer CPU, byte-exact VRAM, explicit GPU modes,
-  per-device minima, generic kernel, hard-before-soft, target/preference
-  separation, and provider-gated sharing.
+  per-device minima, planner-owned intrinsic GPU feasibility, complete-only
+  search, generic kernel, hard-before-soft, site-tier/band/fallback algebra,
+  target/preference separation, and provider-gated sharing.
 - Escalate any need for implicit sharing, aggregated per-device minima, a new
   global resource owner, general solver, or heavyweight dependency.
 

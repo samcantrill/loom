@@ -147,11 +147,14 @@ extension. A passing report is evidence only for its supplied cases.
 Stage 29 plans bounded checks for its explicitly composed scheduling seams:
 
 ```text
-resource planner          validator separation, claim-contract/versioning,
-                          exact capacity atoms, conservation, bounds
+resource planner          validator separation, opportunity canonicalization,
+                          complete claim search/validation, contract/versioning,
+                          namespaced exact capacity atoms, conservation, bounds
 hard constraint evaluator spec resolution, additive rejection, immutability
-preference scorer         spec resolution, bounded score, feasibility neutrality
-scheduling policy         existing-candidate-only selection and determinism
+preference scorer         spec resolution, bounded utility/quality band,
+                          feasibility neutrality, tier/fallback evidence
+scheduling policy         grouped existing-work/candidate-only selection,
+                          typed wait, determinism
 agent resource provider   idempotent closed prepare/activate/abort/reconcile/
                           release and partial-composite cases
 ```
@@ -162,15 +165,112 @@ not access hardware, stores, networks, discover plugins, enforce termination,
 or certify safety. The scheduling kernel separately validates every extension
 result before mutation even when conformance has previously passed.
 
+Kernel tests separately require complete per-resource/composite search before
+assignment, checked lexicographic site tiers, stable ties, durable-ready-time
+fallback across restart, typed work-conserving bypass of exhausted older work,
+and rejection of malformed/unknown work-candidate output. Coordinator tests use
+barriers to prove that the assignment CAS, not ready-work projection, enforces
+`max_parallel_stages` and records a bounded reconstructable policy-decision
+receipt. Configuration tests retain exact component descriptors for pending
+work/live claims or reject reload before swap. They also prove that coordinator
+scheduling reload and agent pool/provider reload are independent owner-local
+transactions and that temporary claim-contract skew makes an opportunity
+ineligible rather than partially applying either configuration.
+
 Stage 29 transport and lifecycle integration tests separately prove the
 coordinator-authority trust boundary: direct/owner-only IPC/HTTP adapters have
 the same scoped semantics, the wrong authority service/workspace/generation or
-principal fails before mutation, a rotated generation resumes only after the
-complete retained-run continuity set agrees, pristine-empty bootstrap is
-accepted only when the coordinator has no retained run, and agent/worker
-environments contain neither authority credentials nor direct database access.
+principal/owner binding fails before mutation, a rotated generation resumes
+only after one authority-owned consistent authority-relevant cut agrees or
+advances through ordered receipts for coordinator intents persisted before
+send. The dual-restart committed-response-lost case succeeds through that
+receipt; regression, missing receipt, unexplained mutation, owner/intent
+mismatch, and torn per-run reads are rejected. Pristine-empty bootstrap is
+accepted only when the coordinator has no authority-relevant retained
+admission/tombstone, and agent/worker environments contain neither authority
+credentials nor direct database access.
 Real loopback TLS fixtures are Stage 29 test assets; they are not assumed to
 exist in the current source.
+
+Ready-stage SLURM validation reuses the fake `SlurmCommandRunner`, script/
+resource mapping fixtures, Phase 2 launcher sentinel, and Phase 5 relay harness.
+Default CI must prove the full lifecycle without a cluster:
+
+```text
+route/profile    default versus explicit, authorization, retained fingerprint,
+                 unavailable/full/unmappable, and no agent/profile fallback
+submission       intent and SUBMITTING durability crossed with accepted,
+                 definite rejection, timeout, malformed/lost response, handle-
+                 commit failure, restart, and one-sbatch sentinel
+discovery        zero unproven, one exact, multiple/conflicting operation matches
+bootstrap        registration before/after handle, input before grant, grant-
+                 response loss, duplicate/requeue incarnation, one-root sentinel
+result/status    SLURM terminal versus absent/stale/current-fence Loom result and
+                 accessible/missing output refs
+control/recovery effective authority cancel at every submit/bootstrap/start edge,
+                 scancel-request semantics, weak/strong containment, late result
+compatibility    existing whole-run queue, single-job, and afterok flows unchanged
+```
+
+The required simulated E2E is a mixed route such as
+`preprocess(agent) -> train(SLURM) -> evaluate(agent)`: only dependency/output
+commit exposes the next stage, the run has one owner, the SLURM stage causes at
+most one submit/root, and descendants wait for the fenced Loom output commit.
+The existing real-SLURM suite remains opt-in and may add a bounded profile/
+bootstrap receipt; it cannot be the only evidence for any correctness edge.
+
+The remaining Stage 29 correctness matrix is causal rather than Cartesian:
+
+```text
+admission       PENDING_AUTHORITY outage/replay/promotion, lost response, changed
+                digest or execution owner, pending cancellation before ACTIVE,
+                embedded/daemon/delegated conflict
+identity        stable coordinator ID versus process epoch; stable stage-work
+                ID across rebuild; old issuer replay versus stale new operation
+events          duplicate, gap, contiguous durable ack, timeout after commit
+sessions        coordinator-issued ID replay/persist-before-offer, same-session
+                registration intent persisted before send, reconnect,
+                cooperative complete-empty rollover, unresolved or lost-journal
+                refusal, late old-session tombstone
+deployment      explicit initialize versus open-only roots; duplicate-owner
+                locks; authority/coordinator/agent start-order matrix; early
+                agent zero-availability reconnect; no inbound agent listener;
+                fresh current-epoch offer after coordinator restart
+security        current credential-policy recheck on ordinary and long-poll
+                requests; revoked connection cannot mutate or imply retirement
+cancellation    request before authority outage; effective epoch versus
+                readiness/bind/grant/terminal/retry races; SLURM intent/
+                submitting/bootstrap/start/result and scancel-observation races
+status          non-atomic join boundary, owner revisions, coordinator-accepted receipt
+                times/freshness, skewed remote clocks, unavailable-owner stale
+                evidence, fixed summary precedence without lifecycle overwrite
+time            accepted-time high-water, restart, local rollback/out-of-policy
+                jump, retained-offer withdrawal, fallback and recovery
+transfer        stable transfer versus renewable authorization, expiry/restart,
+                exact offset/content/finalize replay and conflicting overlap
+resources       configured manageable capacity, external occupancy withdrawal,
+                exclusive-device versus enforced-share semantics, honest OOM limit
+recovery        success/failure/cancellation before close, positive containment,
+                lifecycle close versus physical provider/profile-slot release,
+                SLURM zero/one/multiple handle reconciliation, complete claim/
+                control/transfer/event/outbox session set
+durability      commit-before-success/ack, distinct local SQLite roots, alias/
+                permission/lock/schema/high-water failures, missing/corrupt/
+                identity-mismatched expected roots, explicit first-init versus
+                open-only restart, no empty/memory fallback
+composition     bounded command exit/reopen/resume, retained tombstones, active-
+                daemon routing, unreachable/conflicting role-lock refusal
+boundaries      one stage claim cannot combine agents; priority/preferences do
+                not preempt; no fair-share ledger or batch-solver mutation;
+                explicit ready-stage SLURM remains an external target,
+                historical whole-run delegation remains separate, and
+                unallocated nodes never appear as Loom offers
+```
+
+Use controlled SQLite/process/network barriers at the named edge. A 2xx/5xx or
+connection close alone is never asserted as lifecycle truth; tests inspect the
+owning durable record and replay the same idempotency identity after an
+indeterminate outcome.
 
 ---
 

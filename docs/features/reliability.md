@@ -65,10 +65,10 @@ dashboard delivery
 Executor and store implementations enforce parts of the policy, but the policy
 model should stay shared.
 
-## Stage 29 Managed Recovery Direction
+## Stage 29 Managed And Explicit-SLURM Recovery Direction
 
 Stage 29 makes reliability assignment- and stage-aware for the managed local/
-multi-agent path. This section records planned behavior; the authoritative
+multi-agent path and its explicit ready-stage SLURM target. This section records planned behavior; the authoritative
 contracts and phase ownership remain in
 [Stage 29 planning](../roadmap/stage-29/planning.md).
 
@@ -81,25 +81,78 @@ contracts and phase ownership remain in
 - Disconnect, timeout, missing PID, expired offer, or credential change does not
   prove failure or containment. Accepted unknown work is not automatically
   reassigned and does not consume retry budget.
+- A SLURM submission operation commits `SUBMITTING` before one automatic
+  `sbatch` invocation. Accepted returns an exact job handle; positive non-
+  acceptance may be definitely rejected; every timeout, crash, interruption,
+  malformed success, or lost handle commit is unknown. Restart reconciles the
+  stable operation ID and never submits it again. Zero unproven scheduler
+  matches stay unknown and multiple matches conflict.
+- The fixed SLURM bootstrap obtains the same authority grant/fence before one
+  authored root launch. Duplicate/requeued incarnations cannot receive another
+  start permit. SLURM `COMPLETED` without a current-fence Loom result and
+  accessible outputs is not success, and `scancel` acknowledgement is not
+  containment.
 - Coordinator/authority restart reconciles durable state before new work.
-  Authority generation change requires every retained run to reproduce its
-  last-acknowledged revision/canonical full-snapshot fingerprint plus exact
-  nonterminal fence state; coordinator checkpoints remain evidence rather than
-  authority truth. A pristine empty authority is valid only when the coordinator
-  has no retained admitted run. Agent restart begins at zero availability and
-  preserves unknown claims until exact reconciliation.
+  Every coordinator-originated authority mutation has a durable local intent
+  before send and an authority receipt committed with the domain mutation.
+  Authority generation change uses one authority-owned consistent cut: each
+  authority-relevant retained admission/tombstone must exactly match its
+  checkpoint or advance through an ordered chain of matching receipts.
+  Regression, missing receipt, unexplained mutation, owner/intent mismatch, and
+  torn reads fail closed; checkpoints remain evidence rather than authority
+  truth. A pristine empty authority is valid only when the coordinator has no
+  authority-relevant retained admission/tombstone. Agent restart begins at zero
+  availability and preserves unknown claims until exact reconciliation.
+- After explicit first initialization, service order is not a recovery proof or
+  safety dependency. An agent may start before the coordinator and reconnect at
+  zero availability; a coordinator without authority may admit only
+  `PENDING_AUTHORITY`; a coordinator without agents retains no-capacity waiting
+  work. A new connection never resumes work or capacity until session/event/
+  claim reconciliation and a fresh current-epoch offer/work request complete.
 - Manual recovery requires an authenticated expected-state operation and
-  positive containment tied to the exact agent/session/process boundary.
+  positive containment tied to the exact target boundary: agent/session/process
+  for managed work, or profile/submission/job/bootstrap/process fence for SLURM.
   Recovery intent freezes ordinary mutation but still durably retains terminal
-  facts for the current execution fence. Immediately before close, reachable
-  complete success is finalized or blocks recovery. Authority success commit
-  and recovery close compete on the same expected fence: success winning
-  supersedes recovery; close winning makes only later results stale.
+  facts for the current execution fence. Immediately before close, every
+  reachable complete verified terminal fact follows its normal authority path
+  or blocks recovery. Success supersedes recovery; definitive failure/
+  cancellation supplies its own outcome rather than being overwritten. Any
+  terminal commit and recovery close compete on the same expected fence; close
+  winning makes only later execution facts stale.
 - Only after definitive close may the existing reliability policy consider a
   fresh attempt, with newly resolved placement and no copied claim, device,
-  offer, session, or provider token. Loom does not claim exactly-once authored
+  offer, session, provider token, submission operation, scheduler handle, or
+  bootstrap identity. Its authored explicit route/profile alias remains fixed;
+  retry never switches target type automatically. Loom does not claim exactly-once authored
   external effects; an explicit requeue after proven containment may repeat
   effects that occurred before observation was lost.
+- Authority execution close and agent physical release are separate. Old
+  capacity remains unavailable until exact provider release/reconciliation or a
+  positively contained replacement session publishes fresh fully observed
+  inventory. Exact late cleanup may close only the old claim and cannot mutate a
+  new attempt.
+  For SLURM work, authority close likewise does not release a profile admission
+  slot until exact external/bootstrap containment and result disposition are
+  recorded. Queue/accounting absence, timeout, retention expiry, operator text,
+  and `scancel` success are insufficient containment evidence.
+- Clean session rollover requires cooperative empty-set retirement. Privileged
+  replacement enumerates assignments, provider claims/preparations, delivery,
+  controls, transfers, results/outputs, sequenced events, and outbox facts; every
+  member must be terminal/released or positively contained before a new zero-
+  availability session starts.
+- Required state mutations and event acknowledgements become successful only
+  after their SQLite transactions meet the configured crash-durability
+  contract. Explicit initialization is the only operation that may create a
+  verified absent/empty role root. Ordinary open/start against an expected root
+  that is missing, corrupt, or bound to another role identity is lost-state
+  recovery and blocks; it never becomes an empty restart.
+- Transfer authorization expiry stops only later byte operations. Stable
+  transfer identity and exact progress survive renewal, coordinator restart,
+  and replay; neither expiry nor reconnect releases work or deletes staged data.
+- Coordinator offer/fallback/status time is accepted through one persisted
+  nondecreasing high-water. A local clock regression or out-of-policy jump
+  degrades and pauses new scheduling, withholds retained offers, and requires
+  coherent time/session reconciliation rather than extending stale capacity.
 
 ## Design Goals
 

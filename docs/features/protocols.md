@@ -584,8 +584,13 @@ under the whole-run queue package.
 
 `ResourcePlanner` does not replace the existing resource-validator protocol.
 Validation owns authored/runtime entry shape and canonicalization; the planner
-receives those accepted values and owns scheduling merge, feasibility, and
-claims. Reconstruction preserves their separate identities.
+receives those accepted values and owns scheduling merge, closed opportunity
+validation/canonicalization, intrinsic resource feasibility, complete bounded
+claim search, claim validation, and explanations. Intrinsic means quantity,
+unit, allocation mode, per-instance attributes, and topology among instances of
+that resource. Additive hard evaluators operate only on complete placements and
+own cross-resource, agent, pool/site, or whole-placement predicates.
+Reconstruction preserves validator and planner as separate identities.
 
 The dependency direction is deliberate: `loom.scheduling` does not import
 `loom.pipeline` at runtime. Its protocols consume scheduling-owned immutable
@@ -599,28 +604,41 @@ Reason:
 
 ```text
 their semantics depend on resolved stage placement, versioned agent inventory/
-availability, bounded candidate claims, mandatory-versus-additive feasibility,
-integer preference vectors, exact reservation units, and scheduler-safe
+availability, complete bounded candidate claims, mandatory-versus-additive
+feasibility, checked tiered preference vectors and quality bands, exact
+namespaced reservation units, and scheduler-safe
 explanations/proposals
 ```
 
 The fixed `SchedulingKernel` is concrete rather than a public full-scheduler
-protocol. It owns component/version validation, bounded candidate construction,
-non-overridable system checks, additive-rule/score ordering, proposal validation,
-and the guarantee that scheduling returns data without mutation. A custom hard
-evaluator may only remove a candidate, a preference may only add a bounded
-integer score, and a policy may select only an existing kernel-validated
-candidate ID or a typed wait. None may reserve, bind, launch, or commit stage
+protocol. It owns component/version validation, complete bounded per-resource
+and composite candidate construction, non-overridable system checks,
+additive-rule ordering, checked site-owned lexicographic tier aggregation,
+durable-time fallback eligibility, grouped-work proposal validation, and the
+guarantee that scheduling returns data without mutation. Any exhausted search
+is indeterminate and cannot authorize assignment; Stage 29 has no partial-search
+winner-proof contract. A custom hard evaluator may only remove a complete
+candidate, a preference may only return bounded utility/quality-band evidence,
+and a policy may select only an existing kernel-validated
+`(stage_work_id, candidate_id)` from grouped `WorkEvaluation` values or a typed
+wait. None may reserve, exceed run concurrency, bind, launch, or commit stage
 truth.
 
 Hard evaluators and preference scorers also validate/canonicalize their own
 bounded tagged specs at admission. Only resolved immutable specs enter a
 scheduling snapshot; invalid, unknown, or nondeterministically reconstructed
 specs fail before queueing. `SchedulingPolicy` is selected/configured only by
-trusted deployment composition and is validated before readiness.
+trusted deployment composition and is validated before readiness. It belongs
+to a coordinator scheduling epoch rather than a stage placement; each
+assignment records that policy descriptor and bounded decision evidence so a
+later policy epoch can reorder only still-unassigned work.
 
 Each implementation has a scheduling-subsystem descriptor and is supplied
-through an instance-local registry frozen by trusted deployment composition.
+through an instance-local registry frozen for one trusted deployment
+configuration epoch. Registries distinguish active bindings for fresh
+resolution from exact descriptor-keyed retained bindings required by
+nonterminal work or live claims; reload preserves all references or fails
+before swap.
 The descriptor separates implementation fingerprint from a non-secret canonical
 configuration fingerprint; changing configured semantics creates a new identity
 even when package code is unchanged.
@@ -646,6 +664,107 @@ in-memory-test, direct, and HTTP implementations, but are not package-root
 plugin APIs. Their methods express semantic atomic transitions and least-
 privilege views rather than generic CRUD or one broad service object.
 
+Stage 29 adds a concrete ready-stage SLURM composition, not a generic
+`ExternalScheduler` plugin protocol. Existing `SlurmCommandRunner`, pure
+resource/directive mapping, deterministic script rendering, parsable job-ID,
+status, and cancel seams remain under `loom.pipeline.executors.slurm`. The
+coordinator application/store owns the durable route/profile admission,
+submission-operation state machine, exact handle reconciliation, bootstrap
+authorization, and lifecycle join. Historical whole-run queue/live SLURM
+controllers keep their separate ownership.
+
+The coordinator assignment target is a closed tagged value. The managed variant
+names an agent/session/offer/claim. The SLURM variant names one retained profile,
+request fingerprint, and stable submission operation and holds no agent claim.
+Semantic store operations atomically enforce the run concurrency/profile slots,
+bind the exact authority attempt, persist intent/`SUBMITTING`, record the closed
+accepted/definitely-rejected/unknown outcome, associate one exact scheduler
+handle, and reconcile restart. They do not expose generic submit-row CRUD or
+permit a second automatic external call.
+
+A separate restricted bootstrap application view is an infrastructure port. Its
+construction captures an assignment-scoped principal; operations verify the
+exact profile, assignment, submission operation, scheduler job, bootstrap
+incarnation, request digest, issuer epoch, and fence. It may register/reconcile,
+use the assignment-scoped artifact port, request one exact grant/start permit,
+and report process/result facts. It cannot publish offers, accept arbitrary
+work, inspect unrelated runs, submit jobs, impersonate an agent, or invoke
+authority directly. Direct test adapters and authenticated transport adapters
+must produce the same domain outcomes.
+
+Remote agents use an outbound-only topology. They authenticate the expected
+coordinator, perform a no-mutation capability handshake, register or resume the
+coordinator-issued durable session, reconcile journal/outbox/claim/transfer
+facts, publish a fresh current-epoch offer, and hold one availability-revision-
+bound long poll. The coordinator—not the poll or agent—chooses one globally
+validated ready-work/candidate pair and completes that exact request after its
+reservation transaction. Agents expose no inbound scheduling listener and do
+not communicate with peers. Local direct/IPC and remote HTTP adapters must
+produce the same application outcomes.
+
+Protected role configuration supplies explicit local state roots, endpoints
+and expected service identities, trust/certificate/key references, principal/
+pool policy, manageable provider-backed resources, scheduling components, and
+resident capabilities, plus protected named SLURM profiles and bootstrap
+credential/data-path configuration when enabled. These are deployment inputs rather than protocol body
+authority. Exact CLI/env names and route layout remain private; private keys and
+authority credentials never enter job configuration, durable work records,
+offers, audit output, or worker environments.
+
+After explicit first initialization, inter-service startup order is not a
+protocol dependency. An early agent reconnects at zero availability, a
+coordinator without agents retains waiting work, and a coordinator without its
+authority may admit only `PENDING_AUTHORITY`. Authority then coordinator then
+agents is the recommended low-noise order, not a safety requirement. A new
+connection or process epoch never creates capacity: reconciliation and a fresh
+offer/work request are mandatory before delivery.
+
+Reload is split at that owner boundary. The coordinator's transaction validates
+and swaps planners, hard evaluators, preference scorers, scheduling policy, and
+SLURM profiles while retaining exact profile bindings named by nonterminal
+submissions.
+An agent's independent transaction validates and swaps its pools, providers,
+inventory, and resident capabilities. Each retains the descriptors referenced
+by its own durable nonterminal state. There is no distributed configuration
+transaction; incompatible claim-contract revisions temporarily make an
+opportunity ineligible.
+
+Those semantic ports also fix identity and replay behavior. Managed admission
+atomically creates-or-returns one `(coordinator_id, run_uri)` record
+bound to a normalized intent digest and execution owner. Its coordinator commit
+may be `PENDING_AUTHORITY`, with the authority-operation intent already durable;
+only reconciliation of the exact authority owner, intent digest, and operation
+receipt promotes it to `ACTIVE` and exposes work. Exact replay returns either
+state and conflicting intent/owner is not another admission. A stable
+coordinator ID belongs to the state root while a process epoch rotates;
+assignments preserve their issuer epoch. `StageWorkRecord` rebuild reproduces
+the same ID for its admission/stage/attempt/readiness-generation key.
+
+Critical agent events carry stable IDs and a monotonic per-assignment sequence.
+The coordinator transition accepts next-or-exact-replay, reports gaps without
+advancing, and acknowledges only durably stored contiguous evidence. Direct and
+HTTP adapters expose the same definite domain outcomes. Timeout, disconnect,
+caller cancellation, or 5xx after send is indeterminate and must replay the
+same principal/operation/idempotency-key/request-digest; connection close is not
+a domain cancellation command.
+
+An agent reconnect normally resumes its durable session. Clean rollover is a
+semantic retirement transaction requiring the authenticated old session,
+fenced delivery, and an exact empty complete session-reference set,
+followed by a tombstone. Any non-empty, lost, or unavailable old session uses the
+separate positive-containment recovery operation. These are infrastructure
+contracts, not an extensible session provider.
+
+Session allocation is a coordinator idempotent operation; the agent persists
+the registration operation identity/digest before send and the returned session
+identity before its first offer. The authoritative retirement query
+also covers provider preparations, work requests/delivery, results/outputs, and
+sequenced event/outbox state, and must be extended when another session-scoped
+durable reference is introduced. Authentication is evaluated against the
+current credential-policy revision on every request and long-poll renewal.
+Credential removal fences future operations on an existing connection but does
+not itself retire a session or contain a process.
+
 Per-run authority remains a separate service/API owner. Stage 29 adds only a
 narrow coordinator authority adapter whose construction captures an
 authenticated least-privilege coordinator principal and expected authority
@@ -653,13 +772,41 @@ service/workspace/generation identity. Direct or verified owner-only IPC and
 persistent mTLS HTTP adapters invoke the same authority authorization and
 expected-state operations. This is infrastructure, not a downstream plugin
 protocol; agents and workers never receive it or direct authority database
-access. A separate coordinator infrastructure reconciler may adopt a rotated
-service generation only after complete retained-run continuity: every retained
-run reproduces its last-acknowledged authority revision/canonical full-snapshot
-fingerprint and each nonterminal attempt/execution fence matches exactly. The
-coordinator checkpoint is comparison evidence, not authority truth. A pristine
-empty authority is valid only when the coordinator has no retained admitted
-run. Neither the scheduling kernel nor an agent may make that decision.
+access. The authority also binds each managed run to the stable coordinator ID
+and owns the effective cancellation epoch; the coordinator owns only the durable
+client request and control fan-out. A separate coordinator infrastructure
+reconciler may adopt a rotated service generation only after one authority-owned
+consistent authority-relevant cut. Before each coordinator-originated authority
+mutation, the coordinator persists a stable operation ID, canonical intent
+digest, principal, and expected state/revision; authority stores the matching
+receipt atomically with its domain mutation. Each retained admission/tombstone
+must either match the last acknowledged checkpoint or advance through an
+ordered chain of those receipts. A regression, missing receipt, owner/intent
+mismatch, unexplained mutation, or torn cut fails closed. The coordinator
+checkpoint is comparison evidence, not authority truth. A pristine empty
+authority is valid only when the coordinator has no authority-relevant retained
+admission/tombstone. Neither the scheduling kernel nor an agent may make that
+decision.
+
+The transfer port likewise separates durable object identity from permission.
+One immutable assignment-scoped transfer ID owns exact offset/content/finalize
+progress, while a renewable short-lived authorization ID/revision gates byte
+operations. Expiry or coordinator epoch change invalidates only that
+authorization; exact replay resumes the same transfer and conflicting content
+fails closed.
+
+Production role-store ports distinguish explicit initialization from opening an
+existing role. Initialization alone may create a verified absent/empty target
+and stable role identity; ordinary start requires the expected identity and
+fails on missing, corrupt, or mismatched state. In-memory test adapters do not
+weaken this production behavior.
+
+Coordinator infrastructure also owns one injectable/testable time source with
+a durable nondecreasing accepted-time high-water. Scheduling snapshots receive
+its explicit `as_of`; offer expiry, receipt/freshness, and fallback use the same
+accepted time. This is not a public scheduling-policy hook. Runtime clock
+regression or an out-of-policy jump yields a closed degraded outcome and no new
+scheduling until reconciliation.
 
 Dependency readiness is not another resource or scheduler protocol: one
 authority-side planning predicate is shared by orchestration and assignment CAS,

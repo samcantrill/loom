@@ -22,8 +22,9 @@
 
 - Vertical outcome: Loom has one authoritative answer to “which exact stage
   attempts are ready?” and one pure deterministic answer to “where could this
-  already-ready attempt fit?” An admitted run can be reconciled into durable
-  `StageWorkRecord` projections and evaluated against an immutable local
+  already-ready attempt fit?” Every semantic ready attempt in the bounded
+  reconciliation window can be represented by a durable
+  `StageWorkRecord` projection and evaluated against an immutable local
   resource snapshot without reserving capacity, binding the attempt to an
   assignment, or launching a process. The authority idempotently creates or
   returns the exact `PENDING` attempt before the projection names it.
@@ -34,9 +35,10 @@
 - Later work explicitly out of scope: Phase 2 owns every execution side effect
   from logical reservation through local process release, including worker
   request/input materialization. Phase 3 owns daemon/public facade migration.
-  Phases 4–8 own remote trust, transport, GPU placement, controls, and recovery.
+  Phases 4–9 own remote trust, transport, GPU placement, explicit ready-stage
+  SLURM delegation, controls, and recovery.
 
-This is the one deliberate foundation phase in the eight-phase plan. Its
+This is the one deliberate foundation phase in the nine-phase plan. Its
 boundary is safe to merge independently because the kernel is pure, authority
 adds only the idempotent semantic preparation of a `PENDING` attempt as a new
 lifecycle operation, existing authority-owned controller actions remain in
@@ -88,15 +90,25 @@ In scope:
   - exact-stage runtime refinements that cannot weaken those minima;
   - run and pool defaults that affect this stage's placement, including pool and
     optional target/default resource policy;
-  - site-owned hard limits, allowed kinds, preference weights, and search bounds.
-- Keep `max_parallel_stages` as separate run-orchestrator admission policy. It
-  limits exposed/active work for the run but is not a resource request, hard or
-  soft placement rule, or part of the `ResolvedStagePlacement` fingerprint.
+  - site-owned hard limits, allowed kinds, preference weights, and search bounds;
+  - one closed immutable execution route: default `managed_agent`, or an
+    explicitly named site-authorized `slurm` profile descriptor/fingerprint.
+    Route/profile identity enters the placement fingerprint. No resource,
+    candidate, preference, elapsed wait, or availability state may infer or
+    change it. This phase defines/resolves the route value only; Phase 7 owns
+    SLURM request mapping, admission, submission, and bootstrap execution.
+- Keep `max_parallel_stages` as separate assignment-admission policy. It does
+  not hide dependency-ready unassigned work and is not a resource request,
+  placement rule, preference, or part of the `ResolvedStagePlacement`
+  fingerprint. Phase 1 projects all semantic ready work in its bounded window;
+  Phase 2 atomically enforces the limit when reserving an assignment.
 - Keep authored/runtime resource validation owned by the existing
   `ResourceValidator` contract. A higher-level pipeline-runtime adapter converts
   canonical validated `ResourceEntry` values to scheduling-owned immutable
   entry views. A `ResourcePlanner` receives those views and owns scheduling-time
-  merge, feasibility proposals, exact claims, and safe failure explanations.
+  merge, canonical validation of an inventory/availability opportunity,
+  intrinsic quantity/unit/mode/per-instance/same-resource-topology feasibility,
+  complete exact-claim search, claim validation, and safe failure explanations.
   Runtime validates/rebuilds the canonical existing `ResourceRequest` for the
   resolved placement. The view is not a second authored or durable schema;
   durable resolved resources retain validator and planner descriptors separately.
@@ -110,8 +122,10 @@ In scope:
   - `PreferenceScorer` for bounded scoring of already-feasible candidates;
   - `SchedulingPolicy` for selecting one existing validated candidate or wait.
 - Add one concrete `SchedulingKernel` that owns mandatory eligibility checks,
-  bounded candidate orchestration, deterministic ordering, hard-before-soft
-  evaluation, proposal validation, stable tie-breaking, and mutation exclusion.
+  complete bounded per-resource/composite candidate orchestration,
+  deterministic ordering, hard-before-soft evaluation, site-tier preference
+  aggregation, durable-time fallback eligibility, grouped-work proposal
+  validation, stable tie-breaking, and mutation exclusion.
   There is no replaceable lifecycle scheduler.
 - Provide deterministic built-in CPU and memory planner implementations through
   the pipeline-runtime integration layer, plus scheduling-owned built-in target/
@@ -124,10 +138,13 @@ In scope:
   version, implementation version/fingerprint, non-secret canonical
   configuration fingerprint, and supported data versions. Planner and eventual
   provider identities remain distinct from their negotiated wire claim contract.
-- Add explicit instance-local registries. Registration is duplicate-safe;
-  composition is trusted deployment code; registries freeze before work is
-  admitted; submitted/durable data can select only an allowed registered kind
-  and can never import or deserialize an implementation.
+- Add explicit instance-local configuration-epoch registries. Registration is
+  duplicate-safe; composition is trusted deployment code; registries freeze
+  before work is admitted. They distinguish active bindings for fresh
+  resolution from exact descriptor-keyed retained bindings for referenced
+  nonterminal work or live claims; a reconstruction/reload that cannot retain
+  a required descriptor fails closed. Submitted/durable data can select only an
+  allowed registered kind and can never import or deserialize an implementation.
 - Add bounded `loom.testing` conformance checks for the four pure protocols.
   Checks use caller-supplied semantic samples and cannot discover code, access
   hardware, certify termination, or replace kernel validation.
@@ -147,7 +164,8 @@ In scope:
     the existing authority-owned action/output/lifecycle semantics rather than
     copying their truth into coordinator state;
   - invokes that authority operation for only ready `PlanAction.RUN` stages;
-  - honors per-run parallel-stage limits;
+  - projects all semantic ready work in the bounded window without consuming a
+    per-run parallel-stage slot;
   - materializes or refreshes rebuildable `StageWorkRecord` projections;
   - blocks descendants or derives run completion from authority truth.
 - Add the stage-work subset of a semantic coordinator-state store protocol, with
@@ -155,7 +173,11 @@ In scope:
   domain operations rather than generic CRUD. Stage work stores attempt,
   readiness/order evidence, upstream commit identities, resolved-placement
   fingerprint, and scheduling diagnostic state, but never owns stage success,
-  output truth, or retry decisions.
+  output truth, or retry decisions. Its immutable semantic key includes the
+  admitted-run identity, stage, attempt, and readiness generation. Create-or-
+  return must reproduce one stable `stage_work_id`; rebuild may refresh a
+  projection revision but cannot re-key or discard a record referenced by an
+  assignment, control, event, or retained component binding.
 - Produce scheduling decisions and explanations from immutable snapshots for
   tests and later coordinator use. Phase 1 must not persist a reservation or
   assignment and must not call a resource provider, artifact adapter, or
@@ -169,9 +191,27 @@ Out of scope:
 - Persistent daemon/client lifetime, process role locks, public queue migration,
   remote protocols, mTLS, offers, GPU inventory, artifact bytes, cancellation
   controls, or recovery.
+- SLURM command invocation, scheduler-capacity modeling, directive/request
+  mapping, submission records, bootstrap credentials, external status/cancel,
+  automatic agent/SLURM fallback, or allocation-fed agents. Phase 7 fills only
+  the already-resolved explicit SLURM route.
 - Fair-share, preemption, gang/distributed stages, general constraint solver,
   process-global registry, automatic plugin loading, payload-selected callables,
-  or root-level `Scheduler` re-export.
+  proof-carrying partial search, or root-level `Scheduler` re-export.
+
+These exclusions are structural, not synonyms for features already present.
+The completed managed-agent path may place different pipeline stages on
+different agents, but one managed `Candidate` fits one exact stage wholly on
+one agent. An explicit SLURM-routed stage is not an agent candidate and is
+handled by Phase 7 after readiness. A distributed
+stage/gang proposal would combine several agents and require all-or-none batch
+reservation and group launch/failure semantics. Priority selects unstarted work;
+preemption would checkpoint/stop and release an existing assignment. Fair-share
+would add durable user/project usage and entitlement accounting rather than a
+placement score. A general constraint solver would optimize variables for
+several work items/agents and return a snapshot-bound batch, rather than choose
+one existing validated pair. None may be implemented behind the current scorer
+or policy protocols without an accepted owner and mutation contract.
 
 Assumptions:
 
@@ -192,6 +232,7 @@ The shape is structural rather than inheritance-based:
 ```python
 class ResourcePlanner(Protocol):
     descriptor: SchedulingComponentDescriptor
+    resource_kind: str
     claim_contracts: tuple[ResourceClaimContractDescriptor, ...]
 
     def resolve_request(
@@ -200,12 +241,24 @@ class ResourcePlanner(Protocol):
         runtime: ValidatedResourceEntryView | None,
     ) -> ResourceRequestResolution: ...
 
+    def validate_opportunity(
+        self,
+        inventory: ResourceInventoryEnvelope,
+        availability: ResourceAvailabilityEnvelope,
+    ) -> OpportunityValidationResult: ...
+
     def propose_claims(
         self,
         request: ResolvedResourceRequest,
-        opportunity: ResourceOpportunity,
-        budget: SearchBudget,
+        opportunity: ValidatedResourceOpportunity,
+        budget: ClaimSearchBudget,
     ) -> ClaimSearchResult: ...
+
+    def validate_claim(
+        self,
+        request: ResolvedResourceRequest,
+        claim: ResourceClaim,
+    ) -> ClaimValidationResult: ...
 
 
 class SchedulingPolicy(Protocol):
@@ -213,14 +266,16 @@ class SchedulingPolicy(Protocol):
 
     def select(
         self,
-        candidates: tuple[ValidatedCandidate, ...],
         context: PolicyContext,
-    ) -> PolicySelection: ...
+    ) -> PolicyDecision: ...
 ```
 
 The final names may follow repository conventions, but the authority limits are
-fixed. A planner proposes exact claims; hard rules only reject; preferences only
-score feasible candidates; policy selects an existing candidate ID or waits.
+fixed. A planner validates its opportunity, proposes a complete exact-claim
+result, and validates each claim. Hard rules only reject complete placements;
+preferences return bounded utility/quality-band contributions; policy sees a
+bounded tuple of grouped `WorkEvaluation` values and selects one existing
+`(stage_work_id, candidate_id)` or waits.
 None receives a store, live clock, network client, authority, or launcher.
 `ValidatedResourceEntryView` is an immutable scheduling input, not an authored
 codec; `loom.pipeline.runtime` owns conversion from and back to the existing
@@ -230,17 +285,32 @@ All ambiguity is represented explicitly:
 
 ```text
 resource resolution  = ABSENT | RESOLVED | INVALID
+opportunity validation = VALID | INVALID
 claim search          = COMPLETE | EXHAUSTED
 claim validation      = VALID | INVALID
 rule-spec resolution  = RESOLVED | INVALID
 hard evaluation       = PASS | REJECT | INDETERMINATE
-preference evaluation = SCORE | INDETERMINATE
+preference evaluation = SCORE(utility, quality_band) | INDETERMINATE
 policy selection      = SELECT | WAIT
 ```
 
-`None`, an empty iterable, an exception, an unknown candidate ID, a missing
-required evaluation, oversized output, or search-budget exhaustion must never
-be interpreted as infeasibility or permission to mutate.
+`None`, an empty iterable, an exception, an unknown work/candidate pair, a
+missing required evaluation, oversized output, or search-budget exhaustion must
+never be interpreted as infeasibility or permission to mutate. Every resource
+search and the composite product must report `COMPLETE` before any candidate
+for that work is assignable. `EXHAUSTED` stays indeterminate; Stage 29 accepts
+no planner-supplied winner proof. The default policy may bypass that work for a
+later complete feasible item without relabelling the older work.
+
+Preference resolution assigns immutable IDs, site-owned ordered tiers, bounded
+weights, utility ranges, and optional quality-band schemas. The kernel uses
+checked integer multiplication/addition to form one total per tier and compares
+the vector lexicographically, followed by a stable identity tie-break. An
+optional fallback gate names one guarded preference: before
+`ready_at + wait_duration`, evaluated at the snapshot's explicit `as_of`, only
+its `PREFERRED` band is selectable; afterward declared `FALLBACK` candidates
+re-enter. Policy cannot bypass this gate, and vectors are comparable only among
+candidates for the same work.
 
 ### Capacity and component identity
 
@@ -250,8 +320,11 @@ provider-specific data:
 ```python
 @dataclass(frozen=True)
 class CapacityAtom:
-    capacity_key: str
+    owner_resource_kind: str
+    local_capacity_key: str
     amount: ExactQuantity
+    unit: str
+    granularity: ExactQuantity
 
 
 @dataclass(frozen=True)
@@ -263,8 +336,11 @@ class ResourceClaim:
     provider_data: Mapping[str, PlainData]
 ```
 
-The kernel validates uniqueness, positivity, normalization, bounds, snapshot
-revision, and contract shape. Provider data cannot be used as hidden accounting.
+The kernel validates namespace ownership, uniqueness, positivity, exact unit and
+granularity, normalization, bounds, snapshot revision, and contract shape. A
+planner may consume only atoms in its own resource namespace; cross-resource
+requirements are evaluated only after a complete placement exists. Provider
+data cannot be used as hidden accounting.
 The trusted planner/provider pair owns resource-specific semantics and final
 binding; Loom does not claim to sandbox a dishonest implementation.
 
@@ -299,11 +375,13 @@ changed readiness generation, terminal fact, or unauthorized retry fails
 closed rather than allocating another attempt.
 
 The prepared attempt and its bound-input/readiness evidence are authority truth.
-`StageWorkRecord` is disposable and rebuildable. If it disagrees with the
-authority, the authority wins and reconciliation repairs or retires the
-projection. A scheduler decision derived from it is data only and is stale as
-soon as any input version changes. Phase 1 creates no workspace, worker request,
-resource claim, assignment, execution lease, artifact transfer, or process.
+`StageWorkRecord` content is disposable and rebuildable, but its identity is
+stable for the immutable semantic key. If it disagrees with authority, authority
+wins and reconciliation repairs or retires only an unreferenced projection;
+referenced stale work remains joinable and ineligible until its owners reconcile.
+A scheduler decision derived from it is data only and is stale as soon as any
+input version changes. Phase 1 creates no workspace, worker request, resource
+claim, assignment, execution lease, artifact transfer, or process.
 REUSE/SKIP/BLOCKED reconciliation may still perform the pre-existing
 authority-owned controller transitions and output-reference commits required by
 the execution plan; those are not new scheduler-owned lifecycle mutations.
@@ -336,22 +414,29 @@ effect boundary.
 | --- | --- | --- | --- | --- |
 | One readiness interpretation | Shared authority-side predicate | Existing runner and new orchestrator | Dependency bypass or divergent restart | DAG, reuse, failure, retry, and cancellation tests call both consumers |
 | One exact prepared attempt per readiness generation | Per-run authority preparation transaction | Replayed reconciliation, restart, or concurrent orchestrators | Duplicate attempts or skipped retry ownership | Expected-revision, idempotency, concurrency, and restart tests |
+| Rebuild preserves stage-work identity | Coordinator stage-work transaction | Projection refresh, store reopen, or changed diagnostics | Orphan assignment/event or duplicate work | Deterministic/create-or-return identity, referenced-retention, and rebuild tests |
 | Controller-only actions retain authority ownership | Existing plan-action/authority operations | New orchestrator projection | Reuse/skip/block truth duplicated or descendant unlocked early | Existing runner/orchestrator trace-equivalence and output-commit tests |
 | Authored minima cannot be weakened | Runtime placement resolver and resource planner | Exact-stage runtime policy | Under-requested execution | Merge/property/boundary tests |
+| Resource opportunity and intrinsic feasibility have one owner | Resource planner plus kernel envelope checks | Custom inventory/availability and planner result | Repeated parser failure, unit disagreement, or duplicate GPU/resource rules | Malformed-opportunity, intrinsic-semantics, and claim-validation conformance tests |
+| Assignment uses only a complete search product | `SchedulingKernel` | Bounded custom planner or composite product | An omitted candidate could be the feasible/preferred winner | Per-resource/product exhaustion, boundary, permutation, and no-mutation tests |
 | Mandatory feasibility cannot be overridden | `SchedulingKernel` | Custom rule/policy result | Invalid placement | Invalid-output and mutation-sentinel tests |
-| Preference cannot create feasibility | Kernel hard-before-soft order | Custom scorer | OOM or policy bypass | Feasibility-neutrality tests |
+| Preference cannot create feasibility or violate site precedence/fallback | Kernel hard-before-soft, tier aggregation, and fallback gate | Custom scorer/policy or restart-relative time | OOM, client weight escalation, overflow, or early fallback | Feasibility-neutrality, tier, overflow, band, durable-time restart, and stable-tie tests |
+| Policy preserves work boundaries | Kernel-created grouped `WorkEvaluation` context | Custom cross-work policy | Comparing unrelated score vectors or selecting exhausted work | Unknown-pair, cross-work, typed-wait, and safe-bypass tests |
+| Ready projection does not consume a run slot | Orchestrator projection; Phase 2 assignment transaction owns enforcement | Multiple ready branches | Compatible capacity idles or later cycles over-admit | Blocked-first-branch projection and Phase 2 hand-off tests |
 | Stage work is not lifecycle truth | Coordinator projection reconciler | Stale/crashed projection writer | False readiness/terminal status | Restart and authority-disagreement tests |
-| Component selection is inert data | Frozen registry/composition root | Runtime or durable payload | Code loading/trust violation | Codec/import/unknown-ID tests |
+| Component selection is inert and reconstructable | Epoch-frozen active/retained registry composition root | Runtime/durable payload or config reload | Code loading, semantic reinterpretation, or stranded pending work | Codec/import/unknown-ID plus pending-reference restart/reload tests |
 | Built-in decisions are deterministic | Kernel/default policy | Mapping/registration order | Irreproducible placement | Permutation and stable-tie tests |
 | Phase 1 cannot launch | Composition boundary | Accidental executor/provider dependency | Side effect before saga exists | Dependency/import checks and launcher sentinel |
 
 ## Implementation Slices
 
 1. Add exact quantity, component/claim-contract descriptors, closed result
-   values, frozen registries, four pure protocols, CPU/memory/default rule and
-   policy implementations, and `loom.testing` conformance.
+   values, active/retained epoch registries, four pure protocols, CPU/memory/
+   default rule and policy implementations, and `loom.testing` conformance.
 2. Implement `ResolvedStagePlacement` parsing/resolution and the fixed pure
-   kernel with bounds, mandatory checks, deterministic FIFO-with-safe-bypass,
+   kernel with opportunity/claim validation, complete-only claim/product
+   search, mandatory checks, checked site-tier preference vectors, quality-band
+   fallback, grouped work evaluations, deterministic FIFO-with-safe-bypass,
    explanations, and proposal validation.
 3. Extract the shared readiness predicate and route existing runner readiness
    through it; split semantic `PENDING` attempt preparation from the current
@@ -366,9 +451,9 @@ effect boundary.
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | Required | Cheap intentional exports and dependency direction | Import `loom.scheduling` and `loom.testing` without loading `loom.pipeline`, runtime/network/database modules; no root re-export; pipeline-runtime adapter imports scheduling in the allowed direction |
-| Unit | Required | Quantities, resolution, rule order, bounds, deterministic selection | Integer CPU, byte memory, invalid fractions, hard-before-soft, stable ties, EXHAUSTED versus infeasible |
-| Contract | Required | Downstream protocol authority and fail-closed output | Synthetic planner/rule/scorer/policy; invalid IDs, exceptions, oversize, mutation sentinels, descriptor drift |
-| Integration | Required | Authority preparation, readiness, and durable projection | Train/evaluate, diamond, reuse/skip/failure/retry, concurrent/replayed preparation, per-run parallel limit, restart/rebuild with no duplicate attempt |
+| Unit | Required | Quantities, resolution, search completeness, rule order, preference algebra, bounds, deterministic selection | Integer CPU, byte memory, invalid fractions, namespaced atoms, hard-before-soft, tier dominance, checked overflow, bands/fallback at durable `as_of`, stable ties, `EXHAUSTED` versus infeasible |
+| Contract | Required | Downstream protocol authority and fail-closed output | Synthetic planner/rule/scorer/policy; malformed opportunity/claim, incomplete search, invalid work/candidate pair, exceptions, oversize, mutation sentinels, descriptor drift, retained-binding reconstruction |
+| Integration | Required | Authority preparation, readiness, and durable projection | Train/evaluate, diamond, blocked-first-branch visibility, reuse/skip/failure/retry, concurrent/replayed preparation, restart/rebuild with no duplicate attempt and the exact same `stage_work_id`; referenced projections remain joinable; no projection-time parallel-slot suppression |
 | E2E / opt-in | Deferred | No process or external system is allowed in Phase 1 | Phase 2 owns the first execution E2E; assert launcher/provider/transport sentinels remain untouched |
 
 Targeted commands are fixed during phase preparation from discovered tests.
@@ -381,20 +466,26 @@ Final commands:
 
 - Main risks: accidentally exposing a broad scheduler API; retaining two
   readiness interpreters; treating incomplete search as infeasible; allowing
-  custom output to bypass mandatory checks; making stage work authoritative;
+  custom output to bypass mandatory checks; duplicating intrinsic resource
+  semantics in hard rules; using undefined scalar preference precedence;
+  comparing scores across work items; making stage work authoritative or
+  re-keying it during rebuild;
   importing pipeline resources into the pure subsystem and creating a cycle; or
   reusing the current `RUNNING`/lease allocation semantics for preparation.
 - Review focus: import direction, immutable closed values, explicit registry
-  composition, kernel result validation, readiness extraction, exact-attempt
-  idempotency, and absence of execution side effects.
+  epochs/retention, opportunity/claim validation, complete search, preference/
+  fallback algebra, grouped policy result validation, readiness extraction,
+  exact-attempt/stage-work identity idempotency, and absence of execution side
+  effects.
 - Stop if: canonical runtime requests cannot be composed without weakening;
   readiness cannot be shared without a public behavior change; stage work would
   need to own lifecycle truth; an exact `PENDING` attempt cannot be prepared
   atomically without taking an execution lease; a pure protocol requires a live
   store/launcher or runtime import of `loom.pipeline`; or a required quantity
   cannot be represented exactly.
-- Accepted debt: initial bounded enumeration and FIFO-with-safe-bypass may be
-  suboptimal. Revisit only with measured workloads, not speculation.
+- Accepted debt: complete bounded enumeration can leave a large work item
+  `EXHAUSTED`, and FIFO-with-safe-bypass may be suboptimal. Revisit proof-
+  carrying partial search or fairness only with measured workloads.
 
 ## Executor Handoff
 
@@ -403,8 +494,10 @@ Final commands:
   branch.
 - Safe implementation order: the four slices above. Preserve a runnable test
   tree after each slice and do not implement Phase 2 assignment operations.
-- Decisions not to revisit: fixed kernel, narrow protocols, explicit frozen
-  composition, separate validator/planner identity, exact quantities, one
+- Decisions not to revisit: fixed kernel, narrow protocols, complete-only
+  search, checked site-tier/fallback semantics, grouped policy context, explicit
+  active/retained epoch composition, separate validator/planner identity,
+  exact quantities and namespaced capacity, one
   readiness predicate, authority-owned idempotent `PENDING` preparation,
   authority-owned existing controller actions, rebuildable stage work, and no
   execution side effects.
