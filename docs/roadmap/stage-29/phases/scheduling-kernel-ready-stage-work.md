@@ -2,12 +2,13 @@
 
 ## Metadata
 
-- Status: pending
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 1
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p1-scheduling-kernel-ready-stage-work`
-- Worktree root and path: record during phase preparation
-- Base revision: current clean `origin/develop`
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+  `stage-29-p1-scheduling-kernel-ready-stage-work`
+- Base revision: `24b5d210a258bed2a7ab87973aadefecefd6d753`
 - PR target: `develop`
 - PR title: `feat(scheduling): add kernel and durable ready-stage work`
 - Dependencies: implemented pipeline planner, per-run authority, runtime resource
@@ -16,7 +17,11 @@
 - Workflow path: expanded because this phase establishes subsystem-public
   extension contracts, one authority-owned attempt-preparation transition, and
   one new durable coordinator projection
-- Blockers: none; rediscover exact source names and current tests before editing
+- Blockers: independent review found four reachable product failures after the
+  inclusive correction budget reached 3/3: non-monotonic authority-revision
+  replay, stale READY work after cancellation or upstream supersession,
+  non-durable `ready_at` replay, and unenforced resolved pool/target placement.
+  PR #233 is closed and not merge-eligible.
 
 ## Objective And Context
 
@@ -506,25 +511,26 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning complete; record worktree/base and rediscover
-  exact source/test commands before spawning the executor
-- Expanded planning: required by public extension and durable projection risks;
-  the stage-level design and plan reviews are complete
-- Implementation: pending
-- Refiner: not used
-- Pre-submit gate: pending
-- Independent review: decide during phase preparation from the remaining public
-  protocol/migration risk
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation and expanded planning: complete
+- Implementation: complete on the phase branch but not accepted
+- Refiner: one qualified blocker correction used
+- Pre-submit gate: passed at branch revision `ba29963`; `make validate-pr`
+  recorded 2,342 default-suite passes and 141 config-extra passes, and
+  `make test-summary` recorded 2,483 total passes
+- Independent review: complete; four product blockers and one localized
+  correction make the branch ineligible to merge despite green CI
+- Blocker corrections: 3/3 consumed; repository policy forbids an unbounded
+  fourth correction pass
+- PR and merge: PR #233 closed without merge; Phase 2 remains pending because
+  routine stacked continuation cannot skip this blocker
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Phase branch `agent/stage-29-p1-scheduling-kernel-ready-stage-work` contains the proposed pure scheduling boundary, runtime placement integration, shared readiness, authority preparation, durable stage-work stores, and orchestrator. |
+| Tests added or updated | Branch tests cover scheduling, placement, readiness, authority preparation/migration, orchestration/store replay, and import/public boundaries, but omit the four independently reproduced contract failures. |
+| Validated revision/tree state and evidence | At `ba29963`, `make validate-pr`, `make test-summary`, and GitHub CI passed; the evidence is insufficient because independent review reproduced reachable failures outside those suites. |
+| Validation-relevant changes after evidence | The dedicated worktree preserves an uncommitted, focused revision-cursor mitigation and regression test. It is not a validated or mergeable correction. |
+| PR, review, and merge | [PR #233](https://github.com/samcantrill/loom/pull/233) targeted `develop`, was non-draft and mechanically mergeable, passed CI, then closed without merge after independent review. |
+| Residual risk and cleanup | Four product blockers remain: monotonic replay revision, full authority-owned projection eligibility, durable original `ready_at`, and mandatory resolved pool/target enforcement. Planner-result type validation is a localized correction. The worktree and branch are retained for diagnosis; later phases are not started. |
