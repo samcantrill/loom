@@ -44,6 +44,7 @@ def test_pipeline_execution_public_exports_are_phase_scoped() -> None:
         "ResourceLimitReconciliationResult",
         "ResourceLimitReconciliationStatus",
         "ResourceLeaseRequest",
+        "AgentResourceProvider",
         "StageExecutionRequest",
         "StageExecutionResult",
         "StageExecutionRuntimeError",

@@ -74,6 +74,7 @@ if TYPE_CHECKING:
         reconstruct_stage_execution_request,
         run_stage_worker,
     )
+    from loom.pipeline.execution.managed_local import AgentResourceProvider
 
 
 def __getattr__(name: str) -> object:
@@ -107,6 +108,7 @@ def __getattr__(name: str) -> object:
         "ResourceLimitReconciliationResult",
         "ResourceLimitReconciliationStatus",
         "ResourceLeaseRequest",
+        "AgentResourceProvider",
         "StageExecutionRequest",
         "StageExecutionResult",
         "StageExecutionRuntimeError",
@@ -206,6 +208,7 @@ def __getattr__(name: str) -> object:
             reconstruct_stage_execution_request,
             run_stage_worker,
         )
+        from loom.pipeline.execution.managed_local import AgentResourceProvider
 
         return {
             "ConfigSnapshotInputs": ConfigSnapshotInputs,
@@ -237,6 +240,7 @@ def __getattr__(name: str) -> object:
             "ResourceLimitReconciliationResult": ResourceLimitReconciliationResult,
             "ResourceLimitReconciliationStatus": ResourceLimitReconciliationStatus,
             "ResourceLeaseRequest": ResourceLeaseRequest,
+            "AgentResourceProvider": AgentResourceProvider,
             "StageExecutionRequest": StageExecutionRequest,
             "StageExecutionResult": StageExecutionResult,
             "StageExecutionRuntimeError": StageExecutionRuntimeError,
@@ -300,6 +304,7 @@ __all__ = [
     "ResourceLimitReconciliationResult",
     "ResourceLimitReconciliationStatus",
     "ResourceLeaseRequest",
+    "AgentResourceProvider",
     "StageExecutionRequest",
     "StageExecutionResult",
     "StageExecutionRuntimeError",
