@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 3C
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3c-local-daemon-authoritative-cutover`
@@ -302,10 +302,12 @@ Final commands:
   projected, and socket failures expose stable codes rather than exception text
 - Pre-submit gate: complete at validated source revision `1879cd1`;
   `make validate-pr` and the fresh `make test-summary` receipt passed
-- Independent review: required once after PR preparation because this phase
-  directly closes the five prior durable/cross-owner review findings
+- Independent review: in progress on PR #236 because this phase directly closes
+  the five prior durable/cross-owner review findings
 - Blocker corrections: 3/3
-- PR and merge: pending
+- PR and merge: [#236](https://github.com/samcantrill/loom/pull/236) open against
+  `develop`; title, head, base, non-draft state, and initial mergeability verified;
+  CI and independent review pending
 
 ## Completion Record
 
@@ -315,5 +317,5 @@ Final commands:
 | Tests added or updated | Exact-record settings/concurrency reconstruction independent of daemon CPU capacity; all terminal-before-cancel states and daemon-loop `CANCELLING` settlement; post-bind wrong-run/wrong-coordinator adapter rejection; exact retained accepted/granted/running/unknown/terminal/logical-release claim holds, released capacity, missing-claim fail-closed behavior; corrupt owner-data status degradation, positive cancellation receipt, and socket error redaction |
 | Validated revision/tree state and evidence | Source/test revision `1879cd1`; focused production-daemon suite passed (`27`), phase matrix passed (`309` unit, `64` integration/contract, `4` E2E/regression), `make validate-pr` passed Ruff, full Pyright, `2,384` default tests, `141` config-extra tests with `3` environment skips, and both distributions built; fresh `make test-summary` passed `2,525` tests with `3` environment skips |
 | Validation-relevant changes after evidence | none; this evidence remains fresh because only phase metadata changes follow |
-| PR, review, and merge | pending |
+| PR, review, and merge | [#236](https://github.com/samcantrill/loom/pull/236) open against `develop`; required independent review and CI pending |
 | Residual risk and cleanup | Phase 3A/3B branches/worktrees retained as evidence until Phase 3C disposition; Phase 4 cannot start first |
