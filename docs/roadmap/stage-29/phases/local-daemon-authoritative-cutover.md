@@ -300,7 +300,8 @@ Final commands:
   logical-release claims remain held until provider release proof, `CANCELLING`
   is exercised through the daemon loop, cancellation receipts are positively
   projected, and socket failures expose stable codes rather than exception text
-- Pre-submit gate: pending
+- Pre-submit gate: complete at validated source revision `1879cd1`;
+  `make validate-pr` and the fresh `make test-summary` receipt passed
 - Independent review: required once after PR preparation because this phase
   directly closes the five prior durable/cross-owner review findings
 - Blocker corrections: 3/3
@@ -312,7 +313,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Persistent daemon composition, scoped authority adapter for all post-bind mutation, exact managed-local record, coordinator/journal conservative restart hold, status/cancellation receipt projection, public feature docs, and managed-local example |
 | Tests added or updated | Exact-record settings/concurrency reconstruction independent of daemon CPU capacity; all terminal-before-cancel states and daemon-loop `CANCELLING` settlement; post-bind wrong-run/wrong-coordinator adapter rejection; exact retained accepted/granted/running/unknown/terminal/logical-release claim holds, released capacity, missing-claim fail-closed behavior; corrupt owner-data status degradation, positive cancellation receipt, and socket error redaction |
-| Validated revision/tree state and evidence | Refiner commit `5f827df` plus manager correction at the current tree; focused production-daemon suite passed (`27`); focused Ruff and Pyright passed |
-| Validation-relevant changes after evidence | none after the focused manager checks; repository gates remain pending |
+| Validated revision/tree state and evidence | Source/test revision `1879cd1`; focused production-daemon suite passed (`27`), phase matrix passed (`309` unit, `64` integration/contract, `4` E2E/regression), `make validate-pr` passed Ruff, full Pyright, `2,384` default tests, `141` config-extra tests with `3` environment skips, and both distributions built; fresh `make test-summary` passed `2,525` tests with `3` environment skips |
+| Validation-relevant changes after evidence | none; this evidence remains fresh because only phase metadata changes follow |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Phase 3A/3B branches/worktrees retained as evidence until Phase 3C disposition; Phase 4 cannot start first |
