@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from itertools import combinations
 from dataclasses import dataclass, field
 from datetime import timedelta
 from hashlib import sha256
 import json
-from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 from urllib.parse import quote
@@ -21,7 +20,6 @@ from loom.pipeline.stores import (
     ResourceLeaseRecord,
     WorkspaceCoordinationStore,
 )
-from loom.serialization import PlainData
 from loom.timestamps import parse_timestamp, utc_timestamp
 
 from ..assignments import (
@@ -34,10 +32,7 @@ from ..assignments import (
 )
 from ..config import QueueControllerSpec, QueueServiceSpec
 from ..errors import QueueServiceError
-from ..managed_local import ManagedLocalQueueRuntime
-from ..local import LocalProcessRunner
 from ..models import QueueDefinition, QueuePool, QueuePoolMode, validate_queue_id
-from ..repository import QueueRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -481,7 +476,6 @@ def plan_local_gpu_pool(
         ),
     )
 
-
 def ensure_local_gpu_pool_limits(
     plan: LocalGpuPoolPlan,
     store: WorkspaceCoordinationStore,
@@ -493,40 +487,6 @@ def ensure_local_gpu_pool_limits(
     if not isinstance(plan, LocalGpuPoolPlan):
         raise QueueServiceError("plan must be a LocalGpuPoolPlan")
     return store.ensure_resource_limits(workspace_id, plan.required_limits)
-
-
-def build_managed_local_gpu_runtime(
-    plan: LocalGpuPoolPlan,
-    *,
-    workspace_id: str,
-    coordination_store: WorkspaceCoordinationStore,
-    repository: QueueRepository | None = None,
-    process_runner: LocalProcessRunner | None = None,
-    current_drift_inputs: Mapping[str, PlainData] | None = None,
-    lease_ttl_seconds: int = 60,
-    wait_timeout_seconds: float = 0.0,
-    log_directory: str | Path | None = None,
-    clock: Callable[[], str] = utc_timestamp,
-) -> ManagedLocalQueueRuntime:
-    """Read-only validate a plan, then delegate process lifecycle to managed-local."""
-
-    _require_plan_limits(plan, coordination_store, workspace_id=workspace_id)
-    return ManagedLocalQueueRuntime.from_spec(
-        plan.queue_spec,
-        workspace_id=workspace_id,
-        coordination_store=coordination_store,
-        pool_name=plan.pool_name,
-        repository=repository,
-        process_runner=process_runner,
-        current_drift_inputs=current_drift_inputs,
-        lease_ttl_seconds=lease_ttl_seconds,
-        wait_timeout_seconds=wait_timeout_seconds,
-        assignment_provider=plan.assignment_provider(
-            coordination_store, workspace_id=workspace_id
-        ),
-        log_directory=log_directory,
-        clock=clock,
-    )
 
 
 class _LocalGpuAssignmentProvider:

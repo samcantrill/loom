@@ -32,6 +32,8 @@ from loom.pipeline.stores import (
     BackendRevision,
     CapabilityScope,
     CapabilitySupport,
+    CancellationEpochRequest,
+    CoordinatorAdmissionRequest,
     LeaseState,
     LifecycleReason,
     PreparedAttemptReceipt,
@@ -865,6 +867,128 @@ def test_v4_authority_database_migrates_managed_unbind_receipts(
             )
         }
     assert "managed_attempt_unbind_receipts" in tables
+
+
+def test_coordinator_admission_binding_replays_exact_receipt_and_rejects_conflict(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "coordinator-admission")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    request = CoordinatorAdmissionRequest(
+        operation_id="admit-1",
+        coordinator_id="coordinator-stable-1",
+        run_uri=run_uri,
+        intent_digest="normalized-intent-digest",
+    )
+
+    receipt = store.bind_coordinator_admission(run_uri, request)
+    assert receipt.request == request
+    assert (
+        SQLitePerRunAuthorityStore(clock=FrozenClock()).bind_coordinator_admission(
+            run_uri, request
+        )
+        == receipt
+    )
+
+    with pytest.raises(AuthorityStoreError, match="conflicts"):
+        store.bind_coordinator_admission(
+            run_uri,
+            CoordinatorAdmissionRequest(
+                operation_id=request.operation_id,
+                coordinator_id=request.coordinator_id,
+                run_uri=run_uri,
+                intent_digest="changed-digest",
+            ),
+        )
+    with pytest.raises(AuthorityStoreError, match="owner or intent conflicts"):
+        store.bind_coordinator_admission(
+            run_uri,
+            CoordinatorAdmissionRequest(
+                operation_id="admit-from-other-root",
+                coordinator_id="coordinator-stable-2",
+                run_uri=run_uri,
+                intent_digest=request.intent_digest,
+            ),
+        )
+
+
+def test_cancellation_epoch_is_durable_singleton_and_replays_receipts(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "cancellation-epoch")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    initial = store.create_run(run_uri)
+    store.bind_coordinator_admission(
+        run_uri,
+        CoordinatorAdmissionRequest(
+            operation_id="admit-1",
+            coordinator_id="coordinator-stable-1",
+            run_uri=run_uri,
+            intent_digest="normalized-intent-digest",
+        ),
+    )
+    request = CancellationEpochRequest(
+        operation_id="cancel-1",
+        coordinator_id="coordinator-stable-1",
+        run_uri=run_uri,
+    )
+
+    receipt = store.install_cancellation_epoch(run_uri, request)
+    assert receipt.request == request
+    assert receipt.epoch
+    assert store.install_cancellation_epoch(run_uri, request) == receipt
+    second = SQLitePerRunAuthorityStore(clock=FrozenClock()).install_cancellation_epoch(
+        run_uri,
+        CancellationEpochRequest(
+            operation_id="cancel-2",
+            coordinator_id="coordinator-stable-1",
+            run_uri=run_uri,
+        ),
+    )
+    assert second.epoch == receipt.epoch
+    assert store.snapshot(run_uri).revision.sequence == initial.sequence + 1
+
+    with pytest.raises(AuthorityStoreError, match="conflicts"):
+        store.install_cancellation_epoch(
+            run_uri,
+            CancellationEpochRequest(
+                operation_id=request.operation_id,
+                coordinator_id="other-coordinator",
+                run_uri=run_uri,
+            ),
+        )
+
+
+def test_v5_authority_database_migrates_daemon_authority_receipts(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "v5-daemon-authority-migration")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    database = _authority_database_path(run_uri)
+    with sqlite3.connect(database) as conn:
+        conn.execute("DROP TABLE coordinator_admission_receipts")
+        conn.execute("DROP TABLE cancellation_epochs")
+        conn.execute("DROP TABLE cancellation_epoch_receipts")
+        conn.execute("UPDATE metadata SET value = '5' WHERE key = 'schema_version'")
+
+    reopened = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    reopened.open_run(run_uri)
+
+    assert reopened.check_schema(run_uri).failure is None
+    with sqlite3.connect(database) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table'"
+            )
+        }
+    assert {
+        "coordinator_admission_receipts",
+        "cancellation_epochs",
+        "cancellation_epoch_receipts",
+    }.issubset(tables)
 
 
 def test_prepared_attempt_revalidates_revision_and_terminal_run(tmp_path: Path) -> None:

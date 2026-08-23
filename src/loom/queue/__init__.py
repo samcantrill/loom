@@ -2,8 +2,26 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ._sqlite import QUEUE_DB_SCHEMA_VERSION, SQLiteQueueRepository
 from .client import QueueClient
+if TYPE_CHECKING:
+    from .local_daemon import (
+        LocalDaemon,
+        LocalDaemonAdmission,
+        LocalDaemonAdmissionRequest,
+        LocalDaemonAdmissionState,
+        LocalDaemonConfig,
+        LocalDaemonPrincipal,
+        LocalDaemonRole,
+        LocalDaemonStatus,
+    )
+    from .local_daemon_transport import (
+        LocalDaemonSocketClient,
+        LocalDaemonSocketServer,
+    )
+    from .local_daemon_runtime import prepare_managed_local_runtime_record
 from .config import (
     QUEUE_CONFIG_SCHEMA_VERSION,
     QueueControllerSpec,
@@ -81,6 +99,38 @@ from .selection import (
     QueueSelectionPolicy,
 )
 
+
+_LOCAL_DAEMON_EXPORTS = frozenset(
+    {
+        "LocalDaemon",
+        "LocalDaemonAdmission",
+        "LocalDaemonAdmissionRequest",
+        "LocalDaemonAdmissionState",
+        "LocalDaemonConfig",
+        "LocalDaemonPrincipal",
+        "LocalDaemonRole",
+        "LocalDaemonSocketClient",
+        "LocalDaemonSocketServer",
+        "LocalDaemonStatus",
+    }
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _LOCAL_DAEMON_EXPORTS:
+        if name in {"LocalDaemonSocketClient", "LocalDaemonSocketServer"}:
+            from . import local_daemon_transport
+
+            return getattr(local_daemon_transport, name)
+        from . import local_daemon
+
+        return getattr(local_daemon, name)
+    if name == "prepare_managed_local_runtime_record":
+        from .local_daemon_runtime import prepare_managed_local_runtime_record
+
+        return prepare_managed_local_runtime_record
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 __all__ = [
     "QUEUE_CONFIG_SCHEMA_VERSION",
     "QUEUE_DB_SCHEMA_VERSION",
@@ -89,6 +139,17 @@ __all__ = [
     "DispatchHandle",
     "FakeQueueDispatchAdapter",
     "LaunchContract",
+    "LocalDaemon",
+    "LocalDaemonAdmission",
+    "LocalDaemonAdmissionRequest",
+    "LocalDaemonAdmissionState",
+    "LocalDaemonConfig",
+    "LocalDaemonPrincipal",
+    "LocalDaemonRole",
+    "LocalDaemonSocketClient",
+    "LocalDaemonSocketServer",
+    "LocalDaemonStatus",
+    "prepare_managed_local_runtime_record",
     "LaunchEnvironmentBindings",
     "NoOpResourceAssignmentProvider",
     "ResourceAssignment",

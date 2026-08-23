@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import loom.queue as queue
+import pytest
 
 from pathlib import Path
 
 from loom.queue import (
+    LocalDaemonAdmissionRequest,
+    LocalDaemonConfig,
     QueueClient,
     QueueController,
     QueueCycleResult,
@@ -15,7 +18,6 @@ from loom.queue import (
     QueueDispatchResult,
     QueueEnqueueRequest,
     QueueService,
-    QueueServiceError,
     QueueServiceState,
     QueueSelectionCandidate,
     QueueSelectionContext,
@@ -69,25 +71,35 @@ def test_queue_python_api_contract(tmp_path: Path) -> None:
     assert step.to_dict()["outcome"] == "dispatched"
 
 
-def test_managed_local_queue_runtime_api_is_an_explicit_submodule() -> None:
-    from loom.queue.managed_local import (
-        ManagedLocalQueueRuntime,
-        ManagedLocalQueueRuntimeState,
-        ManagedLocalQueueRuntimeStatus,
-        ManagedLocalShutdownTimeoutError,
+def test_managed_local_queue_runtime_api_is_removed() -> None:
+    import importlib
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("loom.queue.managed_local")
+
+
+def test_local_daemon_public_request_has_no_executable_or_privileged_fields(
+    tmp_path: Path,
+) -> None:
+    request = LocalDaemonAdmissionRequest(
+        queue_item_id="queue-1", run_uri="file:///runs/one"
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=tmp_path / "runs",
     )
 
-    assert ManagedLocalQueueRuntime
-    assert [state.value for state in ManagedLocalQueueRuntimeState] == [
-        "READY",
-        "DEGRADED",
-        "RECOVERY_REQUIRED",
-        "DRAINING",
-        "CANCELLING",
-        "STOPPED",
-    ]
-    assert ManagedLocalQueueRuntimeStatus.__name__ == "ManagedLocalQueueRuntimeStatus"
-    assert issubclass(ManagedLocalShutdownTimeoutError, QueueServiceError)
+    assert request.to_dict() == {
+        "queue_item_id": "queue-1",
+        "run_uri": "file:///runs/one",
+    }
+    assert config.machine_id == "machine-A"
+    assert {
+        "LocalDaemon",
+        "LocalDaemonAdmissionRequest",
+        "LocalDaemonSocketClient",
+    }.issubset(queue.__all__)
 
 
 def test_queue_selection_public_api_is_import_light_and_in_process_only() -> None:

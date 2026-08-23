@@ -474,6 +474,12 @@ keys, environment counts, and adapter namespace names/counts. It does not
 record environment variable names or values, raw adapter payloads, or semantic
 fingerprint inputs.
 
+The managed-local daemon has a separate private exact runtime record, written
+only during trusted managed-local preparation. It carries validated execution
+options, resolved placement evidence, run concurrency, plan identity, and a
+normalized digest. It is not a replacement for `runtime.json`; safe metadata
+cannot be decoded as executable daemon input.
+
 Examples:
 
 ```text
@@ -2398,10 +2404,10 @@ data boundary.
 
 Managed whole-run `LaunchContract.resources`, synthetic whole-run command
 snapshots, and `claim_next -> dispatch(item)` cease to be execution inputs for
-new managed runs. Historical queue rows remain readable and delegated adapters
-remain supported. `ManagedLocalQueueRuntime` and `PipelineRunner` keep their
-intentional public surfaces while their managed internals converge on the new
-coordinator/agent path. The detailed state transitions and migration sequence
+new managed runs. Delegated adapters remain supported. `ManagedLocalQueueRuntime`
+and its old managed-local request/root formats are removed; `PipelineRunner` is
+not a second managed execution owner. Fresh daemon roots and persisted-plan
+admission are the only supported local managed path. The detailed state transitions
 are authoritative in [Stage 29 planning](../roadmap/stage-29/planning.md) and
 its linked phase execution plans.
 

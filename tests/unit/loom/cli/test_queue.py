@@ -9,7 +9,14 @@ from pathlib import Path
 import pytest
 
 from loom.cli.main import main
-from loom.queue import QueueEnqueueRequest, QueueService, load_queue_spec
+from loom.queue import (
+    LocalDaemon,
+    LocalDaemonConfig,
+    LocalDaemonSocketServer,
+    QueueEnqueueRequest,
+    QueueService,
+    load_queue_spec,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -113,6 +120,69 @@ def test_queue_drain_foreground_dispatches_fake_item(tmp_path: Path) -> None:
     assert stderr.getvalue() == ""
     assert "queue drain foreground: 1 step(s)" in stdout.getvalue()
     assert "dispatched: item-1 SUCCEEDED" in stdout.getvalue()
+
+
+def test_queue_daemon_init_creates_fresh_role_roots(tmp_path: Path) -> None:
+    coordinator = tmp_path / "coordinator"
+    agent = tmp_path / "agent"
+    stdout = io.StringIO()
+
+    exit_code = main(
+        [
+            "queue",
+            "daemon-init",
+            "--coordinator-root",
+            str(coordinator),
+            "--agent-root",
+            str(agent),
+            "--run-store-root",
+            str(tmp_path / "runs"),
+            "--format",
+            "json",
+        ],
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue())["result"]["operation"] == "initialize"
+    assert (coordinator / "control.sqlite").is_file()
+    assert (agent / "control.sqlite").is_file()
+
+
+def test_queue_daemon_status_uses_owner_only_socket_client(tmp_path: Path) -> None:
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=tmp_path / "runs",
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server.start()
+    stdout = io.StringIO()
+    try:
+        exit_code = main(
+            [
+                "queue",
+                "daemon-status",
+                "--endpoint",
+                str(config.endpoint),
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=io.StringIO(),
+        )
+    finally:
+        server.stop()
+        daemon.stop()
+
+    payload = json.loads(stdout.getvalue())
+    assert exit_code == 0
+    assert payload["schema_version"] == "loom.cli.queue.local-daemon.v1"
+    assert payload["result"]["service_health"] == "healthy"
 
 
 def _queue_config(tmp_path: Path) -> Path:

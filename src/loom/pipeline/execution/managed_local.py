@@ -187,6 +187,8 @@ class _ManagedWorkerHandle:
         self._run_gate = Event()
         self._result: StageWorkerResult | None = None
         self._error: BaseException | None = None
+        self._cancel_before_run = False
+        self._cancellation_seen = False
         self._thread = Thread(
             target=self._run,
             name=f"loom-managed-{process_execution_id}",
@@ -202,8 +204,25 @@ class _ManagedWorkerHandle:
     def release_to_run(self) -> None:
         self._run_gate.set()
 
-    def wait(self) -> StageWorkerResult:
+    def cancel_before_run(self) -> None:
+        self._cancel_before_run = True
+        self._cancellation_seen = True
+        self._run_gate.set()
         self._thread.join()
+
+    @property
+    def cancellation_seen(self) -> bool:
+        return self._cancellation_seen
+
+    def wait(
+        self, cancellation_requested: Callable[[], bool] | None = None
+    ) -> StageWorkerResult:
+        while self._thread.is_alive():
+            self._thread.join(timeout=0.05)
+            if cancellation_requested is not None and cancellation_requested():
+                self._cancellation_seen = True
+        if cancellation_requested is not None and cancellation_requested():
+            self._cancellation_seen = True
         if self._error is not None:
             raise self._error
         if self._result is None:
@@ -212,6 +231,8 @@ class _ManagedWorkerHandle:
 
     def _run(self) -> None:
         self._run_gate.wait()
+        if self._cancel_before_run:
+            return
         try:
             self._result = self._worker()
         except BaseException as exc:  # noqa: BLE001 - retained for owner reconciliation.
@@ -400,6 +421,37 @@ class AtomResourceProvider:
         with self._lock:
             return self._observe(request)
 
+    def restore_capacity_holding(self, command: ClaimCommand) -> None:
+        """Restore one durable non-released claim before any fresh offer."""
+        with self._lock:
+            existing = self._claims.get(command.assignment.assignment_id)
+            if existing is not None:
+                if existing[0].claim != command.claim:
+                    raise ManagedLocalError("retained provider claim conflicts")
+                return
+            used = {
+                atom.key: atom.amount.fraction
+                for atom in self._capacity.values()
+            }
+            for prior, state in self._claims.values():
+                if state in {ClaimOutcome.PREPARED, ClaimOutcome.ACTIVE}:
+                    for atom in prior.claim.atoms:
+                        used[atom.key] = used.get(atom.key, 0) - atom.amount.fraction
+            for atom in command.claim.atoms:
+                if used.get(atom.key, 0) < atom.amount.fraction:
+                    raise ManagedLocalError("retained provider claim exceeds capacity")
+            self._claims[command.assignment.assignment_id] = (command, ClaimOutcome.PREPARED)
+            self._revision += 1
+
+    def live_claim_ids_for_session(self, session_id: str) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(sorted(
+                command.assignment.claim_id
+                for command, state in self._claims.values()
+                if state in {ClaimOutcome.PREPARED, ClaimOutcome.ACTIVE}
+                and command.assignment.session_id == session_id
+            ))
+
     def _observe(self, request: ObserveRequest) -> ObserveResult:
         if not isinstance(request, ObserveRequest):
             raise ManagedLocalError("observe request is invalid")
@@ -571,10 +623,26 @@ class SQLiteAgentJournal:
     makes a fact durable before it can be delivered and refuses an event gap.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, _allow_initialize: bool = True) -> None:
         self.path = Path(path)
+        self._allow_initialize = _allow_initialize
         self._process_handles: dict[str, _ManagedWorkerHandle] = {}
         self._process_handles_lock = RLock()
+
+    def _initialize(self) -> None:
+        """Create the current journal schema at an explicit owner boundary."""
+
+        with self._transaction():
+            pass
+
+    def _open_existing(self) -> None:
+        """Verify the current journal without creating or repairing it."""
+
+        if not self.path.is_file():
+            raise ManagedLocalError("agent journal is missing")
+        with sqlite3.connect(self.path) as conn:
+            conn.row_factory = sqlite3.Row
+            _require_agent_journal_schema(conn)
 
     def persist_request(
         self, assignment: ManagedAssignment, request: Mapping[str, PlainData]
@@ -1008,12 +1076,63 @@ class SQLiteAgentJournal:
                 json.loads(cast(str, row["result_json"]))
             )
 
+    def retained_claim_commands(self) -> tuple[ClaimCommand, ...]:
+        """Return exact claims still lacking durable provider-release proof."""
+        if not self.path.is_file():
+            return ()
+        with sqlite3.connect(self.path) as conn:
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = tuple(conn.execute(
+                    "SELECT identity_json, claims_json, state FROM assignments "
+                    "WHERE claims_json IS NOT NULL"
+                ))
+            except sqlite3.DatabaseError as exc:
+                raise ManagedLocalError("agent journal retained-claim read failed") from exc
+        retained: list[ClaimCommand] = []
+        released = {AssignmentState.DECLINED.value, AssignmentState.PROVIDERS_RELEASED.value, AssignmentState.RELEASED.value}
+        for row in rows:
+            if cast(str, row["state"]) in released:
+                continue
+            identity = json.loads(cast(str, row["identity_json"]))
+            assignment = ManagedAssignment(
+                assignment_id=cast(str, identity["assignment_id"]),
+                run_uri=cast(str, identity["run_uri"]),
+                stage_work_id=cast(str, identity["stage_work_id"]),
+                stage_name=cast(str, identity["stage_name"]),
+                attempt=cast(int, identity["attempt"]),
+                attempt_id=cast(str, identity["attempt_id"]),
+                agent_id=cast(str, identity["agent_id"]),
+                session_id=cast(str, identity["session_id"]),
+                offer_id=cast(str, identity["offer_id"]),
+                claim_id=cast(str, identity["claim_id"]),
+            )
+            commands = json.loads(cast(str, row["claims_json"]))
+            values = commands.get("commands") if isinstance(commands, dict) else None
+            if not isinstance(values, list):
+                raise ManagedLocalError("retained agent claims are corrupt")
+            retained.extend(_claim_command_from_dict(assignment, value) for value in values)
+        return tuple(retained)
+
     @contextmanager
     def _transaction(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.path.is_file():
+            if not self._allow_initialize:
+                raise ManagedLocalError("agent journal is missing")
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
+            if not self._allow_initialize:
+                _require_agent_journal_schema(conn)
+                try:
+                    yield conn
+                except Exception:
+                    conn.rollback()
+                    raise
+                else:
+                    conn.commit()
+                return
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS assignments ("
                 "assignment_id TEXT PRIMARY KEY, identity_json TEXT NOT NULL, "
@@ -1145,13 +1264,35 @@ class SQLiteCoordinatorAssignments:
         }
     )
 
-    def __init__(self, path: str | Path, capacity: Sequence[CapacityAtom]) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        capacity: Sequence[CapacityAtom],
+        *,
+        _allow_initialize: bool = True,
+    ) -> None:
         self.path = Path(path)
+        self._allow_initialize = _allow_initialize
         self._capacity = {atom.key: atom for atom in capacity}
         if not self._capacity or len(self._capacity) != len(tuple(capacity)):
             raise ManagedLocalError(
                 "coordinator capacity atoms must be non-empty and unique"
             )
+
+    def _initialize(self) -> None:
+        """Create the current coordinator-assignment schema explicitly."""
+
+        with self._transaction():
+            pass
+
+    def _open_existing(self) -> None:
+        """Verify the current assignment schema without creating or repairing it."""
+
+        if not self.path.is_file():
+            raise ManagedLocalError("coordinator assignment store is missing")
+        with sqlite3.connect(self.path) as conn:
+            conn.row_factory = sqlite3.Row
+            _require_coordinator_assignment_schema(conn)
 
     def publish_offer(self, snapshot: ManagedOfferSnapshot) -> str:
         """Persist one exact current offer; an older revision never revives."""
@@ -1549,10 +1690,23 @@ class SQLiteCoordinatorAssignments:
 
     @contextmanager
     def _transaction(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.path.is_file():
+            if not self._allow_initialize:
+                raise ManagedLocalError("coordinator assignment store is missing")
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
+            if not self._allow_initialize:
+                _require_coordinator_assignment_schema(conn)
+                try:
+                    yield conn
+                except Exception:
+                    conn.rollback()
+                    raise
+                else:
+                    conn.commit()
+                return
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS coordinator_assignments ("
                 "assignment_id TEXT PRIMARY KEY, identity_json TEXT NOT NULL, "
@@ -1598,6 +1752,106 @@ class SQLiteCoordinatorAssignments:
                 raise
             else:
                 conn.commit()
+
+
+def _require_agent_journal_schema(conn: sqlite3.Connection) -> None:
+    _require_sqlite_columns(
+        conn,
+        "assignments",
+        {
+            "assignment_id",
+            "identity_json",
+            "request_json",
+            "claims_json",
+            "state",
+            "grant_fence",
+            "process_execution_id",
+            "result_json",
+            "availability_revision",
+            "declined",
+            "start_failed",
+        },
+        "agent journal",
+    )
+    _require_sqlite_columns(
+        conn,
+        "events",
+        {
+            "assignment_id",
+            "sequence",
+            "event_id",
+            "payload_json",
+            "acknowledged_sequence",
+        },
+        "agent journal",
+    )
+
+
+def _require_coordinator_assignment_schema(conn: sqlite3.Connection) -> None:
+    _require_sqlite_columns(
+        conn,
+        "coordinator_assignments",
+        {
+            "assignment_id",
+            "identity_json",
+            "run_uri",
+            "stage_work_id",
+            "state",
+            "receipt_json",
+            "agent_id",
+            "session_id",
+            "offer_id",
+            "claim_id",
+        },
+        "coordinator assignment store",
+    )
+    _require_sqlite_columns(
+        conn,
+        "coordinator_atoms",
+        {
+            "assignment_id",
+            "resource_kind",
+            "capacity_key",
+            "numerator",
+            "denominator",
+        },
+        "coordinator assignment store",
+    )
+    _require_sqlite_columns(
+        conn,
+        "coordinator_events",
+        {"assignment_id", "sequence", "event_id", "payload_json"},
+        "coordinator assignment store",
+    )
+    _require_sqlite_columns(
+        conn,
+        "coordinator_offers",
+        {
+            "agent_id",
+            "session_id",
+            "offer_revision",
+            "snapshot_revision",
+            "availability_revision",
+            "snapshot_json",
+            "consumed",
+            "is_current",
+        },
+        "coordinator assignment store",
+    )
+
+
+def _require_sqlite_columns(
+    conn: sqlite3.Connection,
+    table: str,
+    required: set[str],
+    owner: str,
+) -> None:
+    try:
+        columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.DatabaseError as exc:
+        raise ManagedLocalError(f"{owner} schema is unavailable") from exc
+    if not required.issubset(columns):
+        raise ManagedLocalError(f"{owner} schema is unsupported")
 
 
 def grant_and_start_managed_assignment(
@@ -1673,6 +1927,8 @@ def run_managed_local_assignment(
         [str, Callable[[], StageWorkerResult]], _ManagedWorkerHandle
     ]
     | None = None,
+    cancellation_requested: Callable[[], bool] | None = None,
+    execution_started: Callable[[], None] | None = None,
 ) -> ManagedExecutionReceipt:
     """Run one exact local assignment through the durable Phase 2 saga.
 
@@ -1957,6 +2213,17 @@ def run_managed_local_assignment(
             assignment.assignment_id, expected="granted", next_state="unknown"
         )
         raise
+    handle = journal.process_handle(assignment.assignment_id)
+    if handle is None:
+        raise ManagedLocalError(
+            "managed start intent has no same-process containment handle"
+        )
+    if cancellation_requested is not None and cancellation_requested():
+        handle.cancel_before_run()
+        return finalize_result(
+            _cancelled_worker_result(worker_request),
+            coordinator_expected="granted",
+        )
     authority.confirm_execution_started(assignment.run_uri, fence=fence)
     coordinator.advance(
         assignment.assignment_id, expected="granted", next_state="running"
@@ -1970,17 +2237,15 @@ def run_managed_local_assignment(
     )
     worker_result = journal.read_result(assignment.assignment_id)
     if worker_result is None:
-        handle = journal.process_handle(assignment.assignment_id)
-        if handle is None:
-            raise ManagedLocalError(
-                "confirmed managed process has no same-process containment handle; "
-                "relaunch is forbidden"
-            )
         handle.release_to_run()
+        if execution_started is not None:
+            execution_started()
         try:
-            worker_result = handle.wait()
+            worker_result = handle.wait(cancellation_requested)
         except BaseException as exc:  # noqa: BLE001 - the managed root is contained.
             worker_result = _managed_root_failed_worker_result(worker_request, exc)
+        if handle.cancellation_seen:
+            worker_result = _cancelled_worker_result(worker_request)
     return finalize_result(worker_result, coordinator_expected="running")
 
 
@@ -2064,6 +2329,26 @@ def _claim_command_dict(command: ClaimCommand) -> dict[str, PlainData]:
         ),
         "claim_fingerprint": claim.fingerprint,
     }
+
+
+def _claim_command_from_dict(assignment: ManagedAssignment, data: object) -> ClaimCommand:
+    if not isinstance(data, Mapping):
+        raise ManagedLocalError("retained claim command is invalid")
+    if data.get("assignment_id") != assignment.assignment_id:
+        raise ManagedLocalError("retained claim assignment conflicts")
+    atoms_data = data.get("atoms")
+    if not isinstance(atoms_data, Sequence):
+        raise ManagedLocalError("retained claim atoms are invalid")
+    claim = ResourceClaim(
+        resource_kind=cast(str, data.get("resource_kind")),
+        contract=ResourceClaimContractDescriptor.from_dict(data.get("contract")),
+        atoms=tuple(_capacity_atom_from_dict(cast(Mapping[str, object], atom)) for atom in atoms_data),
+        provider_data_version=cast(int, data.get("provider_data_version")),
+        provider_data=cast(Mapping[str, PlainData], data.get("provider_data", {})),
+    )
+    if data.get("claim_fingerprint") != claim.fingerprint:
+        raise ManagedLocalError("retained claim fingerprint conflicts")
+    return ClaimCommand(assignment, cast(str, data.get("operation_id")), claim)
 
 
 def _operation_command(command: ClaimCommand, operation: str) -> ClaimCommand:
@@ -2219,6 +2504,24 @@ def _start_failed_worker_result(
         stderr_path=request.stderr_path,
         traceback_path=request.traceback_path,
         executor_metadata={"process_created": False},
+    )
+
+
+def _cancelled_worker_result(request: StageWorkerRequest) -> StageWorkerResult:
+    cancelled_at = utc_timestamp()
+    return StageWorkerResult(
+        schema_version=STAGE_WORKER_RESULT_SCHEMA_VERSION,
+        run_uri=request.run_uri,
+        stage_name=request.stage_name,
+        attempt=request.attempt,
+        status=StageStatus.CANCELLED,
+        started_at=cancelled_at,
+        finished_at=cancelled_at,
+        executor_name=request.executor_name,
+        stdout_path=request.stdout_path,
+        stderr_path=request.stderr_path,
+        traceback_path=request.traceback_path,
+        executor_metadata={"cancellation_epoch_effective": True},
     )
 
 
