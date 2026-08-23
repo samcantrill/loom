@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 29, Phase 2
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p2-durable-local-stage-execution`
@@ -476,8 +476,8 @@ if its name does not match the selected directories or expression. Final command
   confirms durable `PROCESS_STARTED` and authority `RUNNING` before releasing
   the worker body, retains one-use exact offer snapshots with reflected-claim
   accounting, and records durable authority unbind tombstones for exact replay
-- PR and merge: PR #234 is open against `develop`; CI and automatic squash
-  merge are pending
+- PR and merge: PR #234 passed CI and was squash-merged into `develop` as
+  `0cff8193562b2af4281da6802c0764699046b175`; cleanup is complete
 
 ## Completion Record
 
@@ -487,5 +487,5 @@ if its name does not match the selected directories or expression. Final command
 | Tests added or updated | Provider and managed-authority contracts; one-use offer and reflected-capacity tests; journal composite/one-launch/start-outcome tests; SQLite authority fence/terminal/v4-to-v5 migration tests; accessible output, definitive start failure, lost unbind/output response replay, crash-before-result non-relaunch, authority-running barrier, failure release, and real same-run overlap integration tests; retained adapter subclass signatures |
 | Validated revision/tree state and evidence | Focused final-correction suite: 45 passed with Ruff and Pyright clean. `make validate-pr`: default 2,378 passed/1 skipped/121 deselected; configuration-extra 141 passed/3 skipped/2,382 deselected; source and wheel builds passed. `make test-summary`: package 118, unit 1,693, contract 293, integration 216, E2E 58, and configuration-extra 141 passed |
 | Validation-relevant changes after evidence | none |
-| PR, review, and merge | independent blocker review completed and corrected; refreshed manager gate passed; PR #234 is open against `develop`, mergeable, and awaiting CI |
-| Residual risk and cleanup | Ambiguous provider/launcher outcomes remain durably retained and non-relaunchable; persistent role startup and user-facing unknown-work recovery remain assigned to later phases |
+| PR, review, and merge | independent blocker review completed and corrected; refreshed manager gate and CI passed; PR #234 squash-merged as `0cff819` |
+| Residual risk and cleanup | Ambiguous provider/launcher outcomes remain durably retained and non-relaunchable; persistent role startup and user-facing unknown-work recovery remain assigned to later phases. The worktree and local/remote phase branch were removed |
