@@ -1,6 +1,6 @@
 id: operations.managed-local-queue
-title: Managed Local Queue Selection
-summary: Inject a smallest-eligible Python policy and refill a two-slot item through the managed-local runtime.
+title: Managed Local Daemon
+summary: Submit a persisted dependency-ordered run through the production local daemon.
 capability: operations
 level: advanced
 introduced_in: v23
@@ -18,11 +18,11 @@ validation_path: tests/e2e/test_queue_cli.py::test_managed_local_queue_example_i
 entrypoints:
   - path: run_managed_local_queue.py
     kind: python
-    description: Start a managed-local runtime with a public Python selection policy and print live queue-status facts.
+    description: Start fresh daemon roots, submit a persisted plan by run URI, and print terminal status.
 tags:
   - queue
   - local
-  - static-slots
+  - persistent-daemon
   - managed-local
   - operations
   - status

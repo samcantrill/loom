@@ -80,12 +80,11 @@ def test_import_loom_queue_public_api() -> None:
     assert "validate_one_queue_per_pool" in loom.queue.__all__
 
 
-def test_import_managed_local_queue_runtime_is_explicit() -> None:
-    import loom.queue
-    from loom.queue.managed_local import ManagedLocalQueueRuntime
+def test_import_managed_local_queue_runtime_is_removed() -> None:
+    import importlib
 
-    assert ManagedLocalQueueRuntime
-    assert "ManagedLocalQueueRuntime" not in loom.queue.__all__
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("loom.queue.managed_local")
 
 
 def test_import_local_gpu_planning_is_explicit_and_does_not_probe_hardware() -> None:

@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 3B
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3b-local-daemon-production-composition`
@@ -54,10 +54,11 @@
   `PreparedAttemptExecutionAuthority`, and
   `run_managed_local_assignment`.
 - Existing run composition:
-  `create_authority_backed_serial_run_store` supplies persisted plan,
-  `PreparedRunRecord`, runtime metadata, local payload access, and authority
-  truth. Its concrete store/authority construction may be reused without
-  transferring lifecycle ownership to the daemon.
+  `create_authority_backed_serial_run_store` supplies the persisted execution
+  plan, runtime metadata, local payload access, and authority truth. Its
+  concrete store/authority construction may be reused without transferring
+  lifecycle ownership to the daemon. `PreparedRunRecord` is a delegated-Slurm
+  continuation artifact and is not a managed-local admission prerequisite.
 - Public paths that are not the solution: `PipelineRunner` remains a whole-run
   execution owner; `continue_prepared_run` and `loom prepared-run continue`
   intentionally fail for insufficient whole-run continuation state. Neither may
@@ -79,12 +80,11 @@
 In scope:
 
 - Define one canonical managed-local admission containing client queue identity
-  and `run_uri`. The service reloads the canonical `PreparedRunRecord`,
-  execution plan, and runtime metadata from the protected run store, computes
-  the existing normalized intent digest, and rejects missing, changed,
-  wrong-run, unsupported, or incomplete content. A caller does not send an
-  executable stage payload, callable, assignment, authority principal, state
-  path, or provider token.
+  and `run_uri`. The service reloads the canonical `ExecutionPlan` and local
+  runtime metadata from the protected run store, computes their normalized
+  intent digest, and rejects missing, changed, wrong-run, unsupported, or
+  incomplete content. A caller does not send an executable stage payload,
+  callable, assignment, authority principal, state path, or provider token.
 - Add one protected production composition above the queue and pipeline owners.
   It opens explicit coordinator/agent roots, authority/run stores, stage-work
   and assignment stores, configured local inventory/providers, scheduling
@@ -193,7 +193,7 @@ Assumptions:
 
 ## Proportionality
 
-- Existing seams reused: `PreparedRunRecord`, authority-backed run store,
+- Existing seams reused: persisted `ExecutionPlan`, authority-backed run store,
   `RunOrchestrator`, `SQLiteStageWorkStore`, scheduling kernel/default policy,
   `SQLiteCoordinatorAssignments`, `SQLiteAgentJournal`, existing local resource
   planners/providers, StageWorker request/materialization, and
@@ -226,7 +226,7 @@ Assumptions:
 
 1. Selectively adopt the Phase 3A root/identity/IPC/admission code into a clean
    branch, correct dependency direction, and replace opaque prepared-stage input
-   with canonical prepared-run/plan resolution by admitted `run_uri`.
+   with canonical persisted-plan/runtime resolution by admitted `run_uri`.
 2. Build the protected authority-backed local composition using existing Phase
    1/2 stores, orchestrator, placement/scheduling, offers/providers, reservation,
    worker construction, and assignment saga; remove supplied resolver/executor
@@ -272,7 +272,7 @@ Final commands:
 - Review focus: the real submit-to-worker trace, invariant owners, absence of
   caller-injected production dependencies, durable causal ordering, restart/
   cancellation behavior, import direction, and removal of unused machinery.
-- Stop if: current persisted prepared-run artifacts cannot reconstruct the exact
+- Stop if: current persisted plan/runtime artifacts cannot reconstruct the exact
   plan/runtime/placement inputs without inventing durable facts; the real path
   would require `PipelineRunner` to remain a second managed owner; Phase 2 lacks
   a safe exact assignment/reservation input; a worker needs authority/daemon
@@ -292,12 +292,12 @@ Final commands:
   Phase 3A worktree/branch only for selective reference. Do not base or open a
   stacked PR from Phase 3A.
 - Decisions not to revisit: hard managed-local cut-over; canonical persisted
-  prepared-run/plan resolution rather than opaque stage payload or a second
-  prepared-run identity; one protected production
+  persisted-plan/runtime resolution rather than opaque stage payload or a
+  second prepared-run identity; one protected production
   composition; Phase 1 readiness/decision owner; Phase 2 execution owner;
   separate authority; no worker authority access; fresh roots; owner-only local
   IPC; delegated Slurm unchanged; correct dependency direction.
-- Stop and return a qualified blocker if a real persisted prepared run cannot be
+- Stop and return a qualified blocker if a real persisted local plan cannot be
   reconstructed into existing Phase 1/2 inputs without a new public/durable
   contract, or if the no-fake E2E cannot reach a real worker root.
 
@@ -311,23 +311,26 @@ Final commands:
   review completed; bounded plan corrections applied; no additional phase-
   planner pass is needed because the approved plan fixes the cross-owner trace,
   dependency direction, hard cut-over, and no-fake E2E acceptance
-- Implementation: blocked at the persisted-preparation boundary after the
-  authority admission/cancellation correction; the current local preparation
-  path has no producer for the required `PreparedRunRecord`
+- Implementation: complete pending the full pre-submit gate; the production
+  daemon, public client/CLI surface, owner-labelled status, connected-local
+  cancellation, hard-cut-over removals, and runnable example are present
 - Refiner: qualified blocker correction 1/3 complete
-- Pre-submit gate: pending
+- Pre-submit gate: complete; `make validate-pr` passed Ruff, Pyright, the
+  2,365-test default suite, the 141-test config-extra suite with three optional
+  container skips, and package builds; `make test-summary` recorded 2,506
+  categorized passes and no failures/errors
 - Independent review: required because the phase crosses durable authority,
   coordinator, agent, public, and filesystem boundaries
-- Blocker corrections: 1/3
+- Blocker corrections: 3/3; all resolved
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Authority correction 1/3 remains intact at `afc245a`: private replay-safe coordinator-admission/cancellation-epoch receipt values and SQLite persistence. No daemon source was retained after source inspection established the next qualified blocker. |
-| Tests added or updated | Authority correction tests remain as recorded at `afc245a`. No Phase 3B composition test was added because it would have to manufacture the missing prepared-run artifact. |
-| Validated revision/tree state and evidence | Authority correction evidence remains valid: focused Ruff and 36 authority contract/store tests passed. New inspection at `afc245a` establishes that `PreparedRunRecord(...)` and `write_prepared_run(...)` have one production producer, `src/loom/cli/run.py::_write_slurm_prepared_run`; the normal local `PipelineRunner` preparation path writes plan/runtime/config only. |
-| Validation-relevant changes after evidence | The completion-record update only; no source, test, dependency, build, or validation configuration changed after the authority correction. |
+| Implementation and changed paths | Added `loom.queue.local_daemon`, its protected production composition and owner-only transport; added shared Python/CLI initialize, serve, submit, status, wait, and cancel operations; connected persisted plan/runtime/config, authority, Phase 1 orchestration/scheduling, and the Phase 2 assignment saga; added connected cancellation polling and commit suppression in `loom.pipeline.execution.managed_local`; removed `loom.queue.managed_local` and its managed-local GPU runtime construction; updated examples and feature/roadmap documentation. Authority correction 1/3 remains intact at `afc245a` with replay-safe coordinator-admission/cancellation-epoch receipts and SQLite persistence. |
+| Tests added or updated | Added daemon bootstrap/restart/lock/root tests and real persisted `preprocess -> train`, authority terminal projection, controller-only skip, independent-run overlap, digest-change, pending-cancel, active socket-cancel, hard-cut-over, CLI, package, contract, and example coverage. Added admission-scoped scheduling coverage. Removed tests for the deleted whole-run managed-local runtime and retained delegated-Slurm coverage. |
+| Validated revision/tree state and evidence | Final tree passed `make validate-pr`: Ruff and Pyright clean; default isolated suite 2,365 passed/121 deselected; config-extra 141 passed/3 optional container skips/2,368 deselected; source distribution and wheel built. Fresh `make test-summary` passed 2,506 categorized tests with zero failures/errors: package 118, unit 1,692, contract 295, integration 203, E2E 57, config-extra 141. |
+| Validation-relevant changes after evidence | This completion-record update only; no source, test, dependency, build, or validation configuration changed after the successful receipts. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | **Qualified blocker (2/3):** Phase 3B is required to admit an already-persisted immutable `PreparedRunRecord`, execution plan, and runtime metadata by `run_uri`; current normal local preparation produces only the plan/runtime/config artifacts. The sole production writer for `PreparedRunRecord` is the delegated-SLURM-specific `_write_slurm_prepared_run`, and its record explicitly carries `executor_kind: slurm`. Creating a generic/local record in the daemon would make admission fabricate the prerequisite it must validate; adapting the SLURM writer would change the explicitly unchanged delegated owner; and accepting a record supplied by a test/client would restore the prohibited opaque/fake input path. The smallest remedy is an approved authority/run-preparation owner and durable record contract for local prepared runs, including its CLI/API producer and intent-digest semantics. Phase 3A branch/worktree remains retained as isolated evidence. |
+| Residual risk and cleanup | Corrections are exhausted and resolved: (1) authority lacked durable coordinator-admission/cancellation receipts; (2) the phase file accidentally promoted delegated Slurm's `PreparedRunRecord` into a local prerequisite, so managed local now uses the existing persisted `ExecutionPlan`, runtime metadata, and resolved config; (3) an active connected cancellation could previously arrive after root launch without suppressing success, so the running assignment now observes the authority epoch, waits for containment, and withholds output commit. The final composition also proves admission activation, authority run finalization, admission-scoped selection, independent-run capacity overlap, and owner-accurate status. No migration or compatibility path was added. Phase 4/8/9 remote, disconnected-control, and exceptional-adoption risks remain deferred as planned. Phase 3A branch/worktree remains retained as isolated evidence pending Phase 3B disposition. |

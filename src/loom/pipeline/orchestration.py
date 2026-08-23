@@ -636,12 +636,14 @@ class RunOrchestrator:
         kernel: SchedulingKernel,
         candidates: Sequence[Candidate],
         as_of: int,
+        admission_id: str | None = None,
     ) -> SchedulingDecision:
         """Produce pure decision data from the immutable durable projection."""
 
         work = tuple(
             record.to_work_item()
             for record in self.store.list_stage_work()
+            if admission_id is None or record.admission_id == admission_id
             if record.scheduling_state is SchedulingProjectionState.READY
             if record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
         )
