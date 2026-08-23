@@ -1,13 +1,13 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: implementation in progress; Phases 1-2 merged
+Status: implementation in progress; Phases 1-2 merged, Phase 3A blocked
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 3 pending
-Blockers: none; Phases 1-2 are remotely merged and Phase 3 may prepare from
-current clean `origin/develop`
+Current phase: Phase 3B pending
+Blockers: none; expanded design/plan reviews and maintainer approval passed.
+Phase 3A exhausted correction 3/3 and did not open a PR.
 
 ## Summary
 
@@ -43,7 +43,8 @@ current clean `origin/develop`
   historical behavior. Stage 29 adds only explicit ready-stage delegation;
   automatic managed-agent/SLURM fallback, allocation-fed agents/provisioning,
   and a generic external-scheduler plugin are out of scope.
-- Implementation reference flows live in nine linked phase plans. They isolate
+- Implementation reference flows live in nine numbered phase plans plus the
+  Phase 3B recovery plan. They isolate
   pure scheduling plus authority-owned `PENDING` preparation/readiness, local
   execution side effects, persistent daemon lifetime, remote trust
   establishment, remote CPU/memory data and execution, GPU/preference placement,
@@ -465,15 +466,17 @@ current clean `origin/develop`
     deployment state. Initial rotation uses configured overlapping credentials;
     identity federation, application-layer signatures, at-rest encryption, and
     hostile-code sandboxing are not claimed;
-  - existing queue records retain schema-compatible inspection and cancellation.
-    Public managed facades keep their callable behavior while routing new work
-    through stage scheduling. `continue_prepared_run` retains its import,
-    validation, and structured insufficient-state failure, not an invented
-    successful path;
-  - managed use of whole-run `LaunchContract.resources`/`snapshot["argv"]`,
-    queue-item direct dispatch, and in-memory runner readiness is deprecated.
-    Private helpers may be replaced directly; public/durable removal requires a
-    later compatibility decision;
+  - managed-local uses an approved hard cut-over. Only immutable persisted
+    prepared-run admission and fresh explicit daemon roots are supported. Old
+    managed-local imports, calls, requests, roots, records, status,
+    cancellation, continuation, and recovery are rejected without adapter,
+    migration, domain-row interpretation, mutation, or deletion; bounded
+    root/schema inspection is permitted only to identify incompatibility;
+    downgrade is unsupported;
+  - managed whole-run `LaunchContract.resources`/`snapshot["argv"]`, direct
+    queue-item dispatch, in-memory runner readiness, and boolean recovery are
+    removed from managed-local. Generic/custom queue ownership and historical
+    whole-run delegated Slurm are not silently rewritten;
   - the base/legacy resource codec remains readable, but Stage 29 managed
     resolution rejects existing float-valued memory and zero-GPU entries with
     actionable exact-unit/omission guidance. Delegated and direct compatibility
@@ -564,8 +567,8 @@ current clean `origin/develop`
   status; no automatic unknown-work redispatch; resident project; one durable
   at-most-once-invoked ready-stage SLURM submission plus gated bootstrap; no
   inference from scheduler terminal state to Loom success; no cloned-state HA/
-  split brain or cross-owner run deletion; compatibility wrapping; unchanged
-  historical whole-run SLURM; deferred automatic fallback, allocation-fed
+  split brain or cross-owner run deletion; managed-local hard cut-over;
+  unchanged historical whole-run SLURM; deferred automatic fallback, allocation-fed
   agents, and generic external-scheduler plugins.
 
 No phase may claim exactly-once user effects. The fixed cross-phase trace is:
@@ -628,7 +631,8 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `scheduling-kernel-ready-stage-work` | merged | `docs/roadmap/stage-29/phases/scheduling-kernel-ready-stage-work.md` | `agent/stage-29-p1-scheduling-kernel-ready-stage-work` | [#233](https://github.com/samcantrill/loom/pull/233) merged | Resolved stage placement and closed default-managed/explicit-SLURM route value; opportunity/claim contracts; active/retained component registries/conformance; complete-only fixed kernel; site-tier/fallback aggregation; grouped default policy; shared readiness; idempotent authority `PENDING` attempt preparation; controller-action reconciliation; identity-stable rebuildable stage work independent of concurrency slots | Produce every authoritative dependency-ready exact attempt in the window and deterministic explainable complete managed placement/route identity without reservation, external mapping, or launch. |
 | 2 | `durable-local-stage-execution` | merged | `docs/roadmap/stage-29/phases/durable-local-stage-execution.md` | `agent/stage-29-p2-durable-local-stage-execution` | [#234](https://github.com/samcantrill/loom/pull/234) merged | Coordinator reservation/tagged-assignment operations with atomic run concurrency and decision receipts; managed-agent target first; authority bind/unbind/grant fence; local agent journal/provider with ordered assignment events; composite CPU/memory admission; local artifact hand-off; execution-only worker; explicit terminal/logical-release/provider-release/fresh-availability order | Run bounded local stages through the complete durable reservation-to-release saga with at most one managed root launch per assignment, causal replay, and real same-run branch concurrency while leaving the closed target seam for Phase 7. |
-| 3 | `local-daemon-control-boundary` | pending | `docs/roadmap/stage-29/phases/local-daemon-control-boundary.md` | `agent/stage-29-p3-local-daemon-control-boundary` | pending | Unique digest-bound pending/active admission including pending-cancel ordering; stable coordinator ID/process epoch; authority owner binding and durable mutation intents/receipts; receipt-aware consistent-cut reconciliation; scoped local views; explicit initialize/open-only crash-durable local SQLite roots and lost-state handling; protected role configuration and order-independent degraded startup behavior; retained embedded state/active-owner routing; coordinator accepted-time high-water/anomaly health; persistent daemon/client; non-atomic receipt-time status; public compatibility; durable cancellation request | Submit, observe, and conservatively cancel multiple uniquely admitted runs through one persistent single-machine system using the Phase 2 stage path. |
+| 3A | `local-daemon-control-boundary` | blocked | `docs/roadmap/stage-29/phases/local-daemon-control-boundary.md` | `agent/stage-29-p3-local-daemon-control-boundary` | not opened | Fresh role roots, stable coordinator identity/process epoch, owner-only IPC, digest admission, and typed hand-off candidate; manager pre-submit gate found no production authority/orchestrator/reservation/Phase 2 composition and correction 3/3 was exhausted | Preserve validated evidence without merging an accepted-but-nonexecuting daemon path. |
+| 3B | `local-daemon-production-composition` | pending | `docs/roadmap/stage-29/phases/local-daemon-production-composition.md` | `agent/stage-29-p3b-local-daemon-production-composition` | pending | Selective Phase 3A reuse; canonical persisted prepared-run/plan resolution by admitted `run_uri`; protected authority-backed run-store/orchestrator/scheduler/offer/reservation/agent composition; automatic daemon reconcile loop; real Phase 2 saga; stage-based Python/socket/CLI status/wait/cancel; joined status; fresh-root hard cut-over; dependency-direction repair | Submit and complete a real dependency-ordered local run through one persistent daemon with no caller/test injected authority, resolver, assignment, or executor. |
 | 4 | `authenticated-agent-sessions` | pending | `docs/roadmap/stage-29/phases/authenticated-agent-sessions.md` | `agent/stage-29-p4-authenticated-agent-sessions` | pending | Outbound-only agent topology; protected endpoint/trust configuration; mTLS identity; current-policy per-operation authorization; agent-persisted pre-send registration operation and coordinator-issued persisted session identity versus process/connection epochs; complete cooperative clean retirement/tombstones; current-epoch fresh remote registration/reconcile/offer/work envelopes after coordinator restart; idempotent indeterminate-outcome handling, limits, audit, and connectivity gate | Prove authenticated outbound agent connectivity and capacity publication across `machine-A` and `machine-B` before remote launch or transfer is enabled. |
 | 5 | `remote-stage-data-execution` | pending | `docs/roadmap/stage-29/phases/remote-stage-data-execution.md` | `agent/stage-29-p5-remote-stage-data-execution` | pending | Cross-agent CPU/memory availability; remote assignment loop; stable assignment-principal transfer progress with renewable authorization; durable grant/start/result; monotonic event/outbox replay; exact old-issuer reconnect, receipt-aware authority reconciliation, status freshness, and ordered physical release | Execute CPU/memory stages remotely with inputs durable before grant and accessible output refs committed before descendants unlock; leave the same bounded relay usable by Phase 7's restricted bootstrap. |
 | 6 | `gpu-preference-placement` | pending | `docs/roadmap/stage-29/phases/gpu-preference-placement.md` | `agent/stage-29-p6-gpu-preference-placement` | pending | Configured manageable GPU inventory; external-occupancy withdrawal; GPU planner/provider and claim contracts; planner-owned count/mode/per-device/topology feasibility; whole-placement constraints; tiered agent/model/packing preferences; quality-band fallback; strict future SLURM hard-mapping boundary; explicit no-OOM guarantee | Prove the generic resource and policy seams with safe exact GPU/VRAM managed placement and deterministic resource-relevant preferences that Phase 7 must map completely or reject. |
@@ -641,8 +645,9 @@ new authoritative lifecycle operation is idempotent creation of an unassigned
 `PENDING` attempt; controller-only actions continue through their existing
 authority-owned transitions. Phase 2 is the first execution-side-effecting stage path and
 must keep reservation, authority bind, physical prepare, grant, launch, commit,
-and release together. Phase 3 cannot merge while any managed entrypoint still
-launches a whole run or bypasses that path. Phase 4 must pass its no-agent-
+and release together. Phase 3A is blocked evidence only. Phase 3B cannot merge
+while any managed entrypoint launches a whole run, bypasses the Phase 1/2 path,
+or requires caller-supplied production collaborators. Phase 4 must pass its no-agent-
 execution connectivity/security gate before Phase 5 enables remote assignment
 or artifact bytes. Phase 7 is a separate external-side-effect gate after the
 managed scheduling/resource path is proven: it adds only an explicit named
@@ -732,10 +737,18 @@ work.
   restricted grant-gated bootstrap, one-root sentinel, accessible-result join,
   and compatibility regression. Phase 8 composes ordinary cancellation/profile
   reload; Phase 9 alone converts exact positive containment into close/retry.
-- Maintainer approval: recorded for the refined design and nine-phase manifest,
-  including the explicit ready-stage-only SLURM scope.
-- Ready for implementation: yes. Phase 1 preparation must still rediscover exact
-  contracts on current clean `origin/develop`.
+- Phase 3 recovery amendment: manager inspection of candidate `51ca432` found
+  that socket admission ended at an injected authority/resolver protocol and
+  its example recorded plan IDs rather than invoking a real worker. Phase 3B is
+  a fresh phase from current `develop`, not correction 4/3 or a stacked PR. It
+  must compose retained prepared-run artifacts, authority snapshot,
+  `RunOrchestrator`, scheduling decision, exact reservation, local agent, and
+  the Phase 2 saga behind the supported client path.
+- Maintainer approval: the refined design and nine-phase manifest, including the
+  explicit ready-stage-only SLURM scope, remain approved. Phase 3B design and
+  plan reviews passed and the maintainer approved the recovery amendment.
+- Ready for implementation: yes. Prepare Phase 3B from current clean
+  `origin/develop`; do not base or stack it on Phase 3A.
 - Accepted risks: FIFO starvation, complete-search exhaustion/delay, coordinator relay
   bottleneck, agent result retention, resident-project drift, trusted
   in-process downstream extension hang/misbehavior, configuration-driven
@@ -758,7 +771,8 @@ work.
 | --- | --- | --- | --- | --- |
 | 1 | [#233](https://github.com/samcantrill/loom/pull/233), squash-merged as `ebab3c5` | `make validate-pr` and `make test-summary` passed at repaired head; 2,490 categorized passes | No known Phase 1 blocker; execution-side effects remain owned by Phase 2 | Worktree and local/remote phase branch removed; merge metadata recorded on `develop` |
 | 2 | [#234](https://github.com/samcantrill/loom/pull/234), squash-merged as `0cff819` | `make validate-pr` passed with 2,378 default and 141 configuration-extra passes plus source/wheel builds; `make test-summary` recorded 2,519 categorized passes | No known Phase 2 blocker; persistent daemon lifetime and public facade migration remain owned by Phase 3 | Worktree and local/remote phase branch removed; merge metadata recorded on `develop` |
-| 3 | pending | pending | pending | pending |
+| 3A | No PR opened; blocked branch head `9d2d7a0` | Candidate `51ca432` passed `make validate-pr` and fresh categorized summary, but the manager pre-submit gate found no production execution path | Accepted socket submission could remain pending indefinitely; candidate retained only as evidence | Dedicated branch/worktree retained until Phase 3B disposition |
+| 3B | pending | pending | Must prove the real no-fake local daemon trace and hard cut-over | pending |
 | 4 | pending | pending | pending | pending |
 | 5 | pending | pending | pending | pending |
 | 6 | pending | pending | pending | pending |

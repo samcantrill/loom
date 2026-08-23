@@ -1,20 +1,24 @@
-# Phase 3 Execution Plan: Persistent Local Daemon And Compatibility Boundary
+# Phase 3A Execution Record: Blocked Local Daemon Candidate
 
 ## Metadata
 
-- Status: pending
-- Roadmap stage and phase: Stage 29, Phase 3
+- Status: blocked
+- Roadmap stage and phase: Stage 29, Phase 3A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3-local-daemon-control-boundary`
-- Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop` after Phase 2 remotely merges
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p3-local-daemon-control-boundary`
+- Base revision: `66d49684a35b9ed2ce1461b27596579b97eb6ffb`
 - PR target: `develop`
 - PR title: `feat(queue): add persistent local stage daemon`
 - Dependencies: Phase 2 merged with the complete bounded local assignment,
   grant, launch, output, and release saga
-- Workflow path: expanded because this phase migrates public managed behavior and
-  introduces persistent role/process and compatibility boundaries
-- Blockers: Phase 2 remote merge
+- Workflow path: expanded because this phase migrated public managed behavior
+  and introduced persistent role/process and irreversible cut-over boundaries
+- Blockers: correction budget exhausted. Candidate `51ca432` passes local
+  validation but has no production authority/orchestrator/reservation/Phase 2
+  composition behind socket admission. Branch head `9d2d7a0` records the
+  manager pre-submit blocker; no PR opened. Phase 3B owns the fresh remedy.
 
 ## Objective And Context
 
@@ -66,11 +70,11 @@ Phase 9 later adds exact same-session process recovery and guarded closure.
   and service test utilities. The current authority HTTP service is
   loopback-oriented; do not mistake that location for Stage 29 authentication.
 - Current queue SQLite rejects duplicate `queue_item_id` but has no unique
-  `run_uri` admission constraint. Add the Stage 29 managed-admission table/
-  transaction deliberately; do not add a raw uniqueness rule that makes
-  historical duplicate rows unreadable.
-- Reuse existing CLI/API compatibility tests, SQLite migration tests, process
-  barriers, fake clocks, subprocess helpers, and safe status/error fixtures.
+  `run_uri` admission constraint. The candidate added a separate Stage 29
+  managed-admission transaction in fresh daemon roots; legacy managed-local
+  databases are incompatible input rather than migration sources.
+- The candidate replaced legacy managed-local runtime/GPU tests with stage-based
+  daemon tests and explicit incompatible-state/import behavior.
 - Deployment/config wiring remains above domain modules. Public imports must stay
   intentional, typed, and cheap.
 
@@ -86,7 +90,8 @@ In scope:
   Direct adapters capture a trusted principal during construction rather than
   accepting authoritative actor fields in public request models.
 - Add persistent single-machine deployment composition with separate
-  coordinator and agent SQLite roots, explicit schema checks/migrations, and one
+  coordinator and agent SQLite roots, explicit schema checks/incompatibility
+  rejection, and one
   active role lock for each root. An implementation may host both roles in one
   daemon process, but it must preserve their state ownership and independent
   lock identities.
@@ -102,8 +107,9 @@ In scope:
   item/admission, including after a lost response; changed intent or switching
   between managed-stage, delegated, and compatibility ownership conflicts.
   Resume addresses the retained admission; a rerun requires a new `run_uri`.
-  Existing historical duplicate rows remain readable through compatibility
-  behavior and do not authorize two new managed owners.
+  Legacy managed-local rows are incompatible and are not read or interpreted by
+  Stage 29. Generic and delegated rows retain their existing owners and do not
+  authorize two new managed owners.
 - Treat coordinator admission commit as durable client acceptance, not proof of
   authority ownership. A managed admission begins `PENDING_AUTHORITY`; persist
   the owner-bind operation ID/digest before calling authority. Promote it to
@@ -218,25 +224,20 @@ In scope:
   distinguishes requested (authority unavailable), effective, settling, and
   terminal cancellation. Do not infer
   completion from daemon shutdown or a missing PID.
-- Keep historical queue rows readable and cancellable. Introduce a new managed
-  orchestration state rather than silently reinterpreting historical
-  `DISPATCHED`. Preserve public callable signatures where feasible and use
-  explicit compatibility adapters/schema migration and actionable warnings.
-- Deprecate managed whole-run `LaunchContract.resources`, stored argv launch,
-  direct queue-item claim/dispatch, full-run lock ownership, and in-memory
-  runner readiness as execution owners. Historical whole-run delegated SLURM
-  remains unchanged; Phase 7 later adds a separate tagged ready-stage target
-  inside the managed-stage run owner.
-- Preserve `continue_prepared_run` import, validation, and its structured
-  insufficient-state failure; do not invent a successful legacy replay payload.
-- Quarantine the current
-  `ManagedLocalQueueRuntime.resolve_recovery_unknown(...,
-  previous_processes_confirmed_stopped=True, ...)` boolean-attestation API. It
-  must never accept a Stage 29 assignment/session or mutate new authority,
-  coordinator, or agent records. If compatibility requires retaining it for
-  exact historical whole-run queue rows, keep it on an explicitly legacy path
-  with its existing warning/semantics until a later removal decision. Phase 9's
-  evidence-resolved operation is the only recovery path for Stage 29 work.
+- Replace the managed-local Python, CLI, runner, and queue surface with a
+  stage-based submission containing queue item identity and `run_uri`; the
+  production service resolves the canonical persisted prepared run/plan and
+  pins its normalized intent digest. Remove managed-local whole-
+  run `QueueEnqueueRequest`/`LaunchContract` submission, direct claim/dispatch,
+  full-run lock ownership, in-memory runner readiness,
+  `ManagedLocalQueueRuntime`, boolean recovery, and continuation compatibility.
+- Inspect only bounded root/schema metadata needed to reject legacy managed-
+  local databases; do not read/interpret their domain rows, translate, cancel,
+  resume, mutate, or delete them. Operators finish
+  old work before upgrade, archive/remove old state themselves, and explicitly
+  initialize fresh daemon roots. Downgrade is unsupported.
+- Keep whole-run delegated Slurm unchanged; Phase 7 later adds a separate
+  ready-stage Slurm target.
 - Add protected, abstract daemon configuration for state roots, endpoint,
   coordinator/local-agent identities, configured pools/resources, project/
   executor composition, and authorization. Examples use only `machine-A` and
@@ -424,13 +425,13 @@ degraded for the outage; it must not claim the run-wide cancellation barrier is
 effective until authority records the epoch. Reconciliation repeats the same
 request identity after restart.
 
-### Compatibility
+### Managed-local hard cut-over
 
-New submissions use the stage scheduler. Old records keep their original schema
-meaning for inspection/cancellation. Compatibility code may translate calls
-into new application operations but must not fabricate per-stage facts that do
-not exist. Removal of deprecated public/durable fields requires a later measured
-compatibility decision.
+Only the new prepared-run surface and fresh daemon roots are supported. Old
+managed-local imports, calls, requests, roots, records, status, cancellation,
+continuation, and recovery fail with actionable replacement/incompatible-state
+diagnostics. No adapter, migration, warning-only fallback, or automatic
+translation exists. Generic/delegated queue records are not reinterpreted.
 
 ### Private discretion
 
@@ -445,7 +446,7 @@ second scheduler, readiness loop, or local-only lifecycle semantics.
   application operations, CLI/Python entrypoints, process helpers, and status
   models.
 - New machinery is limited to a persistent composition, narrow views/
-  authorization, role locks, and compatibility routing required by the accepted
+  authorization, role locks, and stage-based routing required by the accepted
   standalone job-server scenario.
 - Remote transport and advanced operations remain separate phases so this PR can
   prove local lifetime and migration without network/security/data-plane scope.
@@ -464,11 +465,11 @@ second scheduler, readiness loop, or local-only lifecycle semantics.
 | Only the scoped coordinator reaches authority | Authority adapter/authorizer | Bare loopback, worker/client credential, wrong service/workspace/generation | Unauthorized lifecycle mutation or false readiness | Direct/IPC/HTTP identity, scope, mismatch, and credential-exclusion tests |
 | Rotated authority generation preserves one consistent cut of all authority-relevant truth | Authority continuity operation + durable operation intents/receipts + generation reconciler | Restart after commit-before-response, missing, regressed, unexplained, or concurrently mutating service | Permanent false degradation, lost terminal history, forged lifecycle, or duplicate launch | Exact checkpoint, receipt-explained forward state, dual restart, mutation-barrier/torn-read, pristine-bootstrap, and negative matrix |
 | Principal cannot come from request body | Adapter + authorizer | Crafted local request | Unauthorized action | Actor-mismatch tests |
-| New managed work uses stage assignments | Compatibility router | Legacy whole-run dispatcher | Duplicate semantic paths | Launcher sentinel and trace-equivalence tests |
+| New managed work uses stage assignments | Production application composition | Legacy whole-run dispatcher or caller-supplied fake resolver | Accepted work never executes or uses a duplicate semantic path | Real prepared-run launcher sentinel and trace test |
 | Cancellation truth has one lifecycle owner | Coordinator request + authority cancellation-epoch CAS + agent fan-out | Pending-authority activation, authority outage, client timeout, grant race, or daemon loss | Post-cancel work, false terminal, or released resources | Pending-bind/cancel/activation plus requested/effective restart and readiness/grant barriers |
 | Ordinary restart cannot adopt or relaunch uncertain work | Startup reconciler | Intact journal with unresolved accepted/granted assignment | Duplicate process or capacity reuse | Zero-availability/unknown-set/launcher-sentinel tests |
-| Legacy boolean recovery cannot reach Stage 29 state | Compatibility boundary | Existing managed-local recovery call | Weak-evidence fence/requeue | New-record rejection and historical-record compatibility tests |
-| Historical rows retain meaning | Queue migration adapter | Schema migration | Data corruption/false facts | Old-record fixtures |
+| Legacy managed-local behavior cannot reach Stage 29 state | Public/preflight cut-over boundary | Old import, call, request, database, or boolean recovery input | Fabricated stage facts or weak-evidence fence/requeue | Removed-import/call and incompatible-root/request tests |
+| Historical delegated rows retain meaning | Existing delegated queue owner | Managed-local cut-over accidentally broadens | Delegated regression or data corruption | Delegated Slurm fixtures/regressions |
 | Status preserves owner axes without false global time/order | Status projector | Partial/unavailable store, skewed remote clock, interleaved reads, or last-writer flattening | False terminal/healthy/released view | Cross-store revision/accepted-receipt-time/`as_of`, precedence, stale/degraded, redaction, and size tests |
 | Coordinator time cannot silently extend stale capacity | Accepted-time owner + coordinator store | Local clock rollback/out-of-policy jump or restart | Stale offer assignment, fallback reset, or false freshness | Durable high-water, rollback/jump degradation, retained-capacity withdrawal, and recovery tests |
 
@@ -493,16 +494,16 @@ second scheduler, readiness loop, or local-only lifecycle semantics.
    owner-labelled joined status, coordinator-request/authority-epoch connected-
    local cancellation, and fail-closed ordinary restart with zero-availability/
    unknown-work barriers.
-4. Migrate managed Python/CLI/runner/queue facades, preserve historical records
-   and delegated SLURM, add retained embedded-state/active-owner routing,
-   warnings/docs/examples, and prove bounded versus persistent trace
+4. Replace managed Python/CLI/runner/queue facades, reject old managed-local
+   state/requests, preserve delegated SLURM, add retained embedded-state/active-
+   owner routing, docs/examples, and prove bounded versus persistent trace
    equivalence.
 
 ## Test And Validation Plan
 
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
-| Package | Required | Public facade/import compatibility | Cheap imports and retained call signatures |
+| Package | Required | Public hard cut-over and dependency direction | Cheap intentional new imports; removed managed-local imports fail; pipeline execution does not import queue transport |
 | Unit | Required | Config, bootstrap/admission digest/owner/state, identities/epochs, locks, accepted time, status/redaction | Initialize-versus-open validation; invalid permissions/root alias/locality/headroom/missing/corrupt/identity state; exact admission replay/pending-active-with-receipt/conflicts; commit-before-success/ack; accepted-time high-water/rollback/jump; role/action denial; owner-axis accepted-receipt-time precedence and bounded output |
 | Contract | Required | Direct and IPC/application/authority equivalence | Same normalized operation, derived identity, scope, idempotency, expected-state error, owner binding, cancellation request/effective result, and result; non-coordinator principals denied |
 | Integration | Required | SQLite/authority restart, service-order matrix, multi-run service, migration | First-init/re-init/open-only missing/corrupt/wrong-identity root; coordinator-before-authority degraded admission and later activation; authority-first and restart sequences; lost-response duplicate admission, pending authority and pending-cancel-before-activation, embedded/daemon/delegated conflict; authority outage pauses new lifecycle work but not granted process; valid rotated generation with exact or operation-receipt-explained mutation-barrier cut resumes, including authority commit-then-timeout plus dual restart; torn read, pristine-empty with authority-relevant tombstone, wrong/stale/missing/regressed/unexplained authority and bare HTTP fail closed; authority credential absent from worker; duplicate start, crash/reopen, unresolved work remains unknown/no-relaunch, old rows, Stage 29 rejection by legacy recovery, requested/effective conservative cancel |
@@ -515,24 +516,23 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 ## Risks, Review, And Stops
 
-- Main risks: retaining a hidden whole-run dispatcher; treating local IPC as
+- Main risks: retaining a hidden whole-run dispatcher; accepting work without a
+  production authority/orchestrator/reservation/Phase 2 path; treating local IPC as
   automatically trusted; treating the current loopback authority as
   authenticated; admitting one `run_uri` twice; confusing stable owner with
   process epoch; exposing work while admission is still pending authority;
   rejecting receipt-explained authority progress or adopting a new authority
   generation from a torn/unexplained continuity read; using shared SQLite
   semantics; leaking authority access to a
-  worker; duplicate role ownership;
-  silent old-row
-  reinterpretation; letting boolean legacy recovery fence Stage 29 work;
+  worker; duplicate role ownership; silently translating old managed-local
+  state; letting boolean legacy recovery fence Stage 29 work;
   relaunching uncertain work after restart; or reporting cancellation complete
   before containment.
 - Review focus: facade trace equivalence, process/store ownership, application
-  and authority identity derivation/scopes, credential exclusion, migrations,
+  and authority identity derivation/scopes, credential exclusion, hard cut-over,
   admission uniqueness, stable identities/epochs, root preflight, readiness,
   cancellation ownership, status provenance, and safe diagnostics.
-- Stop if: a public facade cannot route through the Phase 2 path without a
-  material compatibility choice; role locks/local preflight cannot identify
+- Stop if: a public facade cannot route through the Phase 2 path; role locks/local preflight cannot identify
   exact roots safely;
   local transport or the authority client would expose an unauthenticated
   mutation surface; workers would need authority credentials/direct database
@@ -551,31 +551,31 @@ Targeted commands are fixed during phase preparation. Final commands:
   principal, separate authenticated authority owner, no worker authority access,
   unique digest/owner-bound admission, stable coordinator identity versus
   process epoch, local-only separate role stores/locks, consistent continuity
-  cuts, authority-owned cancellation, owner-labelled status, explicit
-  compatibility, and one stage execution path.
-- Escalate material public/durable compatibility choices to the manager.
+  cuts, authority-owned cancellation, owner-labelled status, the approved
+  managed-local hard cut-over, and one stage execution path.
+- The candidate is closed. Phase 3B, not another correction here, owns the
+  concrete production composition and final acceptance trace.
 
 ## Workflow State
 
-- Manager preparation: pending Phase 2 merge, worktree/base recording, and
-  exact source/test rediscovery
-- Expanded planning: required by public migration and process/store ownership;
-  phase plan finalized
-- Implementation: pending
-- Refiner: not used
-- Pre-submit gate: pending
-- Independent review: decide during preparation based on remaining migration and
-  process-lifetime risk
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation: completed from clean `origin/develop` at `66d4968`
+- Expanded planning: completed for the original phase; the maintainer later
+  approved the managed-local hard cut-over
+- Implementation: blocked at candidate implementation `51ca432`
+- Refiner: one refiner plus manager corrections used within the phase budget
+- Pre-submit gate: blocked because socket admission had no production authority,
+  orchestrator, reservation, or Phase 2 execution composition
+- Independent review: not eligible because no PR opened
+- Blocker corrections: 3/3 exhausted
+- PR and merge: not opened; Phase 3B supersedes further work on this branch
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Candidate `51ca432` added fresh two-root daemon state, owner-only Unix IPC, durable admissions/cancellation dispatch, a typed Phase 2 hand-off protocol, hard-cut-over docs/examples, and removed old managed-local runtime/GPU paths. |
+| Tests added or updated | Candidate added daemon/root/socket/restart/cancellation and injected Phase 2 hand-off coverage while deleting obsolete whole-run managed-local tests. |
+| Validated revision/tree state and evidence | `make validate-pr` passed with 2,360 default and 141 configuration-extra tests plus builds; fresh `make test-summary` passed 118 package, 1,694 unit, 293 contract, 198 integration, 57 E2E, and 141 configuration-extra tests. |
+| Validation-relevant changes after evidence | Documentation-only blocked-status record at `9d2d7a0`; source receipt remains valid for `51ca432`. |
+| PR, review, and merge | Not opened. Manager pre-submit gate failed after correction 3/3. |
+| Residual risk and cleanup | Candidate worktree/branch is retained read-only as Phase 3B evidence. It must not merge independently or be used as a stacked base. |
