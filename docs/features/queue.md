@@ -213,6 +213,40 @@ This boolean-attestation operation is historical whole-run behavior only. Stage
 only Stage 29's later authenticated positive-containment recovery may fence,
 close, or retry new managed work.
 
+### Authenticated agent sessions
+
+The Stage 29 coordinator also has a deliberately restricted, outbound-agent
+session boundary. Its protected deployment configuration maps a verified mTLS
+client-certificate fingerprint to one credential, principal, role, and (for an
+agent) stable agent ID. Certificate subject text, HTTP paths, request bodies,
+addresses, and caller-selected session IDs are never identity inputs. TLS 1.2
+or newer is required; the agent verifies the configured coordinator service
+identity and the coordinator requires a client certificate from its configured
+trust bundle.
+
+The no-mutation handshake returns only protocol/capability versions, stable
+coordinator ID, current epoch, and verified role. An authorized agent may then
+register or reconcile its coordinator-issued durable session, publish a bounded
+CPU/memory offer, and hold one current revision-bound work poll. A poll returns
+only `wait` in this phase. Those offers are coordinator-retained protocol state,
+not inputs to the local scheduling kernel or assignment store.
+
+Every operation rechecks the protected current policy, so removing a credential
+fences an already-connected peer without retiring its session. Registration and
+offer mutations are canonical-digest/idempotency-key bound. A coordinator restart
+retains its stable ID but rotates epoch; an agent must reconcile and publish a
+fresh offer before polling. Clean retirement requires the authenticated old
+session, withdrawn offer/poll, and an empty protected reference set; it records
+a rejecting `RETIRED_CLEAN` tombstone. Lost state, expiry, a new connection, or
+credential rotation is not retirement.
+
+Client and operator status/admission operations can use the same protected mTLS
+adapter with their separately configured roles. The owner-only Unix client route
+continues unchanged. No authority application route is exposed here, and agent
+operations cannot submit/cancel runs, reserve/bind/grant assignments, read
+artifacts, prepare providers, or invoke launchers. Remote work delivery and
+execution remain later phases.
+
 For independent devices, request the ordinary generic amount:
 
 ```python

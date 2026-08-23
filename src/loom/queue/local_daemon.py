@@ -25,6 +25,7 @@ from uuid import uuid4
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp, utc_timestamp
 
+from .agent_sessions import AgentPolicyConfig, AgentSessionView, initialize_agent_session_schema
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
 if TYPE_CHECKING:
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 1
+_LOCAL_DAEMON_SCHEMA_VERSION = 2
 
 
 class LocalDaemonAdmissionState(StrEnum):
@@ -54,6 +55,7 @@ class LocalDaemonAdmissionState(StrEnum):
 class LocalDaemonRole(StrEnum):
     CLIENT = "client"
     OPERATOR = "operator"
+    AGENT = "agent"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,11 +64,16 @@ class LocalDaemonPrincipal:
 
     subject: str
     role: LocalDaemonRole
+    credential_id: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.subject, str) or not self.subject:
             raise QueueServiceError("daemon principal subject must be non-empty")
         object.__setattr__(self, "role", LocalDaemonRole(self.role))
+        if self.credential_id is not None and (
+            not isinstance(self.credential_id, str) or not self.credential_id
+        ):
+            raise QueueServiceError("daemon principal credential ID must be non-empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +86,7 @@ class LocalDaemonConfig:
     machine_id: str = "machine-A"
     cpu_capacity: int = 1
     poll_interval_seconds: float = 0.05
+    agent_policy: AgentPolicyConfig = AgentPolicyConfig()
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
@@ -102,6 +110,8 @@ class LocalDaemonConfig:
             or self.poll_interval_seconds <= 0
         ):
             raise QueueServiceError("poll_interval_seconds must be positive")
+        if not isinstance(self.agent_policy, AgentPolicyConfig):
+            raise QueueServiceError("agent_policy must be protected agent policy")
         object.__setattr__(self, "coordinator_root", coordinator)
         object.__setattr__(self, "agent_root", agent)
         object.__setattr__(self, "run_store_root", run_store)
@@ -292,6 +302,7 @@ class LocalDaemon:
         self._assignment_futures: dict[str, Future[LocalDaemonExecutionOutcome]] = {}
         self._cycle_lock = RLock()
         self._service_error: str | None = None
+        self._agent_policy = config.agent_policy
 
     @classmethod
     def initialize(cls, config: LocalDaemonConfig) -> None:
@@ -421,6 +432,23 @@ class LocalDaemon:
         self, principal: LocalDaemonPrincipal
     ) -> "LocalDaemonOperatorView":
         return LocalDaemonOperatorView(self, principal)
+
+    def agent_view(self, principal: LocalDaemonPrincipal) -> AgentSessionView:
+        """Return the restricted no-launch agent view for a trusted principal."""
+        return AgentSessionView(self, principal)
+
+    def replace_agent_policy(self, policy: AgentPolicyConfig) -> None:
+        """Install a new protected policy; later operations re-authorize it."""
+        if not isinstance(policy, AgentPolicyConfig):
+            raise QueueServiceError("agent policy is invalid")
+        self._agent_policy = policy
+
+    def _require_view_role(
+        self, principal: LocalDaemonPrincipal, role: LocalDaemonRole
+    ) -> None:
+        from .agent_sessions import ScopedAuthorizer
+
+        ScopedAuthorizer(self._agent_policy).require_role(principal, role.value)
 
     def status(self) -> LocalDaemonStatus:
         coordinator_id = self._require_started()
@@ -755,6 +783,29 @@ class LocalDaemon:
         finally:
             conn.close()
 
+    @contextmanager
+    def _agent_connection(self) -> Iterator[sqlite3.Connection]:
+        try:
+            conn = sqlite3.connect(
+                f"{self.config.agent_root.joinpath('control.sqlite').resolve().as_uri()}?mode=rw",
+                uri=True,
+                timeout=30,
+            )
+            conn.row_factory = sqlite3.Row
+            expected = self._agent_id
+            if expected is not None:
+                row = conn.execute(
+                    "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+                ).fetchone()
+                if row is None or str(row["value"]) != expected:
+                    raise QueueStorageError("agent control identity is invalid")
+        except (OSError, sqlite3.Error):
+            raise QueueStorageError("agent control state is unavailable") from None
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     def _accepted_time(self, conn: sqlite3.Connection) -> str:
         now = self._clock()
         parse_timestamp(now)
@@ -781,21 +832,21 @@ class LocalDaemonClientView:
     _principal: LocalDaemonPrincipal
 
     def submit(self, request: LocalDaemonAdmissionRequest) -> LocalDaemonAdmission:
-        _require_role(self._principal, LocalDaemonRole.CLIENT)
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon._submit(request)
 
     def status(self) -> LocalDaemonStatus:
-        _require_role(self._principal, LocalDaemonRole.CLIENT)
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.status()
 
     def wait(
         self, queue_item_id: str, *, timeout_seconds: float | None = None
     ) -> LocalDaemonAdmission:
-        _require_role(self._principal, LocalDaemonRole.CLIENT)
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon._wait(queue_item_id, timeout_seconds=timeout_seconds)
 
     def cancel(self, queue_item_id: str) -> LocalDaemonAdmission:
-        _require_role(self._principal, LocalDaemonRole.CLIENT)
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon._cancel(queue_item_id)
 
 
@@ -805,11 +856,11 @@ class LocalDaemonOperatorView:
     _principal: LocalDaemonPrincipal
 
     def status(self) -> LocalDaemonStatus:
-        _require_role(self._principal, LocalDaemonRole.OPERATOR)
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.status()
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
-        _require_role(self._principal, LocalDaemonRole.OPERATOR)
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.reconcile_once()
 
 
@@ -881,6 +932,7 @@ def _initialize_root(path: Path, *, role: str) -> None:
                         SET revision = revision + 1 WHERE owner = 'admission'; END;
                 """
             )
+        initialize_agent_session_schema(conn, coordinator=role == "coordinator")
         conn.commit()
     database.chmod(0o600)
 
@@ -895,7 +947,13 @@ def _open_root(path: Path, *, role: str) -> str:
         raise QueueStorageError(f"{role} root must be owner-permissioned")
     with sqlite3.connect(database) as conn:
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        if version != _LOCAL_DAEMON_SCHEMA_VERSION:
+        if version == 1:
+            # Phase 4 only adds isolated tables: all Phase 3 metadata and
+            # admissions retain their existing interpretation and binding.
+            initialize_agent_session_schema(conn, coordinator=role == "coordinator")
+            conn.execute(f"PRAGMA user_version = {_LOCAL_DAEMON_SCHEMA_VERSION}")
+            conn.commit()
+        elif version != _LOCAL_DAEMON_SCHEMA_VERSION:
             raise QueueStorageError(
                 f"{role} daemon schema is unsupported; fresh roots are required"
             )
@@ -986,6 +1044,7 @@ __all__ = [
     "LocalDaemonAdmission",
     "LocalDaemonAdmissionRequest",
     "LocalDaemonAdmissionState",
+    "AgentSessionView",
     "LocalDaemonClientView",
     "LocalDaemonConfig",
     "LocalDaemonOperatorView",
