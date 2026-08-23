@@ -15,7 +15,13 @@ from typing import cast
 
 from loom.serialization import PlainData
 
-from .errors import QueueServiceError
+from .errors import (
+    QueueConflictError,
+    QueueError,
+    QueueServiceError,
+    QueueStorageError,
+    QueueValidationError,
+)
 from .local_daemon import (
     LocalDaemon,
     LocalDaemonAdmission,
@@ -120,11 +126,12 @@ class LocalDaemonSocketServer:
             else:
                 raise QueueServiceError("local daemon operation is unsupported")
             response: PlainData = {"ok": True, "result": result}
-        except Exception as exc:  # Client responses expose one bounded diagnostic.
+        except Exception as exc:  # Public responses expose only stable safe codes.
+            diagnostic = _safe_error_code(exc)
             response = {
                 "ok": False,
-                "error": type(exc).__name__,
-                "message": str(exc)[:512],
+                "error": diagnostic,
+                "message": diagnostic,
             }
         _write_message(connection, cast(Mapping[str, PlainData], response))
 
@@ -166,13 +173,13 @@ class LocalDaemonSocketClient:
             else:
                 raise QueueServiceError("managed admission was not found")
             if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError("managed local admission did not reach terminal state")
+                raise TimeoutError(
+                    "managed local admission did not reach terminal state"
+                )
             time.sleep(0.05)
 
     def cancel(self, queue_item_id: str) -> LocalDaemonAdmission:
-        result = self._call(
-            {"operation": "cancel", "queue_item_id": queue_item_id}
-        )
+        result = self._call({"operation": "cancel", "queue_item_id": queue_item_id})
         return LocalDaemonAdmission.from_dict(result)
 
     def _call(self, request: Mapping[str, PlainData]) -> Mapping[str, object]:
@@ -186,9 +193,11 @@ class LocalDaemonSocketClient:
         finally:
             connection.close()
         if response.get("ok") is not True:
-            message = response.get("message")
+            diagnostic = response.get("error")
             raise QueueServiceError(
-                message if isinstance(message, str) else "local daemon request failed"
+                diagnostic
+                if isinstance(diagnostic, str)
+                else "local_daemon_request_failed"
             )
         result = response.get("result")
         if not isinstance(result, Mapping):
@@ -196,10 +205,24 @@ class LocalDaemonSocketClient:
         return result
 
 
+def _safe_error_code(exc: Exception) -> str:
+    if isinstance(exc, QueueConflictError):
+        return "local_daemon_conflict"
+    if isinstance(exc, QueueValidationError):
+        return "local_daemon_invalid_request"
+    if isinstance(exc, QueueServiceError):
+        return "local_daemon_request_rejected"
+    if isinstance(exc, (QueueStorageError, QueueError)):
+        return "local_daemon_storage_unavailable"
+    return "local_daemon_internal_error"
+
+
 def _peer_uid(connection: socket.socket) -> int:
     if not hasattr(socket, "SO_PEERCRED"):
         raise QueueServiceError("local peer credentials are unavailable")
-    raw = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+    raw = connection.getsockopt(
+        socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+    )
     _pid, uid, _gid = struct.unpack("3i", raw)
     return uid
 
@@ -251,7 +274,9 @@ def _remove_owned_stale_socket(endpoint: Path) -> None:
         return
     endpoint_stat = endpoint.lstat()
     if endpoint_stat.st_uid != os.getuid() or not stat.S_ISSOCK(endpoint_stat.st_mode):
-        raise QueueServiceError("local daemon endpoint exists and is not an owned socket")
+        raise QueueServiceError(
+            "local daemon endpoint exists and is not an owned socket"
+        )
     probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         probe.connect(str(endpoint))

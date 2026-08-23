@@ -193,9 +193,7 @@ class LocalDaemonAdmission:
             execution_owner=_required_string(data, "execution_owner"),
             state=LocalDaemonAdmissionState(_required_string(data, "state")),
             accepted_at=_required_string(data, "accepted_at"),
-            authority_operation_id=_required_string(
-                data, "authority_operation_id"
-            ),
+            authority_operation_id=_required_string(data, "authority_operation_id"),
             cancellation_operation_id=_optional_string(
                 data, "cancellation_operation_id"
             ),
@@ -290,9 +288,7 @@ class LocalDaemon:
         self._thread: Thread | None = None
         self._assignment_workers: ThreadPoolExecutor | None = None
         self._execution: LocalDaemonExecution | None = None
-        self._assignment_futures: dict[
-            str, Future[LocalDaemonExecutionOutcome]
-        ] = {}
+        self._assignment_futures: dict[str, Future[LocalDaemonExecutionOutcome]] = {}
         self._cycle_lock = RLock()
         self._service_error: str | None = None
 
@@ -407,7 +403,11 @@ class LocalDaemon:
             accepted_time = self._accepted_time(conn)
         from .local_daemon_execution import build_local_daemon_owner_views
 
-        views = build_local_daemon_owner_views(self.config, admissions)
+        views = build_local_daemon_owner_views(
+            self.config,
+            admissions,
+            clock=self._clock,
+        )
         unavailable = any(
             any(
                 isinstance(axis, Mapping) and axis.get("availability") == "unavailable"
@@ -423,9 +423,14 @@ class LocalDaemon:
             as_of=as_of,
             accepted_time=accepted_time,
             service_health=(
-                "healthy" if self._service_error is None and not unavailable else "degraded"
+                "healthy"
+                if self._service_error is None and not unavailable
+                else "degraded"
             ),
-            service_diagnostic=self._service_error,
+            service_diagnostic=(
+                self._service_error
+                or ("owner_status_unavailable" if unavailable else None)
+            ),
             admissions=admissions,
             runs=views,
         )
@@ -607,7 +612,9 @@ class LocalDaemon:
             if admission.state in terminal:
                 return admission
             if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError("managed local admission did not reach terminal state")
+                raise TimeoutError(
+                    "managed local admission did not reach terminal state"
+                )
             self._wake.set()
             time.sleep(min(self.config.poll_interval_seconds, 0.05))
 
@@ -716,9 +723,7 @@ class LocalDaemonClientView:
         self, queue_item_id: str, *, timeout_seconds: float | None = None
     ) -> LocalDaemonAdmission:
         _require_role(self._principal, LocalDaemonRole.CLIENT)
-        return self._daemon._wait(
-            queue_item_id, timeout_seconds=timeout_seconds
-        )
+        return self._daemon._wait(queue_item_id, timeout_seconds=timeout_seconds)
 
     def cancel(self, queue_item_id: str) -> LocalDaemonAdmission:
         _require_role(self._principal, LocalDaemonRole.CLIENT)
@@ -741,9 +746,7 @@ class LocalDaemonOperatorView:
 
 def _require_role(principal: LocalDaemonPrincipal, role: LocalDaemonRole) -> None:
     if principal.role is not role:
-        raise QueueServiceError(
-            "daemon principal is not authorized for this operation"
-        )
+        raise QueueServiceError("daemon principal is not authorized for this operation")
 
 
 def _initialize_root(path: Path, *, role: str) -> None:
@@ -829,12 +832,9 @@ def _validate_distinct_roots(config: LocalDaemonConfig) -> None:
         raise QueueServiceError("local daemon initialized roots are missing")
     if (
         config.coordinator_root.resolve() == config.agent_root.resolve()
-        or config.coordinator_root.stat().st_ino
-        == config.agent_root.stat().st_ino
+        or config.coordinator_root.stat().st_ino == config.agent_root.stat().st_ino
     ):
-        raise QueueServiceError(
-            "coordinator and local-agent roots must not alias"
-        )
+        raise QueueServiceError("coordinator and local-agent roots must not alias")
 
 
 def _acquire_lock(root: Path):  # type: ignore[no-untyped-def]
@@ -845,9 +845,7 @@ def _acquire_lock(root: Path):  # type: ignore[no-untyped-def]
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
         lock.close()
-        raise QueueServiceError(
-            f"local daemon role is already locked: {root}"
-        ) from exc
+        raise QueueServiceError(f"local daemon role is already locked: {root}") from exc
     return lock
 
 
@@ -887,9 +885,7 @@ def _optional_string(data: Mapping[str, object], field: str) -> str | None:
     return value
 
 
-def _exact_fields(
-    data: Mapping[str, object], fields: set[str], label: str
-) -> None:
+def _exact_fields(data: Mapping[str, object], fields: set[str], label: str) -> None:
     if set(data) != fields:
         raise QueueServiceError(
             f"{label} must contain exactly: {', '.join(sorted(fields))}"

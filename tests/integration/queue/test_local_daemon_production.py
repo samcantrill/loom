@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 import importlib
 from pathlib import Path
+from threading import Event
 import time
-from typing import cast
+from typing import Never, cast
 
 import pytest
 
@@ -48,11 +49,13 @@ from loom.queue import (
     LocalDaemonRole,
     LocalDaemonSocketClient,
     LocalDaemonSocketServer,
+    QueueServiceError,
     prepare_managed_local_runtime_record,
 )
 from loom.serialization import json_dumps_pretty
 from loom.queue.local_daemon_execution import (
     LocalDaemonExecution,
+    LocalDaemonExecutionOutcome,
     _ScopedCoordinatorAuthority,
     build_local_daemon_owner_views,
     load_managed_local_intent,
@@ -82,9 +85,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
                 },
                 "config": {"value": 42},
                 "resources": {
-                    "entries": {
-                        "cpu": {"kind": "cpu", "amount": 1, "unit": "count"}
-                    }
+                    "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
                 },
                 "outputs": {
                     "data": {
@@ -103,9 +104,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
                 "depends_on": ["preprocess"],
                 "inputs": {"data": "preprocess.data"},
                 "resources": {
-                    "entries": {
-                        "cpu": {"kind": "cpu", "amount": 1, "unit": "count"}
-                    }
+                    "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
                 },
                 "outputs": {
                     "text": {
@@ -121,18 +120,14 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         spec,
         run_uri=run_uri,
         run_store=run_store,
-        artifact_store=LocalArtifactStore(
-            run_store.local_artifact_root(run_uri)
-        ),
+        artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
     run_store.write_runtime_metadata(
         run_uri,
         {
             "executor": "local",
-            "stages": {
-                name: {"executor": "local"} for name in spec.stage_names
-            },
+            "stages": {name: {"executor": "local"} for name in spec.stage_names},
         },
     )
     run_store.write_config_snapshot(
@@ -158,9 +153,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         client = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
-        submitted = client.submit(
-            LocalDaemonAdmissionRequest("queue-1", run_uri)
-        )
+        submitted = client.submit(LocalDaemonAdmissionRequest("queue-1", run_uri))
         completed = client.wait("queue-1", timeout_seconds=10)
         status = client.status()
 
@@ -182,12 +175,15 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         assert cast(Mapping[str, object], owner_view["execution"])["owner"] == (
             "local-agent"
         )
-        assert len(
-            cast(
-                list[object],
-                cast(Mapping[str, object], owner_view["execution"])["journal"],
+        assert (
+            len(
+                cast(
+                    list[object],
+                    cast(Mapping[str, object], owner_view["execution"])["journal"],
+                )
             )
-        ) == 2
+            == 2
+        )
         assert status.as_of
         assert status.service_diagnostic is None
         snapshot = authority.open_run(run_uri)
@@ -196,9 +192,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "preprocess",
             "train",
         ]
-        assert all(
-            stage.status is StageStatus.SUCCEEDED for stage in snapshot.stages
-        )
+        assert all(stage.status is StageStatus.SUCCEEDED for stage in snapshot.stages)
         assert run_store.read_stage_outputs(run_uri, "preprocess") is None
         assert run_store.read_stage_outputs(run_uri, "train") is None
     finally:
@@ -303,7 +297,9 @@ def test_exact_runtime_record_keeps_attributes_settings_and_run_concurrency(
         "settings": {"worker_mode": "exact"}
     }
     placement = cast(Mapping[str, object], record["placements"])["build"]
-    resources = cast(Mapping[str, object], cast(Mapping[str, object], placement)["resource_request"])
+    resources = cast(
+        Mapping[str, object], cast(Mapping[str, object], placement)["resource_request"]
+    )
     cpu = cast(Mapping[str, object], resources["entries"])["cpu"]
     assert cast(Mapping[str, object], cpu)["attributes"] == {}
     intent = load_managed_local_intent(
@@ -357,6 +353,15 @@ def test_post_bind_scoped_authority_rejects_wrong_run_and_coordinator(
     other = path_to_run_uri(tmp_path / "other")
     authority = SQLitePerRunAuthorityStore(first)
     authority.create_run(first)
+    authority.bind_coordinator_admission(
+        first,
+        CoordinatorAdmissionRequest(
+            operation_id="bind",
+            coordinator_id="coordinator-a",
+            run_uri=first,
+            intent_digest="intent",
+        ),
+    )
     scoped = _ScopedCoordinatorAuthority(
         authority, run_uri=first, coordinator_id="coordinator-a"
     )
@@ -405,18 +410,68 @@ def test_cancelling_outcome_remains_reconcilable_until_authority_settles(
         cancellation_operation_id="cancel",
     )
 
-    class _UnsettledAuthority:
-        def install_cancellation_epoch(self, *args: object, **kwargs: object) -> object:
-            return scoped.install_cancellation_epoch(*args, **kwargs)  # type: ignore[arg-type]
-
-        def open_run(self, run: str):
-            return scoped.open_run(run)
-
-        def transition_run(self, *args: object, **kwargs: object) -> object:
+    class _UnsettledAuthority(_ScopedCoordinatorAuthority):
+        def transition_run(self, run_uri: str, **kwargs: object) -> Never:
+            self._run(run_uri)
             raise RuntimeError("transient transition outage")
 
-    assert execution._cancel(admission, _UnsettledAuthority()).state is LocalDaemonAdmissionState.CANCELLING  # type: ignore[arg-type]
-    assert execution._cancel(admission, scoped).state is LocalDaemonAdmissionState.CANCELLED
+    unsettled = _UnsettledAuthority(
+        authority,
+        run_uri=run_uri,
+        coordinator_id="coordinator",
+    )
+    assert (
+        execution._cancel(admission, unsettled).state
+        is LocalDaemonAdmissionState.CANCELLING
+    )
+    assert (
+        execution._cancel(admission, scoped).state
+        is LocalDaemonAdmissionState.CANCELLED
+    )
+
+
+def test_daemon_reconciles_cancelling_and_wait_does_not_treat_it_as_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _store, run_uri, _pipeline = _persist_single_stage_run(tmp_path / "runs")
+    config = _daemon_config(tmp_path)
+    second_reconcile = Event()
+    saw_cancelling = Event()
+
+    def advance(
+        _self: LocalDaemonExecution,
+        admission: LocalDaemonAdmission,
+    ) -> LocalDaemonExecutionOutcome:
+        if admission.state is LocalDaemonAdmissionState.CANCELLING:
+            saw_cancelling.set()
+            assert second_reconcile.wait(timeout=5)
+            return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
+        if admission.cancellation_operation_id is not None:
+            return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLING)
+        return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING)
+
+    monkeypatch.setattr(LocalDaemonExecution, "advance", advance)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        client.submit(LocalDaemonAdmissionRequest("settling-cancel", run_uri))
+        client.cancel("settling-cancel")
+        assert saw_cancelling.wait(timeout=5)
+        with pytest.raises(TimeoutError):
+            client.wait("settling-cancel", timeout_seconds=0)
+
+        second_reconcile.set()
+        assert client.wait("settling-cancel", timeout_seconds=5).state is (
+            LocalDaemonAdmissionState.CANCELLED
+        )
+    finally:
+        second_reconcile.set()
+        daemon.stop()
 
 
 def test_status_degrades_per_run_for_corrupt_or_missing_owner_data(
@@ -442,11 +497,24 @@ def test_status_degrades_per_run_for_corrupt_or_missing_owner_data(
 
     view = build_local_daemon_owner_views(config, (admission,))[0]
 
-    assert cast(Mapping[str, object], view["authority"])["diagnostic"] == "authority_unavailable"
-    assert cast(Mapping[str, object], view["scheduling"])["diagnostic"] == "execution_store_unavailable"
-    assert cast(Mapping[str, object], view["execution"])["diagnostic"] == "agent_journal_unavailable"
+    assert (
+        cast(Mapping[str, object], view["authority"])["diagnostic"]
+        == "authority_unavailable"
+    )
+    assert (
+        cast(Mapping[str, object], view["scheduling"])["diagnostic"]
+        == "execution_store_unavailable"
+    )
+    assert (
+        cast(Mapping[str, object], view["execution"])["diagnostic"]
+        == "agent_journal_unavailable"
+    )
     assert cast(Mapping[str, object], view["service"])["state"] == "degraded"
+    assert cast(Mapping[str, object], view["service"])["diagnostic"] == (
+        "owner_status_unavailable"
+    )
     assert cast(Mapping[str, object], view["cancellation"])["receipt"] is None
+    assert cast(Mapping[str, object], view["cancellation"])["state"] == "unavailable"
     assert all("not a sqlite" not in str(axis) for axis in view.values())
 
 
@@ -478,6 +546,14 @@ def test_pending_cancellation_installs_authority_epoch_before_any_stage(
         snapshot = authority.open_run(run_uri)
         assert snapshot.status is RunStatus.CANCELLED
         assert snapshot.stages == ()
+        cancellation = cast(
+            Mapping[str, object], client.status().runs[0]["cancellation"]
+        )
+        receipt = cast(Mapping[str, object], cancellation["receipt"])
+        request = cast(Mapping[str, object], receipt["request"])
+        assert cancellation["state"] == "installed"
+        assert request["operation_id"] == requested.cancellation_operation_id
+        assert isinstance(receipt["epoch"], str)
     finally:
         daemon.stop()
 
@@ -611,12 +687,14 @@ def test_daemon_overlaps_independent_runs_with_available_capacity(
             "first.started",
             "second.started",
         }
-        assert SQLitePerRunAuthorityStore(first_uri).open_run(
-            first_uri
-        ).status is RunStatus.SUCCEEDED
-        assert SQLitePerRunAuthorityStore(second_uri).open_run(
-            second_uri
-        ).status is RunStatus.SUCCEEDED
+        assert (
+            SQLitePerRunAuthorityStore(first_uri).open_run(first_uri).status
+            is RunStatus.SUCCEEDED
+        )
+        assert (
+            SQLitePerRunAuthorityStore(second_uri).open_run(second_uri).status
+            is RunStatus.SUCCEEDED
+        )
     finally:
         daemon.stop()
 
@@ -648,9 +726,7 @@ def test_daemon_reconciles_skip_without_creating_an_assignment(
         assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
         assert snapshot.status is RunStatus.SUCCEEDED
         assert snapshot.stages[0].status is StageStatus.SKIPPED
-        assignment_view = cast(
-            Mapping[str, object], status.runs[0]["assignment"]
-        )
+        assignment_view = cast(Mapping[str, object], status.runs[0]["assignment"])
         assert assignment_view["assignments"] == []
     finally:
         daemon.stop()
@@ -687,7 +763,17 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
         daemon.stop()
 
 
-@pytest.mark.parametrize("state", ["accepted", "granted", "running", "unknown"])
+@pytest.mark.parametrize(
+    "state",
+    [
+        "accepted",
+        "granted",
+        "running",
+        "unknown",
+        "terminal",
+        "logical_released",
+    ],
+)
 def test_startup_retains_only_the_exact_durable_claim_for_live_coordinator_state(
     tmp_path: Path, state: str
 ) -> None:
@@ -702,7 +788,9 @@ def test_startup_retains_only_the_exact_durable_claim_for_live_coordinator_state
     assert observed.live_claim_ids == (command.assignment.claim_id,)
 
 
-def test_startup_keeps_proven_released_coordinator_capacity_available(tmp_path: Path) -> None:
+def test_startup_keeps_proven_released_coordinator_capacity_available(
+    tmp_path: Path,
+) -> None:
     config = _daemon_config(tmp_path, cpu_capacity=2)
     _coordinator_assignment(config, "released-assignment", "released")
 
@@ -721,6 +809,30 @@ def test_startup_fails_closed_when_live_coordinator_state_lacks_exact_claim(
 
     with pytest.raises(Exception, match="lacks an exact agent claim"):
         _execution(config)
+
+
+def test_socket_diagnostic_redacts_unexpected_exception_text(tmp_path: Path) -> None:
+    secret = "credential=do-not-return"
+
+    class _FailingClient:
+        def status(self) -> object:
+            raise RuntimeError(secret)
+
+    class _FailingDaemon:
+        def client_view(self, _principal: object) -> _FailingClient:
+            return _FailingClient()
+
+    endpoint = tmp_path / "daemon.sock"
+    server = LocalDaemonSocketServer(cast(LocalDaemon, _FailingDaemon()), endpoint)
+    server.start()
+    try:
+        with pytest.raises(QueueServiceError) as raised:
+            LocalDaemonSocketClient(endpoint).status()
+    finally:
+        server.stop()
+
+    assert str(raised.value) == "local_daemon_internal_error"
+    assert secret not in str(raised.value)
 
 
 def _daemon_config(tmp_path: Path, *, cpu_capacity: int = 1) -> LocalDaemonConfig:
@@ -766,7 +878,10 @@ def _retained_claim(config: LocalDaemonConfig, *, assignment_id: str) -> ClaimCo
     journal = SQLiteAgentJournal(config.agent_journal)
     journal.persist_request(assignment, {"request": "durable"})
     provider = AtomResourceProvider(descriptor, (contract,), (atom,))
-    assert journal.prepare_composite(assignment, (command,), {"cpu": provider}) is AssignmentState.PREPARED
+    assert (
+        journal.prepare_composite(assignment, (command,), {"cpu": provider})
+        is AssignmentState.PREPARED
+    )
     assert journal.accept(assignment_id) is AssignmentState.ACCEPTED
     return command
 
@@ -791,9 +906,7 @@ def _persist_single_stage_run(
     run_root: Path,
     *,
     skip: bool = False,
-    factory_target: str = (
-        "tests.support.pipeline_execution_stages.JsonProducerStage"
-    ),
+    factory_target: str = ("tests.support.pipeline_execution_stages.JsonProducerStage"),
 ) -> tuple[LocalRunStore, str, dict[str, object]]:
     run_store = LocalRunStore(run_root)
     run_uri = path_to_run_uri(run_root / "run-1")
@@ -864,13 +977,9 @@ def _persist_coordinated_run(
                     "timeout_seconds": 5,
                 },
                 "resources": {
-                    "entries": {
-                        "cpu": {"kind": "cpu", "amount": 1, "unit": "count"}
-                    }
+                    "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
                 },
-                "outputs": {
-                    "data": {"artifact_type": "json", "codec_key": "json.v1"}
-                },
+                "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
             }
         ],
     }
@@ -894,7 +1003,5 @@ def _persist_coordinated_run(
     prepare_managed_local_runtime_record(
         store=run_store, run_uri=run_uri, plan=plan, pipeline=spec
     )
-    SQLitePerRunAuthorityStore(run_uri).create_run(
-        run_uri, status=RunStatus.RUNNING
-    )
+    SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=RunStatus.RUNNING)
     return run_uri

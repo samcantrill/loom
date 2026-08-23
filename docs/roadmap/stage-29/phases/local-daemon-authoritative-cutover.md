@@ -293,13 +293,17 @@ Final commands:
 - Implementation: complete; exact-record, singleton-authority, conservative
   restart-capacity, terminal-cancellation, and owner-status slices are committed
   in the phase worktree
-- Refiner: correction 2/3 complete at `HEAD`; replaced fabricated full-machine
-  restart holds with exact durable-claim reconciliation and fail-closed missing
-  claim handling, then closed the remaining focused contract evidence
+- Refiner: correction 2/3 complete; replaced fabricated full-machine restart
+  holds with exact durable-claim reconciliation and fail-closed missing-claim
+  handling, then closed the remaining focused contract evidence
+- Manager correction: correction 3/3 complete at the current tree; terminal and
+  logical-release claims remain held until provider release proof, `CANCELLING`
+  is exercised through the daemon loop, cancellation receipts are positively
+  projected, and socket failures expose stable codes rather than exception text
 - Pre-submit gate: pending
 - Independent review: required once after PR preparation because this phase
   directly closes the five prior durable/cross-owner review findings
-- Blocker corrections: 2/3
+- Blocker corrections: 3/3
 - PR and merge: pending
 
 ## Completion Record
@@ -307,8 +311,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Persistent daemon composition, scoped authority adapter for all post-bind mutation, exact managed-local record, coordinator/journal conservative restart hold, status/cancellation receipt projection, public feature docs, and managed-local example |
-| Tests added or updated | Exact-record settings/concurrency reconstruction independent of daemon CPU capacity; all terminal-before-cancel states; post-bind wrong-run/wrong-coordinator adapter rejection; exact retained accepted/granted/running/unknown claim holds, released capacity, missing-claim fail-closed behavior; corrupt owner-data status degradation and receipt diagnostics |
-| Validated revision/tree state and evidence | Corrective commit at `HEAD`; focused `uv run pytest -q tests/integration/queue/test_local_daemon_production.py` passed (`23`); focused Ruff and Pyright passed |
-| Validation-relevant changes after evidence | Startup reconciles only journal-owned exact claims, accepts proven release, and refuses an unresolved coordinator assignment without a reconstructable claim; per-run service health includes authority availability |
+| Tests added or updated | Exact-record settings/concurrency reconstruction independent of daemon CPU capacity; all terminal-before-cancel states and daemon-loop `CANCELLING` settlement; post-bind wrong-run/wrong-coordinator adapter rejection; exact retained accepted/granted/running/unknown/terminal/logical-release claim holds, released capacity, missing-claim fail-closed behavior; corrupt owner-data status degradation, positive cancellation receipt, and socket error redaction |
+| Validated revision/tree state and evidence | Refiner commit `5f827df` plus manager correction at the current tree; focused production-daemon suite passed (`27`); focused Ruff and Pyright passed |
+| Validation-relevant changes after evidence | none after the focused manager checks; repository gates remain pending |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Phase 3A/3B branches/worktrees retained as evidence until Phase 3C disposition; Phase 4 cannot start first |
