@@ -563,7 +563,10 @@ def test_status_distinguishes_observed_empty_owners_and_tracks_owner_changes(
         authority_operation_id="bind",
     )
 
-    initial = build_local_daemon_owner_views(config, (admission,))[0]
+    coordinator_id, agent_id = _owner_ids(config)
+    initial = build_local_daemon_owner_views(
+        config, (admission,), coordinator_id=coordinator_id, agent_id=agent_id
+    )[0]
     initial_revisions: dict[str, int] = {}
     for axis_name in ("scheduling", "assignment", "execution"):
         axis = cast(Mapping[str, object], initial[axis_name])
@@ -601,7 +604,9 @@ def test_status_distinguishes_observed_empty_owners_and_tracks_owner_changes(
             ),
         )
 
-    changed = build_local_daemon_owner_views(config, (admission,))[0]
+    changed = build_local_daemon_owner_views(
+        config, (admission,), coordinator_id=coordinator_id, agent_id=agent_id
+    )[0]
     for axis_name in ("scheduling", "assignment", "execution"):
         axis = cast(Mapping[str, object], changed[axis_name])
         assert cast(int, axis["revision"]) > initial_revisions[axis_name]
@@ -933,11 +938,28 @@ def _daemon_config(tmp_path: Path, *, cpu_capacity: int = 1) -> LocalDaemonConfi
     )
 
 
+def _owner_ids(config: LocalDaemonConfig) -> tuple[str, str]:
+    with sqlite3.connect(config.control_database) as conn:
+        coordinator_id = str(
+            conn.execute(
+                "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+            ).fetchone()[0]
+        )
+    with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
+        agent_id = str(
+            conn.execute(
+                "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+            ).fetchone()[0]
+        )
+    return coordinator_id, agent_id
+
+
 def _execution(config: LocalDaemonConfig) -> LocalDaemonExecution:
     initialize_local_daemon_owner_stores(config)
     return LocalDaemonExecution(
         config=config,
         coordinator_id="coordinator",
+        agent_id="agent",
         coordinator_epoch="epoch",
         cancellation_operation=lambda _admission_id: None,
         admission_activated=lambda _admission_id: None,

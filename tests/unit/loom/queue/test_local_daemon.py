@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from shutil import copyfile
 import sqlite3
 
 import pytest
@@ -72,6 +73,83 @@ def test_start_rejects_missing_expected_owner_store_without_retaining_locks(
     with pytest.raises(QueueServiceError, match="owner state is unavailable"):
         LocalDaemon(config).start()
     assert not store_path.exists()
+
+
+@pytest.mark.parametrize(
+    "store_path",
+    ("control_database", "execution_database", "agent_journal"),
+)
+def test_start_rejects_current_schema_owner_substitution(
+    tmp_path: Path, store_path: str
+) -> None:
+    config = _config(tmp_path / "original")
+    donor = _config(tmp_path / "donor")
+    LocalDaemon.initialize(config)
+    LocalDaemon.initialize(donor)
+    target = getattr(config, store_path)
+    target.unlink()
+    copyfile(getattr(donor, store_path), target)
+    target.chmod(0o600)
+
+    with pytest.raises(QueueServiceError, match="owner state is unavailable"):
+        LocalDaemon(config).start()
+
+
+def test_live_control_loss_never_recreates_control_state(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        config.control_database.unlink()
+        with pytest.raises(QueueStorageError, match="control state is unavailable"):
+            daemon.status()
+        assert not config.control_database.exists()
+    finally:
+        daemon.stop()
+
+
+def test_live_control_substitution_rejects_cached_coordinator_identity(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path / "original")
+    donor = _config(tmp_path / "donor")
+    LocalDaemon.initialize(config)
+    LocalDaemon.initialize(donor)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        config.control_database.unlink()
+        copyfile(donor.control_database, config.control_database)
+        with pytest.raises(QueueStorageError, match="control identity is invalid"):
+            daemon.status()
+    finally:
+        daemon.stop()
+
+
+@pytest.mark.parametrize("owner_store", ("execution_database", "agent_journal"))
+def test_live_owner_substitution_degrades_status_and_blocks_scheduling(
+    tmp_path: Path, owner_store: str
+) -> None:
+    config = _config(tmp_path / "original")
+    donor = _config(tmp_path / "donor")
+    LocalDaemon.initialize(config)
+    LocalDaemon.initialize(donor)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        target = getattr(config, owner_store)
+        target.unlink()
+        copyfile(getattr(donor, owner_store), target)
+        target.chmod(0o600)
+
+        status = daemon.status()
+        assert status.service_health == "degraded"
+        assert status.service_diagnostic == "owner_status_unavailable"
+        with pytest.raises(QueueServiceError, match="owner state is unavailable"):
+            daemon.reconcile_once()
+    finally:
+        daemon.stop()
 
 
 def test_failed_execution_construction_releases_daemon_ownership(

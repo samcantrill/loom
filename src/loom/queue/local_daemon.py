@@ -282,6 +282,7 @@ class LocalDaemon:
         self._coordinator_lock: object | None = None
         self._agent_lock: object | None = None
         self._coordinator_id: str | None = None
+        self._agent_id: str | None = None
         self._epoch: str | None = None
         self._stop = Event()
         self._wake = Event()
@@ -306,7 +307,11 @@ class LocalDaemon:
             _initialize_root(config.agent_root, role="local-agent")
             from .local_daemon_execution import initialize_local_daemon_owner_stores
 
-            initialize_local_daemon_owner_stores(config)
+            initialize_local_daemon_owner_stores(
+                config,
+                coordinator_id=_open_root(config.coordinator_root, role="coordinator"),
+                agent_id=_open_root(config.agent_root, role="local-agent"),
+            )
         except Exception:
             raise
 
@@ -324,7 +329,9 @@ class LocalDaemon:
             coordinator_id = _open_root(
                 self.config.coordinator_root, role="coordinator"
             )
-            _open_root(self.config.agent_root, role="local-agent")
+            agent_id = _open_root(self.config.agent_root, role="local-agent")
+            self._coordinator_id = coordinator_id
+            self._agent_id = agent_id
             epoch = f"coordinator-epoch-{uuid4()}"
             with self._connection() as conn:
                 conn.execute(
@@ -335,6 +342,8 @@ class LocalDaemon:
         except Exception:
             agent_lock.close()
             coordinator_lock.close()
+            self._coordinator_id = None
+            self._agent_id = None
             raise
         assignment_workers = ThreadPoolExecutor(
             max_workers=self.config.cpu_capacity,
@@ -346,6 +355,7 @@ class LocalDaemon:
             execution = LocalDaemonExecution(
                 config=self.config,
                 coordinator_id=coordinator_id,
+                agent_id=agent_id,
                 coordinator_epoch=epoch,
                 cancellation_operation=self._cancellation_operation_id,
                 admission_activated=self._activate_admission,
@@ -354,6 +364,8 @@ class LocalDaemon:
             assignment_workers.shutdown(wait=True)
             agent_lock.close()
             coordinator_lock.close()
+            self._coordinator_id = None
+            self._agent_id = None
             raise QueueServiceError(
                 "retained daemon owner state is unavailable"
             ) from None
@@ -365,6 +377,7 @@ class LocalDaemon:
         self._coordinator_lock = coordinator_lock
         self._agent_lock = agent_lock
         self._coordinator_id = coordinator_id
+        self._agent_id = agent_id
         self._epoch = epoch
         self._service_error = None
         self._stop.clear()
@@ -398,6 +411,7 @@ class LocalDaemon:
         self._coordinator_lock = None
         self._agent_lock = None
         self._coordinator_id = None
+        self._agent_id = None
         self._epoch = None
 
     def client_view(self, principal: LocalDaemonPrincipal) -> "LocalDaemonClientView":
@@ -435,10 +449,16 @@ class LocalDaemon:
         views = build_local_daemon_owner_views(
             self.config,
             admissions,
+            coordinator_id=coordinator_id,
+            agent_id=self._require_agent_id(),
             clock=self._clock,
             admission_revision=admission_revision,
         )
-        unavailable = not local_daemon_owner_stores_available(self.config) or any(
+        unavailable = not local_daemon_owner_stores_available(
+            self.config,
+            coordinator_id=coordinator_id,
+            agent_id=self._require_agent_id(),
+        ) or any(
             any(
                 isinstance(axis, Mapping) and axis.get("availability") == "unavailable"
                 for axis in view.values()
@@ -707,10 +727,29 @@ class LocalDaemon:
             raise QueueServiceError("local daemon is not started")
         return self._coordinator_id
 
+    def _require_agent_id(self) -> str:
+        if self._agent_lock is None or self._agent_id is None:
+            raise QueueServiceError("local daemon is not started")
+        return self._agent_id
+
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.config.control_database, timeout=30)
-        conn.row_factory = sqlite3.Row
+        try:
+            conn = sqlite3.connect(
+                f"{self.config.control_database.resolve().as_uri()}?mode=rw",
+                uri=True,
+                timeout=30,
+            )
+            conn.row_factory = sqlite3.Row
+            expected = self._coordinator_id
+            if expected is not None:
+                row = conn.execute(
+                    "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+                ).fetchone()
+                if row is None or str(row["value"]) != expected:
+                    raise QueueStorageError("coordinator control identity is invalid")
+        except (OSError, sqlite3.Error):
+            raise QueueStorageError("coordinator control state is unavailable") from None
         try:
             yield conn
         finally:

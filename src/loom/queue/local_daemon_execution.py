@@ -101,7 +101,12 @@ def _connect_existing_sqlite(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"{path.resolve().as_uri()}?mode=rw", uri=True)
 
 
-def initialize_local_daemon_owner_stores(config: LocalDaemonConfig) -> None:
+def initialize_local_daemon_owner_stores(
+    config: LocalDaemonConfig,
+    *,
+    coordinator_id: str = "coordinator",
+    agent_id: str = "agent",
+) -> None:
     """Create the two current runtime-owner stores for a fresh daemon root."""
 
     capacity = (
@@ -117,9 +122,18 @@ def initialize_local_daemon_owner_stores(config: LocalDaemonConfig) -> None:
     SQLiteCoordinatorAssignments(config.execution_database, capacity)._initialize()
     SQLiteAgentJournal(config.agent_journal)._initialize()
     _initialize_owner_status_revisions(config)
+    _bind_owner_store(
+        config.execution_database, role="coordinator", stable_id=coordinator_id
+    )
+    _bind_owner_store(config.agent_journal, role="local-agent", stable_id=agent_id)
 
 
-def local_daemon_owner_stores_available(config: LocalDaemonConfig) -> bool:
+def local_daemon_owner_stores_available(
+    config: LocalDaemonConfig,
+    *,
+    coordinator_id: str = "coordinator",
+    agent_id: str = "agent",
+) -> bool:
     """Whether both retained runtime owners can still be opened read-only."""
 
     try:
@@ -142,6 +156,9 @@ def local_daemon_owner_stores_available(config: LocalDaemonConfig) -> bool:
             config.agent_journal, _allow_initialize=False
         )._open_existing()
         with _connect_existing_sqlite(config.execution_database) as conn:
+            _verify_owner_store_binding(
+                conn, role="coordinator", stable_id=coordinator_id
+            )
             axes = {
                 str(row[0])
                 for row in conn.execute(
@@ -149,6 +166,7 @@ def local_daemon_owner_stores_available(config: LocalDaemonConfig) -> bool:
                 )
             }
         with _connect_existing_sqlite(config.agent_journal) as conn:
+            _verify_owner_store_binding(conn, role="local-agent", stable_id=agent_id)
             agent_revision = conn.execute(
                 "SELECT revision FROM local_daemon_status_revision"
             ).fetchone()
@@ -157,6 +175,33 @@ def local_daemon_owner_stores_available(config: LocalDaemonConfig) -> bool:
         ) and agent_revision is not None
     except Exception:
         return False
+
+
+def _bind_owner_store(path: Path, *, role: str, stable_id: str) -> None:
+    with _connect_existing_sqlite(path) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS local_daemon_owner_identity "
+            "(role TEXT PRIMARY KEY, stable_id TEXT NOT NULL)"
+        )
+        rows = tuple(conn.execute("SELECT role, stable_id FROM local_daemon_owner_identity"))
+        if not rows:
+            conn.execute(
+                "INSERT INTO local_daemon_owner_identity(role, stable_id) VALUES (?, ?)",
+                (role, stable_id),
+            )
+        elif rows != ((role, stable_id),):
+            raise sqlite3.DatabaseError("retained daemon owner identity is invalid")
+        conn.commit()
+
+
+def _verify_owner_store_binding(
+    conn: sqlite3.Connection, *, role: str, stable_id: str
+) -> None:
+    rows = tuple(
+        conn.execute("SELECT role, stable_id FROM local_daemon_owner_identity")
+    )
+    if rows != ((role, stable_id),):
+        raise sqlite3.DatabaseError("retained daemon owner identity is invalid")
 
 
 def _initialize_owner_status_revisions(config: LocalDaemonConfig) -> None:
@@ -435,12 +480,14 @@ class LocalDaemonExecution:
         *,
         config: LocalDaemonConfig,
         coordinator_id: str,
+        agent_id: str,
         coordinator_epoch: str,
         cancellation_operation: Callable[[str], str | None],
         admission_activated: Callable[[str], None],
     ) -> None:
         self.config = config
         self.coordinator_id = coordinator_id
+        self.agent_id = agent_id
         self.coordinator_epoch = coordinator_epoch
         self.cancellation_operation = cancellation_operation
         self.admission_activated = admission_activated
@@ -466,6 +513,12 @@ class LocalDaemonExecution:
         self.stage_work_store._open_existing()
         self.coordinator._open_existing()
         self.journal._open_existing()
+        if not local_daemon_owner_stores_available(
+            self.config,
+            coordinator_id=self.coordinator_id,
+            agent_id=self.agent_id,
+        ):
+            raise QueueServiceError("retained daemon owner state is unavailable")
         self.provider = AtomResourceProvider(
             self.cpu_planner.descriptor,
             self.cpu_planner.claim_contracts,
@@ -497,7 +550,11 @@ class LocalDaemonExecution:
             self.stage_work_store._open_existing()
             self.coordinator._open_existing()
             self.journal._open_existing()
-            if not local_daemon_owner_stores_available(self.config):
+            if not local_daemon_owner_stores_available(
+                self.config,
+                coordinator_id=self.coordinator_id,
+                agent_id=self.agent_id,
+            ):
                 raise QueueServiceError("retained daemon owner state is unavailable")
         except Exception:
             raise QueueServiceError(
@@ -998,6 +1055,8 @@ def build_local_daemon_owner_views(
     config: LocalDaemonConfig,
     admissions: tuple[LocalDaemonAdmission, ...],
     *,
+    coordinator_id: str = "coordinator",
+    agent_id: str = "agent",
     clock: Callable[[], str] = utc_timestamp,
     admission_revision: int = 0,
 ) -> tuple[Mapping[str, PlainData], ...]:
@@ -1015,6 +1074,9 @@ def build_local_daemon_owner_views(
     try:
         with _connect_existing_sqlite(config.execution_database) as conn:
             conn.execute("BEGIN")
+            _verify_owner_store_binding(
+                conn, role="coordinator", stable_id=coordinator_id
+            )
             revisions = {
                 str(row[0]): int(row[1])
                 for row in conn.execute(
@@ -1063,6 +1125,7 @@ def build_local_daemon_owner_views(
     try:
         with _connect_existing_sqlite(config.agent_journal) as conn:
             conn.execute("BEGIN")
+            _verify_owner_store_binding(conn, role="local-agent", stable_id=agent_id)
             revision_row = conn.execute(
                 "SELECT revision FROM local_daemon_status_revision"
             ).fetchone()
