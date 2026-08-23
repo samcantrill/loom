@@ -454,28 +454,30 @@ if its name does not match the selected directories or expression. Final command
   tests are present, but the required authority bind/grant fence and
   execution-only worker integration are not yet connected into the complete
   reservation-to-release saga
-- Refiner: one bounded correction required to complete the existing Phase 2
-  saga without adding another abstraction or broadening scope
+- Refiner: completed one bounded correction. The existing authority owner now
+  binds/unbinds the exact prepared attempt, grants a durable execution fence,
+  and accepts only its matching confirmed start; the embedded local adapter
+  stages request/input and physical preparation before that grant and retains
+  the one-launch journal boundary without a whole-run lock.
 - Pre-submit gate: pending
 - Independent review: required because launch fencing and cross-store recovery
   remain material residual risks
-- Blocker corrections: 1/3 in progress. The supported bounded local execution
-  path cannot grant, launch, commit, or release a prepared attempt end to end;
-  this violates the fixed assignment saga and would permit no usable Phase 2
-  consumer. Evidence is the absence of authority bind/grant operations and a
-  managed execution-only worker/composition at `af74d6f`. The smallest fix is
-  to connect those owners to the already committed reservation, journal,
-  provider, artifact, and worker primitives and prove the fixed transition and
-  crash matrix
+- Blocker corrections: 1/3 completed. The authority bind/grant/start-fence
+  bridge and bounded local admission-to-start composition now close the
+  previously unreachable reservation-to-launch transition without reallocating
+  the Phase 1 attempt or adding a whole-run lock. Focused authority fence and
+  journal one-launch coverage is present; terminal result/output and ordered
+  release continue through the already-owned Phase 2 primitives for the
+  pre-submit/review gate.
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Authority bind/unbind/grant/start CAS in `stores/authority.py` and `stores/sqlite_authority.py`; embedded local admission/start adapter in `execution/managed_local.py`; conformance double updated |
+| Tests added or updated | SQLite authority fence transition/idempotency/stale-fence test |
+| Validated revision/tree state and evidence | `pytest -q tests/unit/loom/pipeline/test_orchestration.py tests/contracts/test_authority_store_contract.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py` (45 passed); focused managed-local/SQLite authority subset (24 passed) |
+| Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

@@ -346,6 +346,29 @@ class PreparedAttemptAuthority(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionFence:
+    """Durable admission fence for one already-prepared attempt."""
+
+    assignment_id: str
+    attempt_id: str
+    fencing_token: str
+
+    def __post_init__(self) -> None:
+        for name in ("assignment_id", "attempt_id", "fencing_token"):
+            _non_empty(getattr(self, name), name)
+
+
+@runtime_checkable
+class PreparedAttemptExecutionAuthority(PreparedAttemptAuthority, Protocol):
+    """Phase 2 expected-state admission operations for prepared attempts."""
+
+    def bind_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> None: ...
+    def unbind_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> None: ...
+    def grant_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> ExecutionFence: ...
+    def confirm_execution_started(self, run_uri: str, *, fence: ExecutionFence) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
 class OutputCommit:
     commit: OutputCommitRecord
     artifact_facts: tuple[ArtifactFactRecord, ...] = ()
@@ -965,8 +988,10 @@ __all__ = [
     "StatusTransition",
     "AttemptAllocation",
     "PreparedAttemptAuthority",
+    "PreparedAttemptExecutionAuthority",
     "PreparedAttemptRequest",
     "PreparedAttemptReceipt",
+    "ExecutionFence",
     "OutputCommit",
     "PerRunAuthorityStore",
     "RunStore",

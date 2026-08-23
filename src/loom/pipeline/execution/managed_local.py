@@ -21,6 +21,7 @@ from typing import Protocol
 
 from loom.scheduling import CapacityAtom, ResourceClaim, SchedulingComponentDescriptor
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
+from loom.pipeline.stores.authority import ExecutionFence, PreparedAttemptExecutionAuthority
 
 
 class ManagedLocalError(ValueError):
@@ -662,6 +663,53 @@ class SQLiteCoordinatorAssignments:
                 conn.commit()
 
 
+def grant_and_start_managed_assignment(
+    *,
+    authority: PreparedAttemptExecutionAuthority,
+    journal: SQLiteAgentJournal,
+    assignment: ManagedAssignment,
+    request: Mapping[str, PlainData],
+    commands: Sequence[ClaimCommand],
+    providers: Mapping[str, AgentResourceProvider],
+    launcher: Callable[[], str],
+) -> ExecutionFence:
+    """Execute the bounded local admission-to-start saga for one reservation.
+
+    The caller has already made the coordinator's logical reservation.  This
+    function deliberately has no run lock and neither allocates attempts nor
+    lets the worker write authority lifecycle truth.
+    """
+    authority.bind_prepared_attempt(
+        assignment.run_uri,
+        assignment_id=assignment.assignment_id,
+        attempt_id=assignment.attempt_id,
+    )
+    journal.persist_request(assignment, request)
+    prepared = journal.prepare_composite(assignment, commands, providers)
+    if prepared is not AssignmentState.PREPARED:
+        # A returned non-prepared state is a definitive local pre-grant decline.
+        authority.unbind_prepared_attempt(
+            assignment.run_uri,
+            assignment_id=assignment.assignment_id,
+            attempt_id=assignment.attempt_id,
+        )
+        raise ManagedLocalError("managed assignment was definitively declined")
+    journal.accept(assignment.assignment_id)
+    fence = authority.grant_prepared_attempt(
+        assignment.run_uri,
+        assignment_id=assignment.assignment_id,
+        attempt_id=assignment.attempt_id,
+    )
+    journal.grant(assignment.assignment_id, fence.fencing_token)
+    for command in commands:
+        provider = providers[command.claim.resource_kind]
+        if provider.activate(command).outcome is not ClaimOutcome.ACTIVE:
+            raise ManagedLocalError("managed assignment activation is indeterminate")
+    journal.start_once(assignment.assignment_id, launcher)
+    authority.confirm_execution_started(assignment.run_uri, fence=fence)
+    return fence
+
+
 def _assignment_dict(value: ManagedAssignment) -> dict[str, PlainData]:
     return {name: getattr(value, name) for name in value.__dataclass_fields__}
 
@@ -689,4 +737,5 @@ __all__ = [
     "ManagedLocalError",
     "SQLiteAgentJournal",
     "SQLiteCoordinatorAssignments",
+    "grant_and_start_managed_assignment",
 ]

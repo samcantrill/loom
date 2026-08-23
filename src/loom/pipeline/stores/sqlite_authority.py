@@ -37,6 +37,7 @@ from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 from .authority import (
     AttemptAllocation,
     AuthorityStoreError,
+    ExecutionFence,
     OutputCommit,
     PreparedAttemptReceipt,
     PreparedAttemptRequest,
@@ -831,6 +832,71 @@ class SQLitePerRunAuthorityStore:
             _touch_run(conn, revision)
             return receipt
 
+    def bind_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> None:
+        self._bind_run_uri(run_uri)
+        _non_empty(assignment_id, "assignment_id")
+        _non_empty(attempt_id, "attempt_id")
+        with self._transaction(run_uri) as conn:
+            attempt = conn.execute("SELECT status FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()
+            if attempt is None or StageStatus(cast(str, attempt["status"])) is not StageStatus.PENDING:
+                raise AuthorityStoreError("only a PENDING prepared attempt may bind")
+            row = conn.execute("SELECT attempt_id FROM managed_attempt_bindings WHERE assignment_id = ?", (assignment_id,)).fetchone()
+            if row is not None:
+                if row["attempt_id"] != attempt_id:
+                    raise AuthorityStoreError("assignment binding conflicts")
+                return
+            if conn.execute("SELECT 1 FROM managed_attempt_bindings WHERE attempt_id = ?", (attempt_id,)).fetchone() is not None:
+                raise AuthorityStoreError("prepared attempt is already bound")
+            conn.execute("INSERT INTO managed_attempt_bindings (assignment_id, attempt_id, state, fence) VALUES (?, ?, 'bound', NULL)", (assignment_id, attempt_id))
+
+    def unbind_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> None:
+        self._bind_run_uri(run_uri)
+        with self._transaction(run_uri) as conn:
+            row = conn.execute("SELECT attempt_id, state FROM managed_attempt_bindings WHERE assignment_id = ?", (assignment_id,)).fetchone()
+            if row is None or row["attempt_id"] != attempt_id or row["state"] != "bound":
+                raise AuthorityStoreError("only the same ungranted binding may unbind")
+            conn.execute("DELETE FROM managed_attempt_bindings WHERE assignment_id = ?", (assignment_id,))
+
+    def grant_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> ExecutionFence:
+        self._bind_run_uri(run_uri)
+        with self._transaction(run_uri) as conn:
+            row = conn.execute("SELECT attempt_id, state, fence FROM managed_attempt_bindings WHERE assignment_id = ?", (assignment_id,)).fetchone()
+            if row is None or row["attempt_id"] != attempt_id:
+                raise AuthorityStoreError("prepared attempt is not bound to assignment")
+            if row["state"] in {"granted", "running"}:
+                return ExecutionFence(assignment_id, attempt_id, cast(str, row["fence"]))
+            if row["state"] != "bound":
+                raise AuthorityStoreError("prepared attempt binding is not grantable")
+            attempt = conn.execute("SELECT stage_name, status FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()
+            if attempt is None or StageStatus(cast(str, attempt["status"])) is not StageStatus.PENDING:
+                raise AuthorityStoreError("prepared attempt is no longer pending")
+            revision = self._next_revision(conn)
+            fence = f"managed-fence-{revision.sequence}-{uuid.uuid4().hex}"
+            conn.execute("UPDATE managed_attempt_bindings SET state = 'granted', fence = ? WHERE assignment_id = ?", (fence, assignment_id))
+            conn.execute("UPDATE attempts SET status = ?, revision_sequence = ? WHERE attempt_id = ?", (StageStatus.SUBMITTED.value, revision.sequence, attempt_id))
+            _upsert_stage(conn, stage_name=cast(str, attempt["stage_name"]), status=StageStatus.SUBMITTED, revision=revision, reason=None)
+            _touch_run(conn, revision)
+            return ExecutionFence(assignment_id, attempt_id, fence)
+
+    def confirm_execution_started(self, run_uri: str, *, fence: ExecutionFence) -> None:
+        self._bind_run_uri(run_uri)
+        with self._transaction(run_uri) as conn:
+            row = conn.execute("SELECT state FROM managed_attempt_bindings WHERE assignment_id = ? AND attempt_id = ? AND fence = ?", (fence.assignment_id, fence.attempt_id, fence.fencing_token)).fetchone()
+            if row is None:
+                raise AuthorityStoreError("stale execution fence")
+            if row["state"] == "running":
+                return
+            if row["state"] != "granted":
+                raise AuthorityStoreError("execution fence is not granted")
+            attempt = conn.execute("SELECT stage_name, status FROM attempts WHERE attempt_id = ?", (fence.attempt_id,)).fetchone()
+            if attempt is None or StageStatus(cast(str, attempt["status"])) is not StageStatus.SUBMITTED:
+                raise AuthorityStoreError("attempt is not submitted")
+            revision = self._next_revision(conn)
+            conn.execute("UPDATE managed_attempt_bindings SET state = 'running' WHERE assignment_id = ?", (fence.assignment_id,))
+            conn.execute("UPDATE attempts SET status = ?, revision_sequence = ? WHERE attempt_id = ?", (StageStatus.RUNNING.value, revision.sequence, fence.attempt_id))
+            _upsert_stage(conn, stage_name=cast(str, attempt["stage_name"]), status=StageStatus.RUNNING, revision=revision, reason=None)
+            _touch_run(conn, revision)
+
     def acquire_controller_lease(
         self,
         run_uri: str,
@@ -1268,6 +1334,7 @@ class SQLitePerRunAuthorityStore:
         outputs: Mapping[str, ArtifactRef],
         supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
+        assignment_id: str | None = None,
     ) -> OutputCommit:
         self._bind_run_uri(run_uri)
         _non_empty(stage_name, "stage_name")
@@ -1280,8 +1347,12 @@ class SQLitePerRunAuthorityStore:
                 raise AuthorityStoreError("outputs must contain ArtifactRef values")
         with self._transaction(run_uri) as conn:
             now = self._now()
+            managed = None if assignment_id is None else conn.execute(
+                "SELECT state FROM managed_attempt_bindings WHERE assignment_id = ? AND attempt_id = ? AND fence = ?",
+                (assignment_id, attempt_id, fencing_token),
+            ).fetchone()
             lease_row = _active_stage_lease_row(conn, stage_name, now)
-            if lease_row is None:
+            if managed is None and lease_row is None:
                 expired_lease_row = _stage_lease_row(
                     conn,
                     stage_name=stage_name,
@@ -1295,13 +1366,13 @@ class SQLitePerRunAuthorityStore:
                 raise AuthorityStoreError(
                     "missing active stage lease for output commit"
                 )
-            if cast(str, lease_row["attempt_id"]) != attempt_id:
+            if managed is None and cast(str, lease_row["attempt_id"]) != attempt_id:
                 raise AuthorityStoreError(
                     "missing active stage lease for output commit"
                 )
-            if cast(str, lease_row["fencing_token"]) != fencing_token:
+            if managed is None and cast(str, lease_row["fencing_token"]) != fencing_token:
                 raise AuthorityStoreError("stale or foreign lease token")
-            if _timestamp_expired(cast(str, lease_row["expires_at"]), now):
+            if managed is None and _timestamp_expired(cast(str, lease_row["expires_at"]), now):
                 raise AuthorityStoreError("stage lease has expired")
             attempt_row = conn.execute(
                 """
@@ -1312,7 +1383,7 @@ class SQLitePerRunAuthorityStore:
             ).fetchone()
             if attempt_row is None:
                 raise AuthorityStoreError("unknown stage attempt")
-            if StageStatus(cast(str, attempt_row["status"])) is not StageStatus.RUNNING:
+            if StageStatus(cast(str, attempt_row["status"])) not in ({StageStatus.SUBMITTED, StageStatus.RUNNING} if managed is not None else {StageStatus.RUNNING}):
                 raise AuthorityStoreError("stage attempt is not running")
             stage_row = conn.execute(
                 "SELECT status FROM stages WHERE stage_name = ?",
@@ -1337,7 +1408,8 @@ class SQLitePerRunAuthorityStore:
             revision = self._next_revision(conn)
             commit_id = f"{stage_name}-{attempt_id}-commit-{revision.sequence}"
             output_names = tuple(name for name, _artifact in artifacts)
-            conn.execute(
+            if lease_row is not None:
+                conn.execute(
                 """
                 INSERT INTO commits (
                     commit_id, stage_name, attempt_id, committed_at,
@@ -1356,7 +1428,7 @@ class SQLitePerRunAuthorityStore:
                     _json_dumps([]),
                     supersedes_commit_id,
                 ),
-            )
+                )
             for name, artifact in artifacts:
                 conn.execute(
                     """
@@ -1394,19 +1466,20 @@ class SQLitePerRunAuthorityStore:
                 revision=revision,
                 reason=reason,
             )
-            conn.execute(
-                """
-                UPDATE leases
-                SET state = ?, revision_sequence = ?, reason_json = ?
-                WHERE lease_id = ?
-                """,
-                (
-                    LeaseState.RELEASED.value,
-                    revision.sequence,
-                    _json_dumps_or_none(reason),
-                    cast(str, lease_row["lease_id"]),
-                ),
-            )
+            if lease_row is not None:
+                conn.execute(
+                    """
+                    UPDATE leases
+                    SET state = ?, revision_sequence = ?, reason_json = ?
+                    WHERE lease_id = ?
+                    """,
+                    (
+                        LeaseState.RELEASED.value,
+                        revision.sequence,
+                        _json_dumps_or_none(reason),
+                        cast(str, lease_row["lease_id"]),
+                    ),
+                )
             _touch_run(conn, revision)
             commit = OutputCommitRecord(
                 commit_id=commit_id,
@@ -2013,6 +2086,11 @@ class SQLitePerRunAuthorityStore:
             raise AuthoritySchemaError("SQLite authority database is missing")
         with self._write_connection(database_path, initialize=False) as conn:
             _migrate_schema(conn)
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS managed_attempt_bindings "
+                "(assignment_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL UNIQUE, "
+                "state TEXT NOT NULL, fence TEXT)"
+            )
             _raise_for_schema(conn)
             _require_run_status(conn)
             yield conn
@@ -2434,6 +2512,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             receipt_json TEXT NOT NULL,
             revision_sequence INTEGER NOT NULL,
             UNIQUE(stage_name, readiness_generation)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS managed_attempt_bindings (
+            assignment_id TEXT PRIMARY KEY,
+            attempt_id TEXT NOT NULL UNIQUE,
+            state TEXT NOT NULL,
+            fence TEXT
         )
     """)
     conn.execute(

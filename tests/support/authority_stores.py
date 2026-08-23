@@ -38,6 +38,7 @@ from loom.pipeline.stores import (
     CleanupCandidate,
     CleanupReportFact,
     CleanupResultFact,
+    ExecutionFence,
     ConcurrencyCounter,
     CoordinationFailureKind,
     CoordinationRecoveryRecord,
@@ -118,6 +119,7 @@ class _RunState:
     retry_decisions: dict[str, RetryDecisionRecord] = field(default_factory=dict)
     timeout_outcomes: dict[str, TimeoutOutcomeRecord] = field(default_factory=dict)
     prepared_attempts: dict[str, PreparedAttemptReceipt] = field(default_factory=dict)
+    managed_bindings: dict[str, tuple[str, str, str | None]] = field(default_factory=dict)
 
 
 class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
@@ -378,6 +380,66 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             receipt = PreparedAttemptReceipt(request=request, attempt=attempt)
             state.prepared_attempts[request.operation_id] = receipt
             return receipt
+
+    def bind_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> None:
+        state = self._require_run(run_uri)
+        attempt = next((item for items in state.attempts.values() for item in items if item.attempt_id == attempt_id), None)
+        if attempt is None or attempt.status is not StageStatus.PENDING:
+            raise ValueError("only a PENDING prepared attempt may bind")
+        current = state.managed_bindings.get(assignment_id)
+        if current is not None:
+            if current[0] != attempt_id:
+                raise ValueError("assignment binding conflicts")
+            return
+        if any(value[0] == attempt_id for value in state.managed_bindings.values()):
+            raise ValueError("prepared attempt is already bound")
+        state.managed_bindings[assignment_id] = (attempt_id, "bound", None)
+
+    def unbind_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> None:
+        state = self._require_run(run_uri)
+        if state.managed_bindings.get(assignment_id) != (attempt_id, "bound", None):
+            raise ValueError("only the same ungranted binding may unbind")
+        del state.managed_bindings[assignment_id]
+
+    def grant_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> ExecutionFence:
+        state = self._require_run(run_uri)
+        binding = state.managed_bindings.get(assignment_id)
+        if binding is None or binding[0] != attempt_id:
+            raise ValueError("prepared attempt is not bound to assignment")
+        if binding[1] in {"granted", "running"}:
+            return ExecutionFence(assignment_id, attempt_id, cast(str, binding[2]))
+        if binding[1] != "bound":
+            raise ValueError("prepared attempt binding is not grantable")
+        attempts = state.attempts.get(next(stage for stage, items in state.attempts.items() if any(item.attempt_id == attempt_id for item in items)), [])
+        index = next(index for index, item in enumerate(attempts) if item.attempt_id == attempt_id)
+        old = attempts[index]
+        if old.status is not StageStatus.PENDING:
+            raise ValueError("prepared attempt is no longer pending")
+        revision = self._next_revision()
+        updated = StageAttempt(old.run_uri, old.stage_name, old.attempt, old.attempt_id, StageStatus.SUBMITTED, revision, old.created_at, old.owner)
+        attempts[index] = updated
+        state.stage_statuses[old.stage_name] = StageStatus.SUBMITTED
+        state.revision = revision
+        fence = f"managed-fence-{revision.sequence}"
+        state.managed_bindings[assignment_id] = (attempt_id, "granted", fence)
+        return ExecutionFence(assignment_id, attempt_id, fence)
+
+    def confirm_execution_started(self, run_uri: str, *, fence: ExecutionFence) -> None:
+        state = self._require_run(run_uri)
+        if state.managed_bindings.get(fence.assignment_id) == (fence.attempt_id, "running", fence.fencing_token):
+            return
+        if state.managed_bindings.get(fence.assignment_id) != (fence.attempt_id, "granted", fence.fencing_token):
+            raise ValueError("stale execution fence")
+        for stage_name, attempts in state.attempts.items():
+            for index, old in enumerate(attempts):
+                if old.attempt_id == fence.attempt_id:
+                    revision = self._next_revision()
+                    attempts[index] = StageAttempt(old.run_uri, old.stage_name, old.attempt, old.attempt_id, StageStatus.RUNNING, revision, old.created_at, old.owner)
+                    state.stage_statuses[stage_name] = StageStatus.RUNNING
+                    state.revision = revision
+                    state.managed_bindings[fence.assignment_id] = (fence.attempt_id, "running", fence.fencing_token)
+                    return
+        raise ValueError("unknown attempt")
 
     def acquire_controller_lease(
         self,

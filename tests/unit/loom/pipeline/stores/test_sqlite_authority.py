@@ -660,6 +660,36 @@ def test_prepared_attempt_is_pending_and_replays_the_authority_receipt(tmp_path:
         store.ensure_prepared_attempt(run_uri, replace(request, request_digest="changed"))
 
 
+def test_prepared_attempt_binding_grant_and_start_are_fenced(tmp_path: Path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "managed-prepared-run")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    prepared = store.ensure_prepared_attempt(
+        run_uri,
+        _prepared_request(store.create_run(run_uri)),
+    )
+
+    store.bind_prepared_attempt(
+        run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+    )
+    fence = store.grant_prepared_attempt(
+        run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+    )
+    assert store.grant_prepared_attempt(
+        run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+    ) == fence
+    with pytest.raises(AuthorityStoreError, match="ungranted"):
+        store.unbind_prepared_attempt(
+            run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+        )
+    store.confirm_execution_started(run_uri, fence=fence)
+    store.confirm_execution_started(run_uri, fence=fence)
+    with pytest.raises(AuthorityStoreError, match="stale execution fence"):
+        store.confirm_execution_started(
+            run_uri,
+            fence=replace(fence, fencing_token="stale"),
+        )
+
+
 def test_prepared_attempt_revalidates_revision_and_terminal_run(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "stale-preparation")
     store = SQLitePerRunAuthorityStore(clock=FrozenClock())
