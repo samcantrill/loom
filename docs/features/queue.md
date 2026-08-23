@@ -118,10 +118,10 @@ Foreground drain is a compatibility mode:
 client.drain_foreground(max_items=1)
 ```
 
-For managed-local pools, use the long-lived `ManagedLocalQueueRuntime` described
-below so adapter state and maintenance timing have one owner. Direct
-`run_once()` loops remain a low-level seam for other custom adapters; they are
-not the recommended managed-local construction pattern.
+For managed-local execution, use the persistent `LocalDaemon` described below.
+It accepts a queue identity and `run_uri`, reloads the persisted plan/runtime
+artifacts, and owns reconciliation and local assignment timing. Direct
+`run_once()` loops remain a low-level seam for other custom adapters.
 
 ## Managed Local Pools
 
@@ -182,37 +182,26 @@ fails the process closed on ownership loss or a missed renewal deadline. This
 is not a crash-time guarantee: controller death and process reattachment still
 require explicit recovery.
 
-Each attempt writes distinct stdout and stderr files beneath queue-owned state.
-For a managed-local pool, construct one
-[`ManagedLocalQueueRuntime`](../../examples/operations/managed-local-queue/README.md)
-with `ManagedLocalQueueRuntime.from_spec(...)`; it derives its single owner from
-`controller.owner_id`, constructs the service/controller/local adapter/static
-provider together, and owns maintenance timing. `import loom.queue.managed_local`
-is the explicit operational import path. Do not manually construct those parts
-with independent owners or duplicate the controller timing loop.
+The supported local composition is
+[`LocalDaemon`](../../examples/operations/managed-local-queue/README.md). It
+uses distinct owner-private coordinator and agent roots, a stable coordinator
+identity, a rotating process epoch, and owner-only Unix IPC. Initialize fresh
+roots explicitly, start the daemon, and submit `LocalDaemonAdmissionRequest`
+with only `queue_item_id` and `run_uri`. The daemon reloads the canonical
+`ExecutionPlan`, runtime metadata, and resolved config; clients do not provide
+authority objects, resolvers, assignments, callables, or executor instances.
 
-The recommended long-lived path passes a `threading.Event` (usually set by a
-SIGINT/SIGTERM handler) to `runtime.serve(...)`. `start()` and `run_cycle()` are
-narrow advanced/test seams. The runtime is process-local and has these states:
-`READY`, `DEGRADED`, `RECOVERY_REQUIRED`, `DRAINING`, `CANCELLING`, and
-`STOPPED`. A normal stop drains: it stops new claims while reconciliation and
-renewal continue. `shutdown_mode="cancel"` cancels current-session work. A
-timeout reports remaining work and never force-releases a lease.
+`loom.queue.managed_local` and its whole-run request/root formats were removed
+by a hard cut-over. Existing roots are rejected without interpreting domain
+rows, migration, mutation, cancellation, or deletion. There is no compatibility
+wrapper. Delegated whole-run Slurm remains a separate historical owner and is
+unchanged.
 
-Status must be read by observation scope. Queue records, assignment evidence,
-and log paths are persisted facts; `same_session_live` is an in-process
-observation for an owner/session match; hardware health and current lease
-liveness are not observed. In particular, persisted lease expiry evidence is
-not current hardware availability.
-
-On restart, selected-pool work from another session puts the runtime in
-`RECOVERY_REQUIRED`. First use an external supervisor/operator to contain the
-previous process group. Only then may an operator call
-`resolve_recovery_unknown(item_id, previous_processes_confirmed_stopped=True,
-requested_by=..., reason=...)` for one exact item. That boolean is an operator
-attestation; Loom neither verifies prior processes, reattaches, kills by PID,
-nor renews/releases foreign leases. For the POSIX built-in runner, a small
-systemd deployment can use `KillMode=control-group` and a stop timeout. This is
+Daemon status keeps admission/control state separate from authority stage truth
+and service health. Ordinary restart preserves the stable owner and rotates the
+process epoch. Active-process adoption and privileged unknown-work recovery are
+later Stage 29 work. For the POSIX built-in runner, a small systemd deployment
+can use `KillMode=control-group` and a stop timeout. This is
 an operational pattern, not a Loom daemon or a required default test service.
 
 This boolean-attestation operation is historical whole-run behavior only. Stage
@@ -243,7 +232,7 @@ generic scheduler described below. Notification policy remains Stage 26 work.
 Stage 29 changes managed execution from one whole-run launch to scheduling each
 dependency-ready executable stage attempt. The queue item and `run_uri` remain
 the user-facing submission, status, and cancellation identities. Command-scoped
-local execution, `ManagedLocalQueueRuntime`, a persistent local daemon, and
+local execution, the persistent local daemon, and
 several remote agents compose one durable run orchestrator, one fixed placement
 correctness kernel with explicitly composed pure policy/resource interfaces,
 one assignment lifecycle, and one agent runtime. Delegated SLURM keeps external
@@ -255,13 +244,13 @@ retains node placement.
 New managed admission is unique for `(coordinator_id, run_uri)`. The durable
 root's stable coordinator ID is the namespace. The
 atomic create-or-return record pins a normalized immutable intent digest and one
-execution owner (`managed_stage`, delegated whole-run, or historical
-compatibility). Exact replay—including after a response timeout—returns the same
+execution owner (`managed_stage` or delegated whole-run). Exact replay—including
+after a response timeout—returns the same
 queue item/admission; changed intent or owner conflicts. Resume addresses that
 admission and authority run, while rerun requires a new `run_uri`. This is a
 Stage 29 constraint beyond the current queue SQLite key, which is unique only on
-`queue_item_id`. Historical duplicate rows remain compatibility data and are not
-converted into multiple new managed owners.
+`queue_item_id`. Historical managed-local rows are rejected and are not
+converted into new admissions.
 
 Acceptance is a recoverable two-owner protocol rather than a fictitious
 cross-database transaction. The coordinator may first commit the admission as

@@ -2398,10 +2398,10 @@ data boundary.
 
 Managed whole-run `LaunchContract.resources`, synthetic whole-run command
 snapshots, and `claim_next -> dispatch(item)` cease to be execution inputs for
-new managed runs. Historical queue rows remain readable and delegated adapters
-remain supported. `ManagedLocalQueueRuntime` and `PipelineRunner` keep their
-intentional public surfaces while their managed internals converge on the new
-coordinator/agent path. The detailed state transitions and migration sequence
+new managed runs. Delegated adapters remain supported. `ManagedLocalQueueRuntime`
+and its old managed-local request/root formats are removed; `PipelineRunner` is
+not a second managed execution owner. Fresh daemon roots and persisted-plan
+admission are the only supported local managed path. The detailed state transitions
 are authoritative in [Stage 29 planning](../roadmap/stage-29/planning.md) and
 its linked phase execution plans.
 

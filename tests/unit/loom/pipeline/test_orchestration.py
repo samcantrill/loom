@@ -402,6 +402,45 @@ def test_stage_work_feeds_pure_kernel_without_reservation() -> None:
     assert len(decision.work_evaluations) == 1
 
 
+def test_decision_can_be_scoped_to_one_admission() -> None:
+    first_uri = "file:///decision-first"
+    second_uri = "file:///decision-second"
+    store = InMemoryStageWorkStore()
+    first_authority = _authority(first_uri)
+    second_authority = _authority(second_uri)
+    first = RunOrchestrator(
+        authority=first_authority, store=store, owner_id="coordinator"
+    )
+    second = RunOrchestrator(
+        authority=second_authority, store=store, owner_id="coordinator"
+    )
+    first.reconcile(
+        admission_id="admission-first",
+        plan=_plan(first_uri, _stage("first")),
+        authority_snapshot=first_authority.open_run(first_uri),
+        placements={"first": _placement()},
+        ready_at=10,
+    )
+    second.reconcile(
+        admission_id="admission-second",
+        plan=_plan(second_uri, _stage("second")),
+        authority_snapshot=second_authority.open_run(second_uri),
+        placements={"second": _placement()},
+        ready_at=11,
+    )
+
+    decision = second.decide(
+        kernel=SchedulingKernel(planners={}, policy=FifoSchedulingPolicy()),
+        candidates=(),
+        as_of=11,
+        admission_id="admission-second",
+    )
+
+    assert [item.stage_work_id for item in decision.work_evaluations] == [
+        store.list_stage_work()[1].stage_work_id
+    ]
+
+
 def test_resolved_pool_and_target_reach_mandatory_kernel_eligibility() -> None:
     run_uri = "file:///placement-decision"
     authority = _authority(run_uri)

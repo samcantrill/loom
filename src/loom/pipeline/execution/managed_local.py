@@ -187,6 +187,8 @@ class _ManagedWorkerHandle:
         self._run_gate = Event()
         self._result: StageWorkerResult | None = None
         self._error: BaseException | None = None
+        self._cancel_before_run = False
+        self._cancellation_seen = False
         self._thread = Thread(
             target=self._run,
             name=f"loom-managed-{process_execution_id}",
@@ -202,8 +204,25 @@ class _ManagedWorkerHandle:
     def release_to_run(self) -> None:
         self._run_gate.set()
 
-    def wait(self) -> StageWorkerResult:
+    def cancel_before_run(self) -> None:
+        self._cancel_before_run = True
+        self._cancellation_seen = True
+        self._run_gate.set()
         self._thread.join()
+
+    @property
+    def cancellation_seen(self) -> bool:
+        return self._cancellation_seen
+
+    def wait(
+        self, cancellation_requested: Callable[[], bool] | None = None
+    ) -> StageWorkerResult:
+        while self._thread.is_alive():
+            self._thread.join(timeout=0.05)
+            if cancellation_requested is not None and cancellation_requested():
+                self._cancellation_seen = True
+        if cancellation_requested is not None and cancellation_requested():
+            self._cancellation_seen = True
         if self._error is not None:
             raise self._error
         if self._result is None:
@@ -212,6 +231,8 @@ class _ManagedWorkerHandle:
 
     def _run(self) -> None:
         self._run_gate.wait()
+        if self._cancel_before_run:
+            return
         try:
             self._result = self._worker()
         except BaseException as exc:  # noqa: BLE001 - retained for owner reconciliation.
@@ -1673,6 +1694,8 @@ def run_managed_local_assignment(
         [str, Callable[[], StageWorkerResult]], _ManagedWorkerHandle
     ]
     | None = None,
+    cancellation_requested: Callable[[], bool] | None = None,
+    execution_started: Callable[[], None] | None = None,
 ) -> ManagedExecutionReceipt:
     """Run one exact local assignment through the durable Phase 2 saga.
 
@@ -1957,6 +1980,17 @@ def run_managed_local_assignment(
             assignment.assignment_id, expected="granted", next_state="unknown"
         )
         raise
+    handle = journal.process_handle(assignment.assignment_id)
+    if handle is None:
+        raise ManagedLocalError(
+            "managed start intent has no same-process containment handle"
+        )
+    if cancellation_requested is not None and cancellation_requested():
+        handle.cancel_before_run()
+        return finalize_result(
+            _cancelled_worker_result(worker_request),
+            coordinator_expected="granted",
+        )
     authority.confirm_execution_started(assignment.run_uri, fence=fence)
     coordinator.advance(
         assignment.assignment_id, expected="granted", next_state="running"
@@ -1970,17 +2004,15 @@ def run_managed_local_assignment(
     )
     worker_result = journal.read_result(assignment.assignment_id)
     if worker_result is None:
-        handle = journal.process_handle(assignment.assignment_id)
-        if handle is None:
-            raise ManagedLocalError(
-                "confirmed managed process has no same-process containment handle; "
-                "relaunch is forbidden"
-            )
         handle.release_to_run()
+        if execution_started is not None:
+            execution_started()
         try:
-            worker_result = handle.wait()
+            worker_result = handle.wait(cancellation_requested)
         except BaseException as exc:  # noqa: BLE001 - the managed root is contained.
             worker_result = _managed_root_failed_worker_result(worker_request, exc)
+        if handle.cancellation_seen:
+            worker_result = _cancelled_worker_result(worker_request)
     return finalize_result(worker_result, coordinator_expected="running")
 
 
@@ -2219,6 +2251,24 @@ def _start_failed_worker_result(
         stderr_path=request.stderr_path,
         traceback_path=request.traceback_path,
         executor_metadata={"process_created": False},
+    )
+
+
+def _cancelled_worker_result(request: StageWorkerRequest) -> StageWorkerResult:
+    cancelled_at = utc_timestamp()
+    return StageWorkerResult(
+        schema_version=STAGE_WORKER_RESULT_SCHEMA_VERSION,
+        run_uri=request.run_uri,
+        stage_name=request.stage_name,
+        attempt=request.attempt,
+        status=StageStatus.CANCELLED,
+        started_at=cancelled_at,
+        finished_at=cancelled_at,
+        executor_name=request.executor_name,
+        stdout_path=request.stdout_path,
+        stderr_path=request.stderr_path,
+        traceback_path=request.traceback_path,
+        executor_metadata={"cancellation_epoch_effective": True},
     )
 
 
