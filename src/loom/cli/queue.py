@@ -22,6 +22,7 @@ from loom.queue.status import (
     QueueCancellationStatus,
     build_queue_operational_status,
 )
+from loom.serialization import PlainData
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -37,6 +38,7 @@ QUEUE_PREFLIGHT_SCHEMA_VERSION = "loom.cli.queue.preflight.v1"
 QUEUE_STATUS_SCHEMA_VERSION = "loom.cli.queue.status.v1"
 QUEUE_CANCEL_SCHEMA_VERSION = "loom.cli.queue.cancel.v1"
 QUEUE_DRAIN_SCHEMA_VERSION = "loom.cli.queue.drain.v1"
+LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v1"
 
 
 def register_subparser(
@@ -141,6 +143,39 @@ def register_subparser(
     _add_output_options(drain)
     drain.set_defaults(handler=handle_drain_foreground)
 
+    daemon_init = queue_subparsers.add_parser(
+        "daemon-init",
+        help="initialize fresh managed-local daemon roots",
+    )
+    _add_daemon_root_options(daemon_init)
+    _add_output_options(daemon_init)
+    daemon_init.set_defaults(handler=handle_daemon_init)
+
+    daemon_serve = queue_subparsers.add_parser(
+        "daemon-serve",
+        help="serve one initialized managed-local daemon",
+    )
+    _add_daemon_root_options(daemon_serve)
+    _add_output_options(daemon_serve)
+    daemon_serve.set_defaults(handler=handle_daemon_serve)
+
+    for command, help_text, handler in (
+        ("daemon-submit", "submit one persisted run", handle_daemon_submit),
+        ("daemon-status", "inspect daemon status", handle_daemon_status),
+        ("daemon-wait", "wait for one admitted run", handle_daemon_wait),
+        ("daemon-cancel", "cancel one admitted run", handle_daemon_cancel),
+    ):
+        daemon_client = queue_subparsers.add_parser(command, help=help_text)
+        daemon_client.add_argument("--endpoint", required=True, type=Path)
+        if command != "daemon-status":
+            daemon_client.add_argument("queue_item_id", metavar="QUEUE_ITEM_ID")
+        if command == "daemon-submit":
+            daemon_client.add_argument("run_uri", metavar="RUN_URI")
+        if command == "daemon-wait":
+            daemon_client.add_argument("--timeout", type=float, default=None)
+        _add_output_options(daemon_client)
+        daemon_client.set_defaults(handler=handler)
+
 
 def handle_preflight(namespace: argparse.Namespace) -> int:
     """Handle ``loom queue preflight``."""
@@ -238,6 +273,104 @@ def handle_drain_foreground(namespace: argparse.Namespace) -> int:
     else:
         sys.stdout.write(format_queue_drain_text(result) + "\n")
     return int(ExitCode.SUCCESS)
+
+
+def handle_daemon_init(namespace: argparse.Namespace) -> int:
+    """Initialize fresh role roots without starting a process owner."""
+
+    from loom.queue import LocalDaemon
+
+    config = _daemon_config(namespace)
+    try:
+        LocalDaemon.initialize(config)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(
+        namespace,
+        {
+            "operation": "initialize",
+            "coordinator_root": str(config.coordinator_root),
+            "agent_root": str(config.agent_root),
+            "run_store_root": str(config.run_store_root),
+        },
+    )
+
+
+def handle_daemon_serve(namespace: argparse.Namespace) -> int:
+    """Run the persistent owner and its owner-only Unix endpoint."""
+
+    from threading import Event
+
+    from loom.queue import LocalDaemon, LocalDaemonSocketServer
+
+    config = _daemon_config(namespace)
+    daemon = LocalDaemon(config)
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    try:
+        status = daemon.start()
+        server.start()
+        _emit_daemon_payload(
+            namespace,
+            {
+                "operation": "serve",
+                "endpoint": str(config.endpoint),
+                "coordinator_id": status.coordinator_id,
+                "coordinator_epoch": status.coordinator_epoch,
+            },
+        )
+        Event().wait()
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    finally:
+        server.stop()
+        daemon.stop()
+    return int(ExitCode.SUCCESS)
+
+
+def handle_daemon_submit(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonAdmissionRequest, LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).submit(
+            LocalDaemonAdmissionRequest(namespace.queue_item_id, namespace.run_uri)
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_status(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).status()
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_wait(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).wait(
+            namespace.queue_item_id, timeout_seconds=namespace.timeout
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_cancel(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).cancel(
+            namespace.queue_item_id
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def build_queue_preflight_result(
@@ -433,6 +566,39 @@ def _explicit_authority_config_from_namespace(
     return authority_config_from_namespace(namespace)
 
 
+def _daemon_config(namespace: argparse.Namespace):  # type: ignore[no-untyped-def]
+    from loom.queue import LocalDaemonConfig
+
+    return LocalDaemonConfig(
+        coordinator_root=namespace.coordinator_root,
+        agent_root=namespace.agent_root,
+        run_store_root=namespace.run_store_root,
+        machine_id=namespace.machine_id,
+        cpu_capacity=namespace.cpu_capacity,
+    )
+
+
+def _emit_daemon_payload(
+    namespace: argparse.Namespace, payload: "Mapping[str, PlainData]"
+) -> int:
+    output_format = output_format_from_namespace(namespace)
+    if output_format is OutputFormat.JSON:
+        sys.stdout.write(
+            format_json_envelope(
+                schema_version=LOCAL_DAEMON_SCHEMA_VERSION,
+                ok=True,
+                warnings=[],
+                payload_name="result",
+                payload=payload,
+            )
+        )
+    else:
+        sys.stdout.write("local daemon:\n")
+        for key, value in payload.items():
+            sys.stdout.write(f"  {key}: {value}\n")
+    return int(ExitCode.SUCCESS)
+
+
 def _enum_value(value: object) -> str:
     enum_value = getattr(value, "value", value)
     return str(enum_value)
@@ -440,6 +606,14 @@ def _enum_value(value: object) -> str:
 
 def _add_config_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("config", metavar="CONFIG", help="queue config path")
+
+
+def _add_daemon_root_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--coordinator-root", required=True, type=Path)
+    parser.add_argument("--agent-root", required=True, type=Path)
+    parser.add_argument("--run-store-root", required=True, type=Path)
+    parser.add_argument("--machine-id", default="machine-A")
+    parser.add_argument("--cpu-capacity", type=int, default=1)
 
 
 def _add_output_options(parser: argparse.ArgumentParser) -> None:
@@ -463,12 +637,19 @@ __all__ = [
     "QUEUE_DRAIN_SCHEMA_VERSION",
     "QUEUE_PREFLIGHT_SCHEMA_VERSION",
     "QUEUE_STATUS_SCHEMA_VERSION",
+    "LOCAL_DAEMON_SCHEMA_VERSION",
     "build_queue_cancel_result",
     "build_queue_drain_result",
     "build_queue_preflight_result",
     "build_queue_status_result",
     "handle_cancel",
     "handle_drain_foreground",
+    "handle_daemon_cancel",
+    "handle_daemon_init",
+    "handle_daemon_serve",
+    "handle_daemon_status",
+    "handle_daemon_submit",
+    "handle_daemon_wait",
     "handle_preflight",
     "handle_start",
     "handle_status",

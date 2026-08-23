@@ -337,8 +337,40 @@ class InMemoryStageWorkStore:
 class SQLiteStageWorkStore:
     """Versioned SQLite projection store with semantic, non-CRUD operations."""
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(
+        self, database_path: str | Path, *, _allow_initialize: bool = True
+    ) -> None:
         self.path = Path(database_path)
+        self._allow_initialize = _allow_initialize
+
+    def _initialize(self) -> None:
+        """Create this store's current schema at an explicit owner boundary."""
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with _sqlite_connection(self.path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                exists = conn.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE type = 'table' "
+                    "AND name = 'coordinator_metadata'"
+                ).fetchone()
+                if exists is None:
+                    _initialize_store(conn)
+                else:
+                    _raise_for_store_schema(conn)
+            except Exception:
+                conn.rollback()
+                raise
+            else:
+                conn.commit()
+
+    def _open_existing(self) -> None:
+        """Verify the current schema without creating or repairing it."""
+
+        if not self.path.is_file():
+            raise CoordinatorStoreError("coordinator store is missing")
+        with self._read_connection():
+            pass
 
     def create_or_return_intent(self, intent: PreparationIntent) -> PreparationIntent:
         payload = _json_dumps(intent.to_dict())
@@ -398,6 +430,8 @@ class SQLiteStageWorkStore:
         self, *, admission_id: str, stage_name: str, next_attempt: int
     ) -> PreparationIntent | None:
         if not self.path.exists():
+            if not self._allow_initialize:
+                raise CoordinatorStoreError("coordinator store is missing")
             return None
         with self._read_connection() as conn:
             row = conn.execute(
@@ -464,6 +498,8 @@ class SQLiteStageWorkStore:
 
     def list_stage_work(self) -> tuple[StageWorkRecord, ...]:
         if not self.path.exists():
+            if not self._allow_initialize:
+                raise CoordinatorStoreError("coordinator store is missing")
             return ()
         with self._read_connection() as conn:
             rows = conn.execute(
@@ -476,9 +512,14 @@ class SQLiteStageWorkStore:
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.path.is_file():
+            if not self._allow_initialize:
+                raise CoordinatorStoreError("coordinator store is missing")
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         initialize = not self.path.exists()
-        with _sqlite_connection(self.path) as conn:
+        with _sqlite_connection(
+            self.path, require_existing=not self._allow_initialize
+        ) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 if initialize:
@@ -493,7 +534,9 @@ class SQLiteStageWorkStore:
 
     @contextmanager
     def _read_connection(self) -> Iterator[sqlite3.Connection]:
-        with _sqlite_connection(self.path) as conn:
+        with _sqlite_connection(
+            self.path, require_existing=not self._allow_initialize
+        ) as conn:
             _raise_for_store_schema(conn)
             yield conn
 
@@ -636,12 +679,14 @@ class RunOrchestrator:
         kernel: SchedulingKernel,
         candidates: Sequence[Candidate],
         as_of: int,
+        admission_id: str | None = None,
     ) -> SchedulingDecision:
         """Produce pure decision data from the immutable durable projection."""
 
         work = tuple(
             record.to_work_item()
             for record in self.store.list_stage_work()
+            if admission_id is None or record.admission_id == admission_id
             if record.scheduling_state is SchedulingProjectionState.READY
             if record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
         )
@@ -997,8 +1042,18 @@ def _raise_for_store_schema(conn: sqlite3.Connection) -> None:
 
 
 @contextmanager
-def _sqlite_connection(path: Path) -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(path, timeout=30.0, isolation_level=None)
+def _sqlite_connection(
+    path: Path, *, require_existing: bool = False
+) -> Iterator[sqlite3.Connection]:
+    target: str | Path = (
+        f"{path.resolve().as_uri()}?mode=rw" if require_existing else path
+    )
+    conn = sqlite3.connect(
+        target,
+        timeout=30.0,
+        isolation_level=None,
+        uri=require_existing,
+    )
     conn.row_factory = sqlite3.Row
     try:
         yield conn
