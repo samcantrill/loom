@@ -195,13 +195,18 @@ Final commands:
   recorded
 - Expanded planning: no phase-planner pass; accepted findings and maintainer
   resolution are decision-complete
-- Implementation: complete at `2837b4a`; owner stores initialize explicitly,
+- Implementation: complete at `68747b0`; owner stores initialize explicitly,
   runtime opens fail closed, owner-backed status evidence is normalized, and
   partial construction releases ownership
-- Refiner: not needed unless one qualified blocker is returned
-- Pre-submit gate: pending
-- Independent review: required after manager validation
-- Blocker corrections: 0/3
+- Refiner: not needed
+- Manager correction: correction 1/3 complete; runtime SQLite connections now
+  use true open-existing mode, each owner reads revision and rows in one
+  snapshot, unavailable axes cannot look empty, and focused tests prove empty,
+  changed, degraded, direct, and socket status evidence
+- Pre-submit gate: complete at `68747b0`; `make validate-pr` and a fresh
+  `make test-summary` receipt passed
+- Independent review: pending and required before merge
+- Blocker corrections: 1/3
 - PR and merge: pending
 
 ## Completion Record
@@ -209,8 +214,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Selectively ported the validated Phase 3C local-daemon production path and its source, public wiring, examples, feature docs, and regression replacement. Phase 3D changes are concentrated in `src/loom/queue/local_daemon.py`, `local_daemon_execution.py`, `src/loom/pipeline/orchestration.py`, and `src/loom/pipeline/execution/managed_local.py`: fresh initialization now creates both runtime owner schemas; daemon runtime opens existing schemas only; lost/corrupt owners degrade service and block scheduling; owner snapshots carry aggregate state, durable revisions, observations, and freshness; and failed execution construction releases workers and both locks. |
-| Tests added or updated | `tests/unit/loom/queue/test_local_daemon.py` covers each missing owner store, live loss scheduling block, and construction cleanup. `tests/integration/queue/test_local_daemon_production.py` covers explicit owner schema setup plus populated owner-axis status evidence. Retained Phase 3C contract, production, and CLI tests remain in the focused matrix. |
-| Validated revision/tree state and evidence | Clean `2837b4a` (`git diff --check` clean). Focused: `uv run pytest -q tests/unit/loom/queue tests/contracts/test_local_daemon_authority_contract.py tests/contracts/test_queue_python_api_contract.py` (176 passed) and `uv run pytest -q tests/integration/queue/test_local_daemon_production.py tests/e2e/test_queue_cli.py` (30 passed). Final: `make validate-pr` passed; `make test-summary` passed, with 2,530 tests passed in [`build/test-summary.md`](../../../../build/test-summary.md). |
+| Tests added or updated | `tests/unit/loom/queue/test_local_daemon.py` covers each missing owner store without recreation, live loss scheduling block, and construction cleanup. `tests/integration/queue/test_local_daemon_production.py` covers explicit owner schema setup, healthy-empty and populated axes, monotonic owner revision changes, unavailable state/freshness, and direct/socket normalization. Retained Phase 3C contract, production, and CLI tests remain in the focused matrix. |
+| Validated revision/tree state and evidence | Clean source/test revision `68747b0` (`git diff --check` clean). Focused: `uv run pytest -q tests/unit/loom/queue tests/contracts/test_local_daemon_authority_contract.py tests/contracts/test_queue_python_api_contract.py` (176 passed) and `uv run pytest -q tests/integration/queue/test_local_daemon_production.py tests/e2e/test_queue_cli.py` (31 passed), plus the corrected seven-case boundary subset. Final: `make validate-pr` passed Ruff, full Pyright, 2,390 default tests, 141 config-extra tests with 3 environment skips, and both distributions; fresh `make test-summary` passed 2,531 tests with 3 environment skips in [`build/test-summary.md`](../../../../build/test-summary.md). |
 | Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Missing or corrupt owner truth remains deliberately unrecoverable and may retain unknown capacity until operator restoration; no migration, reconstruction, or release of unknown claims was added. Dedicated worktree and branch remain for manager review/PR handling. |
