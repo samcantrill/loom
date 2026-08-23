@@ -2,12 +2,14 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 3C
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3c-local-daemon-authoritative-cutover`
-- Worktree root and path: record during implementation preparation
-- Base revision: current clean `origin/develop` after this planning amendment
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p3c-local-daemon-authoritative-cutover`
+- Base revision: clean `origin/develop` at
+  `2c5366960b811b03f3d1ec6308c7e9ec4ff2591b`
 - PR target: `develop`
 - PR title: `feat(queue): finalize authoritative local daemon cutover`
 - Dependencies: Phases 1-2 remotely merged; Phases 3A-3B explicitly blocked,
@@ -282,8 +284,10 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending creation of the dedicated branch/worktree from
-  current `origin/develop`
+- Manager preparation: complete at clean `origin/develop` `2c53669`; dedicated
+  branch/worktree, repository `samcantrill/loom`, target/title, predecessor
+  blocked evidence, source owners, focused tests, final gates, and stop
+  conditions are recorded
 - Expanded planning: no phase-planner pass; accepted independent-review findings
   and maintainer resolution make the execution plan decision-complete
 - Implementation: pending one `loom_phase_executor`
