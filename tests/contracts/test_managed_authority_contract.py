@@ -92,3 +92,68 @@ def test_managed_authority_fence_is_replayable_and_rejects_stale_results(
             status=StageStatus.FAILED,
             reason=reason,
         )
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_managed_authority_unbind_retains_an_exact_replay_tombstone(
+    tmp_path: Path, backend: str
+) -> None:
+    store = (
+        InMemoryPerRunAuthorityStore()
+        if backend == "memory"
+        else SQLitePerRunAuthorityStore()
+    )
+    run_uri = path_to_run_uri(tmp_path / backend / "declined")
+    revision = store.create_run(run_uri)
+    prepared = store.ensure_prepared_attempt(
+        run_uri,
+        PreparedAttemptRequest(
+            operation_id="prepare-decline",
+            request_digest="digest-decline",
+            admission_id="admission-1",
+            stage_name="build",
+            readiness_generation="ready-1",
+            expected_revision=revision,
+            expected_stage_status=None,
+            expected_attempt_id=None,
+            next_attempt=1,
+            owner_id="coordinator",
+            plan_fingerprint="plan-1",
+            bound_inputs={},
+            upstream_commits={},
+        ),
+    )
+    attempt_id = prepared.attempt.attempt_id
+    store.bind_prepared_attempt(
+        run_uri, assignment_id="assignment-declined", attempt_id=attempt_id
+    )
+
+    store.unbind_prepared_attempt(
+        run_uri, assignment_id="assignment-declined", attempt_id=attempt_id
+    )
+    store.unbind_prepared_attempt(
+        run_uri, assignment_id="assignment-declined", attempt_id=attempt_id
+    )
+    store.bind_prepared_attempt(
+        run_uri, assignment_id="assignment-declined", attempt_id=attempt_id
+    )
+    with pytest.raises((AuthorityStoreError, ValueError), match="conflicts"):
+        store.bind_prepared_attempt(
+            run_uri,
+            assignment_id="assignment-declined",
+            attempt_id=f"{attempt_id}-different",
+        )
+    with pytest.raises((AuthorityStoreError, ValueError), match="conflicts"):
+        store.unbind_prepared_attempt(
+            run_uri,
+            assignment_id="assignment-declined",
+            attempt_id=f"{attempt_id}-different",
+        )
+    with pytest.raises((AuthorityStoreError, ValueError), match="not bound"):
+        store.grant_prepared_attempt(
+            run_uri, assignment_id="assignment-declined", attempt_id=attempt_id
+        )
+
+    store.bind_prepared_attempt(
+        run_uri, assignment_id="assignment-replacement", attempt_id=attempt_id
+    )

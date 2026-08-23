@@ -122,6 +122,7 @@ class _RunState:
     managed_bindings: dict[str, tuple[str, str, str | None]] = field(
         default_factory=dict
     )
+    managed_unbind_receipts: dict[str, str] = field(default_factory=dict)
 
 
 class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
@@ -389,6 +390,11 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ) -> None:
         state = self._require_run(run_uri)
+        unbound_attempt = state.managed_unbind_receipts.get(assignment_id)
+        if unbound_attempt is not None:
+            if unbound_attempt != attempt_id:
+                raise ValueError("assignment binding conflicts")
+            return
         current = state.managed_bindings.get(assignment_id)
         if current is not None:
             if current[0] != attempt_id:
@@ -434,8 +440,14 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ) -> None:
         state = self._require_run(run_uri)
+        unbound_attempt = state.managed_unbind_receipts.get(assignment_id)
+        if unbound_attempt is not None:
+            if unbound_attempt != attempt_id:
+                raise ValueError("assignment unbind conflicts")
+            return
         if state.managed_bindings.get(assignment_id) != (attempt_id, "bound", None):
             raise ValueError("only the same ungranted binding may unbind")
+        state.managed_unbind_receipts[assignment_id] = attempt_id
         del state.managed_bindings[assignment_id]
 
     def grant_prepared_attempt(

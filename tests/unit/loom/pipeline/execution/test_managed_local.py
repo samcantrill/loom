@@ -14,6 +14,7 @@ from loom.pipeline.execution.managed_local import (
     ClaimResult,
     ManagedAssignment,
     ManagedLocalError,
+    ManagedOfferSnapshot,
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
     ObserveRequest,
@@ -114,6 +115,29 @@ def _decision_receipt(
         ],
         "claim_contract_descriptors": [claim.contract.to_dict()],
     }
+
+
+def _offer(
+    assignment: ManagedAssignment,
+    atoms: tuple[CapacityAtom, ...],
+    *,
+    reflected_claim_ids: tuple[str, ...] = (),
+) -> ManagedOfferSnapshot:
+    return ManagedOfferSnapshot(
+        agent_id=assignment.agent_id,
+        session_id=assignment.session_id,
+        offer_revision=assignment.offer_id,
+        snapshot_revision="snapshot-1",
+        inventory_revision="inventory-1",
+        availability_revision=f"availability-{assignment.offer_id}",
+        component_descriptors=(
+            SchedulingComponentDescriptor(
+                "cpu", 1, "1", "implementation", "configured"
+            ),
+        ),
+        atoms=atoms,
+        reflected_claim_ids=reflected_claim_ids,
+    )
 
 
 def test_provider_is_idempotent_and_never_claims_process_enforcement() -> None:
@@ -256,6 +280,7 @@ def test_coordinator_reserves_atoms_and_run_slot_in_one_transaction(tmp_path) ->
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, command.assignment)
     coordinator = SQLiteCoordinatorAssignments(path, command.claim.atoms)
+    coordinator.publish_offer(_offer(command.assignment, command.claim.atoms))
     assert (
         coordinator.reserve(
             command.assignment,
@@ -307,6 +332,7 @@ def test_coordinator_reserves_atoms_and_run_slot_in_one_transaction(tmp_path) ->
         claim_id="claim-2",
     )
     _seed_stage_work(path, competing)
+    coordinator.publish_offer(_offer(competing, command.claim.atoms))
     with pytest.raises(ManagedLocalError, match="limit"):
         coordinator.reserve(
             competing,
@@ -374,13 +400,13 @@ def test_concurrent_reservations_cannot_consume_the_final_run_slot(tmp_path) -> 
             ),
             stage_name="evaluate",
             attempt_id="evaluate-1",
-            offer_id="offer-2",
             claim_id="claim-2",
         ),
     )
     for assignment in assignments:
         _seed_stage_work(path, assignment)
     coordinator = SQLiteCoordinatorAssignments(path, (capacity,))
+    coordinator.publish_offer(_offer(assignments[0], (capacity,)))
     barrier = Barrier(2)
 
     def reserve(assignment: ManagedAssignment) -> str:
@@ -400,6 +426,88 @@ def test_concurrent_reservations_cannot_consume_the_final_run_slot(tmp_path) -> 
 
     assert outcomes.count("reserved") == 1
     assert sum("limit" in outcome for outcome in outcomes) == 1
+
+
+def test_offer_revision_is_one_use_until_fresh_net_availability(tmp_path) -> None:
+    _provider_value, command = _provider()
+    capacity = command.claim.atoms[0]
+    claim_atom = replace(capacity, amount=ExactQuantity(1))
+    claim = replace(command.claim, atoms=(claim_atom,))
+    first = command.assignment
+    second = replace(
+        first,
+        assignment_id="assignment-2",
+        stage_work_id=stage_work_identity(
+            "admission-1", "evaluate", "evaluate-1", "ready-1"
+        ),
+        stage_name="evaluate",
+        attempt_id="evaluate-1",
+        claim_id="claim-2",
+    )
+    path = tmp_path / "coordinator.sqlite"
+    _seed_stage_work(path, first)
+    _seed_stage_work(path, second)
+    coordinator = SQLiteCoordinatorAssignments(path, (capacity,))
+    coordinator.publish_offer(_offer(first, (capacity,)))
+
+    assert (
+        coordinator.reserve(
+            first,
+            (claim,),
+            max_parallel_stages=2,
+            decision_receipt=_decision_receipt(first, claim),
+        )
+        == "reserved"
+    )
+    coordinator.advance(first.assignment_id, expected="reserved", next_state="bound")
+    coordinator.advance(first.assignment_id, expected="bound", next_state="accepted")
+    with pytest.raises(ManagedLocalError, match="availability revision"):
+        coordinator.reserve(
+            second,
+            (claim,),
+            max_parallel_stages=2,
+            decision_receipt=_decision_receipt(second, claim),
+        )
+
+    remaining = replace(capacity, amount=ExactQuantity(1))
+    not_fresh = replace(second, offer_id="offer-not-fresh")
+    with pytest.raises(ManagedLocalError, match="fresh availability"):
+        coordinator.publish_offer(
+            replace(
+                _offer(not_fresh, (remaining,)),
+                availability_revision=f"availability-{first.offer_id}",
+            )
+        )
+
+    inconsistent = replace(second, offer_id="offer-inconsistent")
+    coordinator.publish_offer(
+        _offer(
+            inconsistent,
+            (capacity,),
+            reflected_claim_ids=(first.claim_id,),
+        )
+    )
+    with pytest.raises(ManagedLocalError, match="reflected logical claims"):
+        coordinator.reserve(
+            inconsistent,
+            (claim,),
+            max_parallel_stages=2,
+            decision_receipt=_decision_receipt(inconsistent, claim),
+        )
+
+    fresh = replace(second, offer_id="offer-fresh")
+    coordinator.publish_offer(
+        _offer(fresh, (remaining,), reflected_claim_ids=(first.claim_id,))
+    )
+    assert (
+        coordinator.reserve(
+            fresh,
+            (claim,),
+            max_parallel_stages=2,
+            decision_receipt=_decision_receipt(fresh, claim),
+        )
+        == "reserved"
+    )
 
 
 def test_start_outcome_unknown_never_invokes_launcher_again(tmp_path) -> None:
@@ -484,6 +592,7 @@ def test_event_replay_after_commit_can_be_acknowledged_exactly_once(tmp_path) ->
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, command.assignment)
     coordinator = SQLiteCoordinatorAssignments(path, command.claim.atoms)
+    coordinator.publish_offer(_offer(command.assignment, command.claim.atoms))
     coordinator.reserve(
         command.assignment,
         (command.claim,),

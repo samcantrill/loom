@@ -450,7 +450,7 @@ if its name does not match the selected directories or expression. Final command
   finalized. No additional planner pass used because the fixed saga, ownership,
   stop conditions, and causal test matrix already resolve the identified risk
 - Implementation: complete through one executor pass, one bounded refiner pass,
-  and one manager-local correction. The exact prepared attempt now proceeds
+  and two manager-local corrections. The exact prepared attempt now proceeds
   through atomic stage-work reservation, authority bind/grant fencing,
   composite provider admission, one-launch execution, durable result and
   accessible output commit, ordered logical/physical release, and fresh
@@ -460,26 +460,31 @@ if its name does not match the selected directories or expression. Final command
   and accepts only its matching confirmed start; the embedded local adapter
   stages request/input and physical preparation before that grant and retains
   the one-launch journal boundary without a whole-run lock.
-- Pre-submit gate: passed; `make validate-pr` completed with 2,372 default
-  passes, 1 default skip, 141 configuration-extra passes, 3 configuration-extra
-  skips, and successful source/wheel builds. `make test-summary` recorded all
-  package, unit, contract, integration, E2E, and configuration-extra categories
-- Independent review: required because launch fencing and cross-store recovery
-  remain material residual risks; pending
-- Blocker corrections: 2/3 completed. The first correction added the exact
+- Pre-submit gate: passed after the final review correction. `make validate-pr`
+  completed with 2,378 default passes, 1 default skip, 141
+  configuration-extra passes, 3 configuration-extra skips, and successful
+  source/wheel builds; `make test-summary` regenerated current category evidence
+- Independent review: completed. It found three blockers in launch ordering,
+  offer-revision fencing, and exact unbind replay; all three are addressed in
+  the final bounded correction and passed the refreshed manager gate
+- Blocker corrections: 3/3 completed. The first correction added the exact
   authority grant/start fence. The manager-local correction completed the
   execution-only worker, terminal/output/release saga, atomic stage-work
   decision revalidation, exact reservation/fence replay, provider conformance,
-  failure release, lost-response recovery, and real same-run overlap coverage
+  failure release, lost-response recovery, and real same-run overlap coverage.
+  The final correction now returns a gated containment handle before execution,
+  confirms durable `PROCESS_STARTED` and authority `RUNNING` before releasing
+  the worker body, retains one-use exact offer snapshots with reflected-claim
+  accounting, and records durable authority unbind tombstones for exact replay
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Managed provider/journal/coordinator saga in `execution/managed_local.py`; exact no-lock worker seam in `execution/stage_worker.py`; managed fence and terminal/output CAS in `stores/authority.py` and `stores/sqlite_authority.py`; authority schema v4 migration; public provider exports; in-memory conformance double |
-| Tests added or updated | Provider and managed-authority contracts; coordinator reservation/replay/event tests; journal composite/one-launch tests; SQLite authority fence/terminal/migration tests; accessible output, failure release, lost-response replay, and real same-run overlap integration tests; retained adapter subclass signatures |
-| Validated revision/tree state and evidence | `make validate-pr`: lint and Pyright clean; default 2,372 passed/1 skipped/121 deselected; configuration-extra 141 passed/3 skipped/2,376 deselected; source and wheel builds passed. `make test-summary`: package 118, unit 1,691, contract 291, integration 214, E2E 58, configuration-extra 141 passed |
+| Implementation and changed paths | Managed provider/journal/coordinator saga in `execution/managed_local.py`; exact no-lock worker seam in `execution/stage_worker.py`; managed fence and terminal/output CAS in `stores/authority.py` and `stores/sqlite_authority.py`; authority schema v5 migration with exact unbind receipts; public provider exports; in-memory conformance double |
+| Tests added or updated | Provider and managed-authority contracts; one-use offer and reflected-capacity tests; journal composite/one-launch/start-outcome tests; SQLite authority fence/terminal/v4-to-v5 migration tests; accessible output, definitive start failure, lost unbind/output response replay, crash-before-result non-relaunch, authority-running barrier, failure release, and real same-run overlap integration tests; retained adapter subclass signatures |
+| Validated revision/tree state and evidence | Focused final-correction suite: 45 passed with Ruff and Pyright clean. `make validate-pr`: default 2,378 passed/1 skipped/121 deselected; configuration-extra 141 passed/3 skipped/2,382 deselected; source and wheel builds passed. `make test-summary`: package 118, unit 1,693, contract 293, integration 216, E2E 58, and configuration-extra 141 passed |
 | Validation-relevant changes after evidence | none |
-| PR, review, and merge | independent review pending; PR and merge pending |
+| PR, review, and merge | independent blocker review completed and corrected; refreshed manager gate passed; PR and merge pending |
 | Residual risk and cleanup | Ambiguous provider/launcher outcomes remain durably retained and non-relaunchable; persistent role startup and user-facing unknown-work recovery remain assigned to later phases |

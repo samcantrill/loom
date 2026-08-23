@@ -842,6 +842,31 @@ def test_v3_authority_database_migrates_managed_fence_table(tmp_path: Path) -> N
     assert {"terminal_status", "terminal_digest"}.issubset(columns)
 
 
+def test_v4_authority_database_migrates_managed_unbind_receipts(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "v4-managed-unbind-migration")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    database = _authority_database_path(run_uri)
+    with sqlite3.connect(database) as conn:
+        conn.execute("DROP TABLE managed_attempt_unbind_receipts")
+        conn.execute("UPDATE metadata SET value = '4' WHERE key = 'schema_version'")
+
+    reopened = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    reopened.open_run(run_uri)
+
+    assert reopened.check_schema(run_uri).failure is None
+    with sqlite3.connect(database) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table'"
+            )
+        }
+    assert "managed_attempt_unbind_receipts" in tables
+
+
 def test_prepared_attempt_revalidates_revision_and_terminal_run(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "stale-preparation")
     store = SQLitePerRunAuthorityStore(clock=FrozenClock())

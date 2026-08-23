@@ -177,6 +177,7 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "terminal_digest",
         }
     ),
+    "managed_attempt_unbind_receipts": frozenset({"assignment_id", "attempt_id"}),
     "leases": frozenset(
         {
             "lease_id",
@@ -853,6 +854,15 @@ class SQLitePerRunAuthorityStore:
         _non_empty(assignment_id, "assignment_id")
         _non_empty(attempt_id, "attempt_id")
         with self._transaction(run_uri) as conn:
+            unbound = conn.execute(
+                "SELECT attempt_id FROM managed_attempt_unbind_receipts "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+            if unbound is not None:
+                if unbound["attempt_id"] != attempt_id:
+                    raise AuthorityStoreError("assignment binding conflicts")
+                return
             row = conn.execute(
                 "SELECT attempt_id FROM managed_attempt_bindings WHERE assignment_id = ?",
                 (assignment_id,),
@@ -926,6 +936,15 @@ class SQLitePerRunAuthorityStore:
     ) -> None:
         self._bind_run_uri(run_uri)
         with self._transaction(run_uri) as conn:
+            receipt = conn.execute(
+                "SELECT attempt_id FROM managed_attempt_unbind_receipts "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+            if receipt is not None:
+                if receipt["attempt_id"] != attempt_id:
+                    raise AuthorityStoreError("assignment unbind conflicts")
+                return
             row = conn.execute(
                 "SELECT attempt_id, state FROM managed_attempt_bindings WHERE assignment_id = ?",
                 (assignment_id,),
@@ -936,6 +955,11 @@ class SQLitePerRunAuthorityStore:
                 or row["state"] != "bound"
             ):
                 raise AuthorityStoreError("only the same ungranted binding may unbind")
+            conn.execute(
+                "INSERT INTO managed_attempt_unbind_receipts "
+                "(assignment_id, attempt_id) VALUES (?, ?)",
+                (assignment_id, attempt_id),
+            )
             conn.execute(
                 "DELETE FROM managed_attempt_bindings WHERE assignment_id = ?",
                 (assignment_id,),
@@ -2510,6 +2534,12 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS managed_attempt_unbind_receipts (
+            assignment_id TEXT PRIMARY KEY,
+            attempt_id TEXT NOT NULL
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS leases (
             lease_id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
@@ -2737,13 +2767,15 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         cast(str, table["name"])
         for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
     }
-    historical_columns = {
-        name: columns
-        for name, columns in _REQUIRED_SCHEMA_COLUMNS.items()
-        if name not in {"prepared_attempt_receipts", "managed_attempt_bindings"}
-    }
-    if version not in {1, 2, 3}:
+    if version not in {1, 2, 3, 4}:
         return
+    historical_columns = dict(_REQUIRED_SCHEMA_COLUMNS)
+    if version < 3:
+        historical_columns.pop("prepared_attempt_receipts")
+    if version < 4:
+        historical_columns.pop("managed_attempt_bindings")
+    if version < 5:
+        historical_columns.pop("managed_attempt_unbind_receipts")
     if set(historical_columns) - tables:
         raise AuthoritySchemaError(
             f"SQLite authority v{version} schema is incomplete or invalid"
@@ -2830,6 +2862,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             fence TEXT,
             terminal_status TEXT,
             terminal_digest TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS managed_attempt_unbind_receipts (
+            assignment_id TEXT PRIMARY KEY,
+            attempt_id TEXT NOT NULL
         )
     """)
     conn.execute(
@@ -2939,6 +2977,8 @@ def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
             required_tables.discard("prepared_attempt_receipts")
         if version < 4:
             required_tables.discard("managed_attempt_bindings")
+        if version < 5:
+            required_tables.discard("managed_attempt_unbind_receipts")
         if required_tables - tables:
             return AuthoritySchemaCheck(
                 current_version=AUTHORITY_SCHEMA_VERSION,
