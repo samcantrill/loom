@@ -24,6 +24,7 @@ from loom.queue import (
     LocalDaemonRole,
     LocalDaemonSocketClient,
     LocalDaemonSocketServer,
+    prepare_managed_local_runtime_record,
 )
 from loom.serialization import json_dumps_pretty
 from loom.queue.local_daemon_execution import load_managed_local_intent
@@ -86,7 +87,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         ],
     }
     spec = PipelineSpec.from_config(pipeline_config)
-    plan_pipeline(
+    plan = plan_pipeline(
         spec,
         run_uri=run_uri,
         run_store=run_store,
@@ -108,6 +109,9 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         run_uri,
         "resolved",
         json_dumps_pretty({"pipeline": pipeline_config}),
+    )
+    prepare_managed_local_runtime_record(
+        store=run_store, run_uri=run_uri, plan=plan, pipeline=spec
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -199,7 +203,7 @@ def test_admission_digest_covers_the_resolved_pipeline_snapshot(
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
     )
-    first = load_managed_local_intent(config, run_uri)
+    load_managed_local_intent(config, run_uri)
     stages = cast(list[dict[str, object]], pipeline_config["stages"])
     stages[0]["config"] = {"value": 99}
     run_store.write_config_snapshot(
@@ -208,7 +212,50 @@ def test_admission_digest_covers_the_resolved_pipeline_snapshot(
         json_dumps_pretty({"pipeline": pipeline_config}),
     )
 
-    assert load_managed_local_intent(config, run_uri).digest != first.digest
+    with pytest.raises(Exception, match="conflicts with exact runtime record"):
+        load_managed_local_intent(config, run_uri)
+
+
+def test_safe_runtime_metadata_cannot_activate_a_run_without_exact_record(
+    tmp_path: Path,
+) -> None:
+    run_store, run_uri, _pipeline = _persist_single_stage_run(tmp_path / "runs")
+    exact = run_store.local_run_dir(run_uri) / "config" / "managed_local_runtime.json"
+    exact.unlink()
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=tmp_path / "runs",
+    )
+
+    with pytest.raises(Exception, match="fresh exact runtime record"):
+        load_managed_local_intent(config, run_uri)
+
+
+def test_terminal_authority_truth_wins_a_late_cancellation(
+    tmp_path: Path,
+) -> None:
+    _store, run_uri, _pipeline = _persist_single_stage_run(tmp_path / "runs")
+    SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=RunStatus.SUCCEEDED)
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=tmp_path / "runs",
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        client.submit(LocalDaemonAdmissionRequest("late-cancel", run_uri))
+        client.cancel("late-cancel")
+        assert client.wait("late-cancel", timeout_seconds=10).state is (
+            LocalDaemonAdmissionState.SUCCEEDED
+        )
+    finally:
+        daemon.stop()
 
 
 def test_pending_cancellation_installs_authority_epoch_before_any_stage(
@@ -273,7 +320,7 @@ def test_connected_active_cancellation_withholds_output_commit(
         ],
     }
     spec = PipelineSpec.from_config(pipeline_config)
-    plan_pipeline(
+    plan = plan_pipeline(
         spec,
         run_uri=run_uri,
         run_store=run_store,
@@ -288,6 +335,9 @@ def test_connected_active_cancellation_withholds_output_commit(
         run_uri,
         "resolved",
         json_dumps_pretty({"pipeline": pipeline_config}),
+    )
+    prepare_managed_local_runtime_record(
+        store=run_store, run_uri=run_uri, plan=plan, pipeline=spec
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -473,7 +523,7 @@ def _persist_single_stage_run(
         ],
     }
     spec = PipelineSpec.from_config(pipeline_config)
-    plan_pipeline(
+    plan = plan_pipeline(
         spec,
         run_uri=run_uri,
         run_store=run_store,
@@ -489,6 +539,9 @@ def _persist_single_stage_run(
         run_uri,
         "resolved",
         json_dumps_pretty({"pipeline": pipeline_config}),
+    )
+    prepare_managed_local_runtime_record(
+        store=run_store, run_uri=run_uri, plan=plan, pipeline=spec
     )
     return run_store, run_uri, pipeline_config
 
@@ -530,7 +583,7 @@ def _persist_coordinated_run(
         ],
     }
     spec = PipelineSpec.from_config(pipeline_config)
-    plan_pipeline(
+    plan = plan_pipeline(
         spec,
         run_uri=run_uri,
         run_store=run_store,
@@ -545,6 +598,9 @@ def _persist_coordinated_run(
         run_uri,
         "resolved",
         json_dumps_pretty({"pipeline": pipeline_config}),
+    )
+    prepare_managed_local_runtime_record(
+        store=run_store, run_uri=run_uri, plan=plan, pipeline=spec
     )
     SQLitePerRunAuthorityStore(run_uri).create_run(
         run_uri, status=RunStatus.RUNNING

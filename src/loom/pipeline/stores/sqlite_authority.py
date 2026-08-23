@@ -887,6 +887,23 @@ class SQLitePerRunAuthorityStore:
                 if receipt.request != request:
                     raise AuthorityStoreError("coordinator admission receipt conflicts")
                 return receipt
+            binding = conn.execute(
+                "SELECT request_json FROM coordinator_admission_receipts LIMIT 1"
+            ).fetchone()
+            if binding is not None:
+                bound = CoordinatorAdmissionRequest.from_dict(
+                    _json_loads(cast(str, binding["request_json"]))
+                )
+                if (
+                    bound.coordinator_id != request.coordinator_id
+                    or bound.intent_digest != request.intent_digest
+                ):
+                    raise AuthorityStoreError(
+                        "coordinator admission owner or intent conflicts"
+                    )
+                raise AuthorityStoreError(
+                    "coordinator admission already has an operation"
+                )
             receipt = CoordinatorAdmissionReceipt(request=request)
             conn.execute(
                 "INSERT INTO coordinator_admission_receipts "
@@ -926,6 +943,16 @@ class SQLitePerRunAuthorityStore:
                 if receipt.request != request:
                     raise AuthorityStoreError("cancellation epoch receipt conflicts")
                 return receipt
+            binding = conn.execute(
+                "SELECT request_json FROM coordinator_admission_receipts LIMIT 1"
+            ).fetchone()
+            if binding is None:
+                raise AuthorityStoreError("cancellation requires a coordinator admission")
+            bound = CoordinatorAdmissionRequest.from_dict(
+                _json_loads(cast(str, binding["request_json"]))
+            )
+            if bound.coordinator_id != request.coordinator_id:
+                raise AuthorityStoreError("cancellation coordinator conflicts with binding")
             epoch_row = conn.execute(
                 "SELECT epoch FROM cancellation_epochs WHERE id = 1"
             ).fetchone()

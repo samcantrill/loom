@@ -290,7 +290,9 @@ Final commands:
   conditions are recorded
 - Expanded planning: no phase-planner pass; accepted independent-review findings
   and maintainer resolution make the execution plan decision-complete
-- Implementation: pending one `loom_phase_executor`
+- Implementation: complete; exact-record, singleton-authority, conservative
+  restart-capacity, terminal-cancellation, and owner-status slices are committed
+  in the phase worktree
 - Refiner: not needed unless the executor returns one qualified blocker
 - Pre-submit gate: pending
 - Independent review: required once after PR preparation because this phase
@@ -302,9 +304,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | planning baseline `b045f45`; Phase 3B implementation/review evidence `a1dfe92` and blocked record `da89ff4` |
-| Validation-relevant changes after evidence | planning-only Phase 3C amendment |
+| Implementation and changed paths | Persistent daemon composition, scoped authority adapter, exact managed-local record, retained-claim provider hold, status/diagnostic projection, public feature docs, and managed-local example |
+| Tests added or updated | Exact-record rejection and changed-snapshot tests; late terminal-cancellation projection; competing coordinator binding conflict; retained focused production/authority coverage |
+| Validated revision/tree state and evidence | Phase implementation commit pending; focused Pyright passed; `38` daemon/authority tests passed; repository test summary is running |
+| Validation-relevant changes after evidence | Exact runtime reconstruction, singleton binding, conservative restart capacity, terminal-truth projection, and owner availability diagnostics added |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Phase 3A/3B branches/worktrees retained as evidence until Phase 3C disposition; Phase 4 cannot start first |

@@ -187,8 +187,11 @@ The supported local composition is
 uses distinct owner-private coordinator and agent roots, a stable coordinator
 identity, a rotating process epoch, and owner-only Unix IPC. Initialize fresh
 roots explicitly, start the daemon, and submit `LocalDaemonAdmissionRequest`
-with only `queue_item_id` and `run_uri`. The daemon reloads the canonical
-`ExecutionPlan`, runtime metadata, and resolved config; clients do not provide
+with only `queue_item_id` and `run_uri`. Trusted run preparation writes a
+versioned exact managed-local runtime record alongside the plan; the daemon
+rejects missing, summary-only, corrupt, changed, or unsupported records before
+admission. The safe `runtime.json` remains observability metadata and cannot
+activate work. Clients do not provide
 authority objects, resolvers, assignments, callables, or executor instances.
 
 `loom.queue.managed_local` and its whole-run request/root formats were removed
@@ -198,7 +201,8 @@ wrapper. Delegated whole-run Slurm remains a separate historical owner and is
 unchanged.
 
 Daemon status keeps admission/control state separate from authority stage truth
-and service health. Ordinary restart preserves the stable owner and rotates the
+and service health, with owner-labelled availability and a coordinator `as_of`
+observation time. Ordinary restart preserves the stable owner and rotates the
 process epoch. Active-process adoption and privileged unknown-work recovery are
 later Stage 29 work. For the POSIX built-in runner, a small systemd deployment
 can use `KillMode=control-group` and a stop timeout. This is

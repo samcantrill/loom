@@ -474,6 +474,12 @@ keys, environment counts, and adapter namespace names/counts. It does not
 record environment variable names or values, raw adapter payloads, or semantic
 fingerprint inputs.
 
+The managed-local daemon has a separate private exact runtime record, written
+only during trusted managed-local preparation. It carries validated execution
+options, resolved placement evidence, run concurrency, plan identity, and a
+normalized digest. It is not a replacement for `runtime.json`; safe metadata
+cannot be decoded as executable daemon input.
+
 Examples:
 
 ```text

@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         LocalDaemonSocketClient,
         LocalDaemonSocketServer,
     )
+    from .local_daemon_runtime import prepare_managed_local_runtime_record
 from .config import (
     QUEUE_CONFIG_SCHEMA_VERSION,
     QueueControllerSpec,
@@ -124,6 +125,10 @@ def __getattr__(name: str) -> object:
         from . import local_daemon
 
         return getattr(local_daemon, name)
+    if name == "prepare_managed_local_runtime_record":
+        from .local_daemon_runtime import prepare_managed_local_runtime_record
+
+        return prepare_managed_local_runtime_record
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -144,6 +149,7 @@ __all__ = [
     "LocalDaemonSocketClient",
     "LocalDaemonSocketServer",
     "LocalDaemonStatus",
+    "prepare_managed_local_runtime_record",
     "LaunchEnvironmentBindings",
     "NoOpResourceAssignmentProvider",
     "ResourceAssignment",

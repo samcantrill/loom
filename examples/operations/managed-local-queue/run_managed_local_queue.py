@@ -20,6 +20,7 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    prepare_managed_local_runtime_record,
 )
 from loom.serialization import json_dumps_pretty
 
@@ -96,7 +97,7 @@ def main() -> None:
         ],
     }
     spec = PipelineSpec.from_config(pipeline)
-    plan_pipeline(
+    plan = plan_pipeline(
         spec,
         run_uri=run_uri,
         run_store=store,
@@ -117,6 +118,9 @@ def main() -> None:
         run_uri,
         "resolved",
         json_dumps_pretty({"pipeline": pipeline}),
+    )
+    prepare_managed_local_runtime_record(
+        store=store, run_uri=run_uri, plan=plan, pipeline=spec
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)

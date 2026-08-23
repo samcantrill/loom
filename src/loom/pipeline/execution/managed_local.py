@@ -421,6 +421,37 @@ class AtomResourceProvider:
         with self._lock:
             return self._observe(request)
 
+    def restore_capacity_holding(self, command: ClaimCommand) -> None:
+        """Restore one durable non-released claim before any fresh offer."""
+        with self._lock:
+            existing = self._claims.get(command.assignment.assignment_id)
+            if existing is not None:
+                if existing[0].claim != command.claim:
+                    raise ManagedLocalError("retained provider claim conflicts")
+                return
+            used = {
+                atom.key: atom.amount.fraction
+                for atom in self._capacity.values()
+            }
+            for prior, state in self._claims.values():
+                if state in {ClaimOutcome.PREPARED, ClaimOutcome.ACTIVE}:
+                    for atom in prior.claim.atoms:
+                        used[atom.key] = used.get(atom.key, 0) - atom.amount.fraction
+            for atom in command.claim.atoms:
+                if used.get(atom.key, 0) < atom.amount.fraction:
+                    raise ManagedLocalError("retained provider claim exceeds capacity")
+            self._claims[command.assignment.assignment_id] = (command, ClaimOutcome.PREPARED)
+            self._revision += 1
+
+    def live_claim_ids_for_session(self, session_id: str) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(sorted(
+                command.assignment.claim_id
+                for command, state in self._claims.values()
+                if state in {ClaimOutcome.PREPARED, ClaimOutcome.ACTIVE}
+                and command.assignment.session_id == session_id
+            ))
+
     def _observe(self, request: ObserveRequest) -> ObserveResult:
         if not isinstance(request, ObserveRequest):
             raise ManagedLocalError("observe request is invalid")
@@ -1028,6 +1059,44 @@ class SQLiteAgentJournal:
             return StageWorkerResult.from_dict(
                 json.loads(cast(str, row["result_json"]))
             )
+
+    def retained_claim_commands(self) -> tuple[ClaimCommand, ...]:
+        """Return exact claims still lacking durable provider-release proof."""
+        if not self.path.is_file():
+            return ()
+        with sqlite3.connect(self.path) as conn:
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = tuple(conn.execute(
+                    "SELECT identity_json, claims_json, state FROM assignments "
+                    "WHERE claims_json IS NOT NULL"
+                ))
+            except sqlite3.DatabaseError as exc:
+                raise ManagedLocalError("agent journal retained-claim read failed") from exc
+        retained: list[ClaimCommand] = []
+        released = {AssignmentState.DECLINED.value, AssignmentState.PROVIDERS_RELEASED.value, AssignmentState.RELEASED.value}
+        for row in rows:
+            if cast(str, row["state"]) in released:
+                continue
+            identity = json.loads(cast(str, row["identity_json"]))
+            assignment = ManagedAssignment(
+                assignment_id=cast(str, identity["assignment_id"]),
+                run_uri=cast(str, identity["run_uri"]),
+                stage_work_id=cast(str, identity["stage_work_id"]),
+                stage_name=cast(str, identity["stage_name"]),
+                attempt=cast(int, identity["attempt"]),
+                attempt_id=cast(str, identity["attempt_id"]),
+                agent_id=cast(str, identity["agent_id"]),
+                session_id=cast(str, identity["session_id"]),
+                offer_id=cast(str, identity["offer_id"]),
+                claim_id=cast(str, identity["claim_id"]),
+            )
+            commands = json.loads(cast(str, row["claims_json"]))
+            values = commands.get("commands") if isinstance(commands, dict) else None
+            if not isinstance(values, list):
+                raise ManagedLocalError("retained agent claims are corrupt")
+            retained.extend(_claim_command_from_dict(assignment, value) for value in values)
+        return tuple(retained)
 
     @contextmanager
     def _transaction(self):
@@ -2096,6 +2165,26 @@ def _claim_command_dict(command: ClaimCommand) -> dict[str, PlainData]:
         ),
         "claim_fingerprint": claim.fingerprint,
     }
+
+
+def _claim_command_from_dict(assignment: ManagedAssignment, data: object) -> ClaimCommand:
+    if not isinstance(data, Mapping):
+        raise ManagedLocalError("retained claim command is invalid")
+    if data.get("assignment_id") != assignment.assignment_id:
+        raise ManagedLocalError("retained claim assignment conflicts")
+    atoms_data = data.get("atoms")
+    if not isinstance(atoms_data, Sequence):
+        raise ManagedLocalError("retained claim atoms are invalid")
+    claim = ResourceClaim(
+        resource_kind=cast(str, data.get("resource_kind")),
+        contract=ResourceClaimContractDescriptor.from_dict(data.get("contract")),
+        atoms=tuple(_capacity_atom_from_dict(cast(Mapping[str, object], atom)) for atom in atoms_data),
+        provider_data_version=cast(int, data.get("provider_data_version")),
+        provider_data=cast(Mapping[str, PlainData], data.get("provider_data", {})),
+    )
+    if data.get("claim_fingerprint") != claim.fingerprint:
+        raise ManagedLocalError("retained claim fingerprint conflicts")
+    return ClaimCommand(assignment, cast(str, data.get("operation_id")), claim)
 
 
 def _operation_command(command: ClaimCommand, operation: str) -> ClaimCommand:

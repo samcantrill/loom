@@ -12,8 +12,9 @@ uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
 ## Public Python Surface
 
 The example uses Loom's public local-daemon types from `loom.queue`. Project
-code persists the plan and run inputs first; daemon clients then submit only
-the queue item identity and `run_uri`.
+code persists the plan, resolved config, and exact managed-local runtime record
+first; daemon clients then submit only the queue item identity and `run_uri`.
+`runtime.json` is safe observability metadata and is not executable input.
 
 The important public flow is:
 

@@ -8,6 +8,7 @@ import hashlib
 import json
 import sqlite3
 from threading import Lock
+from typing import cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.execution import prepare_stage_attempt
@@ -27,13 +28,13 @@ from loom.pipeline.orchestration import (
     StageWorkRecord,
 )
 from loom.pipeline.planning import AttemptReadiness, ExecutionPlan, PlanAction, StagePlan
-from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.runtime import (
     CpuResourcePlanner,
+    RunOptions,
     ResolvedStagePlacement,
     ResolvedStageRuntimeOptions,
-    StagePlacementPolicy,
-    resolve_stage_placement,
+    parallel_execution_options,
+    resolve_run_runtime,
 )
 from loom.pipeline.specs import PipelineSpec, parse_pipeline_config
 from loom.pipeline.status import RunStatus, StageStatus
@@ -46,6 +47,11 @@ from loom.pipeline.stores.read_models import (
     AuthoritativeRunSnapshot,
     LifecycleReason,
 )
+from loom.pipeline.stores.authority import (
+    ExecutionFence,
+    PreparedAttemptRequest,
+    StatusTransition,
+)
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.scheduling import (
     Candidate,
@@ -57,12 +63,7 @@ from loom.scheduling import (
     ResourceInventoryEnvelope,
     SchedulingKernel,
 )
-from loom.serialization import (
-    PlainData,
-    ensure_plain_data,
-    json_loads,
-    stable_json_dumps,
-)
+from loom.serialization import PlainData, ensure_plain_data, json_loads
 from loom.timestamps import utc_timestamp
 
 from .errors import QueueConflictError, QueueServiceError
@@ -71,20 +72,106 @@ from .local_daemon import (
     LocalDaemonAdmissionState,
     LocalDaemonConfig,
 )
+from .local_daemon_runtime import load_managed_local_runtime_record
 
 
 @dataclass(frozen=True, slots=True)
 class ManagedLocalIntent:
     plan: ExecutionPlan
-    runtime: Mapping[str, PlainData]
+    runtime: Mapping[str, ResolvedStageRuntimeOptions]
+    placements: Mapping[str, ResolvedStagePlacement]
     pipeline: PipelineSpec
     digest: str
+    max_parallel_stages: int
 
 
 @dataclass(frozen=True, slots=True)
 class LocalDaemonExecutionOutcome:
     state: LocalDaemonAdmissionState
     reason: str | None = None
+
+
+class _ScopedCoordinatorAuthority:
+    """Least-privilege run/coordinator view used by orchestration and the agent.
+
+    The SQLite authority remains an implementation detail of the daemon.  This
+    adapter deliberately exposes only the exact Phase 1/2 calls needed after
+    the coordinator binding has been accepted.
+    """
+
+    def __init__(
+        self, store: SQLitePerRunAuthorityStore, *, run_uri: str, coordinator_id: str
+    ) -> None:
+        self._store = store
+        self._run_uri = run_uri
+        self._coordinator_id = coordinator_id
+
+    def _run(self, run_uri: str) -> None:
+        if run_uri != self._run_uri:
+            raise QueueConflictError("scoped authority run conflicts")
+
+    def ensure_prepared_attempt(self, run_uri: str, request: PreparedAttemptRequest):
+        self._run(run_uri)
+        return self._store.ensure_prepared_attempt(run_uri, request)
+
+    def bind_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> None:
+        self._run(run_uri)
+        self._store.bind_prepared_attempt(run_uri, assignment_id=assignment_id, attempt_id=attempt_id)
+
+    def unbind_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> None:
+        self._run(run_uri)
+        self._store.unbind_prepared_attempt(run_uri, assignment_id=assignment_id, attempt_id=attempt_id)
+
+    def grant_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str):
+        self._run(run_uri)
+        return self._store.grant_prepared_attempt(run_uri, assignment_id=assignment_id, attempt_id=attempt_id)
+
+    def confirm_execution_started(self, run_uri: str, *, fence: ExecutionFence) -> None:
+        self._run(run_uri)
+        self._store.confirm_execution_started(run_uri, fence=fence)
+
+    def install_cancellation_epoch(self, run_uri: str, request: CancellationEpochRequest):
+        self._run(run_uri)
+        if request.coordinator_id != self._coordinator_id:
+            raise QueueConflictError("scoped authority coordinator conflicts")
+        return self._store.install_cancellation_epoch(run_uri, request)
+
+    def record_managed_attempt_terminal(
+        self,
+        run_uri: str,
+        *,
+        fence: ExecutionFence,
+        status: StageStatus,
+        reason: LifecycleReason,
+    ) -> StatusTransition:
+        self._run(run_uri)
+        return self._store.record_managed_attempt_terminal(
+            run_uri, fence=fence, status=status, reason=reason
+        )
+
+    def record_output_commit(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        attempt_id: str,
+        fencing_token: str,
+        outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
+        reason: LifecycleReason | None = None,
+        assignment_id: str | None = None,
+    ):
+        self._run(run_uri)
+        return self._store.record_output_commit(
+            run_uri,
+            stage_name,
+            attempt_id=attempt_id,
+            fencing_token=fencing_token,
+            outputs=outputs,
+            supersedes_commit_id=supersedes_commit_id,
+            reason=reason,
+            assignment_id=assignment_id,
+        )
 
 
 def load_managed_local_intent(
@@ -102,28 +189,22 @@ def load_managed_local_intent(
             "run_uri is outside the configured local run store"
         ) from exc
     store.open_run(run_uri)
+    record = load_managed_local_runtime_record(store, run_uri)
     plan_payload = store.read_plan(run_uri)
     if plan_payload is None:
         raise QueueServiceError("managed-local admission requires a persisted plan")
     plan = ExecutionPlan.from_dict(plan_payload)
-    if plan.run_uri != run_uri:
-        raise QueueServiceError("persisted execution plan belongs to another run")
-    runtime_payload = store.read_runtime_metadata(run_uri)
-    if runtime_payload is None:
-        raise QueueServiceError(
-            "managed-local admission requires persisted runtime metadata"
-        )
-    executor = runtime_payload.get("executor")
-    if executor not in {None, "local"}:
-        raise QueueServiceError(
-            "managed-local admission supports only local runtime metadata"
-        )
+    exact_plan = ExecutionPlan.from_dict(record["plan"])
+    if plan != exact_plan or plan.run_uri != run_uri:
+        raise QueueServiceError("persisted execution plan conflicts with exact runtime record")
     snapshot = store.read_config_snapshot(run_uri, "resolved")
     if snapshot is None:
         raise QueueServiceError(
             "managed-local admission requires a resolved config snapshot"
         )
     decoded = json_loads(snapshot, path="config/resolved.json")
+    if hashlib.sha256(snapshot.encode("utf-8")).hexdigest() != record["pipeline_digest"]:
+        raise QueueServiceError("resolved pipeline snapshot conflicts with exact runtime record")
     if not isinstance(decoded, Mapping) or "pipeline" not in decoded:
         raise QueueServiceError(
             "resolved config snapshot must contain a pipeline definition"
@@ -143,13 +224,32 @@ def load_managed_local_intent(
             "managed-local admission does not support plan actions: "
             + ", ".join(sorted(action.value for action in unsupported_actions))
         )
-    payload: dict[str, PlainData] = {
-        "plan": plan.to_dict(),
-        "runtime": dict(runtime_payload),
-        "pipeline": decoded["pipeline"],
+    runtime_options = RunOptions.from_dict(record["runtime_options"])
+    runtime = resolve_run_runtime(runtime_options, stage_ids=pipeline.stage_names)
+    placements_payload = record["placements"]
+    if not isinstance(placements_payload, Mapping) or set(placements_payload) != set(
+        pipeline.stage_names
+    ):
+        raise QueueServiceError("exact runtime record placements conflict with pipeline")
+    placements = {
+        name: ResolvedStagePlacement.from_dict(payload)
+        for name, payload in placements_payload.items()
     }
-    digest = hashlib.sha256(stable_json_dumps(payload).encode("utf-8")).hexdigest()
-    return ManagedLocalIntent(plan, runtime_payload, pipeline, digest)
+    for name, placement in placements.items():
+        if placement.target != config.machine_id:
+            raise QueueServiceError("exact runtime record targets another local daemon")
+    if parallel_execution_options(runtime_options).max_parallel_stages != record[
+        "max_parallel_stages"
+    ]:
+        raise QueueServiceError("exact runtime record concurrency conflicts")
+    return ManagedLocalIntent(
+        plan,
+        runtime,
+        placements,
+        pipeline,
+        str(record["digest"]),
+        cast(int, record["max_parallel_stages"]),
+    )
 
 
 class LocalDaemonExecution:
@@ -191,6 +291,11 @@ class LocalDaemonExecution:
             self.cpu_planner.claim_contracts,
             self.capacity,
         )
+        # A new in-memory provider must never begin by advertising full capacity.
+        # Durable agent claims without provider-release proof are restored as
+        # conservative holds before the first candidate or offer is published.
+        for command in self.journal.retained_claim_commands():
+            self.provider.restore_capacity_holding(command)
         self._launch_lock = Lock()
 
     def advance(
@@ -216,6 +321,11 @@ class LocalDaemonExecution:
             raise QueueConflictError(
                 "authority admission receipt does not match retained intent"
             )
+        scoped_authority = _ScopedCoordinatorAuthority(
+            authority,
+            run_uri=admission.run_uri,
+            coordinator_id=self.coordinator_id,
+        )
         if (
             admission.cancellation_operation_id is not None
             or self.cancellation_operation(admission.admission_id) is not None
@@ -223,9 +333,9 @@ class LocalDaemonExecution:
             return self._cancel(admission, authority)
         self.admission_activated(admission.admission_id)
 
-        placements = self._placements(intent)
+        placements = dict(intent.placements)
         orchestrator = RunOrchestrator(
-            authority=authority,
+            authority=scoped_authority,
             store=self.stage_work_store,
             owner_id=self.coordinator_id,
         )
@@ -291,7 +401,7 @@ class LocalDaemonExecution:
                 self._execute(
                     admission=admission,
                     intent=intent,
-                    authority=authority,
+                    authority=scoped_authority,
                     snapshot=snapshot,
                     record=record,
                     decision=decision,
@@ -431,14 +541,15 @@ class LocalDaemonExecution:
         snapshot = authority.open_run(admission.run_uri)
         if snapshot.status is RunStatus.CANCELLED:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
-        if snapshot.status in {
-            RunStatus.SUCCEEDED,
-            RunStatus.FAILED,
-            RunStatus.INTERRUPTED,
-        }:
+        terminal = {
+            RunStatus.SUCCEEDED: LocalDaemonAdmissionState.SUCCEEDED,
+            RunStatus.FAILED: LocalDaemonAdmissionState.FAILED,
+            RunStatus.INTERRUPTED: LocalDaemonAdmissionState.FAILED,
+        }
+        if snapshot.status in terminal:
             return LocalDaemonExecutionOutcome(
-                LocalDaemonAdmissionState.CANCELLING,
-                f"authority run is already {snapshot.status.value}",
+                terminal[snapshot.status],
+                "authority_terminal_before_cancellation",
             )
         try:
             authority.transition_run(
@@ -453,42 +564,6 @@ class LocalDaemonExecution:
                 "cancellation epoch is installed; active or unknown work remains",
             )
         return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
-
-    def _placements(
-        self, intent: ManagedLocalIntent
-    ) -> dict[str, ResolvedStagePlacement]:
-        runtime_stages = intent.runtime.get("stages", {})
-        if not isinstance(runtime_stages, Mapping):
-            raise QueueServiceError("runtime stages metadata must be a mapping")
-        placements: dict[str, ResolvedStagePlacement] = {}
-        for stage in intent.pipeline.stages:
-            unsupported = set(stage.resource_request.entries) - set(self.planners)
-            if unsupported:
-                raise QueueServiceError(
-                    "managed-local daemon has no configured planner for: "
-                    + ", ".join(sorted(unsupported))
-                )
-            runtime_request: ResourceRequest | None = None
-            stage_runtime = runtime_stages.get(stage.name)
-            if isinstance(stage_runtime, Mapping):
-                raw_resources = stage_runtime.get("resources")
-                if isinstance(raw_resources, Mapping):
-                    runtime_request = ResourceRequest.from_dict(raw_resources)
-            placements[stage.name] = resolve_stage_placement(
-                authored=stage.resource_request,
-                runtime=runtime_request,
-                policy=StagePlacementPolicy(
-                    pool_name="default",
-                    target=self.config.machine_id,
-                    default_resources=ResourceRequest(
-                        entries={
-                            "cpu": ResourceEntry("cpu", 1, "count")
-                        }
-                    ),
-                ),
-                planners=self.planners,
-            )
-        return placements
 
     def _candidate(self) -> Candidate:
         observed = self.provider.observe(
@@ -521,7 +596,7 @@ class LocalDaemonExecution:
         *,
         admission: LocalDaemonAdmission,
         intent: ManagedLocalIntent,
-        authority: SQLitePerRunAuthorityStore,
+        authority: _ScopedCoordinatorAuthority,
         snapshot: AuthoritativeRunSnapshot,
         record: StageWorkRecord,
         decision: object,
@@ -573,7 +648,9 @@ class LocalDaemonExecution:
                 availability_revision=observed.availability_revision,
                 component_descriptors=(self.cpu_planner.descriptor,),
                 atoms=observed.atoms,
-                reflected_claim_ids=observed.live_claim_ids,
+                reflected_claim_ids=self.provider.live_claim_ids_for_session(
+                    self.coordinator_epoch
+                ),
             )
         )
         commands = tuple(
@@ -591,7 +668,7 @@ class LocalDaemonExecution:
             if item.stage_name == record.stage_name
         )
         produced = _produced_outputs(snapshot)
-        runtime = _resolved_runtime(intent.runtime, record.stage_name)
+        runtime = intent.runtime[record.stage_name]
         worker_request = prepare_stage_attempt(
             run_store=self.run_store,
             run_uri=record.run_uri,
@@ -640,7 +717,7 @@ class LocalDaemonExecution:
             commands=commands,
             providers={"cpu": self.provider},
             run_store=self.run_store,
-            max_parallel_stages=self.config.cpu_capacity,
+            max_parallel_stages=intent.max_parallel_stages,
             decision_receipt=decision_receipt,
             cancellation_requested=lambda: self._install_cancellation_if_requested(
                 admission, authority
@@ -651,7 +728,7 @@ class LocalDaemonExecution:
     def _install_cancellation_if_requested(
         self,
         admission: LocalDaemonAdmission,
-        authority: SQLitePerRunAuthorityStore,
+        authority: _ScopedCoordinatorAuthority,
     ) -> bool:
         operation_id = self.cancellation_operation(admission.admission_id)
         if operation_id is None:
@@ -689,25 +766,6 @@ def _produced_outputs(
     }
 
 
-def _resolved_runtime(
-    runtime: Mapping[str, PlainData], stage_name: str
-) -> ResolvedStageRuntimeOptions:
-    stages = runtime.get("stages", {})
-    executor = runtime.get("executor", "local")
-    stage_payload = (
-        stages.get(stage_name)
-        if isinstance(stages, Mapping)
-        else None
-    )
-    if isinstance(stage_payload, Mapping):
-        executor = stage_payload.get("executor", executor)
-    if not isinstance(executor, str) or executor != "local":
-        raise QueueServiceError(
-            "managed-local stage runtime must use the local executor"
-        )
-    return ResolvedStageRuntimeOptions(stage_id=stage_name, executor=executor)
-
-
 def build_local_daemon_owner_views(
     config: LocalDaemonConfig,
     admissions: tuple[LocalDaemonAdmission, ...],
@@ -717,6 +775,8 @@ def build_local_daemon_owner_views(
     stage_work_by_run: dict[str, list[dict[str, PlainData]]] = {}
     assignments_by_run: dict[str, list[dict[str, PlainData]]] = {}
     agent_work_by_run: dict[str, list[dict[str, PlainData]]] = {}
+    execution_available = True
+    agent_available = True
     if config.execution_database.is_file():
         try:
             with sqlite3.connect(config.execution_database) as conn:
@@ -750,8 +810,7 @@ def build_local_daemon_owner_views(
                         }
                     )
         except sqlite3.DatabaseError:
-            stage_work_by_run = {}
-            assignments_by_run = {}
+            execution_available = False
     if config.agent_journal.is_file():
         try:
             with sqlite3.connect(config.agent_journal) as conn:
@@ -779,7 +838,7 @@ def build_local_daemon_owner_views(
                         }
                     )
         except (json.JSONDecodeError, sqlite3.DatabaseError):
-            agent_work_by_run = {}
+            agent_available = False
 
     views: list[Mapping[str, PlainData]] = []
     for admission in admissions:
@@ -788,15 +847,17 @@ def build_local_daemon_owner_views(
             snapshot = SQLitePerRunAuthorityStore(admission.run_uri).open_run(
                 admission.run_uri
             )
-        except Exception as exc:
+        except Exception:
             authority_view = {
                 "owner": "per-run-authority",
+                "availability": "unavailable",
                 "state": "unavailable",
-                "diagnostic": type(exc).__name__,
+                "diagnostic": "authority_unavailable",
             }
         else:
             authority_view = {
                 "owner": "per-run-authority",
+                "availability": "available",
                 "state": snapshot.status.value,
                 "revision": snapshot.revision.to_dict(),
                 "stages": {
@@ -810,6 +871,7 @@ def build_local_daemon_owner_views(
                 "run_uri": admission.run_uri,
                 "admission": {
                     "owner": "coordinator",
+                    "availability": "available",
                     "state": admission.state.value,
                     "accepted_at": admission.accepted_at,
                     "intent_digest": admission.intent_digest,
@@ -818,18 +880,25 @@ def build_local_daemon_owner_views(
                 "authority": authority_view,
                 "scheduling": {
                     "owner": "coordinator-stage-work",
+                    "availability": "available" if execution_available else "unavailable",
+                    "diagnostic": None if execution_available else "execution_store_unavailable",
                     "work": stage_work_by_run.get(admission.run_uri, []),
                 },
                 "assignment": {
                     "owner": "coordinator-assignments",
+                    "availability": "available" if execution_available else "unavailable",
+                    "diagnostic": None if execution_available else "execution_store_unavailable",
                     "assignments": assignments_by_run.get(admission.run_uri, []),
                 },
                 "execution": {
                     "owner": "local-agent",
+                    "availability": "available" if agent_available else "unavailable",
+                    "diagnostic": None if agent_available else "agent_journal_unavailable",
                     "journal": agent_work_by_run.get(admission.run_uri, []),
                 },
                 "cancellation": {
                     "owner": "per-run-authority",
+                    "availability": authority_view["availability"],
                     "requested": admission.cancellation_operation_id is not None,
                     "operation_id": admission.cancellation_operation_id,
                 },

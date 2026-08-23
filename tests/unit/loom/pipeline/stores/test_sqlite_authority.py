@@ -901,6 +901,16 @@ def test_coordinator_admission_binding_replays_exact_receipt_and_rejects_conflic
                 intent_digest="changed-digest",
             ),
         )
+    with pytest.raises(AuthorityStoreError, match="owner or intent conflicts"):
+        store.bind_coordinator_admission(
+            run_uri,
+            CoordinatorAdmissionRequest(
+                operation_id="admit-from-other-root",
+                coordinator_id="coordinator-stable-2",
+                run_uri=run_uri,
+                intent_digest=request.intent_digest,
+            ),
+        )
 
 
 def test_cancellation_epoch_is_durable_singleton_and_replays_receipts(
@@ -909,6 +919,15 @@ def test_cancellation_epoch_is_durable_singleton_and_replays_receipts(
     run_uri = path_to_run_uri(tmp_path / "cancellation-epoch")
     store = SQLitePerRunAuthorityStore(clock=FrozenClock())
     initial = store.create_run(run_uri)
+    store.bind_coordinator_admission(
+        run_uri,
+        CoordinatorAdmissionRequest(
+            operation_id="admit-1",
+            coordinator_id="coordinator-stable-1",
+            run_uri=run_uri,
+            intent_digest="normalized-intent-digest",
+        ),
+    )
     request = CancellationEpochRequest(
         operation_id="cancel-1",
         coordinator_id="coordinator-stable-1",

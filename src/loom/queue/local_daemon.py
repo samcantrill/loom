@@ -207,6 +207,7 @@ class LocalDaemonAdmission:
 class LocalDaemonStatus:
     coordinator_id: str
     coordinator_epoch: str
+    as_of: str
     accepted_time: str
     service_health: str
     service_diagnostic: str | None
@@ -228,6 +229,7 @@ class LocalDaemonStatus:
         return {
             "coordinator_id": self.coordinator_id,
             "coordinator_epoch": self.coordinator_epoch,
+            "as_of": self.as_of,
             "accepted_time": self.accepted_time,
             "service_health": self.service_health,
             "service_diagnostic": self.service_diagnostic,
@@ -254,6 +256,7 @@ class LocalDaemonStatus:
         return cls(
             coordinator_id=_required_string(data, "coordinator_id"),
             coordinator_epoch=_required_string(data, "coordinator_epoch"),
+            as_of=_required_string(data, "as_of"),
             accepted_time=_required_string(data, "accepted_time"),
             service_health=_required_string(data, "service_health"),
             service_diagnostic=_optional_string(data, "service_diagnostic"),
@@ -404,16 +407,27 @@ class LocalDaemon:
             accepted_time = self._accepted_time(conn)
         from .local_daemon_execution import build_local_daemon_owner_views
 
+        views = build_local_daemon_owner_views(self.config, admissions)
+        unavailable = any(
+            any(
+                isinstance(axis, Mapping) and axis.get("availability") == "unavailable"
+                for axis in view.values()
+            )
+            for view in views
+        )
+        as_of = self._clock()
+        parse_timestamp(as_of)
         return LocalDaemonStatus(
             coordinator_id=coordinator_id,
             coordinator_epoch=self._epoch or "",
+            as_of=as_of,
             accepted_time=accepted_time,
             service_health=(
-                "healthy" if self._service_error is None else "degraded"
+                "healthy" if self._service_error is None and not unavailable else "degraded"
             ),
             service_diagnostic=self._service_error,
             admissions=admissions,
-            runs=build_local_daemon_owner_views(self.config, admissions),
+            runs=views,
         )
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
@@ -431,14 +445,13 @@ class LocalDaemon:
                     _admission_from_row(row)
                     for row in conn.execute(
                         "SELECT * FROM managed_admissions "
-                        "WHERE state NOT IN (?, ?, ?, ?, ?) "
+                        "WHERE state NOT IN (?, ?, ?, ?) "
                         "ORDER BY accepted_at, admission_id",
                         (
                             LocalDaemonAdmissionState.SUCCEEDED.value,
                             LocalDaemonAdmissionState.FAILED.value,
                             LocalDaemonAdmissionState.CANCELLED.value,
                             LocalDaemonAdmissionState.BLOCKED.value,
-                            LocalDaemonAdmissionState.CANCELLING.value,
                         ),
                     )
                 )
@@ -458,14 +471,14 @@ class LocalDaemon:
             del self._assignment_futures[admission_id]
             try:
                 outcome = future.result()
-            except QueueConflictError as exc:
+            except QueueConflictError:
                 self._set_state(
                     admission_id,
                     LocalDaemonAdmissionState.BLOCKED,
-                    reason=str(exc),
+                    reason="authority_or_intent_conflict",
                 )
-            except Exception as exc:  # outages stay replayable and visible
-                self._service_error = f"{type(exc).__name__}: {str(exc)[:384]}"
+            except Exception:  # outages stay replayable and visible
+                self._service_error = "reconciliation_unavailable"
             else:
                 self._service_error = None
                 self._set_state(
@@ -479,8 +492,8 @@ class LocalDaemon:
             self._wake.clear()
             try:
                 self.reconcile_once()
-            except Exception as exc:  # keep the durable owner alive and diagnosable
-                self._service_error = f"{type(exc).__name__}: {str(exc)[:384]}"
+            except Exception:  # keep the durable owner alive and diagnosable
+                self._service_error = "reconciliation_unavailable"
             self._wake.wait(self.config.poll_interval_seconds)
 
     def _submit(self, request: LocalDaemonAdmissionRequest) -> LocalDaemonAdmission:
