@@ -777,7 +777,17 @@ class LocalDaemon:
                 if row is None or str(row["value"]) != expected:
                     raise QueueStorageError("coordinator control identity is invalid")
         except (OSError, sqlite3.Error):
-            raise QueueStorageError("coordinator control state is unavailable") from None
+            # A missing retained control store is unavailable.  Once a file is
+            # present under a live locked root, however, an open/query failure
+            # cannot prove that it is the stable coordinator store; report the
+            # same fail-closed identity diagnostic as an explicit mismatch.
+            diagnostic = (
+                "coordinator control identity is invalid"
+                if self._coordinator_id is not None
+                and self.config.control_database.is_file()
+                else "coordinator control state is unavailable"
+            )
+            raise QueueStorageError(diagnostic) from None
         try:
             yield conn
         finally:
