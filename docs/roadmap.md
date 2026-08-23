@@ -2463,11 +2463,11 @@ Status:
   owner-labelled external status/cancel, and positive-containment recovery while
   deferring automatic fallback and allocation-fed agents. The maintainer
   approved the refined design and balanced nine-phase implementation plan.
-  Phases 1-2 are merged; Phases 3A-3C are blocked evidence. Phase 3C closed the
-  five earlier findings and passed local/CI gates, but review found incomplete
-  healthy-axis evidence and unsafe missing-store restart handling. The
-  maintainer approved fresh-only Phase 3D to close those two residual findings
-  before Phase 4 begins, with no compatibility or migration.
+  Phases 1-3D are merged; Phases 3A-3C remain blocked evidence. Fresh-only
+  Phase 3D closed complete healthy-axis evidence, fail-closed missing or
+  substituted owner-store handling, and partial-start cleanup without any
+  compatibility or migration. PR #237 passed local gates, independent review,
+  and CI before merging; Phase 4 is next.
 
 Goal:
 

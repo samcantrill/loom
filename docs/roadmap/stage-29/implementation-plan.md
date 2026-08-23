@@ -1,15 +1,15 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: implementation in progress; Phases 1-2 merged, Phases 3A-3C blocked
+Status: implementation in progress; Phases 1-3D merged, Phases 3A-3C retained
+as blocked evidence
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 3D PR open
-Blockers: none. Phase 3C independent review found two residual
-accepted-contract failures and correction 3/3 is exhausted; PR #236 closed
-without merge. The maintainer approved a fresh-only Phase 3D from current
-`develop` to close them without compatibility or migration.
+Current phase: Phase 4 pending
+Blockers: none. Phase 3D closed the residual persistent-daemon contracts and
+merged through PR #237; Phase 4's authenticated-agent-session dependency is
+now satisfied.
 
 ## Summary
 
@@ -637,7 +637,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 3A | `local-daemon-control-boundary` | blocked | `docs/roadmap/stage-29/phases/local-daemon-control-boundary.md` | `agent/stage-29-p3-local-daemon-control-boundary` | not opened | Fresh role roots, stable coordinator identity/process epoch, owner-only IPC, digest admission, and typed hand-off candidate; manager pre-submit gate found no production authority/orchestrator/reservation/Phase 2 composition and correction 3/3 was exhausted | Preserve validated evidence without merging an accepted-but-nonexecuting daemon path. |
 | 3B | `local-daemon-production-composition` | blocked | `docs/roadmap/stage-29/phases/local-daemon-production-composition.md` | `agent/stage-29-p3b-local-daemon-production-composition` | [#235](https://github.com/samcantrill/loom/pull/235) closed without merge | Candidate production composition and hard cut-over; independent review found incomplete exact runtime reconstruction, singleton authority ownership, restart claim reconciliation, terminal cancellation projection, and owner-labelled status | Preserve the validated candidate as evidence; correction 3/3 is exhausted. |
 | 3C | `local-daemon-authoritative-cutover` | blocked | `docs/roadmap/stage-29/phases/local-daemon-authoritative-cutover.md` | `agent/stage-29-p3c-local-daemon-authoritative-cutover` | [#236](https://github.com/samcantrill/loom/pull/236) closed without merge | Validated hard-cutover candidate closes exact-runtime, authority-scope, exact-claim, cancellation, real-execution, and redaction paths; review found incomplete healthy-axis evidence and unsafe missing-store restart interpretation | Preserve the validated candidate as evidence; correction 3/3 is exhausted. |
-| 3D | `local-daemon-status-restart-closure` | pr_open | `docs/roadmap/stage-29/phases/local-daemon-status-restart-closure.md` | `agent/stage-29-p3d-local-daemon-status-restart-closure` | [#237](https://github.com/samcantrill/loom/pull/237) open | Selective Phase 3C source/test reuse; complete owner-backed status; fail-closed expected-store handling and stable-root binding; partial-start cleanup; hard cut-over unchanged | Merge the complete persistent daemon path only after retained restart and every healthy status axis are backed by explicit owner evidence. |
+| 3D | `local-daemon-status-restart-closure` | merged | `docs/roadmap/stage-29/phases/local-daemon-status-restart-closure.md` | `agent/stage-29-p3d-local-daemon-status-restart-closure` | [#237](https://github.com/samcantrill/loom/pull/237) merged | Selective Phase 3C source/test reuse; complete owner-backed status; fail-closed expected-store handling and stable-root binding; partial-start cleanup; hard cut-over unchanged | Merge the complete persistent daemon path only after retained restart and every healthy status axis are backed by explicit owner evidence. |
 | 4 | `authenticated-agent-sessions` | pending | `docs/roadmap/stage-29/phases/authenticated-agent-sessions.md` | `agent/stage-29-p4-authenticated-agent-sessions` | pending | Outbound-only agent topology; protected endpoint/trust configuration; mTLS identity; current-policy per-operation authorization; agent-persisted pre-send registration operation and coordinator-issued persisted session identity versus process/connection epochs; complete cooperative clean retirement/tombstones; current-epoch fresh remote registration/reconcile/offer/work envelopes after coordinator restart; idempotent indeterminate-outcome handling, limits, audit, and connectivity gate | Prove authenticated outbound agent connectivity and capacity publication across `machine-A` and `machine-B` before remote launch or transfer is enabled. |
 | 5 | `remote-stage-data-execution` | pending | `docs/roadmap/stage-29/phases/remote-stage-data-execution.md` | `agent/stage-29-p5-remote-stage-data-execution` | pending | Cross-agent CPU/memory availability; remote assignment loop; stable assignment-principal transfer progress with renewable authorization; durable grant/start/result; monotonic event/outbox replay; exact old-issuer reconnect, receipt-aware authority reconciliation, status freshness, and ordered physical release | Execute CPU/memory stages remotely with inputs durable before grant and accessible output refs committed before descendants unlock; leave the same bounded relay usable by Phase 7's restricted bootstrap. |
 | 6 | `gpu-preference-placement` | pending | `docs/roadmap/stage-29/phases/gpu-preference-placement.md` | `agent/stage-29-p6-gpu-preference-placement` | pending | Configured manageable GPU inventory; external-occupancy withdrawal; GPU planner/provider and claim contracts; planner-owned count/mode/per-device/topology feasibility; whole-placement constraints; tiered agent/model/packing preferences; quality-band fallback; strict future SLURM hard-mapping boundary; explicit no-OOM guarantee | Prove the generic resource and policy seams with safe exact GPU/VRAM managed placement and deterministic resource-relevant preferences that Phase 7 must map completely or reject. |
@@ -650,9 +650,9 @@ new authoritative lifecycle operation is idempotent creation of an unassigned
 `PENDING` attempt; controller-only actions continue through their existing
 authority-owned transitions. Phase 2 is the first execution-side-effecting stage path and
 must keep reservation, authority bind, physical prepare, grant, launch, commit,
-and release together. Phases 3A-3C are blocked evidence only. Phase 3D is the
-only pending persistent-daemon path and must close the two Phase 3C review
-findings before Phase 4 begins. Phase 4 must pass its no-agent-
+and release together. Phases 3A-3C are blocked evidence only. Phase 3D merged
+the accepted persistent-daemon path after closing the Phase 3C review findings.
+Phase 4 is next and must pass its no-agent-
 execution connectivity/security gate before Phase 5 enables remote assignment
 or artifact bytes. Phase 7 is a separate external-side-effect gate after the
 managed scheduling/resource path is proven: it adds only an explicit named
@@ -771,13 +771,13 @@ work.
   replace an expected file. Correction 2/3 binds control, execution, and journal
   stores to their fresh root identities and verifies them at start, status, and
   scheduling boundaries. Manager verification found no remaining blocker; PR
-  #237 is open and CI-gated.
+  #237 passed CI and was squash-merged as `6a8cf9f`.
 - Maintainer approval: the refined design and nine-phase manifest, including the
   explicit ready-stage-only SLURM scope, remain approved. The maintainer
   approved the fresh-only Phase 3D recommendation with no compatibility or
   migration.
-- Ready for implementation: Phase 3D implementation and review are complete;
-  merge PR #237 after its refreshed CI gate passes.
+- Ready for implementation: Phase 3D is merged. Phase 4 remains the next
+  pending phase and must follow its existing execution plan.
 - Accepted risks: FIFO starvation, complete-search exhaustion/delay, coordinator relay
   bottleneck, agent result retention, resident-project drift, trusted
   in-process downstream extension hang/misbehavior, configuration-driven
@@ -803,7 +803,7 @@ work.
 | 3A | No PR opened; blocked branch head `9d2d7a0` | Candidate `51ca432` passed `make validate-pr` and fresh categorized summary, but the manager pre-submit gate found no production execution path | Accepted socket submission could remain pending indefinitely; candidate retained only as evidence | Dedicated branch/worktree retained until Phase 3B disposition |
 | 3B | [#235](https://github.com/samcantrill/loom/pull/235), closed without merge | Candidate `a1dfe92` passed `make validate-pr`, fresh `make test-summary` with 2,506 categorized passes, and CI; required independent review then blocked it | Exact runtime inputs are not reconstructable; authority ownership is not singleton/scoped; restart can over-advertise retained capacity; terminal cancellation can strand admission; status can omit or mask owner truth | Correction 3/3 exhausted; dedicated branch/worktree retained as evidence |
 | 3C | [#236](https://github.com/samcantrill/loom/pull/236), closed without merge | Source/test revision `1879cd1` passed `make validate-pr`; fresh summary recorded 2,525 passes and 3 environment skips; CI passed; required independent review blocked merge | Healthy owner axes omit required state/revision/freshness; missing retained stores can become healthy empty state and full capacity | Correction 3/3 exhausted; dedicated branch/worktree retained as evidence |
-| 3D | [#237](https://github.com/samcantrill/loom/pull/237) open against `develop`; merge CI-gated | Source/test revision `2b48d0e` passed `make validate-pr`; fresh summary recorded 2,538 passes and 3 environment skips; independent review blocker corrected and manager-verified | Missing or corrupt owner truth intentionally requires operator restoration; unknown work remains conservatively capacity-holding | Dedicated worktree and branch retained until remote merge and final metadata update |
+| 3D | [#237](https://github.com/samcantrill/loom/pull/237), squash-merged as `6a8cf9f` | Source/test revision `2b48d0e` passed `make validate-pr`; fresh summary recorded 2,538 passes and 3 environment skips; independent review blocker corrected and manager-verified; CI passed | Missing or corrupt owner truth intentionally requires operator restoration; unknown work remains conservatively capacity-holding | Remote phase branch removed at merge; worktree and local phase branch removed after merge metadata commit; blocked Phase 3A-3C evidence retained |
 | 4 | pending | pending | pending | pending |
 | 5 | pending | pending | pending | pending |
 | 6 | pending | pending | pending | pending |

@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 29, Phase 3D
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3d-local-daemon-status-restart-closure`
@@ -216,8 +216,8 @@ Final commands:
   to its stable root identity, and manager verification plus the fresh full
   gate found no remaining blocker
 - Blocker corrections: 2/3
-- PR and merge: [#237](https://github.com/samcantrill/loom/pull/237) open against
-  `develop`; merge remains CI-gated
+- PR and merge: [#237](https://github.com/samcantrill/loom/pull/237) passed CI
+  and was squash-merged into `develop` as `6a8cf9f`
 
 ## Completion Record
 
@@ -226,6 +226,6 @@ Final commands:
 | Implementation and changed paths | Selectively ported the validated Phase 3C local-daemon production path and its source, public wiring, examples, feature docs, and regression replacement. Phase 3D changes are concentrated in `src/loom/queue/local_daemon.py`, `local_daemon_execution.py`, `src/loom/pipeline/orchestration.py`, and `src/loom/pipeline/execution/managed_local.py`: fresh initialization creates both runtime owner schemas and binds them to immutable coordinator/local-agent identities; daemon runtime opens all stores existing-only, revalidates those bindings, and verifies its cached coordinator identity on each live control connection; lost/corrupt/substituted owners degrade service and block scheduling; owner snapshots carry aggregate state, durable revisions, observations, and freshness; and failed execution construction releases workers and both locks. |
 | Tests added or updated | `tests/unit/loom/queue/test_local_daemon.py` covers each missing owner store without recreation, current-schema substitutions for control/execution/journal on restart, live control loss/substitution, live runtime-owner substitution degradation, live loss scheduling block, and construction cleanup. `tests/integration/queue/test_local_daemon_production.py` covers explicit owner schema setup, exact owner bindings for direct owner snapshots, healthy-empty and populated axes, monotonic owner revision changes, unavailable state/freshness, and direct/socket normalization. Retained Phase 3C contract, production, and CLI tests remain in the focused matrix. |
 | Validated revision/tree state and evidence | Source/test revision `2b48d0e` with a clean tree. Focused: `uv run pytest -q tests/unit/loom/queue tests/contracts/test_local_daemon_authority_contract.py tests/contracts/test_queue_python_api_contract.py` (183 passed) and `uv run pytest -q tests/integration/queue/test_local_daemon_production.py` (28 passed). `make validate-pr` passed Ruff, complete Pyright, 2,397 default tests, 141 configuration-extra tests with 3 environment skips, and source/wheel builds. Fresh `make test-summary`: package 118, unit 1,704, contract 295, integration 223, E2E 57, and configuration-extra 141; 2,538 total passes and 3 environment skips. |
-| Validation-relevant changes after evidence | None. The only pending branch change is this evidence-only phase metadata. |
-| PR, review, and merge | [#237](https://github.com/samcantrill/loom/pull/237) targets `develop` with the required title. Independent review's stable-owner-identity blocker was corrected at `2b48d0e` and manager-verified; merge awaits the refreshed CI result. |
-| Residual risk and cleanup | Missing or corrupt owner truth remains deliberately unrecoverable and may retain unknown capacity until operator restoration; no migration, reconstruction, or release of unknown claims was added. Dedicated worktree and branch remain for manager review/PR handling. |
+| Validation-relevant changes after evidence | None. Only evidence and merge metadata changed after the validated source/test revision. |
+| PR, review, and merge | [#237](https://github.com/samcantrill/loom/pull/237) targeted `develop` with the required title, passed the required `checks` workflow in 5m14s, and was squash-merged as `6a8cf9f`. Independent review's stable-owner-identity blocker was corrected at `2b48d0e` and manager-verified before merge. |
+| Residual risk and cleanup | Missing or corrupt owner truth remains deliberately unrecoverable and may retain unknown capacity until operator restoration; no migration, reconstruction, or release of unknown claims was added. The Phase 3D worktree and local/remote phase branch were removed after merge metadata was recorded; blocked Phase 3A-3C evidence remains untouched. |
