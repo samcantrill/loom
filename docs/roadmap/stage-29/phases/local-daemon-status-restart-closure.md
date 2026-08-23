@@ -2,13 +2,14 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 3D
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3d-local-daemon-status-restart-closure`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees` and
   `/home/can134/work/active/loom-worktrees/stage-29-p3d-local-daemon-status-restart-closure`
-- Base revision: record current clean `origin/develop` during manager preparation
+- Base revision: clean `origin/develop` at
+  `6163d9e5fea6afe6a7c80651e2e97c66f6cf29a1`
 - PR target: `develop`
 - PR title: `feat(queue): close local daemon status and restart contracts`
 - Dependencies: Phases 1-2 merged; Phases 3A-3C blocked and retained only as
@@ -188,7 +189,10 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending
+- Manager preparation: complete at clean `origin/develop` `6163d9e`; dedicated
+  branch/worktree, repository `samcantrill/loom`, target/title, blocked
+  predecessor evidence, source owners, tests, gates, and stop conditions are
+  recorded
 - Expanded planning: no phase-planner pass; accepted findings and maintainer
   resolution are decision-complete
 - Implementation: pending
