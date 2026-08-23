@@ -207,10 +207,35 @@ a default-CI prerequisite.
   recorded.
 - Expanded planning: complete; stale Phase 3 agent-view/shared-authorizer/TLS
   assumptions removed and the executor packet reduced around current owners.
-- Implementation, pre-submit gate, required independent review, PR, and merge:
-  pending. Refiner not used; blocker corrections `0/3`.
+- Implementation and pre-submit gate: complete at `b7699c5`. Required
+  independent review, PR, and merge remain manager-owned pending work. Refiner
+  not used; blocker corrections `1/3` (the recorded deterministic baseline
+  diagnostic correction).
 
 ## Completion Record
 
-Implementation paths, tests, validation revision/evidence, PR/review/merge, and
-residual risk remain pending.
+- Implementation: added private coordinator-owned authenticated session and
+  mTLS adapter modules; extended the persistent daemon with an agent view,
+  protected current policy, additive V1-to-V2 root schema, agent registration
+  journal, retained safe offers, wait-only polls, clean-retirement tombstones,
+  and deterministic live-control substitution diagnostics. Remote offers do not
+  enter `managed_local` assignment/provider state.
+- Changed paths: `src/loom/queue/agent_sessions.py`,
+  `src/loom/queue/agent_session_transport.py`,
+  `src/loom/queue/local_daemon.py`, `docs/features/queue.md`, and focused
+  unit/integration tests.
+- Tests: unit coverage covers policy removal/overlap, digest replay/conflict,
+  coordinator-issued sessions, V1 continuity, restart/re-offer, offer expiry,
+  stale polls, retirement tombstones, and no-launch database sentinels.
+  Loopback integration coverage creates its own mTLS CA/peer credentials and
+  proves verified-fingerprint credentials, service-CA/client-role rejection,
+  live policy removal on one connection, and client-view parity.
+- Validation: `make validate-pr` passed at `b7699c5` (Ruff, Pyright, 2,406
+  default tests, 141 config-extra tests, and build). `make test-summary` passed
+  on the same validation-relevant revision: 118 package, 1,710 unit, 295
+  contract, 226 integration, 57 E2E, and 141 config-extra tests; evidence is
+  `build/test-summary.md`.
+- Validation-relevant changes after evidence: none. PR/review/merge are
+  pending manager work. Residual risk: deployment must protect its configured
+  certificate/key and current credential policy; remote assignment, transfer,
+  and launch remain intentionally unavailable until Phase 5.
