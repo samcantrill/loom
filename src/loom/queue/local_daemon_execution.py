@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import hashlib
 import json
+from pathlib import Path
 import sqlite3
 from threading import Lock
 from typing import cast
@@ -96,6 +97,10 @@ class LocalDaemonExecutionOutcome:
     reason: str | None = None
 
 
+def _connect_existing_sqlite(path: Path) -> sqlite3.Connection:
+    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=rw", uri=True)
+
+
 def initialize_local_daemon_owner_stores(config: LocalDaemonConfig) -> None:
     """Create the two current runtime-owner stores for a fresh daemon root."""
 
@@ -133,16 +138,23 @@ def local_daemon_owner_stores_available(config: LocalDaemonConfig) -> bool:
         SQLiteCoordinatorAssignments(
             config.execution_database, capacity, _allow_initialize=False
         )._open_existing()
-        SQLiteAgentJournal(config.agent_journal, _allow_initialize=False)._open_existing()
-        with sqlite3.connect(config.execution_database) as conn:
-            axes = {str(row[0]) for row in conn.execute(
-                "SELECT axis FROM local_daemon_status_revisions"
-            )}
-        with sqlite3.connect(config.agent_journal) as conn:
+        SQLiteAgentJournal(
+            config.agent_journal, _allow_initialize=False
+        )._open_existing()
+        with _connect_existing_sqlite(config.execution_database) as conn:
+            axes = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT axis FROM local_daemon_status_revisions"
+                )
+            }
+        with _connect_existing_sqlite(config.agent_journal) as conn:
             agent_revision = conn.execute(
                 "SELECT revision FROM local_daemon_status_revision"
             ).fetchone()
-        return {"scheduling", "assignment"}.issubset(axes) and agent_revision is not None
+        return {"scheduling", "assignment"}.issubset(
+            axes
+        ) and agent_revision is not None
     except Exception:
         return False
 
@@ -488,7 +500,9 @@ class LocalDaemonExecution:
             if not local_daemon_owner_stores_available(self.config):
                 raise QueueServiceError("retained daemon owner state is unavailable")
         except Exception:
-            raise QueueServiceError("retained daemon owner state is unavailable") from None
+            raise QueueServiceError(
+                "retained daemon owner state is unavailable"
+            ) from None
 
     def advance(self, admission: LocalDaemonAdmission) -> LocalDaemonExecutionOutcome:
         self.open_owner_stores()
@@ -994,91 +1008,96 @@ def build_local_daemon_owner_views(
     agent_work_by_run: dict[str, list[dict[str, PlainData]]] = {}
     execution_available = False
     agent_available = False
-    scheduling_revision = 0
-    assignment_revision = 0
-    agent_revision = 0
+    scheduling_revision: int | None = None
+    assignment_revision: int | None = None
+    agent_revision: int | None = None
+    admission_observed_at = clock()
+    try:
+        with _connect_existing_sqlite(config.execution_database) as conn:
+            conn.execute("BEGIN")
+            revisions = {
+                str(row[0]): int(row[1])
+                for row in conn.execute(
+                    "SELECT axis, revision FROM local_daemon_status_revisions"
+                )
+            }
+            scheduling_revision = revisions["scheduling"]
+            assignment_revision = revisions["assignment"]
+            for (payload,) in conn.execute(
+                "SELECT record_json FROM stage_work ORDER BY stage_work_id"
+            ):
+                record = StageWorkRecord.from_dict(json.loads(str(payload)))
+                stage_work_by_run.setdefault(record.run_uri, []).append(
+                    {
+                        "stage_work_id": record.stage_work_id,
+                        "stage_name": record.stage_name,
+                        "state": record.scheduling_state.value,
+                        "projection_revision": record.projection_revision,
+                    }
+                )
+            for row in conn.execute(
+                "SELECT assignment_id, run_uri, state, session_id, offer_id, "
+                "claim_id, receipt_json FROM coordinator_assignments "
+                "ORDER BY assignment_id"
+            ):
+                assignments_by_run.setdefault(str(row[1]), []).append(
+                    {
+                        "assignment_id": str(row[0]),
+                        "state": str(row[2]),
+                        "session_id": str(row[3]),
+                        "offer_id": str(row[4]),
+                        "claim_id": str(row[5]),
+                        "receipt_digest": hashlib.sha256(
+                            str(row[6]).encode("utf-8")
+                        ).hexdigest(),
+                    }
+                )
+            execution_available = True
+    except Exception:  # corrupt owner data is unavailable, never partial healthy work
+        stage_work_by_run.clear()
+        assignments_by_run.clear()
+        scheduling_revision = None
+        assignment_revision = None
+        execution_available = False
     execution_observed_at = clock()
-    if config.execution_database.is_file():
-        try:
-            with sqlite3.connect(config.execution_database) as conn:
-                revisions = {
-                    str(row[0]): int(row[1])
-                    for row in conn.execute(
-                        "SELECT axis, revision FROM local_daemon_status_revisions"
-                    )
-                }
-                scheduling_revision = revisions["scheduling"]
-                assignment_revision = revisions["assignment"]
-                for (payload,) in conn.execute(
-                    "SELECT record_json FROM stage_work ORDER BY stage_work_id"
-                ):
-                    record = StageWorkRecord.from_dict(json.loads(str(payload)))
-                    stage_work_by_run.setdefault(record.run_uri, []).append(
-                        {
-                            "stage_work_id": record.stage_work_id,
-                            "stage_name": record.stage_name,
-                            "state": record.scheduling_state.value,
-                            "projection_revision": record.projection_revision,
-                        }
-                    )
-                for row in conn.execute(
-                    "SELECT assignment_id, run_uri, state, session_id, offer_id, "
-                    "claim_id, receipt_json FROM coordinator_assignments "
-                    "ORDER BY assignment_id"
-                ):
-                    assignments_by_run.setdefault(str(row[1]), []).append(
-                        {
-                            "assignment_id": str(row[0]),
-                            "state": str(row[2]),
-                            "session_id": str(row[3]),
-                            "offer_id": str(row[4]),
-                            "claim_id": str(row[5]),
-                            "receipt_digest": hashlib.sha256(
-                                str(row[6]).encode("utf-8")
-                            ).hexdigest(),
-                        }
-                    )
-                execution_available = True
-        except Exception:  # corrupt owner data is unavailable, never empty healthy work
-            execution_available = False
-        execution_observed_at = clock()
+    try:
+        with _connect_existing_sqlite(config.agent_journal) as conn:
+            conn.execute("BEGIN")
+            revision_row = conn.execute(
+                "SELECT revision FROM local_daemon_status_revision"
+            ).fetchone()
+            if revision_row is None:
+                raise sqlite3.DatabaseError("agent status revision is missing")
+            agent_revision = int(revision_row[0])
+            for row in conn.execute(
+                "SELECT assignment_id, identity_json, state, "
+                "process_execution_id, availability_revision "
+                "FROM assignments ORDER BY assignment_id"
+            ):
+                identity = json.loads(str(row[1]))
+                if not isinstance(identity, Mapping):
+                    continue
+                run_uri = identity.get("run_uri")
+                if not isinstance(run_uri, str):
+                    continue
+                agent_work_by_run.setdefault(run_uri, []).append(
+                    {
+                        "assignment_id": str(row[0]),
+                        "state": str(row[2]),
+                        "process_execution_id": (
+                            None if row[3] is None else str(row[3])
+                        ),
+                        "availability_revision": (
+                            None if row[4] is None else str(row[4])
+                        ),
+                    }
+                )
+            agent_available = True
+    except Exception:
+        agent_work_by_run.clear()
+        agent_revision = None
+        agent_available = False
     agent_observed_at = clock()
-    if config.agent_journal.is_file():
-        try:
-            with sqlite3.connect(config.agent_journal) as conn:
-                revision_row = conn.execute(
-                    "SELECT revision FROM local_daemon_status_revision"
-                ).fetchone()
-                if revision_row is None:
-                    raise sqlite3.DatabaseError("agent status revision is missing")
-                agent_revision = int(revision_row[0])
-                for row in conn.execute(
-                    "SELECT assignment_id, identity_json, state, "
-                    "process_execution_id, availability_revision "
-                    "FROM assignments ORDER BY assignment_id"
-                ):
-                    identity = json.loads(str(row[1]))
-                    if not isinstance(identity, Mapping):
-                        continue
-                    run_uri = identity.get("run_uri")
-                    if not isinstance(run_uri, str):
-                        continue
-                    agent_work_by_run.setdefault(run_uri, []).append(
-                        {
-                            "assignment_id": str(row[0]),
-                            "state": str(row[2]),
-                            "process_execution_id": (
-                                None if row[3] is None else str(row[3])
-                            ),
-                            "availability_revision": (
-                                None if row[4] is None else str(row[4])
-                            ),
-                        }
-                    )
-                agent_available = True
-        except Exception:
-            agent_available = False
-        agent_observed_at = clock()
 
     views: list[Mapping[str, PlainData]] = []
     for admission in admissions:
@@ -1126,7 +1145,7 @@ def build_local_daemon_owner_views(
                     "intent_digest": admission.intent_digest,
                     "authority_operation_id": admission.authority_operation_id,
                     "revision": admission_revision,
-                    "observed_at": execution_observed_at,
+                    "observed_at": admission_observed_at,
                     "freshness": "current",
                 },
                 "authority": authority_view,
@@ -1136,15 +1155,15 @@ def build_local_daemon_owner_views(
                     if execution_available
                     else "unavailable",
                     "state": (
-                        "populated"
+                        "unavailable"
+                        if not execution_available
+                        else "populated"
                         if stage_work_by_run.get(admission.run_uri)
                         else "empty"
                     ),
                     "revision": scheduling_revision,
                     "observed_at": execution_observed_at,
-                    "freshness": (
-                        "current" if execution_available else "unavailable"
-                    ),
+                    "freshness": ("current" if execution_available else "unavailable"),
                     "diagnostic": None
                     if execution_available
                     else "execution_store_unavailable",
@@ -1156,15 +1175,15 @@ def build_local_daemon_owner_views(
                     if execution_available
                     else "unavailable",
                     "state": (
-                        "populated"
+                        "unavailable"
+                        if not execution_available
+                        else "populated"
                         if assignments_by_run.get(admission.run_uri)
                         else "empty"
                     ),
                     "revision": assignment_revision,
                     "observed_at": execution_observed_at,
-                    "freshness": (
-                        "current" if execution_available else "unavailable"
-                    ),
+                    "freshness": ("current" if execution_available else "unavailable"),
                     "diagnostic": None
                     if execution_available
                     else "execution_store_unavailable",
@@ -1174,7 +1193,9 @@ def build_local_daemon_owner_views(
                     "owner": "local-agent",
                     "availability": "available" if agent_available else "unavailable",
                     "state": (
-                        "populated"
+                        "unavailable"
+                        if not agent_available
+                        else "populated"
                         if agent_work_by_run.get(admission.run_uri)
                         else "empty"
                     ),

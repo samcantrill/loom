@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import importlib
 from pathlib import Path
+import sqlite3
 from threading import Event
 import time
 from typing import Never, cast
@@ -194,6 +195,17 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             assert axis["revision"] > 0
             assert axis["freshness"] == "current"
             assert str(axis["observed_at"]) <= status.as_of
+        server = LocalDaemonSocketServer(daemon, config.endpoint)
+        server.start()
+        try:
+            socket_view = LocalDaemonSocketClient(config.endpoint).status().runs[0]
+        finally:
+            server.stop()
+        for axis_name in ("scheduling", "assignment", "execution"):
+            direct_axis = cast(Mapping[str, object], owner_view[axis_name])
+            socket_axis = cast(Mapping[str, object], socket_view[axis_name])
+            for field in ("owner", "availability", "state", "revision", "freshness"):
+                assert socket_axis[field] == direct_axis[field]
         assert status.as_of
         assert status.service_diagnostic is None
         snapshot = authority.open_run(run_uri)
@@ -525,7 +537,74 @@ def test_status_degrades_per_run_for_corrupt_or_missing_owner_data(
     )
     assert cast(Mapping[str, object], view["cancellation"])["receipt"] is None
     assert cast(Mapping[str, object], view["cancellation"])["state"] == "unavailable"
+    for axis_name in ("scheduling", "assignment", "execution"):
+        axis = cast(Mapping[str, object], view[axis_name])
+        assert axis["availability"] == "unavailable"
+        assert axis["state"] == "unavailable"
+        assert axis["revision"] is None
+        assert axis["freshness"] == "unavailable"
     assert all("not a sqlite" not in str(axis) for axis in view.values())
+
+
+def test_status_distinguishes_observed_empty_owners_and_tracks_owner_changes(
+    tmp_path: Path,
+) -> None:
+    config = _daemon_config(tmp_path)
+    LocalDaemon.initialize(config)
+    admission = LocalDaemonAdmission(
+        admission_id="admission",
+        queue_item_id="item",
+        coordinator_id="coordinator",
+        run_uri=path_to_run_uri(tmp_path / "missing-authority"),
+        intent_digest="digest",
+        execution_owner="managed-stage",
+        state=LocalDaemonAdmissionState.WAITING,
+        accepted_at="2020-01-01T00:00:00Z",
+        authority_operation_id="bind",
+    )
+
+    initial = build_local_daemon_owner_views(config, (admission,))[0]
+    initial_revisions: dict[str, int] = {}
+    for axis_name in ("scheduling", "assignment", "execution"):
+        axis = cast(Mapping[str, object], initial[axis_name])
+        assert axis["availability"] == "available"
+        assert axis["state"] == "empty"
+        assert axis["revision"] == 0
+        assert axis["freshness"] == "current"
+        assert axis["observed_at"]
+        initial_revisions[axis_name] = cast(int, axis["revision"])
+
+    with sqlite3.connect(config.execution_database) as conn:
+        conn.execute(
+            "INSERT INTO preparation_intents "
+            "(operation_id, request_digest, admission_id, stage_name, "
+            "next_attempt, intent_json) VALUES (?, ?, ?, ?, ?, ?)",
+            ("prepare", "digest", "admission", "stage", 1, "{}"),
+        )
+        conn.execute(
+            "INSERT INTO coordinator_offers "
+            "(agent_id, session_id, offer_revision, snapshot_revision, "
+            "availability_revision, snapshot_json, consumed, is_current) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("agent", "session", "offer", "snapshot", "available", "{}", 0, 1),
+        )
+    with sqlite3.connect(config.agent_journal) as conn:
+        conn.execute(
+            "INSERT INTO assignments "
+            "(assignment_id, identity_json, request_json, state) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "assignment",
+                json_dumps_pretty({"run_uri": admission.run_uri}),
+                "{}",
+                AssignmentState.ACCEPTED.value,
+            ),
+        )
+
+    changed = build_local_daemon_owner_views(config, (admission,))[0]
+    for axis_name in ("scheduling", "assignment", "execution"):
+        axis = cast(Mapping[str, object], changed[axis_name])
+        assert cast(int, axis["revision"]) > initial_revisions[axis_name]
 
 
 def test_pending_cancellation_installs_authority_epoch_before_any_stage(

@@ -640,7 +640,7 @@ class SQLiteAgentJournal:
 
         if not self.path.is_file():
             raise ManagedLocalError("agent journal is missing")
-        with sqlite3.connect(self.path) as conn:
+        with _connect_sqlite(self.path, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             _require_agent_journal_schema(conn)
 
@@ -1079,8 +1079,10 @@ class SQLiteAgentJournal:
     def retained_claim_commands(self) -> tuple[ClaimCommand, ...]:
         """Return exact claims still lacking durable provider-release proof."""
         if not self.path.is_file():
+            if not self._allow_initialize:
+                raise ManagedLocalError("agent journal is missing")
             return ()
-        with sqlite3.connect(self.path) as conn:
+        with _connect_sqlite(self.path, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             try:
                 rows = tuple(conn.execute(
@@ -1120,7 +1122,9 @@ class SQLiteAgentJournal:
             if not self._allow_initialize:
                 raise ManagedLocalError("agent journal is missing")
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.path) as conn:
+        with _connect_sqlite(
+            self.path, require_existing=not self._allow_initialize
+        ) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
             if not self._allow_initialize:
@@ -1290,7 +1294,7 @@ class SQLiteCoordinatorAssignments:
 
         if not self.path.is_file():
             raise ManagedLocalError("coordinator assignment store is missing")
-        with sqlite3.connect(self.path) as conn:
+        with _connect_sqlite(self.path, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             _require_coordinator_assignment_schema(conn)
 
@@ -1694,7 +1698,9 @@ class SQLiteCoordinatorAssignments:
             if not self._allow_initialize:
                 raise ManagedLocalError("coordinator assignment store is missing")
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.path) as conn:
+        with _connect_sqlite(
+            self.path, require_existing=not self._allow_initialize
+        ) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
             if not self._allow_initialize:
@@ -1752,6 +1758,15 @@ class SQLiteCoordinatorAssignments:
                 raise
             else:
                 conn.commit()
+
+
+def _connect_sqlite(
+    path: Path, *, require_existing: bool = False
+) -> sqlite3.Connection:
+    target: str | Path = (
+        f"{path.resolve().as_uri()}?mode=rw" if require_existing else path
+    )
+    return sqlite3.connect(target, uri=require_existing)
 
 
 def _require_agent_journal_schema(conn: sqlite3.Connection) -> None:
@@ -1847,7 +1862,9 @@ def _require_sqlite_columns(
     owner: str,
 ) -> None:
     try:
-        columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
+        columns = {
+            str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")
+        }
     except sqlite3.DatabaseError as exc:
         raise ManagedLocalError(f"{owner} schema is unavailable") from exc
     if not required.issubset(columns):

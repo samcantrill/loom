@@ -354,7 +354,9 @@ class LocalDaemon:
             assignment_workers.shutdown(wait=True)
             agent_lock.close()
             coordinator_lock.close()
-            raise QueueServiceError("retained daemon owner state is unavailable") from None
+            raise QueueServiceError(
+                "retained daemon owner state is unavailable"
+            ) from None
         thread = Thread(
             target=self._serve,
             name="loom-local-daemon-runtime",
@@ -409,6 +411,8 @@ class LocalDaemon:
     def status(self) -> LocalDaemonStatus:
         coordinator_id = self._require_started()
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            accepted_time = self._accepted_time(conn)
             admissions = tuple(
                 _admission_from_row(row)
                 for row in conn.execute(
@@ -416,13 +420,13 @@ class LocalDaemon:
                     "ORDER BY accepted_at, admission_id"
                 )
             )
-            accepted_time = self._accepted_time(conn)
             revision_row = conn.execute(
                 "SELECT revision FROM owner_status_revisions WHERE owner = 'admission'"
             ).fetchone()
             if revision_row is None:
                 raise QueueStorageError("coordinator admission status is unavailable")
             admission_revision = int(revision_row["revision"])
+            conn.commit()
         from .local_daemon_execution import (
             build_local_daemon_owner_views,
             local_daemon_owner_stores_available,
@@ -454,9 +458,7 @@ class LocalDaemon:
                 else "degraded"
             ),
             service_diagnostic=(
-                "owner_status_unavailable"
-                if unavailable
-                else self._service_error
+                "owner_status_unavailable" if unavailable else self._service_error
             ),
             admissions=admissions,
             runs=views,

@@ -64,12 +64,14 @@ def test_start_rejects_missing_expected_owner_store_without_retaining_locks(
 ) -> None:
     config = _config(tmp_path)
     LocalDaemon.initialize(config)
-    getattr(config, owner_store).unlink()
+    store_path = getattr(config, owner_store)
+    store_path.unlink()
 
     with pytest.raises(QueueServiceError, match="owner state is unavailable"):
         LocalDaemon(config).start()
     with pytest.raises(QueueServiceError, match="owner state is unavailable"):
         LocalDaemon(config).start()
+    assert not store_path.exists()
 
 
 def test_failed_execution_construction_releases_daemon_ownership(
@@ -101,7 +103,8 @@ def test_live_owner_loss_degrades_service_and_blocks_scheduling(
     daemon = LocalDaemon(config)
     daemon.start()
     try:
-        getattr(config, owner_store).unlink()
+        store_path = getattr(config, owner_store)
+        store_path.unlink()
 
         status = daemon.status()
         assert status.service_health == "degraded"
@@ -109,6 +112,7 @@ def test_live_owner_loss_degrades_service_and_blocks_scheduling(
         assert not status.scheduling_ready
         with pytest.raises(QueueServiceError, match="owner state is unavailable"):
             daemon.reconcile_once()
+        assert not store_path.exists()
     finally:
         daemon.stop()
 
