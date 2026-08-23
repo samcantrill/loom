@@ -421,34 +421,6 @@ class AtomResourceProvider:
         with self._lock:
             return self._observe(request)
 
-    def withhold_all_capacity(self) -> None:
-        """Keep a fresh provider at zero offer until retained state proves release."""
-        with self._lock:
-            for key, atom in self._capacity.items():
-                assignment = ManagedAssignment(
-                    assignment_id=f"retained-unknown-{key[0]}-{key[1]}",
-                    run_uri="retained://unknown",
-                    stage_work_id="retained-unknown",
-                    stage_name="retained-unknown",
-                    attempt=1,
-                    attempt_id=f"retained-unknown-{key[0]}",
-                    agent_id="retained-agent",
-                    session_id="retained-session",
-                    offer_id="retained-offer",
-                    claim_id=f"retained-unknown-{key[0]}-{key[1]}",
-                )
-                claim = ResourceClaim(
-                    atom.owner_resource_kind,
-                    self.claim_contracts[0],
-                    (atom,),
-                    1,
-                )
-                self._claims[assignment.assignment_id] = (
-                    ClaimCommand(assignment, f"retain-{assignment.assignment_id}", claim),
-                    ClaimOutcome.PREPARED,
-                )
-            self._revision += 1
-
     def restore_capacity_holding(self, command: ClaimCommand) -> None:
         """Restore one durable non-released claim before any fresh offer."""
         with self._lock:

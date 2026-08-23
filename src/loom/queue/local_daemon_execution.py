@@ -305,13 +305,21 @@ class LocalDaemonExecution:
             self.cpu_planner.claim_contracts,
             self.capacity,
         )
-        # A new in-memory provider must never begin by advertising full capacity.
-        # Durable agent claims without provider-release proof are restored as
-        # conservative holds before the first candidate or offer is published.
-        for command in self.journal.retained_claim_commands():
+        # A new in-memory provider must never begin by advertising capacity that
+        # a durable accepted/granted/running/unknown assignment might retain.
+        # The agent journal is the only owner that has an exact provider claim;
+        # coordinator state without that claim is unsafe to reconstruct.
+        retained = self.journal.retained_claim_commands()
+        retained_assignment_ids = {
+            command.assignment.assignment_id for command in retained
+        }
+        missing = self._capacity_holding_coordinator_assignments() - retained_assignment_ids
+        if missing:
+            raise QueueServiceError(
+                "coordinator retained assignment lacks an exact agent claim"
+            )
+        for command in retained:
             self.provider.restore_capacity_holding(command)
-        if self._has_unreleased_coordinator_assignments():
-            self.provider.withhold_all_capacity()
         self._launch_lock = Lock()
 
     def advance(
@@ -759,18 +767,27 @@ class LocalDaemonExecution:
         )
         return True
 
-    def _has_unreleased_coordinator_assignments(self) -> bool:
+    def _capacity_holding_coordinator_assignments(self) -> set[str]:
+        """Return only coordinator states that can retain a physical claim.
+
+        A released coordinator record is proven available.  Earlier logical
+        states which have not reached agent acceptance do not yet own a physical
+        claim.  Every remaining capacity-holding record must be matched by the
+        agent's durable, exact claim rather than a fabricated placeholder.
+        """
         if not self.config.execution_database.is_file():
-            return False
+            return set()
         try:
             with sqlite3.connect(self.config.execution_database) as conn:
-                row = conn.execute(
-                    "SELECT 1 FROM coordinator_assignments "
-                    "WHERE state != 'released' LIMIT 1"
-                ).fetchone()
+                rows = conn.execute(
+                    "SELECT assignment_id FROM coordinator_assignments "
+                    "WHERE state IN ('accepted', 'granted', 'running', 'unknown')"
+                )
         except sqlite3.DatabaseError as exc:
-            raise QueueServiceError("coordinator retained assignment state is unavailable") from exc
-        return row is not None
+            raise QueueServiceError(
+                "coordinator retained assignment state is unavailable"
+            ) from exc
+        return {str(row[0]) for row in rows}
 
 
 def _stage_work(
@@ -838,7 +855,7 @@ def build_local_daemon_owner_views(
                             ).hexdigest(),
                         }
                     )
-        except sqlite3.DatabaseError:
+        except Exception:  # corrupt owner data is unavailable, never empty healthy work
             execution_available = False
     if config.agent_journal.is_file():
         try:
@@ -949,10 +966,22 @@ def build_local_daemon_owner_views(
                     "owner": "local-daemon",
                     "availability": (
                         "available"
-                        if execution_available and agent_available
+                        if (
+                            execution_available
+                            and agent_available
+                            and authority_view["availability"] == "available"
+                        )
                         else "unavailable"
                     ),
-                    "state": "healthy" if execution_available and agent_available else "degraded",
+                    "state": (
+                        "healthy"
+                        if (
+                            execution_available
+                            and agent_available
+                            and authority_view["availability"] == "available"
+                        )
+                        else "degraded"
+                    ),
                     "observed_at": observed_at,
                 },
             },

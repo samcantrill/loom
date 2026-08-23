@@ -11,13 +11,36 @@ from typing import cast
 import pytest
 
 from loom.pipeline import PipelineSpec
+from loom.pipeline.execution.managed_local import (
+    AssignmentState,
+    AtomResourceProvider,
+    ClaimCommand,
+    ManagedAssignment,
+    ObserveRequest,
+    SQLiteAgentJournal,
+)
 from loom.pipeline.planning import PlanSelectors, plan_pipeline
 from loom.pipeline.planning import ExecutionPlan
+from loom.pipeline.runtime.options import ExecutionOptions
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import (
+    CancellationEpochRequest,
+    CoordinatorAdmissionRequest,
+    LocalArtifactStore,
+    LocalRunStore,
+    path_to_run_uri,
+)
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.scheduling import (
+    CapacityAtom,
+    ExactQuantity,
+    ResourceClaim,
+    ResourceClaimContractDescriptor,
+    SchedulingComponentDescriptor,
+)
 from loom.queue import (
     LocalDaemon,
+    LocalDaemonAdmission,
     LocalDaemonAdmissionRequest,
     LocalDaemonAdmissionState,
     LocalDaemonConfig,
@@ -28,7 +51,12 @@ from loom.queue import (
     prepare_managed_local_runtime_record,
 )
 from loom.serialization import json_dumps_pretty
-from loom.queue.local_daemon_execution import load_managed_local_intent
+from loom.queue.local_daemon_execution import (
+    LocalDaemonExecution,
+    _ScopedCoordinatorAuthority,
+    build_local_daemon_owner_views,
+    load_managed_local_intent,
+)
 from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
 
 
@@ -160,6 +188,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
                 cast(Mapping[str, object], owner_view["execution"])["journal"],
             )
         ) == 2
+        assert status.as_of
         assert status.service_diagnostic is None
         snapshot = authority.open_run(run_uri)
         assert snapshot.status is RunStatus.SUCCEEDED
@@ -277,13 +306,31 @@ def test_exact_runtime_record_keeps_attributes_settings_and_run_concurrency(
     resources = cast(Mapping[str, object], cast(Mapping[str, object], placement)["resource_request"])
     cpu = cast(Mapping[str, object], resources["entries"])["cpu"]
     assert cast(Mapping[str, object], cpu)["attributes"] == {}
+    intent = load_managed_local_intent(
+        _daemon_config(tmp_path, cpu_capacity=1), run_uri
+    )
+    assert intent.max_parallel_stages == 2
+    execution = intent.runtime["build"].execution
+    assert isinstance(execution, ExecutionOptions)
+    settings = execution.settings
+    assert settings["worker_mode"] == "exact"
+    assert settings["max_parallel_stages"] == 2
 
 
+@pytest.mark.parametrize(
+    ("authority_status", "expected"),
+    [
+        (RunStatus.SUCCEEDED, LocalDaemonAdmissionState.SUCCEEDED),
+        (RunStatus.FAILED, LocalDaemonAdmissionState.FAILED),
+        (RunStatus.INTERRUPTED, LocalDaemonAdmissionState.FAILED),
+        (RunStatus.CANCELLED, LocalDaemonAdmissionState.CANCELLED),
+    ],
+)
 def test_terminal_authority_truth_wins_a_late_cancellation(
-    tmp_path: Path,
+    tmp_path: Path, authority_status: RunStatus, expected: LocalDaemonAdmissionState
 ) -> None:
     _store, run_uri, _pipeline = _persist_single_stage_run(tmp_path / "runs")
-    SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=RunStatus.SUCCEEDED)
+    SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=authority_status)
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
@@ -298,11 +345,109 @@ def test_terminal_authority_truth_wins_a_late_cancellation(
         )
         client.submit(LocalDaemonAdmissionRequest("late-cancel", run_uri))
         client.cancel("late-cancel")
-        assert client.wait("late-cancel", timeout_seconds=10).state is (
-            LocalDaemonAdmissionState.SUCCEEDED
-        )
+        assert client.wait("late-cancel", timeout_seconds=10).state is expected
     finally:
         daemon.stop()
+
+
+def test_post_bind_scoped_authority_rejects_wrong_run_and_coordinator(
+    tmp_path: Path,
+) -> None:
+    first = path_to_run_uri(tmp_path / "first")
+    other = path_to_run_uri(tmp_path / "other")
+    authority = SQLitePerRunAuthorityStore(first)
+    authority.create_run(first)
+    scoped = _ScopedCoordinatorAuthority(
+        authority, run_uri=first, coordinator_id="coordinator-a"
+    )
+
+    with pytest.raises(Exception, match="scoped authority run conflicts"):
+        scoped.open_run(other)
+    with pytest.raises(Exception, match="scoped authority coordinator conflicts"):
+        scoped.install_cancellation_epoch(
+            first,
+            CancellationEpochRequest(
+                operation_id="cancel", coordinator_id="coordinator-b", run_uri=first
+            ),
+        )
+
+
+def test_cancelling_outcome_remains_reconcilable_until_authority_settles(
+    tmp_path: Path,
+) -> None:
+    config = _daemon_config(tmp_path)
+    execution = _execution(config)
+    run_uri = path_to_run_uri(tmp_path / "cancelling")
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    authority.bind_coordinator_admission(
+        run_uri,
+        CoordinatorAdmissionRequest(
+            operation_id="bind",
+            coordinator_id="coordinator",
+            run_uri=run_uri,
+            intent_digest="digest",
+        ),
+    )
+    scoped = _ScopedCoordinatorAuthority(
+        authority, run_uri=run_uri, coordinator_id="coordinator"
+    )
+    admission = LocalDaemonAdmission(
+        admission_id="admission",
+        queue_item_id="item",
+        coordinator_id="coordinator",
+        run_uri=run_uri,
+        intent_digest="digest",
+        execution_owner="managed-stage",
+        state=LocalDaemonAdmissionState.CANCELLING,
+        accepted_at="2020-01-01T00:00:00Z",
+        authority_operation_id="bind",
+        cancellation_operation_id="cancel",
+    )
+
+    class _UnsettledAuthority:
+        def install_cancellation_epoch(self, *args: object, **kwargs: object) -> object:
+            return scoped.install_cancellation_epoch(*args, **kwargs)  # type: ignore[arg-type]
+
+        def open_run(self, run: str):
+            return scoped.open_run(run)
+
+        def transition_run(self, *args: object, **kwargs: object) -> object:
+            raise RuntimeError("transient transition outage")
+
+    assert execution._cancel(admission, _UnsettledAuthority()).state is LocalDaemonAdmissionState.CANCELLING  # type: ignore[arg-type]
+    assert execution._cancel(admission, scoped).state is LocalDaemonAdmissionState.CANCELLED
+
+
+def test_status_degrades_per_run_for_corrupt_or_missing_owner_data(
+    tmp_path: Path,
+) -> None:
+    config = _daemon_config(tmp_path)
+    config.execution_database.parent.mkdir(parents=True, exist_ok=True)
+    config.execution_database.write_bytes(b"not a sqlite database")
+    config.agent_journal.parent.mkdir(parents=True, exist_ok=True)
+    config.agent_journal.write_bytes(b"not a sqlite database")
+    admission = LocalDaemonAdmission(
+        admission_id="admission",
+        queue_item_id="item",
+        coordinator_id="coordinator",
+        run_uri=path_to_run_uri(tmp_path / "missing-authority"),
+        intent_digest="digest",
+        execution_owner="managed-stage",
+        state=LocalDaemonAdmissionState.CANCELLATION_REQUESTED,
+        accepted_at="2020-01-01T00:00:00Z",
+        authority_operation_id="bind",
+        cancellation_operation_id="cancel",
+    )
+
+    view = build_local_daemon_owner_views(config, (admission,))[0]
+
+    assert cast(Mapping[str, object], view["authority"])["diagnostic"] == "authority_unavailable"
+    assert cast(Mapping[str, object], view["scheduling"])["diagnostic"] == "execution_store_unavailable"
+    assert cast(Mapping[str, object], view["execution"])["diagnostic"] == "agent_journal_unavailable"
+    assert cast(Mapping[str, object], view["service"])["state"] == "degraded"
+    assert cast(Mapping[str, object], view["cancellation"])["receipt"] is None
+    assert all("not a sqlite" not in str(axis) for axis in view.values())
 
 
 def test_pending_cancellation_installs_authority_epoch_before_any_stage(
@@ -540,6 +685,106 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
         assert authority.open_run(run_uri).status is RunStatus.FAILED
     finally:
         daemon.stop()
+
+
+@pytest.mark.parametrize("state", ["accepted", "granted", "running", "unknown"])
+def test_startup_retains_only_the_exact_durable_claim_for_live_coordinator_state(
+    tmp_path: Path, state: str
+) -> None:
+    config = _daemon_config(tmp_path, cpu_capacity=2)
+    command = _retained_claim(config, assignment_id=f"retained-{state}")
+    _coordinator_assignment(config, command.assignment.assignment_id, state)
+
+    execution = _execution(config)
+    observed = execution.provider.observe(ObserveRequest("agent", "session", "one"))
+
+    assert [atom.amount.numerator for atom in observed.atoms] == [1]
+    assert observed.live_claim_ids == (command.assignment.claim_id,)
+
+
+def test_startup_keeps_proven_released_coordinator_capacity_available(tmp_path: Path) -> None:
+    config = _daemon_config(tmp_path, cpu_capacity=2)
+    _coordinator_assignment(config, "released-assignment", "released")
+
+    execution = _execution(config)
+    observed = execution.provider.observe(ObserveRequest("agent", "session", "one"))
+
+    assert [atom.amount.numerator for atom in observed.atoms] == [2]
+    assert observed.live_claim_ids == ()
+
+
+def test_startup_fails_closed_when_live_coordinator_state_lacks_exact_claim(
+    tmp_path: Path,
+) -> None:
+    config = _daemon_config(tmp_path)
+    _coordinator_assignment(config, "unknown-assignment", "unknown")
+
+    with pytest.raises(Exception, match="lacks an exact agent claim"):
+        _execution(config)
+
+
+def _daemon_config(tmp_path: Path, *, cpu_capacity: int = 1) -> LocalDaemonConfig:
+    return LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=tmp_path / "runs",
+        cpu_capacity=cpu_capacity,
+    )
+
+
+def _execution(config: LocalDaemonConfig) -> LocalDaemonExecution:
+    return LocalDaemonExecution(
+        config=config,
+        coordinator_id="coordinator",
+        coordinator_epoch="epoch",
+        cancellation_operation=lambda _admission_id: None,
+        admission_activated=lambda _admission_id: None,
+    )
+
+
+def _retained_claim(config: LocalDaemonConfig, *, assignment_id: str) -> ClaimCommand:
+    atom = CapacityAtom(
+        "cpu", f"{config.machine_id}:cpu", ExactQuantity(1), "count", ExactQuantity(1)
+    )
+    contract = ResourceClaimContractDescriptor("cpu", 1, "loom.cpu.claim.v1")
+    descriptor = SchedulingComponentDescriptor("cpu", 1, "test", "test", "test")
+    assignment = ManagedAssignment(
+        assignment_id=assignment_id,
+        run_uri="file:///retained-run",
+        stage_work_id="work",
+        stage_name="stage",
+        attempt=1,
+        attempt_id="attempt",
+        agent_id="agent",
+        session_id="session",
+        offer_id="offer",
+        claim_id=f"claim-{assignment_id}",
+    )
+    command = ClaimCommand(
+        assignment, "prepare", ResourceClaim("cpu", contract, (atom,), 1)
+    )
+    journal = SQLiteAgentJournal(config.agent_journal)
+    journal.persist_request(assignment, {"request": "durable"})
+    provider = AtomResourceProvider(descriptor, (contract,), (atom,))
+    assert journal.prepare_composite(assignment, (command,), {"cpu": provider}) is AssignmentState.PREPARED
+    assert journal.accept(assignment_id) is AssignmentState.ACCEPTED
+    return command
+
+
+def _coordinator_assignment(
+    config: LocalDaemonConfig, assignment_id: str, state: str
+) -> None:
+    config.execution_database.parent.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    with sqlite3.connect(config.execution_database) as conn:
+        conn.execute(
+            "CREATE TABLE coordinator_assignments (assignment_id TEXT PRIMARY KEY, state TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO coordinator_assignments (assignment_id, state) VALUES (?, ?)",
+            (assignment_id, state),
+        )
 
 
 def _persist_single_stage_run(

@@ -293,11 +293,13 @@ Final commands:
 - Implementation: complete; exact-record, singleton-authority, conservative
   restart-capacity, terminal-cancellation, and owner-status slices are committed
   in the phase worktree
-- Refiner: not needed unless the executor returns one qualified blocker
+- Refiner: correction 2/3 complete at `HEAD`; replaced fabricated full-machine
+  restart holds with exact durable-claim reconciliation and fail-closed missing
+  claim handling, then closed the remaining focused contract evidence
 - Pre-submit gate: pending
 - Independent review: required once after PR preparation because this phase
   directly closes the five prior durable/cross-owner review findings
-- Blocker corrections: 0/3
+- Blocker corrections: 2/3
 - PR and merge: pending
 
 ## Completion Record
@@ -305,8 +307,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Persistent daemon composition, scoped authority adapter for all post-bind mutation, exact managed-local record, coordinator/journal conservative restart hold, status/cancellation receipt projection, public feature docs, and managed-local example |
-| Tests added or updated | Exact-record rejection, settings/concurrency round-trip, and changed-snapshot tests; late terminal-cancellation projection; competing coordinator binding conflict; retained focused production/authority coverage |
-| Validated revision/tree state and evidence | Implementation commits `059686e`, `ebfd86a`, and `00ce7a5`, plus the corrective commit below; focused Pyright and Ruff passed; `203` daemon/authority tests passed |
-| Validation-relevant changes after evidence | Exact runtime reconstruction, singleton binding, conservative restart capacity, terminal-truth projection, and owner availability diagnostics added |
+| Tests added or updated | Exact-record settings/concurrency reconstruction independent of daemon CPU capacity; all terminal-before-cancel states; post-bind wrong-run/wrong-coordinator adapter rejection; exact retained accepted/granted/running/unknown claim holds, released capacity, missing-claim fail-closed behavior; corrupt owner-data status degradation and receipt diagnostics |
+| Validated revision/tree state and evidence | Corrective commit at `HEAD`; focused `uv run pytest -q tests/integration/queue/test_local_daemon_production.py` passed (`23`); focused Ruff and Pyright passed |
+| Validation-relevant changes after evidence | Startup reconciles only journal-owned exact claims, accepts proven release, and refuses an unresolved coordinator assignment without a reconstructable claim; per-run service health includes authority availability |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Phase 3A/3B branches/worktrees retained as evidence until Phase 3C disposition; Phase 4 cannot start first |
