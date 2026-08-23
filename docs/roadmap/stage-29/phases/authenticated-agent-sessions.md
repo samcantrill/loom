@@ -207,12 +207,24 @@ a default-CI prerequisite.
   recorded.
 - Expanded planning: complete; stale Phase 3 agent-view/shared-authorizer/TLS
   assumptions removed and the executor packet reduced around current owners.
-- Implementation and pre-submit gate: complete at `b7699c5`. Required
-  independent review, PR, and merge remain manager-owned pending work. Refiner
-  not used; blocker corrections `1/3` (the recorded deterministic baseline
-  diagnostic correction).
+- Initial executor candidate and full validation completed at `b7699c5`, but
+  manager verification rejected it at the pre-submit gate. The coordinator
+  service persists the pre-send registration intent and returned session by
+  opening its own configured agent root, while the real HTTP agent has no
+  journal owner. A lost response can therefore leave a live coordinator session
+  with no durable session on the remote agent; exact replay does not repair the
+  agent, and clean retirement checks the coordinator host's agent journal rather
+  than the authenticated remote owner's evidence.
+- Treat this as one qualified remote-session ownership and continuity blocker.
+  The bounded correction must move registration/session persistence to an
+  outbound agent-owned journal, make exact replay persist the returned result,
+  reconcile the complete persisted revision tuple, retain effective pool and
+  capability scope, withdraw/fence before proof-based clean retirement, and
+  digest-bind one current policy-rechecked poll. It must retain the no-launch
+  boundary and Phase 3 root continuity. Refiner pending; blocker corrections
+  remain `1/3` until that pass completes.
 
-## Completion Record
+## Candidate Evidence
 
 - Implementation: added private coordinator-owned authenticated session and
   mTLS adapter modules; extended the persistent daemon with an agent view,
@@ -235,7 +247,7 @@ a default-CI prerequisite.
   on the same validation-relevant revision: 118 package, 1,710 unit, 295
   contract, 226 integration, 57 E2E, and 141 config-extra tests; evidence is
   `build/test-summary.md`.
-- Validation-relevant changes after evidence: none. PR/review/merge are
-  pending manager work. Residual risk: deployment must protect its configured
-  certificate/key and current credential policy; remote assignment, transfer,
-  and launch remain intentionally unavailable until Phase 5.
+- The receipt above applies only to the rejected executor candidate and becomes
+  stale when the qualified correction changes source or tests. PR, independent
+  review, and merge remain pending. Remote assignment, transfer, and launch
+  remain intentionally unavailable until Phase 5.
