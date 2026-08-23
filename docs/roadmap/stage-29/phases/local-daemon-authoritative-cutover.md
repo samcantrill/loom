@@ -306,7 +306,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Persistent daemon composition, scoped authority adapter, exact managed-local record, retained-claim provider hold, status/diagnostic projection, public feature docs, and managed-local example |
 | Tests added or updated | Exact-record rejection and changed-snapshot tests; late terminal-cancellation projection; competing coordinator binding conflict; retained focused production/authority coverage |
-| Validated revision/tree state and evidence | Phase implementation commit pending; focused Pyright passed; `38` daemon/authority tests passed; repository test summary is running |
+| Validated revision/tree state and evidence | Implementation commits `059686e`, `ebfd86a`, and `00ce7a5`; focused Pyright passed; `38` daemon/authority tests passed; repository test summary is running |
 | Validation-relevant changes after evidence | Exact runtime reconstruction, singleton binding, conservative restart capacity, terminal-truth projection, and owner availability diagnostics added |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Phase 3A/3B branches/worktrees retained as evidence until Phase 3C disposition; Phase 4 cannot start first |
