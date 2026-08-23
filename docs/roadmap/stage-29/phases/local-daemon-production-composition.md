@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pending
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 3B
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3b-local-daemon-production-composition`
@@ -14,7 +14,11 @@
   isolated worktree/branch retained only as implementation evidence
 - Workflow path: expanded because this phase composes durable coordinator,
   authority, local-agent, public-facade, and filesystem owners across restart
-- Blockers: none; expanded design/plan reviews and maintainer approval passed
+- Blockers: the required independent review found five accepted-contract
+  failures in exact runtime reconstruction, canonical authority ownership,
+  restart capacity reconciliation, terminal cancellation projection, and
+  owner-labelled status. Correction 3/3 is exhausted, so PR #235 was closed
+  without merge.
 
 ## Objective And Context
 
@@ -52,10 +56,11 @@
   `PreparedAttemptExecutionAuthority`, and
   `run_managed_local_assignment`.
 - Existing run composition:
-  `create_authority_backed_serial_run_store` supplies persisted plan,
-  `PreparedRunRecord`, runtime metadata, local payload access, and authority
-  truth. Its concrete store/authority construction may be reused without
-  transferring lifecycle ownership to the daemon.
+  `create_authority_backed_serial_run_store` supplies the persisted execution
+  plan, runtime metadata, local payload access, and authority truth. Its
+  concrete store/authority construction may be reused without transferring
+  lifecycle ownership to the daemon. `PreparedRunRecord` is a delegated-Slurm
+  continuation artifact and is not a managed-local admission prerequisite.
 - Public paths that are not the solution: `PipelineRunner` remains a whole-run
   execution owner; `continue_prepared_run` and `loom prepared-run continue`
   intentionally fail for insufficient whole-run continuation state. Neither may
@@ -77,12 +82,11 @@
 In scope:
 
 - Define one canonical managed-local admission containing client queue identity
-  and `run_uri`. The service reloads the canonical `PreparedRunRecord`,
-  execution plan, and runtime metadata from the protected run store, computes
-  the existing normalized intent digest, and rejects missing, changed,
-  wrong-run, unsupported, or incomplete content. A caller does not send an
-  executable stage payload, callable, assignment, authority principal, state
-  path, or provider token.
+  and `run_uri`. The service reloads the canonical `ExecutionPlan` and local
+  runtime metadata from the protected run store, computes their normalized
+  intent digest, and rejects missing, changed, wrong-run, unsupported, or
+  incomplete content. A caller does not send an executable stage payload,
+  callable, assignment, authority principal, state path, or provider token.
 - Add one protected production composition above the queue and pipeline owners.
   It opens explicit coordinator/agent roots, authority/run stores, stage-work
   and assignment stores, configured local inventory/providers, scheduling
@@ -191,7 +195,7 @@ Assumptions:
 
 ## Proportionality
 
-- Existing seams reused: `PreparedRunRecord`, authority-backed run store,
+- Existing seams reused: persisted `ExecutionPlan`, authority-backed run store,
   `RunOrchestrator`, `SQLiteStageWorkStore`, scheduling kernel/default policy,
   `SQLiteCoordinatorAssignments`, `SQLiteAgentJournal`, existing local resource
   planners/providers, StageWorker request/materialization, and
@@ -224,7 +228,7 @@ Assumptions:
 
 1. Selectively adopt the Phase 3A root/identity/IPC/admission code into a clean
    branch, correct dependency direction, and replace opaque prepared-stage input
-   with canonical prepared-run/plan resolution by admitted `run_uri`.
+   with canonical persisted-plan/runtime resolution by admitted `run_uri`.
 2. Build the protected authority-backed local composition using existing Phase
    1/2 stores, orchestrator, placement/scheduling, offers/providers, reservation,
    worker construction, and assignment saga; remove supplied resolver/executor
@@ -270,7 +274,7 @@ Final commands:
 - Review focus: the real submit-to-worker trace, invariant owners, absence of
   caller-injected production dependencies, durable causal ordering, restart/
   cancellation behavior, import direction, and removal of unused machinery.
-- Stop if: current persisted prepared-run artifacts cannot reconstruct the exact
+- Stop if: current persisted plan/runtime artifacts cannot reconstruct the exact
   plan/runtime/placement inputs without inventing durable facts; the real path
   would require `PipelineRunner` to remain a second managed owner; Phase 2 lacks
   a safe exact assignment/reservation input; a worker needs authority/daemon
@@ -290,36 +294,49 @@ Final commands:
   Phase 3A worktree/branch only for selective reference. Do not base or open a
   stacked PR from Phase 3A.
 - Decisions not to revisit: hard managed-local cut-over; canonical persisted
-  prepared-run/plan resolution rather than opaque stage payload or a second
-  prepared-run identity; one protected production
+  plan/runtime resolution rather than opaque stage payload or a second plan
+  identity; one protected production
   composition; Phase 1 readiness/decision owner; Phase 2 execution owner;
   separate authority; no worker authority access; fresh roots; owner-only local
   IPC; delegated Slurm unchanged; correct dependency direction.
-- Stop and return a qualified blocker if a real persisted prepared run cannot be
+- Stop and return a qualified blocker if a real persisted local plan cannot be
   reconstructed into existing Phase 1/2 inputs without a new public/durable
   contract, or if the no-fake E2E cannot reach a real worker root.
 
 ## Workflow State
 
-- Manager preparation: recovery evidence and exact source owners recorded at
-  clean `develop` `66d4968`; Phase 3A remains isolated
+- Manager preparation: completed from clean `origin/develop` `b045f45`; Phase
+  3A remained isolated
 - Expanded planning: architecture exploration, design-safety review, and plan
   review completed; bounded plan corrections applied
-- Implementation: pending manager preparation
-- Refiner: not used
-- Pre-submit gate: pending
-- Independent review: required because the phase crosses durable authority,
-  coordinator, agent, public, and filesystem boundaries
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Implementation: candidate `a1dfe92` completed the production daemon,
+  client/CLI surface, real Phase 1/2 composition, hard-cut-over removal, joined
+  status, cancellation, and runnable example
+- Refiner: one qualified refiner pass used
+- Pre-submit gate: passed; `make validate-pr` completed Ruff, Pyright, 2,365
+  default tests, 141 config-extra tests with three optional container skips,
+  and package builds; `make test-summary` recorded 2,506 categorized passes
+- Independent review: blocked candidate `a1dfe92` after CI passed. Review found
+  five reachable accepted-contract failures: summaries cannot reconstruct exact
+  runtime resources/concurrency; authority permits competing coordinator
+  bindings; restart republishes capacity before retained claims are reconciled;
+  cancellation can turn terminal authority truth into permanently nonterminal
+  admission state; and status omits required freshness while hiding an
+  execution-store read failure. Raw exception text crossing the service
+  boundary is one additional localized correction.
+- Blocker corrections: 3/3 exhausted; repository workflow permits no further
+  correction in this phase
+- PR and merge: PR #235 passed CI and was otherwise mergeable against `develop`,
+  but the required review gate blocked it. It was closed without merge on
+  2026-08-23; branch and worktree are retained as evidence.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | planning baseline `66d4968`; Phase 3A evidence `51ca432`/`9d2d7a0` |
-| Validation-relevant changes after evidence | planning-only recovery amendment |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | Phase 3A branch/worktree retained until Phase 3B disposition; Phase 4 cannot start first |
+| Implementation and changed paths | Candidate added `loom.queue.local_daemon`, protected production composition and owner-only transport; added shared Python/CLI initialize, serve, submit, status, wait, and cancel operations; connected persisted plan/runtime/config, authority, Phase 1 orchestration/scheduling, and the Phase 2 assignment saga; removed `loom.queue.managed_local` and managed-local GPU construction; updated examples and feature documentation. |
+| Tests added or updated | Added daemon bootstrap/restart/lock/root tests and real persisted `preprocess -> train`, authority terminal projection, controller-only skip, independent-run overlap, digest-change, pending/active cancellation, hard-cut-over, CLI, package, contract, and example coverage. Removed tests for the deleted whole-run managed-local runtime and retained delegated-Slurm coverage. |
+| Validated revision/tree state and evidence | Candidate `a1dfe92` passed `make validate-pr`, fresh `make test-summary` with 2,506 categorized passes and no failures/errors, and CI. |
+| Validation-relevant changes after evidence | Blocked metadata only; source and test evidence remains attached to the isolated candidate. |
+| PR, review, and merge | [PR #235](https://github.com/samcantrill/loom/pull/235) targeted `develop` with the approved title and passed CI. Required independent review blocked it; the PR closed without merge on 2026-08-23. |
+| Residual risk and cleanup | Five accepted contracts remain unsatisfied: exact runtime inputs/concurrency, singleton scoped authority ownership, restart claim reconciliation before capacity, terminal-safe cancellation projection, and honest per-owner status/freshness. Raw exception text also requires stable safe diagnostics. Correction 3/3 is exhausted, so Phase 3B cannot be repaired or merged. Its hard-cut-over direction and delegated-Slurm isolation remain accepted. Phase 3A/3B branches and worktrees remain evidence for a separately approved Phase 3C from current `develop`. |

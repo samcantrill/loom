@@ -2462,8 +2462,10 @@ Status:
   route, durable at-most-one submission, restricted grant-gated bootstrap,
   owner-labelled external status/cancel, and positive-containment recovery while
   deferring automatic fallback and allocation-fed agents. The maintainer
-  approved the refined design and balanced nine-phase implementation plan; all
-  nine phases remain unimplemented.
+  approved the refined design and balanced nine-phase implementation plan.
+  Phases 1-2 are merged; Phase 3A and Phase 3B are blocked evidence; the
+  maintainer approved fresh-only Phase 3C to close the five independent-review
+  findings before Phase 4 begins.
 
 Goal:
 
@@ -2639,15 +2641,16 @@ Implement:
   Loom result plus accessible verified outputs is success; SLURM `COMPLETED` is
   observation and `scancel` success is request only. Existing whole-run/single-
   job/`afterok` SLURM owners remain unchanged.
-- Phases 1–3 migrate `PipelineRunner`, `ManagedLocalQueueRuntime`, the managed
-  queue/controller, local process/resource admission, prepared attempt, and
+- Phases 1–3 replace the managed-local role of `PipelineRunner`, remove
+  `ManagedLocalQueueRuntime`, and compose the managed queue/controller, local
+  process/resource admission, prepared attempt, and
   stage worker into one dependency-aware bounded/persistent local path. Phase 1
   establishes pure scheduling, authority-owned `PENDING` preparation, and ready
   work; Phase 2 adds worker materialization and the complete local assignment
-  saga; Phase 3 adds persistent lifetime/public compatibility.
-  Historical queue rows remain inspectable/cancellable; public facades remain
-  callable; managed whole-run resources/argv/direct dispatch and in-memory
-  ready-loop ownership are deprecated rather than silently reinterpreted.
+  saga; Phase 3 adds persistent lifetime and the hard-cutover public surface.
+  Historical managed-local roots/rows and whole-run facades are rejected; they
+  are not interpreted, migrated, or silently re-owned. Managed whole-run
+  resources/argv/direct dispatch and in-memory ready-loop ownership are removed.
   Production command-scoped composition retains explicitly initialized role
   state after return, routes to a compatible active daemon when configured/
   reachable, and fails rather than selecting a new identity around a held root.
@@ -2947,6 +2950,8 @@ Phase execution plans:
 - [`docs/roadmap/stage-29/phases/scheduling-kernel-ready-stage-work.md`](roadmap/stage-29/phases/scheduling-kernel-ready-stage-work.md)
 - [`docs/roadmap/stage-29/phases/durable-local-stage-execution.md`](roadmap/stage-29/phases/durable-local-stage-execution.md)
 - [`docs/roadmap/stage-29/phases/local-daemon-control-boundary.md`](roadmap/stage-29/phases/local-daemon-control-boundary.md)
+- [`docs/roadmap/stage-29/phases/local-daemon-production-composition.md`](roadmap/stage-29/phases/local-daemon-production-composition.md)
+- [`docs/roadmap/stage-29/phases/local-daemon-authoritative-cutover.md`](roadmap/stage-29/phases/local-daemon-authoritative-cutover.md)
 - [`docs/roadmap/stage-29/phases/authenticated-agent-sessions.md`](roadmap/stage-29/phases/authenticated-agent-sessions.md)
 - [`docs/roadmap/stage-29/phases/remote-stage-data-execution.md`](roadmap/stage-29/phases/remote-stage-data-execution.md)
 - [`docs/roadmap/stage-29/phases/gpu-preference-placement.md`](roadmap/stage-29/phases/gpu-preference-placement.md)
