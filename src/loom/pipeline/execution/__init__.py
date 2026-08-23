@@ -74,6 +74,16 @@ if TYPE_CHECKING:
         reconstruct_stage_execution_request,
         run_stage_worker,
     )
+    from loom.pipeline.execution.managed_local import (
+        AgentResourceProvider,
+        ClaimCommand,
+        ClaimOutcome,
+        ClaimResult,
+        CpuResourceProvider,
+        MemoryResourceProvider,
+        ObserveRequest,
+        ObserveResult,
+    )
 
 
 def __getattr__(name: str) -> object:
@@ -107,6 +117,14 @@ def __getattr__(name: str) -> object:
         "ResourceLimitReconciliationResult",
         "ResourceLimitReconciliationStatus",
         "ResourceLeaseRequest",
+        "AgentResourceProvider",
+        "ClaimCommand",
+        "ClaimOutcome",
+        "ClaimResult",
+        "CpuResourceProvider",
+        "MemoryResourceProvider",
+        "ObserveRequest",
+        "ObserveResult",
         "StageExecutionRequest",
         "StageExecutionResult",
         "StageExecutionRuntimeError",
@@ -206,6 +224,16 @@ def __getattr__(name: str) -> object:
             reconstruct_stage_execution_request,
             run_stage_worker,
         )
+        from loom.pipeline.execution.managed_local import (
+            AgentResourceProvider,
+            ClaimCommand,
+            ClaimOutcome,
+            ClaimResult,
+            CpuResourceProvider,
+            MemoryResourceProvider,
+            ObserveRequest,
+            ObserveResult,
+        )
 
         return {
             "ConfigSnapshotInputs": ConfigSnapshotInputs,
@@ -237,6 +265,14 @@ def __getattr__(name: str) -> object:
             "ResourceLimitReconciliationResult": ResourceLimitReconciliationResult,
             "ResourceLimitReconciliationStatus": ResourceLimitReconciliationStatus,
             "ResourceLeaseRequest": ResourceLeaseRequest,
+            "AgentResourceProvider": AgentResourceProvider,
+            "ClaimCommand": ClaimCommand,
+            "ClaimOutcome": ClaimOutcome,
+            "ClaimResult": ClaimResult,
+            "CpuResourceProvider": CpuResourceProvider,
+            "MemoryResourceProvider": MemoryResourceProvider,
+            "ObserveRequest": ObserveRequest,
+            "ObserveResult": ObserveResult,
             "StageExecutionRequest": StageExecutionRequest,
             "StageExecutionResult": StageExecutionResult,
             "StageExecutionRuntimeError": StageExecutionRuntimeError,
@@ -300,6 +336,14 @@ __all__ = [
     "ResourceLimitReconciliationResult",
     "ResourceLimitReconciliationStatus",
     "ResourceLeaseRequest",
+    "AgentResourceProvider",
+    "ClaimCommand",
+    "ClaimOutcome",
+    "ClaimResult",
+    "CpuResourceProvider",
+    "MemoryResourceProvider",
+    "ObserveRequest",
+    "ObserveResult",
     "StageExecutionRequest",
     "StageExecutionResult",
     "StageExecutionRuntimeError",

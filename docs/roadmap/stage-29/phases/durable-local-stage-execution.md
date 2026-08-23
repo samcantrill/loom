@@ -2,12 +2,14 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 2
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p2-durable-local-stage-execution`
-- Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop` after Phase 1 remotely merges
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p2-durable-local-stage-execution`
+- Base revision: clean `origin/develop` at
+  `3c223938720b487b2d37baf4658fa45a259bf3f2`
 - PR target: `develop`
 - PR title: `feat(scheduling): add durable local stage execution`
 - Dependencies: Phase 1 merged with resolved stage placement, fixed scheduling
@@ -15,7 +17,8 @@
   durable stage work, component contracts, and conformance support
 - Workflow path: expanded because coordinator, per-run authority, agent journal,
   physical resources, artifacts, and process launch form a causal crash boundary
-- Blockers: Phase 1 remote merge
+- Blockers: none; Phase 1 remotely merged as
+  `ebab3c5e9fc241b73992b34b04d69c5acea7f4fe`
 
 ## Objective And Context
 
@@ -43,25 +46,45 @@ be less reviewable and less safe than this indivisible vertical boundary.
 
 ## Current Source And Harness
 
-- Reuse the Phase 1 `StageWorkRecord`, immutable scheduling decision, capacity
-  atoms, component/claim-contract descriptors, and readiness predicate.
-- Rediscover current per-run authority operations, prepared-stage attempt
-  construction, `StageJobRunRequest`, `run_stage_job`/stage worker, local
-  resource lease/GPU-provider seams, artifact materialization/finalization, and
-  reliability retry behavior on the phase branch.
-- Phase 1 will have split authority-owned semantic attempt preparation from the
-  current local-path-dependent `prepare_stage_attempt` helper. Reuse or refactor
+- Reuse `StageWorkRecord`, `CoordinatorStageWorkStore`, its in-memory and SQLite
+  adapters, and `RunOrchestrator` in `src/loom/pipeline/orchestration.py` for
+  the Phase 1 projection/reconciliation boundary. Reuse the immutable scheduling
+  values and kernel under `src/loom/scheduling/` and the CPU/memory resource
+  adapters in `src/loom/pipeline/runtime/scheduling_resources.py`.
+- Extend the expected-state authority surface in
+  `src/loom/pipeline/stores/authority.py`, the production transaction/schema
+  owner in `src/loom/pipeline/stores/sqlite_authority.py`, and the conformance
+  double in `tests/support/authority_stores.py`. The current narrow preparation
+  operation is `ensure_prepared_attempt`.
+- Phase 1 split authority-owned semantic attempt preparation from the current
+  local-path-dependent `prepare_stage_attempt` helper in
+  `src/loom/pipeline/execution/stage_attempts.py`. Reuse or refactor
   the helper's input/fingerprint/request/workspace pieces here, but do not call
   an allocator that creates a second attempt or advances it to `RUNNING`.
-- Current `run_stage_job` is also not the managed worker boundary unchanged: it
-  acquires the whole-run lock, independently validates upstream readiness,
-  materializes request state, executes code, and writes stage/run authority
-  results. Extract or adapt the existing execution-only stage-worker seam so a
-  managed worker returns durable fenced result facts while coordinator/
+- `StageJobRunRequest` and the whole-run-locking `run_stage_job` compatibility
+  wrapper live in `src/loom/pipeline/execution/continuation.py`.
+  `StageWorkerRequest`/`StageWorkerResult` live in
+  `src/loom/pipeline/execution/models.py`, while the lower-level worker seam is
+  in `src/loom/pipeline/execution/stage_worker.py`. Extract or adapt that seam so
+  the managed worker returns durable fenced result facts while coordinator and
   authority operations perform short exact-stage commits.
-- Reuse existing SQLite transaction/schema patterns, fake clocks/processes,
-  barrier-controlled runner tests, stage attempt/output commit tests, resource
-  provider tests, and artifact-store fixtures.
+- Adapt CPU/memory admission behavior from
+  `src/loom/pipeline/execution/resource_admission.py`; do not expose the existing
+  coordination lease API as the new provider contract. Reuse local artifact
+  record/materialization owners in `src/loom/pipeline/stores/local_artifacts.py`,
+  `src/loom/pipeline/stores/artifact_materialization.py`, and the existing
+  execution output finalization seam.
+- Current focused harnesses are
+  `tests/unit/loom/pipeline/test_orchestration.py`,
+  `tests/contracts/test_authority_store_contract.py`,
+  `tests/unit/loom/pipeline/stores/test_sqlite_authority.py`,
+  `tests/unit/loom/pipeline/execution/test_stage_attempts.py`,
+  `tests/unit/loom/pipeline/execution/test_stage_worker.py`,
+  `tests/unit/loom/pipeline/execution/test_resource_admission.py`,
+  `tests/integration/pipeline/test_stage_worker_integration.py`,
+  `tests/integration/pipeline/test_parallel_execution.py`, and
+  `tests/e2e/test_execution_lifecycle.py`. Reuse their SQLite fixtures, fake
+  clocks/processes, barrier-controlled runners, and artifact-store fixtures.
 - Production coordinator and local agent state must be in separate SQLite roots
   even when one bounded command composes both in the same process. In-memory
   stores are tests only.
@@ -371,7 +394,15 @@ write another owner's truth.
 | Integration | Required | Cross-store crash recovery, concurrent assignment CAS, ordered replay, and worker/artifact hand-off | Crash before/after every durable step; timeout after coordinator commit; out-of-order and duplicate events; two cycles race for the final run slot; decline/grant/result/terminal/logical-release/provider-release/fresh-availability races; two allowed same-run workers overlap without a whole-run lock |
 | E2E / opt-in | Required local | Final bounded local stage path | Train/evaluate and diamond with real parallel-branch overlap, failure/retry, one launch; no external network/GPU required |
 
-Targeted commands are fixed during phase preparation. Final commands:
+Targeted commands fixed during phase preparation:
+
+    pytest -q tests/unit/loom/pipeline/test_orchestration.py tests/contracts/test_authority_store_contract.py tests/contracts/test_managed_authority_contract.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py
+    pytest -q tests/unit/loom/pipeline/execution/test_stage_attempts.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/pipeline/execution/test_resource_admission.py tests/integration/pipeline/test_stage_worker_integration.py tests/integration/pipeline/test_parallel_execution.py
+    pytest -q tests/package/test_pipeline_execution_api.py tests/contracts/test_agent_resource_provider_contract.py tests/contracts/test_artifact_materialization_contract.py tests/contracts/test_stage_worker_contract.py
+    pytest -q tests/e2e -k 'stage29_local or execution_lifecycle'
+
+The executor must add every new phase-specific test path to these focused runs
+if its name does not match the selected directories or expression. Final commands:
 
     make validate-pr
     make test-summary
@@ -412,25 +443,49 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 1 merge, worktree/base recording, and
-  exact source/test rediscovery
+- Manager preparation: complete at base `3c22393`; Phase 1 merge, dedicated
+  worktree/base, exact source owners, focused regressions, and harness commands
+  recorded
 - Expanded planning: required by durable cross-owner side effects; phase plan
-  finalized
-- Implementation: pending
-- Refiner: not used
-- Pre-submit gate: pending
-- Independent review: expected because launch fencing and cross-store recovery
-  are material residual risks; confirm during phase preparation
-- Blocker corrections: 0/3
-- PR and merge: pending
+  finalized. No additional planner pass used because the fixed saga, ownership,
+  stop conditions, and causal test matrix already resolve the identified risk
+- Implementation: complete through one executor pass, one bounded refiner pass,
+  and two manager-local corrections. The exact prepared attempt now proceeds
+  through atomic stage-work reservation, authority bind/grant fencing,
+  composite provider admission, one-launch execution, durable result and
+  accessible output commit, ordered logical/physical release, and fresh
+  availability without the legacy whole-run lock
+- Refiner: completed one bounded correction. The existing authority owner now
+  binds/unbinds the exact prepared attempt, grants a durable execution fence,
+  and accepts only its matching confirmed start; the embedded local adapter
+  stages request/input and physical preparation before that grant and retains
+  the one-launch journal boundary without a whole-run lock.
+- Pre-submit gate: passed after the final review correction. `make validate-pr`
+  completed with 2,378 default passes, 1 default skip, 141
+  configuration-extra passes, 3 configuration-extra skips, and successful
+  source/wheel builds; `make test-summary` regenerated current category evidence
+- Independent review: completed. It found three blockers in launch ordering,
+  offer-revision fencing, and exact unbind replay; all three are addressed in
+  the final bounded correction and passed the refreshed manager gate
+- Blocker corrections: 3/3 completed. The first correction added the exact
+  authority grant/start fence. The manager-local correction completed the
+  execution-only worker, terminal/output/release saga, atomic stage-work
+  decision revalidation, exact reservation/fence replay, provider conformance,
+  failure release, lost-response recovery, and real same-run overlap coverage.
+  The final correction now returns a gated containment handle before execution,
+  confirms durable `PROCESS_STARTED` and authority `RUNNING` before releasing
+  the worker body, retains one-use exact offer snapshots with reflected-claim
+  accounting, and records durable authority unbind tombstones for exact replay
+- PR and merge: PR #234 is open against `develop`; CI and automatic squash
+  merge are pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Managed provider/journal/coordinator saga in `execution/managed_local.py`; exact no-lock worker seam in `execution/stage_worker.py`; managed fence and terminal/output CAS in `stores/authority.py` and `stores/sqlite_authority.py`; authority schema v5 migration with exact unbind receipts; public provider exports; in-memory conformance double |
+| Tests added or updated | Provider and managed-authority contracts; one-use offer and reflected-capacity tests; journal composite/one-launch/start-outcome tests; SQLite authority fence/terminal/v4-to-v5 migration tests; accessible output, definitive start failure, lost unbind/output response replay, crash-before-result non-relaunch, authority-running barrier, failure release, and real same-run overlap integration tests; retained adapter subclass signatures |
+| Validated revision/tree state and evidence | Focused final-correction suite: 45 passed with Ruff and Pyright clean. `make validate-pr`: default 2,378 passed/1 skipped/121 deselected; configuration-extra 141 passed/3 skipped/2,382 deselected; source and wheel builds passed. `make test-summary`: package 118, unit 1,693, contract 293, integration 216, E2E 58, and configuration-extra 141 passed |
+| Validation-relevant changes after evidence | none |
+| PR, review, and merge | independent blocker review completed and corrected; refreshed manager gate passed; PR #234 is open against `develop`, mergeable, and awaiting CI |
+| Residual risk and cleanup | Ambiguous provider/launcher outcomes remain durably retained and non-relaunchable; persistent role startup and user-facing unknown-work recovery remain assigned to later phases |

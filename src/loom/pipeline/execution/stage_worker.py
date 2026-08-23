@@ -55,6 +55,7 @@ from .models import (
     StageWorkerRequest,
     StageWorkerResult,
 )
+from .outputs import validate_stage_outputs
 
 Clock = Callable[[], str]
 ArtifactStoreFactory = Callable[[Path], ArtifactStore]
@@ -126,10 +127,6 @@ def run_stage_worker(
         stage_name=request.stage_name,
         attempt=attempt,
     )
-    plugin_warnings = _validate_plugin_activation_evidence(
-        prepared,
-        selected_plugin_records,
-    )
     _validate_current_attempt_state(
         run_store=run_store,
         run_uri=run_uri,
@@ -143,15 +140,78 @@ def run_stage_worker(
         attempt=attempt,
         worker_request=prepared,
     )
+    worker_result = execute_stage_worker_request(
+        run_store=run_store,
+        worker_request=prepared,
+        executor=executor,
+        artifact_store_factory=artifact_store_factory,
+        clock=clock,
+        selected_plugin_records=selected_plugin_records,
+        resource_validator_registry=resource_validator_registry,
+        validate_outputs=False,
+    )
+
+    run_store.write_stage_worker_result(
+        run_uri,
+        request.stage_name,
+        worker_result.to_dict(),
+        attempt=attempt,
+    )
+    return worker_result
+
+
+def execute_stage_worker_request(
+    *,
+    run_store: LegacyRunStore,
+    worker_request: StageWorkerRequest,
+    executor: Executor | None = None,
+    artifact_store_factory: ArtifactStoreFactory | None = None,
+    clock: Clock = utc_timestamp,
+    selected_plugin_records: tuple[PluginRecord, ...] = (),
+    resource_validator_registry: ResourceValidatorRegistry | None = None,
+    validate_outputs: bool = True,
+) -> StageWorkerResult:
+    """Execute one exact request without lifecycle allocation or authority writes.
+
+    This is the managed-worker boundary.  The caller owns assignment/fence
+    validation and durable result hand-off.  This function reads only the
+    persisted plan/config and local path roots needed to reconstruct the stage,
+    executes it, validates locally accessible output references, and returns a
+    closed worker result.  It never infers an attempt, takes a run lock, writes
+    status, or commits authority truth.
+    """
+
+    if not isinstance(run_store, LegacyRunStore):
+        raise StageWorkerStateError(
+            "execute_stage_worker_request requires LegacyRunStore"
+        )
+    if not isinstance(run_store, LocalRunStorePaths):
+        raise StageWorkerStateError(
+            "execute_stage_worker_request requires local run-store path helpers"
+        )
+    if not isinstance(worker_request, StageWorkerRequest):
+        raise StageWorkerStateError(
+            "execute_stage_worker_request.worker_request must be StageWorkerRequest"
+        )
+    run_uri = run_store.resolve_run_uri(worker_request.run_uri)
+    if run_uri != worker_request.run_uri:
+        raise StageWorkerStateError(
+            "managed worker request run_uri is not the exact resolved run URI"
+        )
+    run_store.open_run(run_uri)
+    plugin_warnings = _validate_plugin_activation_evidence(
+        worker_request,
+        selected_plugin_records,
+    )
     stage_plan = _read_stage_plan(
         run_store=run_store,
         run_uri=run_uri,
-        stage_name=request.stage_name,
+        stage_name=worker_request.stage_name,
     )
     stage_index = _stage_index(
         run_store=run_store,
         run_uri=run_uri,
-        stage_name=request.stage_name,
+        stage_name=worker_request.stage_name,
     )
     artifact_factory = artifact_store_factory or LocalArtifactStore
     worker_executor = executor or LocalExecutor(capture_stdout_stderr=True)
@@ -159,22 +219,33 @@ def run_stage_worker(
     try:
         exec_request = reconstruct_stage_execution_request(
             run_store=run_store,
-            worker_request=prepared,
+            worker_request=worker_request,
             stage_plan=stage_plan,
             stage_index=stage_index,
             artifact_store_factory=artifact_factory,
             resource_validator_registry=resource_validator_registry,
         )
         execution_result = worker_executor.execute(exec_request)
+        if execution_result.status is StageStatus.SUCCEEDED and validate_outputs:
+            execution_result = replace(
+                execution_result,
+                outputs=validate_stage_outputs(
+                    stage=exec_request.stage,
+                    outputs=execution_result.outputs,
+                    artifact_store=artifact_factory(
+                        run_store.local_artifact_root(worker_request.run_uri)
+                    ),
+                ),
+            )
         worker_result = _result_from_execution_result(
-            worker_request=prepared,
+            worker_request=worker_request,
             execution_result=execution_result,
         )
     except Exception as exc:
         if isinstance(exc, StageWorkerStateError):
             raise
         worker_result = _failed_worker_result_from_exception(
-            worker_request=prepared,
+            worker_request=worker_request,
             exc=exc,
             clock=clock,
         )
@@ -187,13 +258,6 @@ def run_stage_worker(
                 "plugin_activation_warnings": list(plugin_warnings),
             },
         )
-
-    run_store.write_stage_worker_result(
-        run_uri,
-        request.stage_name,
-        worker_result.to_dict(),
-        attempt=attempt,
-    )
     return worker_result
 
 
@@ -755,6 +819,7 @@ def _failure_type_for_exception(exc: BaseException) -> str:
 
 
 __all__ = [
+    "execute_stage_worker_request",
     "StageWorkerRunRequest",
     "StageWorkerStateError",
     "infer_stage_worker_attempt",
