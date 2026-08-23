@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 3B
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3b-local-daemon-production-composition`
@@ -319,10 +319,11 @@ Final commands:
   2,365-test default suite, the 141-test config-extra suite with three optional
   container skips, and package builds; `make test-summary` recorded 2,506
   categorized passes and no failures/errors
-- Independent review: required because the phase crosses durable authority,
-  coordinator, agent, public, and filesystem boundaries
+- Independent review: pending on PR #235 because the phase crosses durable
+  authority, coordinator, agent, public, and filesystem boundaries
 - Blocker corrections: 3/3; all resolved
-- PR and merge: pending
+- PR and merge: PR #235 is open against `develop`; base/title/mergeability were
+  verified and CI is queued
 
 ## Completion Record
 
@@ -332,5 +333,5 @@ Final commands:
 | Tests added or updated | Added daemon bootstrap/restart/lock/root tests and real persisted `preprocess -> train`, authority terminal projection, controller-only skip, independent-run overlap, digest-change, pending-cancel, active socket-cancel, hard-cut-over, CLI, package, contract, and example coverage. Added admission-scoped scheduling coverage. Removed tests for the deleted whole-run managed-local runtime and retained delegated-Slurm coverage. |
 | Validated revision/tree state and evidence | Final tree passed `make validate-pr`: Ruff and Pyright clean; default isolated suite 2,365 passed/121 deselected; config-extra 141 passed/3 optional container skips/2,368 deselected; source distribution and wheel built. Fresh `make test-summary` passed 2,506 categorized tests with zero failures/errors: package 118, unit 1,692, contract 295, integration 203, E2E 57, config-extra 141. |
 | Validation-relevant changes after evidence | This completion-record update only; no source, test, dependency, build, or validation configuration changed after the successful receipts. |
-| PR, review, and merge | pending |
+| PR, review, and merge | [PR #235](https://github.com/samcantrill/loom/pull/235) is open, non-draft, mergeable, and targets `develop` with the approved title. CI and the required independent expanded-path review are pending. |
 | Residual risk and cleanup | Corrections are exhausted and resolved: (1) authority lacked durable coordinator-admission/cancellation receipts; (2) the phase file accidentally promoted delegated Slurm's `PreparedRunRecord` into a local prerequisite, so managed local now uses the existing persisted `ExecutionPlan`, runtime metadata, and resolved config; (3) an active connected cancellation could previously arrive after root launch without suppressing success, so the running assignment now observes the authority epoch, waits for containment, and withholds output commit. The final composition also proves admission activation, authority run finalization, admission-scoped selection, independent-run capacity overlap, and owner-accurate status. No migration or compatibility path was added. Phase 4/8/9 remote, disconnected-control, and exceptional-adoption risks remain deferred as planned. Phase 3A branch/worktree remains retained as isolated evidence pending Phase 3B disposition. |
