@@ -2463,9 +2463,11 @@ Status:
   owner-labelled external status/cancel, and positive-containment recovery while
   deferring automatic fallback and allocation-fed agents. The maintainer
   approved the refined design and balanced nine-phase implementation plan.
-  Phases 1-2 are merged; Phase 3A and Phase 3B are blocked evidence; the
-  maintainer approved fresh-only Phase 3C to close the five independent-review
-  findings before Phase 4 begins.
+  Phases 1-2 are merged; Phases 3A-3C are blocked evidence. Phase 3C closed the
+  five earlier findings and passed local/CI gates, but review found incomplete
+  healthy-axis evidence and unsafe missing-store restart handling. The
+  maintainer approved fresh-only Phase 3D to close those two residual findings
+  before Phase 4 begins, with no compatibility or migration.
 
 Goal:
 
@@ -2952,6 +2954,7 @@ Phase execution plans:
 - [`docs/roadmap/stage-29/phases/local-daemon-control-boundary.md`](roadmap/stage-29/phases/local-daemon-control-boundary.md)
 - [`docs/roadmap/stage-29/phases/local-daemon-production-composition.md`](roadmap/stage-29/phases/local-daemon-production-composition.md)
 - [`docs/roadmap/stage-29/phases/local-daemon-authoritative-cutover.md`](roadmap/stage-29/phases/local-daemon-authoritative-cutover.md)
+- [`docs/roadmap/stage-29/phases/local-daemon-status-restart-closure.md`](roadmap/stage-29/phases/local-daemon-status-restart-closure.md)
 - [`docs/roadmap/stage-29/phases/authenticated-agent-sessions.md`](roadmap/stage-29/phases/authenticated-agent-sessions.md)
 - [`docs/roadmap/stage-29/phases/remote-stage-data-execution.md`](roadmap/stage-29/phases/remote-stage-data-execution.md)
 - [`docs/roadmap/stage-29/phases/gpu-preference-placement.md`](roadmap/stage-29/phases/gpu-preference-placement.md)

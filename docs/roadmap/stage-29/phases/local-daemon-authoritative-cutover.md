@@ -2,20 +2,23 @@
 
 ## Metadata
 
-- Status: pending
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 3C
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3c-local-daemon-authoritative-cutover`
-- Worktree root and path: record during implementation preparation
-- Base revision: current clean `origin/develop` after this planning amendment
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p3c-local-daemon-authoritative-cutover`
+- Base revision: clean `origin/develop` at
+  `2c5366960b811b03f3d1ec6308c7e9ec4ff2591b`
 - PR target: `develop`
 - PR title: `feat(queue): finalize authoritative local daemon cutover`
 - Dependencies: Phases 1-2 remotely merged; Phases 3A-3B explicitly blocked,
   closed/unmerged where applicable, and retained only as read-only evidence
-- Workflow path: expanded only for one independent implementation review because
-  Phase 3B review demonstrated five material durable/cross-owner failures. The
-  contracts are already fixed, so no phase-planner pass is needed.
-- Blockers: none; maintainer approved the fresh-only hard-cutover approach
+- Workflow path: expanded for one independent implementation review because
+  Phase 3B review demonstrated five material durable/cross-owner failures; no
+  phase-planner pass was needed for the fixed hard-cutover decisions
+- Blockers: required review found incomplete healthy-axis status evidence and
+  unsafe missing-store restart interpretation; correction 3/3 is exhausted
 
 ## Objective And Context
 
@@ -282,25 +285,38 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending creation of the dedicated branch/worktree from
-  current `origin/develop`
+- Manager preparation: complete at clean `origin/develop` `2c53669`; dedicated
+  branch/worktree, repository `samcantrill/loom`, target/title, predecessor
+  blocked evidence, source owners, focused tests, final gates, and stop
+  conditions are recorded
 - Expanded planning: no phase-planner pass; accepted independent-review findings
   and maintainer resolution make the execution plan decision-complete
-- Implementation: pending one `loom_phase_executor`
-- Refiner: not needed unless the executor returns one qualified blocker
-- Pre-submit gate: pending
-- Independent review: required once after PR preparation because this phase
-  directly closes the five prior durable/cross-owner review findings
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Implementation: complete; exact-record, singleton-authority, conservative
+  restart-capacity, terminal-cancellation, and owner-status slices are committed
+  in the phase worktree
+- Refiner: correction 2/3 complete; replaced fabricated full-machine restart
+  holds with exact durable-claim reconciliation and fail-closed missing-claim
+  handling, then closed the remaining focused contract evidence
+- Manager correction: correction 3/3 complete at the current tree; terminal and
+  logical-release claims remain held until provider release proof, `CANCELLING`
+  is exercised through the daemon loop, cancellation receipts are positively
+  projected, and socket failures expose stable codes rather than exception text
+- Pre-submit gate: complete at validated source revision `1879cd1`;
+  `make validate-pr` and the fresh `make test-summary` receipt passed
+- Independent review: complete; blocked on healthy scheduling/assignment/agent
+  axes lacking axis-level state/revision/freshness and retained restarts treating
+  missing execution/journal stores as empty healthy state
+- Blocker corrections: 3/3
+- PR and merge: [#236](https://github.com/samcantrill/loom/pull/236) passed CI and
+  was closed without merge after required review blocked it
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | planning baseline `b045f45`; Phase 3B implementation/review evidence `a1dfe92` and blocked record `da89ff4` |
-| Validation-relevant changes after evidence | planning-only Phase 3C amendment |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | Phase 3A/3B branches/worktrees retained as evidence until Phase 3C disposition; Phase 4 cannot start first |
+| Implementation and changed paths | Persistent daemon composition, scoped authority adapter for all post-bind mutation, exact managed-local record, coordinator/journal conservative restart hold, status/cancellation receipt projection, public feature docs, and managed-local example |
+| Tests added or updated | Exact-record settings/concurrency reconstruction independent of daemon CPU capacity; all terminal-before-cancel states and daemon-loop `CANCELLING` settlement; post-bind wrong-run/wrong-coordinator adapter rejection; exact retained accepted/granted/running/unknown/terminal/logical-release claim holds, released capacity, missing-claim fail-closed behavior; corrupt owner-data status degradation, positive cancellation receipt, and socket error redaction |
+| Validated revision/tree state and evidence | Source/test revision `1879cd1`; focused production-daemon suite passed (`27`), phase matrix passed (`309` unit, `64` integration/contract, `4` E2E/regression), `make validate-pr` passed Ruff, full Pyright, `2,384` default tests, `141` config-extra tests with `3` environment skips, and both distributions built; fresh `make test-summary` passed `2,525` tests with `3` environment skips |
+| Validation-relevant changes after evidence | none; this evidence remains fresh because only phase metadata changes follow |
+| PR, review, and merge | [#236](https://github.com/samcantrill/loom/pull/236) passed CI and closed without merge; independent decision blocked |
+| Residual risk and cleanup | Healthy owner axes omit accepted state/revision/freshness; missing retained stores can permit healthy empty restart capacity; correction 3/3 exhausted; Phase 3A-3C branches/worktrees retained as evidence and Phase 4 cannot start first |

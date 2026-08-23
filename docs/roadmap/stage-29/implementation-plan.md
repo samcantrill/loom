@@ -1,15 +1,15 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: implementation in progress; Phases 1-2 merged, Phases 3A-3B blocked
+Status: implementation in progress; Phases 1-2 merged, Phases 3A-3C blocked
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 3C pending
-Blockers: none. Phase 3B independent review found five accepted-contract
-failures and correction 3/3 is exhausted; PR #235 closed without merge. The
-maintainer approved a fresh-only Phase 3C from current `develop` to close those
-findings without compatibility or migration.
+Current phase: Phase 3D pending
+Blockers: none. Phase 3C independent review found two residual
+accepted-contract failures and correction 3/3 is exhausted; PR #236 closed
+without merge. The maintainer approved a fresh-only Phase 3D from current
+`develop` to close them without compatibility or migration.
 
 ## Summary
 
@@ -46,7 +46,7 @@ findings without compatibility or migration.
   automatic managed-agent/SLURM fallback, allocation-fed agents/provisioning,
   and a generic external-scheduler plugin are out of scope.
 - Implementation reference flows live in nine numbered phase plans plus the
-  Phase 3B/3C recovery plans. They isolate
+  Phase 3B/3C/3D recovery plans. They isolate
   pure scheduling plus authority-owned `PENDING` preparation/readiness, local
   execution side effects, persistent daemon lifetime, remote trust
   establishment, remote CPU/memory data and execution, GPU/preference placement,
@@ -636,7 +636,8 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 2 | `durable-local-stage-execution` | merged | `docs/roadmap/stage-29/phases/durable-local-stage-execution.md` | `agent/stage-29-p2-durable-local-stage-execution` | [#234](https://github.com/samcantrill/loom/pull/234) merged | Coordinator reservation/tagged-assignment operations with atomic run concurrency and decision receipts; managed-agent target first; authority bind/unbind/grant fence; local agent journal/provider with ordered assignment events; composite CPU/memory admission; local artifact hand-off; execution-only worker; explicit terminal/logical-release/provider-release/fresh-availability order | Run bounded local stages through the complete durable reservation-to-release saga with at most one managed root launch per assignment, causal replay, and real same-run branch concurrency while leaving the closed target seam for Phase 7. |
 | 3A | `local-daemon-control-boundary` | blocked | `docs/roadmap/stage-29/phases/local-daemon-control-boundary.md` | `agent/stage-29-p3-local-daemon-control-boundary` | not opened | Fresh role roots, stable coordinator identity/process epoch, owner-only IPC, digest admission, and typed hand-off candidate; manager pre-submit gate found no production authority/orchestrator/reservation/Phase 2 composition and correction 3/3 was exhausted | Preserve validated evidence without merging an accepted-but-nonexecuting daemon path. |
 | 3B | `local-daemon-production-composition` | blocked | `docs/roadmap/stage-29/phases/local-daemon-production-composition.md` | `agent/stage-29-p3b-local-daemon-production-composition` | [#235](https://github.com/samcantrill/loom/pull/235) closed without merge | Candidate production composition and hard cut-over; independent review found incomplete exact runtime reconstruction, singleton authority ownership, restart claim reconciliation, terminal cancellation projection, and owner-labelled status | Preserve the validated candidate as evidence; correction 3/3 is exhausted. |
-| 3C | `local-daemon-authoritative-cutover` | pending | `docs/roadmap/stage-29/phases/local-daemon-authoritative-cutover.md` | `agent/stage-29-p3c-local-daemon-authoritative-cutover` | pending | Selective Phase 3B production-path reuse; fresh-only exact runtime record; singleton scoped authority binding; reconcile-before-offer restart; terminal-safe cancellation; honest owner status and safe diagnostics | Complete and merge the persistent local daemon hard cut-over with all five reviewed contracts proven. |
+| 3C | `local-daemon-authoritative-cutover` | blocked | `docs/roadmap/stage-29/phases/local-daemon-authoritative-cutover.md` | `agent/stage-29-p3c-local-daemon-authoritative-cutover` | [#236](https://github.com/samcantrill/loom/pull/236) closed without merge | Validated hard-cutover candidate closes exact-runtime, authority-scope, exact-claim, cancellation, real-execution, and redaction paths; review found incomplete healthy-axis evidence and unsafe missing-store restart interpretation | Preserve the validated candidate as evidence; correction 3/3 is exhausted. |
+| 3D | `local-daemon-status-restart-closure` | pending | `docs/roadmap/stage-29/phases/local-daemon-status-restart-closure.md` | `agent/stage-29-p3d-local-daemon-status-restart-closure` | pending | Selective Phase 3C source/test reuse; complete owner-backed status; fail-closed expected-store handling; partial-start cleanup; hard cut-over unchanged | Merge the complete persistent daemon path only after retained restart and every healthy status axis are backed by explicit owner evidence. |
 | 4 | `authenticated-agent-sessions` | pending | `docs/roadmap/stage-29/phases/authenticated-agent-sessions.md` | `agent/stage-29-p4-authenticated-agent-sessions` | pending | Outbound-only agent topology; protected endpoint/trust configuration; mTLS identity; current-policy per-operation authorization; agent-persisted pre-send registration operation and coordinator-issued persisted session identity versus process/connection epochs; complete cooperative clean retirement/tombstones; current-epoch fresh remote registration/reconcile/offer/work envelopes after coordinator restart; idempotent indeterminate-outcome handling, limits, audit, and connectivity gate | Prove authenticated outbound agent connectivity and capacity publication across `machine-A` and `machine-B` before remote launch or transfer is enabled. |
 | 5 | `remote-stage-data-execution` | pending | `docs/roadmap/stage-29/phases/remote-stage-data-execution.md` | `agent/stage-29-p5-remote-stage-data-execution` | pending | Cross-agent CPU/memory availability; remote assignment loop; stable assignment-principal transfer progress with renewable authorization; durable grant/start/result; monotonic event/outbox replay; exact old-issuer reconnect, receipt-aware authority reconciliation, status freshness, and ordered physical release | Execute CPU/memory stages remotely with inputs durable before grant and accessible output refs committed before descendants unlock; leave the same bounded relay usable by Phase 7's restricted bootstrap. |
 | 6 | `gpu-preference-placement` | pending | `docs/roadmap/stage-29/phases/gpu-preference-placement.md` | `agent/stage-29-p6-gpu-preference-placement` | pending | Configured manageable GPU inventory; external-occupancy withdrawal; GPU planner/provider and claim contracts; planner-owned count/mode/per-device/topology feasibility; whole-placement constraints; tiered agent/model/packing preferences; quality-band fallback; strict future SLURM hard-mapping boundary; explicit no-OOM guarantee | Prove the generic resource and policy seams with safe exact GPU/VRAM managed placement and deterministic resource-relevant preferences that Phase 7 must map completely or reject. |
@@ -649,8 +650,8 @@ new authoritative lifecycle operation is idempotent creation of an unassigned
 `PENDING` attempt; controller-only actions continue through their existing
 authority-owned transitions. Phase 2 is the first execution-side-effecting stage path and
 must keep reservation, authority bind, physical prepare, grant, launch, commit,
-and release together. Phases 3A and 3B are blocked evidence only. Phase 3C is
-the only pending persistent-daemon path and must close the five Phase 3B review
+and release together. Phases 3A-3C are blocked evidence only. Phase 3D is the
+only pending persistent-daemon path and must close the two Phase 3C review
 findings before Phase 4 begins. Phase 4 must pass its no-agent-
 execution connectivity/security gate before Phase 5 enables remote assignment
 or artifact bytes. Phase 7 is a separate external-side-effect gate after the
@@ -755,12 +756,21 @@ work.
   `develop`, selectively reuses that evidence, and owns only exact runtime
   reconstruction, singleton/scoped authority, restart capacity reconciliation,
   terminal cancellation projection, honest status, and safe diagnostics.
+- Phase 3C disposition and Phase 3D amendment: validated source/test revision
+  `1879cd1` closed all five Phase 3B findings, passed 2,525 categorized tests,
+  `make validate-pr`, and CI. Required review then found that healthy
+  scheduling/assignment/local-agent axes omit aggregate state, owner-derived
+  revision or accepted receipt, and freshness, while missing retained
+  execution/journal stores can be treated as empty healthy state. Correction
+  3/3 is exhausted and PR #236 closed without merge. The approved Phase 3D
+  starts from current `develop`, selectively reuses that validated source/test
+  evidence, and owns only those two closures plus partial-start cleanup.
 - Maintainer approval: the refined design and nine-phase manifest, including the
   explicit ready-stage-only SLURM scope, remain approved. The maintainer
-  approved the fresh-only Phase 3C recommendation with no compatibility or
+  approved the fresh-only Phase 3D recommendation with no compatibility or
   migration.
-- Ready for implementation: yes. Prepare Phase 3C from current clean
-  `origin/develop`; do not base or stack it on Phase 3A/3B.
+- Ready for implementation: yes. Prepare Phase 3D from current clean
+  `origin/develop`; do not base or stack it on Phase 3A-3C.
 - Accepted risks: FIFO starvation, complete-search exhaustion/delay, coordinator relay
   bottleneck, agent result retention, resident-project drift, trusted
   in-process downstream extension hang/misbehavior, configuration-driven
@@ -785,7 +795,8 @@ work.
 | 2 | [#234](https://github.com/samcantrill/loom/pull/234), squash-merged as `0cff819` | `make validate-pr` passed with 2,378 default and 141 configuration-extra passes plus source/wheel builds; `make test-summary` recorded 2,519 categorized passes | No known Phase 2 blocker; persistent daemon lifetime and public facade migration remain owned by Phase 3 | Worktree and local/remote phase branch removed; merge metadata recorded on `develop` |
 | 3A | No PR opened; blocked branch head `9d2d7a0` | Candidate `51ca432` passed `make validate-pr` and fresh categorized summary, but the manager pre-submit gate found no production execution path | Accepted socket submission could remain pending indefinitely; candidate retained only as evidence | Dedicated branch/worktree retained until Phase 3B disposition |
 | 3B | [#235](https://github.com/samcantrill/loom/pull/235), closed without merge | Candidate `a1dfe92` passed `make validate-pr`, fresh `make test-summary` with 2,506 categorized passes, and CI; required independent review then blocked it | Exact runtime inputs are not reconstructable; authority ownership is not singleton/scoped; restart can over-advertise retained capacity; terminal cancellation can strand admission; status can omit or mask owner truth | Correction 3/3 exhausted; dedicated branch/worktree retained as evidence |
-| 3C | pending | pending | Must close the five accepted Phase 3B findings while retaining the real daemon trace and hard cut-over | pending |
+| 3C | [#236](https://github.com/samcantrill/loom/pull/236), closed without merge | Source/test revision `1879cd1` passed `make validate-pr`; fresh summary recorded 2,525 passes and 3 environment skips; CI passed; required independent review blocked merge | Healthy owner axes omit required state/revision/freshness; missing retained stores can become healthy empty state and full capacity | Correction 3/3 exhausted; dedicated branch/worktree retained as evidence |
+| 3D | pending | pending | Must close the two accepted Phase 3C findings while retaining the validated hard cut-over and real daemon trace | pending |
 | 4 | pending | pending | pending | pending |
 | 5 | pending | pending | pending | pending |
 | 6 | pending | pending | pending | pending |
