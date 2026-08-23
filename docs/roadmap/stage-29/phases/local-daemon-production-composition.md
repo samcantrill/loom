@@ -2,12 +2,14 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 3B
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3b-local-daemon-production-composition`
-- Worktree root and path: record during implementation preparation
-- Base revision: current clean `origin/develop` after this planning amendment
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p3b-local-daemon-production-composition`
+- Base revision: clean `origin/develop` at
+  `b045f45c763568d8d8cd3e2fbb1e5a8bf80ddf43`
 - PR target: `develop`
 - PR title: `feat(queue): complete persistent local daemon runtime`
 - Dependencies: Phases 1-2 remotely merged; Phase 3A explicitly blocked and its
@@ -301,11 +303,15 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: recovery evidence and exact source owners recorded at
-  clean `develop` `66d4968`; Phase 3A remains isolated
+- Manager preparation: complete at clean `origin/develop` `b045f45`; dedicated
+  branch/worktree, repository `samcantrill/loom`, target/title, Phase 1/2 source
+  owners, focused test areas, final gates, and isolated Phase 3A evidence path
+  are recorded
 - Expanded planning: architecture exploration, design-safety review, and plan
-  review completed; bounded plan corrections applied
-- Implementation: pending manager preparation
+  review completed; bounded plan corrections applied; no additional phase-
+  planner pass is needed because the approved plan fixes the cross-owner trace,
+  dependency direction, hard cut-over, and no-fake E2E acceptance
+- Implementation: pending executor
 - Refiner: not used
 - Pre-submit gate: pending
 - Independent review: required because the phase crosses durable authority,
