@@ -248,15 +248,11 @@ class PreparedAttemptRequest:
         if isinstance(next_attempt, bool) or not isinstance(next_attempt, int):
             raise AuthorityStoreError("next_attempt must be an integer")
         return cls(
-            operation_id=_non_empty(
-                _required(mapping, "operation_id"), "operation_id"
-            ),
+            operation_id=_non_empty(_required(mapping, "operation_id"), "operation_id"),
             request_digest=_non_empty(
                 _required(mapping, "request_digest"), "request_digest"
             ),
-            admission_id=_non_empty(
-                _required(mapping, "admission_id"), "admission_id"
-            ),
+            admission_id=_non_empty(_required(mapping, "admission_id"), "admission_id"),
             stage_name=_non_empty(_required(mapping, "stage_name"), "stage_name"),
             readiness_generation=_non_empty(
                 _required(mapping, "readiness_generation"), "readiness_generation"
@@ -280,9 +276,7 @@ class PreparedAttemptRequest:
                 "bound_inputs",
             ),
             upstream_commits=_string_mapping(
-                _mapping(
-                    _required(mapping, "upstream_commits"), "upstream_commits"
-                ),
+                _mapping(_required(mapping, "upstream_commits"), "upstream_commits"),
                 "upstream_commits",
             ),
             retry_decision_id=_optional_string(
@@ -362,10 +356,40 @@ class ExecutionFence:
 class PreparedAttemptExecutionAuthority(PreparedAttemptAuthority, Protocol):
     """Phase 2 expected-state admission operations for prepared attempts."""
 
-    def bind_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> None: ...
-    def unbind_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> None: ...
-    def grant_prepared_attempt(self, run_uri: str, *, assignment_id: str, attempt_id: str) -> ExecutionFence: ...
-    def confirm_execution_started(self, run_uri: str, *, fence: ExecutionFence) -> None: ...
+    def bind_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str
+    ) -> None: ...
+    def unbind_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str
+    ) -> None: ...
+    def grant_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str
+    ) -> ExecutionFence: ...
+    def confirm_execution_started(
+        self, run_uri: str, *, fence: ExecutionFence
+    ) -> None: ...
+
+    def record_managed_attempt_terminal(
+        self,
+        run_uri: str,
+        *,
+        fence: ExecutionFence,
+        status: StageStatus,
+        reason: LifecycleReason,
+    ) -> StatusTransition: ...
+
+    def record_output_commit(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        attempt_id: str,
+        fencing_token: str,
+        outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
+        reason: LifecycleReason | None = None,
+        assignment_id: str | None = None,
+    ) -> OutputCommit: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -896,9 +920,7 @@ def _mapping(value: object, field: str) -> Mapping[str, object]:
     return cast(Mapping[str, object], value)
 
 
-def _plain_mapping(
-    value: Mapping[str, object], field: str
-) -> Mapping[str, PlainData]:
+def _plain_mapping(value: Mapping[str, object], field: str) -> Mapping[str, PlainData]:
     try:
         frozen = freeze_plain_data(value, path=field)
     except ValueError as exc:
@@ -910,10 +932,7 @@ def _plain_mapping(
 
 def _string_mapping(value: Mapping[str, object], field: str) -> Mapping[str, str]:
     if any(
-        not isinstance(key, str)
-        or not key
-        or not isinstance(item, str)
-        or not item
+        not isinstance(key, str) or not key or not isinstance(item, str) or not item
         for key, item in value.items()
     ):
         raise AuthorityStoreError(f"{field} must contain non-empty string pairs")

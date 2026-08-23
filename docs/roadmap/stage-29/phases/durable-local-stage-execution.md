@@ -396,9 +396,9 @@ write another owner's truth.
 
 Targeted commands fixed during phase preparation:
 
-    pytest -q tests/unit/loom/pipeline/test_orchestration.py tests/contracts/test_authority_store_contract.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py
+    pytest -q tests/unit/loom/pipeline/test_orchestration.py tests/contracts/test_authority_store_contract.py tests/contracts/test_managed_authority_contract.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py
     pytest -q tests/unit/loom/pipeline/execution/test_stage_attempts.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/pipeline/execution/test_resource_admission.py tests/integration/pipeline/test_stage_worker_integration.py tests/integration/pipeline/test_parallel_execution.py
-    pytest -q tests/package/test_pipeline_execution_api.py tests/contracts/test_artifact_materialization_contract.py tests/contracts/test_stage_worker_contract.py
+    pytest -q tests/package/test_pipeline_execution_api.py tests/contracts/test_agent_resource_provider_contract.py tests/contracts/test_artifact_materialization_contract.py tests/contracts/test_stage_worker_contract.py
     pytest -q tests/e2e -k 'stage29_local or execution_lifecycle'
 
 The executor must add every new phase-specific test path to these focused runs
@@ -449,35 +449,37 @@ if its name does not match the selected directories or expression. Final command
 - Expanded planning: required by durable cross-owner side effects; phase plan
   finalized. No additional planner pass used because the fixed saga, ownership,
   stop conditions, and causal test matrix already resolve the identified risk
-- Implementation: foundational executor pass committed as `af74d6f`; durable
-  agent journaling, logical reservation, provider lifecycle, and their focused
-  tests are present, but the required authority bind/grant fence and
-  execution-only worker integration are not yet connected into the complete
-  reservation-to-release saga
+- Implementation: complete through one executor pass, one bounded refiner pass,
+  and one manager-local correction. The exact prepared attempt now proceeds
+  through atomic stage-work reservation, authority bind/grant fencing,
+  composite provider admission, one-launch execution, durable result and
+  accessible output commit, ordered logical/physical release, and fresh
+  availability without the legacy whole-run lock
 - Refiner: completed one bounded correction. The existing authority owner now
   binds/unbinds the exact prepared attempt, grants a durable execution fence,
   and accepts only its matching confirmed start; the embedded local adapter
   stages request/input and physical preparation before that grant and retains
   the one-launch journal boundary without a whole-run lock.
-- Pre-submit gate: pending
+- Pre-submit gate: passed; `make validate-pr` completed with 2,372 default
+  passes, 1 default skip, 141 configuration-extra passes, 3 configuration-extra
+  skips, and successful source/wheel builds. `make test-summary` recorded all
+  package, unit, contract, integration, E2E, and configuration-extra categories
 - Independent review: required because launch fencing and cross-store recovery
-  remain material residual risks
-- Blocker corrections: 1/3 completed. The authority bind/grant/start-fence
-  bridge and bounded local admission-to-start composition now close the
-  previously unreachable reservation-to-launch transition without reallocating
-  the Phase 1 attempt or adding a whole-run lock. Focused authority fence and
-  journal one-launch coverage is present; terminal result/output and ordered
-  release continue through the already-owned Phase 2 primitives for the
-  pre-submit/review gate.
+  remain material residual risks; pending
+- Blocker corrections: 2/3 completed. The first correction added the exact
+  authority grant/start fence. The manager-local correction completed the
+  execution-only worker, terminal/output/release saga, atomic stage-work
+  decision revalidation, exact reservation/fence replay, provider conformance,
+  failure release, lost-response recovery, and real same-run overlap coverage
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Authority bind/unbind/grant/start CAS in `stores/authority.py` and `stores/sqlite_authority.py`; embedded local admission/start adapter in `execution/managed_local.py`; conformance double updated |
-| Tests added or updated | SQLite authority fence transition/idempotency/stale-fence test |
-| Validated revision/tree state and evidence | `pytest -q tests/unit/loom/pipeline/test_orchestration.py tests/contracts/test_authority_store_contract.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py` (45 passed); focused managed-local/SQLite authority subset (24 passed) |
+| Implementation and changed paths | Managed provider/journal/coordinator saga in `execution/managed_local.py`; exact no-lock worker seam in `execution/stage_worker.py`; managed fence and terminal/output CAS in `stores/authority.py` and `stores/sqlite_authority.py`; authority schema v4 migration; public provider exports; in-memory conformance double |
+| Tests added or updated | Provider and managed-authority contracts; coordinator reservation/replay/event tests; journal composite/one-launch tests; SQLite authority fence/terminal/migration tests; accessible output, failure release, lost-response replay, and real same-run overlap integration tests; retained adapter subclass signatures |
+| Validated revision/tree state and evidence | `make validate-pr`: lint and Pyright clean; default 2,372 passed/1 skipped/121 deselected; configuration-extra 141 passed/3 skipped/2,376 deselected; source and wheel builds passed. `make test-summary`: package 118, unit 1,691, contract 291, integration 214, E2E 58, configuration-extra 141 passed |
 | Validation-relevant changes after evidence | none |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| PR, review, and merge | independent review pending; PR and merge pending |
+| Residual risk and cleanup | Ambiguous provider/launcher outcomes remain durably retained and non-relaunchable; persistent role startup and user-facing unknown-work recovery remain assigned to later phases |

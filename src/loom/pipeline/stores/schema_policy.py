@@ -13,7 +13,7 @@ from loom.serialization.errors import PlainDataError
 from .capabilities import DiagnosticSeverity, StoreDiagnostic
 
 
-AUTHORITY_SCHEMA_VERSION = 3
+AUTHORITY_SCHEMA_VERSION = 4
 
 
 class AuthoritySchemaError(ValueError):
