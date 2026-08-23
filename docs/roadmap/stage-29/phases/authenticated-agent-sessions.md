@@ -2,20 +2,25 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 4
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p4-authenticated-agent-sessions`
-- Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop` after Phase 3 remotely merges
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p4-authenticated-agent-sessions`
+- Base revision: clean `origin/develop` at
+  `ad3c8349f014f454c831d6e3f50cf97cec3ddea5`
 - PR target: `develop`
 - PR title: `feat(protocols): add authenticated agent sessions`
-- Dependencies: Phase 3 merged with one coordinator application owner, narrow
-  role views, authorizer, persistent state, and local daemon composition
-- Workflow path: expanded because this phase establishes the remote trust,
-  authorization, replay, and session boundary before remote code execution
-- Blockers: Phase 3 remote merge and opt-in site credentials for the optional
-  two-machine receipt; automated loopback evidence must not depend on them
+- Dependencies: Phase 3D remotely merged through PR #237 as `6a8cf9f`, with one
+  persistent coordinator application owner, client/operator views, owner-only
+  local IPC, durable coordinator/agent roots, and the complete local execution
+  path
+- Workflow path: expanded with one phase-planner refinement and one independent
+  PR review because this phase establishes transport-derived identity, current
+  scoped authorization, durable remote sessions, and the no-launch trust gate
+- Blockers: none. Optional site credentials may add a two-machine receipt but
+  are not required by the automated loopback gate
 
 ## Objective And Context
 
@@ -47,22 +52,33 @@ prepare, bind, grant, transfer, or launch remote stage execution.
 
 ## Current Source And Harness
 
-- Reuse Phase 3 client/local-agent/operator application views, shared
-  authorizer, authenticated scoped coordinator-authority adapter, direct adapter
-  conformance, coordinator SQLite ownership, safe status/errors, and protected
-  configuration patterns.
-- Rediscover existing authority HTTP/client codecs, service test utilities,
-  idempotency/version envelopes, payload limits, fake clocks/networks, and
-  application error normalization. Add or extend the real TLS fixtures and
-  verification harness needed here; the pre-Stage-29 source does not already
-  provide them, though Phase 3 may have introduced a bounded local subset if it
-  selected HTTP instead of owner-only IPC.
-- Standard-library/existing HTTP dependencies are preferred. Do not add a
-  broker, service mesh, streaming platform, certificate authority, or
-  heavyweight networking dependency.
-- Automated tests use loopback and fake transports. Real `machine-A`/
-  `machine-B` connectivity is an explicit opt-in receipt and performs no run,
-  assignment, artifact, or launch mutation.
+- `src/loom/queue/local_daemon.py` owns the persistent coordinator composition,
+  stable coordinator/process identity, protected local roots, client/operator
+  views, and a narrow role check. It does not yet contain an agent view,
+  object/pool/session-scoped authorizer, credential policy, remote session
+  state, or remote offers.
+- `src/loom/queue/local_daemon_transport.py` is owner-only Unix IPC with bounded
+  JSON and safe errors. It derives a local UID and reaches the same client view,
+  but is not an HTTP or TLS boundary and must remain the supported local path.
+- `src/loom/pipeline/execution/managed_local.py` already owns durable agent
+  assignment events, contiguous acknowledgement, exact CPU capacity atoms, and
+  coordinator offer records. Phase 4 may reuse those semantic values and
+  journal facts, but its remote session/offer state remains coordinator-owned
+  and cannot enable Phase 5 delivery or launch.
+- `src/loom/authority/app.py`, `src/loom/pipeline/stores/authority_client.py`,
+  and their contract/integration tests provide FastAPI, standard-library HTTP,
+  versioned plain-data, fake transport, and error-normalization patterns. The
+  current hosted authority path has no mTLS peer extraction, expected-service
+  verification, principal map, or persistent remote-agent authorization and is
+  not the Phase 4 application owner.
+- The repository has no current TLS certificate fixture. Required automated
+  evidence must build a real loopback TLS 1.2+ connection without adding a
+  heavyweight runtime dependency; any optional external-tool fixture must fail
+  or skip only the opt-in site receipt, not the default protocol proof.
+- Current focused regressions live under `tests/unit/loom/queue`,
+  `tests/contracts/test_queue_python_api_contract.py`,
+  `tests/integration/queue`, and `tests/e2e/test_queue_cli.py`. New direct/HTTP,
+  TLS, session/replay/offer, and no-launch tests belong beside those owners.
 
 ## Scope
 
@@ -426,7 +442,12 @@ decoding, idempotency, or the no-launch gate.
 | Integration | Required | Real TLS loopback, service-order behavior, and durable reconnect/rollover | Agent-before-coordinator bounded reconnect at zero availability; coordinator-without-agent no-capacity wait; wrong CA/service/role/scope; removal on established connection/poll; overlapping-credential same-session resume; authority view inaccessible to agent credentials; same coordinator ID/new epoch rejects retained offer until reconcile/re-offer; crash after persisted registration intent and commit-then-timeout replay to the same session; stale poll; cooperative-empty rollover; unresolved/lost-journal refusal and late-old tombstone; one pool domain; no inbound agent listener |
 | E2E / opt-in | Required loopback; optional two-machine | No-mutation connectivity | Authenticated register/offer/wait on loopback; abstract two-machine receipt when credentials exist; launch/artifact sentinels untouched |
 
-Targeted commands are fixed during phase preparation. Final commands:
+Targeted commands:
+
+    uv run pytest -q tests/unit/loom/queue tests/contracts/test_queue_python_api_contract.py tests/contracts/test_agent_session_protocol_contract.py
+    uv run pytest -q tests/integration/queue/test_agent_session_protocol.py tests/e2e/test_agent_connectivity.py
+
+Final commands:
 
     make validate-pr
     make test-summary
@@ -469,14 +490,20 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 3 merge, worktree/base recording, and
-  exact transport/test rediscovery
-- Expanded planning: required by remote trust boundary; phase plan finalized
+- Manager preparation: complete at clean `origin/develop` `ad3c834`; repository
+  `samcantrill/loom`, dedicated branch/worktree, target/title, Phase 3D merge,
+  current local/HTTP/store seams, focused tests, gates, and stop conditions are
+  recorded
+- Expanded planning: one loom-phase-planner refinement pending to remove the
+  stale Phase 3 authorizer/agent-view assumption and tighten the exact
+  transport-derived identity plus no-launch boundary; reduce the 3,282-word
+  executor packet toward the 800-1,600-word target without losing accepted
+  trust, durability, validation, or stop contracts
 - Implementation: pending
 - Refiner: not used
 - Pre-submit gate: pending
-- Independent review: expected because a mistaken boundary can authorize future
-  remote execution; confirm during preparation
+- Independent review: required because a mistaken identity, authorization, or
+  session boundary can authorize future remote execution
 - Blocker corrections: 0/3
 - PR and merge: pending
 
