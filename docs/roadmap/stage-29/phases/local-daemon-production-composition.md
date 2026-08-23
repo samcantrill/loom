@@ -311,10 +311,9 @@ Final commands:
   review completed; bounded plan corrections applied; no additional phase-
   planner pass is needed because the approved plan fixes the cross-owner trace,
   dependency direction, hard cut-over, and no-fake E2E acceptance
-- Implementation: authority admission/cancellation boundary correction complete;
-  production SQLite authority now durably replays exact coordinator admission
-  bindings and one authority-owned cancellation epoch, ready for the approved
-  production-composition work to resume
+- Implementation: blocked at the persisted-preparation boundary after the
+  authority admission/cancellation correction; the current local preparation
+  path has no producer for the required `PreparedRunRecord`
 - Refiner: qualified blocker correction 1/3 complete
 - Pre-submit gate: pending
 - Independent review: required because the phase crosses durable authority,
@@ -326,9 +325,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added the private `LocalDaemonAuthority` extension and serializable coordinator-admission/cancellation-epoch request/receipt values in `src/loom/pipeline/stores/authority.py`, with intentional package exports. `SQLitePerRunAuthorityStore` now atomically records/replays an exact operation-to-stable-coordinator/`run_uri`/intent-digest admission receipt, and atomically installs/replays one authority-owned cancellation epoch before any later fan-out. SQLite schema v6 persists the two receipt tables and epoch, including v5 upgrade handling. No daemon composition was added. |
-| Tests added or updated | Added focused SQLite replay/conflict/durability and v5 schema-upgrade coverage in `tests/unit/loom/pipeline/stores/test_sqlite_authority.py`; added `tests/contracts/test_local_daemon_authority_contract.py` for the daemon-only protocol and request/receipt serialization. |
-| Validated revision/tree state and evidence | `uv run ruff check` on changed authority/store/tests passed. `uv run pytest -q tests/unit/loom/pipeline/stores/test_authority_models.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/contracts/test_local_daemon_authority_contract.py` passed (36 passed). |
-| Validation-relevant changes after evidence | Authority protocol, SQLite schema/implementation, and focused tests changed; the cited validation was rerun after those changes. |
+| Implementation and changed paths | Authority correction 1/3 remains intact at `afc245a`: private replay-safe coordinator-admission/cancellation-epoch receipt values and SQLite persistence. No daemon source was retained after source inspection established the next qualified blocker. |
+| Tests added or updated | Authority correction tests remain as recorded at `afc245a`. No Phase 3B composition test was added because it would have to manufacture the missing prepared-run artifact. |
+| Validated revision/tree state and evidence | Authority correction evidence remains valid: focused Ruff and 36 authority contract/store tests passed. New inspection at `afc245a` establishes that `PreparedRunRecord(...)` and `write_prepared_run(...)` have one production producer, `src/loom/cli/run.py::_write_slurm_prepared_run`; the normal local `PipelineRunner` preparation path writes plan/runtime/config only. |
+| Validation-relevant changes after evidence | The completion-record update only; no source, test, dependency, build, or validation configuration changed after the authority correction. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | **Qualified blocker resolved (1/3):** the production authority owns the required replay-safe coordinator-admission receipt and cancellation epoch, so a supported admission can remain `PENDING_AUTHORITY` until its exact binding is returned and connected cancellation can persist ordering before fan-out. Daemon composition, authority consumption, and execution-control fan-out remain the already-approved Phase 3B implementation work and were deliberately not started by this correction. Phase 3A branch/worktree remains retained as isolated evidence. |
+| Residual risk and cleanup | **Qualified blocker (2/3):** Phase 3B is required to admit an already-persisted immutable `PreparedRunRecord`, execution plan, and runtime metadata by `run_uri`; current normal local preparation produces only the plan/runtime/config artifacts. The sole production writer for `PreparedRunRecord` is the delegated-SLURM-specific `_write_slurm_prepared_run`, and its record explicitly carries `executor_kind: slurm`. Creating a generic/local record in the daemon would make admission fabricate the prerequisite it must validate; adapting the SLURM writer would change the explicitly unchanged delegated owner; and accepting a record supplied by a test/client would restore the prohibited opaque/fake input path. The smallest remedy is an approved authority/run-preparation owner and durable record contract for local prepared runs, including its CLI/API producer and intent-digest semantics. Phase 3A branch/worktree remains retained as isolated evidence. |
