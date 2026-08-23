@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import ssl
+import sqlite3
 import subprocess
 from collections.abc import Mapping
 
@@ -88,6 +89,7 @@ def test_loopback_mtls_derives_credential_and_rechecks_live_policy(tmp_path: Pat
         AgentTlsClientConfig(
             f"https://localhost:{server.port}", credentials["ca"].with_suffix(".crt"),
             credentials["agent"].with_suffix(".crt"), credentials["agent"].with_suffix(".key"),
+            tmp_path / "remote-agent" / "journal.sqlite",
         )
     )
     try:
@@ -106,6 +108,44 @@ def test_loopback_mtls_derives_credential_and_rechecks_live_policy(tmp_path: Pat
                 idempotency_key="offer-1",
             )
         assert client._connection is connection  # policy is rechecked on one TLS connection
+    finally:
+        client.close()
+        server.stop()
+        daemon.stop()
+
+
+def test_lost_registration_response_replays_into_remote_agent_journal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    config = LocalDaemonConfig(tmp_path / "coordinator", tmp_path / "coordinator-agent", tmp_path / "runs", agent_policy=_policy())
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(daemon, AgentTlsServerConfig("localhost", 0, credentials["server"].with_suffix(".crt"), credentials["server"].with_suffix(".key"), credentials["ca"].with_suffix(".crt"), {_fingerprint(credentials["agent"].with_suffix(".crt")): "agent-credential"}))
+    server.start()
+    journal = tmp_path / "remote-agent" / "journal.sqlite"
+    client = LocalDaemonAgentHttpClient(AgentTlsClientConfig(f"https://localhost:{server.port}", credentials["ca"].with_suffix(".crt"), credentials["agent"].with_suffix(".crt"), credentials["agent"].with_suffix(".key"), journal))
+    try:
+        request = _request(client.handshake())
+        original = client._call
+        called = False
+
+        def lose_response(operation: str, value: Mapping[str, object], *, role: str = "agent"):
+            nonlocal called
+            result = original(operation, value, role=role)
+            if operation == "register" and not called:
+                called = True
+                raise QueueServiceError("agent protocol outcome is indeterminate")
+            return result
+
+        monkeypatch.setattr(client, "_call", lose_response)
+        with pytest.raises(QueueServiceError, match="indeterminate"):
+            client.register(request)
+        repaired = client.register(request)
+        with sqlite3.connect(journal) as conn:
+            assert conn.execute("SELECT result_json FROM registration_intents WHERE operation_id = ?", (request.idempotency_key,)).fetchone()[0]
+            assert conn.execute("SELECT session_id FROM sessions").fetchone()[0] == repaired.session_id
+        with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
+            assert conn.execute("SELECT name FROM sqlite_master WHERE name = 'registration_intents'").fetchone() is None
     finally:
         client.close()
         server.stop()

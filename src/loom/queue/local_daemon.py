@@ -967,6 +967,10 @@ def _open_root(path: Path, *, role: str) -> str:
             raise QueueStorageError(
                 f"{role} daemon schema is unsupported; fresh roots are required"
             )
+        else:
+            # Phase 4 additions remain isolated from the Phase 3 root contract.
+            initialize_agent_session_schema(conn, coordinator=role == "coordinator")
+            conn.commit()
         values = {
             str(row[0]): str(row[1])
             for row in conn.execute("SELECT key, value FROM root_metadata")

@@ -13,6 +13,7 @@ import hashlib
 import http.client
 import json
 from pathlib import Path
+import sqlite3
 import ssl
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -67,11 +68,119 @@ class AgentTlsClientConfig:
     server_ca_path: Path
     certificate_path: Path
     private_key_path: Path
+    agent_journal_path: Path | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/"):
             raise QueueServiceError("agent TLS URL must be one HTTPS service identity")
+
+
+class _RemoteAgentJournal:
+    """The outbound agent's private, replayable session evidence.
+
+    This intentionally lives with the HTTP caller, never under the coordinator
+    daemon's configured local-agent root.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connection() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS registration_intents (operation_id TEXT PRIMARY KEY, digest TEXT NOT NULL, request_json TEXT NOT NULL, result_json TEXT);
+                CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, value_json TEXT NOT NULL, state TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS offers (session_id TEXT PRIMARY KEY, availability_revision TEXT NOT NULL, fenced INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS polls (session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, poll_id TEXT NOT NULL, fenced INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id, availability_revision));
+                CREATE TABLE IF NOT EXISTS session_references (session_id TEXT NOT NULL, reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id, reference_kind, reference_id));
+                CREATE TABLE IF NOT EXISTS retirement_proofs (session_id TEXT PRIMARY KEY, proof TEXT NOT NULL);
+                """
+            )
+            conn.commit()
+
+    def _connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def persist_registration_intent(self, request: AgentRegistration) -> None:
+        value = request.value()
+        digest = _canonical_digest(value)
+        encoded = _canonical_json(value)
+        with self._connection() as conn:
+            row = conn.execute("SELECT digest FROM registration_intents WHERE operation_id = ?", (request.idempotency_key,)).fetchone()
+            if row is None:
+                conn.execute("INSERT INTO registration_intents(operation_id, digest, request_json, result_json) VALUES (?, ?, ?, NULL)", (request.idempotency_key, digest, encoded))
+            elif str(row["digest"]) != digest:
+                raise QueueConflictError("idempotency key was reused with different content")
+            conn.commit()
+
+    def persist_session(self, operation_id: str, request: Mapping[str, PlainData], session: AgentSession) -> None:
+        digest = _canonical_digest(request)
+        encoded = _canonical_json(session.value())
+        with self._connection() as conn:
+            row = conn.execute("SELECT digest FROM registration_intents WHERE operation_id = ?", (operation_id,)).fetchone()
+            if row is None or str(row["digest"]) != digest:
+                raise QueueConflictError("agent registration intent is not durable")
+            conn.execute("UPDATE registration_intents SET result_json = ? WHERE operation_id = ?", (encoded, operation_id))
+            conn.execute("INSERT INTO sessions(session_id, value_json, state) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET value_json = excluded.value_json, state = excluded.state", (session.session_id, encoded, session.state.value))
+            conn.commit()
+
+    def session(self, session_id: str) -> AgentSession:
+        with self._connection() as conn:
+            row = conn.execute("SELECT value_json FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+        if row is None:
+            raise QueueServiceError("remote agent session evidence is unavailable")
+        value = json.loads(str(row["value_json"]))
+        if not isinstance(value, Mapping):
+            raise QueueServiceError("remote agent session evidence is invalid")
+        return _session_from_value(cast(Mapping[str, PlainData], value))
+
+    def persist_reconciled_session(self, session: AgentSession) -> None:
+        with self._connection() as conn:
+            conn.execute("UPDATE sessions SET value_json = ? WHERE session_id = ?", (_canonical_json(session.value()), session.session_id))
+            if conn.total_changes != 1:
+                raise QueueServiceError("remote agent session evidence is unavailable")
+            conn.commit()
+
+    def persist_offer(self, offer: AgentOffer) -> None:
+        with self._connection() as conn:
+            conn.execute("INSERT INTO offers(session_id, availability_revision, fenced) VALUES (?, ?, 0) ON CONFLICT(session_id) DO UPDATE SET availability_revision = excluded.availability_revision, fenced = 0", (offer.session_id, offer.availability_revision))
+            conn.commit()
+
+    def persist_poll(self, session_id: str, availability_revision: str, poll_id: str) -> None:
+        with self._connection() as conn:
+            conn.execute("UPDATE polls SET fenced = 1 WHERE session_id = ? AND availability_revision = ?", (session_id, availability_revision))
+            conn.execute("INSERT INTO polls(session_id, availability_revision, poll_id, fenced) VALUES (?, ?, ?, 0) ON CONFLICT(session_id, availability_revision) DO UPDATE SET poll_id = excluded.poll_id, fenced = 0", (session_id, availability_revision, poll_id))
+            conn.commit()
+
+    def fence_and_prove_empty(self, session_id: str) -> str:
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("UPDATE offers SET fenced = 1 WHERE session_id = ?", (session_id,))
+            conn.execute("UPDATE polls SET fenced = 1 WHERE session_id = ?", (session_id,))
+            row = conn.execute("SELECT COUNT(*) AS n FROM session_references WHERE session_id = ? AND resolved = 0", (session_id,)).fetchone()
+            if row is None or int(row["n"]) != 0:
+                conn.rollback()
+                raise QueueConflictError("remote agent session has unresolved references")
+            proof = _canonical_digest({"session_id": session_id, "offers_fenced": True, "polls_fenced": True, "references_empty": True})
+            conn.execute("INSERT INTO retirement_proofs(session_id, proof) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET proof = excluded.proof", (session_id, proof))
+            conn.commit()
+        return proof
+
+    def persist_retired(self, session_id: str) -> None:
+        with self._connection() as conn:
+            conn.execute("UPDATE sessions SET state = ? WHERE session_id = ?", ("RETIRED_CLEAN", session_id))
+            conn.commit()
+
+
+def _canonical_json(value: Mapping[str, PlainData]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _canonical_digest(value: Mapping[str, PlainData]) -> str:
+    return hashlib.sha256(_canonical_json(value).encode()).hexdigest()
 
 
 class LocalDaemonAgentHttpServer:
@@ -122,6 +231,7 @@ class LocalDaemonAgentHttpClient:
     def __init__(self, config: AgentTlsClientConfig) -> None:
         self._config = config
         self._connection: http.client.HTTPSConnection | None = None
+        self._journal = _RemoteAgentJournal(config.agent_journal_path) if config.agent_journal_path else None
 
     def close(self) -> None:
         if self._connection is not None:
@@ -132,19 +242,42 @@ class LocalDaemonAgentHttpClient:
         return self._call("handshake", {})
 
     def register(self, request: AgentRegistration) -> AgentSession:
-        return _session_from_value(self._call("register", request.value()))
+        journal = self._require_journal()
+        journal.persist_registration_intent(request)
+        session = _session_from_value(self._call("register", request.value()))
+        journal.persist_session(request.idempotency_key, request.value(), session)
+        return session
 
     def reconcile(self, session_id: str, coordinator_epoch: str) -> AgentSession:
-        return _session_from_value(self._call("reconcile", {"session_id": session_id, "coordinator_epoch": coordinator_epoch}))
+        journal = self._require_journal()
+        expected = journal.session(session_id)
+        value = expected.value()
+        value["coordinator_epoch"] = coordinator_epoch
+        session = _session_from_value(self._call("reconcile", value))
+        journal.persist_reconciled_session(session)
+        return session
 
     def publish_offer(self, offer: AgentOffer, *, idempotency_key: str) -> Mapping[str, PlainData]:
-        return self._call("offer", {"offer": offer.value(), "idempotency_key": idempotency_key})
+        result = self._call("offer", {"offer": offer.value(), "idempotency_key": idempotency_key})
+        self._require_journal().persist_offer(offer)
+        return result
 
     def wait_for_work(self, session_id: str, availability_revision: str, *, poll_id: str) -> Mapping[str, PlainData]:
-        return self._call("poll", {"session_id": session_id, "availability_revision": availability_revision, "poll_id": poll_id})
+        result = self._call("poll", {"session_id": session_id, "availability_revision": availability_revision, "poll_id": poll_id})
+        self._require_journal().persist_poll(session_id, availability_revision, poll_id)
+        return result
 
     def retire_clean(self, session_id: str, *, idempotency_key: str) -> Mapping[str, PlainData]:
-        return self._call("retire", {"session_id": session_id, "idempotency_key": idempotency_key})
+        journal = self._require_journal()
+        proof = journal.fence_and_prove_empty(session_id)
+        result = self._call("retire", {"session_id": session_id, "idempotency_key": idempotency_key, "agent_proof": proof})
+        journal.persist_retired(session_id)
+        return result
+
+    def _require_journal(self) -> "_RemoteAgentJournal":
+        if self._journal is None:
+            raise QueueServiceError("remote agent durable journal is required")
+        return self._journal
 
     def call_application(
         self, role: str, operation: str, value: Mapping[str, PlainData]
@@ -177,6 +310,8 @@ class LocalDaemonAgentHttpClient:
         if len(raw) > _MAX_BODY_BYTES:
             raise QueueServiceError("agent protocol response is too large")
         payload = _decode(raw)
+        if response.status == 409:
+            raise QueueConflictError("agent protocol conflict")
         if response.status != 200 or payload.get("ok") is not True:
             code = payload.get("error")
             raise QueueServiceError(str(code) if isinstance(code, str) else "agent protocol request failed")
@@ -273,8 +408,8 @@ def _dispatch(view: Any, operation: str, value: Mapping[str, object]) -> Mapping
     if operation == "register":
         return view.register(_registration(value)).value()
     if operation == "reconcile":
-        _exact(value, {"session_id", "coordinator_epoch"})
-        return view.reconcile(_string(value, "session_id"), _string(value, "coordinator_epoch")).value()
+        _exact(value, {"session_id", "coordinator_id", "coordinator_epoch", "agent_id", "policy_revision", "config_revision", "inventory_revision", "availability_revision", "capabilities", "pools", "state"})
+        return view.reconcile(_string(value, "session_id"), _string(value, "coordinator_epoch"), expected=_session_from_value(cast(Mapping[str, PlainData], value))).value()
     if operation == "offer":
         _exact(value, {"offer", "idempotency_key"})
         offer = value["offer"]
@@ -284,8 +419,8 @@ def _dispatch(view: Any, operation: str, value: Mapping[str, object]) -> Mapping
     if operation == "poll":
         _exact(value, {"session_id", "availability_revision", "poll_id"})
         return view.wait_for_work(_string(value, "session_id"), _string(value, "availability_revision"), poll_id=_string(value, "poll_id"))
-    _exact(value, {"session_id", "idempotency_key"})
-    return view.retire_clean(_string(value, "session_id"), idempotency_key=_string(value, "idempotency_key"))
+    _exact(value, {"session_id", "idempotency_key", "agent_proof"})
+    return view.retire_clean(_string(value, "session_id"), idempotency_key=_string(value, "idempotency_key"), agent_proof=_string(value, "agent_proof"))
 
 
 def _dispatch_application(
@@ -340,10 +475,11 @@ def _registration(value: Mapping[str, object]) -> AgentRegistration:
 
 
 def _offer(value: Mapping[str, object]) -> AgentOffer:
-    _exact(value, {"session_id", "coordinator_epoch", "config_revision", "inventory_revision", "availability_revision", "cpu", "memory_bytes", "ttl_seconds", "reflected_claim_ids"})
+    _exact(value, {"session_id", "coordinator_epoch", "config_revision", "inventory_revision", "availability_revision", "cpu", "memory_bytes", "ttl_seconds", "pools", "reflected_claim_ids"})
     claims = value["reflected_claim_ids"]
-    if not isinstance(claims, list) or any(not isinstance(item, str) for item in claims):
-        raise QueueServiceError("agent reflected claims are invalid")
+    pools = value["pools"]
+    if not isinstance(claims, list) or any(not isinstance(item, str) for item in claims) or not isinstance(pools, list) or any(not isinstance(item, str) for item in pools):
+        raise QueueServiceError("agent offer scope is invalid")
     numeric = (value["cpu"], value["memory_bytes"], value["ttl_seconds"])
     if any(isinstance(item, bool) or not isinstance(item, int) for item in numeric):
         raise QueueServiceError("agent offer quantities are invalid")
@@ -356,6 +492,7 @@ def _offer(value: Mapping[str, object]) -> AgentOffer:
         cpu=cast(int, numeric[0]),
         memory_bytes=cast(int, numeric[1]),
         ttl_seconds=cast(int, numeric[2]),
+        pools=tuple(pools),
         reflected_claim_ids=tuple(claims),
     )
 

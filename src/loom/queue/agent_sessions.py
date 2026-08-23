@@ -30,6 +30,7 @@ PROTOCOL_VERSION = "1"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
+_MAX_RESOURCE_ATOM = 2**63 - 1
 
 
 class AgentSessionState(StrEnum):
@@ -135,6 +136,7 @@ class AgentSession:
     inventory_revision: str
     availability_revision: str
     capabilities: tuple[str, ...]
+    pools: tuple[str, ...]
     state: AgentSessionState
 
     def value(self) -> dict[str, PlainData]:
@@ -148,6 +150,7 @@ class AgentSession:
             "inventory_revision": self.inventory_revision,
             "availability_revision": self.availability_revision,
             "capabilities": list(self.capabilities),
+            "pools": list(self.pools),
             "state": self.state.value,
         }
 
@@ -162,6 +165,7 @@ class AgentOffer:
     cpu: int
     memory_bytes: int
     ttl_seconds: int
+    pools: tuple[str, ...] = ("default",)
     reflected_claim_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -174,8 +178,8 @@ class AgentOffer:
         ):
             _identifier(getattr(self, name), name)
         for value, name in ((self.cpu, "cpu"), (self.memory_bytes, "memory_bytes")):
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise QueueServiceError(f"{name} must be a non-negative integer")
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= _MAX_RESOURCE_ATOM:
+                raise QueueServiceError(f"{name} must be a bounded non-negative integer")
         if not self.cpu and not self.memory_bytes:
             raise QueueServiceError("offer capacity must not be empty")
         if (
@@ -185,6 +189,7 @@ class AgentOffer:
         ):
             raise QueueServiceError("offer TTL is outside the permitted range")
         _identifiers(self.reflected_claim_ids, "reflected claim IDs")
+        _identifiers(self.pools, "offer pools", non_empty=True)
 
     def value(self) -> dict[str, PlainData]:
         return {
@@ -196,6 +201,7 @@ class AgentOffer:
             "cpu": self.cpu,
             "memory_bytes": self.memory_bytes,
             "ttl_seconds": self.ttl_seconds,
+            "pools": list(self.pools),
             "reflected_claim_ids": list(self.reflected_claim_ids),
         }
 
@@ -257,9 +263,11 @@ class AgentSessionView:
     def register(self, request: AgentRegistration) -> AgentSession:
         return AgentSessionService(self._daemon, self._principal).register(request)
 
-    def reconcile(self, session_id: str, coordinator_epoch: str) -> AgentSession:
+    def reconcile(
+        self, session_id: str, coordinator_epoch: str, *, expected: AgentSession | None = None
+    ) -> AgentSession:
         return AgentSessionService(self._daemon, self._principal).reconcile(
-            session_id, coordinator_epoch
+            session_id, coordinator_epoch, expected=expected
         )
 
     def publish_offer(self, offer: AgentOffer, *, idempotency_key: str) -> Mapping[str, PlainData]:
@@ -274,9 +282,9 @@ class AgentSessionView:
             session_id, availability_revision, poll_id=poll_id
         )
 
-    def retire_clean(self, session_id: str, *, idempotency_key: str) -> Mapping[str, PlainData]:
+    def retire_clean(self, session_id: str, *, idempotency_key: str, agent_proof: str) -> Mapping[str, PlainData]:
         return AgentSessionService(self._daemon, self._principal).retire_clean(
-            session_id, idempotency_key=idempotency_key
+            session_id, idempotency_key=idempotency_key, agent_proof=agent_proof
         )
 
 
@@ -315,7 +323,6 @@ class AgentSessionService:
         if request.session_id is not None:
             raise QueueConflictError("agent callers cannot select a session ID")
         digest = _digest(request.value())
-        self._persist_agent_intent(request, digest)
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             conn.execute("BEGIN IMMEDIATE")
             replay = _receipt(conn, rule.principal_id, "register", request.idempotency_key, digest)
@@ -335,21 +342,21 @@ class AgentSessionService:
                 config_revision=request.config_revision, inventory_revision=request.inventory_revision,
                 availability_revision=request.availability_revision,
                 capabilities=tuple(sorted(set(request.declared_capabilities) & set(rule.capabilities))),
+                pools=rule.pools,
                 state=AgentSessionState.ACTIVE,
             )
             accepted = self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
             conn.execute(
-                "INSERT INTO agent_sessions(session_id, agent_id, principal_id, policy_revision, config_revision, inventory_revision, availability_revision, coordinator_epoch, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO agent_sessions(session_id, agent_id, principal_id, policy_revision, config_revision, inventory_revision, availability_revision, capabilities_json, pools_json, coordinator_epoch, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (session.session_id, rule.agent_id, rule.principal_id, session.policy_revision,
                  session.config_revision, session.inventory_revision, session.availability_revision,
-                 epoch, session.state.value, accepted),
+                 json.dumps(session.capabilities), json.dumps(session.pools), epoch, session.state.value, accepted),
             )
             _write_receipt(conn, rule.principal_id, "register", request.idempotency_key, digest, session.value())
             conn.commit()
-        self._persist_agent_session(session, request.idempotency_key, digest)
         return session
 
-    def reconcile(self, session_id: str, coordinator_epoch: str) -> AgentSession:
+    def reconcile(self, session_id: str, coordinator_epoch: str, *, expected: AgentSession | None = None) -> AgentSession:
         rule = self._rule("reconcile")
         _identifier(session_id, "session_id")
         _identifier(coordinator_epoch, "coordinator_epoch")
@@ -358,6 +365,19 @@ class AgentSessionService:
         session = _session_from_row(row, self._daemon._require_started())  # type: ignore[attr-defined]
         if session.agent_id != rule.agent_id or session.state is not AgentSessionState.ACTIVE:
             raise QueueServiceError("agent session is not authorized")
+        if expected is not None and (
+            expected.session_id != session.session_id
+            or expected.coordinator_id != session.coordinator_id
+            or expected.agent_id != session.agent_id
+            or expected.config_revision != session.config_revision
+            or expected.inventory_revision != session.inventory_revision
+            or expected.availability_revision != session.availability_revision
+            or expected.capabilities != session.capabilities
+            or expected.pools != session.pools
+        ):
+            raise QueueConflictError("agent session reconciliation facts are stale")
+        if not set(session.capabilities).issubset(rule.capabilities) or not set(session.pools).issubset(rule.pools):
+            raise QueueServiceError("agent session effective scope is no longer current")
         if coordinator_epoch != self._daemon._epoch:  # type: ignore[attr-defined]
             raise QueueConflictError("coordinator epoch is stale")
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
@@ -370,7 +390,7 @@ class AgentSessionService:
             session.session_id, session.coordinator_id, coordinator_epoch,
             session.agent_id, self._daemon._agent_policy.revision,  # type: ignore[attr-defined]
             session.config_revision, session.inventory_revision,
-            session.availability_revision, session.capabilities, session.state,
+            session.availability_revision, session.capabilities, session.pools, session.state,
         )
 
     def publish_offer(self, offer: AgentOffer, *, idempotency_key: str) -> Mapping[str, PlainData]:
@@ -392,6 +412,8 @@ class AgentSessionService:
                 session.config_revision, session.inventory_revision, session.availability_revision
             ):
                 raise QueueConflictError("agent offer revisions do not match its session")
+            if offer.pools != session.pools:
+                raise QueueConflictError("agent offer pools do not match its effective scope")
             accepted = self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
             expiry = _add_seconds(accepted, offer.ttl_seconds)
             offer_id = f"offer-{uuid4()}"
@@ -408,8 +430,8 @@ class AgentSessionService:
 
     def wait_for_work(self, session_id: str, availability_revision: str, *, poll_id: str) -> Mapping[str, PlainData]:
         rule = self._rule("poll")
-        for value, name in ((session_id, "session_id"), (availability_revision, "availability_revision"), (poll_id, "poll_id")):
-            _identifier(value, name)
+        for identifier, name in ((session_id, "session_id"), (availability_revision, "availability_revision"), (poll_id, "poll_id")):
+            _identifier(identifier, name)
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             conn.execute("BEGIN IMMEDIATE")
             session = _session_from_row(conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone(), self._daemon._require_started())  # type: ignore[attr-defined]
@@ -419,16 +441,24 @@ class AgentSessionService:
             offer = conn.execute("SELECT expires_at FROM agent_offers WHERE session_id = ? AND coordinator_epoch = ? AND availability_revision = ? AND current = 1", (session_id, self._daemon._epoch, availability_revision)).fetchone()  # type: ignore[attr-defined]
             if offer is None or str(offer["expires_at"]) < self._daemon._accepted_time(conn):  # type: ignore[attr-defined]
                 raise QueueConflictError("work poll requires a current offer")
+            digest = _digest({"session_id": session_id, "availability_revision": availability_revision, "coordinator_epoch": self._daemon._epoch or ""})  # type: ignore[attr-defined]
+            replay = _poll_receipt(conn, rule.principal_id, poll_id, digest)
+            if replay is not None:
+                conn.commit()
+                return replay
             conn.execute("UPDATE agent_polls SET active = 0 WHERE session_id = ? AND availability_revision = ?", (session_id, availability_revision))
-            conn.execute("INSERT INTO agent_polls(poll_id, session_id, availability_revision, coordinator_epoch, active) VALUES (?, ?, ?, ?, 1) ON CONFLICT(poll_id) DO UPDATE SET active = 1", (poll_id, session_id, availability_revision, self._daemon._epoch))  # type: ignore[attr-defined]
+            conn.execute("INSERT INTO agent_polls(poll_id, session_id, availability_revision, coordinator_epoch, active) VALUES (?, ?, ?, ?, 1)", (poll_id, session_id, availability_revision, self._daemon._epoch))  # type: ignore[attr-defined]
+            value: dict[str, PlainData] = {"result": "wait", "poll_id": poll_id, "coordinator_epoch": self._daemon._epoch or ""}  # type: ignore[attr-defined]
+            _write_poll_receipt(conn, rule.principal_id, poll_id, digest, value)
             conn.commit()
-        return freeze_plain_data({"result": "wait", "poll_id": poll_id, "coordinator_epoch": self._daemon._epoch or ""}, path="agent wait")  # type: ignore[attr-defined]
+        return freeze_plain_data(value, path="agent wait")
 
-    def retire_clean(self, session_id: str, *, idempotency_key: str) -> Mapping[str, PlainData]:
+    def retire_clean(self, session_id: str, *, idempotency_key: str, agent_proof: str) -> Mapping[str, PlainData]:
         rule = self._rule("retire")
         _identifier(session_id, "session_id")
         _identifier(idempotency_key, "idempotency_key")
-        digest = _digest({"session_id": session_id})
+        _identifier(agent_proof, "agent retirement proof")
+        digest = _digest({"session_id": session_id, "agent_proof": agent_proof})
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             conn.execute("BEGIN IMMEDIATE")
             replay = _receipt(conn, rule.principal_id, "retire", idempotency_key, digest)
@@ -437,10 +467,12 @@ class AgentSessionService:
                 return replay
             session = _session_from_row(conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone(), self._daemon._require_started())  # type: ignore[attr-defined]
             self._check_current_session(session, rule, self._daemon._epoch or "")  # type: ignore[attr-defined]
-            if not self._agent_references_empty(session_id):
-                raise QueueConflictError("agent session has unresolved references")
+            # Fencing is durable before either owner supplies its empty-set proof.
             conn.execute("UPDATE agent_offers SET current = 0 WHERE session_id = ?", (session_id,))
             conn.execute("UPDATE agent_polls SET active = 0 WHERE session_id = ?", (session_id,))
+            if not _coordinator_references_empty(conn, session_id):
+                raise QueueConflictError("agent session has unresolved references")
+            conn.execute("INSERT INTO agent_retirement_proofs(session_id, proof) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET proof = excluded.proof", (session_id, agent_proof))
             conn.execute("UPDATE agent_sessions SET state = ? WHERE session_id = ?", (AgentSessionState.RETIRED_CLEAN.value, session_id))
             conn.execute("INSERT INTO agent_session_tombstones(session_id, state) VALUES (?, ?) ON CONFLICT(session_id) DO NOTHING", (session_id, AgentSessionState.RETIRED_CLEAN.value))
             value: dict[str, PlainData] = {"session_id": session_id, "state": AgentSessionState.RETIRED_CLEAN.value}
@@ -456,50 +488,24 @@ class AgentSessionService:
         if epoch != self._daemon._epoch:  # type: ignore[attr-defined]
             raise QueueConflictError("coordinator epoch is stale")
 
-    def _persist_agent_intent(self, request: AgentRegistration, digest: str) -> None:
-        with self._daemon._agent_connection() as conn:  # type: ignore[attr-defined]
-            existing = conn.execute(
-                "SELECT digest FROM agent_registration_intents WHERE operation_id = ?",
-                (request.idempotency_key,),
-            ).fetchone()
-            if existing is None:
-                conn.execute(
-                    "INSERT INTO agent_registration_intents(operation_id, digest, result_json) VALUES (?, ?, NULL)",
-                    (request.idempotency_key, digest),
-                )
-            elif str(existing["digest"]) != digest:
-                raise QueueConflictError("idempotency key was reused with different content")
-            conn.commit()
-
-    def _persist_agent_session(self, session: AgentSession, operation_id: str, digest: str) -> None:
-        with self._daemon._agent_connection() as conn:  # type: ignore[attr-defined]
-            value = json.dumps(session.value(), sort_keys=True, separators=(",", ":"))
-            conn.execute("UPDATE agent_registration_intents SET result_json = ? WHERE operation_id = ? AND digest = ?", (value, operation_id, digest))
-            conn.execute("INSERT INTO agent_sessions_local(session_id, coordinator_id, coordinator_epoch, state) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET coordinator_epoch = excluded.coordinator_epoch, state = excluded.state", (session.session_id, session.coordinator_id, session.coordinator_epoch, session.state.value))
-            conn.commit()
-
-    def _agent_references_empty(self, session_id: str) -> bool:
-        with self._daemon._agent_connection() as conn:  # type: ignore[attr-defined]
-            row = conn.execute("SELECT COUNT(*) AS n FROM agent_session_references WHERE session_id = ? AND resolved = 0", (session_id,)).fetchone()
-        return row is not None and int(row["n"]) == 0
-
-
 def initialize_agent_session_schema(conn: sqlite3.Connection, *, coordinator: bool) -> None:
     """Additive V2 tables; retained Phase 3 rows are intentionally untouched."""
     if coordinator:
         conn.executescript("""
-        CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, principal_id TEXT NOT NULL, policy_revision TEXT NOT NULL, config_revision TEXT NOT NULL, inventory_revision TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, principal_id TEXT NOT NULL, policy_revision TEXT NOT NULL, config_revision TEXT NOT NULL, inventory_revision TEXT NOT NULL, availability_revision TEXT NOT NULL, capabilities_json TEXT NOT NULL DEFAULT '[]', pools_json TEXT NOT NULL DEFAULT '[]', coordinator_epoch TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_receipts (principal_id TEXT NOT NULL, operation TEXT NOT NULL, idempotency_key TEXT NOT NULL, digest TEXT NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY(principal_id, operation, idempotency_key));
         CREATE TABLE IF NOT EXISTS agent_offers (offer_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, availability_revision TEXT NOT NULL, offer_json TEXT NOT NULL, accepted_at TEXT NOT NULL, expires_at TEXT NOT NULL, current INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_polls (poll_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, active INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS agent_poll_receipts (principal_id TEXT NOT NULL, poll_id TEXT NOT NULL, digest TEXT NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY(principal_id, poll_id));
+        CREATE TABLE IF NOT EXISTS agent_coordinator_references (session_id TEXT NOT NULL, reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id, reference_kind, reference_id));
+        CREATE TABLE IF NOT EXISTS agent_retirement_proofs (session_id TEXT PRIMARY KEY, proof TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_session_tombstones (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
         """)
-    else:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS agent_registration_intents (operation_id TEXT PRIMARY KEY, digest TEXT NOT NULL, result_json TEXT);
-        CREATE TABLE IF NOT EXISTS agent_sessions_local (session_id TEXT PRIMARY KEY, coordinator_id TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, state TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS agent_session_references (session_id TEXT NOT NULL, reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id, reference_kind, reference_id));
-        """)
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(agent_sessions)")}
+        if "capabilities_json" not in columns:
+            conn.execute("ALTER TABLE agent_sessions ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]'")
+        if "pools_json" not in columns:
+            conn.execute("ALTER TABLE agent_sessions ADD COLUMN pools_json TEXT NOT NULL DEFAULT '[]'")
 
 
 def _receipt(conn: sqlite3.Connection, principal: str, operation: str, key: str, digest: str) -> Mapping[str, PlainData] | None:
@@ -514,6 +520,27 @@ def _receipt(conn: sqlite3.Connection, principal: str, operation: str, key: str,
     return freeze_plain_data(value, path="agent receipt")
 
 
+def _poll_receipt(conn: sqlite3.Connection, principal: str, poll_id: str, digest: str) -> Mapping[str, PlainData] | None:
+    row = conn.execute("SELECT digest, result_json FROM agent_poll_receipts WHERE principal_id = ? AND poll_id = ?", (principal, poll_id)).fetchone()
+    if row is None:
+        return None
+    if str(row["digest"]) != digest:
+        raise QueueConflictError("poll ID was reused with different content")
+    value = json.loads(str(row["result_json"]))
+    if not isinstance(value, Mapping):
+        raise QueueServiceError("agent poll receipt is invalid")
+    return freeze_plain_data(value, path="agent poll receipt")
+
+
+def _write_poll_receipt(conn: sqlite3.Connection, principal: str, poll_id: str, digest: str, result: Mapping[str, PlainData]) -> None:
+    conn.execute("INSERT INTO agent_poll_receipts(principal_id, poll_id, digest, result_json) VALUES (?, ?, ?, ?)", (principal, poll_id, digest, json.dumps(result, sort_keys=True, separators=(",", ":"))))
+
+
+def _coordinator_references_empty(conn: sqlite3.Connection, session_id: str) -> bool:
+    row = conn.execute("SELECT COUNT(*) AS n FROM agent_coordinator_references WHERE session_id = ? AND resolved = 0", (session_id,)).fetchone()
+    return row is not None and int(row["n"]) == 0
+
+
 def _write_receipt(conn: sqlite3.Connection, principal: str, operation: str, key: str, digest: str, result: Mapping[str, PlainData]) -> None:
     conn.execute("INSERT INTO agent_receipts(principal_id, operation, idempotency_key, digest, result_json) VALUES (?, ?, ?, ?, ?)", (principal, operation, key, digest, json.dumps(result, sort_keys=True, separators=(",", ":"))))
 
@@ -521,22 +548,36 @@ def _write_receipt(conn: sqlite3.Connection, principal: str, operation: str, key
 def _session_from_row(row: sqlite3.Row | None, coordinator_id: str) -> AgentSession:
     if row is None:
         raise QueueServiceError("agent session was not found")
-    return AgentSession(str(row["session_id"]), coordinator_id, str(row["coordinator_epoch"]), str(row["agent_id"]), str(row["policy_revision"]), str(row["config_revision"]), str(row["inventory_revision"]), str(row["availability_revision"]), (), AgentSessionState(str(row["state"])))
+    capabilities = _stored_identifiers(row["capabilities_json"], "session capabilities")
+    pools = _stored_identifiers(row["pools_json"], "session pools")
+    return AgentSession(str(row["session_id"]), coordinator_id, str(row["coordinator_epoch"]), str(row["agent_id"]), str(row["policy_revision"]), str(row["config_revision"]), str(row["inventory_revision"]), str(row["availability_revision"]), capabilities, pools, AgentSessionState(str(row["state"])))
 
 
 def _session_from_value(value: Mapping[str, PlainData]) -> AgentSession:
     capabilities = value.get("capabilities")
+    pools = value.get("pools")
     if not isinstance(capabilities, (list, tuple)) or any(
         not isinstance(item, str) for item in capabilities
-    ):
+    ) or not isinstance(pools, (list, tuple)) or any(not isinstance(item, str) for item in pools):
         raise QueueServiceError("agent session receipt capabilities are invalid")
     return AgentSession(
         str(value["session_id"]), str(value["coordinator_id"]),
         str(value["coordinator_epoch"]), str(value["agent_id"]),
         str(value["policy_revision"]), str(value["config_revision"]),
         str(value["inventory_revision"]), str(value["availability_revision"]),
-        tuple(str(item) for item in capabilities), AgentSessionState(str(value["state"])),
+        tuple(str(item) for item in capabilities), tuple(str(item) for item in pools), AgentSessionState(str(value["state"])),
     )
+
+
+def _stored_identifiers(value: object, name: str) -> tuple[str, ...]:
+    try:
+        stored = json.loads(str(value))
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise QueueServiceError(f"{name} are invalid") from exc
+    if not isinstance(stored, list) or any(not isinstance(item, str) for item in stored):
+        raise QueueServiceError(f"{name} are invalid")
+    _identifiers(stored, name)
+    return tuple(stored)
 
 
 def _digest(value: Mapping[str, PlainData]) -> str:

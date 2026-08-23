@@ -223,6 +223,18 @@ a default-CI prerequisite.
   digest-bind one current policy-rechecked poll. It must retain the no-launch
   boundary and Phase 3 root continuity. Refiner pending; blocker corrections
   remain `1/3` until that pass completes.
+- Refiner correction: complete at the current commit. The HTTP caller now owns
+  a separate durable agent journal: it persists canonical registration intent
+  before send and persists exact replay results, including after a lost
+  response. Coordinator state retains only coordinator facts. Reconciliation
+  checks the complete durable revision tuple and effective pool/capability
+  scope; offers project bounded CPU/memory for that scope. Polls are
+  digest-bound, current-policy-rechecked exact replays. Retirement durably
+  fences offer and poll state before both the remote-agent and coordinator
+  empty-reference proofs, records the remote proof, then tombstones. The
+  restricted agent path remains outside all assignment, provider, artifact,
+  and launcher owners. Focused unit and loopback TLS tests pass (12 tests), as
+  do scoped Ruff and Pyright checks. Blocker corrections are now `2/3`.
 
 ## Candidate Evidence
 

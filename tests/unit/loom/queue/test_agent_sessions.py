@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -180,25 +181,27 @@ def test_restart_requires_reconcile_fresh_offer_and_only_returns_wait(tmp_path: 
         second.stop()
 
 
-def test_retirement_requires_empty_agent_references_and_tombstones_old_session(tmp_path: Path) -> None:
+def test_retirement_fences_then_requires_empty_coordinator_references_and_tombstones(tmp_path: Path) -> None:
     config = _config(tmp_path)
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
     daemon.start()
     try:
         registered = _register(daemon)
-        with daemon._agent_connection() as conn:  # protected root fact injected as an unresolved reference
+        with daemon._connection() as conn:  # coordinator-owned known reference
             conn.execute(
-                "INSERT INTO agent_session_references(session_id, reference_kind, reference_id, resolved) VALUES (?, ?, ?, 0)",
+                "INSERT INTO agent_coordinator_references(session_id, reference_kind, reference_id, resolved) VALUES (?, ?, ?, 0)",
                 (registered.session_id, "outbox", "event-1"),
             )
             conn.commit()
         with pytest.raises(QueueConflictError, match="unresolved"):
-            _view(daemon).retire_clean(registered.session_id, idempotency_key="retire-1")
-        with daemon._agent_connection() as conn:
-            conn.execute("UPDATE agent_session_references SET resolved = 1")
+            _view(daemon).retire_clean(registered.session_id, idempotency_key="retire-1", agent_proof="proof-1")
+        with daemon._connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM agent_offers WHERE current = 1").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM agent_polls WHERE active = 1").fetchone()[0] == 0
+            conn.execute("UPDATE agent_coordinator_references SET resolved = 1")
             conn.commit()
-        retired = _view(daemon).retire_clean(registered.session_id, idempotency_key="retire-1")
+        retired = _view(daemon).retire_clean(registered.session_id, idempotency_key="retire-1", agent_proof="proof-1")
         assert retired["state"] == AgentSessionState.RETIRED_CLEAN.value
         with daemon._connection() as conn:
             assert conn.execute("SELECT state FROM agent_session_tombstones").fetchone()[0] == "RETIRED_CLEAN"
@@ -232,6 +235,45 @@ def test_offer_expiry_and_stale_poll_fail_without_touching_execution_owners(tmp_
             )
         with sqlite3.connect(config.execution_database) as conn:
             assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments").fetchone()[0] == 0
+    finally:
+        daemon.stop()
+
+
+def test_wait_poll_is_digest_replayed_and_current_policy_is_rechecked(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        registered = _register(daemon)
+        _view(daemon).publish_offer(_offer(registered.session_id, registered.coordinator_epoch), idempotency_key="offer-1")
+        first = _view(daemon).wait_for_work(registered.session_id, "availability-1", poll_id="poll-1")
+        assert _view(daemon).wait_for_work(registered.session_id, "availability-1", poll_id="poll-1") == first
+        daemon.replace_agent_policy(AgentPolicyConfig(revision="policy-2"))
+        with pytest.raises(QueueServiceError, match="not authorized"):
+            _view(daemon).wait_for_work(registered.session_id, "availability-1", poll_id="poll-1")
+    finally:
+        daemon.stop()
+
+
+def test_reconciliation_and_offer_preserve_the_durable_effective_scope(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        registered = _register(daemon)
+        with pytest.raises(QueueConflictError, match="reconciliation facts"):
+            _view(daemon).reconcile(
+                registered.session_id,
+                registered.coordinator_epoch,
+                expected=replace(registered, inventory_revision="different"),
+            )
+        with pytest.raises(QueueConflictError, match="effective scope"):
+            _view(daemon).publish_offer(
+                replace(_offer(registered.session_id, registered.coordinator_epoch), pools=("other",)),
+                idempotency_key="offer-1",
+            )
     finally:
         daemon.stop()
 
