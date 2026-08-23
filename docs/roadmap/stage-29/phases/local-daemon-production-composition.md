@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 3B
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p3b-local-daemon-production-composition`
@@ -311,7 +311,10 @@ Final commands:
   review completed; bounded plan corrections applied; no additional phase-
   planner pass is needed because the approved plan fixes the cross-owner trace,
   dependency direction, hard cut-over, and no-fake E2E acceptance
-- Implementation: pending executor
+- Implementation: blocked at the authority admission/cancellation boundary; the
+  current production authority protocol has no durable operation that can bind
+  the exact coordinator identity and intent digest or install a cancellation
+  epoch with a replayable receipt
 - Refiner: not used
 - Pre-submit gate: pending
 - Independent review: required because the phase crosses durable authority,
@@ -323,9 +326,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | planning baseline `66d4968`; Phase 3A evidence `51ca432`/`9d2d7a0` |
-| Validation-relevant changes after evidence | planning-only recovery amendment |
+| Implementation and changed paths | No implementation change. Source inspection found that the concrete `PerRunAuthorityStore`/`SQLitePerRunAuthorityStore` and `PreparedAttemptExecutionAuthority` expose prepared-attempt, grant, terminal, and snapshot operations, but no durable coordinator-admission bind or cancellation-epoch mutation/receipt. The only matching `LocalDaemonAuthority` operation is the Phase 3A protocol and its uses are fake-only. |
+| Tests added or updated | None; adding a production composition test would require faking the missing authority receipt or creating a new durable authority protocol. |
+| Validated revision/tree state and evidence | Inspection at `c82465c`: `src/loom/pipeline/stores/authority.py` defines the production authority protocols; `src/loom/pipeline/stores/sqlite_authority.py` implements no bind-admission or cancellation-epoch operation; Phase 3A `src/loom/queue/local_daemon.py` defines its own fake-backed `LocalDaemonAuthority` protocol. |
+| Validation-relevant changes after evidence | This completion-record update only; no source, test, dependency, build, or validation configuration changed. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Phase 3A branch/worktree retained until Phase 3B disposition; Phase 4 cannot start first |
+| Residual risk and cleanup | **Qualified blocker:** Phase 3B's fixed causal contract requires an admission to remain `PENDING_AUTHORITY` until the authority atomically records and returns a receipt matching stable coordinator identity, `run_uri`, intent digest, and operation ID; connected cancellation likewise requires a durable authority cancellation epoch before fan-out. Neither operation exists on the concrete production authority owner. Replacing this with a snapshot check would violate the authority receipt/cancellation ordering contract; reusing Phase 3A's protocol would preserve its fake/manual path; adding the operations changes the cross-owner durable authority protocol/schema and needs an explicit finalized design decision. Smallest remedy: approve and assign an authority-owned, replay-safe coordinator-admission and cancellation-epoch receipt contract (including persistence/serialization and adapter scope), then resume Phase 3B. Phase 3A branch/worktree remains retained as isolated evidence. |
