@@ -978,6 +978,24 @@ class SQLitePerRunAuthorityStore:
             )
             return receipt
 
+    def read_cancellation_epoch_receipt(
+        self, run_uri: str, operation_id: str
+    ) -> CancellationEpochReceipt | None:
+        """Read one durable cancellation receipt for the daemon status projection."""
+        self._bind_run_uri(run_uri)
+        with self._connect(_authority_database_path(run_uri)) as conn:
+            row = conn.execute(
+                "SELECT receipt_json FROM cancellation_epoch_receipts WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else CancellationEpochReceipt.from_dict(
+                _json_loads(cast(str, row["receipt_json"]))
+            )
+        )
+
     def bind_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ) -> None:

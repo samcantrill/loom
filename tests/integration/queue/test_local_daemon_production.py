@@ -12,6 +12,7 @@ import pytest
 
 from loom.pipeline import PipelineSpec
 from loom.pipeline.planning import PlanSelectors, plan_pipeline
+from loom.pipeline.planning import ExecutionPlan
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
@@ -28,6 +29,7 @@ from loom.queue import (
 )
 from loom.serialization import json_dumps_pretty
 from loom.queue.local_daemon_execution import load_managed_local_intent
+from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
 
 
 pytestmark = pytest.mark.integration
@@ -230,6 +232,51 @@ def test_safe_runtime_metadata_cannot_activate_a_run_without_exact_record(
 
     with pytest.raises(Exception, match="fresh exact runtime record"):
         load_managed_local_intent(config, run_uri)
+
+
+def test_exact_runtime_record_keeps_attributes_settings_and_run_concurrency(
+    tmp_path: Path,
+) -> None:
+    store, run_uri, pipeline = _persist_single_stage_run(tmp_path / "runs")
+    plan = ExecutionPlan.from_dict(store.read_plan(run_uri))
+    spec = PipelineSpec.from_config(pipeline)
+    prepare_managed_local_runtime_record(
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=spec,
+        options={
+            "run_uri": run_uri,
+            "execution": {"settings": {"max_parallel_stages": 2}},
+            "stage_options": {
+                "build": {
+                    "resources": {
+                        "entries": {
+                            "cpu": {
+                                "kind": "cpu",
+                                "amount": 1,
+                                "unit": "count",
+                                "attributes": {},
+                            }
+                        }
+                    },
+                    "execution": {"settings": {"worker_mode": "exact"}},
+                }
+            },
+        },
+    )
+    record = load_managed_local_runtime_record(store, run_uri)
+
+    assert record["max_parallel_stages"] == 2
+    runtime = cast(Mapping[str, object], record["runtime_options"])
+    stage = cast(Mapping[str, object], runtime["stage_options"])["build"]
+    assert cast(Mapping[str, object], stage)["execution"] == {
+        "settings": {"worker_mode": "exact"}
+    }
+    placement = cast(Mapping[str, object], record["placements"])["build"]
+    resources = cast(Mapping[str, object], cast(Mapping[str, object], placement)["resource_request"])
+    cpu = cast(Mapping[str, object], resources["entries"])["cpu"]
+    assert cast(Mapping[str, object], cpu)["attributes"] == {}
 
 
 def test_terminal_authority_truth_wins_a_late_cancellation(

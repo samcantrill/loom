@@ -110,6 +110,20 @@ class _ScopedCoordinatorAuthority:
         if run_uri != self._run_uri:
             raise QueueConflictError("scoped authority run conflicts")
 
+    def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
+        self._run(run_uri)
+        return self._store.open_run(run_uri)
+
+    def transition_run(self, run_uri: str, **kwargs: object) -> StatusTransition:
+        self._run(run_uri)
+        return self._store.transition_run(run_uri, **kwargs)  # type: ignore[arg-type]
+
+    def transition_stage(
+        self, run_uri: str, stage_name: str, **kwargs: object
+    ) -> StatusTransition:
+        self._run(run_uri)
+        return self._store.transition_stage(run_uri, stage_name, **kwargs)  # type: ignore[arg-type]
+
     def ensure_prepared_attempt(self, run_uri: str, request: PreparedAttemptRequest):
         self._run(run_uri)
         return self._store.ensure_prepared_attempt(run_uri, request)
@@ -296,6 +310,8 @@ class LocalDaemonExecution:
         # conservative holds before the first candidate or offer is published.
         for command in self.journal.retained_claim_commands():
             self.provider.restore_capacity_holding(command)
+        if self._has_unreleased_coordinator_assignments():
+            self.provider.withhold_all_capacity()
         self._launch_lock = Lock()
 
     def advance(
@@ -330,7 +346,7 @@ class LocalDaemonExecution:
             admission.cancellation_operation_id is not None
             or self.cancellation_operation(admission.admission_id) is not None
         ):
-            return self._cancel(admission, authority)
+            return self._cancel(admission, scoped_authority)
         self.admission_activated(admission.admission_id)
 
         placements = dict(intent.placements)
@@ -352,9 +368,9 @@ class LocalDaemonExecution:
 
             try:
                 if self.cancellation_operation(admission.admission_id) is not None:
-                    return self._cancel(admission, authority)
-                snapshot = authority.open_run(admission.run_uri)
-                terminal = self._terminal_outcome(intent.plan, snapshot, authority)
+                    return self._cancel(admission, scoped_authority)
+                snapshot = scoped_authority.open_run(admission.run_uri)
+                terminal = self._terminal_outcome(intent.plan, snapshot, scoped_authority)
                 if terminal is not None:
                     return terminal
                 orchestrator.reconcile(
@@ -365,16 +381,16 @@ class LocalDaemonExecution:
                     ready_at=snapshot.revision.sequence,
                     controller_action=lambda stage_plan, readiness: (
                         self._apply_controller_action(
-                            authority,
+                            scoped_authority,
                             admission.run_uri,
                             stage_plan,
                             readiness,
                         )
                     ),
                 )
-                snapshot = authority.open_run(admission.run_uri)
+                snapshot = scoped_authority.open_run(admission.run_uri)
                 terminal = self._terminal_outcome(
-                    intent.plan, snapshot, authority
+                    intent.plan, snapshot, scoped_authority
                 )
                 if terminal is not None:
                     return terminal
@@ -416,7 +432,7 @@ class LocalDaemonExecution:
 
     def _apply_controller_action(
         self,
-        authority: SQLitePerRunAuthorityStore,
+        authority: _ScopedCoordinatorAuthority,
         run_uri: str,
         stage_plan: StagePlan,
         readiness: AttemptReadiness,
@@ -467,7 +483,7 @@ class LocalDaemonExecution:
         self,
         plan: ExecutionPlan,
         snapshot: AuthoritativeRunSnapshot,
-        authority: SQLitePerRunAuthorityStore,
+        authority: _ScopedCoordinatorAuthority,
     ) -> LocalDaemonExecutionOutcome | None:
         if snapshot.status is RunStatus.SUCCEEDED:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.SUCCEEDED)
@@ -520,7 +536,7 @@ class LocalDaemonExecution:
     def _cancel(
         self,
         admission: LocalDaemonAdmission,
-        authority: SQLitePerRunAuthorityStore,
+        authority: _ScopedCoordinatorAuthority,
     ) -> LocalDaemonExecutionOutcome:
         operation_id = (
             admission.cancellation_operation_id
@@ -743,6 +759,19 @@ class LocalDaemonExecution:
         )
         return True
 
+    def _has_unreleased_coordinator_assignments(self) -> bool:
+        if not self.config.execution_database.is_file():
+            return False
+        try:
+            with sqlite3.connect(self.config.execution_database) as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM coordinator_assignments "
+                    "WHERE state != 'released' LIMIT 1"
+                ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            raise QueueServiceError("coordinator retained assignment state is unavailable") from exc
+        return row is not None
+
 
 def _stage_work(
     store: SQLiteStageWorkStore, stage_work_id: str
@@ -843,22 +872,30 @@ def build_local_daemon_owner_views(
     views: list[Mapping[str, PlainData]] = []
     for admission in admissions:
         authority_view: dict[str, PlainData]
+        observed_at = utc_timestamp()
+        cancellation_receipt: dict[str, PlainData] | None = None
         try:
-            snapshot = SQLitePerRunAuthorityStore(admission.run_uri).open_run(
-                admission.run_uri
-            )
+            authority = SQLitePerRunAuthorityStore(admission.run_uri)
+            snapshot = authority.open_run(admission.run_uri)
+            if admission.cancellation_operation_id is not None:
+                receipt = authority.read_cancellation_epoch_receipt(
+                    admission.run_uri, admission.cancellation_operation_id
+                )
+                cancellation_receipt = None if receipt is None else receipt.to_dict()
         except Exception:
             authority_view = {
                 "owner": "per-run-authority",
                 "availability": "unavailable",
                 "state": "unavailable",
                 "diagnostic": "authority_unavailable",
+                "observed_at": observed_at,
             }
         else:
             authority_view = {
                 "owner": "per-run-authority",
                 "availability": "available",
                 "state": snapshot.status.value,
+                "observed_at": observed_at,
                 "revision": snapshot.revision.to_dict(),
                 "stages": {
                     stage.stage_name: stage.status.value
@@ -876,23 +913,27 @@ def build_local_daemon_owner_views(
                     "accepted_at": admission.accepted_at,
                     "intent_digest": admission.intent_digest,
                     "authority_operation_id": admission.authority_operation_id,
+                    "observed_at": observed_at,
                 },
                 "authority": authority_view,
                 "scheduling": {
                     "owner": "coordinator-stage-work",
                     "availability": "available" if execution_available else "unavailable",
+                    "observed_at": observed_at,
                     "diagnostic": None if execution_available else "execution_store_unavailable",
                     "work": stage_work_by_run.get(admission.run_uri, []),
                 },
                 "assignment": {
                     "owner": "coordinator-assignments",
                     "availability": "available" if execution_available else "unavailable",
+                    "observed_at": observed_at,
                     "diagnostic": None if execution_available else "execution_store_unavailable",
                     "assignments": assignments_by_run.get(admission.run_uri, []),
                 },
                 "execution": {
                     "owner": "local-agent",
                     "availability": "available" if agent_available else "unavailable",
+                    "observed_at": observed_at,
                     "diagnostic": None if agent_available else "agent_journal_unavailable",
                     "journal": agent_work_by_run.get(admission.run_uri, []),
                 },
@@ -901,6 +942,18 @@ def build_local_daemon_owner_views(
                     "availability": authority_view["availability"],
                     "requested": admission.cancellation_operation_id is not None,
                     "operation_id": admission.cancellation_operation_id,
+                    "receipt": cancellation_receipt,
+                    "observed_at": observed_at,
+                },
+                "service": {
+                    "owner": "local-daemon",
+                    "availability": (
+                        "available"
+                        if execution_available and agent_available
+                        else "unavailable"
+                    ),
+                    "state": "healthy" if execution_available and agent_available else "degraded",
+                    "observed_at": observed_at,
                 },
             },
             path="local_daemon_status.runs",
