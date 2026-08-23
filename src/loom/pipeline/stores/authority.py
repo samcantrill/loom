@@ -393,6 +393,148 @@ class PreparedAttemptExecutionAuthority(PreparedAttemptAuthority, Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class CoordinatorAdmissionRequest:
+    """One replay-safe production coordinator admission binding."""
+
+    operation_id: str
+    coordinator_id: str
+    run_uri: str
+    intent_digest: str
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "operation_id",
+            "coordinator_id",
+            "run_uri",
+            "intent_digest",
+        ):
+            _non_empty(getattr(self, field_name), field_name)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "coordinator_id": self.coordinator_id,
+            "run_uri": self.run_uri,
+            "intent_digest": self.intent_digest,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "CoordinatorAdmissionRequest":
+        mapping = _mapping(data, "CoordinatorAdmissionRequest")
+        _reject_unknown(
+            mapping,
+            {"operation_id", "coordinator_id", "run_uri", "intent_digest"},
+            "CoordinatorAdmissionRequest",
+        )
+        return cls(
+            operation_id=_non_empty(_required(mapping, "operation_id"), "operation_id"),
+            coordinator_id=_non_empty(
+                _required(mapping, "coordinator_id"), "coordinator_id"
+            ),
+            run_uri=_non_empty(_required(mapping, "run_uri"), "run_uri"),
+            intent_digest=_non_empty(
+                _required(mapping, "intent_digest"), "intent_digest"
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CoordinatorAdmissionReceipt:
+    """Authority receipt that confirms an exact coordinator admission binding."""
+
+    request: CoordinatorAdmissionRequest
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, CoordinatorAdmissionRequest):
+            raise AuthorityStoreError("request must be a CoordinatorAdmissionRequest")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {"request": self.request.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: object) -> "CoordinatorAdmissionReceipt":
+        mapping = _mapping(data, "CoordinatorAdmissionReceipt")
+        _reject_unknown(mapping, {"request"}, "CoordinatorAdmissionReceipt")
+        return cls(
+            request=CoordinatorAdmissionRequest.from_dict(_required(mapping, "request"))
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CancellationEpochRequest:
+    """One replay-safe request to install the run cancellation epoch."""
+
+    operation_id: str
+    coordinator_id: str
+    run_uri: str
+
+    def __post_init__(self) -> None:
+        for field_name in ("operation_id", "coordinator_id", "run_uri"):
+            _non_empty(getattr(self, field_name), field_name)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "coordinator_id": self.coordinator_id,
+            "run_uri": self.run_uri,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "CancellationEpochRequest":
+        mapping = _mapping(data, "CancellationEpochRequest")
+        _reject_unknown(
+            mapping,
+            {"operation_id", "coordinator_id", "run_uri"},
+            "CancellationEpochRequest",
+        )
+        return cls(
+            operation_id=_non_empty(_required(mapping, "operation_id"), "operation_id"),
+            coordinator_id=_non_empty(
+                _required(mapping, "coordinator_id"), "coordinator_id"
+            ),
+            run_uri=_non_empty(_required(mapping, "run_uri"), "run_uri"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CancellationEpochReceipt:
+    """Authority-owned durable cancellation epoch and its operation receipt."""
+
+    request: CancellationEpochRequest
+    epoch: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, CancellationEpochRequest):
+            raise AuthorityStoreError("request must be a CancellationEpochRequest")
+        _non_empty(self.epoch, "epoch")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {"request": self.request.to_dict(), "epoch": self.epoch}
+
+    @classmethod
+    def from_dict(cls, data: object) -> "CancellationEpochReceipt":
+        mapping = _mapping(data, "CancellationEpochReceipt")
+        _reject_unknown(mapping, {"request", "epoch"}, "CancellationEpochReceipt")
+        return cls(
+            request=CancellationEpochRequest.from_dict(_required(mapping, "request")),
+            epoch=_non_empty(_required(mapping, "epoch"), "epoch"),
+        )
+
+
+@runtime_checkable
+class LocalDaemonAuthority(Protocol):
+    """Private production-daemon authority operations for one retained run."""
+
+    def bind_coordinator_admission(
+        self, run_uri: str, request: CoordinatorAdmissionRequest
+    ) -> CoordinatorAdmissionReceipt: ...
+
+    def install_cancellation_epoch(
+        self, run_uri: str, request: CancellationEpochRequest
+    ) -> CancellationEpochReceipt: ...
+
+
+@dataclass(frozen=True, slots=True)
 class OutputCommit:
     commit: OutputCommitRecord
     artifact_facts: tuple[ArtifactFactRecord, ...] = ()
@@ -1011,6 +1153,11 @@ __all__ = [
     "PreparedAttemptRequest",
     "PreparedAttemptReceipt",
     "ExecutionFence",
+    "CoordinatorAdmissionRequest",
+    "CoordinatorAdmissionReceipt",
+    "CancellationEpochRequest",
+    "CancellationEpochReceipt",
+    "LocalDaemonAuthority",
     "OutputCommit",
     "PerRunAuthorityStore",
     "RunStore",

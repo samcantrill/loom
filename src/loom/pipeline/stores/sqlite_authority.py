@@ -38,6 +38,10 @@ from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 from .authority import (
     AttemptAllocation,
     AuthorityStoreError,
+    CancellationEpochReceipt,
+    CancellationEpochRequest,
+    CoordinatorAdmissionReceipt,
+    CoordinatorAdmissionRequest,
     ExecutionFence,
     OutputCommit,
     PreparedAttemptReceipt,
@@ -178,6 +182,13 @@ _REQUIRED_SCHEMA_COLUMNS = {
         }
     ),
     "managed_attempt_unbind_receipts": frozenset({"assignment_id", "attempt_id"}),
+    "coordinator_admission_receipts": frozenset(
+        {"operation_id", "request_json", "receipt_json"}
+    ),
+    "cancellation_epochs": frozenset({"id", "epoch"}),
+    "cancellation_epoch_receipts": frozenset(
+        {"operation_id", "request_json", "receipt_json"}
+    ),
     "leases": frozenset(
         {
             "lease_id",
@@ -845,6 +856,99 @@ class SQLitePerRunAuthorityStore:
                 ),
             )
             _touch_run(conn, revision)
+            return receipt
+
+    def bind_coordinator_admission(
+        self, run_uri: str, request: CoordinatorAdmissionRequest
+    ) -> CoordinatorAdmissionReceipt:
+        """Durably bind one accepted operation to the production coordinator."""
+        self._bind_run_uri(run_uri)
+        if not isinstance(request, CoordinatorAdmissionRequest):
+            raise AuthorityStoreError("request must be a CoordinatorAdmissionRequest")
+        if request.run_uri != run_uri:
+            raise AuthorityStoreError("coordinator admission run_uri conflicts")
+        with self._transaction(run_uri) as conn:
+            row = conn.execute(
+                "SELECT request_json, receipt_json FROM coordinator_admission_receipts "
+                "WHERE operation_id = ?",
+                (request.operation_id,),
+            ).fetchone()
+            if row is not None:
+                existing = CoordinatorAdmissionRequest.from_dict(
+                    _json_loads(cast(str, row["request_json"]))
+                )
+                if existing != request:
+                    raise AuthorityStoreError(
+                        "coordinator admission operation conflicts"
+                    )
+                receipt = CoordinatorAdmissionReceipt.from_dict(
+                    _json_loads(cast(str, row["receipt_json"]))
+                )
+                if receipt.request != request:
+                    raise AuthorityStoreError("coordinator admission receipt conflicts")
+                return receipt
+            receipt = CoordinatorAdmissionReceipt(request=request)
+            conn.execute(
+                "INSERT INTO coordinator_admission_receipts "
+                "(operation_id, request_json, receipt_json) VALUES (?, ?, ?)",
+                (
+                    request.operation_id,
+                    _json_dumps(request.to_dict()),
+                    _json_dumps(receipt.to_dict()),
+                ),
+            )
+            return receipt
+
+    def install_cancellation_epoch(
+        self, run_uri: str, request: CancellationEpochRequest
+    ) -> CancellationEpochReceipt:
+        """Install one authority-owned cancellation epoch before control fan-out."""
+        self._bind_run_uri(run_uri)
+        if not isinstance(request, CancellationEpochRequest):
+            raise AuthorityStoreError("request must be a CancellationEpochRequest")
+        if request.run_uri != run_uri:
+            raise AuthorityStoreError("cancellation epoch run_uri conflicts")
+        with self._transaction(run_uri) as conn:
+            row = conn.execute(
+                "SELECT request_json, receipt_json FROM cancellation_epoch_receipts "
+                "WHERE operation_id = ?",
+                (request.operation_id,),
+            ).fetchone()
+            if row is not None:
+                existing = CancellationEpochRequest.from_dict(
+                    _json_loads(cast(str, row["request_json"]))
+                )
+                if existing != request:
+                    raise AuthorityStoreError("cancellation epoch operation conflicts")
+                receipt = CancellationEpochReceipt.from_dict(
+                    _json_loads(cast(str, row["receipt_json"]))
+                )
+                if receipt.request != request:
+                    raise AuthorityStoreError("cancellation epoch receipt conflicts")
+                return receipt
+            epoch_row = conn.execute(
+                "SELECT epoch FROM cancellation_epochs WHERE id = 1"
+            ).fetchone()
+            if epoch_row is None:
+                revision = self._next_revision(conn)
+                epoch = f"cancellation-{revision.sequence}-{uuid.uuid4().hex}"
+                conn.execute(
+                    "INSERT INTO cancellation_epochs (id, epoch) VALUES (1, ?)",
+                    (epoch,),
+                )
+                _touch_run(conn, revision)
+            else:
+                epoch = cast(str, epoch_row["epoch"])
+            receipt = CancellationEpochReceipt(request=request, epoch=epoch)
+            conn.execute(
+                "INSERT INTO cancellation_epoch_receipts "
+                "(operation_id, request_json, receipt_json) VALUES (?, ?, ?)",
+                (
+                    request.operation_id,
+                    _json_dumps(request.to_dict()),
+                    _json_dumps(receipt.to_dict()),
+                ),
+            )
             return receipt
 
     def bind_prepared_attempt(
@@ -2540,6 +2644,26 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS coordinator_admission_receipts (
+            operation_id TEXT PRIMARY KEY,
+            request_json TEXT NOT NULL,
+            receipt_json TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS cancellation_epochs (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            epoch TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS cancellation_epoch_receipts (
+            operation_id TEXT PRIMARY KEY,
+            request_json TEXT NOT NULL,
+            receipt_json TEXT NOT NULL
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS leases (
             lease_id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
@@ -2767,7 +2891,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         cast(str, table["name"])
         for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
     }
-    if version not in {1, 2, 3, 4}:
+    if version not in {1, 2, 3, 4, 5}:
         return
     historical_columns = dict(_REQUIRED_SCHEMA_COLUMNS)
     if version < 3:
@@ -2776,6 +2900,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         historical_columns.pop("managed_attempt_bindings")
     if version < 5:
         historical_columns.pop("managed_attempt_unbind_receipts")
+    if version < 6:
+        historical_columns.pop("coordinator_admission_receipts")
+        historical_columns.pop("cancellation_epochs")
+        historical_columns.pop("cancellation_epoch_receipts")
     if set(historical_columns) - tables:
         raise AuthoritySchemaError(
             f"SQLite authority v{version} schema is incomplete or invalid"
@@ -2868,6 +2996,26 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS managed_attempt_unbind_receipts (
             assignment_id TEXT PRIMARY KEY,
             attempt_id TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS coordinator_admission_receipts (
+            operation_id TEXT PRIMARY KEY,
+            request_json TEXT NOT NULL,
+            receipt_json TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS cancellation_epochs (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            epoch TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS cancellation_epoch_receipts (
+            operation_id TEXT PRIMARY KEY,
+            request_json TEXT NOT NULL,
+            receipt_json TEXT NOT NULL
         )
     """)
     conn.execute(
