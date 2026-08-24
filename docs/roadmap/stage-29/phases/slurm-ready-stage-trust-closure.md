@@ -2,14 +2,14 @@
 
 ## Metadata
 
-- Status: pending
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 7A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p7a-slurm-ready-stage-trust-closure`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees` and
   `/home/can134/work/active/loom-worktrees/stage-29-p7a-slurm-ready-stage-trust-closure`
-- Base revision: current clean `origin/develop` after the approved recovery-
-  planning metadata; record the exact revision during worktree preparation
+- Base revision: clean `origin/develop`
+  `916c62b0e31dca244adf258acd85a2230ef98560`
 - PR target: `develop`
 - PR title: `feat(scheduling): secure ready-stage SLURM delegation`
 - Dependencies: Phase 6 [PR #241](https://github.com/samcantrill/loom/pull/241)
@@ -20,8 +20,9 @@
   effect, the irreversible `sbatch` boundary, scheduler-started bootstrap
   registration, and one-root authorization interact causally. Use one bounded
   phase-planner refinement and one independent implementation review.
-- Blockers: none. The maintainer approved a Slurm prolog/container-provisioned
-  job-private capability file and the existing fresh-only hard cut-over.
+- Blockers: required review found a verifier-publication race before fast
+  bootstrap registration, missing normal terminal provider revocation, and a
+  localized flaky parallel-limit wait after correction 3/3 was exhausted.
 
 ## Objective And Context
 
@@ -359,26 +360,43 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: approved recovery contract, candidate/review evidence,
-  clean base `5d466bd`, source ownership, target, and title recorded; dedicated
-  worktree creation/verification remains before executor handoff
+- Manager preparation: complete at clean `origin/develop` `916c62b`; dedicated
+  branch/worktree, repository `samcantrill/loom`, predecessor merge, blocked
+  candidate evidence, source/test owners, target/title, validation gates, and
+  stop conditions verified
 - Expanded planning: complete; the provider owner, causal crash/replay order,
   private implementation discretion, proportional validation, and stop
   conditions are implementation-ready with no reopened decision
-- Implementation: pending
-- Refiner: not used
-- Pre-submit gate: pending
-- Independent review: required after a stable validated implementation
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Implementation: complete locally; selective Phase 7 vertical now uses the
+  concrete `job_private_file_v1` binding, verifier-only assignment consumption,
+  ready-stage-only `--export=NIL` submission, route-local continuation, and
+  final schemas.
+- Refiner: correction 1/3 complete locally: replaced the process-local
+  capability fake with the concrete strict site-helper adapter, moved
+  capability proof ahead of scheduler-handle mutation, and added fresh-daemon
+  retained-submission evidence. Correction 2/3 complete locally: added causal
+  fresh-object prepared/`SUBMITTING`/`ACCEPTED`/`UNKNOWN` submission evidence
+  and proved an unavailable pinned SLURM root does not starve an independent
+  managed root. Correction 3/3 complete locally: repaired the new crash-barrier
+  test callbacks' static types and kept process-launch support lazy after the
+  full pre-submit gate exposed both defects.
+- Pre-submit gate: complete at validated implementation revision `ac1bfd9`;
+  focused Phase 7A selectors, `make validate-pr`, `make test-summary`, and
+  `git diff --check` passed
+- Independent review: complete at head `a70986c`; blocked because a fast
+  allocation can register while the assignment verifier is still null, normal
+  terminal release never revokes provider state, and the parallel-limit test
+  waits for calls rather than accepted mirrors
+- Blocker corrections: 3/3 exhausted
+- Phase status: blocked; no PR opened and no merge attempted
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none yet |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Restored the Phase 7 ready-stage vertical under `src/loom/` and closed its capability, submission, registration, bootstrap, and scheduler-loop boundaries; correction 1 replaces the process-local raw-secret provider with one strict non-secret site-helper adapter, makes helper replay survive fresh provider construction, revokes on definite submit rejection, and verifies/consumes capability before any scheduler-handle mutation. Updated `docs/features/slurm.md`. |
+| Tests added or updated | Added deterministic protected-site helper coverage for verifier-only replay/materialization, malformed or unavailable helper zero-submit, definite-rejection revocation, wrong-capability zero-mutation, and fresh daemon/provider retained-acceptance zero-resubmit; retained ready-stage transport coverage uses the fake materialized file rather than a production test escape hatch. Correction 2 adds fresh replacement provider/runner/store evidence for retained prepared, `SUBMITTING`, `ACCEPTED`, and `UNKNOWN` states, including exact unknown-handle reconciliation, plus an unavailable pinned SLURM root alongside a completing independent managed root. |
+| Validated revision/tree state and evidence | Implementation revision `ac1bfd9` passed the focused Phase 7A matrix (153 passed), `make validate-pr` (Ruff; Pyright 0 errors; default 2,490 passed; config-extra 141 passed and 3 skipped; package build passed), `make test-summary` (overall passed: 2,631 passed, 3 skipped), and `git diff --check`. |
+| Validation-relevant changes after evidence | none; this completion-record update is documentation-only |
+| PR, review, and merge | Required independent review blocked submission. No PR was opened. Preserve the branch and validated implementation `ac1bfd9` as read-only evidence; correction 3/3 is exhausted. |
+| Residual risk and cleanup | Supported fast bootstrap can receive a definitive conflict before the verifier reaches the assignment owner; successful terminal release leaves site provider state unreleased; the parallel-limit integration wait is flaky. Unknown preparation/submission/start containment remains Phase 9, and a real protected site-helper/prolog receipt remains opt-in. |
