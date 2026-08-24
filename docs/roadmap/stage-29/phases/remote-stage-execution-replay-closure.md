@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 29, Phase 5A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p5a-remote-stage-execution-replay-closure`
@@ -211,8 +211,7 @@ Final commands:
   validation receipts.
 - Blocker corrections: 0/3
 - PR and merge: [PR #240](https://github.com/samcantrill/loom/pull/240)
-  opened against verified `develop` with the planned title/head and matching
-  body; CI and merge pending
+  passed CI and squash-merged to `develop` as `5116f18`
 
 ## Completion Record
 
@@ -222,5 +221,5 @@ Final commands:
 | Tests added or updated | Restored the Phase 5 focused test changes in `tests/integration/queue/test_agent_session_transport.py`, `tests/unit/loom/pipeline/execution/test_managed_local.py`, `tests/unit/loom/queue/test_agent_sessions.py`, and `tests/unit/loom/queue/test_remote_stage_execution.py`. Added multi-chunk post-publication crash/replay and conflicting-final-target coverage for both input and output finalization in `test_remote_stage_execution.py`. Manager-focused evidence: remote workspace 10, agent sessions 18, transport 10, and local daemon 16, for 54 passes. |
 | Validated revision/tree state and evidence | At stable source/test revision `4134d70`, the manager reran `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`: Ruff passed; Pyright reported 0 errors/warnings; default passed 2,436 with 121 deselected; configuration-extra passed 141 with 3 expected skips and 2,439 deselected; source and wheel builds succeeded. Fresh `make test-summary` passed package 118, unit 1,733, contract 295, integration 233, e2e 57, and configuration-extra 141 with 3 expected skips, for 2,577 categorized passes and no failures/errors. |
 | Validation-relevant changes after evidence | Phase and manifest evidence/status metadata only. |
-| PR, review, and merge | Required independent review passed at `600ac80` with no product blocker. [PR #240](https://github.com/samcantrill/loom/pull/240) is open against verified `develop`, non-draft, and mergeable; CI and merge remain pending. |
-| Residual risk and cleanup | No product blocker or new contract decision found. The accepted bounded relay-throughput/retained-output debt remains deferred as planned; worktree and branch cleanup await manager workflow. |
+| PR, review, and merge | Required independent review passed at `600ac80` with no product blocker. [PR #240](https://github.com/samcantrill/loom/pull/240) passed CI and squash-merged to `develop` as `5116f18`. |
+| Residual risk and cleanup | No product blocker or new contract decision found. The accepted bounded relay-throughput/retained-output debt remains deferred as planned. The Phase 5A worktree and local/remote branch were removed after merge; the blocked Phase 5 branch/worktree remain explicit read-only evidence. |
