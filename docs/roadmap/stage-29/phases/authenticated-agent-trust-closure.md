@@ -248,7 +248,7 @@ Final commands:
   format design, one removal-first safety review passed, and one plan-quality
   review passed after correcting only an ambiguous lifecycle label from phase
   `approved` to phase `pending` with design approval explicit
-- Implementation: complete at `fc122bb` (`feat(queue): close agent retirement trust boundary`); selective Phase 4 source/test/docs port plus final journal-secret/verifier, redacted retirement proof, principal-scoped poll-key, and hard-schema-cutover closures are committed
+- Implementation: complete at `fc122bb` and `c5a6338` (`feat(queue): close agent retirement trust boundary`; `test(queue): cover missing retirement secret rejection`); selective Phase 4 source/test/docs port plus final journal-secret/verifier, redacted retirement proof, principal-scoped poll-key, and hard-schema-cutover closures are committed
 - Refiner: not used
 - Pre-submit gate: pending
 - Independent review: required because this closes the demonstrated remote
@@ -260,9 +260,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `fc122bb`: `src/loom/queue/agent_sessions.py`, `src/loom/queue/agent_session_transport.py`, `src/loom/queue/local_daemon.py`, `tests/unit/loom/queue/test_agent_sessions.py`, `tests/integration/queue/test_agent_session_transport.py`, and `docs/features/queue.md` |
+| Implementation and changed paths | `fc122bb` and `c5a6338`: `src/loom/queue/agent_sessions.py`, `src/loom/queue/agent_session_transport.py`, `src/loom/queue/local_daemon.py`, `tests/unit/loom/queue/test_agent_sessions.py`, `tests/integration/queue/test_agent_session_transport.py`, and `docs/features/queue.md` |
 | Tests added or updated | Focused unit/integration coverage now proves persist-before-send exact replay, verifier-only coordinator state, invalid/missing-old secret rejection without coordinator mutation, secret redaction/ack cleanup, distinct later-session secret, final-schema candidate rejection, and same-ID cross-principal poll isolation/cleanup; retained mTLS, policy, restart, offer, held-poll, and no-launch coverage passes |
-| Validated revision/tree state and evidence | Clean implementation commit `fc122bb`; focused session suites: 19 passed; daemon/authority/Python-API contract suites: 23 passed; scoped Ruff passed; `make validate-pr` passed (Ruff and Pyright clean); `make test-summary` passed with 2,557 passes, 3 expected skips, and 0 failures/errors |
+| Validated revision/tree state and evidence | Clean source/test commit `c5a6338`; focused session suites: 19 passed; daemon/authority/Python-API contract suites: 23 passed; scoped Ruff passed; refreshed `make validate-pr` passed (Ruff and Pyright clean); refreshed `make test-summary` passed with 2,557 passes, 3 expected skips, and 0 failures/errors |
 | Validation-relevant changes after evidence | Phase completion metadata only |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Protected-agent-root loss intentionally cannot cleanly retire a session and remains Phase 9 positive-containment work; no Phase 5 delivery/launch side effect was added; worktree/branch retained for pre-submit and required independent review |
