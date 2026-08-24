@@ -12,6 +12,7 @@ from time import monotonic, sleep
 import pytest
 
 from loom.queue import (
+    GpuDeviceDescriptor,
     LocalDaemon,
     LocalDaemonConfig,
     LocalDaemonPrincipal,
@@ -522,6 +523,127 @@ def test_offer_wire_shape_uses_bounded_exact_capacity_atoms() -> None:
             "granularity": {"numerator": 1, "denominator": 1},
         },
     ]
+
+
+def test_gpu_offer_has_one_strict_exact_round_trip_without_private_binding() -> None:
+    device = GpuDeviceDescriptor("safe-gpu", "large", 80 * 1024**3)
+    offer = AgentOffer(
+        "session-1",
+        "epoch-1",
+        "config-1",
+        "inventory-1",
+        "availability-1",
+        0,
+        0,
+        30,
+        gpu_devices=(device,),
+        gpu_atoms=(device.capacity_atom(),),
+    )
+
+    encoded = offer.value()
+    assert AgentOffer.from_value(encoded) == offer
+    assert "binding" not in repr(encoded).lower()
+
+    atoms = encoded["capacity_atoms"]
+    assert isinstance(atoms, list)
+    gpu_atom = atoms[0]
+    assert isinstance(gpu_atom, dict)
+    gpu_atom["amount"] = {"numerator": 2, "denominator": 1}
+    with pytest.raises(QueueServiceError, match="conflicts with configured inventory"):
+        AgentOffer.from_value(encoded)
+
+
+def test_gpu_offer_rejects_old_or_policy_different_inventory(tmp_path: Path) -> None:
+    device = GpuDeviceDescriptor("safe-gpu", "large", 80 * 1024**3)
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-a",
+                "principal-a",
+                "agent-a",
+                ("default",),
+                ("python",),
+                (device,),
+            ),
+        )
+    )
+    config = _config(tmp_path, policy)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        registered = _register(daemon)
+        accepted = AgentOffer(
+            registered.session_id,
+            registered.coordinator_epoch,
+            "config-1",
+            "inventory-1",
+            "availability-1",
+            1,
+            0,
+            30,
+            gpu_devices=(device,),
+            gpu_atoms=(device.capacity_atom(),),
+        )
+        _view(daemon).publish_offer(accepted, idempotency_key="gpu-offer")
+        different = replace(
+            accepted,
+            gpu_devices=(GpuDeviceDescriptor("other-gpu", "large", 80 * 1024**3),),
+            gpu_atoms=(),
+        )
+        with pytest.raises(QueueConflictError, match="protected policy"):
+            _view(daemon).publish_offer(
+                different, idempotency_key="different-gpu-offer"
+            )
+
+        old_shape = accepted.value()
+        del old_shape["gpu_devices"]
+        old_shape["gpu"] = {"device_id": "safe-gpu"}
+        with pytest.raises(QueueServiceError, match="agent offer is invalid"):
+            AgentOffer.from_value(old_shape)
+    finally:
+        daemon.stop()
+
+
+def test_production_policy_rejects_unenforced_gpu_sharing() -> None:
+    shared = GpuDeviceDescriptor(
+        "safe-gpu",
+        "large",
+        80 * 1024**3,
+        allocation_mode="vram_share",
+        provider="configured-share-provider",
+        granularity=1024**3,
+    )
+    with pytest.raises(QueueServiceError, match="enforceable provider adapter"):
+        AgentPrincipalPolicy(
+            "agent-a",
+            "principal-a",
+            "agent-a",
+            ("default",),
+            ("python",),
+            (shared,),
+        )
+
+
+def test_gpu_fraction_descriptor_uses_one_canonical_rational_shape() -> None:
+    descriptor = GpuDeviceDescriptor(
+        "safe-gpu",
+        "partitioned",
+        80 * 1024**3,
+        allocation_mode="provider_fraction",
+        provider="configured-fraction-provider",
+        share_numerator=2,
+        share_denominator=4,
+        share_granularity_numerator=2,
+        share_granularity_denominator=8,
+    )
+
+    assert (descriptor.share_numerator, descriptor.share_denominator) == (1, 2)
+    assert (
+        descriptor.share_granularity_numerator,
+        descriptor.share_granularity_denominator,
+    ) == (1, 4)
+    assert GpuDeviceDescriptor.from_dict(descriptor.to_dict()) == descriptor
 
 
 def test_wait_poll_is_digest_replayed_and_current_policy_is_rechecked(

@@ -481,11 +481,15 @@ unit and granularity. Binary floating point never owns availability, reservation
 or release. Unsupported contract version, unit, mode, or granularity rejects the
 request before mutation.
 
-The base resource codec and historical records remain readable. The Stage 29
-managed-resolution path nevertheless rejects existing float-valued memory and
-zero-GPU entries with actionable migration guidance: express memory in an exact
-smaller integer unit (for example `1536 MiB` instead of `1.5 GiB`) and omit a
-zero-GPU entry. Delegated/direct compatibility behavior is not silently changed.
+This is a hard cut-over. The resource boundary rejects zero-GPU entries instead
+of preserving the old “zero means absent” exception: omit the GPU entry when a
+stage does not request a GPU. Managed resolution also rejects float-valued
+memory; express it in an exact smaller integer unit (for example `1536 MiB`
+instead of `1.5 GiB`). There is no legacy managed/delegated interpretation.
+
+The agent-session protocol is likewise a hard v3 cut-over. A v2 agent or
+coordinator is rejected during handshake; Loom does not translate the earlier
+flat GPU offer into the exact descriptor-and-capacity-atom schema.
 
 The Phase 6 provider-defined GPU fraction has one exact encoding that preserves
 the current numeric `ResourceEntry` field: `amount` is a positive integer
@@ -535,6 +539,12 @@ These modes are not interchangeable. Requesting 10 GiB VRAM does not silently
 mean one whole GPU, and requesting 0.5 GPU is not accepted merely because the
 number is fractional. A provider must advertise compatible inventory,
 availability, claim, admission, binding, accounting, and release semantics.
+
+The built-in production agent currently composes only the exclusive adapter.
+The exact share/fraction request and descriptor contracts are available for a
+real provider adapter, but naming an alias alone does not enable sharing:
+managed local and resident-agent configuration rejects those modes until an
+adapter can enforce their preparation, isolation, observation, and release.
 
 For example, one half of a named enforceable provider share is explicit:
 

@@ -281,17 +281,12 @@ def _validate_gpu(entry: ResourceEntry, path: str) -> None:
     if mode == "exclusive":
         if entry.unit not in {None, "count"}:
             raise RuntimeResourceError(f"{path}.unit must be count")
-        # The legacy codec remains readable; managed resolution rejects zero.
-        if not entry.attributes and entry.amount == 0:
-            return
         if (
             not isinstance(entry.amount, int)
             or isinstance(entry.amount, bool)
             or entry.amount <= 0
         ):
-            raise RuntimeResourceError(
-                f"{path}.amount must be a non-negative integer (positive for managed GPU requests)"
-            )
+            raise RuntimeResourceError(f"{path}.amount must be a positive integer")
         _validate_gpu_attributes(
             entry,
             path,

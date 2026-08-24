@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -58,9 +59,6 @@ class ManagedLocalError(ValueError):
 
 class ManagedProcessStartError(ManagedLocalError):
     """The launcher proved that no managed root was created or can later run."""
-
-
-_WORKER_ENVIRONMENT_LOCK = RLock()
 
 
 class ClaimOutcome(StrEnum):
@@ -1506,7 +1504,13 @@ class SQLiteCoordinatorAssignments:
                     receipt_value["component_descriptors"],
                 )
             )
-            if offered_descriptors != receipt_descriptors:
+            offered_by_kind = {
+                descriptor.kind: descriptor for descriptor in offered_descriptors
+            }
+            if any(
+                offered_by_kind.get(descriptor.kind) != descriptor
+                for descriptor in receipt_descriptors
+            ):
                 raise ManagedLocalError(
                     "decision components do not match the durable offer"
                 )
@@ -2250,15 +2254,30 @@ def run_managed_local_assignment(
             provider = providers[command.claim.resource_kind]
             if isinstance(provider, GpuResourceProvider):
                 environment.update(provider.worker_environment(command))
-        with _worker_environment(environment):
-            return execute_stage_worker_request(
+        if environment:
+            if (
+                executor is not None
+                or artifact_store_factory is not None
+                or resource_validator_registry is not None
+            ):
+                raise ManagedLocalError(
+                    "GPU-bound local workers require process-compatible default "
+                    "execution services"
+                )
+            return _execute_gpu_worker_process(
                 run_store=run_store,
                 worker_request=worker_request,
-                executor=executor,
-                artifact_store_factory=artifact_store_factory,
+                environment=environment,
                 selected_plugin_records=selected_plugin_records,
-                resource_validator_registry=resource_validator_registry,
             )
+        return execute_stage_worker_request(
+            run_store=run_store,
+            worker_request=worker_request,
+            executor=executor,
+            artifact_store_factory=artifact_store_factory,
+            selected_plugin_records=selected_plugin_records,
+            resource_validator_registry=resource_validator_registry,
+        )
 
     def launch_exact_worker() -> str:
         launch = process_launcher or _launch_managed_worker
@@ -2530,23 +2549,77 @@ def _require_worker_assignment_match(
         )
 
 
-@contextmanager
-def _worker_environment(values: Mapping[str, str]):
-    """Apply an assignment-private worker environment for one contained root."""
-    if not values:
-        yield
-        return
-    with _WORKER_ENVIRONMENT_LOCK:
-        prior = {key: os.environ.get(key) for key in values}
-        os.environ.update(values)
+def _execute_gpu_worker_process(
+    *,
+    run_store: LegacyRunStore,
+    worker_request: StageWorkerRequest,
+    environment: Mapping[str, str],
+    selected_plugin_records: tuple[PluginRecord, ...],
+) -> StageWorkerResult:
+    """Execute a GPU-bound local stage with a process-private environment."""
+    import subprocess
+
+    child_environment = dict(os.environ)
+    child_environment.update(environment)
+    command = [
+        sys.executable,
+        "-m",
+        "loom.pipeline.execution._managed_local_worker",
+        "--run-uri",
+        worker_request.run_uri,
+        "--stage",
+        worker_request.stage_name,
+        "--attempt",
+        str(worker_request.attempt),
+    ]
+    for record in selected_plugin_records:
+        command.extend(("--plugin", f"{record.group}:{record.name}"))
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=child_environment,
+    )
+    try:
+        stdout, stderr = process.communicate()
+    except KeyboardInterrupt:
+        process.terminate()
         try:
-            yield
-        finally:
-            for key, value in prior.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+        raise
+    raw_result = run_store.read_stage_worker_result(
+        worker_request.run_uri,
+        worker_request.stage_name,
+        attempt=worker_request.attempt,
+    )
+    if raw_result is None:
+        detail = (stderr or stdout).strip()[-1_000:]
+        raise ManagedLocalError(
+            "GPU worker process exited without a durable result"
+            + (f": {detail}" if detail else "")
+        )
+    result = StageWorkerResult.from_dict(raw_result)
+    if (
+        result.run_uri != worker_request.run_uri
+        or result.stage_name != worker_request.stage_name
+        or result.attempt != worker_request.attempt
+    ):
+        raise ManagedLocalError("GPU worker result identity conflicts")
+    successful = result.status in {StageStatus.SUCCEEDED, StageStatus.CANCELLED}
+    if successful != (process.returncode == 0):
+        raise ManagedLocalError("GPU worker result conflicts with process exit")
+    return replace(
+        result,
+        executor_metadata={
+            **dict(result.executor_metadata),
+            "gpu_worker_process_boundary": True,
+        },
+    )
 
 
 def _emit_assignment_event(

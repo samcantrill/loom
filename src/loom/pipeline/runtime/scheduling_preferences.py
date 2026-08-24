@@ -118,16 +118,46 @@ class ResourceAttributePreferenceScorer:
         claims: tuple[ResourceClaim, ...],
         spec: PreferenceSpec,
     ) -> PreferenceResult:
-        del work, claims
+        del work
+        resource = spec.data.get("resource")
         attribute = spec.data.get("attribute")
-        if not isinstance(attribute, str) or not attribute:
+        if (
+            not isinstance(resource, str)
+            or not resource
+            or not isinstance(attribute, str)
+            or not attribute
+        ):
             return PreferenceResult(
                 PreferenceEvaluationState.INDETERMINATE,
                 explanation="resource attribute preference is invalid",
             )
-        return _ordered_score(
-            candidate.attributes.get(attribute), spec.data.get("values")
-        )
+        inventory = candidate.inventory.get(resource)
+        claim = next((item for item in claims if item.resource_kind == resource), None)
+        if inventory is None or claim is None:
+            return PreferenceResult(
+                PreferenceEvaluationState.SCORE, PreferenceScore(0, "fallback")
+            )
+        items = inventory.data.get("devices")
+        if not isinstance(items, tuple):
+            return PreferenceResult(
+                PreferenceEvaluationState.INDETERMINATE,
+                explanation="resource attribute inventory is invalid",
+            )
+        attributes = {
+            str(item.get("id")): item.get(attribute)
+            for item in items
+            if isinstance(item, Mapping)
+        }
+        selected = [attributes.get(atom.local_capacity_key) for atom in claim.atoms]
+        if (
+            not selected
+            or any(not isinstance(value, str) for value in selected)
+            or len(set(selected)) != 1
+        ):
+            return PreferenceResult(
+                PreferenceEvaluationState.SCORE, PreferenceScore(0, "fallback")
+            )
+        return _ordered_score(selected[0], spec.data.get("values"))
 
 
 class PackingPreferenceScorer:

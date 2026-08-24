@@ -8,6 +8,7 @@ from ._sqlite import QUEUE_DB_SCHEMA_VERSION, SQLiteQueueRepository
 from .client import QueueClient
 
 if TYPE_CHECKING:
+    from ._remote_stage_execution import GpuDeviceDescriptor
     from .local_daemon import (
         LocalDaemon,
         LocalDaemonAdmission,
@@ -132,6 +133,10 @@ def __getattr__(name: str) -> object:
         from .local_daemon_runtime import prepare_managed_local_runtime_record
 
         return prepare_managed_local_runtime_record
+    if name == "GpuDeviceDescriptor":
+        from ._remote_stage_execution import GpuDeviceDescriptor
+
+        return GpuDeviceDescriptor
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -142,6 +147,7 @@ __all__ = [
     "CancellationRecord",
     "DispatchHandle",
     "FakeQueueDispatchAdapter",
+    "GpuDeviceDescriptor",
     "LaunchContract",
     "LocalDaemon",
     "LocalDaemonAdmission",

@@ -129,12 +129,13 @@ def test_resource_requests_from_runtime_uses_positive_integer_requests() -> None
     request = ResourceRequest(
         entries={
             "cpu": ResourceEntry(kind="cpu", amount=2),
-            "gpu": ResourceEntry(kind="gpu", amount=0),
+            "gpu": ResourceEntry(kind="gpu", amount=1),
         }
     )
 
     assert resource_requests_from_runtime(request) == (
         ResourceLeaseRequest(resource_key="cpu", amount=2),
+        ResourceLeaseRequest(resource_key="gpu", amount=1),
     )
 
 

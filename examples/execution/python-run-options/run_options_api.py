@@ -41,7 +41,7 @@ def main() -> None:
                     "train": {
                         "resources": {
                             "entries": {
-                                "gpu": {"kind": "gpu", "amount": 0},
+                                "gpu": {"kind": "gpu", "amount": 1},
                             }
                         }
                     }

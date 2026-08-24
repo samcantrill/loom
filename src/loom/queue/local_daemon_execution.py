@@ -157,33 +157,17 @@ def _coordinator_capacity(config: LocalDaemonConfig) -> tuple[CapacityAtom, ...]
         )
     gpu_atoms: list[CapacityAtom] = []
     for device in config.gpu_devices:
-        unit = {"exclusive": "count", "vram_share": "B", "provider_fraction": "share"}[
-            device.allocation_mode
-        ]
-        amount = ExactQuantity(
-            1 if device.allocation_mode == "exclusive" else device.vram_bytes
-        )
-        granularity = ExactQuantity(
-            1 if device.allocation_mode == "exclusive" else device.granularity
-        )
-        if device.allocation_mode == "provider_fraction":
-            amount = ExactQuantity(device.share_numerator, device.share_denominator)
-            granularity = ExactQuantity(
-                device.share_granularity_numerator,
-                device.share_granularity_denominator,
-            )
+        descriptor = device.descriptor
         gpu_atoms.append(
-            CapacityAtom(
-                "gpu",
-                f"{config.machine_id}:{device.device_id}",
-                amount,
-                unit,
-                granularity,
-            )
+            descriptor.capacity_atom(f"{config.machine_id}:{descriptor.device_id}")
         )
     for rule in config.agent_policy.agents:
         amounts[("cpu", f"{rule.agent_id}:cpu")] = (maximum, "count")
         amounts[("memory", f"{rule.agent_id}:memory")] = (maximum, "B")
+        gpu_atoms.extend(
+            device.capacity_atom(f"{rule.agent_id}:{device.device_id}")
+            for device in rule.gpu_devices
+        )
     return tuple(
         CapacityAtom(kind, key, ExactQuantity(amount), unit, ExactQuantity(1))
         for (kind, key), (amount, unit) in sorted(amounts.items())
@@ -605,31 +589,9 @@ class LocalDaemonExecution:
                 )
             )
         for device in config.gpu_devices:
-            unit = {
-                "exclusive": "count",
-                "vram_share": "B",
-                "provider_fraction": "share",
-            }[device.allocation_mode]
-            amount = ExactQuantity(
-                1 if device.allocation_mode == "exclusive" else device.vram_bytes
-            )
-            granularity = ExactQuantity(
-                1 if device.allocation_mode == "exclusive" else device.granularity
-            )
-            if device.allocation_mode == "provider_fraction":
-                amount = ExactQuantity(device.share_numerator, device.share_denominator)
-                granularity = ExactQuantity(
-                    device.share_granularity_numerator,
-                    device.share_granularity_denominator,
-                )
+            descriptor = device.descriptor
             local_capacity.append(
-                CapacityAtom(
-                    "gpu",
-                    f"{config.machine_id}:{device.device_id}",
-                    amount,
-                    unit,
-                    granularity,
-                )
+                descriptor.capacity_atom(f"{config.machine_id}:{descriptor.device_id}")
             )
         self.local_capacity = tuple(local_capacity)
         self.capacity = _coordinator_capacity(config)
@@ -669,7 +631,9 @@ class LocalDaemonExecution:
                 self.gpu_planner.claim_contracts,
                 gpu_atoms,
                 bindings={
-                    f"{config.machine_id}:{device.device_id}": device.binding_value
+                    f"{config.machine_id}:{device.descriptor.device_id}": (
+                        device.binding_value
+                    )
                     for device in config.gpu_devices
                 },
             )
@@ -770,6 +734,9 @@ class LocalDaemonExecution:
             try:
                 if self.cancellation_operation(admission.admission_id) is not None:
                     return self._cancel(admission, scoped_authority)
+                decision_as_of, snapshot_time = (
+                    self._daemon_owner()._accepted_snapshot()
+                )
                 snapshot = scoped_authority.open_run(admission.run_uri)
                 terminal = self._terminal_outcome(
                     intent.plan, snapshot, scoped_authority
@@ -786,7 +753,7 @@ class LocalDaemonExecution:
                     plan=intent.plan,
                     authority_snapshot=snapshot,
                     placements=placements,
-                    ready_at=snapshot.revision.sequence,
+                    ready_at=snapshot_time,
                     controller_action=lambda stage_plan, readiness: (
                         self._apply_controller_action(
                             scoped_authority,
@@ -822,7 +789,7 @@ class LocalDaemonExecution:
                             preference_scorers=_production_preference_scorers(),
                         ),
                         candidates=candidates,
-                        as_of=snapshot.revision.sequence,
+                        as_of=snapshot_time,
                         admission_id=admission.admission_id,
                     )
                     if decision.state is not PolicyDecisionState.SELECT:
@@ -860,6 +827,7 @@ class LocalDaemonExecution:
                     remote_targets={
                         key: value[1] for key, value in remote_targets.items()
                     },
+                    decision_as_of=decision_as_of,
                     execution_started=release_launch,
                 )
                 if remote_started:
@@ -1044,15 +1012,12 @@ class LocalDaemonExecution:
                     Mapping[str, PlainData],
                     {
                         "devices": [
-                            {
-                                "id": f"{self.config.machine_id}:{device.device_id}",
-                                "model": device.model,
-                                "vram_bytes": device.vram_bytes,
-                                "allocation_mode": device.allocation_mode,
-                                "provider": device.provider,
-                                "features": list(device.features),
-                                "healthy": device.healthy,
-                            }
+                            device.descriptor.to_dict(
+                                device_id=(
+                                    f"{self.config.machine_id}:"
+                                    f"{device.descriptor.device_id}"
+                                )
+                            )
                             for device in self.config.gpu_devices
                         ]
                     },
@@ -1140,12 +1105,16 @@ class LocalDaemonExecution:
                         ExactQuantity(1),
                     )
                 )
-            for device_id, _model, _vram in offer.gpu_devices:
-                atoms.append(
-                    CapacityAtom(
-                        "gpu", device_id, ExactQuantity(1), "count", ExactQuantity(1)
-                    )
+            atoms.extend(
+                CapacityAtom(
+                    "gpu",
+                    f"{agent_id}:{atom.local_capacity_key}",
+                    atom.amount,
+                    atom.unit,
+                    atom.granularity,
                 )
+                for atom in offer.gpu_atoms
+            )
             inventory: dict[str, ResourceInventoryEnvelope] = {}
             availability: dict[str, ResourceAvailabilityEnvelope] = {}
             for kind in {atom.owner_resource_kind for atom in atoms}:
@@ -1154,12 +1123,17 @@ class LocalDaemonExecution:
                 )
                 data: Mapping[str, PlainData] = {}
                 if kind == "gpu":
-                    data = cast(Mapping[str, PlainData], {"devices": [
-                        {"id": device_id, "model": model, "vram_bytes": vram,
-                         "allocation_mode": "exclusive", "provider": "exclusive",
-                         "features": [], "healthy": True}
-                        for device_id, model, vram in offer.gpu_devices
-                    ]})
+                    data = cast(
+                        Mapping[str, PlainData],
+                        {
+                            "devices": [
+                                device.to_dict(
+                                    device_id=f"{agent_id}:{device.device_id}"
+                                )
+                                for device in offer.gpu_devices
+                            ]
+                        },
+                    )
                 inventory[kind] = ResourceInventoryEnvelope(
                     agent_id,
                     kind,
@@ -1272,6 +1246,7 @@ class LocalDaemonExecution:
         record: StageWorkRecord,
         decision: object,
         remote_targets: Mapping[str, _RemoteCandidateTarget],
+        decision_as_of: str,
         execution_started: Callable[[], None],
     ) -> bool:
         selected = getattr(decision, "selected")
@@ -1425,8 +1400,8 @@ class LocalDaemonExecution:
             "snapshot_revision": snapshot_revision,
             "offer_revision": offer_id,
             "score_summary": {"preference_vector": list(selected.preference_vector)},
-            "fallback_eligible": False,
-            "as_of": utc_timestamp(),
+            "fallback_eligible": selected.fallback_eligible,
+            "as_of": decision_as_of,
             "reason_codes": ["selected"],
             "component_descriptors": [
                 self.planners[kind].descriptor.to_dict()

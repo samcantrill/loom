@@ -148,19 +148,188 @@ class ResidentProfileDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
-class ResidentGpuDevice:
-    """One safe configured remote GPU identity and its private binding."""
+class GpuDeviceDescriptor:
+    """Safe configured GPU identity carried across the agent protocol."""
 
     device_id: str
-    binding_value: str
     model: str
     vram_bytes: int
+    allocation_mode: str = "exclusive"
+    provider: str = "exclusive"
+    granularity: int = 1
+    share_numerator: int = 1
+    share_denominator: int = 1
+    share_granularity_numerator: int = 1
+    share_granularity_denominator: int = 1
+    features: tuple[str, ...] = ()
+    healthy: bool = True
 
     def __post_init__(self) -> None:
-        for value, name in ((self.device_id, "device_id"), (self.binding_value, "binding_value"), (self.model, "model")):
-            _identifier(value, f"resident GPU {name}")
-        if "," in self.binding_value or isinstance(self.vram_bytes, bool) or not isinstance(self.vram_bytes, int) or self.vram_bytes <= 0:
-            raise QueueServiceError("resident GPU configuration is invalid")
+        for value, name in (
+            (self.device_id, "device_id"),
+            (self.model, "model"),
+            (self.provider, "provider"),
+        ):
+            _identifier(value, f"GPU {name}")
+        if self.allocation_mode not in {
+            "exclusive",
+            "vram_share",
+            "provider_fraction",
+        }:
+            raise QueueServiceError("GPU allocation mode is unsupported")
+        if self.allocation_mode == "exclusive" and self.provider != "exclusive":
+            raise QueueServiceError("exclusive GPU provider must be exclusive")
+        for value, name in (
+            (self.vram_bytes, "vram_bytes"),
+            (self.granularity, "granularity"),
+            (self.share_numerator, "share_numerator"),
+            (self.share_denominator, "share_denominator"),
+            (self.share_granularity_numerator, "share_granularity_numerator"),
+            (self.share_granularity_denominator, "share_granularity_denominator"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise QueueServiceError(f"GPU {name} must be a positive integer")
+        if self.allocation_mode == "exclusive" and self.granularity != 1:
+            raise QueueServiceError("exclusive GPU granularity must be one device")
+        if self.allocation_mode == "vram_share" and (
+            self.vram_bytes % self.granularity
+        ):
+            raise QueueServiceError("GPU VRAM capacity must be a granularity multiple")
+        if self.allocation_mode == "provider_fraction":
+            capacity = ExactQuantity(self.share_numerator, self.share_denominator)
+            granularity = ExactQuantity(
+                self.share_granularity_numerator,
+                self.share_granularity_denominator,
+            )
+            if capacity.fraction % granularity.fraction:
+                raise QueueServiceError(
+                    "GPU share capacity must be a granularity multiple"
+                )
+            object.__setattr__(self, "share_numerator", capacity.numerator)
+            object.__setattr__(self, "share_denominator", capacity.denominator)
+            object.__setattr__(
+                self, "share_granularity_numerator", granularity.numerator
+            )
+            object.__setattr__(
+                self, "share_granularity_denominator", granularity.denominator
+            )
+        features = tuple(self.features)
+        if any(not isinstance(value, str) or not value for value in features) or len(
+            set(features)
+        ) != len(features):
+            raise QueueServiceError("GPU features are invalid")
+        if not isinstance(self.healthy, bool):
+            raise QueueServiceError("GPU health is invalid")
+        object.__setattr__(self, "features", tuple(sorted(features)))
+
+    @property
+    def unit(self) -> str:
+        return {
+            "exclusive": "count",
+            "vram_share": "B",
+            "provider_fraction": "share",
+        }[self.allocation_mode]
+
+    @property
+    def capacity(self) -> ExactQuantity:
+        if self.allocation_mode == "exclusive":
+            return ExactQuantity(1)
+        if self.allocation_mode == "vram_share":
+            return ExactQuantity(self.vram_bytes)
+        return ExactQuantity(self.share_numerator, self.share_denominator)
+
+    @property
+    def capacity_granularity(self) -> ExactQuantity:
+        if self.allocation_mode == "exclusive":
+            return ExactQuantity(1)
+        if self.allocation_mode == "vram_share":
+            return ExactQuantity(self.granularity)
+        return ExactQuantity(
+            self.share_granularity_numerator,
+            self.share_granularity_denominator,
+        )
+
+    def capacity_atom(self, local_capacity_key: str | None = None) -> CapacityAtom:
+        return CapacityAtom(
+            "gpu",
+            local_capacity_key or self.device_id,
+            self.capacity,
+            self.unit,
+            self.capacity_granularity,
+        )
+
+    def to_dict(self, *, device_id: str | None = None) -> dict[str, PlainData]:
+        return {
+            "id": device_id or self.device_id,
+            "model": self.model,
+            "vram_bytes": self.vram_bytes,
+            "allocation_mode": self.allocation_mode,
+            "provider": self.provider,
+            "granularity": self.granularity,
+            "share_numerator": self.share_numerator,
+            "share_denominator": self.share_denominator,
+            "share_granularity_numerator": self.share_granularity_numerator,
+            "share_granularity_denominator": self.share_granularity_denominator,
+            "features": list(self.features),
+            "healthy": self.healthy,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "GpuDeviceDescriptor":
+        expected = {
+            "id",
+            "model",
+            "vram_bytes",
+            "allocation_mode",
+            "provider",
+            "granularity",
+            "share_numerator",
+            "share_denominator",
+            "share_granularity_numerator",
+            "share_granularity_denominator",
+            "features",
+            "healthy",
+        }
+        if not isinstance(value, Mapping) or set(value) != expected:
+            raise QueueServiceError("GPU device descriptor is invalid")
+        features = value["features"]
+        if not isinstance(features, Sequence) or isinstance(features, (str, bytes)):
+            raise QueueServiceError("GPU device features are invalid")
+        return cls(
+            device_id=cast(str, value["id"]),
+            model=cast(str, value["model"]),
+            vram_bytes=cast(int, value["vram_bytes"]),
+            allocation_mode=cast(str, value["allocation_mode"]),
+            provider=cast(str, value["provider"]),
+            granularity=cast(int, value["granularity"]),
+            share_numerator=cast(int, value["share_numerator"]),
+            share_denominator=cast(int, value["share_denominator"]),
+            share_granularity_numerator=cast(int, value["share_granularity_numerator"]),
+            share_granularity_denominator=cast(
+                int, value["share_granularity_denominator"]
+            ),
+            features=tuple(cast(Sequence[str], features)),
+            healthy=cast(bool, value["healthy"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ResidentGpuDevice:
+    """One safe remote GPU descriptor plus its agent-private binding."""
+
+    descriptor: GpuDeviceDescriptor
+    binding_value: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.descriptor, GpuDeviceDescriptor):
+            raise QueueServiceError("resident GPU descriptor is invalid")
+        if self.descriptor.allocation_mode != "exclusive":
+            raise QueueServiceError(
+                "resident GPU sharing requires an enforceable provider adapter"
+            )
+        _identifier(self.binding_value, "resident GPU binding_value")
+        if "," in self.binding_value:
+            raise QueueServiceError("resident GPU binding value is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,7 +365,9 @@ class ResidentExecutionProfile:
             ):
                 raise QueueServiceError(f"resident {name} is invalid")
         gpu_devices = tuple(self.gpu_devices)
-        if any(not isinstance(item, ResidentGpuDevice) for item in gpu_devices) or len({item.device_id for item in gpu_devices}) != len(gpu_devices):
+        if any(not isinstance(item, ResidentGpuDevice) for item in gpu_devices) or len(
+            {item.descriptor.device_id for item in gpu_devices}
+        ) != len(gpu_devices):
             raise QueueServiceError("resident GPU devices are invalid")
         object.__setattr__(self, "project_root", project_root)
         object.__setattr__(self, "python_executable", executable)
@@ -224,7 +395,7 @@ class ResidentExecutionProfile:
                 )
             )
         atoms.extend(
-            CapacityAtom("gpu", device.device_id, ExactQuantity(1), "count", ExactQuantity(1))
+            device.descriptor.capacity_atom(f"{agent_id}:{device.descriptor.device_id}")
             for device in self.gpu_devices
         )
         return tuple(atoms)
@@ -1027,9 +1198,7 @@ class _RemoteAssignmentWorkspace:
                     raise QueueConflictError("input replay exceeds durable content")
                 existing = _read_regular_file_bytes(target)[offset : offset + len(data)]
                 if existing != data:
-                    raise QueueConflictError(
-                        "input replay conflicts with durable bytes"
-                    )
+                    raise QueueConflictError("input replay conflicts with durable bytes")
                 return int(row["size_bytes"])
             if _published_file_matches(
                 target,
@@ -1046,7 +1215,9 @@ class _RemoteAssignmentWorkspace:
                     raise QueueConflictError("input replay exceeds durable content")
                 existing = _read_regular_file_range(target, offset, len(data))
                 if existing != data:
-                    raise QueueConflictError("input replay conflicts with durable bytes")
+                    raise QueueConflictError(
+                        "input replay conflicts with durable bytes"
+                    )
                 conn.commit()
                 return received
             received = _append_exact_chunk(part, offset, received, data)
@@ -1646,6 +1817,8 @@ __all__ = [
     "REGULAR_FILE_RELAY_CAPABILITY",
     "REMOTE_EXECUTION_CAPABILITY",
     "REMOTE_EXECUTION_SCHEMA_VERSION",
+    "GpuDeviceDescriptor",
     "ResidentExecutionProfile",
+    "ResidentGpuDevice",
     "ResidentProfileDescriptor",
 ]

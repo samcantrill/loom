@@ -8,7 +8,7 @@ trusted preparation path and read before daemon admission.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -23,8 +23,15 @@ from loom.pipeline.runtime import (
     resolve_run_runtime,
 )
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
+from loom.pipeline.runtime.scheduling_preferences import (
+    GpuModelPreferenceScorer,
+    OrderedAgentPreferenceScorer,
+    PackingPreferenceScorer,
+    ResourceAttributePreferenceScorer,
+)
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
-from loom.pipeline.specs import PipelineSpec
+from loom.pipeline.specs import PipelineSpec, StageSpec
+from loom.scheduling import PreferenceSpec
 from loom.serialization import (
     PlainData,
     ensure_plain_data,
@@ -47,7 +54,6 @@ def prepare_managed_local_runtime_record(
     plan: ExecutionPlan,
     pipeline: PipelineSpec,
     options: RunOptions | Mapping[str, object] | None = None,
-    machine_id: str = "machine-A",
 ) -> str:
     """Write the current exact managed-local execution intent once prepared.
 
@@ -97,13 +103,7 @@ def prepare_managed_local_runtime_record(
         placements[stage.name] = resolve_stage_placement(
             authored=stage.resource_request,
             runtime=resources,
-            policy=StagePlacementPolicy(
-                pool_name="default",
-                target=machine_id,
-                default_resources=ResourceRequest(
-                    entries={"cpu": ResourceEntry("cpu", 1, "count")}
-                ),
-            ),
+            policy=_stage_placement_policy(stage, resources),
             planners=planners,
         ).to_dict()
     payload: dict[str, PlainData] = {
@@ -125,6 +125,163 @@ def prepare_managed_local_runtime_record(
     atomic_write_json(path, payload)
     path.chmod(0o600)
     return str(payload["digest"])
+
+
+def _stage_placement_policy(
+    stage: StageSpec, resources: ResourceRequest
+) -> StagePlacementPolicy:
+    raw = dict(stage.placement)
+    unknown = set(raw) - {"pool", "target", "preferences"}
+    if unknown:
+        raise QueueServiceError(
+            "stage placement contains unsupported field(s): "
+            + ", ".join(sorted(unknown))
+        )
+    pool = raw.get("pool", "default")
+    target = raw.get("target")
+    if not isinstance(pool, str) or not pool:
+        raise QueueServiceError("stage placement pool must be non-empty")
+    if target is not None and (not isinstance(target, str) or not target):
+        raise QueueServiceError("stage placement target must be non-empty or null")
+    return StagePlacementPolicy(
+        pool_name=pool,
+        target=cast(str | None, target),
+        default_resources=ResourceRequest(
+            entries={"cpu": ResourceEntry("cpu", 1, "count")}
+        ),
+        preferences=_resolved_preferences(stage, resources, raw.get("preferences")),
+    )
+
+
+def _resolved_preferences(
+    stage: StageSpec,
+    resources: ResourceRequest,
+    value: object,
+) -> tuple[PreferenceSpec, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise QueueServiceError("stage placement preferences must be a sequence")
+    if len(value) > 8:
+        raise QueueServiceError("stage placement preferences exceed the bound")
+    result: list[PreferenceSpec] = []
+    seen: set[str] = set()
+    requested_kinds = set(stage.resource_request.entries) | set(resources.entries)
+    scorers = {
+        "agent_order": OrderedAgentPreferenceScorer(),
+        "gpu_model_order": GpuModelPreferenceScorer(),
+        "resource_attribute_order": ResourceAttributePreferenceScorer(),
+        "packing": PackingPreferenceScorer(),
+    }
+    tiers = {
+        "agent_order": 0,
+        "gpu_model_order": 0,
+        "resource_attribute_order": 1,
+        "packing": 2,
+    }
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise QueueServiceError("stage placement preference is invalid")
+        kind = item.get("kind")
+        if not isinstance(kind, str) or kind not in scorers or kind in seen:
+            raise QueueServiceError("stage placement preference kind is invalid")
+        seen.add(kind)
+        scorer = scorers[kind]
+        fallback_after = item.get("fallback_after_seconds")
+        if fallback_after is not None and (
+            isinstance(fallback_after, bool)
+            or not isinstance(fallback_after, int)
+            or not 0 <= fallback_after <= 86_400
+        ):
+            raise QueueServiceError(
+                "stage placement fallback duration is outside the site bound"
+            )
+        data: dict[str, PlainData]
+        utility_min = 0
+        utility_max = 0
+        if kind == "packing":
+            _exact_preference_fields(item, {"kind", "fallback_after_seconds"})
+            data = {}
+            utility_min = -(2**63) + 1
+        elif kind == "agent_order":
+            _exact_preference_fields(item, {"kind", "agents", "fallback_after_seconds"})
+            agents = _ordered_strings(item.get("agents"), "agents")
+            data = {"agents": list(agents)}
+            utility_max = len(agents)
+        elif kind == "gpu_model_order":
+            _exact_preference_fields(item, {"kind", "models", "fallback_after_seconds"})
+            if "gpu" not in requested_kinds:
+                raise QueueServiceError(
+                    "GPU model preference requires a GPU stage request"
+                )
+            models = _ordered_strings(item.get("models"), "models")
+            data = {"models": list(models)}
+            utility_max = len(models)
+        else:
+            _exact_preference_fields(
+                item,
+                {
+                    "kind",
+                    "resource",
+                    "attribute",
+                    "values",
+                    "fallback_after_seconds",
+                },
+            )
+            resource = item.get("resource")
+            attribute = item.get("attribute")
+            if (
+                not isinstance(resource, str)
+                or resource not in requested_kinds
+                or not isinstance(attribute, str)
+                or not attribute
+            ):
+                raise QueueServiceError(
+                    "resource attribute preference requires a requested resource"
+                )
+            values = _ordered_strings(item.get("values"), "values")
+            data = {
+                "resource": resource,
+                "attribute": attribute,
+                "values": list(values),
+            }
+            utility_max = len(values)
+        result.append(
+            PreferenceSpec(
+                identifier=f"{stage.name}:preference:{index}:{kind}",
+                scorer=scorer.descriptor.kind,
+                tier=tiers[kind],
+                weight=1,
+                fallback_after_seconds=cast(int | None, fallback_after),
+                data=data,
+                utility_min=utility_min,
+                utility_max=utility_max,
+                quality_bands=("preferred", "fallback"),
+                fallback_band=("fallback" if fallback_after is not None else None),
+                descriptor=scorer.descriptor,
+            )
+        )
+    return tuple(result)
+
+
+def _exact_preference_fields(value: Mapping[str, object], expected: set[str]) -> None:
+    if set(value) != expected - {"fallback_after_seconds"} and set(value) != expected:
+        raise QueueServiceError("stage placement preference fields are invalid")
+
+
+def _ordered_strings(value: object, field: str) -> tuple[str, ...]:
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or not value
+        or len(value) > 32
+        or any(not isinstance(item, str) or not item for item in value)
+        or len(set(value)) != len(value)
+    ):
+        raise QueueServiceError(
+            f"stage placement preference {field} must be bounded unique strings"
+        )
+    return tuple(cast(Sequence[str], value))
 
 
 def load_managed_local_runtime_record(

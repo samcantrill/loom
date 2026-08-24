@@ -829,6 +829,7 @@ class CandidateEvaluation:
     claims: tuple[ResourceClaim, ...]
     preference_vector: tuple[int, ...]
     explanations: tuple[str, ...] = ()
+    fallback_eligible: bool = False
 
     def __post_init__(self) -> None:
         _text(self.stage_work_id, "evaluation stage_work_id")
@@ -844,6 +845,8 @@ class CandidateEvaluation:
         explanations = tuple(self.explanations)
         for value in explanations:
             _explanation(value)
+        if not isinstance(self.fallback_eligible, bool):
+            raise SchedulingError("fallback eligibility must be a boolean")
         object.__setattr__(self, "claims", claims)
         object.__setattr__(self, "preference_vector", vector)
         object.__setattr__(self, "explanations", explanations)

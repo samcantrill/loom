@@ -113,7 +113,7 @@ def test_stage_resources_validate_supported_local_subset() -> None:
         "entries": {
             "cpu": {"kind": "cpu", "amount": 2, "unit": "count"},
             "memory": {"kind": "memory", "amount": 1024, "unit": "MiB"},
-            "gpu": {"kind": "gpu", "amount": 0},
+            "gpu": {"kind": "gpu", "amount": 1},
         },
     }
     spec = PipelineSpec.from_config({"stages": [stage]})
@@ -123,7 +123,7 @@ def test_stage_resources_validate_supported_local_subset() -> None:
         "entries": {
             "cpu": {"kind": "cpu", "amount": 2, "unit": "count"},
             "memory": {"kind": "memory", "amount": 1024, "unit": "MiB"},
-            "gpu": {"kind": "gpu", "amount": 0},
+            "gpu": {"kind": "gpu", "amount": 1},
         },
     }
     assert parsed.resource_request.entries["cpu"].amount == 2

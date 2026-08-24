@@ -31,7 +31,7 @@ from .agent_sessions import (
     initialize_agent_session_schema,
     validate_agent_session_schema,
 )
-from ._remote_stage_execution import ResidentProfileDescriptor
+from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
 if TYPE_CHECKING:
@@ -68,74 +68,28 @@ class LocalDaemonRole(StrEnum):
 class ConfiguredGpuDevice:
     """One configured manageable GPU; ``binding_value`` never leaves the agent."""
 
-    device_id: str
+    descriptor: GpuDeviceDescriptor
     binding_value: str
-    model: str
-    vram_bytes: int
-    allocation_mode: str = "exclusive"
-    provider: str = "exclusive"
-    granularity: int = 1
-    share_numerator: int = 1
-    share_denominator: int = 1
-    share_granularity_numerator: int = 1
-    share_granularity_denominator: int = 1
-    features: tuple[str, ...] = ()
-    healthy: bool = True
 
     def __post_init__(self) -> None:
-        for name in ("device_id", "binding_value", "model", "provider"):
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value or "\0" in value:
-                raise QueueServiceError(
-                    f"configured GPU {name} must be a safe non-empty string"
-                )
+        if not isinstance(self.descriptor, GpuDeviceDescriptor):
+            raise QueueServiceError("configured GPU descriptor is invalid")
+        if self.descriptor.allocation_mode != "exclusive":
+            raise QueueServiceError(
+                "configured GPU sharing requires an enforceable provider adapter"
+            )
+        if (
+            not isinstance(self.binding_value, str)
+            or not self.binding_value
+            or "\0" in self.binding_value
+        ):
+            raise QueueServiceError(
+                "configured GPU binding_value must be a safe non-empty string"
+            )
         if "," in self.binding_value:
             raise QueueServiceError(
                 "configured GPU binding_value must not contain a list separator"
             )
-        if self.allocation_mode not in {"exclusive", "vram_share", "provider_fraction"}:
-            raise QueueServiceError("configured GPU allocation_mode is unsupported")
-        if self.allocation_mode == "exclusive" and self.provider != "exclusive":
-            raise QueueServiceError("exclusive GPU provider must be exclusive")
-        for value, name in (
-            (self.vram_bytes, "vram_bytes"),
-            (self.granularity, "granularity"),
-        ):
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise QueueServiceError(
-                    f"configured GPU {name} must be a positive integer"
-                )
-        if self.allocation_mode == "exclusive" and self.granularity != 1:
-            raise QueueServiceError("exclusive GPU granularity must be one device")
-        if self.vram_bytes % self.granularity:
-            raise QueueServiceError(
-                "configured GPU capacity must be a granularity multiple"
-            )
-        for value, name in (
-            (self.share_numerator, "share_numerator"),
-            (self.share_denominator, "share_denominator"),
-            (self.share_granularity_numerator, "share_granularity_numerator"),
-            (self.share_granularity_denominator, "share_granularity_denominator"),
-        ):
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise QueueServiceError(
-                    f"configured GPU {name} must be a positive integer"
-                )
-        if self.allocation_mode == "provider_fraction" and (
-            (self.share_numerator * self.share_granularity_denominator)
-            % (self.share_denominator * self.share_granularity_numerator)
-        ):
-            raise QueueServiceError(
-                "configured GPU share capacity must be a granularity multiple"
-            )
-        features = tuple(self.features)
-        if any(not isinstance(value, str) or not value for value in features) or len(
-            set(features)
-        ) != len(features):
-            raise QueueServiceError("configured GPU features are invalid")
-        if not isinstance(self.healthy, bool):
-            raise QueueServiceError("configured GPU health is invalid")
-        object.__setattr__(self, "features", tuple(sorted(features)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,7 +152,7 @@ class LocalDaemonConfig:
         gpu_devices = tuple(self.gpu_devices)
         if any(not isinstance(item, ConfiguredGpuDevice) for item in gpu_devices):
             raise QueueServiceError("gpu_devices must be configured GPU devices")
-        if len({item.device_id for item in gpu_devices}) != len(gpu_devices):
+        if len({item.descriptor.device_id for item in gpu_devices}) != len(gpu_devices):
             raise QueueServiceError("configured GPU device IDs must be unique")
         if len({item.binding_value for item in gpu_devices}) != len(gpu_devices):
             raise QueueServiceError("configured GPU bindings must be unique")
@@ -226,7 +180,7 @@ class LocalDaemonConfig:
         object.__setattr__(
             self,
             "gpu_devices",
-            tuple(sorted(gpu_devices, key=lambda item: item.device_id)),
+            tuple(sorted(gpu_devices, key=lambda item: item.descriptor.device_id)),
         )
         object.__setattr__(
             self, "poll_interval_seconds", float(self.poll_interval_seconds)
@@ -960,6 +914,14 @@ class LocalDaemon:
             (accepted,),
         )
         return accepted
+
+    def _accepted_snapshot(self) -> tuple[str, int]:
+        """Return one monotonic accepted timestamp and whole-second snapshot time."""
+
+        with self._connection() as conn:
+            accepted = self._accepted_time(conn)
+            conn.commit()
+        return accepted, int(parse_timestamp(accepted).timestamp())
 
 
 @dataclass(frozen=True, slots=True)

@@ -328,6 +328,7 @@ class StageSpec:
     dependencies: tuple[StageID, ...] = field(default_factory=tuple)
     inputs: Mapping[str, str] = field(default_factory=dict)
     resources: Mapping[str, PlainData] = field(default_factory=dict)
+    placement: Mapping[str, PlainData] = field(default_factory=dict)
     fingerprint_fields: Mapping[str, PlainData] = field(default_factory=dict)
     validator_registry: InitVar[ResourceValidatorRegistry | None] = None
     _resource_request: ResourceRequest = field(init=False, repr=False, compare=False)
@@ -394,6 +395,14 @@ class StageSpec:
         object.__setattr__(self, "_resource_request", resource_request)
         object.__setattr__(
             self,
+            "placement",
+            freeze_plain_data(
+                _plain_mapping(self.placement, path="StageSpec.placement"),
+                path="StageSpec.placement",
+            ),
+        )
+        object.__setattr__(
+            self,
             "fingerprint_fields",
             freeze_plain_data(
                 _plain_mapping(
@@ -434,6 +443,7 @@ class StageSpec:
                 "inputs",
                 "outputs",
                 "resources",
+                "placement",
                 "fingerprint",
             },
             deferred=_STAGE_DEFERRED_FIELDS,
@@ -466,6 +476,9 @@ class StageSpec:
             mapping.get("resources", {}), path=f"{path}.resources"
         )
         parse_resource_request(resources, registry=registry)
+        placement = _plain_mapping(
+            mapping.get("placement", {}), path=f"{path}.placement"
+        )
         fingerprint_fields = _plain_mapping(
             mapping.get("fingerprint", {}), path=f"{path}.fingerprint"
         )
@@ -477,6 +490,7 @@ class StageSpec:
             dependencies=dependencies,
             inputs=inputs,
             resources=resources,
+            placement=placement,
             fingerprint_fields=fingerprint_fields,
             validator_registry=registry,
         )

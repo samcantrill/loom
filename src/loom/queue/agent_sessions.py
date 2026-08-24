@@ -22,6 +22,7 @@ from uuid import uuid4
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.status import StageStatus
+from loom.scheduling import CapacityAtom, ExactQuantity
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
@@ -30,6 +31,7 @@ from ._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
     TRANSFER_CHUNK_BYTES,
+    GpuDeviceDescriptor,
     ResidentProfileDescriptor,
     _DeliveredExecutionRequest,
     _RemoteExecutionReport,
@@ -49,7 +51,7 @@ if TYPE_CHECKING:
     from .local_daemon import LocalDaemon, LocalDaemonPrincipal
 
 
-PROTOCOL_VERSION = "2"
+PROTOCOL_VERSION = "3"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -97,12 +99,25 @@ class AgentPrincipalPolicy:
     agent_id: str
     pools: tuple[str, ...]
     capabilities: tuple[str, ...] = ()
+    gpu_devices: tuple[GpuDeviceDescriptor, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("credential_id", "principal_id", "agent_id"):
             _identifier(getattr(self, name), name)
         _identifiers(self.pools, "pools", non_empty=True)
         _identifiers(self.capabilities, "capabilities")
+        devices = tuple(self.gpu_devices)
+        if any(not isinstance(item, GpuDeviceDescriptor) for item in devices):
+            raise QueueServiceError("agent policy GPU devices are invalid")
+        if any(item.allocation_mode != "exclusive" for item in devices):
+            raise QueueServiceError(
+                "agent policy GPU sharing requires an enforceable provider adapter"
+            )
+        if len({item.device_id for item in devices}) != len(devices):
+            raise QueueServiceError("agent policy GPU device IDs must be unique")
+        object.__setattr__(
+            self, "gpu_devices", tuple(sorted(devices, key=lambda item: item.device_id))
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,7 +279,8 @@ class AgentOffer:
     pools: tuple[str, ...] = ("default",)
     reflected_claim_ids: tuple[str, ...] = ()
     resident_profiles: tuple[ResidentProfileDescriptor, ...] = ()
-    gpu_devices: tuple[tuple[str, str, int], ...] = ()
+    gpu_devices: tuple[GpuDeviceDescriptor, ...] = ()
+    gpu_atoms: tuple[CapacityAtom, ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -301,15 +317,36 @@ class AgentOffer:
             raise QueueServiceError("offer resident profile IDs must be unique")
         object.__setattr__(self, "resident_profiles", profiles)
         devices = tuple(self.gpu_devices)
-        if any(
-            not isinstance(item, tuple) or len(item) != 3
-            or not isinstance(item[0], str) or not item[0]
-            or not isinstance(item[1], str) or not item[1]
-            or isinstance(item[2], bool) or not isinstance(item[2], int) or item[2] <= 0
-            for item in devices
-        ) or len({item[0] for item in devices}) != len(devices):
+        if any(not isinstance(item, GpuDeviceDescriptor) for item in devices) or len(
+            {item.device_id for item in devices}
+        ) != len(devices):
             raise QueueServiceError("offer GPU devices are invalid")
+        devices = tuple(sorted(devices, key=lambda item: item.device_id))
+        configured = {item.device_id: item for item in devices}
+        gpu_atoms = tuple(self.gpu_atoms)
+        if any(not isinstance(item, CapacityAtom) for item in gpu_atoms) or len(
+            {item.local_capacity_key for item in gpu_atoms}
+        ) != len(gpu_atoms):
+            raise QueueServiceError("offer GPU availability atoms are invalid")
+        for atom in gpu_atoms:
+            device = configured.get(atom.local_capacity_key)
+            if (
+                device is None
+                or not device.healthy
+                or atom.owner_resource_kind != "gpu"
+                or atom.unit != device.unit
+                or atom.granularity != device.capacity_granularity
+                or atom.amount.fraction > device.capacity.fraction
+            ):
+                raise QueueServiceError(
+                    "offer GPU availability conflicts with configured inventory"
+                )
         object.__setattr__(self, "gpu_devices", devices)
+        object.__setattr__(
+            self,
+            "gpu_atoms",
+            tuple(sorted(gpu_atoms, key=lambda item: item.local_capacity_key)),
+        )
 
     def value(self) -> dict[str, PlainData]:
         capacity_atoms: list[PlainData] = []
@@ -333,14 +370,7 @@ class AgentOffer:
                     "granularity": {"numerator": 1, "denominator": 1},
                 }
             )
-        capacity_atoms.extend(
-            {
-                "owner_resource_kind": "gpu", "local_capacity_key": device_id,
-                "amount": {"numerator": 1, "denominator": 1}, "unit": "count",
-                "granularity": {"numerator": 1, "denominator": 1},
-            }
-            for device_id, _model, _vram in self.gpu_devices
-        )
+        capacity_atoms.extend(atom.to_dict() for atom in self.gpu_atoms)
         return {
             "session_id": self.session_id,
             "coordinator_epoch": self.coordinator_epoch,
@@ -352,10 +382,7 @@ class AgentOffer:
             "pools": list(self.pools),
             "reflected_claim_ids": list(self.reflected_claim_ids),
             "resident_profiles": [item.to_dict() for item in self.resident_profiles],
-            "gpu_devices": [
-                {"id": device_id, "model": model, "vram_bytes": vram}
-                for device_id, model, vram in self.gpu_devices
-            ],
+            "gpu_devices": [device.to_dict() for device in self.gpu_devices],
         }
 
     @classmethod
@@ -379,6 +406,7 @@ class AgentOffer:
         if not isinstance(atoms, Sequence) or isinstance(atoms, (str, bytes)):
             raise QueueServiceError("agent offer capacity is invalid")
         capacities: dict[str, int] = {}
+        gpu_atoms: list[CapacityAtom] = []
         for atom in atoms:
             if not isinstance(atom, Mapping) or set(atom) != {
                 "owner_resource_kind",
@@ -389,25 +417,22 @@ class AgentOffer:
             }:
                 raise QueueServiceError("agent offer capacity is invalid")
             kind = atom.get("owner_resource_kind")
-            amount = atom.get("amount")
-            granularity = atom.get("granularity")
+            if kind not in {"cpu", "memory", "gpu"}:
+                raise QueueServiceError("agent offer capacity is invalid")
+            parsed = _offer_capacity_atom(atom)
+            if kind == "gpu":
+                gpu_atoms.append(parsed)
+                continue
+            if kind in capacities or parsed.local_capacity_key != kind:
+                raise QueueServiceError("agent offer capacity is invalid")
+            expected_unit = "count" if kind == "cpu" else "byte"
             if (
-                kind not in {"cpu", "memory", "gpu"}
-                or (kind in capacities and kind != "gpu")
-                or not isinstance(amount, Mapping)
-                or set(amount) != {"numerator", "denominator"}
-                or amount.get("denominator") != 1
-                or isinstance(amount.get("numerator"), bool)
-                or not isinstance(amount.get("numerator"), int)
-                or cast(int, amount["numerator"]) <= 0
-                or (kind in {"cpu", "memory"} and atom.get("local_capacity_key") != kind)
-                or atom.get("unit") != ("count" if kind in {"cpu", "gpu"} else "byte")
-                or not isinstance(granularity, Mapping)
-                or dict(granularity) != {"numerator": 1, "denominator": 1}
+                parsed.unit != expected_unit
+                or parsed.amount.denominator != 1
+                or parsed.granularity != ExactQuantity(1)
             ):
                 raise QueueServiceError("agent offer capacity is invalid")
-            if kind != "gpu":
-                capacities[cast(str, kind)] = cast(int, amount["numerator"])
+            capacities[cast(str, kind)] = parsed.amount.numerator
         pools = value["pools"]
         claims = value["reflected_claim_ids"]
         profiles = value["resident_profiles"]
@@ -438,11 +463,30 @@ class AgentOffer:
                 ResidentProfileDescriptor.from_dict(item) for item in profiles
             ),
             gpu_devices=tuple(
-                (cast(str, item["id"]), cast(str, item["model"]), cast(int, item["vram_bytes"]))
-                for item in cast(Sequence[Mapping[str, object]], gpu_devices)
-                if isinstance(item, Mapping) and set(item) == {"id", "model", "vram_bytes"}
+                GpuDeviceDescriptor.from_dict(item) for item in gpu_devices
             ),
+            gpu_atoms=tuple(gpu_atoms),
         )
+
+
+def _offer_capacity_atom(value: Mapping[str, object]) -> CapacityAtom:
+    try:
+        atom = CapacityAtom(
+            owner_resource_kind=cast(str, value["owner_resource_kind"]),
+            local_capacity_key=cast(str, value["local_capacity_key"]),
+            amount=ExactQuantity.from_dict(value["amount"]),
+            unit=cast(str, value["unit"]),
+            granularity=ExactQuantity.from_dict(value["granularity"]),
+        )
+    except Exception as exc:
+        raise QueueServiceError("agent offer capacity is invalid") from exc
+    for quantity in (atom.amount, atom.granularity):
+        if (
+            quantity.numerator > _MAX_RESOURCE_ATOM
+            or quantity.denominator > _MAX_RESOURCE_ATOM
+        ):
+            raise QueueServiceError("agent offer capacity is outside its bound")
+    return atom
 
 
 @dataclass(frozen=True, slots=True)
@@ -817,7 +861,7 @@ class AgentSessionService:
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
-                    "agent-sessions-v2",
+                    "agent-sessions-v3",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],
@@ -1095,6 +1139,10 @@ class AgentSessionService:
             if offer.pools != session.pools:
                 raise QueueConflictError(
                     "agent offer pools do not match its effective scope"
+                )
+            if offer.gpu_devices != rule.gpu_devices:
+                raise QueueConflictError(
+                    "agent offer GPU inventory does not match protected policy"
                 )
             if offer.resident_profiles and not {
                 REMOTE_EXECUTION_CAPABILITY,
@@ -2965,6 +3013,7 @@ __all__ = [
     "AgentSession",
     "AgentSessionState",
     "AgentSessionView",
+    "GpuDeviceDescriptor",
     "PROTOCOL_VERSION",
     "ScopedAuthorizer",
     "TransportPrincipalPolicy",
