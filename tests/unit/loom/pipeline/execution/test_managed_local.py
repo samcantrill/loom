@@ -510,6 +510,52 @@ def test_offer_revision_is_one_use_until_fresh_net_availability(tmp_path) -> Non
     )
 
 
+def test_unaccepted_release_can_reopen_the_same_availability_offer(tmp_path) -> None:
+    _provider_value, command = _provider()
+    capacity = command.claim.atoms[0]
+    claim = replace(
+        command.claim,
+        atoms=(replace(capacity, amount=ExactQuantity(1)),),
+    )
+    first = command.assignment
+    second = replace(
+        first,
+        assignment_id="assignment-2",
+        stage_work_id=stage_work_identity(
+            "admission-1", "evaluate", "evaluate-1", "ready-1"
+        ),
+        stage_name="evaluate",
+        attempt_id="evaluate-1",
+        claim_id="claim-2",
+    )
+    path = tmp_path / "coordinator.sqlite"
+    _seed_stage_work(path, first)
+    _seed_stage_work(path, second)
+    coordinator = SQLiteCoordinatorAssignments(path, (capacity,))
+    coordinator.publish_offer(_offer(first, (capacity,)))
+    coordinator.reserve(
+        first,
+        (claim,),
+        max_parallel_stages=2,
+        decision_receipt=_decision_receipt(first, claim),
+    )
+    coordinator.advance(first.assignment_id, expected="reserved", next_state="bound")
+
+    assert (
+        coordinator.release_unaccepted(first.assignment_id, reopen_offer=True)
+        == "released"
+    )
+    assert (
+        coordinator.reserve(
+            second,
+            (claim,),
+            max_parallel_stages=2,
+            decision_receipt=_decision_receipt(second, claim),
+        )
+        == "reserved"
+    )
+
+
 def test_start_outcome_unknown_never_invokes_launcher_again(tmp_path) -> None:
     journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
     assignment = _assignment()

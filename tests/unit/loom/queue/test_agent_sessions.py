@@ -25,8 +25,9 @@ from loom.queue.agent_sessions import (
     AgentRetirementProof,
     AgentSessionState,
 )
-from loom.queue.errors import QueueConflictError, QueueServiceError
+from loom.queue.errors import QueueConflictError, QueueServiceError, QueueStorageError
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.serialization import PlainData
 
 
 _TEST_RETIREMENT_SECRET = "01" * 32
@@ -100,6 +101,28 @@ def _offer(
         memory_bytes=1024,
         ttl_seconds=30,
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("local_capacity_key", "host-cpu"),
+        ("unit", "cores"),
+        ("granularity", {"numerator": 2, "denominator": 1}),
+    ],
+)
+def test_offer_codec_rejects_noncanonical_capacity_atoms(
+    field: str, value: PlainData
+) -> None:
+    encoded = _offer("session-1", "epoch-1").value()
+    atoms = encoded["capacity_atoms"]
+    assert isinstance(atoms, list)
+    first = atoms[0]
+    assert isinstance(first, dict)
+    first[field] = value
+
+    with pytest.raises(QueueServiceError, match="capacity is invalid"):
+        AgentOffer.from_value(encoded)
 
 
 def _proof(session) -> AgentRetirementProof:
@@ -606,9 +629,7 @@ def test_poll_identity_and_cleanup_are_scoped_to_the_principal(tmp_path: Path) -
         )
         handshake = view_a.handshake()
 
-        def register(
-            view, *, key: str, agent_root_id: str, verifier_seed: str
-        ):
+        def register(view, *, key: str, agent_root_id: str, verifier_seed: str):
             return view.register(
                 AgentRegistration(
                     idempotency_key=key,
@@ -685,10 +706,13 @@ def test_poll_identity_and_cleanup_are_scoped_to_the_principal(tmp_path: Path) -
             assert held.result(timeout=2)["result"] == "wait"
 
         with daemon._connection() as conn:
-            assert conn.execute(
-                "SELECT COUNT(*) FROM agent_polls WHERE poll_id = ?",
-                ("shared-poll",),
-            ).fetchone()[0] == 2
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM agent_polls WHERE poll_id = ?",
+                    ("shared-poll",),
+                ).fetchone()[0]
+                == 2
+            )
     finally:
         daemon.stop()
 
@@ -720,28 +744,21 @@ def test_reconciliation_and_offer_preserve_the_durable_effective_scope(
         daemon.stop()
 
 
-def test_current_v1_roots_migrate_additively_without_losing_admission_tables(
-    tmp_path: Path,
+@pytest.mark.parametrize("old_version", [1, 2])
+def test_old_roots_are_rejected_by_the_hard_cutover(
+    tmp_path: Path, old_version: int
 ) -> None:
     config = _config(tmp_path)
     LocalDaemon.initialize(config)
     for path in (config.control_database, config.agent_root / "control.sqlite"):
         with sqlite3.connect(path) as conn:
-            conn.execute("PRAGMA user_version = 1")
+            conn.execute(f"PRAGMA user_version = {old_version}")
             conn.commit()
-    daemon = LocalDaemon(config)
-    daemon.start()
-    try:
-        with sqlite3.connect(config.control_database) as conn:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
-            assert conn.execute(
-                "SELECT name FROM sqlite_master WHERE name = 'managed_admissions'"
-            ).fetchone()
-            assert conn.execute(
-                "SELECT name FROM sqlite_master WHERE name = 'agent_sessions'"
-            ).fetchone()
-    finally:
-        daemon.stop()
+    with pytest.raises(QueueStorageError, match="fresh roots are required"):
+        LocalDaemon(config).start()
+    for path in (config.control_database, config.agent_root / "control.sqlite"):
+        with sqlite3.connect(path) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == old_version
 
 
 def test_current_version_incomplete_session_schema_is_rejected_not_repaired(

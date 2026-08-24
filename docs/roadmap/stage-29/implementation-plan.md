@@ -1,15 +1,18 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: implementation in progress; Phases 1-3D and 4A merged, Phases 3A-3C
-and 4 retained as blocked evidence; Phase 5 pending
+Status: implementation in progress; Phases 1-3D and 4A merged, Phases 3A-3C,
+4, and 5 retained as blocked evidence; Phase 5A PR open
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 5 pending
-Blockers: none. Phase 4A passed local validation, required independent review,
-and GitHub CI; [PR #239](https://github.com/samcantrill/loom/pull/239)
-squash-merged to `develop` as `2d273b8`.
+Current phase: Phase 5A PR open
+Blockers: none. Phase 5A source/test revision `4134d70` closes the exact
+publish-before-commit input/output crash window without changing the approved
+hard cut-over. Manager-focused and full validation plus a fresh 2,577-pass
+categorized receipt are green, and required independent review found no product
+blocker. [PR #240](https://github.com/samcantrill/loom/pull/240) targets verified
+`develop`; CI and merge remain.
 
 ## Summary
 
@@ -46,7 +49,7 @@ squash-merged to `develop` as `2d273b8`.
   automatic managed-agent/SLURM fallback, allocation-fed agents/provisioning,
   and a generic external-scheduler plugin are out of scope.
 - Implementation reference flows live in nine numbered phase plans plus the
-  Phase 3B/3C/3D recovery plans. They isolate
+  Phase 3B/3C/3D and Phase 5A recovery plans. They isolate
   pure scheduling plus authority-owned `PENDING` preparation/readiness, local
   execution side effects, persistent daemon lifetime, remote trust
   establishment, remote CPU/memory data and execution, GPU/preference placement,
@@ -650,7 +653,8 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 3D | `local-daemon-status-restart-closure` | merged | `docs/roadmap/stage-29/phases/local-daemon-status-restart-closure.md` | `agent/stage-29-p3d-local-daemon-status-restart-closure` | [#237](https://github.com/samcantrill/loom/pull/237) merged | Selective Phase 3C source/test reuse; complete owner-backed status; fail-closed expected-store handling and stable-root binding; partial-start cleanup; hard cut-over unchanged | Merge the complete persistent daemon path only after retained restart and every healthy status axis are backed by explicit owner evidence. |
 | 4 | `authenticated-agent-sessions` | blocked | `docs/roadmap/stage-29/phases/authenticated-agent-sessions.md` | `agent/stage-29-p4-authenticated-agent-sessions` | [#238](https://github.com/samcantrill/loom/pull/238) closed without merge | Validated outbound mTLS/session/offer/poll/no-launch candidate; required review found that retirement evidence did not prove original-journal possession and globally keyed poll IDs collided across principals | Preserve candidate `c373d04` and its passing validation/CI as read-only evidence; correction 3/3 is exhausted. |
 | 4A | `authenticated-agent-trust-closure` | merged | `docs/roadmap/stage-29/phases/authenticated-agent-trust-closure.md` | `agent/stage-29-p4a-authenticated-agent-trust-closure` | [#239](https://github.com/samcantrill/loom/pull/239) merged | Selective Phase 4 source/test reuse; journal-owned fresh per-session retirement secret and coordinator-only verifier; verification before mutation with no coordinator secret retention; `(principal_id, poll_id)` storage and query identity; final additive Phase 3 schema plus hard rejection of unmerged candidate schema; all existing no-launch gates | Merge the authenticated outbound agent connectivity/capacity path only after clean retirement is tied to the original protected journal and same-named polls are isolated across authorized principals. |
-| 5 | `remote-stage-data-execution` | pending | `docs/roadmap/stage-29/phases/remote-stage-data-execution.md` | `agent/stage-29-p5-remote-stage-data-execution` | pending | Cross-agent CPU/memory availability; remote assignment loop; stable assignment-principal transfer progress with renewable authorization; durable grant/start/result; monotonic event/outbox replay; exact old-issuer reconnect, receipt-aware authority reconciliation, status freshness, and ordered physical release | Execute CPU/memory stages remotely with inputs durable before grant and accessible output refs committed before descendants unlock; leave the same bounded relay usable by Phase 7's restricted bootstrap. |
+| 5 | `remote-stage-data-execution` | blocked | `docs/roadmap/stage-29/phases/remote-stage-data-execution.md` | `agent/stage-29-p5-remote-stage-data-execution` | not opened | Validated hard-cutover remote execution candidate; required review found that input/output publication can precede the matching SQLite finalization commit, so a crash can remove staging bytes while durable state remains unfinished and exact replay then strands the assignment | Preserve candidate `d536a1e` and its passing validation as read-only evidence; correction 3/3 is exhausted. |
+| 5A | `remote-stage-execution-replay-closure` | pr_open | `docs/roadmap/stage-29/phases/remote-stage-execution-replay-closure.md` | `agent/stage-29-p5a-remote-stage-execution-replay-closure` | [#240](https://github.com/samcantrill/loom/pull/240) open | Selective Phase 5 source/test reuse; exact no-follow size/digest validation and transactional adoption of already-published input/output targets; post-publication/pre-commit crash tests; unchanged hard-cutover owner and protocol boundaries | Merge the complete remote CPU/memory execution path only after both transfer owners recover exact published bytes instead of requiring a vanished staging file. |
 | 6 | `gpu-preference-placement` | pending | `docs/roadmap/stage-29/phases/gpu-preference-placement.md` | `agent/stage-29-p6-gpu-preference-placement` | pending | Configured manageable GPU inventory; external-occupancy withdrawal; GPU planner/provider and claim contracts; planner-owned count/mode/per-device/topology feasibility; whole-placement constraints; tiered agent/model/packing preferences; quality-band fallback; strict future SLURM hard-mapping boundary; explicit no-OOM guarantee | Prove the generic resource and policy seams with safe exact GPU/VRAM managed placement and deterministic resource-relevant preferences that Phase 7 must map completely or reject. |
 | 7 | `slurm-ready-stage-delegation` | pending | `docs/roadmap/stage-29/phases/slurm-ready-stage-delegation.md` | `agent/stage-29-p7-slurm-ready-stage-delegation` | pending | Explicit route/profile resolution; protected profile registry and preflight; complete non-weakening request mapping; tagged target admission; durable at-most-one `sbatch` operation and exact reconciliation; assignment-scoped gated bootstrap; execution-only worker/result relay; external-scheduler observation and primitive cancel | Run one exact dependency-ready stage through one explicitly selected SLURM profile without duplicate submission/root launch, inferred fallback, weakened resources, or scheduler-state-as-Loom-success. |
 | 8 | `agent-controls-cancellation` | pending | `docs/roadmap/stage-29/phases/agent-controls-cancellation.md` | `agent/stage-29-p8-agent-controls-cancellation` | pending | Serialized drain/resume; separate agent pool/provider/inventory and coordinator planner/rule/scorer/policy/profile reload transactions; retained owner-local descriptors and contract-skew ineligibility; coordinator request/authority cancellation epoch and complete managed/SLURM fan-out | Operate agents/profiles and cancel runs without mutating live claims, stranding durable component references, starting descendants, or treating disconnection/`scancel` acknowledgement as completion. |
@@ -665,7 +669,9 @@ and release together. Phases 3A-3C are blocked evidence only. Phase 3D merged
 the accepted persistent-daemon path after closing the Phase 3C review findings.
 Phase 4 is blocked evidence only. Fresh Phase 4A merged the same no-agent-
 execution connectivity/security gate plus the retirement-possession and poll-
-isolation closures. Phase 5 now owns remote assignment and artifact bytes.
+isolation closures. Phase 5 is blocked evidence after required review found a
+transfer publication/finalization crash window. Fresh Phase 5A owns the same
+accepted remote assignment and artifact-byte path plus only that replay closure.
 Phase 7 is a separate external-side-effect gate after the
 managed scheduling/resource path is proven: it adds only an explicit named
 SLURM route and reuses the Phase 2 execution-only worker plus Phase 5 relay.
@@ -839,7 +845,8 @@ work.
 | 3D | [#237](https://github.com/samcantrill/loom/pull/237), squash-merged as `6a8cf9f` | Source/test revision `2b48d0e` passed `make validate-pr`; fresh summary recorded 2,538 passes and 3 environment skips; independent review blocker corrected and manager-verified; CI passed | Missing or corrupt owner truth intentionally requires operator restoration; unknown work remains conservatively capacity-holding | Remote phase branch removed at merge; worktree and local phase branch removed after merge metadata commit; blocked Phase 3A-3C evidence retained |
 | 4 | [#238](https://github.com/samcantrill/loom/pull/238), closed without merge | Candidate `c373d04` passed `make validate-pr`, fresh `make test-summary` with 2,554 categorized passes and 3 expected skips, and CI; required independent review then blocked it | Retirement evidence is forgeable without the original journal; same poll ID across principals collides globally | Correction 3/3 exhausted; dedicated branch/worktree retained as read-only evidence |
 | 4A | [#239](https://github.com/samcantrill/loom/pull/239), squash-merged as `2d273b8` | Source/test revision `41a6045`; focused 19 + adjacent 23 passes; `make validate-pr` passed 2,416 default and 141 config-extra tests with 3 expected skips plus builds; fresh summary recorded 2,557 passes; independent review and CI passed | Lost protected-agent state still intentionally requires Phase 9 positive containment; no Phase 5 behavior is present | Remote branch removed at merge; worktree and local phase branch removed after merge; blocked Phase 4 evidence retained |
-| 5 | pending | pending | pending | pending |
+| 5 | No PR opened; blocked branch head `0928736` | Source/test revision `d536a1e`; `make validate-pr` passed 2,435 default and 141 configuration-extra tests with 3 expected skips plus builds; fresh summary recorded 2,576 categorized passes; required independent review found one blocker | Publish-before-commit can leave an already-published input/output target with unfinished durable state, causing exact replay to fail and strand the assignment | Correction 3/3 exhausted; dedicated branch/worktree retained as read-only evidence |
+| 5A | [PR #240](https://github.com/samcantrill/loom/pull/240) open against verified `develop` | Source/test revision `4134d70`; manager-focused 54 tests passed; `make validate-pr` passed 2,436 default and 141 configuration-extra tests with 3 expected skips plus lint, zero-finding type checks, and builds; fresh summary recorded 2,577 categorized passes; required independent review passed at `600ac80` with no product blocker | No known Phase 5A blocker; coordinator relay throughput and bounded retained output remain accepted debt | Branch/worktree active pending CI, merge, and cleanup |
 | 6 | pending | pending | pending | pending |
 | 7 | pending | pending | pending | pending |
 | 8 | pending | pending | pending | pending |

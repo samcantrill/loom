@@ -7,7 +7,7 @@ or session selector from the HTTP path as transport identity.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 import fcntl
 import hashlib
@@ -19,12 +19,26 @@ import secrets
 import sqlite3
 import ssl
 import stat
+import subprocess
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from time import monotonic, sleep
 from typing import Any, cast
 from urllib.parse import urlsplit
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
+from loom.pipeline.execution.managed_local import (
+    AssignmentState,
+    AtomResourceProvider,
+    ClaimCommand,
+    ClaimOutcome,
+    ManagedAssignment,
+    ObserveRequest,
+    SQLiteAgentJournal,
+)
+from loom.pipeline.execution.models import StageWorkerResult
+from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
+from loom.pipeline.stores.atomic import atomic_write_bytes
 
 from .agent_sessions import (
     AgentOffer,
@@ -33,10 +47,23 @@ from .agent_sessions import (
     AgentRetirementProof,
     AgentSession,
     AgentSessionState,
+    AgentTransferAuthorizationStaleError,
+    PROTOCOL_VERSION,
     ScopedAuthorizer,
     _SESSION_REFERENCE_KINDS,
     _session_from_value,
     validate_agent_session_schema,
+)
+from ._remote_stage_execution import (
+    REGULAR_FILE_RELAY_CAPABILITY,
+    REMOTE_EXECUTION_CAPABILITY,
+    ResidentExecutionProfile,
+    ResidentProfileDescriptor,
+    _DeliveredExecutionRequest,
+    _RemoteAssignmentWorkspace,
+    _RemoteExecutionReport,
+    _decode_chunk,
+    _encode_chunk,
 )
 from .errors import QueueConflictError, QueueError, QueueServiceError
 from .local_daemon import (
@@ -51,6 +78,8 @@ _MAX_BODY_BYTES = 65_536
 _MAX_JSON_DEPTH = 8
 _MAX_JSON_COLLECTION = 64
 _HTTP_TIMEOUT_SECONDS = 10
+_ASSIGNMENT_RECONCILIATION_SECONDS = 60
+_MAX_TRANSFER_AUTHORIZATION_RENEWALS = 64
 
 
 class _IndeterminateAgentProtocolError(QueueServiceError):
@@ -87,6 +116,7 @@ class AgentTlsClientConfig:
     certificate_path: Path
     private_key_path: Path
     agent_root: Path | None = None
+    resident_profiles: tuple[ResidentExecutionProfile, ...] = ()
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
@@ -105,6 +135,21 @@ class AgentTlsClientConfig:
             or bool(parsed.fragment)
         ):
             raise QueueServiceError("agent TLS URL must be one HTTPS service identity")
+        profiles = tuple(self.resident_profiles)
+        if any(not isinstance(item, ResidentExecutionProfile) for item in profiles):
+            raise QueueServiceError("agent resident profiles are invalid")
+        if len({item.descriptor.profile_id for item in profiles}) != len(profiles):
+            raise QueueServiceError("agent resident profile IDs must be unique")
+        capacity_domains = {
+            (item.cpu_capacity, item.memory_capacity_bytes) for item in profiles
+        }
+        if len(capacity_domains) > 1:
+            raise QueueServiceError(
+                "agent resident profiles must share one capacity domain"
+            )
+        if profiles and self.agent_root is None:
+            raise QueueServiceError("resident execution requires an agent root")
+        object.__setattr__(self, "resident_profiles", profiles)
 
 
 class _RemoteAgentJournal:
@@ -126,7 +171,7 @@ class _RemoteAgentJournal:
             raise QueueServiceError("remote agent control state is unavailable")
         try:
             with self._connection() as conn:
-                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 2:
+                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 3:
                     raise QueueServiceError("remote agent root schema is unsupported")
                 metadata = {
                     str(row[0]): str(row[1])
@@ -162,7 +207,9 @@ class _RemoteAgentJournal:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def persist_registration_intent(self, request: AgentRegistration) -> AgentRegistration:
+    def persist_registration_intent(
+        self, request: AgentRegistration
+    ) -> AgentRegistration:
         if request.agent_root_id != self.root_id:
             raise QueueConflictError("registration does not match the agent root")
         if request.retirement_verifier is not None:
@@ -193,7 +240,9 @@ class _RemoteAgentJournal:
                     raise QueueServiceError("agent registration intent is invalid")
                 persisted = _registration(cast(Mapping[str, object], stored_value))
                 if persisted.retirement_verifier is None or _canonical_digest(
-                    replace(request, retirement_verifier=persisted.retirement_verifier).value()
+                    replace(
+                        request, retirement_verifier=persisted.retirement_verifier
+                    ).value()
                 ) != str(row["digest"]):
                     raise QueueConflictError(
                         "idempotency key was reused with different content"
@@ -244,7 +293,13 @@ class _RemoteAgentJournal:
             )
             conn.execute(
                 "INSERT INTO agent_sessions_local(session_id, value_json, registration_operation_id, retirement_secret, state) VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id) DO NOTHING",
-                (session.session_id, encoded, operation_id, secret, session.state.value),
+                (
+                    session.session_id,
+                    encoded,
+                    operation_id,
+                    secret,
+                    session.state.value,
+                ),
             )
             conn.commit()
 
@@ -362,9 +417,31 @@ class _RemoteAgentJournal:
                     (session_id,),
                 )
             elif operation == "poll":
+                poll_result = result.get("result")
+                if poll_result == "assignment":
+                    request_value = result.get("request")
+                    request = _DeliveredExecutionRequest.from_dict(request_value)
+                    poll_request = json.loads(str(row["request_json"]))
+                    if not isinstance(poll_request, Mapping):
+                        raise QueueServiceError("agent poll intent is invalid")
+                    request_session = poll_request.get("session_id")
+                    if not isinstance(request_session, str):
+                        raise QueueServiceError("agent poll intent is invalid")
+                    conn.execute(
+                        "INSERT INTO agent_session_references(session_id, "
+                        "reference_kind, reference_id, resolved) "
+                        "VALUES (?, 'delivery', ?, 0) ON CONFLICT(session_id, "
+                        "reference_kind, reference_id) DO NOTHING",
+                        (request_session, request.assignment_id),
+                    )
+                    poll_state = "DELIVERED"
+                elif poll_result == "wait":
+                    poll_state = "WAIT"
+                else:
+                    raise QueueServiceError("agent poll result is invalid")
                 conn.execute(
-                    "UPDATE agent_polls_local SET state = 'WAIT' WHERE poll_id = ?",
-                    (operation_id,),
+                    "UPDATE agent_polls_local SET state = ? WHERE poll_id = ?",
+                    (poll_state, operation_id),
                 )
             conn.commit()
 
@@ -375,6 +452,38 @@ class _RemoteAgentJournal:
                 (poll_id,),
             )
             conn.commit()
+
+    def retain_assignment_reference(self, session_id: str, assignment_id: str) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "INSERT INTO agent_session_references(session_id, reference_kind, "
+                "reference_id, resolved) VALUES (?, 'delivery', ?, 0) "
+                "ON CONFLICT(session_id, reference_kind, reference_id) DO NOTHING",
+                (session_id, assignment_id),
+            )
+            conn.commit()
+
+    def resolve_assignment_reference(self, session_id: str, assignment_id: str) -> None:
+        with self._connection() as conn:
+            updated = conn.execute(
+                "UPDATE agent_session_references SET resolved = 1 WHERE "
+                "session_id = ? AND reference_kind = 'delivery' AND reference_id = ?",
+                (session_id, assignment_id),
+            ).rowcount
+            if updated != 1:
+                raise QueueConflictError("remote assignment reference is unavailable")
+            conn.commit()
+
+    def has_unresolved_assignment_references(self) -> bool:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM agent_session_references WHERE "
+                "reference_kind = 'delivery' AND resolved = 0 LIMIT 1"
+            ).fetchone()
+            pending_poll = conn.execute(
+                "SELECT 1 FROM agent_polls_local WHERE state = 'PENDING' LIMIT 1"
+            ).fetchone()
+        return row is not None or pending_poll is not None
 
     def fence_and_prove_empty(self, session_id: str) -> AgentRetirementProof:
         with self._connection() as conn:
@@ -597,6 +706,31 @@ class LocalDaemonAgentHttpClient:
         self._journal = (
             _RemoteAgentJournal(config.agent_root) if config.agent_root else None
         )
+        self._profiles = {
+            item.descriptor.profile_id: item for item in config.resident_profiles
+        }
+        self._execution_journal = (
+            SQLiteAgentJournal(
+                Path(config.agent_root) / "journal.sqlite",
+                _allow_initialize=False,
+            )
+            if config.agent_root is not None
+            else None
+        )
+        if self._execution_journal is not None:
+            self._execution_journal._open_existing()
+        self._restart_with_retained_work = bool(
+            self._execution_journal.retained_claim_commands()
+            if self._execution_journal is not None
+            else ()
+        ) or bool(
+            self._journal.has_unresolved_assignment_references()
+            if self._journal is not None
+            else False
+        )
+        self._runtime_agent_id: str | None = None
+        self._providers: dict[str, AtomResourceProvider] = {}
+        self._processes: dict[str, subprocess.Popen[bytes]] = {}
 
     @property
     def agent_root_id(self) -> str:
@@ -604,6 +738,10 @@ class LocalDaemonAgentHttpClient:
 
     def close(self) -> None:
         self._close_connection()
+        if any(process.poll() is None for process in self._processes.values()):
+            raise QueueConflictError(
+                "remote agent cannot close while an assignment process is live"
+            )
         if self._journal is not None:
             self._journal.close()
             self._journal = None
@@ -616,7 +754,25 @@ class LocalDaemonAgentHttpClient:
     def handshake(self, *, role: str = "agent") -> Mapping[str, PlainData]:
         if role not in {"agent", "client", "operator"}:
             raise QueueServiceError("authenticated application role is invalid")
-        return self._call("handshake", {}, role=role)
+        result = self._call("handshake", {}, role=role)
+        if role == "agent":
+            capabilities = result.get("capabilities")
+            if (
+                result.get("protocol_version") != PROTOCOL_VERSION
+                or not isinstance(capabilities, Sequence)
+                or isinstance(capabilities, (str, bytes))
+                or any(not isinstance(item, str) for item in capabilities)
+                or not {
+                    "agent-sessions-v2",
+                    REMOTE_EXECUTION_CAPABILITY,
+                    REGULAR_FILE_RELAY_CAPABILITY,
+                }.issubset(set(capabilities))
+            ):
+                raise QueueServiceError(
+                    "agent coordinator protocol is unsupported; hard cut-over "
+                    "requires version 2"
+                )
+        return result
 
     def register(self, request: AgentRegistration) -> AgentSession:
         journal = self._require_journal()
@@ -648,6 +804,28 @@ class LocalDaemonAgentHttpClient:
     def publish_offer(
         self, offer: AgentOffer, *, idempotency_key: str
     ) -> Mapping[str, PlainData]:
+        if self._restart_with_retained_work:
+            raise QueueConflictError(
+                "restarted agent with retained remote work cannot advertise "
+                "executable capacity"
+            )
+        if offer.resident_profiles:
+            local_descriptors = {
+                profile.descriptor.profile_id: profile
+                for profile in self._profiles.values()
+            }
+            if any(
+                local_descriptors.get(descriptor.profile_id) is None
+                or local_descriptors[descriptor.profile_id].descriptor != descriptor
+                for descriptor in offer.resident_profiles
+            ):
+                raise QueueConflictError("offer names an unavailable resident profile")
+            capacity = next(iter(local_descriptors.values()))
+            if (
+                offer.cpu > capacity.cpu_capacity
+                or offer.memory_bytes > capacity.memory_capacity_bytes
+            ):
+                raise QueueConflictError("offer exceeds the resident capacity domain")
         journal = self._require_journal()
         journal.prepare_offer(offer, idempotency_key)
         result = self._call(
@@ -664,6 +842,10 @@ class LocalDaemonAgentHttpClient:
         poll_id: str,
         wait_timeout_ms: int,
     ) -> Mapping[str, PlainData]:
+        if self._restart_with_retained_work:
+            raise QueueConflictError(
+                "restarted agent with retained remote work cannot poll for new work"
+            )
         value: dict[str, PlainData] = {
             "session_id": session_id,
             "availability_revision": availability_revision,
@@ -688,6 +870,764 @@ class LocalDaemonAgentHttpClient:
             raise
         journal.complete_mutation("poll", poll_id, result)
         return result
+
+    def authorize_transfers(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        expected_revision: int,
+        operation_id: str,
+    ) -> Mapping[str, PlainData]:
+        return self._call(
+            "authorize",
+            {
+                "session_id": session_id,
+                "assignment_id": assignment_id,
+                "expected_revision": expected_revision,
+                "operation_id": operation_id,
+            },
+        )
+
+    def read_input_chunk(
+        self,
+        session_id: str,
+        assignment_id: str,
+        transfer_id: str,
+        *,
+        offset: int,
+        authorization_id: str,
+        authorization_revision: int,
+    ) -> tuple[bytes, int, bool]:
+        result = self._call(
+            "input",
+            {
+                "session_id": session_id,
+                "assignment_id": assignment_id,
+                "transfer_id": transfer_id,
+                "offset": offset,
+                "authorization_id": authorization_id,
+                "authorization_revision": authorization_revision,
+            },
+        )
+        data = _decode_chunk(result.get("data"))
+        next_offset = result.get("next_offset")
+        final = result.get("final")
+        if (
+            isinstance(next_offset, bool)
+            or not isinstance(next_offset, int)
+            or not isinstance(final, bool)
+            or next_offset != offset + len(data)
+        ):
+            raise QueueServiceError("remote input chunk response is invalid")
+        return data, next_offset, final
+
+    def accept_assignment(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        request_digest: str,
+    ) -> Mapping[str, PlainData]:
+        return self._call(
+            "accept",
+            {
+                "session_id": session_id,
+                "assignment_id": assignment_id,
+                "request_digest": request_digest,
+            },
+        )
+
+    def decline_assignment(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        availability_revision: str,
+    ) -> AgentSession:
+        session = _session_from_value(
+            self._call(
+                "decline",
+                {
+                    "session_id": session_id,
+                    "assignment_id": assignment_id,
+                    "availability_revision": availability_revision,
+                },
+            )
+        )
+        journal = self._require_journal()
+        journal.persist_reconciled_session(session)
+        journal.resolve_assignment_reference(session_id, assignment_id)
+        return session
+
+    def confirm_started(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        process_execution_id: str,
+    ) -> Mapping[str, PlainData]:
+        return self._call(
+            "started",
+            {
+                "session_id": session_id,
+                "assignment_id": assignment_id,
+                "fence": fence,
+                "process_execution_id": process_execution_id,
+            },
+        )
+
+    def report_event(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        sequence: int,
+        event_id: str,
+        payload: Mapping[str, PlainData],
+    ) -> Mapping[str, PlainData]:
+        return self._call(
+            "event",
+            {
+                "session_id": session_id,
+                "assignment_id": assignment_id,
+                "sequence": sequence,
+                "event_id": event_id,
+                "payload": thaw_plain_data(payload, path="remote event"),
+            },
+        )
+
+    def declare_outputs(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        authorization_id: str,
+        authorization_revision: int,
+        report: _RemoteExecutionReport,
+    ) -> Mapping[str, PlainData]:
+        return self._call(
+            "output_manifest",
+            {
+                "session_id": session_id,
+                "assignment_id": assignment_id,
+                "fence": fence,
+                "authorization_id": authorization_id,
+                "authorization_revision": authorization_revision,
+                "report": report.to_dict(),
+            },
+        )
+
+    def upload_output_chunk(
+        self,
+        session_id: str,
+        assignment_id: str,
+        transfer_id: str,
+        *,
+        offset: int,
+        data: bytes,
+        final: bool,
+        authorization_id: str,
+        authorization_revision: int,
+    ) -> Mapping[str, PlainData]:
+        return self._call(
+            "output",
+            {
+                "session_id": session_id,
+                "assignment_id": assignment_id,
+                "transfer_id": transfer_id,
+                "offset": offset,
+                "data": _encode_chunk(data),
+                "final": final,
+                "authorization_id": authorization_id,
+                "authorization_revision": authorization_revision,
+            },
+        )
+
+    def commit_result(
+        self, session_id: str, assignment_id: str, *, fence: str
+    ) -> Mapping[str, PlainData]:
+        return self._call(
+            "result",
+            {
+                "session_id": session_id,
+                "assignment_id": assignment_id,
+                "fence": fence,
+            },
+        )
+
+    def release_assignment(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        availability_revision: str,
+    ) -> AgentSession:
+        session = _session_from_value(
+            self._call(
+                "release",
+                {
+                    "session_id": session_id,
+                    "assignment_id": assignment_id,
+                    "fence": fence,
+                    "availability_revision": availability_revision,
+                },
+            )
+        )
+        journal = self._require_journal()
+        journal.persist_reconciled_session(session)
+        journal.resolve_assignment_reference(session_id, assignment_id)
+        return session
+
+    def execute_one(
+        self,
+        session_id: str,
+        availability_revision: str,
+        *,
+        poll_id: str,
+        wait_timeout_ms: int,
+    ) -> Mapping[str, PlainData]:
+        """Poll and drive at most one resident assignment to ordered release."""
+
+        delivery = self.wait_for_work(
+            session_id,
+            availability_revision,
+            poll_id=poll_id,
+            wait_timeout_ms=wait_timeout_ms,
+        )
+        if delivery.get("result") != "assignment":
+            return delivery
+        raw_request = delivery.get("request")
+        request = _DeliveredExecutionRequest.from_dict(
+            thaw_plain_data(raw_request, path="remote delivered request")
+        )
+        profile = self._profiles.get(request.profile.profile_id)
+        if profile is None or profile.descriptor != request.profile:
+            raise QueueConflictError(
+                "delivered assignment has no exact resident profile"
+            )
+        session = self._require_journal().session(session_id)
+        workspace = _RemoteAssignmentWorkspace(
+            cast(Path, self._config.agent_root), request.assignment_id
+        )
+        workspace.persist_request(request, profile)
+        self._require_journal().retain_assignment_reference(
+            session_id, request.assignment_id
+        )
+        providers, execution_journal = self._runtime_owners(session, profile)
+        assignment = ManagedAssignment(
+            assignment_id=request.assignment_id,
+            run_uri=f"loom-agent:{request.assignment_id}",
+            stage_work_id=request.stage_work_id,
+            stage_name=request.stage_name,
+            attempt=request.attempt,
+            attempt_id=request.attempt_id,
+            agent_id=session.agent_id,
+            session_id=session.session_id,
+            offer_id=request.offer_id,
+            claim_id=request.claim_id,
+        )
+        commands = tuple(
+            ClaimCommand(
+                assignment,
+                f"{request.assignment_id}:prepare:{index}",
+                claim,
+            )
+            for index, claim in enumerate(request.claims)
+        )
+        execution_journal.persist_request(assignment, request.to_dict())
+
+        authorization = self._fresh_transfer_authorization(
+            session_id=session_id,
+            assignment_id=request.assignment_id,
+            expected_revision=0,
+        )
+        authorization_id = cast(str, authorization["authorization_id"])
+        authorization_revision = cast(int, authorization["revision"])
+        for item in request.inputs:
+            offset = 0
+            while True:
+                response, authorization_id, authorization_revision = (
+                    self._authorized_transfer_call(
+                        session_id=session_id,
+                        assignment_id=request.assignment_id,
+                        authorization_id=authorization_id,
+                        authorization_revision=authorization_revision,
+                        operation=lambda current_id, current_revision: (
+                            self.read_input_chunk(
+                                session_id,
+                                request.assignment_id,
+                                item.transfer_id,
+                                offset=offset,
+                                authorization_id=current_id,
+                                authorization_revision=current_revision,
+                            )
+                        ),
+                    )
+                )
+                data, next_offset, final = cast(tuple[bytes, int, bool], response)
+                workspace.stage_input_chunk(
+                    item.transfer_id,
+                    offset,
+                    data,
+                    final=final,
+                )
+                offset = next_offset
+                if final:
+                    break
+        workspace.accept()
+        prepared = execution_journal.prepare_composite(assignment, commands, providers)
+        if prepared is AssignmentState.DECLINED:
+            next_revision = self._availability_revision(
+                session, request.assignment_id, providers
+            )
+            execution_journal.release_declined(assignment.assignment_id, next_revision)
+            released_session = cast(
+                AgentSession,
+                self._assignment_call(
+                    session_id,
+                    request.assignment_id,
+                    lambda: self.decline_assignment(
+                        session_id,
+                        request.assignment_id,
+                        availability_revision=next_revision,
+                    ),
+                ),
+            )
+            return freeze_plain_data(
+                {
+                    "result": "assignment",
+                    "assignment_id": request.assignment_id,
+                    "state": "DECLINED",
+                    "session": released_session.value(),
+                },
+                path="remote execution decline",
+            )
+        if prepared not in {
+            AssignmentState.PREPARED,
+            AssignmentState.ACCEPTED,
+            AssignmentState.GRANTED,
+            AssignmentState.ACTIVE,
+            AssignmentState.PROCESS_STARTED,
+            AssignmentState.RESULT_DURABLE,
+        }:
+            raise QueueConflictError("remote physical admission is indeterminate")
+        execution_journal.accept(assignment.assignment_id)
+        workspace.append_event(
+            f"{request.assignment_id}:request-inputs-durable",
+            {"kind": "request_and_inputs_durable"},
+        )
+        request_json = json.dumps(
+            request.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        grant = cast(
+            Mapping[str, PlainData],
+            self._assignment_call(
+                session_id,
+                request.assignment_id,
+                lambda: self.accept_assignment(
+                    session_id,
+                    request.assignment_id,
+                    request_digest=hashlib.sha256(request_json.encode()).hexdigest(),
+                ),
+            ),
+        )
+        fence = cast(str, grant["fence"])
+        execution_journal.grant(assignment.assignment_id, fence)
+        workspace.grant(fence)
+        activated = execution_journal.activate_composite(
+            assignment.assignment_id, commands, providers
+        )
+        if activated not in {
+            AssignmentState.ACTIVE,
+            AssignmentState.PROCESS_STARTED,
+            AssignmentState.RESULT_DURABLE,
+        }:
+            raise QueueConflictError("remote physical activation is indeterminate")
+
+        execution_id = f"{request.assignment_id}:root"
+        process = self._processes.get(request.assignment_id)
+        result_path = workspace.root / "worker-result.json"
+        if execution_journal.read_state(assignment.assignment_id) in {
+            AssignmentState.ACTIVE,
+        }:
+
+            def launch() -> str:
+                gate = workspace.root / "run.grant"
+                if gate.exists():
+                    raise QueueConflictError("remote run gate already exists")
+                environment = {
+                    key: value
+                    for key, value in os.environ.items()
+                    if not any(
+                        marker in key.upper()
+                        for marker in (
+                            "TOKEN",
+                            "SECRET",
+                            "CREDENTIAL",
+                            "PASSWORD",
+                            "KEY",
+                        )
+                    )
+                }
+                child = subprocess.Popen(
+                    [
+                        str(profile.python_executable),
+                        "-m",
+                        "loom.queue._resident_stage_worker",
+                        "--workspace",
+                        str(workspace.root),
+                    ],
+                    cwd=profile.project_root,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self._processes[request.assignment_id] = child
+                workspace.mark_process_started(execution_id, child.pid)
+                return execution_id
+
+            execution_journal.start_once(assignment.assignment_id, execution_id, launch)
+            process = self._processes[request.assignment_id]
+            atomic_write_bytes(workspace.root / "run.grant", b"granted\n")
+            workspace.append_event(
+                f"{request.assignment_id}:agent-process-started",
+                {"kind": "process_started"},
+            )
+            self._assignment_call(
+                session_id,
+                request.assignment_id,
+                lambda: self.confirm_started(
+                    session_id,
+                    request.assignment_id,
+                    fence=fence,
+                    process_execution_id=execution_id,
+                ),
+            )
+        self._flush_workspace_events(session_id, workspace)
+        if process is not None:
+            process.wait()
+        elif not result_path.is_file():
+            raise QueueConflictError(
+                "remote process outcome is unknown and cannot be relaunched"
+            )
+        if not result_path.is_file():
+            raise QueueConflictError(
+                "remote process exited without a durable worker result"
+            )
+        result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
+        workspace.persist_worker_result(result)
+        execution_journal.record_result(assignment.assignment_id, result.to_dict())
+        report = workspace.retain_outputs()
+        workspace.append_event(
+            f"{request.assignment_id}:result-output-durable",
+            {"kind": "result_and_output_durable", "status": report.status.value},
+        )
+        self._flush_workspace_events(session_id, workspace)
+
+        authorization = self._fresh_transfer_authorization(
+            session_id=session_id,
+            assignment_id=request.assignment_id,
+            expected_revision=authorization_revision,
+        )
+        authorization_id = cast(str, authorization["authorization_id"])
+        authorization_revision = cast(int, authorization["revision"])
+        _, authorization_id, authorization_revision = self._authorized_transfer_call(
+            session_id=session_id,
+            assignment_id=request.assignment_id,
+            authorization_id=authorization_id,
+            authorization_revision=authorization_revision,
+            operation=lambda current_id, current_revision: self.declare_outputs(
+                session_id,
+                request.assignment_id,
+                fence=fence,
+                authorization_id=current_id,
+                authorization_revision=current_revision,
+                report=report,
+            ),
+        )
+        for item in report.outputs:
+            offset = 0
+            while True:
+                data, final = workspace.output_chunk(item.transfer_id, offset)
+                raw_response, authorization_id, authorization_revision = (
+                    self._authorized_transfer_call(
+                        session_id=session_id,
+                        assignment_id=request.assignment_id,
+                        authorization_id=authorization_id,
+                        authorization_revision=authorization_revision,
+                        operation=lambda current_id, current_revision: (
+                            self.upload_output_chunk(
+                                session_id,
+                                request.assignment_id,
+                                item.transfer_id,
+                                offset=offset,
+                                data=data,
+                                final=final,
+                                authorization_id=current_id,
+                                authorization_revision=current_revision,
+                            )
+                        ),
+                    )
+                )
+                response = cast(Mapping[str, PlainData], raw_response)
+                offset = cast(int, response["received_bytes"])
+                if final:
+                    break
+        self._assignment_call(
+            session_id,
+            request.assignment_id,
+            lambda: self.commit_result(session_id, request.assignment_id, fence=fence),
+        )
+        execution_journal.acknowledge_terminal(assignment.assignment_id)
+        for command in commands:
+            provider = providers[command.claim.resource_kind]
+            released = provider.release(
+                ClaimCommand(
+                    assignment,
+                    f"{command.operation_id}:release",
+                    command.claim,
+                )
+            )
+            if released.outcome is not ClaimOutcome.RELEASED:
+                raise QueueConflictError("remote provider release is indeterminate")
+        execution_journal.mark_providers_released(assignment.assignment_id)
+        next_revision = self._availability_revision(
+            session, request.assignment_id, providers
+        )
+        execution_journal.publish_availability(assignment.assignment_id, next_revision)
+        released_session = cast(
+            AgentSession,
+            self._assignment_call(
+                session_id,
+                request.assignment_id,
+                lambda: self.release_assignment(
+                    session_id,
+                    request.assignment_id,
+                    fence=fence,
+                    availability_revision=next_revision,
+                ),
+            ),
+        )
+        self._processes.pop(request.assignment_id, None)
+        return freeze_plain_data(
+            {
+                "result": "assignment",
+                "assignment_id": request.assignment_id,
+                "state": "RELEASED",
+                "session": released_session.value(),
+            },
+            path="remote execution completion",
+        )
+
+    @staticmethod
+    def _availability_revision(
+        session: AgentSession,
+        assignment_id: str,
+        providers: Mapping[str, AtomResourceProvider],
+    ) -> str:
+        observations = {
+            kind: provider.observe(
+                ObserveRequest(
+                    session.agent_id,
+                    session.session_id,
+                    f"{assignment_id}:released:{kind}",
+                )
+            )
+            for kind, provider in providers.items()
+        }
+        return (
+            "availability-"
+            + hashlib.sha256(
+                "\0".join(
+                    observations[kind].availability_revision
+                    for kind in sorted(observations)
+                ).encode()
+            ).hexdigest()
+        )
+
+    def _fresh_transfer_authorization(
+        self,
+        *,
+        session_id: str,
+        assignment_id: str,
+        expected_revision: int,
+    ) -> Mapping[str, PlainData]:
+        """Renew until the authorization belongs to the reconciled epoch."""
+
+        revision = expected_revision
+        while True:
+            operation_id = f"{assignment_id}:authorize:{revision + 1}"
+            result = cast(
+                Mapping[str, PlainData],
+                self._assignment_call(
+                    session_id,
+                    assignment_id,
+                    lambda: self.authorize_transfers(
+                        session_id,
+                        assignment_id,
+                        expected_revision=revision,
+                        operation_id=operation_id,
+                    ),
+                ),
+            )
+            returned_revision = result.get("revision")
+            returned_epoch = result.get("coordinator_epoch")
+            if (
+                isinstance(returned_revision, bool)
+                or not isinstance(returned_revision, int)
+                or returned_revision != revision + 1
+                or not isinstance(returned_epoch, str)
+            ):
+                raise QueueConflictError(
+                    "remote transfer authorization evidence is invalid"
+                )
+            revision = returned_revision
+            if (
+                returned_epoch
+                == self._require_journal().session(session_id).coordinator_epoch
+            ):
+                return result
+
+    def _authorized_transfer_call(
+        self,
+        *,
+        session_id: str,
+        assignment_id: str,
+        authorization_id: str,
+        authorization_revision: int,
+        operation: Callable[[str, int], Any],
+    ) -> tuple[Any, str, int]:
+        """Run one transfer operation, renewing only a proven-stale grant."""
+
+        current_id = authorization_id
+        current_revision = authorization_revision
+        for _ in range(_MAX_TRANSFER_AUTHORIZATION_RENEWALS + 1):
+            try:
+                result = self._assignment_call(
+                    session_id,
+                    assignment_id,
+                    lambda: operation(current_id, current_revision),
+                )
+                return result, current_id, current_revision
+            except AgentTransferAuthorizationStaleError:
+                renewed = self._fresh_transfer_authorization(
+                    session_id=session_id,
+                    assignment_id=assignment_id,
+                    expected_revision=current_revision,
+                )
+                current_id = cast(str, renewed["authorization_id"])
+                current_revision = cast(int, renewed["revision"])
+        raise QueueConflictError(
+            "remote transfer authorization renewal exceeded its bound"
+        )
+
+    def _assignment_call(
+        self,
+        session_id: str,
+        assignment_id: str,
+        operation: Callable[[], Any],
+    ) -> Any:
+        """Retry one exact assignment operation across coordinator restart."""
+
+        deadline = monotonic() + _ASSIGNMENT_RECONCILIATION_SECONDS
+        while True:
+            try:
+                return operation()
+            except QueueConflictError as conflict:
+                prior = self._require_journal().session(session_id)
+                current = self.handshake()
+                epoch = current.get("coordinator_epoch")
+                if not isinstance(epoch, str) or epoch == prior.coordinator_epoch:
+                    raise conflict
+                self.reconcile(
+                    session_id,
+                    epoch,
+                    idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
+                )
+            except _IndeterminateAgentProtocolError:
+                if monotonic() >= deadline:
+                    raise
+                try:
+                    current = self.handshake()
+                    epoch = current.get("coordinator_epoch")
+                    prior = self._require_journal().session(session_id)
+                    if isinstance(epoch, str) and epoch != prior.coordinator_epoch:
+                        self.reconcile(
+                            session_id,
+                            epoch,
+                            idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
+                        )
+                except _IndeterminateAgentProtocolError:
+                    pass
+                sleep(0.05)
+
+    def _runtime_owners(
+        self, session: AgentSession, profile: ResidentExecutionProfile
+    ) -> tuple[dict[str, AtomResourceProvider], SQLiteAgentJournal]:
+        journal = self._execution_journal
+        if journal is None:
+            raise QueueServiceError("remote execution journal is required")
+        if self._runtime_agent_id is None:
+            self._runtime_agent_id = session.agent_id
+            planners = {
+                "cpu": CpuResourcePlanner(),
+                "memory": MemoryResourcePlanner(),
+            }
+            atoms = profile.capacity_atoms(session.agent_id)
+            self._providers = {
+                kind: AtomResourceProvider(
+                    planners[kind].descriptor,
+                    planners[kind].claim_contracts,
+                    tuple(atom for atom in atoms if atom.owner_resource_kind == kind),
+                )
+                for kind in {atom.owner_resource_kind for atom in atoms}
+            }
+            for command in journal.retained_claim_commands():
+                provider = self._providers.get(command.claim.resource_kind)
+                if provider is None:
+                    raise QueueConflictError(
+                        "retained remote claim has no resident provider"
+                    )
+                provider.restore_capacity_holding(command)
+        elif self._runtime_agent_id != session.agent_id:
+            raise QueueConflictError("remote runtime agent identity changed")
+        if any(
+            claim_kind not in self._providers
+            for claim_kind in {
+                atom.owner_resource_kind
+                for atom in profile.capacity_atoms(session.agent_id)
+            }
+        ):
+            raise QueueConflictError("resident provider composition changed")
+        return self._providers, journal
+
+    def _flush_workspace_events(
+        self, session_id: str, workspace: _RemoteAssignmentWorkspace
+    ) -> None:
+        for sequence, event_id, payload in workspace.pending_events():
+            result = cast(
+                Mapping[str, PlainData],
+                self._assignment_call(
+                    session_id,
+                    workspace.assignment_id,
+                    lambda: self.report_event(
+                        session_id,
+                        workspace.assignment_id,
+                        sequence=sequence,
+                        event_id=event_id,
+                        payload=payload,
+                    ),
+                ),
+            )
+            acknowledged = result.get("acknowledged_sequence")
+            if acknowledged != sequence:
+                raise QueueConflictError("remote event acknowledgement has a gap")
+            workspace.acknowledge_event(sequence)
 
     def retire_clean(
         self, session_id: str, *, idempotency_key: str
@@ -769,6 +1709,10 @@ class LocalDaemonAgentHttpClient:
             self._close_connection()
             if payload.get("error") == "agent_poll_active":
                 raise AgentPollActiveError("work poll is already active")
+            if payload.get("error") == "agent_transfer_authorization_stale":
+                raise AgentTransferAuthorizationStaleError(
+                    "remote transfer authorization is stale"
+                )
             raise QueueConflictError("agent protocol conflict")
         if response.status >= 500:
             self._close_connection()
@@ -866,6 +1810,16 @@ class _Handler(BaseHTTPRequestHandler):
                     "reconcile",
                     "offer",
                     "poll",
+                    "authorize",
+                    "input",
+                    "accept",
+                    "decline",
+                    "started",
+                    "event",
+                    "output_manifest",
+                    "output",
+                    "result",
+                    "release",
                     "retire",
                 }:
                     raise QueueServiceError("agent protocol operation is unsupported")
@@ -885,6 +1839,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(200, {"ok": True, "result": result})
         except AgentPollActiveError:
             self._reply(409, {"ok": False, "error": "agent_poll_active"})
+        except AgentTransferAuthorizationStaleError:
+            self._reply(
+                409,
+                {"ok": False, "error": "agent_transfer_authorization_stale"},
+            )
         except QueueConflictError:
             self._reply(409, {"ok": False, "error": "agent_protocol_conflict"})
         except QueueError:
@@ -946,6 +1905,155 @@ def _dispatch(
             poll_id=_string(value, "poll_id"),
             wait_timeout_ms=_integer(value, "wait_timeout_ms"),
         )
+    if operation == "authorize":
+        _exact(
+            value,
+            {
+                "session_id",
+                "assignment_id",
+                "expected_revision",
+                "operation_id",
+            },
+        )
+        return view.authorize_transfers(
+            _string(value, "session_id"),
+            _string(value, "assignment_id"),
+            expected_revision=_integer(value, "expected_revision"),
+            operation_id=_string(value, "operation_id"),
+        )
+    if operation == "input":
+        _exact(
+            value,
+            {
+                "session_id",
+                "assignment_id",
+                "transfer_id",
+                "offset",
+                "authorization_id",
+                "authorization_revision",
+            },
+        )
+        return view.read_input_chunk(
+            _string(value, "session_id"),
+            _string(value, "assignment_id"),
+            _string(value, "transfer_id"),
+            offset=_integer(value, "offset"),
+            authorization_id=_string(value, "authorization_id"),
+            authorization_revision=_integer(value, "authorization_revision"),
+        )
+    if operation == "accept":
+        _exact(value, {"session_id", "assignment_id", "request_digest"})
+        return view.accept_assignment(
+            _string(value, "session_id"),
+            _string(value, "assignment_id"),
+            request_digest=_string(value, "request_digest"),
+        )
+    if operation == "decline":
+        _exact(
+            value,
+            {"session_id", "assignment_id", "availability_revision"},
+        )
+        return view.decline_assignment(
+            _string(value, "session_id"),
+            _string(value, "assignment_id"),
+            availability_revision=_string(value, "availability_revision"),
+        ).value()
+    if operation == "started":
+        _exact(
+            value,
+            {
+                "session_id",
+                "assignment_id",
+                "fence",
+                "process_execution_id",
+            },
+        )
+        return view.confirm_started(
+            _string(value, "session_id"),
+            _string(value, "assignment_id"),
+            fence=_string(value, "fence"),
+            process_execution_id=_string(value, "process_execution_id"),
+        )
+    if operation == "event":
+        _exact(
+            value,
+            {"session_id", "assignment_id", "sequence", "event_id", "payload"},
+        )
+        payload = value["payload"]
+        if not isinstance(payload, Mapping):
+            raise QueueServiceError("remote event payload is invalid")
+        return view.report_event(
+            _string(value, "session_id"),
+            _string(value, "assignment_id"),
+            sequence=_integer(value, "sequence"),
+            event_id=_string(value, "event_id"),
+            payload=freeze_plain_data(payload, path="remote event"),
+        )
+    if operation == "output_manifest":
+        _exact(
+            value,
+            {
+                "session_id",
+                "assignment_id",
+                "fence",
+                "authorization_id",
+                "authorization_revision",
+                "report",
+            },
+        )
+        return view.declare_outputs(
+            _string(value, "session_id"),
+            _string(value, "assignment_id"),
+            fence=_string(value, "fence"),
+            authorization_id=_string(value, "authorization_id"),
+            authorization_revision=_integer(value, "authorization_revision"),
+            report=_RemoteExecutionReport.from_dict(value["report"]),
+        )
+    if operation == "output":
+        _exact(
+            value,
+            {
+                "session_id",
+                "assignment_id",
+                "transfer_id",
+                "offset",
+                "data",
+                "final",
+                "authorization_id",
+                "authorization_revision",
+            },
+        )
+        final = value["final"]
+        if not isinstance(final, bool):
+            raise QueueServiceError("remote output final flag is invalid")
+        return view.upload_output_chunk(
+            _string(value, "session_id"),
+            _string(value, "assignment_id"),
+            _string(value, "transfer_id"),
+            offset=_integer(value, "offset"),
+            data=_decode_chunk(value["data"]),
+            final=final,
+            authorization_id=_string(value, "authorization_id"),
+            authorization_revision=_integer(value, "authorization_revision"),
+        )
+    if operation == "result":
+        _exact(value, {"session_id", "assignment_id", "fence"})
+        return view.commit_result(
+            _string(value, "session_id"),
+            _string(value, "assignment_id"),
+            fence=_string(value, "fence"),
+        )
+    if operation == "release":
+        _exact(
+            value,
+            {"session_id", "assignment_id", "fence", "availability_revision"},
+        )
+        return view.release_assignment(
+            _string(value, "session_id"),
+            _string(value, "assignment_id"),
+            fence=_string(value, "fence"),
+            availability_revision=_string(value, "availability_revision"),
+        ).value()
     _exact(value, {"proof", "idempotency_key"})
     proof = value["proof"]
     if not isinstance(proof, Mapping):
@@ -1065,15 +2173,19 @@ def _offer(value: Mapping[str, object]) -> AgentOffer:
             "ttl_seconds",
             "pools",
             "reflected_claim_ids",
+            "resident_profiles",
         },
     )
     claims = value["reflected_claim_ids"]
     pools = value["pools"]
+    profiles = value["resident_profiles"]
     if (
         not isinstance(claims, list)
         or any(not isinstance(item, str) for item in claims)
         or not isinstance(pools, list)
         or any(not isinstance(item, str) for item in pools)
+        or not isinstance(profiles, list)
+        or any(not isinstance(item, Mapping) for item in profiles)
     ):
         raise QueueServiceError("agent offer scope is invalid")
     cpu, memory = _capacity_atoms(value["capacity_atoms"])
@@ -1088,6 +2200,9 @@ def _offer(value: Mapping[str, object]) -> AgentOffer:
         ttl_seconds=_integer(value, "ttl_seconds"),
         pools=tuple(pools),
         reflected_claim_ids=tuple(claims),
+        resident_profiles=tuple(
+            ResidentProfileDescriptor.from_dict(item) for item in profiles
+        ),
     )
 
 

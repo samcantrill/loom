@@ -12,7 +12,8 @@ from threading import Lock
 from typing import cast
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.execution import prepare_stage_attempt
+from loom.pipeline.execution import StageWorkerRequest, prepare_stage_attempt
+from loom.pipeline.execution.lifecycle import bind_stage_inputs
 from loom.pipeline.execution.managed_local import (
     AtomResourceProvider,
     ClaimCommand,
@@ -33,9 +34,11 @@ from loom.pipeline.planning import (
     ExecutionPlan,
     PlanAction,
     StagePlan,
+    build_stage_fingerprint,
 )
 from loom.pipeline.runtime import (
     CpuResourcePlanner,
+    MemoryResourcePlanner,
     RunOptions,
     ResolvedStagePlacement,
     ResolvedStageRuntimeOptions,
@@ -73,7 +76,17 @@ from loom.serialization import PlainData, ensure_plain_data, json_loads
 from loom.timestamps import utc_timestamp
 
 from .errors import QueueConflictError, QueueServiceError
+from ._remote_stage_execution import (
+    MAX_TRANSFER_BYTES,
+    ResidentProfileDescriptor,
+    _DeliveredExecutionRequest,
+    _RemoteArtifact,
+    _RemoteExecutionReport,
+    _validate_remote_semantic_data,
+)
+from .agent_sessions import AgentOffer, _target_remote_delivery
 from .local_daemon import (
+    LocalDaemon,
     LocalDaemonAdmission,
     LocalDaemonAdmissionState,
     LocalDaemonConfig,
@@ -97,8 +110,40 @@ class LocalDaemonExecutionOutcome:
     reason: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _RemoteCandidateTarget:
+    agent_id: str
+    session_id: str
+    offer_id: str
+    availability_revision: str
+    inventory_revision: str
+    offer: AgentOffer
+    profile: ResidentProfileDescriptor
+
+
 def _connect_existing_sqlite(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"{path.resolve().as_uri()}?mode=rw", uri=True)
+
+
+def _coordinator_capacity(config: LocalDaemonConfig) -> tuple[CapacityAtom, ...]:
+    """Protected upper bounds for local and policy-authorized agent namespaces."""
+
+    maximum = 2**63 - 1
+    amounts: dict[tuple[str, str], tuple[int, str]] = {
+        ("cpu", f"{config.machine_id}:cpu"): (config.cpu_capacity, "count")
+    }
+    if config.memory_capacity_bytes:
+        amounts[("memory", f"{config.machine_id}:memory")] = (
+            config.memory_capacity_bytes,
+            "B",
+        )
+    for rule in config.agent_policy.agents:
+        amounts[("cpu", f"{rule.agent_id}:cpu")] = (maximum, "count")
+        amounts[("memory", f"{rule.agent_id}:memory")] = (maximum, "B")
+    return tuple(
+        CapacityAtom(kind, key, ExactQuantity(amount), unit, ExactQuantity(1))
+        for (kind, key), (amount, unit) in sorted(amounts.items())
+    )
 
 
 def initialize_local_daemon_owner_stores(
@@ -109,15 +154,7 @@ def initialize_local_daemon_owner_stores(
 ) -> None:
     """Create the two current runtime-owner stores for a fresh daemon root."""
 
-    capacity = (
-        CapacityAtom(
-            "cpu",
-            f"{config.machine_id}:cpu",
-            ExactQuantity(config.cpu_capacity),
-            "count",
-            ExactQuantity(1),
-        ),
-    )
+    capacity = _coordinator_capacity(config)
     SQLiteStageWorkStore(config.execution_database)._initialize()
     SQLiteCoordinatorAssignments(config.execution_database, capacity)._initialize()
     SQLiteAgentJournal(config.agent_journal)._initialize()
@@ -137,15 +174,7 @@ def local_daemon_owner_stores_available(
     """Whether both retained runtime owners can still be opened read-only."""
 
     try:
-        capacity = (
-            CapacityAtom(
-                "cpu",
-                f"{config.machine_id}:cpu",
-                ExactQuantity(config.cpu_capacity),
-                "count",
-                ExactQuantity(1),
-            ),
-        )
+        capacity = _coordinator_capacity(config)
         SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
         )._open_existing()
@@ -183,7 +212,9 @@ def _bind_owner_store(path: Path, *, role: str, stable_id: str) -> None:
             "CREATE TABLE IF NOT EXISTS local_daemon_owner_identity "
             "(role TEXT PRIMARY KEY, stable_id TEXT NOT NULL)"
         )
-        rows = tuple(conn.execute("SELECT role, stable_id FROM local_daemon_owner_identity"))
+        rows = tuple(
+            conn.execute("SELECT role, stable_id FROM local_daemon_owner_identity")
+        )
         if not rows:
             conn.execute(
                 "INSERT INTO local_daemon_owner_identity(role, stable_id) VALUES (?, ?)",
@@ -454,9 +485,14 @@ def load_managed_local_intent(
         name: ResolvedStagePlacement.from_dict(payload)
         for name, payload in placements_payload.items()
     }
-    for name, placement in placements.items():
-        if placement.target != config.machine_id:
-            raise QueueServiceError("exact runtime record targets another local daemon")
+    allowed_targets = {config.machine_id} | {
+        rule.agent_id for rule in config.agent_policy.agents
+    }
+    for placement in placements.values():
+        if placement.target is not None and placement.target not in allowed_targets:
+            raise QueueServiceError(
+                "exact runtime record targets an unauthorized managed agent"
+            )
     if (
         parallel_execution_options(runtime_options).max_parallel_stages
         != record["max_parallel_stages"]
@@ -484,6 +520,7 @@ class LocalDaemonExecution:
         coordinator_epoch: str,
         cancellation_operation: Callable[[str], str | None],
         admission_activated: Callable[[str], None],
+        daemon: LocalDaemon | None = None,
     ) -> None:
         self.config = config
         self.coordinator_id = coordinator_id
@@ -491,21 +528,38 @@ class LocalDaemonExecution:
         self.coordinator_epoch = coordinator_epoch
         self.cancellation_operation = cancellation_operation
         self.admission_activated = admission_activated
+        self.daemon = daemon
         self.run_store = LocalRunStore(config.run_store_root)
         self.stage_work_store = SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
         )
         self.cpu_planner = CpuResourcePlanner()
-        self.planners = {"cpu": self.cpu_planner}
-        self.capacity = (
+        self.memory_planner = MemoryResourcePlanner()
+        self.planners = {
+            "cpu": self.cpu_planner,
+            "memory": self.memory_planner,
+        }
+        local_capacity: list[CapacityAtom] = [
             CapacityAtom(
                 "cpu",
                 f"{config.machine_id}:cpu",
                 ExactQuantity(config.cpu_capacity),
                 "count",
                 ExactQuantity(1),
-            ),
-        )
+            )
+        ]
+        if config.memory_capacity_bytes:
+            local_capacity.append(
+                CapacityAtom(
+                    "memory",
+                    f"{config.machine_id}:memory",
+                    ExactQuantity(config.memory_capacity_bytes),
+                    "B",
+                    ExactQuantity(1),
+                )
+            )
+        self.local_capacity = tuple(local_capacity)
+        self.capacity = _coordinator_capacity(config)
         self.coordinator = SQLiteCoordinatorAssignments(
             config.execution_database, self.capacity, _allow_initialize=False
         )
@@ -519,11 +573,19 @@ class LocalDaemonExecution:
             agent_id=self.agent_id,
         ):
             raise QueueServiceError("retained daemon owner state is unavailable")
-        self.provider = AtomResourceProvider(
-            self.cpu_planner.descriptor,
-            self.cpu_planner.claim_contracts,
-            self.capacity,
-        )
+        self.providers = {
+            kind: AtomResourceProvider(
+                self.planners[kind].descriptor,
+                self.planners[kind].claim_contracts,
+                tuple(
+                    atom
+                    for atom in self.local_capacity
+                    if atom.owner_resource_kind == kind
+                ),
+            )
+            for kind in {atom.owner_resource_kind for atom in self.local_capacity}
+        }
+        self.provider = self.providers["cpu"]
         # A new in-memory provider must never begin by advertising capacity that
         # a durable accepted/granted/running/unknown assignment might retain.
         # The agent journal is the only owner that has an exact provider claim;
@@ -540,7 +602,12 @@ class LocalDaemonExecution:
                 "coordinator retained assignment lacks an exact agent claim"
             )
         for command in retained:
-            self.provider.restore_capacity_holding(command)
+            provider = self.providers.get(command.claim.resource_kind)
+            if provider is None:
+                raise QueueServiceError(
+                    "retained local claim has no configured provider"
+                )
+            provider.restore_capacity_holding(command)
         self._launch_lock = Lock()
 
     def open_owner_stores(self) -> None:
@@ -621,6 +688,11 @@ class LocalDaemonExecution:
                 )
                 if terminal is not None:
                     return terminal
+                if self._remote_run_in_flight(admission.run_uri):
+                    return LocalDaemonExecutionOutcome(
+                        LocalDaemonAdmissionState.ACTIVE,
+                        "remote assignment remains durably in flight",
+                    )
                 orchestrator.reconcile(
                     admission_id=admission.admission_id,
                     plan=intent.plan,
@@ -642,33 +714,70 @@ class LocalDaemonExecution:
                 )
                 if terminal is not None:
                     return terminal
-                decision = orchestrator.decide(
-                    kernel=SchedulingKernel(
-                        planners=self.planners,
-                        policy=FifoSchedulingPolicy(),
-                        component_epoch=self.coordinator_epoch,
-                    ),
-                    candidates=(self._candidate(),),
-                    as_of=snapshot.revision.sequence,
-                    admission_id=admission.admission_id,
-                )
-                if decision.state is not PolicyDecisionState.SELECT:
-                    return LocalDaemonExecutionOutcome(
-                        LocalDaemonAdmissionState.WAITING,
-                        "no dependency-ready stage currently has local capacity",
+                remote_targets = self._remote_candidates()
+                local_candidate = self._candidate()
+                remote_rejected = False
+                while True:
+                    candidates = tuple(
+                        [
+                            local_candidate
+                            for _ in (0,)
+                            if local_candidate.candidate_id not in remote_targets
+                        ]
+                        + [target[0] for _, target in sorted(remote_targets.items())]
                     )
-                assert decision.stage_work_id is not None
-                assert decision.selected is not None
-                record = _stage_work(self.stage_work_store, decision.stage_work_id)
-                self._execute(
+                    decision = orchestrator.decide(
+                        kernel=SchedulingKernel(
+                            planners=self.planners,
+                            policy=FifoSchedulingPolicy(),
+                            component_epoch=self.coordinator_epoch,
+                        ),
+                        candidates=candidates,
+                        as_of=snapshot.revision.sequence,
+                        admission_id=admission.admission_id,
+                    )
+                    if decision.state is not PolicyDecisionState.SELECT:
+                        reason = (
+                            "selected remote capacity does not support path-free "
+                            "regular-file execution"
+                            if remote_rejected
+                            else "no dependency-ready stage currently has managed "
+                            "capacity"
+                        )
+                        return LocalDaemonExecutionOutcome(
+                            LocalDaemonAdmissionState.WAITING,
+                            reason,
+                        )
+                    assert decision.stage_work_id is not None
+                    assert decision.selected is not None
+                    record = _stage_work(self.stage_work_store, decision.stage_work_id)
+                    candidate_id = cast(str, decision.candidate_id)
+                    if candidate_id in remote_targets and not self._remote_eligible(
+                        intent=intent,
+                        snapshot=snapshot,
+                        record=record,
+                    ):
+                        del remote_targets[candidate_id]
+                        remote_rejected = True
+                        continue
+                    break
+                remote_started = self._execute(
                     admission=admission,
                     intent=intent,
                     authority=scoped_authority,
                     snapshot=snapshot,
                     record=record,
                     decision=decision,
+                    remote_targets={
+                        key: value[1] for key, value in remote_targets.items()
+                    },
                     execution_started=release_launch,
                 )
+                if remote_started:
+                    return LocalDaemonExecutionOutcome(
+                        LocalDaemonAdmissionState.ACTIVE,
+                        "remote assignment was durably targeted",
+                    )
             finally:
                 release_launch()
         return LocalDaemonExecutionOutcome(
@@ -830,30 +939,202 @@ class LocalDaemonExecution:
         return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
 
     def _candidate(self) -> Candidate:
-        observed = self.provider.observe(
-            ObserveRequest(
-                self.config.machine_id,
-                self.coordinator_epoch,
-                f"candidate-observe-{utc_timestamp()}",
+        inventory: dict[str, ResourceInventoryEnvelope] = {}
+        availability: dict[str, ResourceAvailabilityEnvelope] = {}
+        for kind, provider in self.providers.items():
+            observed = provider.observe(
+                ObserveRequest(
+                    self.config.machine_id,
+                    self.coordinator_epoch,
+                    f"candidate-observe-{kind}-{utc_timestamp()}",
+                )
             )
-        )
-        inventory = ResourceInventoryEnvelope(
-            self.config.machine_id,
-            "cpu",
-            observed.availability_revision,
-            atoms=self.capacity,
-        )
-        availability = ResourceAvailabilityEnvelope(
-            self.config.machine_id,
-            "cpu",
-            observed.availability_revision,
-            atoms=observed.atoms,
-        )
+            inventory[kind] = ResourceInventoryEnvelope(
+                self.config.machine_id,
+                kind,
+                observed.availability_revision,
+                atoms=tuple(
+                    atom
+                    for atom in self.local_capacity
+                    if atom.owner_resource_kind == kind
+                ),
+            )
+            availability[kind] = ResourceAvailabilityEnvelope(
+                self.config.machine_id,
+                kind,
+                observed.availability_revision,
+                atoms=observed.atoms,
+            )
         return Candidate(
             self.config.machine_id,
-            {"cpu": inventory},
-            {"cpu": availability},
+            inventory,
+            availability,
         )
+
+    def _remote_candidates(
+        self,
+    ) -> dict[str, tuple[Candidate, _RemoteCandidateTarget]]:
+        if not self.config.remote_profiles:
+            return {}
+        configured = {
+            profile.profile_id: profile for profile in self.config.remote_profiles
+        }
+        with sqlite3.connect(self.config.control_database) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = tuple(
+                conn.execute(
+                    "SELECT o.offer_id, o.offer_json, o.expires_at, "
+                    "s.agent_id, s.session_id FROM agent_offers o "
+                    "JOIN agent_sessions s ON s.session_id = o.session_id "
+                    "WHERE o.current = 1 AND o.coordinator_epoch = ? "
+                    "AND s.state = 'ACTIVE' AND s.coordinator_epoch = ?",
+                    (self.coordinator_epoch, self.coordinator_epoch),
+                )
+            )
+            accepted_row = conn.execute(
+                "SELECT value FROM daemon_metadata WHERE key = 'accepted_time'"
+            ).fetchone()
+            accepted_time = "" if accepted_row is None else str(accepted_row[0])
+        targets: dict[str, tuple[Candidate, _RemoteCandidateTarget]] = {}
+        for row in rows:
+            if accepted_time and str(row["expires_at"]) < accepted_time:
+                continue
+            offer = AgentOffer.from_value(json.loads(str(row["offer_json"])))
+            matching = tuple(
+                profile
+                for profile in offer.resident_profiles
+                if configured.get(profile.profile_id) == profile
+            )
+            if not matching:
+                continue
+            profile = sorted(matching, key=lambda item: item.profile_id)[0]
+            agent_id = str(row["agent_id"])
+            atoms: list[CapacityAtom] = []
+            if offer.cpu:
+                atoms.append(
+                    CapacityAtom(
+                        "cpu",
+                        f"{agent_id}:cpu",
+                        ExactQuantity(offer.cpu),
+                        "count",
+                        ExactQuantity(1),
+                    )
+                )
+            if offer.memory_bytes:
+                atoms.append(
+                    CapacityAtom(
+                        "memory",
+                        f"{agent_id}:memory",
+                        ExactQuantity(offer.memory_bytes),
+                        "B",
+                        ExactQuantity(1),
+                    )
+                )
+            inventory: dict[str, ResourceInventoryEnvelope] = {}
+            availability: dict[str, ResourceAvailabilityEnvelope] = {}
+            for kind in {atom.owner_resource_kind for atom in atoms}:
+                kind_atoms = tuple(
+                    atom for atom in atoms if atom.owner_resource_kind == kind
+                )
+                inventory[kind] = ResourceInventoryEnvelope(
+                    agent_id,
+                    kind,
+                    offer.availability_revision,
+                    atoms=kind_atoms,
+                )
+                availability[kind] = ResourceAvailabilityEnvelope(
+                    agent_id,
+                    kind,
+                    offer.availability_revision,
+                    atoms=kind_atoms,
+                )
+            candidate = Candidate(
+                agent_id,
+                inventory,
+                availability,
+                attributes={
+                    "resident_profile_id": profile.profile_id,
+                    "resident_profile_revision": profile.revision,
+                    "resident_project_fingerprint": profile.project_fingerprint,
+                    "resident_environment_fingerprint": (
+                        profile.environment_fingerprint
+                    ),
+                    "resident_executor_fingerprint": profile.executor_fingerprint,
+                    "artifact_capability": "regular-file-relay-v1",
+                },
+                pool_names=offer.pools,
+            )
+            target = _RemoteCandidateTarget(
+                agent_id=agent_id,
+                session_id=str(row["session_id"]),
+                offer_id=str(row["offer_id"]),
+                availability_revision=offer.availability_revision,
+                inventory_revision=offer.inventory_revision,
+                offer=offer,
+                profile=profile,
+            )
+            self.coordinator.publish_offer(
+                ManagedOfferSnapshot(
+                    agent_id=agent_id,
+                    session_id=target.session_id,
+                    offer_revision=target.offer_id,
+                    snapshot_revision=offer.availability_revision,
+                    inventory_revision=offer.inventory_revision,
+                    availability_revision=offer.availability_revision,
+                    component_descriptors=tuple(
+                        self.planners[kind].descriptor for kind in sorted(inventory)
+                    ),
+                    atoms=tuple(atoms),
+                    reflected_claim_ids=offer.reflected_claim_ids,
+                )
+            )
+            targets[agent_id] = (candidate, target)
+        return targets
+
+    @staticmethod
+    def _remote_eligible(
+        *,
+        intent: ManagedLocalIntent,
+        snapshot: AuthoritativeRunSnapshot,
+        record: StageWorkRecord,
+    ) -> bool:
+        """Preflight the selected remote pair before any durable assignment."""
+
+        stage = intent.pipeline.get_stage(record.stage_name)
+        stage_plan = next(
+            item
+            for item in intent.plan.ordered_stage_plans
+            if item.stage_name == record.stage_name
+        )
+        inputs = bind_stage_inputs(
+            stage=stage,
+            stage_plan=stage_plan,
+            produced_outputs=_produced_outputs(snapshot),
+        )
+        fingerprint = build_stage_fingerprint(
+            stage,
+            bound_inputs=inputs,
+            fingerprint_context=intent.plan.fingerprint_context,
+        ).to_dict()
+        try:
+            _validate_remote_semantic_data(
+                fingerprint=fingerprint,
+                resolved_runtime=intent.runtime[record.stage_name].to_safe_metadata(),
+                worker_metadata={},
+            )
+            total_bytes = 0
+            for index, (logical_name, ref) in enumerate(sorted(inputs.items())):
+                descriptor, _path = _RemoteArtifact.from_local_ref(
+                    transfer_id=f"preflight-{index}",
+                    logical_name=logical_name,
+                    ref=ref,
+                )
+                total_bytes += descriptor.size_bytes
+                if total_bytes > MAX_TRANSFER_BYTES:
+                    return False
+        except (OSError, QueueConflictError, QueueServiceError):
+            return False
+        return True
 
     def _execute(
         self,
@@ -864,15 +1145,22 @@ class LocalDaemonExecution:
         snapshot: AuthoritativeRunSnapshot,
         record: StageWorkRecord,
         decision: object,
+        remote_targets: Mapping[str, _RemoteCandidateTarget],
         execution_started: Callable[[], None],
-    ) -> None:
+    ) -> bool:
         selected = getattr(decision, "selected")
         claims = tuple(selected.claims)
-        if len(claims) != 1 or claims[0].resource_kind != "cpu":
+        if not claims or len({claim.resource_kind for claim in claims}) != len(claims):
             raise QueueServiceError(
-                "managed-local daemon requires one exact CPU claim per stage"
+                "managed daemon requires one exact claim per resource kind"
             )
-        offer_id = f"offer-{record.stage_work_id}-{record.projection_revision}"
+        candidate_id = cast(str, getattr(decision, "candidate_id"))
+        remote_target = remote_targets.get(candidate_id)
+        offer_id = (
+            remote_target.offer_id
+            if remote_target is not None
+            else f"offer-{record.stage_work_id}-{record.projection_revision}"
+        )
         assignment_id = (
             "assignment-"
             + hashlib.sha256(
@@ -882,6 +1170,8 @@ class LocalDaemonExecution:
                     + record.stage_work_id
                     + "\0"
                     + offer_id
+                    + "\0"
+                    + str(record.projection_revision)
                 ).encode("utf-8")
             ).hexdigest()
         )
@@ -893,33 +1183,66 @@ class LocalDaemonExecution:
             stage_name=record.stage_name,
             attempt=record.attempt,
             attempt_id=record.attempt_id,
-            agent_id=self.config.machine_id,
-            session_id=self.coordinator_epoch,
+            agent_id=(
+                remote_target.agent_id
+                if remote_target is not None
+                else self.config.machine_id
+            ),
+            session_id=(
+                remote_target.session_id
+                if remote_target is not None
+                else self.coordinator_epoch
+            ),
             offer_id=offer_id,
             claim_id=claim_id,
         )
-        observed = self.provider.observe(
-            ObserveRequest(
-                self.config.machine_id,
-                self.coordinator_epoch,
-                f"offer-observe-{assignment_id}",
+        if remote_target is None:
+            observations = {
+                kind: provider.observe(
+                    ObserveRequest(
+                        self.config.machine_id,
+                        self.coordinator_epoch,
+                        f"offer-observe-{assignment_id}-{kind}",
+                    )
+                )
+                for kind, provider in self.providers.items()
+            }
+            availability_revision = (
+                "local-"
+                + hashlib.sha256(
+                    "\0".join(
+                        observations[kind].availability_revision
+                        for kind in sorted(observations)
+                    ).encode()
+                ).hexdigest()
             )
-        )
-        self.coordinator.publish_offer(
-            ManagedOfferSnapshot(
-                agent_id=self.config.machine_id,
-                session_id=self.coordinator_epoch,
-                offer_revision=offer_id,
-                snapshot_revision=self.coordinator_epoch,
-                inventory_revision=f"inventory-{self.coordinator_epoch}",
-                availability_revision=observed.availability_revision,
-                component_descriptors=(self.cpu_planner.descriptor,),
-                atoms=observed.atoms,
-                reflected_claim_ids=self.provider.live_claim_ids_for_session(
-                    self.coordinator_epoch
-                ),
+            self.coordinator.publish_offer(
+                ManagedOfferSnapshot(
+                    agent_id=self.config.machine_id,
+                    session_id=self.coordinator_epoch,
+                    offer_revision=offer_id,
+                    snapshot_revision=self.coordinator_epoch,
+                    inventory_revision=f"inventory-{self.coordinator_epoch}",
+                    availability_revision=availability_revision,
+                    component_descriptors=tuple(
+                        self.planners[kind].descriptor for kind in sorted(observations)
+                    ),
+                    atoms=tuple(
+                        atom
+                        for kind in sorted(observations)
+                        for atom in observations[kind].atoms
+                    ),
+                    reflected_claim_ids=tuple(
+                        sorted(
+                            {
+                                claim_id
+                                for result in observations.values()
+                                for claim_id in result.live_claim_ids
+                            }
+                        )
+                    ),
+                )
             )
-        )
         commands = tuple(
             ClaimCommand(
                 assignment,
@@ -936,32 +1259,53 @@ class LocalDaemonExecution:
         )
         produced = _produced_outputs(snapshot)
         runtime = intent.runtime[record.stage_name]
-        worker_request = prepare_stage_attempt(
-            run_store=self.run_store,
-            run_uri=record.run_uri,
-            stage=stage,
-            stage_plan=stage_plan,
-            produced_outputs=produced,
-            fingerprint_context=intent.plan.fingerprint_context,
-            resolved_runtime=runtime,
+        raw_worker_request = self.run_store.read_stage_worker_request(
+            record.run_uri,
+            record.stage_name,
+            attempt=record.attempt,
         )
-        if worker_request.attempt != record.attempt:
-            raise QueueConflictError(
-                "local worker preparation attempt differs from authority attempt"
+        worker_request = (
+            StageWorkerRequest.from_dict(raw_worker_request)
+            if raw_worker_request is not None
+            else prepare_stage_attempt(
+                run_store=self.run_store,
+                run_uri=record.run_uri,
+                stage=stage,
+                stage_plan=stage_plan,
+                produced_outputs=produced,
+                fingerprint_context=intent.plan.fingerprint_context,
+                resolved_runtime=runtime,
             )
+        )
+        if (
+            worker_request.run_uri != record.run_uri
+            or worker_request.stage_name != record.stage_name
+            or worker_request.attempt != record.attempt
+        ):
+            raise QueueConflictError(
+                "managed worker preparation identity differs from authority attempt"
+            )
+        snapshot_revision = (
+            remote_target.availability_revision
+            if remote_target is not None
+            else self.coordinator_epoch
+        )
         decision_receipt: dict[str, PlainData] = {
             "policy_epoch": getattr(decision, "component_epoch"),
             "policy_descriptor": getattr(decision, "policy_descriptor").to_dict(),
             "stage_work_id": record.stage_work_id,
-            "candidate_id": self.config.machine_id,
+            "candidate_id": assignment.agent_id,
             "stage_work_revision": record.projection_revision,
-            "snapshot_revision": self.coordinator_epoch,
+            "snapshot_revision": snapshot_revision,
             "offer_revision": offer_id,
             "score_summary": {"preference_vector": list(selected.preference_vector)},
             "fallback_eligible": False,
             "as_of": utc_timestamp(),
             "reason_codes": ["selected"],
-            "component_descriptors": [self.cpu_planner.descriptor.to_dict()],
+            "component_descriptors": [
+                self.planners[kind].descriptor.to_dict()
+                for kind in sorted(claim.resource_kind for claim in claims)
+            ],
             "claim_contract_descriptors": [
                 descriptor.to_dict()
                 for descriptor in sorted(
@@ -970,6 +1314,88 @@ class LocalDaemonExecution:
                 )
             ],
         }
+        if remote_target is not None:
+            remote_inputs: list[_RemoteArtifact] = []
+            input_paths: dict[str, Path] = {}
+            total_bytes = 0
+            for logical_name, ref in sorted(worker_request.inputs.items()):
+                transfer_id = (
+                    "input-"
+                    + hashlib.sha256(
+                        (
+                            assignment.assignment_id
+                            + "\0"
+                            + logical_name
+                            + "\0"
+                            + ref.artifact_id
+                        ).encode("utf-8")
+                    ).hexdigest()
+                )
+                descriptor, path = _RemoteArtifact.from_local_ref(
+                    transfer_id=transfer_id,
+                    logical_name=logical_name,
+                    ref=ref,
+                )
+                total_bytes += descriptor.size_bytes
+                if total_bytes > MAX_TRANSFER_BYTES:
+                    raise QueueServiceError(
+                        "remote assignment inputs exceed the configured bound"
+                    )
+                remote_inputs.append(descriptor)
+                input_paths[transfer_id] = path
+            delivered = _DeliveredExecutionRequest.from_worker_request(
+                assignment_id=assignment.assignment_id,
+                stage_work_id=assignment.stage_work_id,
+                attempt_id=assignment.attempt_id,
+                offer_id=assignment.offer_id,
+                claim_id=assignment.claim_id,
+                worker_request=worker_request,
+                profile=remote_target.profile,
+                inputs=tuple(remote_inputs),
+                declared_outputs=tuple(sorted(stage.outputs)),
+                claims=claims,
+            )
+            self.coordinator.reserve(
+                assignment,
+                claims,
+                max_parallel_stages=intent.max_parallel_stages,
+                decision_receipt=decision_receipt,
+            )
+            authority.bind_prepared_attempt(
+                assignment.run_uri,
+                assignment_id=assignment.assignment_id,
+                attempt_id=assignment.attempt_id,
+            )
+            self.coordinator.advance(
+                assignment.assignment_id,
+                expected="reserved",
+                next_state="bound",
+            )
+            try:
+                _target_remote_delivery(
+                    self._daemon_owner(),
+                    session_id=remote_target.session_id,
+                    availability_revision=remote_target.availability_revision,
+                    request=delivered,
+                    run_uri=assignment.run_uri,
+                    input_paths=input_paths,
+                )
+            except (QueueConflictError, QueueServiceError):
+                if self._remote_delivery_retained(assignment.assignment_id):
+                    execution_started()
+                    return True
+                authority.unbind_prepared_attempt(
+                    assignment.run_uri,
+                    assignment_id=assignment.assignment_id,
+                    attempt_id=assignment.attempt_id,
+                )
+                self.coordinator.release_unaccepted(
+                    assignment.assignment_id,
+                    reopen_offer=True,
+                )
+                return False
+            execution_started()
+            return True
         run_managed_local_assignment(
             coordinator=self.coordinator,
             authority=authority,
@@ -978,7 +1404,7 @@ class LocalDaemonExecution:
             worker_request=worker_request,
             claims=claims,
             commands=commands,
-            providers={"cpu": self.provider},
+            providers=self.providers,
             run_store=self.run_store,
             max_parallel_stages=intent.max_parallel_stages,
             decision_receipt=decision_receipt,
@@ -987,6 +1413,26 @@ class LocalDaemonExecution:
             ),
             execution_started=execution_started,
         )
+        return False
+
+    def _remote_run_in_flight(self, run_uri: str) -> bool:
+        with sqlite3.connect(self.config.control_database) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM remote_assignments WHERE run_uri = ? "
+                "AND state != 'RELEASED' LIMIT 1",
+                (run_uri,),
+            ).fetchone()
+        return row is not None
+
+    def _remote_delivery_retained(self, assignment_id: str) -> bool:
+        with sqlite3.connect(self.config.control_database) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM remote_assignments r JOIN agent_deliveries d "
+                "ON d.assignment_id = r.assignment_id "
+                "WHERE r.assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+        return row is not None
 
     def _install_cancellation_if_requested(
         self,
@@ -1005,6 +1451,192 @@ class LocalDaemonExecution:
             ),
         )
         return True
+
+    def _daemon_owner(self) -> LocalDaemon:
+        if self.daemon is None:
+            raise QueueServiceError("remote coordinator owner is unavailable")
+        return self.daemon
+
+    def remote_accept(self, assignment_id: str) -> str:
+        """Advance one delivered, input-durable assignment through grant."""
+
+        record = self._remote_assignment_record(assignment_id)
+        authority = self._remote_authority(str(record["run_uri"]))
+        state = self.coordinator.state(assignment_id)
+        if state == "bound":
+            self.coordinator.advance(
+                assignment_id, expected="bound", next_state="accepted"
+            )
+        fence = authority.grant_prepared_attempt(
+            str(record["run_uri"]),
+            assignment_id=assignment_id,
+            attempt_id=str(record["attempt_id"]),
+        )
+        state = self.coordinator.state(assignment_id)
+        if state == "accepted":
+            self.coordinator.advance(
+                assignment_id, expected="accepted", next_state="granted"
+            )
+        return fence.fencing_token
+
+    def remote_decline(self, assignment_id: str) -> None:
+        """Release a pre-grant assignment after definitive physical decline."""
+
+        record = self._remote_assignment_record(assignment_id)
+        authority = self._remote_authority(str(record["run_uri"]))
+        state = self.coordinator.state(assignment_id)
+        if state == "released":
+            return
+        if state != "bound":
+            raise QueueConflictError("only a bound remote assignment can be declined")
+        authority.unbind_prepared_attempt(
+            str(record["run_uri"]),
+            assignment_id=assignment_id,
+            attempt_id=str(record["attempt_id"]),
+        )
+        self.coordinator.advance(assignment_id, expected="bound", next_state="terminal")
+        self.coordinator.advance(
+            assignment_id,
+            expected="terminal",
+            next_state="logical_released",
+        )
+        self.coordinator.advance(
+            assignment_id,
+            expected="logical_released",
+            next_state="released",
+        )
+
+    def remote_started(
+        self, assignment_id: str, *, fence: str, process_execution_id: str
+    ) -> None:
+        record = self._remote_assignment_record(assignment_id)
+        authority = self._remote_authority(str(record["run_uri"]))
+        granted = authority.grant_prepared_attempt(
+            str(record["run_uri"]),
+            assignment_id=assignment_id,
+            attempt_id=str(record["attempt_id"]),
+        )
+        if granted.fencing_token != fence:
+            raise QueueConflictError("remote execution fence conflicts")
+        authority.confirm_execution_started(str(record["run_uri"]), fence=granted)
+        state = self.coordinator.state(assignment_id)
+        if state == "granted":
+            self.coordinator.advance(
+                assignment_id, expected="granted", next_state="running"
+            )
+        self.coordinator.record_event(
+            assignment_id,
+            1,
+            f"{assignment_id}:process-started",
+            {"process_execution_id": process_execution_id},
+        )
+
+    def remote_event(
+        self,
+        assignment_id: str,
+        *,
+        sequence: int,
+        event_id: str,
+        payload: Mapping[str, PlainData],
+    ) -> int:
+        # Sequence 1 is reserved for the coordinator-confirmed start fact.
+        return (
+            self.coordinator.record_event(
+                assignment_id, sequence + 1, event_id, payload
+            )
+            - 1
+        )
+
+    def remote_commit(
+        self,
+        assignment_id: str,
+        *,
+        fence: str,
+        report: _RemoteExecutionReport,
+        outputs: Mapping[str, ArtifactRef],
+    ) -> None:
+        record = self._remote_assignment_record(assignment_id)
+        authority = self._remote_authority(str(record["run_uri"]))
+        granted = authority.grant_prepared_attempt(
+            str(record["run_uri"]),
+            assignment_id=assignment_id,
+            attempt_id=str(record["attempt_id"]),
+        )
+        if granted.fencing_token != fence:
+            raise QueueConflictError("remote terminal fence conflicts")
+        if report.status is StageStatus.SUCCEEDED:
+            authority.record_output_commit(
+                str(record["run_uri"]),
+                str(record["stage_name"]),
+                attempt_id=str(record["attempt_id"]),
+                fencing_token=fence,
+                outputs=outputs,
+                assignment_id=assignment_id,
+            )
+        else:
+            authority.record_managed_attempt_terminal(
+                str(record["run_uri"]),
+                fence=granted,
+                status=report.status,
+                reason=LifecycleReason(
+                    code=(
+                        "worker.remote_cancelled"
+                        if report.status is StageStatus.CANCELLED
+                        else "worker.remote_failed"
+                    ),
+                    detail={
+                        "failure_type": report.failure_type,
+                        "message": report.message,
+                    },
+                ),
+            )
+        state = self.coordinator.state(assignment_id)
+        if state == "running":
+            self.coordinator.advance(
+                assignment_id, expected="running", next_state="terminal"
+            )
+        elif state == "granted":
+            self.coordinator.advance(
+                assignment_id, expected="granted", next_state="terminal"
+            )
+        state = self.coordinator.state(assignment_id)
+        if state == "terminal":
+            self.coordinator.advance(
+                assignment_id,
+                expected="terminal",
+                next_state="logical_released",
+            )
+
+    def remote_release(self, assignment_id: str) -> None:
+        state = self.coordinator.state(assignment_id)
+        if state == "logical_released":
+            self.coordinator.advance(
+                assignment_id,
+                expected="logical_released",
+                next_state="released",
+            )
+        elif state != "released":
+            raise QueueConflictError("remote assignment is not logically released")
+
+    def _remote_assignment_record(self, assignment_id: str) -> sqlite3.Row:
+        with sqlite3.connect(self.config.control_database) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM remote_assignments WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+        if row is None:
+            raise QueueConflictError("remote assignment is not retained")
+        return row
+
+    def _remote_authority(self, run_uri: str) -> _ScopedCoordinatorAuthority:
+        store = SQLitePerRunAuthorityStore(run_uri)
+        store.open_run(run_uri)
+        return _ScopedCoordinatorAuthority(
+            store,
+            run_uri=run_uri,
+            coordinator_id=self.coordinator_id,
+        )
 
     def _capacity_holding_coordinator_assignments(self) -> set[str]:
         """Return only coordinator states that can retain a physical claim.
@@ -1025,11 +1657,24 @@ class LocalDaemonExecution:
                     "'terminal', 'logical_released'"
                     ")"
                 )
+                capacity_holding = {str(row[0]) for row in rows}
+            remote_assignment_ids: set[str] = set()
+            if self.config.control_database.is_file():
+                with sqlite3.connect(self.config.control_database) as conn:
+                    table = conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                        "AND name = 'remote_assignments'"
+                    ).fetchone()
+                    if table is not None:
+                        remote_rows = conn.execute(
+                            "SELECT assignment_id FROM remote_assignments"
+                        )
+                        remote_assignment_ids = {str(row[0]) for row in remote_rows}
         except sqlite3.DatabaseError as exc:
             raise QueueServiceError(
                 "coordinator retained assignment state is unavailable"
             ) from exc
-        return {str(row[0]) for row in rows}
+        return capacity_holding - remote_assignment_ids
 
 
 def _stage_work(store: SQLiteStageWorkStore, stage_work_id: str) -> StageWorkRecord:

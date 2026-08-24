@@ -14,6 +14,7 @@ from loom.pipeline.errors import PipelineValidationError, StageContractError
 from loom.pipeline.executors import Executor, LocalExecutor
 from loom.pipeline.planning import (
     ExecutionPlan,
+    FingerprintStatus,
     PlanAction,
     StageFingerprintRecord,
     StagePlan,
@@ -259,6 +260,119 @@ def execute_stage_worker_request(
             },
         )
     return worker_result
+
+
+def execute_resident_stage_worker_request(
+    *,
+    worker_request: StageWorkerRequest,
+    workspace_root: Path,
+    executor: Executor | None = None,
+    clock: Clock = utc_timestamp,
+    resource_validator_registry: ResourceValidatorRegistry | None = None,
+) -> StageWorkerResult:
+    """Execute one path-free resident request in an agent-owned workspace.
+
+    Unlike ``execute_stage_worker_request``, this boundary deliberately has no
+    run-store parameter. The coordinator already prepared and fingerprinted the
+    exact stage, while the agent owns only an assignment-local artifact and
+    workspace layout. Lifecycle and output authority remain with the caller.
+    """
+
+    if not isinstance(worker_request, StageWorkerRequest):
+        raise StageWorkerStateError(
+            "resident worker requires one exact StageWorkerRequest"
+        )
+    root = Path(workspace_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    fingerprint = cast(StageFingerprintRecord, worker_request.fingerprint)
+    stage = _stage_spec_from_request(
+        worker_request,
+        registry=resource_validator_registry,
+    )
+    stage_plan = StagePlan(
+        stage_name=worker_request.stage_name,
+        action=PlanAction.RUN,
+        base_action=PlanAction.RUN,
+        fingerprint_status=FingerprintStatus.COMPUTED,
+        fingerprint=fingerprint,
+        resume_check=None,
+        reasons=(),
+        bound_inputs={},
+        pending_inputs=(),
+        reusable_outputs={},
+        declared_outputs=fingerprint.payload.declared_outputs,
+        upstream_stages=(),
+        downstream_stages=(),
+        selected_by=(),
+        invalidated_by=(),
+    )
+    artifact_store = LocalArtifactStore(root / "artifacts")
+    worker_executor = executor or LocalExecutor(capture_stdout_stderr=True)
+    try:
+        stage_object = construct_stage(
+            factory=stage.factory,
+            stage_path="resident_stage",
+        )
+        context = StageContext(
+            run_uri=worker_request.run_uri,
+            stage_name=worker_request.stage_name,
+            resolved_config=_minimal_resolved_config(stage),
+            stage_config=stage.stage_config,
+            inputs=worker_request.inputs,
+            local_output_dir=artifact_store.local_stage_dir(
+                worker_request.stage_name
+            ),
+            local_workspace_dir=root / "workspace",
+            provenance={},
+            metadata={
+                "factory_target": stage.factory.target_path,
+                "resolved_runtime": dict(worker_request.resolved_runtime),
+                "resident_worker_request": True,
+            },
+            artifact_store=artifact_store,
+            output_specs=stage.outputs,
+        )
+        execution_result = worker_executor.execute(
+            StageExecutionRequest(
+                run_uri=worker_request.run_uri,
+                stage=stage,
+                stage_plan=stage_plan,
+                stage_object=stage_object,
+                context=context,
+                inputs=worker_request.inputs,
+                fingerprint=fingerprint,
+                attempt=worker_request.attempt,
+                stdout_path=Path(worker_request.stdout_path),
+                stderr_path=Path(worker_request.stderr_path),
+                traceback_path=Path(worker_request.traceback_path),
+                metadata={"resident_worker_request": True},
+                resolved_runtime=_resolved_runtime_for_execution(
+                    worker_request,
+                    registry=resource_validator_registry,
+                ),
+            )
+        )
+        if execution_result.status is StageStatus.SUCCEEDED:
+            execution_result = replace(
+                execution_result,
+                outputs=validate_stage_outputs(
+                    stage=stage,
+                    outputs=execution_result.outputs,
+                    artifact_store=artifact_store,
+                ),
+            )
+        return _result_from_execution_result(
+            worker_request=worker_request,
+            execution_result=execution_result,
+        )
+    except Exception as exc:
+        if isinstance(exc, StageWorkerStateError):
+            raise
+        return _failed_worker_result_from_exception(
+            worker_request=worker_request,
+            exc=exc,
+            clock=clock,
+        )
 
 
 def infer_stage_worker_attempt(
@@ -819,6 +933,7 @@ def _failure_type_for_exception(exc: BaseException) -> str:
 
 
 __all__ = [
+    "execute_resident_stage_worker_request",
     "execute_stage_worker_request",
     "StageWorkerRunRequest",
     "StageWorkerStateError",
