@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 7
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p7-slurm-ready-stage-delegation`
@@ -21,11 +21,23 @@
 - Workflow path: expanded because a durable database mutation, an external
   nontransactional `sbatch` side effect, a scheduler-started bootstrap, an
   authority grant, and output commit interact causally
-- Blockers: none. The prior command-seam blocker is superseded by correction
-  1/3: profile-owned versioned operation comments and bounded exact discovery
-  are now being added without changing historical whole-run callers.
+- Blockers: required independent review found that inherited `SBATCH_*`
+  variables can weaken the protected request and export coordinator secrets,
+  the bootstrap credential authorizes a whole profile rather than one exact
+  assignment, and the first unavailable SLURM route can prevent independent
+  managed work from running. Correction `3/3` was already exhausted.
+  [PR #242](https://github.com/samcantrill/loom/pull/242) closed without merge;
+  no later phase may stack on this candidate.
 
 ## Objective And Context
+
+This plan is retained as read-only execution evidence. Candidate `3515400`
+completed the vertical path below and passed the full local and CI gates; it is
+not an accepted implementation because the production submit environment can
+override hard directives or disclose secrets, bootstrap authorization is not
+assignment-scoped, and blocked SLURM work can starve an independent managed
+stage. The strict schema-v2 cut-over remains intentional; these findings are
+current correctness and security failures, not compatibility requirements.
 
 - Vertical outcome: once an exact stage attempt becomes dependency-ready, a
   stage explicitly configured with one authorized SLURM profile is submitted as
@@ -644,19 +656,23 @@ Final commands:
 - Expanded planning: no extra planner pass needed. Current source/harness
   matches the recorded external-call, bootstrap trust, and durable compatibility
   boundaries; the independent review remains required after implementation.
-- Implementation: complete in the phase worktree. The explicit route/profile,
+- Implementation: validated candidate `3515400` in the phase worktree. The explicit route/profile,
   atomic run/profile reservation, at-most-one submission owner, fixed bootstrap,
   authority fence/start gate, relay/result path, scheduler observation, safe
   diagnostics, and mixed-route coordinator composition are wired end to end.
-- Refiner: correction 2/3 completed the durable bootstrap one-start compare-and-
-  swap; the production explicit-SLURM composition blocker remains for manager
-  disposition because no protected profile/credential application boundary is
-  currently wired into the daemon path.
+- Refiner and manager corrections: all three passes consumed. They added exact
+  operation discovery, an atomic one-start permit, and the approved hard-cut
+  production composition plus restart, handle-cardinality, retained-process,
+  credential-role, and managed-decline fixes.
 - Pre-submit gate: passed manager-local diff/contract review and
-  `make validate-pr` on the final source/test tree
-- Independent review: expected because the phase contains an external submit
-  ambiguity and remote execution authorization boundary; confirm against the
-  current workflow risk at phase preparation
+  `make validate-pr` on `3515400`; `make test-summary` recorded 2,620 passes and
+  3 environment-dependent skips; PR #242 passed CI and was mergeable
+- Independent review: blocked merge because the production `sbatch` process
+  inherits override and secret-bearing coordinator variables, the profile-wide
+  bootstrap identity can claim another same-profile assignment, and an
+  unavailable first SLURM route returns before independent managed work is
+  considered. Review also requested fresh-process restart coverage for
+  `SUBMITTING`, `ACCEPTED`, and `UNKNOWN` without a second `sbatch`.
 - Blocker corrections: 3/3 — correction 1 added profile-owned operation
   comment/discovery rather than treating job status as identity; correction 2
   made the submission-record root-launch permit atomic across concurrent
@@ -664,7 +680,8 @@ Final commands:
   production composition and closed manager-review recovery/identity findings,
   including durable-intent restart, exact handle cardinality, retained process
   identity, role-exclusive credentials, and explicit managed-decline reopening.
-- PR and merge: pending; squash merge to `develop` after all gates pass
+- PR and merge: PR #242 closed without merge; branch/worktree retained as
+  read-only evidence. Phases 8 and 9 cannot start from this candidate.
 
 ## Completion Record
 
@@ -674,5 +691,5 @@ Final commands:
 | Tests added or updated | Added ready-stage submission/bootstrap unit coverage and mixed-route/parallel/relay integration coverage; extended placement, orchestration, managed retry, mTLS role isolation, command/resource mapping, and historical SLURM regression coverage. |
 | Validated revision/tree state and evidence | Final `make validate-pr` passed: Ruff, Pyright with zero errors, 2,479 default tests, 141 config-extra tests with 3 environment-dependent skips, and source/wheel builds. Final focused matrix passed 60 unit and 21 integration tests. |
 | Validation-relevant changes after evidence | Only this roadmap metadata is updated after the successful source/test gate. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | Independent expanded-path review and CI remain. Real-cluster execution is opt-in and was not available locally. Phase 8 still owns run-level cancellation/profile reload and Phase 9 still owns privileged containment/close/retry of exceptional unknown work. |
+| PR, review, and merge | PR #242 passed CI and was mergeable, but required independent review found the three accepted-contract blockers; it closed without merge after correction 3/3. |
+| Residual risk and cleanup | Candidate branch/worktree remain read-only evidence. Any approved recovery must start from current `develop`, selectively reuse the candidate, sanitize only ready-stage submission, introduce assignment-bound one-use bootstrap authority, continue past route-local waits, and add fresh-process restart evidence. It must not stack this PR or support its unmerged schema. |
