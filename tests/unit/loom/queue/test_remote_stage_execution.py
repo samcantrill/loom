@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+import loom.queue._remote_stage_execution as remote_stage_execution
+import loom.queue.agent_sessions as agent_sessions
 from loom.artifacts import ArtifactRef
 from loom.pipeline.execution.models import StageWorkerRequest, StageWorkerResult
 from loom.pipeline.planning import StageFingerprintPayload, StageFingerprintRecord
@@ -32,12 +34,14 @@ from loom.queue.agent_session_transport import _RemoteAgentJournal
 from loom.queue._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
+    TRANSFER_CHUNK_BYTES,
     ResidentExecutionProfile,
     ResidentProfileDescriptor,
     _DeliveredExecutionRequest,
     _RemoteArtifact,
     _RemoteAssignmentWorkspace,
     _RemoteExecutionReport,
+    _RemoteOutputArtifact,
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError
 from loom.scheduling import (
@@ -356,8 +360,70 @@ def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -
     assert str(workspace.root) not in str(report.to_dict())
 
 
+def test_input_publish_before_commit_replay_adopts_only_exact_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _profile(tmp_path)
+    data = b"a" * (TRANSFER_CHUNK_BYTES + 7)
+    initial = _request(profile)
+    request = replace(
+        initial,
+        inputs=(
+            replace(
+                initial.inputs[0],
+                digest=hashlib.sha256(data).hexdigest(),
+                size_bytes=len(data),
+            ),
+        ),
+    )
+    workspace = _RemoteAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace.persist_request(request, profile)
+    first = data[:TRANSFER_CHUNK_BYTES]
+    final = data[TRANSFER_CHUNK_BYTES:]
+    assert workspace.stage_input_chunk("input-1", 0, first, final=False) == len(first)
+
+    original_publish = remote_stage_execution._publish_staged_file
+
+    def crash_after_publish(staging: Path, target: Path) -> None:
+        original_publish(staging, target)
+        raise RuntimeError("simulated crash after input publication")
+
+    monkeypatch.setattr(
+        remote_stage_execution, "_publish_staged_file", crash_after_publish
+    )
+    with pytest.raises(RuntimeError, match="after input publication"):
+        workspace.stage_input_chunk("input-1", len(first), final, final=True)
+    monkeypatch.setattr(
+        remote_stage_execution, "_publish_staged_file", original_publish
+    )
+
+    assert (
+        workspace.stage_input_chunk("input-1", len(first), final, final=True)
+        == len(data)
+    )
+    with sqlite3.connect(workspace._db) as conn:
+        assert conn.execute(
+            "SELECT received_bytes, finalized FROM transfers WHERE transfer_id = ?",
+            ("input-1",),
+        ).fetchone() == (len(data), 1)
+        conn.execute(
+            "UPDATE transfers SET received_bytes = ?, finalized = 0 "
+            "WHERE transfer_id = ?",
+            (len(first), "input-1"),
+        )
+        conn.commit()
+    (workspace.root / "inputs" / "source").write_bytes(b"conflict")
+    with pytest.raises(QueueConflictError, match="conflicts with durable identity"):
+        workspace.stage_input_chunk("input-1", len(first), final, final=True)
+    with sqlite3.connect(workspace._db) as conn:
+        assert conn.execute(
+            "SELECT received_bytes, finalized FROM transfers WHERE transfer_id = ?",
+            ("input-1",),
+        ).fetchone() == (len(first), 0)
+
+
 def test_targeted_current_poll_delivers_only_the_exact_durable_request(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     capabilities = (
         "python",
@@ -482,6 +548,130 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
         )
         assert chunk["next_offset"] == 5
         assert chunk["final"] is True
+        output_data = b"o" * (TRANSFER_CHUNK_BYTES + 11)
+        output = _RemoteOutputArtifact(
+            "output-1",
+            "result",
+            hashlib.sha256(output_data).hexdigest(),
+            len(output_data),
+            "result.data",
+            "bytes",
+            None,
+            1,
+            None,
+            None,
+            None,
+        )
+        with sqlite3.connect(config.control_database) as conn:
+            conn.execute(
+                "UPDATE remote_assignments SET state = 'RUNNING', fence = ? "
+                "WHERE assignment_id = ?",
+                ("fence-1", request.assignment_id),
+            )
+            conn.commit()
+        view.declare_outputs(
+            session.session_id,
+            request.assignment_id,
+            fence="fence-1",
+            authorization_id=str(renewed["authorization_id"]),
+            authorization_revision=2,
+            report=_RemoteExecutionReport(
+                request.assignment_id,
+                request.stage_name,
+                request.attempt,
+                StageStatus.SUCCEEDED,
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:01Z",
+                "local",
+                outputs=(output,),
+                exit_code=0,
+            ),
+        )
+        first_output = output_data[:TRANSFER_CHUNK_BYTES]
+        final_output = output_data[TRANSFER_CHUNK_BYTES:]
+        view.upload_output_chunk(
+            session.session_id,
+            request.assignment_id,
+            output.transfer_id,
+            offset=0,
+            data=first_output,
+            final=False,
+            authorization_id=str(renewed["authorization_id"]),
+            authorization_revision=2,
+        )
+        original_publish = agent_sessions._publish_staged_file
+
+        def crash_after_publish(staging: Path, target: Path) -> None:
+            original_publish(staging, target)
+            raise RuntimeError("simulated crash after output publication")
+
+        monkeypatch.setattr(
+            agent_sessions, "_publish_staged_file", crash_after_publish
+        )
+        with pytest.raises(RuntimeError, match="after output publication"):
+            view.upload_output_chunk(
+                session.session_id,
+                request.assignment_id,
+                output.transfer_id,
+                offset=len(first_output),
+                data=final_output,
+                final=True,
+                authorization_id=str(renewed["authorization_id"]),
+                authorization_revision=2,
+            )
+        monkeypatch.setattr(agent_sessions, "_publish_staged_file", original_publish)
+        assert view.upload_output_chunk(
+            session.session_id,
+            request.assignment_id,
+            output.transfer_id,
+            offset=len(first_output),
+            data=final_output,
+            final=True,
+            authorization_id=str(renewed["authorization_id"]),
+            authorization_revision=2,
+        ) == {
+            "transfer_id": output.transfer_id,
+            "received_bytes": len(output_data),
+            "final": True,
+        }
+        output_target = (
+            config.coordinator_root
+            / "remote-relay"
+            / request.assignment_id
+            / "outputs"
+            / output.logical_name
+        )
+        assert output_target.read_bytes() == output_data
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute(
+                "SELECT received_bytes, finalized FROM remote_transfers "
+                "WHERE assignment_id = ? AND direction = 'output' AND transfer_id = ?",
+                (request.assignment_id, output.transfer_id),
+            ).fetchone() == (len(output_data), 1)
+            conn.execute(
+                "UPDATE remote_transfers SET received_bytes = ?, finalized = 0 "
+                "WHERE assignment_id = ? AND direction = 'output' AND transfer_id = ?",
+                (len(first_output), request.assignment_id, output.transfer_id),
+            )
+            conn.commit()
+        output_target.write_bytes(b"conflict")
+        with pytest.raises(QueueConflictError, match="conflicts with durable identity"):
+            view.upload_output_chunk(
+                session.session_id,
+                request.assignment_id,
+                output.transfer_id,
+                offset=len(first_output),
+                data=final_output,
+                final=True,
+                authorization_id=str(renewed["authorization_id"]),
+                authorization_revision=2,
+            )
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute(
+                "SELECT received_bytes, finalized FROM remote_transfers "
+                "WHERE assignment_id = ? AND direction = 'output' AND transfer_id = ?",
+                (request.assignment_id, output.transfer_id),
+            ).fetchone() == (len(first_output), 0)
         retained_input = (
             config.coordinator_root
             / "remote-relay"

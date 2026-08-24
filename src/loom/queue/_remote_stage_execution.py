@@ -1006,6 +1006,24 @@ class _RemoteAssignmentWorkspace:
                         "input replay conflicts with durable bytes"
                     )
                 return int(row["size_bytes"])
+            if _published_file_matches(
+                target,
+                size_bytes=int(row["size_bytes"]),
+                digest=str(row["digest"]),
+            ):
+                received = int(row["size_bytes"])
+                conn.execute(
+                    "UPDATE transfers SET received_bytes = ?, finalized = 1 "
+                    "WHERE transfer_id = ?",
+                    (received, transfer_id),
+                )
+                if offset + len(data) > received:
+                    raise QueueConflictError("input replay exceeds durable content")
+                existing = _read_regular_file_range(target, offset, len(data))
+                if existing != data:
+                    raise QueueConflictError("input replay conflicts with durable bytes")
+                conn.commit()
+                return received
             received = _append_exact_chunk(part, offset, received, data)
             if received > int(row["size_bytes"]):
                 raise QueueConflictError("input transfer exceeds its durable size")
@@ -1532,6 +1550,18 @@ def _file_digest(path: Path) -> str:
     finally:
         os.close(descriptor)
     return hasher.hexdigest()
+
+
+def _published_file_matches(path: Path, *, size_bytes: int, digest: str) -> bool:
+    try:
+        details = path.lstat()
+    except FileNotFoundError:
+        return False
+    if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
+        raise QueueConflictError("remote transfer target is not a regular file")
+    if details.st_size != size_bytes or _file_digest(path) != digest:
+        raise QueueConflictError("remote transfer target conflicts with durable identity")
+    return True
 
 
 def _publish_staged_file(staging: Path, target: Path) -> None:

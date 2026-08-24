@@ -38,8 +38,10 @@ from ._remote_stage_execution import (
     _atomic_regular_file,
     _encode_chunk,
     _file_digest,
+    _published_file_matches,
     _publish_staged_file,
     _read_regular_file_bytes,
+    _read_regular_file_range,
     _reject_path_bearing_data,
 )
 
@@ -1814,6 +1816,25 @@ class AgentSessionService:
                         raise QueueConflictError(
                             "output replay conflicts with durable bytes"
                         )
+                return freeze_plain_data(
+                    {"transfer_id": transfer_id, "received_bytes": size, "final": True},
+                    path="remote output chunk",
+                )
+            if _published_file_matches(
+                target, size_bytes=size, digest=str(row["digest"])
+            ):
+                received = size
+                conn.execute(
+                    "UPDATE remote_transfers SET received_bytes = ?, finalized = 1 "
+                    "WHERE assignment_id = ? AND direction = 'output' "
+                    "AND transfer_id = ?",
+                    (received, assignment_id, transfer_id),
+                )
+                if offset + len(data) > size:
+                    raise QueueConflictError("output replay exceeds durable content")
+                if _read_regular_file_range(target, offset, len(data)) != data:
+                    raise QueueConflictError("output replay conflicts with durable bytes")
+                conn.commit()
                 return freeze_plain_data(
                     {"transfer_id": transfer_id, "received_bytes": size, "final": True},
                     path="remote output chunk",
