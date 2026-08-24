@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 5A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p5a-remote-stage-execution-replay-closure`
@@ -191,9 +191,11 @@ Final commands:
   tests, and stop conditions recorded
 - Expanded planning: not needed; accepted contracts are complete and the one
   crash window has a concrete minimum remedy
-- Implementation: pending
+- Implementation: complete at `4134d70` (`947cb87` selectively restores the
+  approved Phase 5 source/test candidate without its superseded roadmap
+  metadata; `4134d70` closes the replay window)
 - Refiner: not needed unless one qualified blocker consumes a correction pass
-- Pre-submit gate: pending
+- Pre-submit gate: complete at stable source/test revision `4134d70`
 - Independent review: required after the manager gate because the repaired
   boundary publishes executable input and authoritative output across crashes
 - Blocker corrections: 0/3
@@ -203,9 +205,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Selectively restored the approved Phase 5 remote-stage execution source/test vertical path in `src/loom/pipeline/execution/managed_local.py`, `src/loom/pipeline/execution/stage_worker.py`, `src/loom/queue/_remote_stage_execution.py`, `src/loom/queue/_resident_stage_worker.py`, `src/loom/queue/agent_session_transport.py`, `src/loom/queue/agent_sessions.py`, `src/loom/queue/local_daemon.py`, `src/loom/queue/local_daemon_execution.py`, and `src/loom/queue/local_daemon_runtime.py`. The agent input workspace and coordinator output relay now adopt an exact, no-follow regular final target after a publish-before-commit crash, finalizing it in their existing SQLite transaction before enforcing normal replay range/byte checks. |
+| Tests added or updated | Restored the Phase 5 focused test changes in `tests/integration/queue/test_agent_session_transport.py`, `tests/unit/loom/pipeline/execution/test_managed_local.py`, `tests/unit/loom/queue/test_agent_sessions.py`, and `tests/unit/loom/queue/test_remote_stage_execution.py`. Added multi-chunk post-publication crash/replay and conflicting-final-target coverage for both input and output finalization in `test_remote_stage_execution.py`. Focused evidence: remote workspace `10 passed`; agent sessions `18 passed`; current transport harness `10 passed`; current local-daemon harness `16 passed`. The two plan-listed paths that are absent in this checkout were run at their current equivalent locations: integration `test_agent_session_transport.py` and unit `test_local_daemon.py`. |
+| Validated revision/tree state and evidence | At stable source/test revision `4134d70`, `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed (Ruff, Pyright, default/config-extra harnesses, and build). `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md`: package 118 passed; unit 1,733 passed; contract 295 passed; integration 233 passed; e2e 57 passed; config-extra 141 passed/3 skipped. |
+| Validation-relevant changes after evidence | None. This completion-record update is documentation-only. |
+| PR, review, and merge | Not prepared by executor; independent review remains required and PR/merge remain pending. |
+| Residual risk and cleanup | No product blocker or new contract decision found. The accepted bounded relay-throughput/retained-output debt remains deferred as planned; worktree and branch cleanup await manager workflow. |
