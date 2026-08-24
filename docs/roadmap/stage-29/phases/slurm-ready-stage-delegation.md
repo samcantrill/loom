@@ -2,15 +2,18 @@
 
 ## Metadata
 
-- Status: pending
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 7
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p7-slurm-ready-stage-delegation`
-- Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop` after Phase 6 remotely merges
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p7-slurm-ready-stage-delegation`
+- Base revision: clean `origin/develop`
+  `b57d65d7790e88eb63bf25f1ff98c762d4853aa2`
 - PR target: `develop`
 - PR title: `feat(scheduling): delegate explicit ready stages to SLURM`
-- Dependencies: Phase 6 remotely merged; Phase 1 provides immutable route,
+- Dependencies: Phase 6 [PR #241](https://github.com/samcantrill/loom/pull/241)
+  passed CI and squash-merged as `2c6d366`; Phase 1 provides immutable route,
   ready-work, request, and descriptor contracts; Phase 2 provides tagged
   assignments, authority bind/grant/fence, and the execution-only stage worker;
   Phase 3 provides crash-durable coordinator state and scoped application
@@ -18,10 +21,26 @@
 - Workflow path: expanded because a durable database mutation, an external
   nontransactional `sbatch` side effect, a scheduler-started bootstrap, an
   authority grant, and output commit interact causally
-- Blockers: Phase 6 remote merge; the executor must confirm the current SLURM
-  command/mapping/script seams and Phase 2/5 handoff shapes on its exact base
+- Blockers: required independent review found that inherited `SBATCH_*`
+  variables can weaken the protected request and export coordinator secrets,
+  the bootstrap credential authorizes a whole profile rather than one exact
+  assignment, and the first unavailable SLURM route can prevent independent
+  managed work from running. Correction `3/3` was exhausted.
+  [PR #242](https://github.com/samcantrill/loom/pull/242) closed without merge.
+  A fresh recovery cannot be shaped until the maintainer selects a supported
+  site-owned channel that delivers one assignment capability only to the
+  allocated job, outside scripts, arguments, scheduler metadata, and
+  environment.
 
 ## Objective And Context
+
+This plan is retained as read-only execution evidence. Candidate `3515400`
+completed the vertical path below and passed the full local and CI gates; it is
+not an accepted implementation because the production submit environment can
+override hard directives or disclose secrets, bootstrap authorization is not
+assignment-scoped, and blocked SLURM work can starve an independent managed
+stage. The hard cut-over remains intentional; these findings are current
+correctness and security failures, not compatibility requirements.
 
 - Vertical outcome: once an exact stage attempt becomes dependency-ready, a
   stage explicitly configured with one authorized SLURM profile is submitted as
@@ -612,27 +631,37 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending after Phase 6 remotely merges; rediscover exact
-  contracts and prepare one worktree from current `origin/develop`
-- Expanded planning: required at phase time only if current source/harness
-  materially changes the external-call, bootstrap trust, or durable compatibility
-  boundary recorded here
-- Implementation: pending; one `loom_phase_executor`
-- Refiner: not needed unless the executor returns one qualified blocker
-- Pre-submit gate: pending manager-local validation and diff/contract review
-- Independent review: expected because the phase contains an external submit
-  ambiguity and remote execution authorization boundary; confirm against the
-  current workflow risk at phase preparation
-- Blocker corrections: 0/3
-- PR and merge: pending; squash merge to `develop` after all gates pass
+- Manager preparation: complete at clean `origin/develop` `b57d65d`; dedicated
+  branch/worktree, repository, Phase 6 merge, route, assignment/start, worker,
+  relay/result, command seams, selectors, target/title, and stops were verified
+- Expanded planning: no extra phase-planner pass was needed; required
+  independent implementation review remained because this phase crosses the
+  external-submit and remote-bootstrap trust boundaries
+- Implementation: validated candidate `3515400` completed explicit
+  route/profile resolution, atomic run/profile reservation, at-most-one
+  submission, fixed bootstrap, authority fence/start, relay/result, scheduler
+  observation, diagnostics, and mixed-route composition
+- Refiner and manager corrections: all three passes consumed by exact operation
+  discovery, the atomic one-start permit, and the hard-cut production
+  composition plus restart/identity/credential-role/managed-decline fixes
+- Pre-submit gate: `make validate-pr` passed on `3515400`; `make test-summary`
+  recorded 2,620 passes and 3 environment-dependent skips; PR #242 passed CI
+- Independent review: blocked merge because ready-stage `sbatch` inherited
+  override and secret-bearing coordinator variables, a profile credential could
+  claim another same-profile assignment, and one unavailable SLURM route could
+  starve independent managed work. It also requested fresh-process restart
+  coverage for `SUBMITTING`, `ACCEPTED`, and `UNKNOWN` without another `sbatch`.
+- Blocker corrections: 3/3 exhausted
+- PR and merge: PR #242 closed without merge; branch/worktree retained as
+  read-only evidence. Phases 8 and 9 cannot start from this candidate.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added the candidate strict placement/profile shape; durable ready-stage request/submission and tagged-assignment owners; fixed bootstrap CLI/application role; coordinator dispatch/reconciliation, fence/start/result relay, scheduler observation/status, and exact cancel primitive. Historical whole-run SLURM remains separate. |
+| Tests added or updated | Added ready-stage submission/bootstrap unit coverage and mixed-route/parallel/relay integration coverage; extended placement, orchestration, managed retry, mTLS role isolation, command/resource mapping, and historical SLURM regression coverage. |
+| Validated revision/tree state and evidence | Candidate `3515400`: Ruff and Pyright passed; 2,479 default and 141 config-extra tests passed with 3 environment-dependent skips; source/wheel builds passed; focused 60-unit/21-integration matrix and CI passed. |
+| Validation-relevant changes after evidence | Blocked roadmap metadata only. |
+| PR, review, and merge | PR #242 passed CI but required independent review found three accepted-contract blockers; it closed without merge after correction 3/3. |
+| Residual risk and cleanup | Candidate branch/worktree remain read-only evidence. Any approved recovery must start from current `develop`, selectively reuse the candidate, isolate the ready-stage submit environment, use a site-owned job-private assignment-capability channel, continue past route-local waits, add fresh-process restart evidence, and reject the unmerged candidate schema. The exact site delivery channel is not repository-native and remains a maintainer decision. |
