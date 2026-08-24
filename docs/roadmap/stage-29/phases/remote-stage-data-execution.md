@@ -2,21 +2,31 @@
 
 ## Metadata
 
-- Status: pending
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 5
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p5-remote-stage-data-execution`
-- Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop` after Phase 4A remotely merges
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p5-remote-stage-data-execution`
+- Base revision: clean `origin/develop`
+  `4d0a9bb6708752d711701885a793dd28b915571d`
 - PR target: `develop`
 - PR title: `feat(scheduling): execute stages on remote agents`
-- Dependencies: Phase 4A merged with authenticated role views, agent sessions,
+- Dependencies: Phase 4A [PR #239](https://github.com/samcantrill/loom/pull/239)
+  squash-merged as `2d273b8` with authenticated role views, agent sessions,
   safe CPU/memory offers, long-poll ownership, and a passing no-launch transport
   gate; Phase 2 provides the assignment/grant/launch saga
 - Workflow path: expanded because authenticated control, artifact bytes,
   cross-host process launch, coordinator outage, and replay interact causally
-- Blockers: Phase 4A remote merge; remote launch must remain disabled until the
-  Phase 4A security/connectivity receipt is verified on the implementation tree
+- Blockers: the required independent review found a publish-before-SQLite-commit
+  crash window in both input and output transfer finalization. After the rename
+  publishes verified bytes and removes the staging file, a crash can leave the
+  durable transfer row unfinished; exact replay then rejects the missing/short
+  staging file and strands the assignment. Correction 3/3 is exhausted, so this
+  phase stops without a PR. The maintainer-approved hard cut-over remains:
+  protected resident profiles and paths stay agent-local, wire requests are
+  path-free, and old protocol/root/request schemas receive no compatibility or
+  migration support.
 
 ## Objective And Context
 
@@ -478,25 +488,29 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 4A merge, worktree/base recording, and
-  exact artifact/process/transport rediscovery
-- Expanded planning: required by remote code/data/outage interaction; phase plan
-  finalized
-- Implementation: pending
-- Refiner: not used
-- Pre-submit gate: pending
-- Independent review: expected because this is the first remote code and data
-  execution phase; confirm during preparation
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation and expanded planning: complete; the final hard-cutover
+  resident-profile/assignment-workspace boundary was maintainer-approved
+- Implementation: complete at source/test candidate `d536a1e`; global CPU/memory
+  placement, path-free delivery, bounded relay, durable grant/start/result,
+  contained resident process, authority commit, replay, and release are wired
+  through production direct and HTTP paths
+- Pre-submit gate: complete. `make validate-pr` passed 2,435 default and 141
+  configuration-extra tests with 3 expected skips plus lint, zero-error pyright,
+  and builds; fresh `make test-summary` recorded 2,576 categorized passes
+- Independent review: complete; one product blocker found. Input and output
+  publication precede matching SQLite finalization, so exact post-publication
+  crash replay must verify and adopt an already-published target. No other
+  product blocker was found; the focused 50-test matrix passed.
+- Blocker corrections: 3/3 exhausted
+- PR and merge: no PR opened; phase blocked and retained as evidence
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Candidate `d536a1e` adds the private resident request/workspace/worker and regular-file relay, extends authenticated direct/HTTP operations, composes global local/remote scheduling and authority lifecycle, and keeps resident paths agent-local. |
+| Tests added or updated | Unit and integration coverage exercises hard-cutover codecs, path/link/size/digest rejection, delivery, transfer, process, restart/outage, authority, result, and release behavior; the missing causal case is a crash after final file publication but before SQLite commit. |
+| Validated revision/tree state and evidence | `make validate-pr` passed 2,435 default and 141 configuration-extra tests with 3 expected skips plus builds; fresh categorized summary recorded 2,576 passes; required review's focused matrix passed 50 tests. |
+| Validation-relevant changes after evidence | Roadmap status/evidence metadata only. |
+| PR, review, and merge | Required review found the transfer-finalization crash-replay blocker; no PR opened and no merge attempted. |
+| Residual risk and cleanup | A crash after verified publication but before transfer-row commit can strand input before grant or output before terminal commit. Correction 3/3 is exhausted; branch/worktree retained as read-only evidence and Phase 5A owns the narrow closure. |
