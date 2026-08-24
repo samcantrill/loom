@@ -2,21 +2,25 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 6
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p6-gpu-preference-placement`
-- Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop` after Phase 5 remotely merges
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p6-gpu-preference-placement`
+- Base revision: clean `origin/develop`
+  `34acb214b8c9e09a442637021742fbc7b4104257`
 - PR target: `develop`
 - PR title: `feat(scheduling): add GPU and preference placement`
-- Dependencies: Phase 5 merged with authenticated multi-agent CPU/memory
+- Dependencies: Phase 5A [PR #240](https://github.com/samcantrill/loom/pull/240)
+  squash-merged as `5116f18` with authenticated multi-agent CPU/memory
   scheduling, remote assignment/data execution, exact capacity accounting, and
-  reconnect behavior; Phase 1 provides generic resource/rule/policy contracts
-- Workflow path: expanded because discrete devices, optional sharing, global
-  capacity, hard feasibility, and soft ranking interact causally
-- Blockers: Phase 5 remote merge; opt-in hardware evidence is optional and must
-  not block simulated/default CI
+  crash-replay closure; Phase 1 provides generic resource/rule/policy contracts
+- Workflow path: expanded because exact device/provider accounting and
+  wait-then-fallback preference ranking interact at the production assignment
+  boundary; use one bounded phase-planner refinement and one independent review
+- Blockers: none. Opt-in hardware evidence is optional and must not block
+  simulated/default CI.
 
 ## Objective And Context
 
@@ -36,12 +40,27 @@
 
 ## Current Source And Harness
 
-- Reuse Stage 27 local GPU discovery, assignment plans/providers, capability and
-  acceptance tests where their current contracts remain valid.
-- Reuse Phase 1 `ResourcePlanner`, rule/scorer/policy, exact quantity, capacity
-  atom, descriptor, claim-contract, registry, and conformance seams.
-- Reuse Phase 5 global snapshots, offers, assignments, transfer/execution loop,
-  availability reconciliation, and loopback multi-agent harness.
+- Stage 27 ownership is isolated in `src/loom/queue/gpu/local.py`: inventory and
+  deterministic layout values, `_LocalGpuAssignmentProvider` device leasing,
+  and `CUDA_VISIBLE_DEVICES` binding are reusable evidence, not the production
+  Phase 6 provider seam. `src/loom/queue/gpu/nvidia.py` remains optional.
+- Reuse `src/loom/pipeline/runtime/scheduling_resources.py` and the Phase 1
+  `ResourcePlanner`, exact quantity, capacity atom, descriptor, claim-contract,
+  registry, and conformance seams. `src/loom/scheduling/kernel.py` already owns
+  hard-before-soft evaluation, checked tier vectors, quality-band fallback from
+  immutable `ready_at`/`as_of`, stable ties, and output validation; Phase 6 must
+  not reproduce those algorithms.
+- Extend the current production seam in
+  `src/loom/queue/local_daemon_execution.py`: `LocalDaemonExecution.__init__`
+  composes only CPU/memory planners/providers and `_remote_candidates` projects
+  only CPU/memory `AgentOffer` capacity. Selected composite claims already flow
+  through `_execute`, `ClaimCommand`, and
+  `SQLiteAgentJournal.prepare_composite` for local and remote execution.
+- `src/loom/queue/agent_sessions.py`,
+  `src/loom/queue/agent_session_transport.py`, and
+  `src/loom/queue/_remote_stage_execution.py` own the offer, physical admission,
+  resident profile, request/claim, and worker-launch boundaries. Remote launch
+  currently carries claims but applies no GPU-specific local binding.
 - Real GPU/vendor calls remain optional adapters. Deterministic fake inventory
   and providers own required CI coverage; do not add a heavyweight vendor SDK
   without a demonstrated current need.
@@ -323,10 +342,11 @@ kernel branches, or allow preferences to change feasibility.
 2. Implement GPU planner and agent provider adapters with exact device/share
    bind/reconcile/activate/release, composite CPU/memory/GPU admission, and
    concurrency/drift/crash tests.
-3. Keep GPU-intrinsic requirements in the planner; add complete-placement
-   target/agent/cross-resource hard rules, stage-relevant agent/model/attribute/
-   packing preferences, checked site-tier vectors, quality bands, durable-time
-   fallback, safe explanations, and deterministic permutation tests.
+3. Keep GPU-intrinsic requirements in the planner; add only the concrete
+   complete-placement target/agent/cross-resource rules and stage-relevant
+   agent/model/attribute/packing scorers and registrations. Reuse the kernel's
+   existing checked site-tier vectors, quality bands, durable-time fallback,
+   validation, and stable ties; add focused integration and permutation tests.
 4. Integrate multi-agent GPU stage execution, synthetic downstream resource,
    status/docs/config examples, simulated E2E, and optional real-GPU receipt.
 
@@ -340,7 +360,13 @@ kernel branches, or allow preferences to change feasibility.
 | Integration | Required | Global capacity and exact bind | Concurrent device claims, pool overlap, external occupancy withdrawal, drift decline, release and retry |
 | E2E / opt-in | Required simulated; optional GPU | Stage-specific placement | CPU preprocess/GPU train across logical agents; optional configured hardware receipt |
 
-Targeted commands are fixed during phase preparation. Final commands:
+Targeted commands:
+
+    .venv/bin/pytest -q tests/unit/loom/pipeline/test_runtime_resources.py tests/unit/loom/scheduling/test_kernel.py
+    .venv/bin/pytest -q tests/unit/loom/queue/gpu/test_local.py tests/contracts/test_local_gpu_assignment_provider.py tests/contracts/test_local_gpu_inventory_provider.py
+    .venv/bin/pytest -q tests/unit/loom/queue/test_remote_stage_execution.py tests/integration/queue/test_agent_session_transport.py
+
+Final commands:
 
     make validate-pr
     make test-summary
@@ -366,8 +392,9 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 ## Executor Handoff
 
-- Read this file, Phase 5 completion record, manifest resource constraints, and
-  planning FR-5–FR-8, FR-11, FR-19, FR-22–FR-24, and FR-26.
+- Read this file from `Current Source And Harness` through `Risks, Review, And
+  Stops`, the Phase 5A completion record, and the manifest resource/security
+  constraints cited here.
 - Prove exact simulated behavior before optional hardware tests. Do not make
   default CI depend on a GPU or vendor library.
 - Decisions not to revisit: integer CPU, byte-exact VRAM, explicit GPU modes,
@@ -379,15 +406,18 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 5 merge, worktree/base recording, and
-  exact Stage 27/provider/test rediscovery
-- Expanded planning: required by resource/provider/global accounting interaction;
-  phase plan finalized
+- Manager preparation: complete at clean `origin/develop` `34acb21`; dedicated
+  branch/worktree, repository `samcantrill/loom`, verified Phase 5A merge,
+  current Stage 27 and Phase 5A source owners, target/title, tests, and stop
+  conditions recorded
+- Expanded planning: one bounded refinement pending for the exact provider/
+  offer/binding composition and already-owned preference algebra
 - Implementation: pending
 - Refiner: not used
 - Pre-submit gate: pending
-- Independent review: decide during preparation from concrete provider and
-  accounting risk
+- Independent review: required after the manager gate because GPU claims cross
+  configured inventory, coordinator selection, agent physical binding, and
+  worker environment boundaries
 - Blocker corrections: 0/3
 - PR and merge: pending
 
