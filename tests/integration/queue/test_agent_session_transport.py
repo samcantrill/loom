@@ -30,6 +30,8 @@ from loom.pipeline.execution.managed_local import (
     ManagedAssignment,
     SQLiteAgentJournal,
 )
+from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import CpuResourcePlanner
 from loom.pipeline.status import RunStatus, StageStatus
@@ -698,9 +700,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
     )
     local_gpu = GpuDeviceDescriptor("local-safe", "small", 80 * 1024**3)
     remote_gpu = GpuDeviceDescriptor("remote-safe", "large", 80 * 1024**3)
-    remote_busy_gpu = GpuDeviceDescriptor(
-        "remote-busy", "large", 80 * 1024**3
-    )
+    remote_busy_gpu = GpuDeviceDescriptor("remote-busy", "large", 80 * 1024**3)
     local_binding = "local-private-binding"
     remote_binding = "remote-private-binding"
     capabilities = (
@@ -805,9 +805,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
             1,
             0,
             30,
-            _resident_provider_descriptors(
-                profile, str(session_value["agent_id"])
-            ),
+            _resident_provider_descriptors(profile, str(session_value["agent_id"])),
             resident_profiles=(profile_descriptor,),
             gpu_devices=(remote_busy_gpu, remote_gpu),
             # The first configured device is externally occupied. Inventory
@@ -985,9 +983,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
             )
         delivered_provider = next(
             item
-            for item in cast(
-                list[dict[str, object]], delivered["provider_descriptors"]
-            )
+            for item in cast(list[dict[str, object]], delivered["provider_descriptors"])
             if item["kind"] == "gpu"
         )
         assert receipt_provider != receipt_planner
@@ -2163,5 +2159,86 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
     finally:
         client.close()
         agent.close()
+        server.stop()
+        daemon.stop()
+
+
+def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
+    tmp_path: Path,
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    profile = SlurmReadyStageProfile(
+        profile_id="training",
+        partition="gpu",
+        max_outstanding=1,
+        bootstrap_argv=("loom", "slurm-bootstrap"),
+        runner=FakeSlurmCommandRunner(),
+        command_adapter_fingerprint="fake-slurm-v1",
+        bootstrap_principal_id="slurm-principal",
+        credential_reference="slurm-credential",
+        coordinator_endpoint="https://coordinator.example",
+        project_fingerprint="project-v1",
+        environment_fingerprint="environment-v1",
+        executor_fingerprint="executor-v1",
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "agent-root",
+        tmp_path / "runs",
+        slurm_profiles=(profile,),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["other"].with_suffix(".crt")
+                ): "slurm-credential"
+            },
+        ),
+    )
+    server.start()
+    client = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".key"),
+        )
+    )
+    try:
+        handshake = client.handshake(role="slurm_bootstrap")
+        assert handshake["role"] == "slurm_bootstrap"
+        assert handshake["profile_id"] == "training"
+        assert handshake["credential_policy_revision"] == "slurm-policy-1"
+        capabilities = handshake["capabilities"]
+        assert isinstance(capabilities, (list, tuple))
+        assert "slurm-ready-stage-bootstrap-v1" in capabilities
+        with pytest.raises(QueueServiceError, match="role-exclusive"):
+            daemon.replace_agent_policy(
+                AgentPolicyConfig(
+                    agents=(
+                        AgentPrincipalPolicy(
+                            "slurm-credential",
+                            "agent-principal",
+                            "agent-a",
+                            ("default",),
+                            ("python",),
+                        ),
+                    )
+                )
+            )
+        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+            client.handshake(role="client")
+    finally:
+        client.close()
         server.stop()
         daemon.stop()

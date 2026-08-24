@@ -157,7 +157,13 @@ def _map_memory(
             f"{path} conflicts with SlurmOptions.mem_per_cpu"
         )
     amount = _positive_int(entry.amount, path=f"{path}.amount")
-    if entry.unit == "MiB":
+    if entry.unit == "B":
+        if amount % (1024**2):
+            raise SlurmResourceMappingError(
+                f"{path}.amount must be an exact MiB multiple for SLURM"
+            )
+        value = f"{amount // (1024**2)}M"
+    elif entry.unit == "MiB":
         value = f"{amount}M"
     elif entry.unit == "GiB":
         value = f"{amount}G"
@@ -165,7 +171,7 @@ def _map_memory(
         value = f"{amount}T"
     else:
         raise SlurmResourceMappingError(
-            f"{path}.unit must be one of MiB, GiB, TiB for deterministic SLURM mapping"
+            f"{path}.unit must be one of B, MiB, GiB, TiB for deterministic SLURM mapping"
         )
     return SlurmSbatchDirective(name="mem", value=value, source="resource:memory")
 

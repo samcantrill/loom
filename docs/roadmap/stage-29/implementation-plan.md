@@ -9,9 +9,9 @@ Target branch: `develop`
 Current phase: Phase 7 `in_progress`
 Blockers: none. Phase 6 independent-review findings were closed by final
 correction `75cd70a`; [PR #241](https://github.com/samcantrill/loom/pull/241)
-passed CI and squash-merged into `develop` as `2c6d366`. Phase 7 manager
-preparation is complete on clean base `b57d65d`; no implementation blocker is
-known.
+passed CI and squash-merged into `develop` as `2c6d366`. Phase 7 implementation
+and the manager-local validation gate are complete on base `b57d65d`; expanded
+independent review and PR/CI remain.
 
 ## Summary
 

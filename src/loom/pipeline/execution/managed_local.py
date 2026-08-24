@@ -1516,7 +1516,23 @@ class SQLiteCoordinatorAssignments:
                 "SELECT assignment_id FROM coordinator_assignments WHERE stage_work_id = ? AND state IN ('reserved','bound','accepted','granted','running','unknown')",
                 (assignment.stage_work_id,),
             ).fetchone()
-            if work is not None:
+            has_slurm_assignments = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE type = 'table' "
+                    "AND name = 'slurm_stage_assignments'"
+                ).fetchone()
+                is not None
+            )
+            slurm_work = (
+                conn.execute(
+                    "SELECT assignment_id FROM slurm_stage_assignments "
+                    "WHERE stage_work_id = ? AND state NOT IN ('rejected','released')",
+                    (assignment.stage_work_id,),
+                ).fetchone()
+                if has_slurm_assignments
+                else None
+            )
+            if work is not None or slurm_work is not None:
                 raise ManagedLocalError("stage work already has a live assignment")
             active = int(
                 conn.execute(
@@ -1524,6 +1540,14 @@ class SQLiteCoordinatorAssignments:
                     (assignment.run_uri,),
                 ).fetchone()[0]
             )
+            if has_slurm_assignments:
+                active += int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM slurm_stage_assignments WHERE run_uri = ? "
+                        "AND state NOT IN ('rejected','released')",
+                        (assignment.run_uri,),
+                    ).fetchone()[0]
+                )
             if active >= max_parallel_stages:
                 raise ManagedLocalError("run active-assignment limit reached")
             offer_row = conn.execute(
@@ -1739,7 +1763,7 @@ class SQLiteCoordinatorAssignments:
 
         with self._transaction() as conn:
             row = conn.execute(
-                "SELECT state, agent_id, session_id, offer_id "
+                "SELECT state, agent_id, session_id, offer_id, stage_work_id "
                 "FROM coordinator_assignments WHERE assignment_id = ?",
                 (assignment_id,),
             ).fetchone()
@@ -1755,6 +1779,38 @@ class SQLiteCoordinatorAssignments:
                 "UPDATE coordinator_assignments SET state = 'released' "
                 "WHERE assignment_id = ?",
                 (assignment_id,),
+            )
+            stage_work_row = conn.execute(
+                "SELECT record_json FROM stage_work WHERE stage_work_id = ?",
+                (row["stage_work_id"],),
+            ).fetchone()
+            if stage_work_row is None:
+                raise ManagedLocalError("released assignment stage work is missing")
+            try:
+                stage_work = StageWorkRecord.from_dict(
+                    json.loads(cast(str, stage_work_row["record_json"]))
+                )
+            except Exception as exc:
+                raise ManagedLocalError(
+                    "released assignment stage work is invalid"
+                ) from exc
+            if (
+                stage_work.scheduling_state is not SchedulingProjectionState.DECIDED
+                or stage_work.scheduling_diagnostics.get("assignment_id")
+                != assignment_id
+            ):
+                raise ManagedLocalError(
+                    "released assignment does not own its stage-work decision"
+                )
+            reopened = replace(
+                stage_work,
+                scheduling_state=SchedulingProjectionState.READY,
+                scheduling_diagnostics={},
+                projection_revision=stage_work.projection_revision + 1,
+            )
+            conn.execute(
+                "UPDATE stage_work SET record_json = ? WHERE stage_work_id = ?",
+                (_json(reopened.to_dict()), reopened.stage_work_id),
             )
             if reopen_offer:
                 conn.execute(
@@ -2168,25 +2224,13 @@ def run_managed_local_assignment(
             assignment_id=assignment.assignment_id,
             attempt_id=assignment.attempt_id,
         )
-        coordinator.advance(
-            assignment.assignment_id, expected="bound", next_state="terminal"
-        )
-        coordinator.advance(
-            assignment.assignment_id,
-            expected="terminal",
-            next_state="logical_released",
-        )
         availability_revision = _fresh_availability_revision(
             assignment=assignment,
             providers=providers,
             operation="declined",
         )
         journal.release_declined(assignment.assignment_id, availability_revision)
-        coordinator.advance(
-            assignment.assignment_id,
-            expected="logical_released",
-            next_state="released",
-        )
+        coordinator.release_unaccepted(assignment.assignment_id)
         _emit_assignment_event(
             journal,
             coordinator,

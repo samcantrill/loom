@@ -193,8 +193,14 @@ class SlurmCommandRunner(Protocol):
         """Cancel submitted jobs."""
         ...
 
-    def discover_operation(self, operation_marker: str) -> SlurmCommandResult:
-        """Return bounded job/comment rows for one profile-owned marker."""
+    def discover_live_operations(self) -> SlurmCommandResult:
+        """Return bounded live job/comment rows for exact local filtering."""
+        ...
+
+    def discover_accounted_operations(
+        self, *, started_after: str
+    ) -> SlurmCommandResult:
+        """Return bounded retained allocation/comment rows for local filtering."""
         ...
 
 
@@ -250,11 +256,27 @@ class SubprocessSlurmCommandRunner:
             raise SlurmPlanningError("scancel requires at least one job ID")
         return self._run("scancel", ["scancel", *ids])
 
-    def discover_operation(self, operation_marker: str) -> SlurmCommandResult:
-        _operation_marker(operation_marker)
+    def discover_live_operations(self) -> SlurmCommandResult:
         return self._run(
             "squeue",
             ["squeue", "--noheader", "--format", "%i|%k"],
+        )
+
+    def discover_accounted_operations(
+        self, *, started_after: str
+    ) -> SlurmCommandResult:
+        timestamp = _required_text(started_after, "started_after")
+        return self._run(
+            "sacct",
+            [
+                "sacct",
+                "--noheader",
+                "--parsable2",
+                "--allocations",
+                f"--starttime={timestamp}",
+                "--format",
+                "JobIDRaw,Comment,Cluster",
+            ],
         )
 
     def _run(self, command: str, argv: Sequence[str]) -> SlurmCommandResult:
@@ -369,13 +391,31 @@ class FakeSlurmCommandRunner:
             SlurmCommandResult(command="scancel", argv=argv, returncode=0),
         )
 
-    def discover_operation(self, operation_marker: str) -> SlurmCommandResult:
-        _operation_marker(operation_marker)
+    def discover_live_operations(self) -> SlurmCommandResult:
         argv = ("squeue", "--noheader", "--format", "%i|%k")
         return self._result(
             "squeue",
             argv,
             SlurmCommandResult(command="squeue", argv=argv, returncode=0),
+        )
+
+    def discover_accounted_operations(
+        self, *, started_after: str
+    ) -> SlurmCommandResult:
+        timestamp = _required_text(started_after, "started_after")
+        argv = (
+            "sacct",
+            "--noheader",
+            "--parsable2",
+            "--allocations",
+            f"--starttime={timestamp}",
+            "--format",
+            "JobIDRaw,Comment,Cluster",
+        )
+        return self._result(
+            "sacct",
+            argv,
+            SlurmCommandResult(command="sacct", argv=argv, returncode=0),
         )
 
     def _result(

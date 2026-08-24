@@ -183,6 +183,41 @@ runtime:
           profile: training
 ```
 
+This is an intentional hard cut-over for the exact managed-stage route record.
+Current records use placement schema v2 and retain `profile_id`, the complete
+profile descriptor, and its configuration fingerprint. The earlier provisional
+`profile_name`/`profile_fingerprint` shape is rejected rather than translated.
+Runs must be prepared again and daemon owner roots must be freshly initialized
+when crossing this boundary. Historical whole-run SLURM manifests and the
+single-job/`afterok` controllers use different owners and remain unchanged.
+
+Protected deployment composition supplies the concrete profile separately from
+authored stage configuration. The current built-in bootstrap executes only the
+resident local executor:
+
+```python
+from loom.pipeline.executors.slurm import SlurmReadyStageProfile
+
+profile = SlurmReadyStageProfile(
+    profile_id="training",
+    partition="gpu",
+    max_outstanding=8,
+    bootstrap_argv=("loom", "slurm-bootstrap"),
+    runner=runner,
+    command_adapter_fingerprint="site-slurm-cli-v1",
+    bootstrap_principal_id="slurm-training",
+    credential_reference="slurm-training-mtls",
+    coordinator_endpoint="https://loom.internal",
+    project_fingerprint="project-v3",
+    environment_fingerprint="environment-v2",
+    executor_fingerprint="local-executor-v1",
+)
+```
+
+The fixed bootstrap reads its protected TLS/workspace configuration from a
+private deployment-owned file and removes that file reference from the process
+environment before authored stage code runs.
+
 The profile, not authored stage data, supplies allowlisted account/partition/
 QoS, resource/directive mappings, submission limits, resident bootstrap
 environment, command adapter, credential delivery, data path, reconciliation,

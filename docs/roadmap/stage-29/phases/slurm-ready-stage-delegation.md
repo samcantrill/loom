@@ -644,30 +644,35 @@ Final commands:
 - Expanded planning: no extra planner pass needed. Current source/harness
   matches the recorded external-call, bootstrap trust, and durable compatibility
   boundaries; the independent review remains required after implementation.
-- Implementation: in progress; correction 1/3 adds the profile-owned operation
-  marker and command discovery seam before ready-stage dispatch wiring.
+- Implementation: complete in the phase worktree. The explicit route/profile,
+  atomic run/profile reservation, at-most-one submission owner, fixed bootstrap,
+  authority fence/start gate, relay/result path, scheduler observation, safe
+  diagnostics, and mixed-route coordinator composition are wired end to end.
 - Refiner: correction 2/3 completed the durable bootstrap one-start compare-and-
   swap; the production explicit-SLURM composition blocker remains for manager
   disposition because no protected profile/credential application boundary is
   currently wired into the daemon path.
-- Pre-submit gate: pending manager-local validation and diff/contract review
+- Pre-submit gate: passed manager-local diff/contract review and
+  `make validate-pr` on the final source/test tree
 - Independent review: expected because the phase contains an external submit
   ambiguity and remote execution authorization boundary; confirm against the
   current workflow risk at phase preparation
-- Blocker corrections: 2/3 — correction 1 added profile-owned operation
+- Blocker corrections: 3/3 — correction 1 added profile-owned operation
   comment/discovery rather than treating job status as identity; correction 2
   made the submission-record root-launch permit atomic across concurrent
-  bootstrap incarnations. The missing production route/profile composition is
-  still unresolved.
+  bootstrap incarnations; correction 3 supplied the approved hard-cut
+  production composition and closed manager-review recovery/identity findings,
+  including durable-intent restart, exact handle cardinality, retained process
+  identity, role-exclusive credentials, and explicit managed-decline reopening.
 - PR and merge: pending; squash merge to `develop` after all gates pass
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `src/loom/pipeline/executors/slurm/ready_stage.py` now consumes the durable root-launch permit with a conditional SQLite update, so concurrent bootstrap incarnations cannot both receive `True`. |
-| Tests added or updated | Added `tests/unit/loom/pipeline/executors/slurm/test_ready_stage.py`, which exercises two concurrent consumers of one accepted submission. |
-| Validated revision/tree state and evidence | `uv run pytest -q tests/unit/loom/pipeline/executors/slurm/test_ready_stage.py` passed (1 test). The compare-and-swap update changes the row only while its original serialized value is current. |
-| Validation-relevant changes after evidence | No changes after the focused test run. |
+| Implementation and changed paths | Added strict placement schema v2 and protected `SlurmReadyStageProfile`; durable ready-stage request/submission and tagged-assignment owners; fixed hidden bootstrap CLI/application role; explicit coordinator dispatch, restart reconciliation, fence/start/result relay, scheduler observation/status, and exact cancel primitive. Existing whole-run SLURM owners remain separate. |
+| Tests added or updated | Added ready-stage submission/bootstrap unit coverage and mixed-route/parallel/relay integration coverage; extended placement, orchestration, managed retry, mTLS role isolation, command/resource mapping, and historical SLURM regression coverage. |
+| Validated revision/tree state and evidence | Final `make validate-pr` passed: Ruff, Pyright with zero errors, 2,479 default tests, 141 config-extra tests with 3 environment-dependent skips, and source/wheel builds. Final focused matrix passed 60 unit and 21 integration tests. |
+| Validation-relevant changes after evidence | Only this roadmap metadata is updated after the successful source/test gate. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Blocked. Although operation discovery and the one-start store gate now exist, no production caller composes a protected profile, exact bootstrap credential scope, assignment reservation/bind, and `SQLiteReadyStageSubmissions` around explicit-SLURM stage work. Adding that boundary requires manager confirmation of the concrete deployment composition; no `sbatch`, authority, or historical whole-run SLURM path was changed by this correction. |
+| Residual risk and cleanup | Independent expanded-path review and CI remain. Real-cluster execution is opt-in and was not available locally. Phase 8 still owns run-level cancellation/profile reload and Phase 9 still owns privileged containment/close/retry of exceptional unknown work. |
