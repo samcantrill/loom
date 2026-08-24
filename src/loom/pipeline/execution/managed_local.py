@@ -248,6 +248,7 @@ class ClaimCommand:
     assignment: ManagedAssignment
     operation_id: str
     claim: ResourceClaim
+    provider_descriptor: SchedulingComponentDescriptor
 
     def __post_init__(self) -> None:
         if not isinstance(self.assignment, ManagedAssignment):
@@ -256,6 +257,14 @@ class ClaimCommand:
             raise ManagedLocalError("operation_id must be a non-empty string")
         if not isinstance(self.claim, ResourceClaim):
             raise ManagedLocalError("claim must be a ResourceClaim")
+        if not isinstance(self.provider_descriptor, SchedulingComponentDescriptor):
+            raise ManagedLocalError(
+                "provider_descriptor must be a scheduling component descriptor"
+            )
+        if self.provider_descriptor.kind != self.claim.resource_kind:
+            raise ManagedLocalError(
+                "provider descriptor kind must match the claim resource kind"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +332,7 @@ class ManagedOfferSnapshot:
     inventory_revision: str
     availability_revision: str
     component_descriptors: tuple[SchedulingComponentDescriptor, ...]
+    provider_descriptors: tuple[SchedulingComponentDescriptor, ...]
     atoms: tuple[CapacityAtom, ...]
     reflected_claim_ids: tuple[str, ...] = ()
 
@@ -347,17 +357,29 @@ class ManagedOfferSnapshot:
             self.component_descriptors
         ):
             raise ManagedLocalError("offer component descriptor kinds must be unique")
-        if (
-            not self.atoms
-            or any(not isinstance(item, CapacityAtom) for item in self.atoms)
-            or len({item.key for item in self.atoms}) != len(self.atoms)
+        if not self.provider_descriptors or any(
+            not isinstance(item, SchedulingComponentDescriptor)
+            for item in self.provider_descriptors
         ):
-            raise ManagedLocalError("offer capacity atoms must be non-empty and unique")
-        if {item.kind for item in self.component_descriptors} != {
-            item.owner_resource_kind for item in self.atoms
-        }:
+            raise ManagedLocalError("offer provider descriptors must not be empty")
+        if len({item.kind for item in self.provider_descriptors}) != len(
+            self.provider_descriptors
+        ):
+            raise ManagedLocalError("offer provider descriptor kinds must be unique")
+        if any(not isinstance(item, CapacityAtom) for item in self.atoms) or len(
+            {item.key for item in self.atoms}
+        ) != len(self.atoms):
+            raise ManagedLocalError("offer capacity atoms must be unique")
+        component_kinds = {item.kind for item in self.component_descriptors}
+        provider_kinds = {item.kind for item in self.provider_descriptors}
+        atom_kinds = {item.owner_resource_kind for item in self.atoms}
+        if component_kinds != provider_kinds:
             raise ManagedLocalError(
-                "offer component descriptors must match capacity atom owners"
+                "offer planner and provider descriptor kinds must match"
+            )
+        if not atom_kinds.issubset(component_kinds):
+            raise ManagedLocalError(
+                "offer capacity atom owners require planner and provider descriptors"
             )
         if any(
             not isinstance(value, str) or not value
@@ -377,6 +399,9 @@ class ManagedOfferSnapshot:
             "availability_revision": self.availability_revision,
             "component_descriptors": [
                 item.to_dict() for item in self.component_descriptors
+            ],
+            "provider_descriptors": [
+                item.to_dict() for item in self.provider_descriptors
             ],
             "atoms": [item.to_dict() for item in self.atoms],
             "reflected_claim_ids": list(self.reflected_claim_ids),
@@ -426,6 +451,7 @@ class AtomResourceProvider:
     def restore_capacity_holding(self, command: ClaimCommand) -> None:
         """Restore one durable non-released claim before any fresh offer."""
         with self._lock:
+            self._require_provider_identity(command)
             existing = self._claims.get(command.assignment.assignment_id)
             if existing is not None:
                 if existing[0].claim != command.claim:
@@ -495,6 +521,9 @@ class AtomResourceProvider:
             return self._prepare(command)
 
     def _prepare(self, command: ClaimCommand) -> ClaimResult:
+        identity_error = self._provider_identity_error(command)
+        if identity_error is not None:
+            return identity_error
         if command.claim.contract not in self.claim_contracts:
             return ClaimResult(
                 ClaimOutcome.INDETERMINATE,
@@ -548,6 +577,9 @@ class AtomResourceProvider:
             return self._reconcile(command)
 
     def _reconcile(self, command: ClaimCommand) -> ClaimResult:
+        identity_error = self._provider_identity_error(command)
+        if identity_error is not None:
+            return identity_error
         prior = self._claims.get(command.assignment.assignment_id)
         if prior is None:
             return ClaimResult(
@@ -563,6 +595,9 @@ class AtomResourceProvider:
             return self._activate(command)
 
     def _activate(self, command: ClaimCommand) -> ClaimResult:
+        identity_error = self._provider_identity_error(command)
+        if identity_error is not None:
+            return identity_error
         prior = self._claims.get(command.assignment.assignment_id)
         if prior is None or prior[0].claim.fingerprint != command.claim.fingerprint:
             return ClaimResult(
@@ -593,6 +628,9 @@ class AtomResourceProvider:
             return self._release(command)
 
     def _release(self, command: ClaimCommand) -> ClaimResult:
+        identity_error = self._provider_identity_error(command)
+        if identity_error is not None:
+            return identity_error
         prior = self._claims.get(command.assignment.assignment_id)
         if (
             prior is not None
@@ -618,6 +656,22 @@ class AtomResourceProvider:
         return ClaimResult(
             ClaimOutcome.RELEASED, command.operation_id, command.claim.fingerprint
         )
+
+    def _provider_identity_error(self, command: ClaimCommand) -> ClaimResult | None:
+        if command.provider_descriptor == self.descriptor:
+            return None
+        return ClaimResult(
+            ClaimOutcome.INDETERMINATE,
+            command.operation_id,
+            command.claim.fingerprint,
+            "provider descriptor does not match configured provider",
+        )
+
+    def _require_provider_identity(self, command: ClaimCommand) -> None:
+        if command.provider_descriptor != self.descriptor:
+            raise ManagedLocalError(
+                "retained claim provider descriptor conflicts with configuration"
+            )
 
 
 class SQLiteAgentJournal:
@@ -1514,6 +1568,31 @@ class SQLiteCoordinatorAssignments:
                 raise ManagedLocalError(
                     "decision components do not match the durable offer"
                 )
+            offered_provider_descriptors = tuple(
+                SchedulingComponentDescriptor.from_dict(value)
+                for value in cast(
+                    Sequence[Mapping[str, object]],
+                    offer["provider_descriptors"],
+                )
+            )
+            receipt_provider_descriptors = tuple(
+                SchedulingComponentDescriptor.from_dict(value)
+                for value in cast(
+                    Sequence[Mapping[str, object]],
+                    receipt_value["provider_descriptors"],
+                )
+            )
+            offered_providers_by_kind = {
+                descriptor.kind: descriptor
+                for descriptor in offered_provider_descriptors
+            }
+            if any(
+                offered_providers_by_kind.get(descriptor.kind) != descriptor
+                for descriptor in receipt_provider_descriptors
+            ):
+                raise ManagedLocalError(
+                    "decision providers do not match the durable offer"
+                )
             offered_atoms = {
                 atom.key: atom
                 for atom in (
@@ -2031,21 +2110,27 @@ def run_managed_local_assignment(
             )
         ),
     )
-    recorded_descriptors = {
+    recorded_provider_descriptors = {
         descriptor.kind: descriptor
         for descriptor in (
             SchedulingComponentDescriptor.from_dict(item)
             for item in cast(
                 Sequence[Mapping[str, object]],
-                validated_decision["component_descriptors"],
+                validated_decision["provider_descriptors"],
             )
         )
     }
-    for claim in claims:
+    for claim, command in zip(claims, commands, strict=True):
         provider = providers.get(claim.resource_kind)
         if provider is None:
             raise ManagedLocalError("no provider for claim resource kind")
-        if provider.descriptor != recorded_descriptors.get(claim.resource_kind):
+        if command.provider_descriptor != recorded_provider_descriptors.get(
+            claim.resource_kind
+        ):
+            raise ManagedLocalError(
+                "command provider descriptor does not match decision evidence"
+            )
+        if provider.descriptor != command.provider_descriptor:
             raise ManagedLocalError(
                 "decision provider descriptor does not match configured provider"
             )
@@ -2406,6 +2491,46 @@ class MemoryResourceProvider(AtomResourceProvider):
         )
 
 
+def _configured_provider_descriptor(
+    resource_kind: str,
+    atoms: Sequence[CapacityAtom],
+    *,
+    bindings: Mapping[str, str] | None = None,
+) -> SchedulingComponentDescriptor:
+    """Build safe identity for one concrete provider configuration.
+
+    Private binding values contribute to the digest but are never serialized.
+    A mapping change therefore fences retained claims without disclosing the
+    agent-local device path, token, or runtime selector that changed.
+    """
+
+    configured_atoms = tuple(sorted(atoms, key=lambda item: item.key))
+    if any(atom.owner_resource_kind != resource_kind for atom in configured_atoms):
+        raise ManagedLocalError("provider atoms must match its resource kind")
+    private_bindings = dict(bindings or {})
+    if private_bindings and set(private_bindings) != {
+        atom.local_capacity_key for atom in configured_atoms
+    }:
+        raise ManagedLocalError("provider bindings must exactly cover its atoms")
+    payload = {
+        "resource_kind": resource_kind,
+        "atoms": [atom.to_dict() for atom in configured_atoms],
+        "bindings": [
+            {"capacity_key": key, "private_value": private_bindings[key]}
+            for key in sorted(private_bindings)
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    configuration_fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return SchedulingComponentDescriptor(
+        resource_kind,
+        1,
+        "1",
+        f"loom.{resource_kind}.provider.v1",
+        configuration_fingerprint,
+    )
+
+
 class GpuResourceProvider(AtomResourceProvider):
     """Configured GPU accounting plus private exact-claim binding lookup.
 
@@ -2415,13 +2540,16 @@ class GpuResourceProvider(AtomResourceProvider):
 
     def __init__(
         self,
-        descriptor: SchedulingComponentDescriptor,
         claim_contracts: Sequence[ResourceClaimContractDescriptor],
         atoms: Sequence[CapacityAtom],
         *,
         bindings: Mapping[str, str],
     ) -> None:
-        super().__init__(descriptor, claim_contracts, atoms)
+        super().__init__(
+            _configured_provider_descriptor("gpu", atoms, bindings=bindings),
+            claim_contracts,
+            atoms,
+        )
         self._bindings = dict(bindings)
         if set(self._bindings) != {atom.local_capacity_key for atom in atoms}:
             raise ManagedLocalError("GPU bindings must exactly cover configured atoms")
@@ -2431,6 +2559,7 @@ class GpuResourceProvider(AtomResourceProvider):
     def binding_for_claim(self, command: ClaimCommand) -> tuple[str, ...]:
         """Return private worker bindings only for the exact active claim."""
         with self._lock:
+            self._require_provider_identity(command)
             prior = self._claims.get(command.assignment.assignment_id)
             if prior is None or prior[1] is not ClaimOutcome.ACTIVE:
                 raise ManagedLocalError("GPU claim is not active")
@@ -2458,6 +2587,7 @@ def _claim_command_dict(command: ClaimCommand) -> dict[str, PlainData]:
     return {
         "assignment_id": command.assignment.assignment_id,
         "operation_id": command.operation_id,
+        "provider_descriptor": command.provider_descriptor.to_dict(),
         "resource_kind": claim.resource_kind,
         "contract": claim.contract.to_dict(),
         "atoms": [atom.to_dict() for atom in claim.atoms],
@@ -2472,7 +2602,18 @@ def _claim_command_dict(command: ClaimCommand) -> dict[str, PlainData]:
 def _claim_command_from_dict(
     assignment: ManagedAssignment, data: object
 ) -> ClaimCommand:
-    if not isinstance(data, Mapping):
+    expected = {
+        "assignment_id",
+        "operation_id",
+        "provider_descriptor",
+        "resource_kind",
+        "contract",
+        "atoms",
+        "provider_data_version",
+        "provider_data",
+        "claim_fingerprint",
+    }
+    if not isinstance(data, Mapping) or set(data) != expected:
         raise ManagedLocalError("retained claim command is invalid")
     if data.get("assignment_id") != assignment.assignment_id:
         raise ManagedLocalError("retained claim assignment conflicts")
@@ -2491,7 +2632,20 @@ def _claim_command_from_dict(
     )
     if data.get("claim_fingerprint") != claim.fingerprint:
         raise ManagedLocalError("retained claim fingerprint conflicts")
-    return ClaimCommand(assignment, cast(str, data.get("operation_id")), claim)
+    try:
+        provider_descriptor = SchedulingComponentDescriptor.from_dict(
+            data["provider_descriptor"]
+        )
+    except Exception as exc:
+        raise ManagedLocalError(
+            "retained claim provider descriptor is invalid"
+        ) from exc
+    return ClaimCommand(
+        assignment,
+        cast(str, data["operation_id"]),
+        claim,
+        provider_descriptor,
+    )
 
 
 def _operation_command(command: ClaimCommand, operation: str) -> ClaimCommand:
@@ -2499,6 +2653,7 @@ def _operation_command(command: ClaimCommand, operation: str) -> ClaimCommand:
         assignment=command.assignment,
         operation_id=f"{command.operation_id}:{operation}",
         claim=command.claim,
+        provider_descriptor=command.provider_descriptor,
     )
 
 
@@ -2868,6 +3023,30 @@ def _validate_decision_receipt(
     }:
         raise ManagedLocalError(
             "decision component descriptors do not match reservation resources"
+        )
+    provider_descriptors = value.get("provider_descriptors")
+    if not isinstance(provider_descriptors, Sequence) or isinstance(
+        provider_descriptors, str
+    ):
+        raise ManagedLocalError("decision receipt requires provider_descriptors")
+    try:
+        parsed_providers = tuple(
+            SchedulingComponentDescriptor.from_dict(descriptor)
+            for descriptor in provider_descriptors
+        )
+    except Exception as exc:
+        raise ManagedLocalError("decision provider descriptors are invalid") from exc
+    if not parsed_providers or len({item.kind for item in parsed_providers}) != len(
+        parsed_providers
+    ):
+        raise ManagedLocalError(
+            "decision provider descriptors must be non-empty and unique"
+        )
+    if {item.kind for item in parsed_providers} != {
+        claim.resource_kind for claim in claims
+    }:
+        raise ManagedLocalError(
+            "decision provider descriptors do not match reservation resources"
         )
     contract_descriptors = value.get("claim_contract_descriptors")
     if not isinstance(contract_descriptors, Sequence) or isinstance(

@@ -34,6 +34,7 @@ from loom.scheduling import (
     ExactQuantity,
     ResourceClaim,
     ResourceClaimContractDescriptor,
+    SchedulingComponentDescriptor,
 )
 from loom.serialization import (
     PlainData,
@@ -45,8 +46,8 @@ from loom.serialization import (
 from .errors import QueueConflictError, QueueServiceError
 
 
-REMOTE_EXECUTION_SCHEMA_VERSION = 2
-REMOTE_EXECUTION_CAPABILITY = "remote-stage-execution-v2"
+REMOTE_EXECUTION_SCHEMA_VERSION = 3
+REMOTE_EXECUTION_CAPABILITY = "remote-stage-execution-v3"
 REGULAR_FILE_RELAY_CAPABILITY = "regular-file-relay-v1"
 MAX_TRANSFER_BYTES = 64 * 1024 * 1024
 TRANSFER_CHUNK_BYTES = 32 * 1024
@@ -161,6 +162,7 @@ class GpuDeviceDescriptor:
     share_denominator: int = 1
     share_granularity_numerator: int = 1
     share_granularity_denominator: int = 1
+    fabric_group: str | None = None
     features: tuple[str, ...] = ()
     healthy: bool = True
 
@@ -213,6 +215,8 @@ class GpuDeviceDescriptor:
             object.__setattr__(
                 self, "share_granularity_denominator", granularity.denominator
             )
+        if self.fabric_group is not None:
+            _identifier(self.fabric_group, "GPU fabric_group")
         features = tuple(self.features)
         if any(not isinstance(value, str) or not value for value in features) or len(
             set(features)
@@ -270,6 +274,7 @@ class GpuDeviceDescriptor:
             "share_denominator": self.share_denominator,
             "share_granularity_numerator": self.share_granularity_numerator,
             "share_granularity_denominator": self.share_granularity_denominator,
+            "fabric_group": self.fabric_group,
             "features": list(self.features),
             "healthy": self.healthy,
         }
@@ -287,6 +292,7 @@ class GpuDeviceDescriptor:
             "share_denominator",
             "share_granularity_numerator",
             "share_granularity_denominator",
+            "fabric_group",
             "features",
             "healthy",
         }
@@ -308,6 +314,7 @@ class GpuDeviceDescriptor:
             share_granularity_denominator=cast(
                 int, value["share_granularity_denominator"]
             ),
+            fabric_group=cast(str | None, value["fabric_group"]),
             features=tuple(cast(Sequence[str], features)),
             healthy=cast(bool, value["healthy"]),
         )
@@ -624,6 +631,7 @@ class _DeliveredExecutionRequest:
     inputs: tuple[_RemoteArtifact, ...]
     declared_outputs: tuple[str, ...]
     claims: tuple[ResourceClaim, ...]
+    provider_descriptors: tuple[SchedulingComponentDescriptor, ...]
     schema_version: int = REMOTE_EXECUTION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -704,9 +712,28 @@ class _DeliveredExecutionRequest:
             or len({item.resource_kind for item in claims}) != len(claims)
         ):
             raise QueueServiceError("remote request requires exact resource claims")
+        provider_descriptors = tuple(self.provider_descriptors)
+        if any(
+            not isinstance(item, SchedulingComponentDescriptor)
+            for item in provider_descriptors
+        ) or len({item.kind for item in provider_descriptors}) != len(
+            provider_descriptors
+        ):
+            raise QueueServiceError("remote provider descriptors are invalid")
+        if {item.kind for item in provider_descriptors} != {
+            claim.resource_kind for claim in claims
+        }:
+            raise QueueServiceError(
+                "remote provider descriptors do not match resource claims"
+            )
         object.__setattr__(self, "inputs", inputs)
         object.__setattr__(self, "declared_outputs", outputs)
         object.__setattr__(self, "claims", claims)
+        object.__setattr__(
+            self,
+            "provider_descriptors",
+            tuple(sorted(provider_descriptors, key=lambda item: item.kind)),
+        )
 
     @classmethod
     def from_worker_request(
@@ -722,6 +749,7 @@ class _DeliveredExecutionRequest:
         inputs: tuple[_RemoteArtifact, ...],
         declared_outputs: tuple[str, ...],
         claims: tuple[ResourceClaim, ...],
+        provider_descriptors: tuple[SchedulingComponentDescriptor, ...],
     ) -> "_DeliveredExecutionRequest":
         if not isinstance(worker_request, StageWorkerRequest):
             raise QueueServiceError(
@@ -751,6 +779,7 @@ class _DeliveredExecutionRequest:
             inputs=inputs,
             declared_outputs=declared_outputs,
             claims=claims,
+            provider_descriptors=provider_descriptors,
         )
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -776,6 +805,9 @@ class _DeliveredExecutionRequest:
             "inputs": [item.to_dict() for item in self.inputs],
             "declared_outputs": list(self.declared_outputs),
             "claims": [_claim_to_dict(item) for item in self.claims],
+            "provider_descriptors": [
+                item.to_dict() for item in self.provider_descriptors
+            ],
         }
 
     @classmethod
@@ -798,10 +830,16 @@ class _DeliveredExecutionRequest:
             "inputs",
             "declared_outputs",
             "claims",
+            "provider_descriptors",
         }
         if not isinstance(value, Mapping) or set(value) != expected:
             raise QueueServiceError("remote execution request is invalid")
-        for field_name in ("inputs", "declared_outputs", "claims"):
+        for field_name in (
+            "inputs",
+            "declared_outputs",
+            "claims",
+            "provider_descriptors",
+        ):
             field_value = value[field_name]
             if not isinstance(field_value, Sequence) or isinstance(
                 field_value, (str, bytes)
@@ -824,6 +862,10 @@ class _DeliveredExecutionRequest:
             inputs=tuple(_RemoteArtifact.from_dict(item) for item in value["inputs"]),
             declared_outputs=tuple(cast(Sequence[str], value["declared_outputs"])),
             claims=tuple(_claim_from_dict(item) for item in value["claims"]),
+            provider_descriptors=tuple(
+                SchedulingComponentDescriptor.from_dict(item)
+                for item in value["provider_descriptors"]
+            ),
             schema_version=cast(int, value["schema_version"]),
         )
 

@@ -352,6 +352,8 @@ class GpuResourcePlanner:
             vram = value.get("vram_bytes")
             mode = value.get("allocation_mode")
             provider = value.get("provider")
+            healthy = value.get("healthy", True)
+            fabric_group = value.get("fabric_group")
             if (
                 not isinstance(device_id, str)
                 or not device_id
@@ -362,7 +364,15 @@ class GpuResourcePlanner:
                 or mode not in {"exclusive", "vram_share", "provider_fraction"}
                 or not isinstance(provider, str)
                 or not provider
-                or value.get("healthy", True) is not True
+                or not isinstance(healthy, bool)
+                or (
+                    fabric_group is not None
+                    and (
+                        not isinstance(fabric_group, str)
+                        or not fabric_group
+                        or len(fabric_group) > 160
+                    )
+                )
             ):
                 return OpportunityValidationResult(
                     OpportunityState.INVALID,
@@ -401,7 +411,8 @@ class GpuResourcePlanner:
                 )
             available = available_atoms.get(device_id)
             if available is not None and (
-                available.unit != atom.unit
+                device.get("healthy", True) is not True
+                or available.unit != atom.unit
                 or available.amount.fraction > atom.amount.fraction
             ):
                 return OpportunityValidationResult(

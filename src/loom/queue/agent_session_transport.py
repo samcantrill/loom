@@ -36,11 +36,13 @@ from loom.pipeline.execution.managed_local import (
     ObserveRequest,
     SQLiteAgentJournal,
     GpuResourceProvider,
+    _configured_provider_descriptor,
 )
 from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.stores.atomic import atomic_write_bytes
+from loom.scheduling import SchedulingComponentDescriptor
 
 from .agent_sessions import (
     AgentOffer,
@@ -156,6 +158,39 @@ class AgentTlsClientConfig:
         if profiles and self.agent_root is None:
             raise QueueServiceError("resident execution requires an agent root")
         object.__setattr__(self, "resident_profiles", profiles)
+
+
+def _resident_provider_descriptors(
+    profile: ResidentExecutionProfile,
+    agent_id: str,
+    *,
+    resource_kinds: set[str] | None = None,
+) -> tuple[SchedulingComponentDescriptor, ...]:
+    """Derive safe provider identities from one protected resident profile."""
+
+    atoms = profile.capacity_atoms(agent_id)
+    kinds = resource_kinds or {atom.owner_resource_kind for atom in atoms}
+    result: list[SchedulingComponentDescriptor] = []
+    for kind in sorted(kinds):
+        provider_atoms = tuple(
+            atom for atom in atoms if atom.owner_resource_kind == kind
+        )
+        bindings: Mapping[str, str] | None = None
+        if kind == "gpu":
+            bindings = {
+                f"{agent_id}:{device.descriptor.device_id}": device.binding_value
+                for device in profile.gpu_devices
+                if device.descriptor.healthy
+            }
+            provider_atoms = tuple(
+                atom
+                for atom in provider_atoms
+                if atom.local_capacity_key in bindings
+            )
+        result.append(
+            _configured_provider_descriptor(kind, provider_atoms, bindings=bindings)
+        )
+    return tuple(result)
 
 
 class _RemoteAgentJournal:
@@ -776,7 +811,7 @@ class LocalDaemonAgentHttpClient:
             ):
                 raise QueueServiceError(
                     "agent coordinator protocol is unsupported; hard cut-over "
-                    "requires version 2"
+                    f"requires version {PROTOCOL_VERSION}"
                 )
         return result
 
@@ -853,6 +888,15 @@ class LocalDaemonAgentHttpClient:
                 for atom in offer.gpu_atoms
             ):
                 raise QueueConflictError("offer exceeds the resident GPU capacity")
+            expected_provider_descriptors = _resident_provider_descriptors(
+                capacity,
+                self._require_journal().session(offer.session_id).agent_id,
+                resource_kinds={item.kind for item in offer.provider_descriptors},
+            )
+            if offer.provider_descriptors != expected_provider_descriptors:
+                raise QueueConflictError(
+                    "offer provider identity differs from resident configuration"
+                )
         journal = self._require_journal()
         journal.prepare_offer(offer, idempotency_key)
         result = self._call(
@@ -1162,6 +1206,10 @@ class LocalDaemonAgentHttpClient:
                 assignment,
                 f"{request.assignment_id}:prepare:{index}",
                 claim,
+                {
+                    descriptor.kind: descriptor
+                    for descriptor in request.provider_descriptors
+                }[claim.resource_kind],
             )
             for index, claim in enumerate(request.claims)
         )
@@ -1422,6 +1470,7 @@ class LocalDaemonAgentHttpClient:
                     assignment,
                     f"{command.operation_id}:release",
                     command.claim,
+                    command.provider_descriptor,
                 )
             )
             if released.outcome is not ClaimOutcome.RELEASED:
@@ -1611,20 +1660,31 @@ class LocalDaemonAgentHttpClient:
                 "gpu": GpuResourcePlanner(),
             }
             atoms = profile.capacity_atoms(session.agent_id)
-            self._providers = {
-                kind: AtomResourceProvider(
-                    planners[kind].descriptor,
-                    planners[kind].claim_contracts,
-                    tuple(atom for atom in atoms if atom.owner_resource_kind == kind),
+            self._providers = {}
+            for kind in {atom.owner_resource_kind for atom in atoms}:
+                if kind == "gpu":
+                    continue
+                provider_atoms = tuple(
+                    atom for atom in atoms if atom.owner_resource_kind == kind
                 )
-                for kind in {atom.owner_resource_kind for atom in atoms}
-            }
+                self._providers[kind] = AtomResourceProvider(
+                    _configured_provider_descriptor(kind, provider_atoms),
+                    planners[kind].claim_contracts,
+                    provider_atoms,
+                )
             if profile.gpu_devices:
+                healthy_gpu_keys = {
+                    f"{session.agent_id}:{device.descriptor.device_id}"
+                    for device in profile.gpu_devices
+                    if device.descriptor.healthy
+                }
                 gpu_atoms = tuple(
-                    atom for atom in atoms if atom.owner_resource_kind == "gpu"
+                    atom
+                    for atom in atoms
+                    if atom.owner_resource_kind == "gpu"
+                    and atom.local_capacity_key in healthy_gpu_keys
                 )
                 self._providers["gpu"] = GpuResourceProvider(
-                    planners["gpu"].descriptor,
                     planners["gpu"].claim_contracts,
                     gpu_atoms,
                     bindings={
@@ -1632,6 +1692,7 @@ class LocalDaemonAgentHttpClient:
                             device.binding_value
                         )
                         for device in profile.gpu_devices
+                        if device.descriptor.healthy
                     },
                 )
             for command in journal.retained_claim_commands():

@@ -63,6 +63,7 @@ from loom.queue.agent_session_transport import (
     LocalDaemonAgentHttpClient,
     LocalDaemonAgentHttpServer,
     _decode,
+    _resident_provider_descriptors,
 )
 from loom.queue.agent_sessions import (
     AgentOffer,
@@ -74,8 +75,17 @@ from loom.queue.agent_sessions import (
     TransportPrincipalPolicy,
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError
-from loom.scheduling import ResourceClaim
+from loom.scheduling import ResourceClaim, SchedulingComponentDescriptor
 from loom.serialization import PlainData, json_dumps_pretty
+
+
+def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, ...]:
+    return tuple(
+        SchedulingComponentDescriptor(
+            kind, 1, "1", f"test-{kind}-provider", f"{kind}-configuration"
+        )
+        for kind in sorted(kinds)
+    )
 
 
 def _run(*args: str, cwd: Path) -> None:
@@ -379,7 +389,10 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
         (atom,),
         1,
     )
-    command = ClaimCommand(assignment, "assignment-1:prepare:0", claim)
+    provider_descriptor = _resident_provider_descriptors(profile, "agent-a")[0]
+    command = ClaimCommand(
+        assignment, "assignment-1:prepare:0", claim, provider_descriptor
+    )
     execution_journal = SQLiteAgentJournal(
         agent_root / "journal.sqlite", _allow_initialize=False
     )
@@ -394,7 +407,7 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
             (command,),
             {
                 "cpu": AtomResourceProvider(
-                    planner.descriptor,
+                    provider_descriptor,
                     planner.claim_contracts,
                     (atom,),
                 )
@@ -423,6 +436,7 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
             1,
             0,
             30,
+            _resident_provider_descriptors(profile, "agent-a"),
             resident_profiles=(descriptor,),
         )
         with pytest.raises(QueueConflictError, match="cannot advertise"):
@@ -480,6 +494,7 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
             1,
             0,
             30,
+            _resident_provider_descriptors(profile, "agent-a"),
             resident_profiles=(descriptor,),
         )
         with pytest.raises(QueueConflictError, match="cannot advertise"):
@@ -560,6 +575,11 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
     )
     server.start()
     project_root = Path(__file__).resolve().parents[3]
+    profile = ResidentExecutionProfile(
+        descriptor,
+        project_root,
+        Path(sys.executable),
+    )
     agent_a = LocalDaemonAgentHttpClient(
         AgentTlsClientConfig(
             f"https://localhost:{server.port}",
@@ -567,13 +587,7 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
             credentials["agent"].with_suffix(".crt"),
             credentials["agent"].with_suffix(".key"),
             _remote_agent_root(tmp_path, "remote-owner-a"),
-            (
-                ResidentExecutionProfile(
-                    descriptor,
-                    project_root,
-                    Path(sys.executable),
-                ),
-            ),
+            (profile,),
         )
     )
     agent_b = LocalDaemonAgentHttpClient(
@@ -583,13 +597,7 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
             credentials["other"].with_suffix(".crt"),
             credentials["other"].with_suffix(".key"),
             _remote_agent_root(tmp_path, "remote-owner-b"),
-            (
-                ResidentExecutionProfile(
-                    descriptor,
-                    project_root,
-                    Path(sys.executable),
-                ),
-            ),
+            (profile,),
         )
     )
 
@@ -618,6 +626,7 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
                 1,
                 0,
                 30,
+                _resident_provider_descriptors(profile, session.agent_id),
                 resident_profiles=(descriptor,),
             ),
             idempotency_key=f"offer-{suffix}",
@@ -689,6 +698,9 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
     )
     local_gpu = GpuDeviceDescriptor("local-safe", "small", 80 * 1024**3)
     remote_gpu = GpuDeviceDescriptor("remote-safe", "large", 80 * 1024**3)
+    remote_busy_gpu = GpuDeviceDescriptor(
+        "remote-busy", "large", 80 * 1024**3
+    )
     local_binding = "local-private-binding"
     remote_binding = "remote-private-binding"
     capabilities = (
@@ -704,7 +716,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
                 "agent-a",
                 ("default",),
                 capabilities,
-                (remote_gpu,),
+                (remote_busy_gpu, remote_gpu),
             ),
         )
     )
@@ -750,7 +762,10 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
         profile_descriptor,
         Path(__file__).resolve().parents[3],
         Path(sys.executable),
-        gpu_devices=(ResidentGpuDevice(remote_gpu, remote_binding),),
+        gpu_devices=(
+            ResidentGpuDevice(remote_busy_gpu, "remote-busy-private-binding"),
+            ResidentGpuDevice(remote_gpu, remote_binding),
+        ),
     )
     agent = LocalDaemonAgentHttpClient(
         AgentTlsClientConfig(
@@ -762,7 +777,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
             (profile,),
         )
     )
-    released_claims: list[tuple[str, str, tuple[str, ...]]] = []
+    released_claims: list[tuple[str, str, tuple[str, ...], str]] = []
     original_release = GpuResourceProvider.release
 
     def record_release(
@@ -773,6 +788,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
                 command.assignment.agent_id,
                 command.claim.fingerprint,
                 tuple(atom.local_capacity_key for atom in command.claim.atoms),
+                command.provider_descriptor.configuration_fingerprint,
             )
         )
         return original_release(provider, command)
@@ -789,8 +805,13 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
             1,
             0,
             30,
+            _resident_provider_descriptors(
+                profile, str(session_value["agent_id"])
+            ),
             resident_profiles=(profile_descriptor,),
-            gpu_devices=(remote_gpu,),
+            gpu_devices=(remote_busy_gpu, remote_gpu),
+            # The first configured device is externally occupied. Inventory
+            # remains complete while only the manageable device is available.
             gpu_atoms=(remote_gpu.capacity_atom(),),
         )
 
@@ -903,6 +924,16 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
                     (remote_run, local_run),
                 )
             )
+            remote_assignment_id, receipt_json = cast(
+                tuple[str, str],
+                conn.execute(
+                    "SELECT a.assignment_id, a.receipt_json "
+                    "FROM coordinator_assignments a "
+                    "JOIN stage_work w ON w.stage_work_id = a.stage_work_id "
+                    "WHERE a.run_uri = ? AND w.stage_name = 'capture'",
+                    (remote_run,),
+                ).fetchone(),
+            )
         assert assignments == {
             (remote_run, "preprocess", "machine-A"),
             (remote_run, "capture", "agent-a"),
@@ -927,7 +958,44 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
         remote_release = next(item for item in released_claims if item[0] == "agent-a")
         assert gpu_command["claim_fingerprint"] == remote_release[1]
         assert remote_release[2] == ("agent-a:remote-safe",)
+        receipt = cast(dict[str, object], json.loads(receipt_json))
+        receipt_provider = next(
+            item
+            for item in cast(list[dict[str, object]], receipt["provider_descriptors"])
+            if item["kind"] == "gpu"
+        )
+        receipt_planner = next(
+            item
+            for item in cast(list[dict[str, object]], receipt["component_descriptors"])
+            if item["kind"] == "gpu"
+        )
+        with sqlite3.connect(
+            remote_root / "assignments" / remote_assignment_id / "remote.sqlite"
+        ) as conn:
+            delivered = cast(
+                dict[str, object],
+                json.loads(
+                    cast(
+                        str,
+                        conn.execute(
+                            "SELECT value_json FROM request WHERE singleton = 1"
+                        ).fetchone()[0],
+                    )
+                ),
+            )
+        delivered_provider = next(
+            item
+            for item in cast(
+                list[dict[str, object]], delivered["provider_descriptors"]
+            )
+            if item["kind"] == "gpu"
+        )
+        assert receipt_provider != receipt_planner
+        assert delivered_provider == receipt_provider
+        assert gpu_command["provider_descriptor"] == receipt_provider
+        assert remote_release[3] == receipt_provider["configuration_fingerprint"]
         assert remote_binding not in claims_json
+        assert "remote-busy-private-binding" not in claims_json
 
         retained = SQLiteAgentJournal(
             remote_root / "journal.sqlite", _allow_initialize=False
@@ -944,6 +1012,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
         )
         assert local_binding not in protected_dump
         assert remote_binding not in protected_dump
+        assert "remote-busy-private-binding" not in protected_dump
     finally:
         agent.close()
         server.stop()
@@ -1176,6 +1245,7 @@ def test_loopback_mtls_derives_credential_and_rechecks_live_policy(
                 1,
                 1,
                 10,
+                _provider_descriptors("cpu", "memory"),
             ),
             idempotency_key="offer-1",
         )
@@ -1247,6 +1317,7 @@ def test_loopback_mtls_derives_credential_and_rechecks_live_policy(
                     1,
                     1,
                     10,
+                    _provider_descriptors("cpu", "memory"),
                 ),
                 idempotency_key="offer-rotated-credential",
             )
@@ -1428,6 +1499,7 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                 1,
                 0,
                 30,
+                _resident_provider_descriptors(profile, session.agent_id),
                 resident_profiles=(descriptor,),
             ),
             idempotency_key="offer-remote-1",
@@ -1570,6 +1642,7 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                     1,
                     0,
                     30,
+                    _resident_provider_descriptors(profile, session.agent_id),
                     resident_profiles=(descriptor,),
                 ),
                 idempotency_key="offer-remote-2",
@@ -1594,6 +1667,7 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                     1,
                     0,
                     30,
+                    _resident_provider_descriptors(profile, session.agent_id),
                     resident_profiles=(descriptor,),
                 ),
                 idempotency_key="offer-remote-3",

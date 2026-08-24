@@ -201,6 +201,64 @@ def test_gpu_exclusive_request_is_per_device_and_claims_exact_safe_identity() ->
     assert claims.claims[0].provider_data["device_ids"] == ("gpu-B",)
 
 
+def test_gpu_inventory_keeps_unhealthy_devices_but_never_offers_them() -> None:
+    planner, work = _gpu_work()
+    inventory_atoms = (
+        CapacityAtom(
+            "gpu", "gpu-unhealthy", ExactQuantity(1), "count", ExactQuantity(1)
+        ),
+        CapacityAtom(
+            "gpu", "gpu-available", ExactQuantity(1), "count", ExactQuantity(1)
+        ),
+    )
+    data: dict[str, PlainData] = {
+        "devices": [
+            {
+                "id": "gpu-unhealthy",
+                "model": "large",
+                "vram_bytes": 80 * 1024**3,
+                "allocation_mode": "exclusive",
+                "provider": "exclusive",
+                "healthy": False,
+            },
+            {
+                "id": "gpu-available",
+                "model": "large",
+                "vram_bytes": 80 * 1024**3,
+                "allocation_mode": "exclusive",
+                "provider": "exclusive",
+                "healthy": True,
+            },
+        ]
+    }
+    inventory = ResourceInventoryEnvelope(
+        "machine", "gpu", "revision", data=data, atoms=inventory_atoms
+    )
+    availability = ResourceAvailabilityEnvelope(
+        "machine", "gpu", "revision", data=data, atoms=(inventory_atoms[1],)
+    )
+
+    validated = planner.validate_opportunity(inventory, availability)
+    assert validated.opportunity is not None
+    result = planner.propose_claims(
+        work.requests["gpu"], validated.opportunity, ClaimSearchBudget(4)
+    )
+    assert [
+        atom.local_capacity_key
+        for claim in result.claims
+        for atom in claim.atoms
+    ] == ["gpu-available"]
+
+    invalid = planner.validate_opportunity(
+        inventory,
+        ResourceAvailabilityEnvelope(
+            "machine", "gpu", "revision", data=data, atoms=inventory_atoms
+        ),
+    )
+    assert invalid.opportunity is None
+    assert invalid.explanation == "GPU availability atom is invalid"
+
+
 def test_gpu_share_and_fraction_requests_require_explicit_provider_and_exact_values() -> (
     None
 ):

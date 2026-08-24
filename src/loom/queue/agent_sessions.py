@@ -22,7 +22,11 @@ from uuid import uuid4
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.status import StageStatus
-from loom.scheduling import CapacityAtom, ExactQuantity
+from loom.scheduling import (
+    CapacityAtom,
+    ExactQuantity,
+    SchedulingComponentDescriptor,
+)
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
@@ -276,6 +280,7 @@ class AgentOffer:
     cpu: int
     memory_bytes: int
     ttl_seconds: int
+    provider_descriptors: tuple[SchedulingComponentDescriptor, ...]
     pools: tuple[str, ...] = ("default",)
     reflected_claim_ids: tuple[str, ...] = ()
     resident_profiles: tuple[ResidentProfileDescriptor, ...] = ()
@@ -308,6 +313,30 @@ class AgentOffer:
             or not 1 <= self.ttl_seconds <= _MAX_OFFER_TTL_SECONDS
         ):
             raise QueueServiceError("offer TTL is outside the permitted range")
+        provider_descriptors = tuple(self.provider_descriptors)
+        if any(
+            not isinstance(item, SchedulingComponentDescriptor)
+            for item in provider_descriptors
+        ) or len({item.kind for item in provider_descriptors}) != len(
+            provider_descriptors
+        ):
+            raise QueueServiceError("offer provider descriptors are invalid")
+        configured_kinds: set[str] = set()
+        if self.cpu:
+            configured_kinds.add("cpu")
+        if self.memory_bytes:
+            configured_kinds.add("memory")
+        if self.gpu_devices:
+            configured_kinds.add("gpu")
+        if {item.kind for item in provider_descriptors} != configured_kinds:
+            raise QueueServiceError(
+                "offer provider descriptors must match configured resources"
+            )
+        object.__setattr__(
+            self,
+            "provider_descriptors",
+            tuple(sorted(provider_descriptors, key=lambda item: item.kind)),
+        )
         _identifiers(self.reflected_claim_ids, "reflected claim IDs")
         _identifiers(self.pools, "offer pools", non_empty=True)
         profiles = tuple(self.resident_profiles)
@@ -379,6 +408,9 @@ class AgentOffer:
             "availability_revision": self.availability_revision,
             "capacity_atoms": capacity_atoms,
             "ttl_seconds": self.ttl_seconds,
+            "provider_descriptors": [
+                descriptor.to_dict() for descriptor in self.provider_descriptors
+            ],
             "pools": list(self.pools),
             "reflected_claim_ids": list(self.reflected_claim_ids),
             "resident_profiles": [item.to_dict() for item in self.resident_profiles],
@@ -395,6 +427,7 @@ class AgentOffer:
             "availability_revision",
             "capacity_atoms",
             "ttl_seconds",
+            "provider_descriptors",
             "pools",
             "reflected_claim_ids",
             "resident_profiles",
@@ -437,6 +470,7 @@ class AgentOffer:
         claims = value["reflected_claim_ids"]
         profiles = value["resident_profiles"]
         gpu_devices = value["gpu_devices"]
+        provider_descriptors = value["provider_descriptors"]
         if (
             not isinstance(pools, Sequence)
             or isinstance(pools, (str, bytes))
@@ -446,6 +480,8 @@ class AgentOffer:
             or isinstance(profiles, (str, bytes))
             or not isinstance(gpu_devices, Sequence)
             or isinstance(gpu_devices, (str, bytes))
+            or not isinstance(provider_descriptors, Sequence)
+            or isinstance(provider_descriptors, (str, bytes))
         ):
             raise QueueServiceError("agent offer scope is invalid")
         return cls(
@@ -457,6 +493,10 @@ class AgentOffer:
             cpu=capacities.get("cpu", 0),
             memory_bytes=capacities.get("memory", 0),
             ttl_seconds=cast(int, value["ttl_seconds"]),
+            provider_descriptors=tuple(
+                SchedulingComponentDescriptor.from_dict(item)
+                for item in provider_descriptors
+            ),
             pools=tuple(cast(Sequence[str], pools)),
             reflected_claim_ids=tuple(cast(Sequence[str], claims)),
             resident_profiles=tuple(

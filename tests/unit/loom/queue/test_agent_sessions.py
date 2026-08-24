@@ -28,6 +28,7 @@ from loom.queue.agent_sessions import (
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError, QueueStorageError
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.scheduling import SchedulingComponentDescriptor
 from loom.serialization import PlainData
 
 
@@ -35,6 +36,15 @@ _TEST_RETIREMENT_SECRET = "01" * 32
 _TEST_RETIREMENT_VERIFIER = hashlib.sha256(
     bytes.fromhex(_TEST_RETIREMENT_SECRET)
 ).hexdigest()
+
+
+def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, ...]:
+    return tuple(
+        SchedulingComponentDescriptor(
+            kind, 1, "1", f"test-{kind}-provider", f"{kind}-configuration"
+        )
+        for kind in sorted(kinds)
+    )
 
 
 def _policy(
@@ -101,6 +111,7 @@ def _offer(
         cpu=2,
         memory_bytes=1024,
         ttl_seconds=30,
+        provider_descriptors=_provider_descriptors("cpu", "memory"),
     )
 
 
@@ -473,6 +484,7 @@ def test_offer_expiry_and_stale_poll_fail_without_touching_execution_owners(
                 1,
                 1,
                 1,
+                _provider_descriptors("cpu", "memory"),
             ),
             idempotency_key="offer-1",
         )
@@ -526,7 +538,9 @@ def test_offer_wire_shape_uses_bounded_exact_capacity_atoms() -> None:
 
 
 def test_gpu_offer_has_one_strict_exact_round_trip_without_private_binding() -> None:
-    device = GpuDeviceDescriptor("safe-gpu", "large", 80 * 1024**3)
+    device = GpuDeviceDescriptor(
+        "safe-gpu", "large", 80 * 1024**3, fabric_group="fabric-a"
+    )
     offer = AgentOffer(
         "session-1",
         "epoch-1",
@@ -536,6 +550,7 @@ def test_gpu_offer_has_one_strict_exact_round_trip_without_private_binding() -> 
         0,
         0,
         30,
+        _provider_descriptors("gpu"),
         gpu_devices=(device,),
         gpu_atoms=(device.capacity_atom(),),
     )
@@ -543,6 +558,15 @@ def test_gpu_offer_has_one_strict_exact_round_trip_without_private_binding() -> 
     encoded = offer.value()
     assert AgentOffer.from_value(encoded) == offer
     assert "binding" not in repr(encoded).lower()
+
+    old_descriptor = device.to_dict()
+    del old_descriptor["fabric_group"]
+    with pytest.raises(QueueServiceError, match="descriptor is invalid"):
+        GpuDeviceDescriptor.from_dict(old_descriptor)
+    old_offer = offer.value()
+    del old_offer["provider_descriptors"]
+    with pytest.raises(QueueServiceError, match="agent offer is invalid"):
+        AgentOffer.from_value(old_offer)
 
     atoms = encoded["capacity_atoms"]
     assert isinstance(atoms, list)
@@ -582,6 +606,7 @@ def test_gpu_offer_rejects_old_or_policy_different_inventory(tmp_path: Path) -> 
             1,
             0,
             30,
+            _provider_descriptors("cpu", "gpu"),
             gpu_devices=(device,),
             gpu_atoms=(device.capacity_atom(),),
         )
