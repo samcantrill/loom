@@ -500,25 +500,31 @@ Final commands:
   provider claim is preserved through offer, assignment, journalled physical
   binding, worker environment, and release, while concrete scorers contribute
   only utility/band evidence to the kernel-owned preference algebra
-- Implementation: complete at `40e9332`; the manager correction closes the
-  strict offer, authored placement, accepted-time fallback, private child-worker
-  environment, exact local/remote bind, and CPU-with-GPU-inventory paths
+- Implementation: complete at `75cd70a`; the final manager correction separates
+  planner and provider identity, fences private GPU binding drift, preserves
+  complete configured inventory when availability is withdrawn, carries
+  bounded fabric groups through protocol v3, and retains the prior strict offer,
+  authored placement, accepted-time fallback, private child-worker environment,
+  exact local/remote bind, and CPU-with-GPU-inventory paths
 - Refiner: completed one qualified production-wiring correction
 - Pre-submit gate: complete; `make validate-pr` passed and `make test-summary`
   wrote the current evidence receipt
-- Independent review: required after the manager gate because GPU claims cross
-  configured inventory, coordinator selection, agent physical binding, and
-  worker environment boundaries; pending
-- Blocker corrections: 2/3
+- Independent review: complete. It found three reachable blockers: planner and
+  provider descriptors were collapsed so retained work could adopt a changed
+  private binding; remote inventory was reconstructed from net availability;
+  and protocol GPU descriptors could not represent authored fabric groups. It
+  also found one stale protocol-version diagnostic. Final correction `75cd70a`
+  closes all four findings, and manager verification found no residual blocker.
+- Blocker corrections: 3/3; no further correction or review pass is available
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `fd03da0` adds the GPU primitives, `847e302` wires the first production path, and manager correction `40e9332` completes the hard cut-over. The final path adds strict safe GPU descriptors and exact availability atoms, agent protocol v3, authored stage placement, production scorer registration, local and protected-remote GPU capacity, exact claim-to-private-binding mapping, process-private local GPU workers, accepted-time fallback, and descriptor-subset validation so CPU-only stages remain valid when an offer also contains GPU inventory. Share/fraction descriptors remain exact but production configuration rejects those modes until an enforceable provider adapter exists. |
-| Tests added or updated | Unit coverage proves exact GPU modes, canonical rationals, strict offer/policy codecs, scorer causality, tier dominance, and fallback deadlines. The loopback integration trace reverses only model preference to select distinct local/remote devices and private bindings, proves CPU stages receive no CUDA binding, checks child-process isolation, journalled claim/release identity, no protected-store binding leak, and accepted-time fallback. Valid-path configs/examples now omit zero GPU entries; rejection coverage owns the hard-cut behavior. |
-| Validated revision/tree state and evidence | Clean `40e9332`: `make validate-pr` passed Ruff, Pyright, 2,452 default tests, 141 configuration-extra tests with 3 environment skips, and sdist/wheel build. `make test-summary` passed package 118, unit 1,747, contract 295, integration 235, E2E 57, and config-extra 141 with 3 skips; receipt at `build/test-summary.md`. |
+| Implementation and changed paths | `fd03da0` adds the GPU primitives, `847e302` wires the first production path, `40e9332` completes the initial hard cut-over, and final correction `75cd70a` closes the independent-review findings. Planner descriptors now remain coordinator scheduling evidence while distinct provider descriptors use a non-secret configuration fingerprint derived from exact manageable atoms and private bindings. Provider identity crosses offer, decision, delivery, journal, prepare/activate/reconcile/release, and retained restoration. Remote GPU inventory uses every configured descriptor while availability uses only offered atoms; unhealthy devices remain inventory facts but cannot be offered. Strict GPU descriptors carry optional bounded `fabric_group`. Share/fraction descriptors remain exact but production configuration rejects those modes until an enforceable provider adapter exists. |
+| Tests added or updated | Unit coverage proves exact GPU modes, canonical rationals, strict offer/policy codecs, scorer causality, tier dominance, fallback deadlines, unhealthy-device withdrawal, and binding-drift rejection. Production integration proves positive and negative multi-device fabric placement. The loopback trace withholds one busy configured remote GPU while selecting another, reverses only model preference to select distinct local/remote devices and private bindings, proves CPU stages receive no CUDA binding, checks child-process isolation, and asserts distinct planner/provider identity is unchanged across coordinator receipt, delivered request, journalled command, release, and protected-store redaction. Valid-path configs/examples omit zero GPU entries; rejection coverage owns the hard-cut behavior. |
+| Validated revision/tree state and evidence | Clean source/test revision `75cd70a`: `make validate-pr` passed Ruff, Pyright, 2,456 default tests, 141 configuration-extra tests with 3 environment skips, and sdist/wheel build. `make test-summary` passed package 118, unit 1,749, contract 295, integration 237, E2E 57, and config-extra 141 with 3 skips; receipt at `build/test-summary.md`. |
 | Validation-relevant changes after evidence | None. The phase-plan evidence update changes documentation only. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | No GPU hardware/vendor dependency was introduced. Required behavior is simulated and deterministic; real hardware evidence remains optional. Non-exclusive production modes fail closed until a provider can enforce observation, isolation, binding, accounting, and release. Worktree and branch remain for independent review and PR completion. |
+| PR, review, and merge | Independent review completed with all findings resolved by final correction `75cd70a`; PR and merge pending. |
+| Residual risk and cleanup | This is an intentional hard cut-over. Protocol-v3 offers now require provider descriptors and the complete GPU descriptor shape; remote execution requires schema/capability v3; retained claim commands require provider identity. Old offers, deliveries, and retained claim rows are rejected rather than migrated, so operators must deploy coordinator and agents together and drain or explicitly discard pre-cutover retained work. No GPU hardware/vendor dependency was introduced. Required behavior is simulated and deterministic; real hardware evidence remains optional. Non-exclusive production modes fail closed until a provider can enforce observation, isolation, binding, accounting, and release. Worktree and branch remain for PR completion. |

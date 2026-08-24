@@ -8,8 +8,10 @@ Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
 Current phase: Phase 6 in progress
 Blockers: none. Phase 6 manager preparation and its one bounded expanded-path
-refinement are complete. Implementation and the manager pre-submit gate pass at
-`40e9332`; the required independent Phase 6 review is pending.
+refinement are complete. Independent review found three reachable GPU identity,
+inventory, and topology blockers plus one stale diagnostic; final correction
+`75cd70a` closes them. The manager pre-submit gate and fresh evidence receipt
+pass with no residual blocker; PR creation is pending.
 
 ## Summary
 
@@ -844,7 +846,7 @@ work.
 | 4A | [#239](https://github.com/samcantrill/loom/pull/239), squash-merged as `2d273b8` | Source/test revision `41a6045`; focused 19 + adjacent 23 passes; `make validate-pr` passed 2,416 default and 141 config-extra tests with 3 expected skips plus builds; fresh summary recorded 2,557 passes; independent review and CI passed | Lost protected-agent state still intentionally requires Phase 9 positive containment; no Phase 5 behavior is present | Remote branch removed at merge; worktree and local phase branch removed after merge; blocked Phase 4 evidence retained |
 | 5 | No PR opened; blocked branch head `0928736` | Source/test revision `d536a1e`; `make validate-pr` passed 2,435 default and 141 configuration-extra tests with 3 expected skips plus builds; fresh summary recorded 2,576 categorized passes; required independent review found one blocker | Publish-before-commit can leave an already-published input/output target with unfinished durable state, causing exact replay to fail and strand the assignment | Correction 3/3 exhausted; dedicated branch/worktree retained as read-only evidence |
 | 5A | [PR #240](https://github.com/samcantrill/loom/pull/240), squash-merged as `5116f18` | Source/test revision `4134d70`; manager-focused 54 tests passed; `make validate-pr` passed 2,436 default and 141 configuration-extra tests with 3 expected skips plus lint, zero-finding type checks, and builds; fresh summary recorded 2,577 categorized passes; required independent review and CI passed | No known Phase 5A blocker; coordinator relay throughput and bounded retained output remain accepted debt | Phase 5A remote/local branch and worktree removed; blocked Phase 5 branch/worktree retained as explicit read-only evidence |
-| 6 | PR pending | Manager preparation complete at `34acb21`; bounded expanded-path refinement `d0c9af5` fixes exact claim identity through worker binding/release and preserves kernel-owned preference algebra; implementation pending | No known blocker; required simulated GPU/provider evidence must remain hardware-independent | Dedicated branch/worktree active |
+| 6 | PR pending | Source/test revision `75cd70a`; `make validate-pr` passed 2,456 default and 141 configuration-extra tests with 3 expected skips plus lint, zero-finding type checks, and builds; fresh summary recorded package 118, unit 1,749, contract 295, integration 237, E2E 57, and config-extra 141; independent-review findings resolved by correction 3/3 and manager-verified | No known blocker. Intentional hard cut rejects pre-provider-descriptor offers, remote execution schema/capability v2, and retained claim rows without provider identity; simulated GPU/provider evidence remains hardware-independent | Dedicated branch/worktree active pending PR |
 | 7 | pending | pending | pending | pending |
 | 8 | pending | pending | pending | pending |
 | 9 | pending | pending | pending | pending |
