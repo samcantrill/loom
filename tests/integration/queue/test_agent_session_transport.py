@@ -32,6 +32,7 @@ from loom.queue.agent_sessions import (
     AgentPolicyConfig,
     AgentPrincipalPolicy,
     AgentRegistration,
+    AgentSessionState,
     TransportPrincipalPolicy,
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError
@@ -479,6 +480,26 @@ def test_lost_registration_response_replays_into_remote_agent_journal(
                 )
         finally:
             replacement.close()
+
+        lose_once.add("retire")
+        with pytest.raises(QueueServiceError, match="indeterminate"):
+            client.retire_clean(
+                resumed.session_id, idempotency_key="retire-first"
+            )
+        with sqlite3.connect(journal) as conn:
+            assert conn.execute(
+                "SELECT retirement_secret FROM agent_sessions_local WHERE session_id = ?",
+                (resumed.session_id,),
+            ).fetchone()[0] == first_secret
+            assert conn.execute(
+                "SELECT result_json FROM agent_mutation_intents "
+                "WHERE operation = 'retire' AND operation_id = 'retire-first'"
+            ).fetchone()[0] is None
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute(
+                "SELECT state FROM agent_sessions WHERE session_id = ?",
+                (resumed.session_id,),
+            ).fetchone()[0] == AgentSessionState.RETIRED_CLEAN.value
 
         client.retire_clean(resumed.session_id, idempotency_key="retire-first")
         with sqlite3.connect(journal) as conn:
