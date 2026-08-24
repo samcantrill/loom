@@ -6,8 +6,10 @@
 - Roadmap stage and phase: Stage 29, Phase 4A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p4a-authenticated-agent-trust-closure`
-- Worktree root and path: record during phase preparation
-- Base revision: current clean `origin/develop` after this planning amendment
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p4a-authenticated-agent-trust-closure`
+- Base revision: clean `origin/develop`
+  `922237c352548abe7c7affc9768ab02510791924`
 - PR target: `develop`
 - PR title: `feat(protocols): complete authenticated agent sessions`
 - Dependencies: Phase 3D merged; Phase 4 and PR #238 are blocked read-only
@@ -239,7 +241,9 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending dedicated branch/worktree after planning merge
+- Manager preparation: complete at clean `origin/develop` `922237c`; dedicated
+  branch/worktree, repository `samcantrill/loom`, target/title, read-only Phase 4
+  evidence, source/test owners, validation gates, and stop conditions recorded
 - Expanded planning: complete; maintainer approved the exact trust/durable-
   format design, one removal-first safety review passed, and one plan-quality
   review passed after correcting only an ambiguous lifecycle label from phase
