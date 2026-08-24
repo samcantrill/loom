@@ -512,6 +512,14 @@ def test_lost_registration_response_replays_into_remote_agent_journal(
         assert second_secret is not None and second_secret != first_secret
         proof = client._journal.fence_and_prove_empty(second.session_id)  # type: ignore[union-attr]
         before = _sqlite_dump(config.control_database)
+        missing_secret = proof.value()
+        del missing_secret["retirement_secret"]
+        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+            client._call(
+                "retire",
+                {"proof": missing_secret, "idempotency_key": "retire-missing-secret"},
+            )
+        assert _sqlite_dump(config.control_database) == before
         with pytest.raises(QueueServiceError, match="proof is invalid"):
             daemon.agent_view(
                 LocalDaemonPrincipal(
