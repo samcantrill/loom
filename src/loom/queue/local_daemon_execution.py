@@ -17,6 +17,7 @@ from loom.pipeline.execution.lifecycle import bind_stage_inputs
 from loom.pipeline.execution.managed_local import (
     AtomResourceProvider,
     ClaimCommand,
+    GpuResourceProvider,
     ManagedAssignment,
     ManagedOfferSnapshot,
     ObserveRequest,
@@ -45,6 +46,7 @@ from loom.pipeline.runtime import (
     parallel_execution_options,
     resolve_run_runtime,
 )
+from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.specs import PipelineSpec, parse_pipeline_config
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
@@ -137,13 +139,39 @@ def _coordinator_capacity(config: LocalDaemonConfig) -> tuple[CapacityAtom, ...]
             config.memory_capacity_bytes,
             "B",
         )
+    gpu_atoms: list[CapacityAtom] = []
+    for device in config.gpu_devices:
+        unit = {"exclusive": "count", "vram_share": "B", "provider_fraction": "share"}[
+            device.allocation_mode
+        ]
+        amount = ExactQuantity(
+            1 if device.allocation_mode == "exclusive" else device.vram_bytes
+        )
+        granularity = ExactQuantity(
+            1 if device.allocation_mode == "exclusive" else device.granularity
+        )
+        if device.allocation_mode == "provider_fraction":
+            amount = ExactQuantity(device.share_numerator, device.share_denominator)
+            granularity = ExactQuantity(
+                device.share_granularity_numerator,
+                device.share_granularity_denominator,
+            )
+        gpu_atoms.append(
+            CapacityAtom(
+                "gpu",
+                f"{config.machine_id}:{device.device_id}",
+                amount,
+                unit,
+                granularity,
+            )
+        )
     for rule in config.agent_policy.agents:
         amounts[("cpu", f"{rule.agent_id}:cpu")] = (maximum, "count")
         amounts[("memory", f"{rule.agent_id}:memory")] = (maximum, "B")
     return tuple(
         CapacityAtom(kind, key, ExactQuantity(amount), unit, ExactQuantity(1))
         for (kind, key), (amount, unit) in sorted(amounts.items())
-    )
+    ) + tuple(gpu_atoms)
 
 
 def initialize_local_daemon_owner_stores(
@@ -535,9 +563,11 @@ class LocalDaemonExecution:
         )
         self.cpu_planner = CpuResourcePlanner()
         self.memory_planner = MemoryResourcePlanner()
+        self.gpu_planner = GpuResourcePlanner()
         self.planners = {
             "cpu": self.cpu_planner,
             "memory": self.memory_planner,
+            "gpu": self.gpu_planner,
         }
         local_capacity: list[CapacityAtom] = [
             CapacityAtom(
@@ -556,6 +586,33 @@ class LocalDaemonExecution:
                     ExactQuantity(config.memory_capacity_bytes),
                     "B",
                     ExactQuantity(1),
+                )
+            )
+        for device in config.gpu_devices:
+            unit = {
+                "exclusive": "count",
+                "vram_share": "B",
+                "provider_fraction": "share",
+            }[device.allocation_mode]
+            amount = ExactQuantity(
+                1 if device.allocation_mode == "exclusive" else device.vram_bytes
+            )
+            granularity = ExactQuantity(
+                1 if device.allocation_mode == "exclusive" else device.granularity
+            )
+            if device.allocation_mode == "provider_fraction":
+                amount = ExactQuantity(device.share_numerator, device.share_denominator)
+                granularity = ExactQuantity(
+                    device.share_granularity_numerator,
+                    device.share_granularity_denominator,
+                )
+            local_capacity.append(
+                CapacityAtom(
+                    "gpu",
+                    f"{config.machine_id}:{device.device_id}",
+                    amount,
+                    unit,
+                    granularity,
                 )
             )
         self.local_capacity = tuple(local_capacity)
@@ -585,6 +642,21 @@ class LocalDaemonExecution:
             )
             for kind in {atom.owner_resource_kind for atom in self.local_capacity}
         }
+        if config.gpu_devices:
+            gpu_atoms = tuple(
+                atom
+                for atom in self.local_capacity
+                if atom.owner_resource_kind == "gpu"
+            )
+            self.providers["gpu"] = GpuResourceProvider(
+                self.gpu_planner.descriptor,
+                self.gpu_planner.claim_contracts,
+                gpu_atoms,
+                bindings={
+                    f"{config.machine_id}:{device.device_id}": device.binding_value
+                    for device in config.gpu_devices
+                },
+            )
         self.provider = self.providers["cpu"]
         # A new in-memory provider must never begin by advertising capacity that
         # a durable accepted/granted/running/unknown assignment might retain.
@@ -949,10 +1021,30 @@ class LocalDaemonExecution:
                     f"candidate-observe-{kind}-{utc_timestamp()}",
                 )
             )
+            data: Mapping[str, PlainData] = {}
+            if kind == "gpu":
+                data = cast(
+                    Mapping[str, PlainData],
+                    {
+                        "devices": [
+                            {
+                                "id": f"{self.config.machine_id}:{device.device_id}",
+                                "model": device.model,
+                                "vram_bytes": device.vram_bytes,
+                                "allocation_mode": device.allocation_mode,
+                                "provider": device.provider,
+                                "features": list(device.features),
+                                "healthy": device.healthy,
+                            }
+                            for device in self.config.gpu_devices
+                        ]
+                    },
+                )
             inventory[kind] = ResourceInventoryEnvelope(
                 self.config.machine_id,
                 kind,
                 observed.availability_revision,
+                data=data,
                 atoms=tuple(
                     atom
                     for atom in self.local_capacity
@@ -963,6 +1055,7 @@ class LocalDaemonExecution:
                 self.config.machine_id,
                 kind,
                 observed.availability_revision,
+                data=data,
                 atoms=observed.atoms,
             )
         return Candidate(

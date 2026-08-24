@@ -22,9 +22,15 @@ from loom.pipeline.runtime import (
     resolve_stage_placement,
     resolve_run_runtime,
 )
+from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.specs import PipelineSpec
-from loom.serialization import PlainData, ensure_plain_data, json_loads, stable_json_dumps
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    json_loads,
+    stable_json_dumps,
+)
 from loom.pipeline.stores.local_runs import LocalRunStore, atomic_write_json
 
 from .errors import QueueServiceError
@@ -52,8 +58,10 @@ def prepare_managed_local_runtime_record(
 
     if plan.run_uri != run_uri or set(plan.stage_order) != set(pipeline.stage_names):
         raise QueueServiceError("managed-local runtime preparation identity conflicts")
-    normalized = options if isinstance(options, RunOptions) else RunOptions.from_dict(
-        options or {"run_uri": run_uri}
+    normalized = (
+        options
+        if isinstance(options, RunOptions)
+        else RunOptions.from_dict(options or {"run_uri": run_uri})
     )
     if normalized.run_uri not in {None, run_uri}:
         raise QueueServiceError("managed-local runtime options belong to another run")
@@ -64,21 +72,27 @@ def prepare_managed_local_runtime_record(
     planners = {
         "cpu": CpuResourcePlanner(),
         "memory": MemoryResourcePlanner(),
+        "gpu": GpuResourcePlanner(),
     }
     resolved_snapshot = store.read_config_snapshot(run_uri, "resolved")
     if resolved_snapshot is None:
-        raise QueueServiceError("managed-local preparation requires a resolved config snapshot")
+        raise QueueServiceError(
+            "managed-local preparation requires a resolved config snapshot"
+        )
     runtime = resolve_run_runtime(normalized, stage_ids=pipeline.stage_names)
     placements: dict[str, PlainData] = {}
     for stage in pipeline.stages:
         exact = runtime[stage.name]
         if exact.executor != "local":
-            raise QueueServiceError("managed-local stage runtime requires local executor")
+            raise QueueServiceError(
+                "managed-local stage runtime requires local executor"
+            )
         resources = cast(ResourceRequest, exact.resources)
         unsupported = set(resources.entries) - set(planners)
         if unsupported:
             raise QueueServiceError(
-                "managed-local runtime has no planner for: " + ", ".join(sorted(unsupported))
+                "managed-local runtime has no planner for: "
+                + ", ".join(sorted(unsupported))
             )
         placements[stage.name] = resolve_stage_placement(
             authored=stage.resource_request,
@@ -97,10 +111,14 @@ def prepare_managed_local_runtime_record(
         "run_uri": run_uri,
         "plan": plan.to_dict(),
         "plan_digest": _digest(plan.to_dict()),
-        "pipeline_digest": hashlib.sha256(resolved_snapshot.encode("utf-8")).hexdigest(),
+        "pipeline_digest": hashlib.sha256(
+            resolved_snapshot.encode("utf-8")
+        ).hexdigest(),
         "runtime_options": runtime_options,
         "placements": placements,
-        "max_parallel_stages": parallel_execution_options(normalized).max_parallel_stages,
+        "max_parallel_stages": parallel_execution_options(
+            normalized
+        ).max_parallel_stages,
     }
     payload["digest"] = _digest(payload)
     path = _record_path(store, run_uri)
@@ -124,15 +142,25 @@ def load_managed_local_runtime_record(
     except Exception as exc:
         raise QueueServiceError("managed-local runtime record is corrupt") from exc
     if not isinstance(data, Mapping) or set(data) != {
-        "schema_version", "run_uri", "plan", "plan_digest", "runtime_options",
-        "pipeline_digest", "placements", "max_parallel_stages", "digest",
+        "schema_version",
+        "run_uri",
+        "plan",
+        "plan_digest",
+        "runtime_options",
+        "pipeline_digest",
+        "placements",
+        "max_parallel_stages",
+        "digest",
     }:
         raise QueueServiceError("managed-local runtime record is unsupported")
     try:
         payload = ensure_plain_data(dict(data), path="managed_local_runtime")
     except Exception as exc:
         raise QueueServiceError("managed-local runtime record is invalid") from exc
-    if not isinstance(payload, dict) or payload.get("schema_version") != _SCHEMA_VERSION:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != _SCHEMA_VERSION
+    ):
         raise QueueServiceError("managed-local runtime record schema is unsupported")
     if payload.get("run_uri") != run_uri:
         raise QueueServiceError("managed-local runtime record belongs to another run")
@@ -172,8 +200,13 @@ def _reject_forbidden(value: object, *, path: str) -> None:
             if not isinstance(key, str):
                 raise QueueServiceError(f"{path} has an invalid field")
             lowered = key.lower()
-            if "provider" in lowered or "authority" in lowered or any(
-                part in lowered for part in ("token", "credential", "secret", "password")
+            if (
+                "provider" in lowered
+                or "authority" in lowered
+                or any(
+                    part in lowered
+                    for part in ("token", "credential", "secret", "password")
+                )
             ):
                 raise QueueServiceError(
                     "managed-local runtime record forbids provider or authority credentials"

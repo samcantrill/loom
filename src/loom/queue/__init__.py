@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from ._sqlite import QUEUE_DB_SCHEMA_VERSION, SQLiteQueueRepository
 from .client import QueueClient
+
 if TYPE_CHECKING:
     from .local_daemon import (
         LocalDaemon,
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
         LocalDaemonAdmissionRequest,
         LocalDaemonAdmissionState,
         LocalDaemonConfig,
+        ConfiguredGpuDevice,
         LocalDaemonPrincipal,
         LocalDaemonRole,
         LocalDaemonStatus,
@@ -107,6 +109,7 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
         "LocalDaemonAdmissionRequest",
         "LocalDaemonAdmissionState",
         "LocalDaemonConfig",
+        "ConfiguredGpuDevice",
         "LocalDaemonPrincipal",
         "LocalDaemonRole",
         "LocalDaemonSocketClient",
@@ -131,6 +134,7 @@ def __getattr__(name: str) -> object:
         return prepare_managed_local_runtime_record
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+
 __all__ = [
     "QUEUE_CONFIG_SCHEMA_VERSION",
     "QUEUE_DB_SCHEMA_VERSION",
@@ -144,6 +148,7 @@ __all__ = [
     "LocalDaemonAdmissionRequest",
     "LocalDaemonAdmissionState",
     "LocalDaemonConfig",
+    "ConfiguredGpuDevice",
     "LocalDaemonPrincipal",
     "LocalDaemonRole",
     "LocalDaemonSocketClient",

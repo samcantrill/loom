@@ -65,6 +65,80 @@ class LocalDaemonRole(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ConfiguredGpuDevice:
+    """One configured manageable GPU; ``binding_value`` never leaves the agent."""
+
+    device_id: str
+    binding_value: str
+    model: str
+    vram_bytes: int
+    allocation_mode: str = "exclusive"
+    provider: str = "exclusive"
+    granularity: int = 1
+    share_numerator: int = 1
+    share_denominator: int = 1
+    share_granularity_numerator: int = 1
+    share_granularity_denominator: int = 1
+    features: tuple[str, ...] = ()
+    healthy: bool = True
+
+    def __post_init__(self) -> None:
+        for name in ("device_id", "binding_value", "model", "provider"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value or "\0" in value:
+                raise QueueServiceError(
+                    f"configured GPU {name} must be a safe non-empty string"
+                )
+        if "," in self.binding_value:
+            raise QueueServiceError(
+                "configured GPU binding_value must not contain a list separator"
+            )
+        if self.allocation_mode not in {"exclusive", "vram_share", "provider_fraction"}:
+            raise QueueServiceError("configured GPU allocation_mode is unsupported")
+        if self.allocation_mode == "exclusive" and self.provider != "exclusive":
+            raise QueueServiceError("exclusive GPU provider must be exclusive")
+        for value, name in (
+            (self.vram_bytes, "vram_bytes"),
+            (self.granularity, "granularity"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise QueueServiceError(
+                    f"configured GPU {name} must be a positive integer"
+                )
+        if self.allocation_mode == "exclusive" and self.granularity != 1:
+            raise QueueServiceError("exclusive GPU granularity must be one device")
+        if self.vram_bytes % self.granularity:
+            raise QueueServiceError(
+                "configured GPU capacity must be a granularity multiple"
+            )
+        for value, name in (
+            (self.share_numerator, "share_numerator"),
+            (self.share_denominator, "share_denominator"),
+            (self.share_granularity_numerator, "share_granularity_numerator"),
+            (self.share_granularity_denominator, "share_granularity_denominator"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise QueueServiceError(
+                    f"configured GPU {name} must be a positive integer"
+                )
+        if self.allocation_mode == "provider_fraction" and (
+            (self.share_numerator * self.share_granularity_denominator)
+            % (self.share_denominator * self.share_granularity_numerator)
+        ):
+            raise QueueServiceError(
+                "configured GPU share capacity must be a granularity multiple"
+            )
+        features = tuple(self.features)
+        if any(not isinstance(value, str) or not value for value in features) or len(
+            set(features)
+        ) != len(features):
+            raise QueueServiceError("configured GPU features are invalid")
+        if not isinstance(self.healthy, bool):
+            raise QueueServiceError("configured GPU health is invalid")
+        object.__setattr__(self, "features", tuple(sorted(features)))
+
+
+@dataclass(frozen=True, slots=True)
 class LocalDaemonPrincipal:
     """Trusted adapter-derived principal; request bodies never select it."""
 
@@ -92,6 +166,7 @@ class LocalDaemonConfig:
     machine_id: str = "machine-A"
     cpu_capacity: int = 1
     memory_capacity_bytes: int = 0
+    gpu_devices: tuple[ConfiguredGpuDevice, ...] = ()
     poll_interval_seconds: float = 0.05
     agent_policy: AgentPolicyConfig = AgentPolicyConfig()
     remote_profiles: tuple[ResidentProfileDescriptor, ...] = ()
@@ -120,6 +195,13 @@ class LocalDaemonConfig:
             raise QueueServiceError(
                 "memory_capacity_bytes must be a non-negative integer"
             )
+        gpu_devices = tuple(self.gpu_devices)
+        if any(not isinstance(item, ConfiguredGpuDevice) for item in gpu_devices):
+            raise QueueServiceError("gpu_devices must be configured GPU devices")
+        if len({item.device_id for item in gpu_devices}) != len(gpu_devices):
+            raise QueueServiceError("configured GPU device IDs must be unique")
+        if len({item.binding_value for item in gpu_devices}) != len(gpu_devices):
+            raise QueueServiceError("configured GPU bindings must be unique")
         if (
             isinstance(self.poll_interval_seconds, bool)
             or not isinstance(self.poll_interval_seconds, (int, float))
@@ -141,6 +223,11 @@ class LocalDaemonConfig:
         object.__setattr__(self, "agent_root", agent)
         object.__setattr__(self, "run_store_root", run_store)
         object.__setattr__(self, "remote_profiles", profiles)
+        object.__setattr__(
+            self,
+            "gpu_devices",
+            tuple(sorted(gpu_devices, key=lambda item: item.device_id)),
+        )
         object.__setattr__(
             self, "poll_interval_seconds", float(self.poll_interval_seconds)
         )

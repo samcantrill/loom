@@ -88,7 +88,9 @@ class ResourceEntry:
             kind=_string_value(mapping["kind"], path=f"{path}.kind"),
             amount=_numeric_amount(mapping["amount"], path=f"{path}.amount"),
             unit=_optional_unit(mapping.get("unit"), path=f"{path}.unit"),
-            attributes=_plain_mapping(mapping.get("attributes", {}), path=f"{path}.attributes"),
+            attributes=_plain_mapping(
+                mapping.get("attributes", {}), path=f"{path}.attributes"
+            ),
         )
 
 
@@ -122,7 +124,9 @@ class ResourceValidatorRegistry:
             raise RuntimeResourceError(
                 f"resource validator already registered for kind {normalized_kind!r}"
             )
-        return ResourceValidatorRegistry({**self.validators, normalized_kind: validator})
+        return ResourceValidatorRegistry(
+            {**self.validators, normalized_kind: validator}
+        )
 
     def compose(
         self,
@@ -153,23 +157,30 @@ class ResourceRequest:
     schema_version: int = RESOURCE_SCHEMA_VERSION
     validator_registry: InitVar[ResourceValidatorRegistry | None] = None
 
-    def __post_init__(self, validator_registry: ResourceValidatorRegistry | None) -> None:
+    def __post_init__(
+        self, validator_registry: ResourceValidatorRegistry | None
+    ) -> None:
         _require_schema_version(self.schema_version)
-        registry = DEFAULT_RESOURCE_VALIDATOR_REGISTRY if validator_registry is None else validator_registry
+        registry = (
+            DEFAULT_RESOURCE_VALIDATOR_REGISTRY
+            if validator_registry is None
+            else validator_registry
+        )
         if not isinstance(registry, ResourceValidatorRegistry):
             raise RuntimeResourceError(
                 "ResourceRequest.validator_registry must be a ResourceValidatorRegistry"
             )
         entries = _coerce_entries(self.entries, path="ResourceRequest.entries")
         _validate_entries(entries, registry=registry, path="ResourceRequest.entries")
-        object.__setattr__(self, "entries", MappingProxyType(dict(sorted(entries.items()))))
+        object.__setattr__(
+            self, "entries", MappingProxyType(dict(sorted(entries.items())))
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "schema_version": self.schema_version,
             "entries": {
-                kind: entry.to_dict()
-                for kind, entry in sorted(self.entries.items())
+                kind: entry.to_dict() for kind, entry in sorted(self.entries.items())
             },
         }
 
@@ -260,20 +271,125 @@ def _validate_cpu(entry: ResourceEntry, path: str) -> None:
 def _validate_memory(entry: ResourceEntry, path: str) -> None:
     _require_no_attributes(entry, path=path)
     if entry.unit not in {"B", "KiB", "MiB", "GiB", "TiB"}:
-        raise RuntimeResourceError(
-            f"{path}.unit must be one of B, KiB, MiB, GiB, TiB"
-        )
+        raise RuntimeResourceError(f"{path}.unit must be one of B, KiB, MiB, GiB, TiB")
     if entry.amount <= 0:
         raise RuntimeResourceError(f"{path}.amount must be positive")
 
 
 def _validate_gpu(entry: ResourceEntry, path: str) -> None:
-    _require_no_attributes(entry, path=path)
-    _require_count_unit(entry, path=path)
-    if not isinstance(entry.amount, int):
-        raise RuntimeResourceError(f"{path}.amount must be a non-negative integer")
-    if entry.amount < 0:
-        raise RuntimeResourceError(f"{path}.amount must be a non-negative integer")
+    mode = entry.attributes.get("allocation_mode", "exclusive")
+    if mode == "exclusive":
+        if entry.unit not in {None, "count"}:
+            raise RuntimeResourceError(f"{path}.unit must be count")
+        # The legacy codec remains readable; managed resolution rejects zero.
+        if not entry.attributes and entry.amount == 0:
+            return
+        if (
+            not isinstance(entry.amount, int)
+            or isinstance(entry.amount, bool)
+            or entry.amount <= 0
+        ):
+            raise RuntimeResourceError(
+                f"{path}.amount must be a non-negative integer (positive for managed GPU requests)"
+            )
+        _validate_gpu_attributes(
+            entry,
+            path,
+            {"allocation_mode", "minimum_vram", "models", "features", "fabric_group"},
+        )
+        _validate_gpu_minimum_vram(entry.attributes.get("minimum_vram"), path)
+        _validate_gpu_strings(entry.attributes.get("models"), path, "models")
+        _validate_gpu_strings(entry.attributes.get("features"), path, "features")
+        fabric_group = entry.attributes.get("fabric_group")
+        if fabric_group is not None and (
+            not isinstance(fabric_group, str) or not fabric_group
+        ):
+            raise RuntimeResourceError(f"{path}.attributes.fabric_group is invalid")
+        return
+    if mode == "vram_share":
+        if entry.unit not in {"B", "KiB", "MiB", "GiB", "TiB"}:
+            raise RuntimeResourceError(f"{path}.unit must be a binary VRAM byte unit")
+        if (
+            not isinstance(entry.amount, int)
+            or isinstance(entry.amount, bool)
+            or entry.amount <= 0
+        ):
+            raise RuntimeResourceError(
+                f"{path}.amount must be an exact positive integer"
+            )
+        _validate_gpu_attributes(
+            entry, path, {"allocation_mode", "provider", "device_ids"}
+        )
+        _gpu_provider(entry, path)
+        _validate_gpu_strings(entry.attributes.get("device_ids"), path, "device_ids")
+        return
+    if mode == "provider_fraction":
+        if entry.unit != "share":
+            raise RuntimeResourceError(f"{path}.unit must be share")
+        denominator = entry.attributes.get("share_denominator")
+        if (
+            not isinstance(entry.amount, int)
+            or isinstance(entry.amount, bool)
+            or entry.amount <= 0
+            or not isinstance(denominator, int)
+            or isinstance(denominator, bool)
+            or denominator <= 0
+        ):
+            raise RuntimeResourceError(
+                f"{path} provider_fraction requires positive integer amount and share_denominator"
+            )
+        _validate_gpu_attributes(
+            entry,
+            path,
+            {"allocation_mode", "provider", "share_denominator", "device_ids"},
+        )
+        _gpu_provider(entry, path)
+        _validate_gpu_strings(entry.attributes.get("device_ids"), path, "device_ids")
+        return
+    raise RuntimeResourceError(f"{path}.attributes.allocation_mode is unsupported")
+
+
+def _validate_gpu_attributes(
+    entry: ResourceEntry, path: str, allowed: set[str]
+) -> None:
+    unknown = set(entry.attributes) - allowed
+    if unknown:
+        raise RuntimeResourceError(
+            f"{path}.attributes contains unsupported GPU field(s): {', '.join(sorted(unknown))}"
+        )
+
+
+def _gpu_provider(entry: ResourceEntry, path: str) -> None:
+    provider = entry.attributes.get("provider")
+    if not isinstance(provider, str) or not provider:
+        raise RuntimeResourceError(f"{path}.attributes.provider is required")
+
+
+def _validate_gpu_minimum_vram(value: object, path: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping) or set(value) != {"amount", "unit"}:
+        raise RuntimeResourceError(f"{path}.attributes.minimum_vram is invalid")
+    amount, unit = value["amount"], value["unit"]
+    if (
+        not isinstance(amount, int)
+        or isinstance(amount, bool)
+        or amount <= 0
+        or unit not in {"B", "KiB", "MiB", "GiB", "TiB"}
+    ):
+        raise RuntimeResourceError(f"{path}.attributes.minimum_vram is invalid")
+
+
+def _validate_gpu_strings(value: object, path: str, field: str) -> None:
+    if value is None:
+        return
+    if (
+        not isinstance(value, (list, tuple))
+        or not value
+        or any(not isinstance(item, str) or not item for item in value)
+        or len(set(value)) != len(value)
+    ):
+        raise RuntimeResourceError(f"{path}.attributes.{field} is invalid")
 
 
 def _require_no_attributes(entry: ResourceEntry, *, path: str) -> None:
@@ -315,7 +431,9 @@ def _coerce_entries(
     }
 
 
-def _entry_mapping(value: object, *, path: str) -> Mapping[str, ResourceEntry | Mapping[str, PlainData]]:
+def _entry_mapping(
+    value: object, *, path: str
+) -> Mapping[str, ResourceEntry | Mapping[str, PlainData]]:
     if not isinstance(value, Mapping):
         raise RuntimeResourceError(f"{path} must be a mapping")
     if any(not isinstance(key, str) for key in value):
@@ -371,9 +489,7 @@ def _reject_old_resource_fields(mapping: Mapping[str, object], *, path: str) -> 
     old_fields = set(mapping) & _OLD_RESOURCE_FIELDS
     if old_fields:
         fields = ", ".join(sorted(old_fields))
-        raise RuntimeResourceError(
-            f"{path} uses removed resource field(s): {fields}"
-        )
+        raise RuntimeResourceError(f"{path} uses removed resource field(s): {fields}")
 
 
 DEFAULT_RESOURCE_VALIDATOR_REGISTRY = _builtin_registry()

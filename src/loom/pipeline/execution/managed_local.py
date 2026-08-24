@@ -2377,6 +2377,49 @@ class MemoryResourceProvider(AtomResourceProvider):
         )
 
 
+class GpuResourceProvider(AtomResourceProvider):
+    """Configured GPU accounting plus private exact-claim binding lookup.
+
+    The mapping intentionally stores only on the agent.  Coordinator-visible
+    claims name configured IDs through atoms, never their device paths/tokens.
+    """
+
+    def __init__(
+        self,
+        descriptor: SchedulingComponentDescriptor,
+        claim_contracts: Sequence[ResourceClaimContractDescriptor],
+        atoms: Sequence[CapacityAtom],
+        *,
+        bindings: Mapping[str, str],
+    ) -> None:
+        super().__init__(descriptor, claim_contracts, atoms)
+        self._bindings = dict(bindings)
+        if set(self._bindings) != {atom.local_capacity_key for atom in atoms}:
+            raise ManagedLocalError("GPU bindings must exactly cover configured atoms")
+        if any(not value or "\0" in value for value in self._bindings.values()):
+            raise ManagedLocalError("GPU binding values are invalid")
+
+    def binding_for_claim(self, command: ClaimCommand) -> tuple[str, ...]:
+        """Return private worker bindings only for the exact active claim."""
+        with self._lock:
+            prior = self._claims.get(command.assignment.assignment_id)
+            if prior is None or prior[1] is not ClaimOutcome.ACTIVE:
+                raise ManagedLocalError("GPU claim is not active")
+            if prior[0].claim.fingerprint != command.claim.fingerprint:
+                raise ManagedLocalError(
+                    "GPU claim binding differs from journalled claim"
+                )
+            try:
+                return tuple(
+                    self._bindings[atom.local_capacity_key]
+                    for atom in command.claim.atoms
+                )
+            except KeyError as exc:
+                raise ManagedLocalError(
+                    "GPU configured binding is unavailable"
+                ) from exc
+
+
 def _claim_command_dict(command: ClaimCommand) -> dict[str, PlainData]:
     claim = command.claim
     return {
@@ -2782,6 +2825,7 @@ __all__ = [
     "ManagedOfferSnapshot",
     "ManagedProcessStartError",
     "MemoryResourceProvider",
+    "GpuResourceProvider",
     "ObserveRequest",
     "ObserveResult",
     "SQLiteAgentJournal",
