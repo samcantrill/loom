@@ -60,7 +60,11 @@
   `src/loom/queue/agent_session_transport.py`, and
   `src/loom/queue/_remote_stage_execution.py` own the offer, physical admission,
   resident profile, request/claim, and worker-launch boundaries. Remote launch
-  currently carries claims but applies no GPU-specific local binding.
+  currently carries `ResourceClaim` values unchanged into journalled
+  `ClaimCommand`s but applies no GPU-specific local binding. The existing claim
+  fingerprint covers its contract, exact atoms, provider-data version, and
+  provider data; reuse that identity rather than introducing a second GPU lease
+  or assignment identity.
 - Real GPU/vendor calls remain optional adapters. Deterministic fake inventory
   and providers own required CI coverage; do not add a heavyweight vendor SDK
   without a demonstrated current need.
@@ -112,10 +116,22 @@ In scope:
   provider contract, and ambiguous count-versus-capacity requests at admission.
   The `provider` field is a site-allowlisted semantic capability alias; it cannot
   name/import/activate implementation code.
-- Bind exact selected device/share identities in the claim, assignment, agent
-  journal, worker environment/binding plan, output provenance where already
-  appropriate, and release operation. Do not expose unsafe device details to
-  unrelated clients.
+- Preserve one exact opportunity-to-release identity chain. The offered GPU
+  opportunity is tied to the agent/session and config/inventory/availability
+  revisions plus the planner, provider, and claim-contract descriptors. The
+  selected claim names its safe configured device/share identity through exact
+  atom keys and bounded versioned provider data. The coordinator persists and
+  delivers that claim unchanged with its descriptor evidence; the agent
+  journals the same claim fingerprint before provider preparation, maps only
+  that configured identity to its local worker binding, and releases using the
+  same assignment-scoped claim. Missing, stale, or mismatched identity declines
+  or becomes indeterminate; no layer may substitute another feasible GPU.
+- Keep local binding values, vendor handles, live provider tokens, device paths,
+  and daemon credentials agent-local. They do not become capacity keys,
+  provider data, decision evidence, work-request metadata, status, or output
+  provenance. The concrete way an activated provider contributes its binding
+  to the already-sanitized worker environment remains private, provided the
+  launcher receives only the binding derived from the journalled selected claim.
 - Negotiate planner and provider via `ResourceClaimContractDescriptor` while
   retaining their separate component/configuration descriptors. The coordinator
   rejects an offer or candidate when contract/data versions or fingerprints are
@@ -138,6 +154,12 @@ In scope:
   resources plus deterministic stable tie-breaking. Preferences are attached to
   resolved stage placement, so a training-stage GPU preference does not affect
   preprocess/evaluate stages that do not request that resource.
+- Each concrete agent/model/attribute/packing scorer implements the existing
+  `PreferenceScorer` boundary and returns only its bounded integer utility and
+  declared quality band for a complete feasible candidate. It does not combine
+  scorers, apply a site weight or tier, decide fallback eligibility, compare
+  candidates, or break ties. Do not add a GPU preference engine, composite
+  scorer, score-normalization layer, or packing policy beside the kernel.
 - Keep pack/fill and agent/model preference distinct from cluster policy.
   They rank feasible placements for one ready stage; they do not account for
   historical user shares, preempt a running assignment, jointly optimize a
@@ -301,12 +323,35 @@ provider-defined atoms. The agent revalidates device state and contract before
 acceptance; drift causes definitive decline or indeterminate reconciliation,
 never substitution with an unrecorded device.
 
+The cross-owner equality is the `ResourceClaim` fingerprint together with the
+assignment's planner/provider/claim-contract descriptor evidence and offer
+revisions. Safe configured device/share IDs appear in the claim's atom keys or
+bounded provider data; an agent-local mapping may translate those IDs to worker
+binding values only after exact descriptor/config matching. Prepare, activate,
+reconcile, and release reuse the journalled claim and assignment identity.
+Binding values and provider live tokens are deliberately not part of the
+coordinator-visible identity.
+
+### Concrete scorer composition
+
+Agent, GPU-model, resource-attribute, and pack/fill scorers independently read
+the existing complete `Candidate` and selected claims plus their one resolved
+`PreferenceSpec`. Each emits only a `PreferenceResult` containing bounded
+`PreferenceScore(utility, quality_band)` evidence.
+The existing kernel remains the sole owner of utility bounds, checked
+weighting/addition, ordered tier vectors, durable-time band eligibility,
+candidate comparison, and stable tie-breaking. Packing is therefore a
+placement-local preference over currently advertised feasible capacity, not a
+new capacity owner or cross-work batching algorithm.
+
 ### Private discretion
 
-Candidate enumeration heuristics, private GPU inventory adapter layout, score
-normalization helpers, and topology data representation remain changeable within
-the bounded schemas. The executor may not add implicit sharing, resource-specific
-kernel branches, or allow preferences to change feasibility.
+Candidate enumeration heuristics, private GPU inventory adapter layout, the
+agent-local configured-ID-to-binding mapping, individual scorer utility
+formulas, and topology data representation remain changeable within the bounded
+schemas. The executor may not add implicit sharing, a second durable GPU claim/
+lease record, resource-specific kernel branches, or allow preferences to change
+feasibility.
 
 ## Proportionality
 
@@ -326,27 +371,34 @@ kernel branches, or allow preferences to change feasibility.
 | GPU intrinsic semantics have one owner | GPU planner | Duplicate hard evaluator or malformed opportunity | Planner/rule disagreement about count, mode, model, or topology | Opportunity validation and no-duplicate-rule tests |
 | Sharing requires enforceable named provider | Validator/planner/provider negotiation | Free-VRAM observation, float, malformed rational, or request text | Unsafe oversubscription | Unsupported/mismatch/canonical-rational/granularity tests |
 | Exact selected devices/shares conserve | Coordinator atoms + agent provider | Concurrent assignments/pool views | Device collision | Barrier/property/release tests |
-| Planner/provider/contract identities agree | Composition and assignment validation | Restart/config drift | Wrong binding semantics | Version/fingerprint/restart tests |
+| Selected GPU/provider identity survives selection through release | Coordinator assignment plus agent journal/provider | Offer/request codec, provider preparation, local binding mapping, or replay/release substitutes or drops the selected safe identity | The worker uses or releases a different GPU/share than the coordinator reserved | One simulated decision-to-worker-to-release trace with distinct safe IDs and local bindings; descriptor/config drift negative |
+| Planner/provider/contract identities agree | Composition and assignment validation | Restart/config drift | Wrong binding semantics | Version/fingerprint/restart tests with no adoption or substitution |
 | Complete intrinsic feasibility and hard rules precede preferences | GPU planner + scheduling kernel | Exhausted search, scorer, or policy | Omitted/bad device or preference bypasses feasibility | Exhaustion, invalid-output, and scoring mutation tests |
-| Preference precedence and fallback are restart-stable | Kernel tier aggregation and durable-time gate | Client weights, registration order, overflow, or restart clock | Wrong device/agent or premature fallback | Tier/weight overflow, band, stable-tie, and restart-`as_of` tests |
+| Concrete scorers contribute only bounded utility/band evidence | Concrete scorer; kernel owns composition | Agent/model/attribute/packing scorer reimplements tiers, weighting, fallback, or ties | Scorer order or duplicated algebra changes the selected feasible placement | One causal pair per scorer plus mixed-scorer tier/weight/band and permutation tests through the real kernel |
+| Preference precedence and fallback are restart-stable | Kernel tier aggregation and durable-time gate | Client weights, registration order, overflow, or restart clock | Wrong device/agent or premature fallback | Existing kernel tier/weight overflow, band, stable-tie, and restart-`as_of` coverage plus concrete-scorer integration |
 | Preference applies only to relevant stage/resource | Placement resolver/scorer | Run-wide default | CPU work unnecessarily constrained | CPU preprocess/GPU train tests |
 | Target and preference are distinct | Hard evaluator versus scorer/policy | User config | Silent fallback or unnecessary pending | Offline target/preferred fallback tests |
 | Kernel remains resource-neutral | Scheduling package boundary | GPU implementation | Core coupling | Import/source contract plus synthetic resource test |
 
 ## Implementation Slices
 
-1. Add GPU request/inventory/availability/claim schemas, exact exclusive and
-   provider-gated share/fraction semantics including the integer numerator/
-   denominator encoding, safe offer projection, claim-contract negotiation, and
-   validation/unit/conformance coverage.
+1. Carry GPU-specific validated data in the existing resource request,
+   inventory/availability opportunity, and `ResourceClaim` envelopes; add exact
+   exclusive and provider-gated share/fraction semantics including the integer
+   numerator/denominator encoding, safe offer projection, claim-contract
+   negotiation, and validation/unit/conformance coverage. Do not introduce a
+   parallel authored or durable GPU schema.
 2. Implement GPU planner and agent provider adapters with exact device/share
-   bind/reconcile/activate/release, composite CPU/memory/GPU admission, and
-   concurrency/drift/crash tests.
+   bind/reconcile/activate/release. Preserve the selected claim fingerprint and
+   descriptor/config evidence through delivery and the agent journal, derive
+   the worker binding from that exact safe configured identity, and reuse it for
+   release; add composite CPU/memory/GPU concurrency/drift/replay tests.
 3. Keep GPU-intrinsic requirements in the planner; add only the concrete
    complete-placement target/agent/cross-resource rules and stage-relevant
-   agent/model/attribute/packing scorers and registrations. Reuse the kernel's
-   existing checked site-tier vectors, quality bands, durable-time fallback,
-   validation, and stable ties; add focused integration and permutation tests.
+   agent/model/attribute/packing scorers and registrations. Each scorer returns
+   only bounded utility/band evidence and reuses the kernel's checked site-tier
+   vectors, durable-time fallback, validation, and stable ties; add focused
+   causal integration and permutation tests without a Cartesian scorer matrix.
 4. Integrate multi-agent GPU stage execution, synthetic downstream resource,
    status/docs/config examples, simulated E2E, and optional real-GPU receipt.
 
@@ -355,10 +407,28 @@ kernel branches, or allow preferences to change feasibility.
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | Required | GPU adapters do not pollute generic imports | Scheduling core remains vendor/driver free |
-| Unit | Required | Request modes, exact units, complete candidate feasibility/scoring | Count/bytes/rational boundaries; malformed opportunity; per-device VRAM; tier dominance/overflow; target/preference/band/fallback restart |
-| Contract | Required | Planner/provider and custom resource behavior | Negotiated contract, stable namespaced atoms, complete/exhausted search, validated claims, partial prepare, malformed/unknown versions |
-| Integration | Required | Global capacity and exact bind | Concurrent device claims, pool overlap, external occupancy withdrawal, drift decline, release and retry |
-| E2E / opt-in | Required simulated; optional GPU | Stage-specific placement | CPU preprocess/GPU train across logical agents; optional configured hardware receipt |
+| Unit | Required | Request modes, exact units, complete candidate feasibility and concrete scorer composition | Count/bytes/rational boundaries; malformed opportunity; per-device VRAM; for each agent/model/attribute/packing scorer, candidates differ only in that input and reversing the resolved preference reverses their ranking; an infeasible candidate remains rejected |
+| Contract | Required | Planner/provider identity and custom resource behavior | Negotiated descriptors and contract, stable namespaced atoms, unchanged claim codec/fingerprint, complete/exhausted search, validated claims, partial prepare, malformed/unknown versions; a changed provider/config/contract cannot adopt or substitute the claim |
+| Integration | Required | Global capacity and exact physical bind/release | Concurrent device claims and pool overlap; use different safe configured IDs and local binding values, assert the selected claim fingerprint is journalled, the worker receives only its mapped binding, and release receives the same claim after replay; external occupancy and mapping/descriptor drift fail closed without launch or substitution, using the exact decline/indeterminate outcome supported by evidence |
+| E2E / opt-in | Required simulated; optional GPU | Stage-specific placement across the real selection and launch path | On abstract agents with multiple feasible models, a GPU preference causally selects the expected claim, its exact local binding reaches the GPU-train worker, and the same claim releases; changing only the model preference changes selection. CPU preprocess carries no GPU claim/binding. Optional configured hardware receipt |
+
+Required scorer composition coverage uses the concrete registered scorers
+through `SchedulingKernel`, not direct scorer-output assertions alone. One mixed
+case proves a higher tier dominates every allowed lower-tier total, weights are
+applied once, fallback bands use the existing immutable `ready_at`/`as_of`
+gate, and registration/candidate permutation preserves the stable decision.
+These dimensions share the kernel composition path; the independent scorer
+formula cases remain focused pairs rather than a Cartesian matrix.
+
+The required simulated identity trace starts from an offered opportunity and
+records the coordinator decision, delivered/decoded claim, journalled
+`ClaimCommand`, provider prepare/activate input, launched worker environment,
+and release input. Assert equality of claim fingerprint, exact atoms, contract,
+provider-data version/data, and retained component descriptors at every
+applicable boundary. Give safe configured IDs and agent-local binding values
+deliberately different strings so accidental use, recomputation, or substitution
+cannot pass. Optional real-GPU evidence supplements but never replaces this
+trace.
 
 Targeted commands:
 
@@ -375,16 +445,24 @@ Final commands:
 
 - Main risks: treating total VRAM as per-device, inferring isolation from free
   VRAM, hidden provider consumption, duplicating planner semantics in hard
-  rules, assigning from incomplete search, score overflow/client policy abuse,
-  restart-relative fallback, preference leakage to unrelated stages, or
-  provider identity drift; or implying that a declared request guarantees actual
-  peak use or prevents OOM.
-- Review focus: exact mode semantics, atom conservation, final binding,
-  planner/provider/contract separation, hard-before-soft, and generic core
-  independence.
+  rules, dropping or substituting the selected safe GPU/provider identity at
+  delivery/binding/release, assigning from incomplete search, letting a
+  concrete scorer duplicate tier/weight/fallback/tie algebra, score overflow/
+  client policy abuse, restart-relative fallback, preference leakage to
+  unrelated stages, or provider identity drift; or implying that a declared
+  request guarantees actual peak use or prevents OOM.
+- Review focus: exact mode semantics, atom conservation, equality of the
+  opportunity/claim/descriptors across coordinator selection and agent
+  journal/binding/release, absence of coordinator-visible local bindings,
+  planner/provider/contract separation, scorer-only utility/band contribution,
+  hard-before-soft, and generic core independence.
 - Stop if: a requested share mode lacks enforceable provider semantics; Stage 27
   device identity cannot be made stable for one inventory revision; a resource
-  needs hidden capacity outside atoms; or implementing GPU requires database/
+  needs hidden capacity outside atoms; exact binding/release would require
+  exposing a local binding/live token to the coordinator or adding a second
+  durable GPU claim/lease owner; the existing descriptor/claim/assignment/
+  journal contracts cannot retain the selected safe identity without a new
+  public or compatibility decision; or implementing GPU requires database/
   provider logic inside `loom.scheduling`.
 - Accepted debt: complete bounded heuristics may report `EXHAUSTED` rather than
   assign from an unproven partial prefix, and default FIFO can starve large
@@ -397,6 +475,14 @@ Final commands:
   constraints cited here.
 - Prove exact simulated behavior before optional hardware tests. Do not make
   default CI depend on a GPU or vendor library.
+- The required end-to-end proof must distinguish safe configured GPU/share IDs
+  from agent-local binding values and show the same selected claim and component
+  identities at coordinator decision, delivery, durable agent preparation,
+  worker binding, and release. A collection of isolated codec/provider tests is
+  insufficient.
+- Exercise each concrete scorer through the existing kernel with causal input
+  changes. Scorers stop at bounded utility/band evidence; do not add another
+  tier aggregator, fallback gate, stable tie, or packing scheduler.
 - Decisions not to revisit: integer CPU, byte-exact VRAM, explicit GPU modes,
   per-device minima, planner-owned intrinsic GPU feasibility, complete-only
   search, generic kernel, hard-before-soft, site-tier/band/fallback algebra,
@@ -410,8 +496,10 @@ Final commands:
   branch/worktree, repository `samcantrill/loom`, verified Phase 5A merge,
   current Stage 27 and Phase 5A source owners, target/title, tests, and stop
   conditions recorded
-- Expanded planning: one bounded refinement pending for the exact provider/
-  offer/binding composition and already-owned preference algebra
+- Expanded planning: complete in this plan revision; the selected safe GPU/
+  provider claim is preserved through offer, assignment, journalled physical
+  binding, worker environment, and release, while concrete scorers contribute
+  only utility/band evidence to the kernel-owned preference algebra
 - Implementation: pending
 - Refiner: not used
 - Pre-submit gate: pending
