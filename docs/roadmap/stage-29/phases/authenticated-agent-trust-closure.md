@@ -2,14 +2,17 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 4A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p4a-authenticated-agent-trust-closure`
-- Worktree root and path: record during phase preparation
-- Base revision: current clean `origin/develop` after this planning amendment
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p4a-authenticated-agent-trust-closure`
+- Base revision: clean `origin/develop`
+  `922237c352548abe7c7affc9768ab02510791924`
 - PR target: `develop`
 - PR title: `feat(protocols): complete authenticated agent sessions`
+- PR: [#239](https://github.com/samcantrill/loom/pull/239) open
 - Dependencies: Phase 3D merged; Phase 4 and PR #238 are blocked read-only
   evidence and are not a branch base
 - Workflow path: expanded for one independent implementation review because
@@ -239,26 +242,38 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending dedicated branch/worktree after planning merge
+- Manager preparation: complete at clean `origin/develop` `922237c`; dedicated
+  branch/worktree, repository `samcantrill/loom`, target/title, read-only Phase 4
+  evidence, source/test owners, validation gates, and stop conditions recorded
 - Expanded planning: complete; maintainer approved the exact trust/durable-
   format design, one removal-first safety review passed, and one plan-quality
   review passed after correcting only an ambiguous lifecycle label from phase
   `approved` to phase `pending` with design approval explicit
-- Implementation: pending
+- Implementation: complete at `fc122bb` and `c5a6338` (`feat(queue): close agent retirement trust boundary`; `test(queue): cover missing retirement secret rejection`); selective Phase 4 source/test/docs port plus final journal-secret/verifier, redacted retirement proof, principal-scoped poll-key, and hard-schema-cutover closures are committed
+- Manager correction: correction 1/3 complete at `41a6045`; a required
+  response-loss regression now proves that coordinator-committed retirement
+  keeps the journal secret/intent until the same request replays and durably
+  acknowledges the recorded result
 - Refiner: not used
-- Pre-submit gate: pending
-- Independent review: required because this closes the demonstrated remote
-  retirement trust boundary
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Pre-submit gate: complete at clean validation-relevant revision `41a6045`;
+  manager inspection found no further retirement-order, secret-redaction,
+  poll-SQL, schema-cutover, import, or no-launch blocker; focused suites and the
+  full implementation gate/summary passed
+- Independent review: passed at clean head `b5cf127`; no product blocker,
+  optional hardening request, future-capability finding, workflow issue, or
+  source-boundary/no-launch concern; reviewer independently confirmed 19
+  focused session and 23 adjacent contract passes
+- Blocker corrections: 1/3
+- PR and merge: PR #239 is open, non-draft, mergeable, and verified with exact
+  `develop` base, phase head, and required title; GitHub CI is pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | `fc122bb`, `c5a6338`, and manager test correction `41a6045`: `src/loom/queue/agent_sessions.py`, `src/loom/queue/agent_session_transport.py`, `src/loom/queue/local_daemon.py`, `tests/unit/loom/queue/test_agent_sessions.py`, `tests/integration/queue/test_agent_session_transport.py`, and `docs/features/queue.md` |
+| Tests added or updated | Focused unit/integration coverage proves persist-before-send exact replay, verifier-only coordinator state, invalid/missing/old-secret rejection without coordinator mutation, secret redaction/ack cleanup, distinct later-session secret, exact replay after a committed retirement response is lost, final-schema candidate rejection, and same-ID cross-principal poll isolation/cleanup; retained mTLS, policy, restart, offer, held-poll, and no-launch coverage passes |
+| Validated revision/tree state and evidence | Clean source/test revision `41a6045`; focused session suites: 19 passed; daemon/authority/Python-API contract suites: 23 passed. Fresh `make validate-pr` passed Ruff, zero-error Pyright, 2,416 default tests, 141 configuration-extra tests with 3 expected environment skips, and source/wheel builds. Fresh `make test-summary`: package 118, unit 1,718, contract 295, integration 228, E2E 57, configuration-extra 141; 2,557 passes, 3 expected skips, 0 failures/errors. |
+| Validation-relevant changes after evidence | Phase completion metadata only |
+| PR, review, and merge | [PR #239](https://github.com/samcantrill/loom/pull/239) targets `develop` with the required title. Independent review passed with no blocker; GitHub CI is pending. |
+| Residual risk and cleanup | Protected-agent-root loss intentionally cannot cleanly retire a session and remains Phase 9 positive-containment work; no Phase 5 delivery/launch side effect was added; worktree/branch retained for pre-submit and required independent review |

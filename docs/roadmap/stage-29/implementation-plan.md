@@ -1,16 +1,15 @@
 # Roadmap Stage 29 Implementation Plan
 
 Status: implementation in progress; Phases 1-3D merged, Phases 3A-3C and 4
-retained as blocked evidence; Phase 4A pending with its recovery design approved
+retained as blocked evidence; Phase 4A PR open
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 4A pending
-Blockers: none. Phase 4 candidate `c373d04` passed local validation and PR #238
-passed CI, but required review found forgeable retirement evidence and global
-poll identity after correction 3/3. PR #238 closed without merge. The
-maintainer approved the fresh-only Phase 4A remedy.
+Current phase: Phase 4A pr_open
+Blockers: none. Phase 4A local validation and required independent review pass;
+[PR #239](https://github.com/samcantrill/loom/pull/239) targets `develop` with
+the required title and awaits GitHub CI.
 
 ## Summary
 
@@ -650,7 +649,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 3C | `local-daemon-authoritative-cutover` | blocked | `docs/roadmap/stage-29/phases/local-daemon-authoritative-cutover.md` | `agent/stage-29-p3c-local-daemon-authoritative-cutover` | [#236](https://github.com/samcantrill/loom/pull/236) closed without merge | Validated hard-cutover candidate closes exact-runtime, authority-scope, exact-claim, cancellation, real-execution, and redaction paths; review found incomplete healthy-axis evidence and unsafe missing-store restart interpretation | Preserve the validated candidate as evidence; correction 3/3 is exhausted. |
 | 3D | `local-daemon-status-restart-closure` | merged | `docs/roadmap/stage-29/phases/local-daemon-status-restart-closure.md` | `agent/stage-29-p3d-local-daemon-status-restart-closure` | [#237](https://github.com/samcantrill/loom/pull/237) merged | Selective Phase 3C source/test reuse; complete owner-backed status; fail-closed expected-store handling and stable-root binding; partial-start cleanup; hard cut-over unchanged | Merge the complete persistent daemon path only after retained restart and every healthy status axis are backed by explicit owner evidence. |
 | 4 | `authenticated-agent-sessions` | blocked | `docs/roadmap/stage-29/phases/authenticated-agent-sessions.md` | `agent/stage-29-p4-authenticated-agent-sessions` | [#238](https://github.com/samcantrill/loom/pull/238) closed without merge | Validated outbound mTLS/session/offer/poll/no-launch candidate; required review found that retirement evidence did not prove original-journal possession and globally keyed poll IDs collided across principals | Preserve candidate `c373d04` and its passing validation/CI as read-only evidence; correction 3/3 is exhausted. |
-| 4A | `authenticated-agent-trust-closure` | pending | `docs/roadmap/stage-29/phases/authenticated-agent-trust-closure.md` | `agent/stage-29-p4a-authenticated-agent-trust-closure` | pending | Selective Phase 4 source/test reuse; journal-owned fresh per-session retirement secret and coordinator-only verifier; verification before mutation with no coordinator secret retention; `(principal_id, poll_id)` storage and query identity; final additive Phase 3 schema plus hard rejection of unmerged candidate schema; all existing no-launch gates | Merge the authenticated outbound agent connectivity/capacity path only after clean retirement is tied to the original protected journal and same-named polls are isolated across authorized principals. |
+| 4A | `authenticated-agent-trust-closure` | pr_open | `docs/roadmap/stage-29/phases/authenticated-agent-trust-closure.md` | `agent/stage-29-p4a-authenticated-agent-trust-closure` | [#239](https://github.com/samcantrill/loom/pull/239) open | Selective Phase 4 source/test reuse; journal-owned fresh per-session retirement secret and coordinator-only verifier; verification before mutation with no coordinator secret retention; `(principal_id, poll_id)` storage and query identity; final additive Phase 3 schema plus hard rejection of unmerged candidate schema; all existing no-launch gates | Merge the authenticated outbound agent connectivity/capacity path only after clean retirement is tied to the original protected journal and same-named polls are isolated across authorized principals. |
 | 5 | `remote-stage-data-execution` | pending | `docs/roadmap/stage-29/phases/remote-stage-data-execution.md` | `agent/stage-29-p5-remote-stage-data-execution` | pending | Cross-agent CPU/memory availability; remote assignment loop; stable assignment-principal transfer progress with renewable authorization; durable grant/start/result; monotonic event/outbox replay; exact old-issuer reconnect, receipt-aware authority reconciliation, status freshness, and ordered physical release | Execute CPU/memory stages remotely with inputs durable before grant and accessible output refs committed before descendants unlock; leave the same bounded relay usable by Phase 7's restricted bootstrap. |
 | 6 | `gpu-preference-placement` | pending | `docs/roadmap/stage-29/phases/gpu-preference-placement.md` | `agent/stage-29-p6-gpu-preference-placement` | pending | Configured manageable GPU inventory; external-occupancy withdrawal; GPU planner/provider and claim contracts; planner-owned count/mode/per-device/topology feasibility; whole-placement constraints; tiered agent/model/packing preferences; quality-band fallback; strict future SLURM hard-mapping boundary; explicit no-OOM guarantee | Prove the generic resource and policy seams with safe exact GPU/VRAM managed placement and deterministic resource-relevant preferences that Phase 7 must map completely or reject. |
 | 7 | `slurm-ready-stage-delegation` | pending | `docs/roadmap/stage-29/phases/slurm-ready-stage-delegation.md` | `agent/stage-29-p7-slurm-ready-stage-delegation` | pending | Explicit route/profile resolution; protected profile registry and preflight; complete non-weakening request mapping; tagged target admission; durable at-most-one `sbatch` operation and exact reconciliation; assignment-scoped gated bootstrap; execution-only worker/result relay; external-scheduler observation and primitive cancel | Run one exact dependency-ready stage through one explicitly selected SLURM profile without duplicate submission/root launch, inferred fallback, weakened resources, or scheduler-state-as-Loom-success. |
@@ -807,8 +806,9 @@ work.
   approved the fresh-only Phase 3D recommendation and the fresh-only Phase 4A
   per-session-preimage/composite-poll-key recommendation with no compatibility
   or migration.
-- Ready for implementation: Phase 4 is blocked read-only evidence. Phase 4A is
-  the next pending phase and must follow its linked execution plan.
+- Ready for implementation: Phase 4 is blocked read-only evidence. Phase 4A
+  implementation, full local gate, and independent review pass; PR #239 awaits
+  CI-gated merge.
 - Accepted risks: FIFO starvation, complete-search exhaustion/delay, coordinator relay
   bottleneck, agent result retention, resident-project drift, trusted
   in-process downstream extension hang/misbehavior, configuration-driven
@@ -836,7 +836,7 @@ work.
 | 3C | [#236](https://github.com/samcantrill/loom/pull/236), closed without merge | Source/test revision `1879cd1` passed `make validate-pr`; fresh summary recorded 2,525 passes and 3 environment skips; CI passed; required independent review blocked merge | Healthy owner axes omit required state/revision/freshness; missing retained stores can become healthy empty state and full capacity | Correction 3/3 exhausted; dedicated branch/worktree retained as evidence |
 | 3D | [#237](https://github.com/samcantrill/loom/pull/237), squash-merged as `6a8cf9f` | Source/test revision `2b48d0e` passed `make validate-pr`; fresh summary recorded 2,538 passes and 3 environment skips; independent review blocker corrected and manager-verified; CI passed | Missing or corrupt owner truth intentionally requires operator restoration; unknown work remains conservatively capacity-holding | Remote phase branch removed at merge; worktree and local phase branch removed after merge metadata commit; blocked Phase 3A-3C evidence retained |
 | 4 | [#238](https://github.com/samcantrill/loom/pull/238), closed without merge | Candidate `c373d04` passed `make validate-pr`, fresh `make test-summary` with 2,554 categorized passes and 3 expected skips, and CI; required independent review then blocked it | Retirement evidence is forgeable without the original journal; same poll ID across principals collides globally | Correction 3/3 exhausted; dedicated branch/worktree retained as read-only evidence |
-| 4A | pending | pending | Original-journal possession and cross-principal poll isolation must close before Phase 5 | pending |
+| 4A | [#239](https://github.com/samcantrill/loom/pull/239) open | Source/test revision `41a6045`; focused 19 + adjacent 23 passes; `make validate-pr` passed 2,416 default and 141 config-extra tests with 3 expected skips plus builds; fresh summary recorded 2,557 passes; independent review passed | Lost protected-agent state still intentionally requires Phase 9 positive containment; no Phase 5 behavior is present | Worktree/branch retained for CI and merge |
 | 5 | pending | pending | pending | pending |
 | 6 | pending | pending | pending | pending |
 | 7 | pending | pending | pending | pending |
