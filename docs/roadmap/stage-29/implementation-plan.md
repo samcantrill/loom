@@ -10,7 +10,8 @@ Current phase: Phase 5A in progress
 Blockers: none. Phase 5A source/test revision `4134d70` closes the exact
 publish-before-commit input/output crash window without changing the approved
 hard cut-over. Manager-focused and full validation plus a fresh 2,577-pass
-categorized receipt are green; required independent review, PR, and CI remain.
+categorized receipt are green, and required independent review found no product
+blocker; PR and CI remain.
 
 ## Summary
 
@@ -844,7 +845,7 @@ work.
 | 4 | [#238](https://github.com/samcantrill/loom/pull/238), closed without merge | Candidate `c373d04` passed `make validate-pr`, fresh `make test-summary` with 2,554 categorized passes and 3 expected skips, and CI; required independent review then blocked it | Retirement evidence is forgeable without the original journal; same poll ID across principals collides globally | Correction 3/3 exhausted; dedicated branch/worktree retained as read-only evidence |
 | 4A | [#239](https://github.com/samcantrill/loom/pull/239), squash-merged as `2d273b8` | Source/test revision `41a6045`; focused 19 + adjacent 23 passes; `make validate-pr` passed 2,416 default and 141 config-extra tests with 3 expected skips plus builds; fresh summary recorded 2,557 passes; independent review and CI passed | Lost protected-agent state still intentionally requires Phase 9 positive containment; no Phase 5 behavior is present | Remote branch removed at merge; worktree and local phase branch removed after merge; blocked Phase 4 evidence retained |
 | 5 | No PR opened; blocked branch head `0928736` | Source/test revision `d536a1e`; `make validate-pr` passed 2,435 default and 141 configuration-extra tests with 3 expected skips plus builds; fresh summary recorded 2,576 categorized passes; required independent review found one blocker | Publish-before-commit can leave an already-published input/output target with unfinished durable state, causing exact replay to fail and strand the assignment | Correction 3/3 exhausted; dedicated branch/worktree retained as read-only evidence |
-| 5A | PR pending | Source/test revision `4134d70`; manager-focused 54 tests passed; `make validate-pr` passed 2,436 default and 141 configuration-extra tests with 3 expected skips plus lint, zero-finding type checks, and builds; fresh summary recorded 2,577 categorized passes; independent review pending | No known Phase 5A blocker; coordinator relay throughput and bounded retained output remain accepted debt | Branch/worktree active pending review, PR, CI, and merge |
+| 5A | PR pending | Source/test revision `4134d70`; manager-focused 54 tests passed; `make validate-pr` passed 2,436 default and 141 configuration-extra tests with 3 expected skips plus lint, zero-finding type checks, and builds; fresh summary recorded 2,577 categorized passes; required independent review passed at `600ac80` with no product blocker | No known Phase 5A blocker; coordinator relay throughput and bounded retained output remain accepted debt | Branch/worktree active pending PR, CI, and merge |
 | 6 | pending | pending | pending | pending |
 | 7 | pending | pending | pending | pending |
 | 8 | pending | pending | pending | pending |
