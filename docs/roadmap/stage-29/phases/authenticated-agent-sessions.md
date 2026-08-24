@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: `in_progress`
+- Status: `blocked`
 - Stage/phase: Stage 29, Phase 4
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p4-authenticated-agent-sessions`
 - Base: clean `origin/develop` `ad3c8349f014f454c831d6e3f50cf97cec3ddea5`
-- PR: `feat(protocols): add authenticated agent sessions` into `develop`
+- PR: [#238](https://github.com/samcantrill/loom/pull/238) closed without merge
 - Dependency: Phase 3D merged as PR #237 (`6a8cf9f`)
 - Route: expanded planning and independent PR review because this phase creates
   the remote identity, authorization, and durable-session boundary.
@@ -231,16 +231,32 @@ a default-CI prerequisite.
   current-policy-renewed poll, and structured root/session/revision-bound
   retirement evidence. Both owners fence first; unresolved references leave a
   durable `RETIRING` session that can finish after restart or credential
-  rotation, while a lost/replaced root cannot produce the proof. Valid Phase 3
-  roots migrate additively; incomplete current-version candidate state fails
-  closed with no compatibility repair.
+  rotation. The client wrapper requires the original local journal to construct
+  that evidence. Valid Phase 3 roots migrate additively; incomplete
+  current-version candidate state fails closed with no compatibility repair.
 - Focused evidence is clean: 16 authenticated-session unit/loopback tests, 57
   adjacent daemon/contract tests, scoped Ruff, and scoped Pyright. Fresh
   `make validate-pr` and `make test-summary` also pass on the same
-  validation-relevant revision. Independent PR review, CI, and merge remain
-  pending.
+  validation-relevant revision. PR #238 also passed CI and was mergeable.
+- Required independent review blocked the candidate on two reachable accepted
+  contracts. First, the coordinator accepts any syntactically valid reference
+  digest after matching copied session fields, so a credential holder can call
+  the retirement route directly without the original root journal and falsely
+  attest that agent references are empty. The smallest repair is a root-held
+  secret or signing key established with the session and a coordinator-verified
+  MAC/signature over the complete bound empty-reference evidence.
+- Second, poll lookup is principal-scoped but `agent_polls` uses global
+  `poll_id` primary-key identity. Two authorized agents choosing the same poll
+  ID therefore produce a permanent SQLite collision and indeterminate response.
+  The smallest repair is `PRIMARY KEY(principal_id, poll_id)` plus
+  principal-scoped poll updates and cleanup.
+- Blocker corrections are exhausted at `3/3`. Review made no other material
+  scope, domain-neutrality, source-boundary, no-launch, title, or validation
+  finding. PR #238 was closed without merge; its body retained a stale
+  pending-check row, while the final CI check itself passed. The branch and
+  worktree remain as validated blocked evidence, and Phase 5 cannot start.
 
-## Candidate Evidence
+## Completion Record
 
 - Implementation: private authenticated session and mTLS adapter modules add a
   coordinator-owned protocol view and a distinct outbound-agent-owned durable
@@ -262,7 +278,10 @@ a default-CI prerequisite.
   build). `make test-summary` passed on the same validation-relevant revision:
   118 package, 1,715 unit, 295 contract, 228 integration, 57 E2E, and 141
   config-extra tests; evidence is `build/test-summary.md`.
-- The earlier `b7699c5` receipt remains historical evidence for the rejected
-  candidate only. PR, independent review, CI, and merge remain pending. Remote
-  assignment, transfer, and launch remain intentionally unavailable until
-  Phase 5.
+- Review and outcome: required independent review found forgeable agent-root
+  retirement evidence and globally keyed poll identity. Correction `3/3` was
+  already consumed, so [PR #238](https://github.com/samcantrill/loom/pull/238)
+  closed without merge after CI passed. The earlier `b7699c5` receipt remains
+  historical evidence for the rejected executor candidate only. Remote
+  assignment, transfer, and launch remain unavailable, and no later phase may
+  use this candidate as a base.
