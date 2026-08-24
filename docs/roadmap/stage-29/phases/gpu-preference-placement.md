@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 29, Phase 6
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p6-gpu-preference-placement`
@@ -517,7 +517,7 @@ Final commands:
   closes all four findings, and manager verification found no residual blocker.
 - Blocker corrections: 3/3; no further correction or review pass is available
 - PR and merge: [PR #241](https://github.com/samcantrill/loom/pull/241)
-  open against `develop`; CI and automatic squash merge pending
+  passed CI and squash-merged into `develop` as `2c6d366`
 
 ## Completion Record
 
@@ -527,5 +527,5 @@ Final commands:
 | Tests added or updated | Unit coverage proves exact GPU modes, canonical rationals, strict offer/policy codecs, scorer causality, tier dominance, fallback deadlines, unhealthy-device withdrawal, and binding-drift rejection. Production integration proves positive and negative multi-device fabric placement. The loopback trace withholds one busy configured remote GPU while selecting another, reverses only model preference to select distinct local/remote devices and private bindings, proves CPU stages receive no CUDA binding, checks child-process isolation, and asserts distinct planner/provider identity is unchanged across coordinator receipt, delivered request, journalled command, release, and protected-store redaction. Valid-path configs/examples omit zero GPU entries; rejection coverage owns the hard-cut behavior. |
 | Validated revision/tree state and evidence | Clean source/test revision `75cd70a`: `make validate-pr` passed Ruff, Pyright, 2,456 default tests, 141 configuration-extra tests with 3 environment skips, and sdist/wheel build. `make test-summary` passed package 118, unit 1,749, contract 295, integration 237, E2E 57, and config-extra 141 with 3 skips; receipt at `build/test-summary.md`. |
 | Validation-relevant changes after evidence | None. The phase-plan evidence update changes documentation only. |
-| PR, review, and merge | Independent review completed with all findings resolved by final correction `75cd70a`; [PR #241](https://github.com/samcantrill/loom/pull/241) is open, non-draft, mergeable, and correctly targets `develop`; CI and automatic squash merge pending. |
-| Residual risk and cleanup | This is an intentional hard cut-over. Protocol-v3 offers now require provider descriptors and the complete GPU descriptor shape; remote execution requires schema/capability v3; retained claim commands require provider identity. Old offers, deliveries, and retained claim rows are rejected rather than migrated, so operators must deploy coordinator and agents together and drain or explicitly discard pre-cutover retained work. No GPU hardware/vendor dependency was introduced. Required behavior is simulated and deterministic; real hardware evidence remains optional. Non-exclusive production modes fail closed until a provider can enforce observation, isolation, binding, accounting, and release. Worktree and branch remain for PR completion. |
+| PR, review, and merge | Independent review completed with all findings resolved by final correction `75cd70a`; [PR #241](https://github.com/samcantrill/loom/pull/241) passed CI and squash-merged into `develop` as `2c6d366`. |
+| Residual risk and cleanup | This is an intentional hard cut-over. Protocol-v3 offers now require provider descriptors and the complete GPU descriptor shape; remote execution requires schema/capability v3; retained claim commands require provider identity. Old offers, deliveries, and retained claim rows are rejected rather than migrated, so operators must deploy coordinator and agents together and drain or explicitly discard pre-cutover retained work. No GPU hardware/vendor dependency was introduced. Required behavior is simulated and deterministic; real hardware evidence remains optional. Non-exclusive production modes fail closed until a provider can enforce observation, isolation, binding, accounting, and release. The Phase 6 worktree and local/remote branches were removed after merge. |
