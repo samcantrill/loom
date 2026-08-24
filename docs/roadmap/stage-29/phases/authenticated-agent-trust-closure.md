@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 29, Phase 4A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p4a-authenticated-agent-trust-closure`
@@ -12,7 +12,8 @@
   `922237c352548abe7c7affc9768ab02510791924`
 - PR target: `develop`
 - PR title: `feat(protocols): complete authenticated agent sessions`
-- PR: [#239](https://github.com/samcantrill/loom/pull/239) open
+- PR: [#239](https://github.com/samcantrill/loom/pull/239), squash-merged as
+  `2d273b83a9043299befcca0a21a0481d624804c0`
 - Dependencies: Phase 3D merged; Phase 4 and PR #238 are blocked read-only
   evidence and are not a branch base
 - Workflow path: expanded for one independent implementation review because
@@ -264,8 +265,8 @@ Final commands:
   source-boundary/no-launch concern; reviewer independently confirmed 19
   focused session and 23 adjacent contract passes
 - Blocker corrections: 1/3
-- PR and merge: PR #239 is open, non-draft, mergeable, and verified with exact
-  `develop` base, phase head, and required title; GitHub CI is pending
+- PR and merge: PR #239 passed GitHub CI at branch head `898f853`, retained the
+  exact `develop` base and required title, and squash-merged as `2d273b8`
 
 ## Completion Record
 
@@ -275,5 +276,5 @@ Final commands:
 | Tests added or updated | Focused unit/integration coverage proves persist-before-send exact replay, verifier-only coordinator state, invalid/missing/old-secret rejection without coordinator mutation, secret redaction/ack cleanup, distinct later-session secret, exact replay after a committed retirement response is lost, final-schema candidate rejection, and same-ID cross-principal poll isolation/cleanup; retained mTLS, policy, restart, offer, held-poll, and no-launch coverage passes |
 | Validated revision/tree state and evidence | Clean source/test revision `41a6045`; focused session suites: 19 passed; daemon/authority/Python-API contract suites: 23 passed. Fresh `make validate-pr` passed Ruff, zero-error Pyright, 2,416 default tests, 141 configuration-extra tests with 3 expected environment skips, and source/wheel builds. Fresh `make test-summary`: package 118, unit 1,718, contract 295, integration 228, E2E 57, configuration-extra 141; 2,557 passes, 3 expected skips, 0 failures/errors. |
 | Validation-relevant changes after evidence | Phase completion metadata only |
-| PR, review, and merge | [PR #239](https://github.com/samcantrill/loom/pull/239) targets `develop` with the required title. Independent review passed with no blocker; GitHub CI is pending. |
-| Residual risk and cleanup | Protected-agent-root loss intentionally cannot cleanly retire a session and remains Phase 9 positive-containment work; no Phase 5 delivery/launch side effect was added; worktree/branch retained for pre-submit and required independent review |
+| PR, review, and merge | [PR #239](https://github.com/samcantrill/loom/pull/239) targeted `develop` with the required title. Independent review passed with no blocker, GitHub CI passed at `898f853`, and the PR squash-merged as `2d273b8`. |
+| Residual risk and cleanup | Protected-agent-root loss intentionally cannot cleanly retire a session and remains Phase 9 positive-containment work; no Phase 5 delivery/launch side effect was added; the remote branch, worktree, and local phase branch were removed while blocked Phase 4 evidence was retained |
