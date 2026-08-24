@@ -2,22 +2,31 @@
 
 ## Metadata
 
-- Status: pending
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 4
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p4-authenticated-agent-sessions`
-- Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop` after Phase 3 remotely merges
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p4-authenticated-agent-sessions`
+- Base revision: clean `origin/develop`
+  `ad3c8349f014f454c831d6e3f50cf97cec3ddea5`
 - PR target: `develop`
 - PR title: `feat(protocols): add authenticated agent sessions`
-- Dependencies: Phase 3 merged with one coordinator application owner, narrow
-  role views, authorizer, persistent state, and local daemon composition
+- Dependencies: Phase 3D merged through PR #237 (`6a8cf9f`)
 - Workflow path: expanded because this phase establishes the remote trust,
   authorization, replay, and session boundary before remote code execution
-- Blockers: Phase 3 remote merge and opt-in site credentials for the optional
-  two-machine receipt; automated loopback evidence must not depend on them
+- Blockers: required independent review found forgeable agent-journal
+  retirement evidence and globally keyed coordinator polls after correction
+  `3/3` was exhausted. [PR #238](https://github.com/samcantrill/loom/pull/238)
+  closed without merge. Phase 4A owns the fresh remedy.
 
 ## Objective And Context
+
+This plan is retained as read-only execution evidence. Candidate `c373d04`
+completed the vertical path below and passed the full local gate; it is not an
+accepted implementation because its retirement proof did not prove possession
+of the original protected journal and its poll table did not isolate identical
+caller IDs across principals.
 
 - Vertical outcome: outbound daemons on `machine-A` and `machine-B` can
   authenticate a coordinator, establish or resume an authorized agent session,
@@ -469,24 +478,32 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 3 merge, worktree/base recording, and
-  exact transport/test rediscovery
-- Expanded planning: required by remote trust boundary; phase plan finalized
-- Implementation: pending
-- Refiner: not used
-- Pre-submit gate: pending
-- Independent review: expected because a mistaken boundary can authorize future
-  remote execution; confirm during preparation
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation and expanded planning: complete at clean Phase 3D base;
+  dedicated branch/worktree and the no-launch trust boundary were recorded
+- Implementation: validated source/test candidate `c373d04`; agent-owned
+  journal, shared authenticated application boundary, current-policy checks,
+  session/offer replay, exact capacity atoms, held polls, and no-launch gates
+  are present
+- Refiner and manager corrections: all three passes consumed; the final
+  candidate moved durable evidence to the outbound agent owner and closed the
+  earlier lost-response, schema, offer, poll-hold, and reconciliation failures
+- Pre-submit gate: `make validate-pr` and `make test-summary` passed at
+  `c373d04`; PR #238 passed CI and was mergeable
+- Independent review: blocked merge because copied session fields plus an
+  arbitrary valid digest can retire without the original journal, and
+  `agent_polls.poll_id` is globally unique despite principal-scoped protocol
+  identity
+- Blocker corrections: 3/3 exhausted
+- PR and merge: PR #238 closed without merge; branch/worktree retained as
+  read-only evidence; Phase 5 cannot start until fresh Phase 4A merges
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Candidate adds `src/loom/queue/agent_sessions.py`, `agent_session_transport.py`, daemon wiring, feature docs, and focused unit/integration coverage. |
+| Tests added or updated | Sixteen authenticated-session unit/loopback tests plus 57 adjacent daemon/contract tests cover replay, restart, rotation, schema continuity, exact offers, held polls, retirement, and causal no-launch behavior. |
+| Validated revision/tree state and evidence | `c373d04`; `make validate-pr` passed Ruff, Pyright, 2,413 default tests, 141 config-extra tests with 3 expected skips, and both builds. `make test-summary` recorded 2,554 passes and the same 3 skips. |
+| Validation-relevant changes after evidence | Only validation/PR metadata at `a991ced`; blocked metadata at `e22500f`. |
+| PR, review, and merge | PR #238 passed CI, but required independent review found the two accepted-contract blockers; it closed without merge after correction 3/3. |
+| Residual risk and cleanup | Candidate branch/worktree remain read-only evidence. Phase 4A must selectively reuse source/tests from current `develop`; it must not stack, reopen this PR, or support the unmerged schema. |

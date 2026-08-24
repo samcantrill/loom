@@ -7,16 +7,16 @@
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p5-remote-stage-data-execution`
 - Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop` after Phase 4 remotely merges
+- Base revision: current `origin/develop` after Phase 4A remotely merges
 - PR target: `develop`
 - PR title: `feat(scheduling): execute stages on remote agents`
-- Dependencies: Phase 4 merged with authenticated role views, agent sessions,
+- Dependencies: Phase 4A merged with authenticated role views, agent sessions,
   safe CPU/memory offers, long-poll ownership, and a passing no-launch transport
   gate; Phase 2 provides the assignment/grant/launch saga
 - Workflow path: expanded because authenticated control, artifact bytes,
   cross-host process launch, coordinator outage, and replay interact causally
-- Blockers: Phase 4 remote merge; remote launch must remain disabled until the
-  Phase 4 security/connectivity receipt is verified on the implementation tree
+- Blockers: Phase 4A remote merge; remote launch must remain disabled until the
+  Phase 4A security/connectivity receipt is verified on the implementation tree
 
 ## Objective And Context
 
@@ -27,7 +27,7 @@
   a grant, launches once, retains outputs, and reports/finalizes them. A granted
   stage continues while the coordinator or lifecycle authority is unavailable
   and reconciles after both required owners return.
-- Earlier dependency: Phase 4 proves who is talking and what operations they may
+- Earlier dependency: Phase 4A proves who is talking and what operations they may
   request. It deliberately cannot deliver an assignment. Phase 5 enables remote
   side effects by reusing the Phase 2 saga over that authenticated boundary.
 - Later work explicitly out of scope: Phase 6 adds GPU/VRAM inventory, device
@@ -39,7 +39,7 @@
 ## Current Source And Harness
 
 - Reuse Phase 1 kernel/CPU-memory planners, Phase 2 coordinator/authority/agent
-  saga and artifact port, Phase 3 status/facades, and Phase 4 HTTP/session/offer/
+  saga and artifact port, Phase 3 status/facades, and Phase 4A HTTP/session/offer/
   long-poll/idempotency boundary.
 - Rediscover existing artifact backend capabilities, payload-operation codecs,
   local materialization safety, digest helpers, atomic write utilities, stage
@@ -221,7 +221,7 @@ In scope:
   cannot overwrite authority terminal truth.
 - Add client/agent HTTP operations for assignment delivery, accept/decline,
   grant, transfer authorization/chunks/finalization, event/result/output report,
-  acknowledgements, and reconciliation. Reuse Phase 4 authentication,
+  acknowledgements, and reconciliation. Reuse Phase 4A authentication,
   authorization, versions, limits, and idempotency for every operation.
 
 Out of scope:
@@ -373,7 +373,7 @@ URLs, grant before inputs, publish partial outputs, or infer failure from loss.
 ## Proportionality
 
 - Reuses every semantic side of the Phase 2 saga and every trust/session side of
-  Phase 4. Adds only the real remote data and process adapters required by the
+  Phase 4A. Adds only the real remote data and process adapters required by the
   accepted two-machine CPU/memory consumer.
 - Artifact relay stays with its first execution consumer so its capability and
   durability contract are validated by a real end-to-end trace rather than an
@@ -463,10 +463,10 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 ## Executor Handoff
 
-- Read this file, Phase 4 completion record, manifest trace/security constraints,
+- Read this file, Phase 4A completion record, manifest trace/security constraints,
   and planning FR-1, FR-8–FR-13, FR-15–FR-17, FR-19, FR-20, FR-25, FR-26, and
   DQ-14, DQ-20, DQ-23, and DQ-24.
-- Keep remote launch disabled until slices 1–2 and the Phase 4 gate pass. Use
+- Keep remote launch disabled until slices 1–2 and the Phase 4A gate pass. Use
   real process barriers for grant/start/outage rather than mocks alone.
 - Decisions not to revisit: coordinator chooses JIT, outbound polling, inputs
   before grant, output grants after manifest, accessible refs before commit, and
@@ -478,7 +478,7 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 4 merge, worktree/base recording, and
+- Manager preparation: pending Phase 4A merge, worktree/base recording, and
   exact artifact/process/transport rediscovery
 - Expanded planning: required by remote code/data/outage interaction; phase plan
   finalized
