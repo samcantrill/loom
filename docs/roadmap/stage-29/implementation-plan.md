@@ -8,7 +8,8 @@ Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
 Current phase: Phase 6 in progress
 Blockers: none. Phase 6 manager preparation and its one bounded expanded-path
-refinement are complete at `d0c9af5`; implementation is pending.
+refinement are complete. Implementation and the manager pre-submit gate pass at
+`40e9332`; the required independent Phase 6 review is pending.
 
 ## Summary
 

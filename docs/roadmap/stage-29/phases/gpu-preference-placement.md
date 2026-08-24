@@ -19,8 +19,8 @@
 - Workflow path: expanded because exact device/provider accounting and
   wait-then-fallback preference ranking interact at the production assignment
   boundary; use one bounded phase-planner refinement and one independent review
-- Blockers: resolved production-wiring correction. Opt-in hardware evidence is optional and must not block
-  simulated/default CI.
+- Blockers: none. Opt-in hardware evidence is optional and does not block the
+  simulated/default validation gate.
 
 ## Objective And Context
 
@@ -500,22 +500,25 @@ Final commands:
   provider claim is preserved through offer, assignment, journalled physical
   binding, worker environment, and release, while concrete scorers contribute
   only utility/band evidence to the kernel-owned preference algebra
-- Implementation: pending
+- Implementation: complete at `40e9332`; the manager correction closes the
+  strict offer, authored placement, accepted-time fallback, private child-worker
+  environment, exact local/remote bind, and CPU-with-GPU-inventory paths
 - Refiner: completed one qualified production-wiring correction
-- Pre-submit gate: pending
+- Pre-submit gate: complete; `make validate-pr` passed and `make test-summary`
+  wrote the current evidence receipt
 - Independent review: required after the manager gate because GPU claims cross
   configured inventory, coordinator selection, agent physical binding, and
-  worker environment boundaries
-- Blocker corrections: 1/3
+  worker environment boundaries; pending
+- Blocker corrections: 2/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `fd03da0` adds the GPU primitives. Follow-up correction wires the concrete scorer registry into the production kernel; carries safe remote GPU offer inventory into candidate selection; composes the remote GPU provider; and derives `CUDA_VISIBLE_DEVICES` only from the active journalled GPU claim for local/remote workers. It retains the existing claim/journal identity and releases that same command. |
-| Tests added or updated | Existing GPU provider coverage now proves its environment exists only while the exact claim is active; GPU scheduling coverage proves the production scorer registration. Focused offer/session, remote execution, and transport coverage exercises the revised remote profile/offer path. |
-| Validated revision/tree state and evidence | Correction revision pending commit: Ruff passed for all changed paths; focused pytest passed: 43 tests across GPU scheduling/provider, agent-session, remote-stage execution, and transport integration. |
-| Validation-relevant changes after evidence | One qualified correction after `a89194b`: production GPU binding/scorer/remote-offer closure. |
+| Implementation and changed paths | `fd03da0` adds the GPU primitives, `847e302` wires the first production path, and manager correction `40e9332` completes the hard cut-over. The final path adds strict safe GPU descriptors and exact availability atoms, agent protocol v3, authored stage placement, production scorer registration, local and protected-remote GPU capacity, exact claim-to-private-binding mapping, process-private local GPU workers, accepted-time fallback, and descriptor-subset validation so CPU-only stages remain valid when an offer also contains GPU inventory. Share/fraction descriptors remain exact but production configuration rejects those modes until an enforceable provider adapter exists. |
+| Tests added or updated | Unit coverage proves exact GPU modes, canonical rationals, strict offer/policy codecs, scorer causality, tier dominance, and fallback deadlines. The loopback integration trace reverses only model preference to select distinct local/remote devices and private bindings, proves CPU stages receive no CUDA binding, checks child-process isolation, journalled claim/release identity, no protected-store binding leak, and accepted-time fallback. Valid-path configs/examples now omit zero GPU entries; rejection coverage owns the hard-cut behavior. |
+| Validated revision/tree state and evidence | Clean `40e9332`: `make validate-pr` passed Ruff, Pyright, 2,452 default tests, 141 configuration-extra tests with 3 environment skips, and sdist/wheel build. `make test-summary` passed package 118, unit 1,747, contract 295, integration 235, E2E 57, and config-extra 141 with 3 skips; receipt at `build/test-summary.md`. |
+| Validation-relevant changes after evidence | None. The phase-plan evidence update changes documentation only. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | No GPU hardware/vendor dependency was introduced. The full gate remains blocked by the three SIGINT lifecycle failures above, which do not exercise GPU code; test-summary completion is pending. Worktree and branch retained for manager validation/review. |
+| Residual risk and cleanup | No GPU hardware/vendor dependency was introduced. Required behavior is simulated and deterministic; real hardware evidence remains optional. Non-exclusive production modes fail closed until a provider can enforce observation, isolation, binding, accounting, and release. Worktree and branch remain for independent review and PR completion. |
