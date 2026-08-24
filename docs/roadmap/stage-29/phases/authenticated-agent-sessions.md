@@ -220,7 +220,7 @@ a default-CI prerequisite.
   did not hold the poll, retained a scalar offer wire shape, and could not repair
   a lost reconciliation response safely. Manager verification rejected that
   correction; blocker corrections used: `2/3`.
-- Final manager correction `3/3` is implemented in the worktree. The caller now
+- Final manager correction `3/3` is complete at `c373d04`. The caller now
   opens one explicitly initialized and locked owner-private agent root, records
   intent before network mutation and results before later operations, and never
   creates or repairs missing current state. Coordinator receipts and the remote
@@ -234,9 +234,11 @@ a default-CI prerequisite.
   rotation, while a lost/replaced root cannot produce the proof. Valid Phase 3
   roots migrate additively; incomplete current-version candidate state fails
   closed with no compatibility repair.
-- Focused evidence is currently clean: 16 authenticated-session unit/loopback
-  tests, 57 adjacent daemon/contract tests, scoped Ruff, and scoped Pyright.
-  Fresh full validation, independent PR review, CI, and merge remain pending.
+- Focused evidence is clean: 16 authenticated-session unit/loopback tests, 57
+  adjacent daemon/contract tests, scoped Ruff, and scoped Pyright. Fresh
+  `make validate-pr` and `make test-summary` also pass on the same
+  validation-relevant revision. Independent PR review, CI, and merge remain
+  pending.
 
 ## Candidate Evidence
 
@@ -255,6 +257,12 @@ a default-CI prerequisite.
   schema continuity/rejection, exact capacity wire shape, held/concurrent polls,
   clean retirement, and causal no-launch sentinels over assignment, provider,
   artifact, and launcher owners.
-- The earlier `b7699c5` validation receipt belongs to the rejected candidate and
-  is stale. Record the final `make validate-pr` and `make test-summary` receipt
-  here after the final correction is committed and the fresh gates pass.
+- Validation: `make validate-pr` passed at `c373d04` (Ruff, Pyright, 2,413
+  default tests, 141 config-extra tests with 3 expected skips, and source/wheel
+  build). `make test-summary` passed on the same validation-relevant revision:
+  118 package, 1,715 unit, 295 contract, 228 integration, 57 E2E, and 141
+  config-extra tests; evidence is `build/test-summary.md`.
+- The earlier `b7699c5` receipt remains historical evidence for the rejected
+  candidate only. PR, independent review, CI, and merge remain pending. Remote
+  assignment, transfer, and launch remain intentionally unavailable until
+  Phase 5.
