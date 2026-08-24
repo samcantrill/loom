@@ -1,4 +1,4 @@
-"""Persistent single-machine managed-local daemon.
+"""Persistent managed-execution coordinator with a protected local agent.
 
 The daemon owns admission, process identity, and the production composition that
 connects persisted run plans to the Stage 29 orchestrator and local assignment
@@ -31,6 +31,7 @@ from .agent_sessions import (
     initialize_agent_session_schema,
     validate_agent_session_schema,
 )
+from ._remote_stage_execution import ResidentProfileDescriptor
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
 if TYPE_CHECKING:
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 2
+_LOCAL_DAEMON_SCHEMA_VERSION = 3
 
 
 class LocalDaemonAdmissionState(StrEnum):
@@ -90,8 +91,10 @@ class LocalDaemonConfig:
     run_store_root: Path
     machine_id: str = "machine-A"
     cpu_capacity: int = 1
+    memory_capacity_bytes: int = 0
     poll_interval_seconds: float = 0.05
     agent_policy: AgentPolicyConfig = AgentPolicyConfig()
+    remote_profiles: tuple[ResidentProfileDescriptor, ...] = ()
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
@@ -110,6 +113,14 @@ class LocalDaemonConfig:
         ):
             raise QueueServiceError("cpu_capacity must be a positive integer")
         if (
+            isinstance(self.memory_capacity_bytes, bool)
+            or not isinstance(self.memory_capacity_bytes, int)
+            or self.memory_capacity_bytes < 0
+        ):
+            raise QueueServiceError(
+                "memory_capacity_bytes must be a non-negative integer"
+            )
+        if (
             isinstance(self.poll_interval_seconds, bool)
             or not isinstance(self.poll_interval_seconds, (int, float))
             or self.poll_interval_seconds <= 0
@@ -117,9 +128,19 @@ class LocalDaemonConfig:
             raise QueueServiceError("poll_interval_seconds must be positive")
         if not isinstance(self.agent_policy, AgentPolicyConfig):
             raise QueueServiceError("agent_policy must be protected agent policy")
+        if any(rule.agent_id == self.machine_id for rule in self.agent_policy.agents):
+            raise QueueServiceError(
+                "remote agent identities must be distinct from the local machine"
+            )
+        profiles = tuple(self.remote_profiles)
+        if any(not isinstance(item, ResidentProfileDescriptor) for item in profiles):
+            raise QueueServiceError("remote resident profiles are invalid")
+        if len({item.profile_id for item in profiles}) != len(profiles):
+            raise QueueServiceError("remote resident profile IDs must be unique")
         object.__setattr__(self, "coordinator_root", coordinator)
         object.__setattr__(self, "agent_root", agent)
         object.__setattr__(self, "run_store_root", run_store)
+        object.__setattr__(self, "remote_profiles", profiles)
         object.__setattr__(
             self, "poll_interval_seconds", float(self.poll_interval_seconds)
         )
@@ -338,6 +359,10 @@ class LocalDaemon:
         if path.exists():
             raise QueueServiceError("remote agent requires a fresh root")
         _initialize_root(path, role="local-agent")
+        from loom.pipeline.execution.managed_local import SQLiteAgentJournal
+
+        SQLiteAgentJournal(path / "journal.sqlite")._initialize()
+        (path / "journal.sqlite").chmod(0o600)
 
     def start(self) -> LocalDaemonStatus:
         if self._coordinator_lock is not None:
@@ -383,6 +408,7 @@ class LocalDaemon:
                 coordinator_epoch=epoch,
                 cancellation_operation=self._cancellation_operation_id,
                 admission_activated=self._activate_admission,
+                daemon=self,
             )
         except Exception:
             assignment_workers.shutdown(wait=True)
@@ -447,7 +473,7 @@ class LocalDaemon:
         return LocalDaemonOperatorView(self, principal)
 
     def agent_view(self, principal: LocalDaemonPrincipal) -> AgentSessionView:
-        """Return the restricted no-launch agent view for a trusted principal."""
+        """Return the restricted authenticated agent view for a trusted principal."""
         return AgentSessionView(self, principal)
 
     def replace_agent_policy(self, policy: AgentPolicyConfig) -> None:
@@ -970,13 +996,7 @@ def _open_root(path: Path, *, role: str) -> str:
         raise QueueStorageError(f"{role} root must be owner-permissioned")
     with sqlite3.connect(database) as conn:
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        if version == 1:
-            # Phase 4 only adds isolated tables: all Phase 3 metadata and
-            # admissions retain their existing interpretation and binding.
-            initialize_agent_session_schema(conn, coordinator=role == "coordinator")
-            conn.execute(f"PRAGMA user_version = {_LOCAL_DAEMON_SCHEMA_VERSION}")
-            conn.commit()
-        elif version != _LOCAL_DAEMON_SCHEMA_VERSION:
+        if version != _LOCAL_DAEMON_SCHEMA_VERSION:
             raise QueueStorageError(
                 f"{role} daemon schema is unsupported; fresh roots are required"
             )

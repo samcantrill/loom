@@ -15,6 +15,7 @@ from typing import cast
 from loom.pipeline.planning import ExecutionPlan
 from loom.pipeline.runtime import (
     CpuResourcePlanner,
+    MemoryResourcePlanner,
     RunOptions,
     StagePlacementPolicy,
     parallel_execution_options,
@@ -60,7 +61,10 @@ def prepare_managed_local_runtime_record(
         raise QueueServiceError("managed-local runtime requires the local executor")
     runtime_options = normalized.to_dict()
     _reject_forbidden(runtime_options, path="runtime_options")
-    planner = CpuResourcePlanner()
+    planners = {
+        "cpu": CpuResourcePlanner(),
+        "memory": MemoryResourcePlanner(),
+    }
     resolved_snapshot = store.read_config_snapshot(run_uri, "resolved")
     if resolved_snapshot is None:
         raise QueueServiceError("managed-local preparation requires a resolved config snapshot")
@@ -71,7 +75,7 @@ def prepare_managed_local_runtime_record(
         if exact.executor != "local":
             raise QueueServiceError("managed-local stage runtime requires local executor")
         resources = cast(ResourceRequest, exact.resources)
-        unsupported = set(resources.entries) - {"cpu"}
+        unsupported = set(resources.entries) - set(planners)
         if unsupported:
             raise QueueServiceError(
                 "managed-local runtime has no planner for: " + ", ".join(sorted(unsupported))
@@ -86,7 +90,7 @@ def prepare_managed_local_runtime_record(
                     entries={"cpu": ResourceEntry("cpu", 1, "count")}
                 ),
             ),
-            planners={"cpu": planner},
+            planners=planners,
         ).to_dict()
     payload: dict[str, PlainData] = {
         "schema_version": _SCHEMA_VERSION,

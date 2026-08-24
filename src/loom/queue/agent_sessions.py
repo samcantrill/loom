@@ -1,9 +1,8 @@
-"""Authenticated, no-launch agent session protocol.
+"""Authenticated agent session and remote stage execution protocol.
 
-This module deliberately owns only the coordinator-facing Phase 4 protocol.
-It has no dependency on the managed-local execution composition: retained
-offers are protocol facts until the later delivery phase explicitly consumes
-them.
+This module owns coordinator-facing sessions, offers, targeted delivery,
+transfer authorization, and replay. Resident profiles, paths, physical
+admission, and process launch remain protected agent-local concerns.
 """
 
 from __future__ import annotations
@@ -14,27 +13,49 @@ from enum import StrEnum
 import hashlib
 import hmac
 import json
+from pathlib import Path
 import re
 import sqlite3
 from time import monotonic, sleep
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
-from loom.serialization import PlainData, freeze_plain_data
+from loom.artifacts import ArtifactRef
+from loom.pipeline.status import StageStatus
+from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
 from .errors import QueueConflictError, QueueServiceError
+from ._remote_stage_execution import (
+    REGULAR_FILE_RELAY_CAPABILITY,
+    REMOTE_EXECUTION_CAPABILITY,
+    TRANSFER_CHUNK_BYTES,
+    ResidentProfileDescriptor,
+    _DeliveredExecutionRequest,
+    _RemoteExecutionReport,
+    _RemoteOutputArtifact,
+    _append_exact_chunk,
+    _atomic_regular_file,
+    _encode_chunk,
+    _file_digest,
+    _publish_staged_file,
+    _read_regular_file_bytes,
+    _reject_path_bearing_data,
+)
 
 if TYPE_CHECKING:
     from .local_daemon import LocalDaemon, LocalDaemonPrincipal
 
 
-PROTOCOL_VERSION = "1"
+PROTOCOL_VERSION = "2"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
 _MAX_RESOURCE_ATOM = 2**63 - 1
 _MAX_POLL_WAIT_MILLISECONDS = 5_000
+_MAX_TRANSFER_AUTHORIZATIONS = 64
+_MAX_REMOTE_WIRE_VALUE_BYTES = 60 * 1024
+_MAX_REMOTE_EVENT_BYTES = 8 * 1024
 _SESSION_REFERENCE_KINDS = frozenset(
     {
         "assignment",
@@ -59,6 +80,10 @@ class AgentSessionState(StrEnum):
 
 class AgentPollActiveError(QueueConflictError):
     """An exact poll retry reached the still-held original poll."""
+
+
+class AgentTransferAuthorizationStaleError(QueueConflictError):
+    """A transfer must obtain a fresh assignment-scoped authorization."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +261,7 @@ class AgentOffer:
     ttl_seconds: int
     pools: tuple[str, ...] = ("default",)
     reflected_claim_ids: tuple[str, ...] = ()
+    resident_profiles: tuple[ResidentProfileDescriptor, ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -265,6 +291,12 @@ class AgentOffer:
             raise QueueServiceError("offer TTL is outside the permitted range")
         _identifiers(self.reflected_claim_ids, "reflected claim IDs")
         _identifiers(self.pools, "offer pools", non_empty=True)
+        profiles = tuple(self.resident_profiles)
+        if any(not isinstance(item, ResidentProfileDescriptor) for item in profiles):
+            raise QueueServiceError("offer resident profiles are invalid")
+        if len({item.profile_id for item in profiles}) != len(profiles):
+            raise QueueServiceError("offer resident profile IDs must be unique")
+        object.__setattr__(self, "resident_profiles", profiles)
 
     def value(self) -> dict[str, PlainData]:
         capacity_atoms: list[PlainData] = []
@@ -298,7 +330,84 @@ class AgentOffer:
             "ttl_seconds": self.ttl_seconds,
             "pools": list(self.pools),
             "reflected_claim_ids": list(self.reflected_claim_ids),
+            "resident_profiles": [item.to_dict() for item in self.resident_profiles],
         }
+
+    @classmethod
+    def from_value(cls, value: object) -> "AgentOffer":
+        expected = {
+            "session_id",
+            "coordinator_epoch",
+            "config_revision",
+            "inventory_revision",
+            "availability_revision",
+            "capacity_atoms",
+            "ttl_seconds",
+            "pools",
+            "reflected_claim_ids",
+            "resident_profiles",
+        }
+        if not isinstance(value, Mapping) or set(value) != expected:
+            raise QueueServiceError("agent offer is invalid")
+        atoms = value["capacity_atoms"]
+        if not isinstance(atoms, Sequence) or isinstance(atoms, (str, bytes)):
+            raise QueueServiceError("agent offer capacity is invalid")
+        capacities: dict[str, int] = {}
+        for atom in atoms:
+            if not isinstance(atom, Mapping) or set(atom) != {
+                "owner_resource_kind",
+                "local_capacity_key",
+                "amount",
+                "unit",
+                "granularity",
+            }:
+                raise QueueServiceError("agent offer capacity is invalid")
+            kind = atom.get("owner_resource_kind")
+            amount = atom.get("amount")
+            granularity = atom.get("granularity")
+            if (
+                kind not in {"cpu", "memory"}
+                or kind in capacities
+                or not isinstance(amount, Mapping)
+                or set(amount) != {"numerator", "denominator"}
+                or amount.get("denominator") != 1
+                or isinstance(amount.get("numerator"), bool)
+                or not isinstance(amount.get("numerator"), int)
+                or cast(int, amount["numerator"]) <= 0
+                or atom.get("local_capacity_key") != kind
+                or atom.get("unit") != ("count" if kind == "cpu" else "byte")
+                or not isinstance(granularity, Mapping)
+                or dict(granularity) != {"numerator": 1, "denominator": 1}
+            ):
+                raise QueueServiceError("agent offer capacity is invalid")
+            capacities[cast(str, kind)] = cast(int, amount["numerator"])
+        pools = value["pools"]
+        claims = value["reflected_claim_ids"]
+        profiles = value["resident_profiles"]
+        if (
+            not isinstance(pools, Sequence)
+            or isinstance(pools, (str, bytes))
+            or not isinstance(claims, Sequence)
+            or isinstance(claims, (str, bytes))
+            or not isinstance(profiles, Sequence)
+            or isinstance(profiles, (str, bytes))
+        ):
+            raise QueueServiceError("agent offer scope is invalid")
+        return cls(
+            session_id=cast(str, value["session_id"]),
+            coordinator_epoch=cast(str, value["coordinator_epoch"]),
+            config_revision=cast(str, value["config_revision"]),
+            inventory_revision=cast(str, value["inventory_revision"]),
+            availability_revision=cast(str, value["availability_revision"]),
+            cpu=capacities.get("cpu", 0),
+            memory_bytes=capacities.get("memory", 0),
+            ttl_seconds=cast(int, value["ttl_seconds"]),
+            pools=tuple(cast(Sequence[str], pools)),
+            reflected_claim_ids=tuple(cast(Sequence[str], claims)),
+            resident_profiles=tuple(
+                ResidentProfileDescriptor.from_dict(item) for item in profiles
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,6 +515,16 @@ class ScopedAuthorizer:
             "reconcile",
             "offer",
             "poll",
+            "authorize",
+            "input",
+            "accept",
+            "decline",
+            "started",
+            "event",
+            "output_manifest",
+            "output",
+            "result",
+            "release",
             "retire",
         }:
             raise QueueServiceError("agent operation is unsupported")
@@ -476,6 +595,162 @@ class AgentSessionView:
             wait_timeout_ms=wait_timeout_ms,
         )
 
+    def authorize_transfers(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        expected_revision: int,
+        operation_id: str,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).authorize_transfers(
+            session_id,
+            assignment_id,
+            expected_revision=expected_revision,
+            operation_id=operation_id,
+        )
+
+    def read_input_chunk(
+        self,
+        session_id: str,
+        assignment_id: str,
+        transfer_id: str,
+        *,
+        offset: int,
+        authorization_id: str,
+        authorization_revision: int,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).read_input_chunk(
+            session_id,
+            assignment_id,
+            transfer_id,
+            offset=offset,
+            authorization_id=authorization_id,
+            authorization_revision=authorization_revision,
+        )
+
+    def accept_assignment(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        request_digest: str,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).accept_assignment(
+            session_id,
+            assignment_id,
+            request_digest=request_digest,
+        )
+
+    def decline_assignment(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        availability_revision: str,
+    ) -> AgentSession:
+        return AgentSessionService(self._daemon, self._principal).decline_assignment(
+            session_id,
+            assignment_id,
+            availability_revision=availability_revision,
+        )
+
+    def confirm_started(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        process_execution_id: str,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).confirm_started(
+            session_id,
+            assignment_id,
+            fence=fence,
+            process_execution_id=process_execution_id,
+        )
+
+    def report_event(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        sequence: int,
+        event_id: str,
+        payload: Mapping[str, PlainData],
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).report_event(
+            session_id,
+            assignment_id,
+            sequence=sequence,
+            event_id=event_id,
+            payload=payload,
+        )
+
+    def declare_outputs(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        authorization_id: str,
+        authorization_revision: int,
+        report: _RemoteExecutionReport,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).declare_outputs(
+            session_id,
+            assignment_id,
+            fence=fence,
+            authorization_id=authorization_id,
+            authorization_revision=authorization_revision,
+            report=report,
+        )
+
+    def upload_output_chunk(
+        self,
+        session_id: str,
+        assignment_id: str,
+        transfer_id: str,
+        *,
+        offset: int,
+        data: bytes,
+        final: bool,
+        authorization_id: str,
+        authorization_revision: int,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).upload_output_chunk(
+            session_id,
+            assignment_id,
+            transfer_id,
+            offset=offset,
+            data=data,
+            final=final,
+            authorization_id=authorization_id,
+            authorization_revision=authorization_revision,
+        )
+
+    def commit_result(
+        self, session_id: str, assignment_id: str, *, fence: str
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).commit_result(
+            session_id, assignment_id, fence=fence
+        )
+
+    def release_assignment(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        availability_revision: str,
+    ) -> AgentSession:
+        return AgentSessionService(self._daemon, self._principal).release_assignment(
+            session_id,
+            assignment_id,
+            fence=fence,
+            availability_revision=availability_revision,
+        )
+
     def retire_clean(
         self, proof: AgentRetirementProof, *, idempotency_key: str
     ) -> Mapping[str, PlainData]:
@@ -506,7 +781,11 @@ class AgentSessionService:
         return freeze_plain_data(
             {
                 "protocol_version": PROTOCOL_VERSION,
-                "capabilities": ["agent-sessions-v1", "wait-only-work-v1"],
+                "capabilities": [
+                    "agent-sessions-v2",
+                    REMOTE_EXECUTION_CAPABILITY,
+                    REGULAR_FILE_RELAY_CAPABILITY,
+                ],
                 "coordinator_id": coordinator_id,
                 "coordinator_epoch": self._daemon._epoch or "",  # type: ignore[attr-defined]
                 "role": "agent",
@@ -782,6 +1061,13 @@ class AgentSessionService:
                 raise QueueConflictError(
                     "agent offer pools do not match its effective scope"
                 )
+            if offer.resident_profiles and not {
+                REMOTE_EXECUTION_CAPABILITY,
+                REGULAR_FILE_RELAY_CAPABILITY,
+            }.issubset(session.capabilities):
+                raise QueueServiceError(
+                    "agent session lacks remote execution capabilities"
+                )
             accepted = self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
             expiry = _add_seconds(accepted, offer.ttl_seconds)
             offer_id = f"offer-{uuid4()}"
@@ -898,6 +1184,17 @@ class AgentSessionService:
             )
             conn.commit()
 
+        delivered = self._take_targeted_delivery(
+            principal_id=rule.principal_id,
+            session_id=session_id,
+            availability_revision=availability_revision,
+            poll_id=poll_id,
+            epoch=epoch,
+            digest=digest,
+        )
+        if delivered is not None:
+            return delivered
+
         deadline = monotonic() + wait_timeout_ms / 1_000
         try:
             while monotonic() < deadline:
@@ -926,6 +1223,16 @@ class AgentSessionService:
                     )
                     self._check_current_session(session, rule, epoch, policy_revision)
                     self._require_current_offer(conn, session_id, availability_revision)
+                delivered = self._take_targeted_delivery(
+                    principal_id=rule.principal_id,
+                    session_id=session_id,
+                    availability_revision=availability_revision,
+                    poll_id=poll_id,
+                    epoch=epoch,
+                    digest=digest,
+                )
+                if delivered is not None:
+                    return delivered
             value = {
                 "result": "wait",
                 "poll_id": poll_id,
@@ -961,6 +1268,812 @@ class AgentSessionService:
                 )
                 conn.commit()
             raise
+
+    def _take_targeted_delivery(
+        self,
+        *,
+        principal_id: str,
+        session_id: str,
+        availability_revision: str,
+        poll_id: str,
+        epoch: str,
+        digest: str,
+    ) -> Mapping[str, PlainData] | None:
+        """Consume only an already-CAS-targeted delivery for this exact poll."""
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT assignment_id, request_json FROM agent_deliveries "
+                "WHERE session_id = ? AND availability_revision = ? AND "
+                "coordinator_epoch = ? AND state = 'TARGETED' ORDER BY assignment_id LIMIT 1",
+                (session_id, availability_revision, epoch),
+            ).fetchone()
+            if row is None:
+                conn.commit()
+                return None
+            value: dict[str, PlainData] = {
+                "result": "assignment",
+                "poll_id": poll_id,
+                "coordinator_epoch": epoch,
+                "request": cast(PlainData, json.loads(str(row["request_json"]))),
+            }
+            updated = conn.execute(
+                "UPDATE agent_deliveries SET state = 'DELIVERED', poll_id = ? "
+                "WHERE assignment_id = ? AND state = 'TARGETED'",
+                (poll_id, str(row["assignment_id"])),
+            ).rowcount
+            if updated != 1:
+                raise QueueConflictError("targeted delivery changed before its poll")
+            updated = conn.execute(
+                "UPDATE agent_polls SET active = 0, result_json = ? WHERE "
+                "principal_id = ? AND poll_id = ? AND digest = ? AND active = 1",
+                (_canonical_json(value), principal_id, poll_id, digest),
+            ).rowcount
+            if updated != 1:
+                raise QueueConflictError("work poll was fenced")
+            conn.commit()
+        return freeze_plain_data(value, path="agent assignment delivery")
+
+    def authorize_transfers(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        expected_revision: int,
+        operation_id: str,
+    ) -> Mapping[str, PlainData]:
+        rule, policy_revision = self._authorize("authorize")
+        _identifier(operation_id, "operation_id")
+        if (
+            isinstance(expected_revision, bool)
+            or not isinstance(expected_revision, int)
+            or expected_revision < 0
+        ):
+            raise QueueServiceError("transfer authorization revision is invalid")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+            self._require_remote_assignment(conn, session_id, assignment_id)
+            replay = conn.execute(
+                "SELECT assignment_id, authorization_id, revision, "
+                "coordinator_epoch, expires_at "
+                "FROM remote_transfer_authorizations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if replay is not None:
+                if (
+                    str(replay["assignment_id"]) != assignment_id
+                    or int(replay["revision"]) != expected_revision + 1
+                ):
+                    raise QueueConflictError("transfer authorization replay conflicts")
+                value = {
+                    "authorization_id": str(replay["authorization_id"]),
+                    "revision": int(replay["revision"]),
+                    "coordinator_epoch": str(replay["coordinator_epoch"]),
+                    "expires_at": str(replay["expires_at"]),
+                }
+                conn.commit()
+                return freeze_plain_data(value, path="transfer authorization")
+            current = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(revision), 0) FROM "
+                    "remote_transfer_authorizations WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()[0]
+            )
+            if current != expected_revision:
+                raise QueueConflictError("transfer authorization revision is stale")
+            if current >= _MAX_TRANSFER_AUTHORIZATIONS:
+                raise QueueConflictError(
+                    "transfer authorization renewal exceeded its bound"
+                )
+            revision = current + 1
+            authorization_id = f"authorization-{uuid4()}"
+            expires_at = _add_seconds(
+                self._daemon._accepted_time(conn),
+                60,  # type: ignore[attr-defined]
+            )
+            conn.execute(
+                "INSERT INTO remote_transfer_authorizations(assignment_id, "
+                "authorization_id, revision, coordinator_epoch, operation_id, "
+                "expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    assignment_id,
+                    authorization_id,
+                    revision,
+                    epoch,
+                    operation_id,
+                    expires_at,
+                ),
+            )
+            conn.commit()
+        return freeze_plain_data(
+            {
+                "authorization_id": authorization_id,
+                "revision": revision,
+                "coordinator_epoch": epoch,
+                "expires_at": expires_at,
+            },
+            path="transfer authorization",
+        )
+
+    def read_input_chunk(
+        self,
+        session_id: str,
+        assignment_id: str,
+        transfer_id: str,
+        *,
+        offset: int,
+        authorization_id: str,
+        authorization_revision: int,
+    ) -> Mapping[str, PlainData]:
+        rule, policy_revision = self._authorize("input")
+        _identifier(transfer_id, "transfer_id")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise QueueServiceError("input transfer offset is invalid")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+            self._require_remote_assignment(conn, session_id, assignment_id)
+            self._require_transfer_authorization(
+                conn,
+                assignment_id,
+                authorization_id,
+                authorization_revision,
+                epoch,
+            )
+            row = conn.execute(
+                "SELECT size_bytes, private_path FROM remote_transfers WHERE "
+                "assignment_id = ? AND direction = 'input' AND transfer_id = ? "
+                "AND finalized = 1",
+                (assignment_id, transfer_id),
+            ).fetchone()
+            if row is None:
+                raise QueueConflictError("remote input transfer is unavailable")
+            size = int(row["size_bytes"])
+            if offset > size:
+                raise QueueConflictError("input transfer offset exceeds its size")
+            path = Path(str(row["private_path"]))
+            with path.open("rb") as stream:
+                stream.seek(offset)
+                data = stream.read(TRANSFER_CHUNK_BYTES)
+        return freeze_plain_data(
+            {
+                "transfer_id": transfer_id,
+                "offset": offset,
+                "data": _encode_chunk(data),
+                "next_offset": offset + len(data),
+                "final": offset + len(data) == size,
+            },
+            path="remote input chunk",
+        )
+
+    def accept_assignment(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        request_digest: str,
+    ) -> Mapping[str, PlainData]:
+        rule, policy_revision = self._authorize("accept")
+        _secret_digest(request_digest, "request digest")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+            row = self._require_remote_assignment(conn, session_id, assignment_id)
+            delivery = conn.execute(
+                "SELECT request_json, state FROM agent_deliveries "
+                "WHERE assignment_id = ? AND session_id = ?",
+                (assignment_id, session_id),
+            ).fetchone()
+            if delivery is None or str(delivery["state"]) != "DELIVERED":
+                raise QueueConflictError("remote assignment was not delivered")
+            if (
+                hashlib.sha256(str(delivery["request_json"]).encode()).hexdigest()
+                != request_digest
+            ):
+                raise QueueConflictError("remote durable request digest conflicts")
+            if row["fence"] is not None:
+                return freeze_plain_data(
+                    {
+                        "assignment_id": assignment_id,
+                        "fence": str(row["fence"]),
+                        "state": str(row["state"]),
+                    },
+                    path="remote assignment grant",
+                )
+        execution = self._remote_execution()
+        fence = execution.remote_accept(assignment_id)
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._require_remote_assignment(conn, session_id, assignment_id)
+            if row["fence"] is not None and str(row["fence"]) != fence:
+                raise QueueConflictError("remote assignment grant replay conflicts")
+            conn.execute(
+                "UPDATE remote_assignments SET state = 'GRANTED', fence = ? "
+                "WHERE assignment_id = ?",
+                (fence, assignment_id),
+            )
+            conn.commit()
+        return freeze_plain_data(
+            {"assignment_id": assignment_id, "fence": fence, "state": "GRANTED"},
+            path="remote assignment grant",
+        )
+
+    def decline_assignment(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        availability_revision: str,
+    ) -> AgentSession:
+        rule, policy_revision = self._authorize("decline")
+        _identifier(availability_revision, "availability_revision")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            session = self._require_remote_session(
+                conn, rule, policy_revision, session_id, epoch
+            )
+            row = self._require_remote_assignment(conn, session_id, assignment_id)
+            if row["fence"] is not None or str(row["state"]) not in {
+                "BOUND",
+                "RELEASED",
+            }:
+                raise QueueConflictError(
+                    "remote assignment cannot be definitively declined"
+                )
+            if str(row["state"]) == "RELEASED":
+                if row["next_availability_revision"] != availability_revision:
+                    raise QueueConflictError("remote decline replay conflicts")
+                return AgentSession(
+                    session.session_id,
+                    session.coordinator_id,
+                    session.coordinator_epoch,
+                    session.agent_id,
+                    session.agent_root_id,
+                    session.policy_revision,
+                    session.config_revision,
+                    session.inventory_revision,
+                    availability_revision,
+                    session.capabilities,
+                    session.pools,
+                    session.state,
+                )
+        self._remote_execution().remote_decline(assignment_id)
+        resumed = AgentSession(
+            session.session_id,
+            session.coordinator_id,
+            session.coordinator_epoch,
+            session.agent_id,
+            session.agent_root_id,
+            session.policy_revision,
+            session.config_revision,
+            session.inventory_revision,
+            availability_revision,
+            session.capabilities,
+            session.pools,
+            session.state,
+        )
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE remote_assignments SET state = 'RELEASED', "
+                "next_availability_revision = ? WHERE assignment_id = ?",
+                (availability_revision, assignment_id),
+            )
+            conn.execute(
+                "UPDATE agent_sessions SET availability_revision = ? "
+                "WHERE session_id = ?",
+                (availability_revision, session_id),
+            )
+            conn.execute(
+                "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "UPDATE agent_coordinator_references SET resolved = 1 WHERE "
+                "session_id = ? AND reference_kind = 'delivery' "
+                "AND reference_id = ?",
+                (session_id, assignment_id),
+            )
+            conn.commit()
+        return resumed
+
+    def confirm_started(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        process_execution_id: str,
+    ) -> Mapping[str, PlainData]:
+        rule, policy_revision = self._authorize("started")
+        _identifier(fence, "fence")
+        _identifier(process_execution_id, "process_execution_id")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+            row = self._require_remote_assignment(conn, session_id, assignment_id)
+            if row["fence"] != fence or str(row["state"]) not in {
+                "GRANTED",
+                "RUNNING",
+            }:
+                raise QueueConflictError("remote start grant is stale")
+        self._remote_execution().remote_started(
+            assignment_id, fence=fence, process_execution_id=process_execution_id
+        )
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute(
+                "UPDATE remote_assignments SET state = 'RUNNING' "
+                "WHERE assignment_id = ? AND fence = ?",
+                (assignment_id, fence),
+            )
+            conn.commit()
+        return freeze_plain_data(
+            {"assignment_id": assignment_id, "state": "RUNNING"},
+            path="remote start confirmation",
+        )
+
+    def report_event(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        sequence: int,
+        event_id: str,
+        payload: Mapping[str, PlainData],
+    ) -> Mapping[str, PlainData]:
+        rule, policy_revision = self._authorize("event")
+        _identifier(event_id, "event_id")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise QueueServiceError("remote event sequence is invalid")
+        frozen_payload = freeze_plain_data(payload, path="remote event")
+        if not isinstance(frozen_payload, Mapping):
+            raise QueueServiceError("remote event payload is invalid")
+        _reject_path_bearing_data(frozen_payload, "remote event")
+        if (
+            len(_canonical_json(frozen_payload).encode("utf-8"))
+            > _MAX_REMOTE_EVENT_BYTES
+        ):
+            raise QueueServiceError("remote event payload exceeds its bound")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+            row = self._require_remote_assignment(conn, session_id, assignment_id)
+            if str(row["state"]) not in {
+                "RUNNING",
+                "RESULT_RETAINED",
+                "TERMINAL",
+            }:
+                raise QueueConflictError(
+                    "remote event requires a started retained assignment"
+                )
+        acknowledged = self._remote_execution().remote_event(
+            assignment_id,
+            sequence=sequence,
+            event_id=event_id,
+            payload=frozen_payload,
+        )
+        return freeze_plain_data(
+            {"assignment_id": assignment_id, "acknowledged_sequence": acknowledged},
+            path="remote event acknowledgement",
+        )
+
+    def declare_outputs(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        authorization_id: str,
+        authorization_revision: int,
+        report: _RemoteExecutionReport,
+    ) -> Mapping[str, PlainData]:
+        rule, policy_revision = self._authorize("output_manifest")
+        _identifier(fence, "fence")
+        if report.assignment_id != assignment_id:
+            raise QueueConflictError("remote report targets another assignment")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        encoded = _canonical_json(report.to_dict())
+        if len(encoded.encode("utf-8")) > _MAX_REMOTE_WIRE_VALUE_BYTES:
+            raise QueueServiceError("remote result manifest exceeds its bound")
+        digest = hashlib.sha256(encoded.encode()).hexdigest()
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+            row = self._require_remote_assignment(conn, session_id, assignment_id)
+            self._require_transfer_authorization(
+                conn,
+                assignment_id,
+                authorization_id,
+                authorization_revision,
+                epoch,
+            )
+            if row["fence"] != fence or str(row["state"]) not in {
+                "RUNNING",
+                "RESULT_RETAINED",
+                "TERMINAL",
+            }:
+                raise QueueConflictError("remote result fence is stale")
+            delivery = conn.execute(
+                "SELECT request_json FROM agent_deliveries WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+            if delivery is None:
+                raise QueueConflictError("remote delivered request is unavailable")
+            request = _DeliveredExecutionRequest.from_dict(
+                json.loads(str(delivery["request_json"]))
+            )
+            output_mismatch = (
+                set(item.logical_name for item in report.outputs)
+                != set(request.declared_outputs)
+                if report.status is StageStatus.SUCCEEDED
+                else bool(report.outputs)
+            )
+            if (
+                report.stage_name != request.stage_name
+                or report.attempt != request.attempt
+                or output_mismatch
+            ):
+                raise QueueConflictError("remote result does not match its request")
+            if row["report_json"] is not None:
+                if str(row["report_json"]) != encoded:
+                    raise QueueConflictError("remote result replay conflicts")
+                conn.commit()
+                return freeze_plain_data(
+                    {"assignment_id": assignment_id, "state": str(row["state"])},
+                    path="remote output manifest",
+                )
+            for item in report.outputs:
+                target = (
+                    self._daemon.config.coordinator_root  # type: ignore[attr-defined]
+                    / "remote-relay"
+                    / assignment_id
+                    / "outputs"
+                    / item.logical_name
+                )
+                conn.execute(
+                    "INSERT INTO remote_transfers(assignment_id, direction, "
+                    "transfer_id, logical_name, digest, size_bytes, private_path, "
+                    "received_bytes, finalized, descriptor_json) "
+                    "VALUES (?, 'output', ?, ?, ?, ?, ?, 0, 0, ?)",
+                    (
+                        assignment_id,
+                        item.transfer_id,
+                        item.logical_name,
+                        item.digest,
+                        item.size_bytes,
+                        str(target),
+                        _canonical_json(item.to_dict()),
+                    ),
+                )
+            conn.execute(
+                "UPDATE remote_assignments SET state = 'RESULT_RETAINED', "
+                "report_json = ?, report_digest = ? WHERE assignment_id = ?",
+                (encoded, digest, assignment_id),
+            )
+            conn.commit()
+        return freeze_plain_data(
+            {"assignment_id": assignment_id, "state": "RESULT_RETAINED"},
+            path="remote output manifest",
+        )
+
+    def upload_output_chunk(
+        self,
+        session_id: str,
+        assignment_id: str,
+        transfer_id: str,
+        *,
+        offset: int,
+        data: bytes,
+        final: bool,
+        authorization_id: str,
+        authorization_revision: int,
+    ) -> Mapping[str, PlainData]:
+        rule, policy_revision = self._authorize("output")
+        _identifier(transfer_id, "transfer_id")
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or offset < 0
+            or not isinstance(data, bytes)
+            or len(data) > TRANSFER_CHUNK_BYTES
+            or not isinstance(final, bool)
+        ):
+            raise QueueServiceError("remote output chunk is invalid")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+            self._require_remote_assignment(conn, session_id, assignment_id)
+            self._require_transfer_authorization(
+                conn,
+                assignment_id,
+                authorization_id,
+                authorization_revision,
+                epoch,
+            )
+            row = conn.execute(
+                "SELECT digest, size_bytes, private_path, received_bytes, "
+                "finalized FROM remote_transfers WHERE assignment_id = ? AND "
+                "direction = 'output' AND transfer_id = ?",
+                (assignment_id, transfer_id),
+            ).fetchone()
+            if row is None:
+                raise QueueConflictError("remote output transfer is not declared")
+            target = Path(str(row["private_path"]))
+            received = int(row["received_bytes"])
+            size = int(row["size_bytes"])
+            if bool(row["finalized"]):
+                if offset + len(data) > size:
+                    raise QueueConflictError("output replay exceeds durable content")
+                with target.open("rb") as stream:
+                    stream.seek(offset)
+                    if stream.read(len(data)) != data:
+                        raise QueueConflictError(
+                            "output replay conflicts with durable bytes"
+                        )
+                return freeze_plain_data(
+                    {"transfer_id": transfer_id, "received_bytes": size, "final": True},
+                    path="remote output chunk",
+                )
+            staging = target.with_name(f".{transfer_id}.part")
+            received = _append_exact_chunk(staging, offset, received, data)
+            if received > size:
+                raise QueueConflictError("remote output exceeds declared size")
+            should_finalize = final or received == size
+            if should_finalize:
+                if received != size or _file_digest(staging) != str(row["digest"]):
+                    raise QueueConflictError(
+                        "remote output bytes do not match their manifest"
+                    )
+                _publish_staged_file(staging, target)
+                conn.execute(
+                    "UPDATE remote_transfers SET received_bytes = ?, finalized = 1 "
+                    "WHERE assignment_id = ? AND direction = 'output' "
+                    "AND transfer_id = ?",
+                    (received, assignment_id, transfer_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE remote_transfers SET received_bytes = ? WHERE "
+                    "assignment_id = ? AND direction = 'output' AND transfer_id = ?",
+                    (received, assignment_id, transfer_id),
+                )
+            conn.commit()
+        return freeze_plain_data(
+            {
+                "transfer_id": transfer_id,
+                "received_bytes": received,
+                "final": should_finalize,
+            },
+            path="remote output chunk",
+        )
+
+    def commit_result(
+        self, session_id: str, assignment_id: str, *, fence: str
+    ) -> Mapping[str, PlainData]:
+        rule, policy_revision = self._authorize("result")
+        _identifier(fence, "fence")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+            row = self._require_remote_assignment(conn, session_id, assignment_id)
+            if row["fence"] != fence or str(row["state"]) not in {
+                "RESULT_RETAINED",
+                "TERMINAL",
+                "RELEASED",
+            }:
+                raise QueueConflictError("remote terminal result fence is stale")
+            if row["report_json"] is None:
+                raise QueueConflictError("remote terminal report is unavailable")
+            report = _RemoteExecutionReport.from_dict(
+                json.loads(str(row["report_json"]))
+            )
+            pending = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM remote_transfers WHERE assignment_id = ? "
+                    "AND direction = 'output' AND finalized = 0",
+                    (assignment_id,),
+                ).fetchone()[0]
+            )
+            if pending:
+                raise QueueConflictError("remote output manifest is incomplete")
+            outputs = self._coordinator_output_refs(conn, assignment_id)
+            if str(row["state"]) in {"TERMINAL", "RELEASED"}:
+                return freeze_plain_data(
+                    {"assignment_id": assignment_id, "state": str(row["state"])},
+                    path="remote result commit",
+                )
+        self._remote_execution().remote_commit(
+            assignment_id, fence=fence, report=report, outputs=outputs
+        )
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute(
+                "UPDATE remote_assignments SET state = 'TERMINAL' "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
+            )
+            conn.commit()
+        return freeze_plain_data(
+            {"assignment_id": assignment_id, "state": "TERMINAL"},
+            path="remote result commit",
+        )
+
+    def release_assignment(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        availability_revision: str,
+    ) -> AgentSession:
+        rule, policy_revision = self._authorize("release")
+        _identifier(fence, "fence")
+        _identifier(availability_revision, "availability_revision")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            session = self._require_remote_session(
+                conn, rule, policy_revision, session_id, epoch
+            )
+            row = self._require_remote_assignment(conn, session_id, assignment_id)
+            if row["fence"] != fence or str(row["state"]) not in {
+                "TERMINAL",
+                "RELEASED",
+            }:
+                raise QueueConflictError("remote release fence is stale")
+            if str(row["state"]) == "RELEASED":
+                if row["next_availability_revision"] != availability_revision:
+                    raise QueueConflictError("remote release replay conflicts")
+                return AgentSession(
+                    session.session_id,
+                    session.coordinator_id,
+                    session.coordinator_epoch,
+                    session.agent_id,
+                    session.agent_root_id,
+                    session.policy_revision,
+                    session.config_revision,
+                    session.inventory_revision,
+                    availability_revision,
+                    session.capabilities,
+                    session.pools,
+                    session.state,
+                )
+        self._remote_execution().remote_release(assignment_id)
+        resumed = AgentSession(
+            session.session_id,
+            session.coordinator_id,
+            session.coordinator_epoch,
+            session.agent_id,
+            session.agent_root_id,
+            session.policy_revision,
+            session.config_revision,
+            session.inventory_revision,
+            availability_revision,
+            session.capabilities,
+            session.pools,
+            session.state,
+        )
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE remote_assignments SET state = 'RELEASED', "
+                "next_availability_revision = ? WHERE assignment_id = ?",
+                (availability_revision, assignment_id),
+            )
+            conn.execute(
+                "UPDATE agent_sessions SET availability_revision = ? "
+                "WHERE session_id = ?",
+                (availability_revision, session_id),
+            )
+            conn.execute(
+                "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "UPDATE agent_coordinator_references SET resolved = 1 WHERE "
+                "session_id = ? AND reference_kind = 'delivery' AND reference_id = ?",
+                (session_id, assignment_id),
+            )
+            conn.commit()
+        return resumed
+
+    def _require_remote_session(
+        self,
+        conn: sqlite3.Connection,
+        rule: AgentPrincipalPolicy,
+        policy_revision: str,
+        session_id: str,
+        epoch: str,
+    ) -> AgentSession:
+        session = _session_from_row(
+            conn.execute(
+                "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+            ).fetchone(),
+            self._daemon._require_started(),  # type: ignore[attr-defined]
+            expected_principal=rule.principal_id,
+        )
+        self._check_current_session(session, rule, epoch, policy_revision)
+        if not {
+            REMOTE_EXECUTION_CAPABILITY,
+            REGULAR_FILE_RELAY_CAPABILITY,
+        }.issubset(session.capabilities):
+            raise QueueServiceError("agent session lacks remote execution capabilities")
+        return session
+
+    @staticmethod
+    def _require_remote_assignment(
+        conn: sqlite3.Connection, session_id: str, assignment_id: str
+    ) -> sqlite3.Row:
+        _identifier(assignment_id, "assignment_id")
+        row = conn.execute(
+            "SELECT * FROM remote_assignments WHERE assignment_id = ? "
+            "AND session_id = ?",
+            (assignment_id, session_id),
+        ).fetchone()
+        if row is None:
+            raise QueueConflictError("remote assignment is not retained")
+        return row
+
+    def _require_transfer_authorization(
+        self,
+        conn: sqlite3.Connection,
+        assignment_id: str,
+        authorization_id: str,
+        revision: int,
+        epoch: str,
+    ) -> None:
+        _identifier(authorization_id, "authorization_id")
+        row = conn.execute(
+            "SELECT coordinator_epoch, expires_at FROM "
+            "remote_transfer_authorizations WHERE assignment_id = ? AND "
+            "authorization_id = ? AND revision = ?",
+            (assignment_id, authorization_id, revision),
+        ).fetchone()
+        if (
+            row is None
+            or str(row["coordinator_epoch"]) != epoch
+            or str(row["expires_at"]) < self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
+        ):
+            raise AgentTransferAuthorizationStaleError(
+                "remote transfer authorization is stale"
+            )
+
+    @staticmethod
+    def _coordinator_output_refs(
+        conn: sqlite3.Connection, assignment_id: str
+    ) -> dict[str, ArtifactRef]:
+        outputs: dict[str, ArtifactRef] = {}
+        for row in conn.execute(
+            "SELECT logical_name, private_path, descriptor_json FROM "
+            "remote_transfers WHERE assignment_id = ? AND direction = 'output' "
+            "AND finalized = 1 ORDER BY logical_name",
+            (assignment_id,),
+        ):
+            descriptor = _RemoteOutputArtifact.from_dict(
+                json.loads(str(row["descriptor_json"]))
+            )
+            path = Path(str(row["private_path"]))
+            outputs[str(row["logical_name"])] = ArtifactRef(
+                artifact_id=descriptor.artifact_id,
+                uri=path.resolve().as_uri(),
+                artifact_type=descriptor.artifact_type,
+                codec_key=descriptor.codec_key,
+                schema_version=descriptor.artifact_schema_version,
+                checksum=f"sha256:{descriptor.digest}",
+                fingerprint=descriptor.fingerprint,
+                producer_stage=descriptor.producer_stage,
+                created_at=descriptor.created_at,
+                metadata=descriptor.metadata,
+            )
+        return outputs
+
+    def _remote_execution(self):  # type: ignore[no-untyped-def]
+        execution = self._daemon._execution  # type: ignore[attr-defined]
+        if execution is None:
+            raise QueueServiceError("remote execution owner is unavailable")
+        return execution
 
     def retire_clean(
         self, proof: AgentRetirementProof, *, idempotency_key: str
@@ -1119,7 +2232,7 @@ class AgentSessionService:
 def initialize_agent_session_schema(
     conn: sqlite3.Connection, *, coordinator: bool
 ) -> None:
-    """Additive V2 tables; retained Phase 3 rows are intentionally untouched."""
+    """Create the current tables in a freshly initialized version-3 root."""
     if coordinator:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, agent_root_id TEXT NOT NULL, principal_id TEXT NOT NULL, policy_revision TEXT NOT NULL, config_revision TEXT NOT NULL, inventory_revision TEXT NOT NULL, availability_revision TEXT NOT NULL, capabilities_json TEXT NOT NULL, pools_json TEXT NOT NULL, retirement_verifier TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -1130,6 +2243,10 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS agent_coordinator_references (session_id TEXT NOT NULL, reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id, reference_kind, reference_id));
         CREATE TABLE IF NOT EXISTS agent_retirement_proofs (session_id TEXT PRIMARY KEY, proof_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_session_tombstones (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS agent_deliveries (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, poll_id TEXT);
+        CREATE TABLE IF NOT EXISTS remote_assignments (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, issuer_epoch TEXT NOT NULL, run_uri TEXT NOT NULL, stage_work_id TEXT NOT NULL, stage_name TEXT NOT NULL, attempt INTEGER NOT NULL, attempt_id TEXT NOT NULL, profile_json TEXT NOT NULL, state TEXT NOT NULL, fence TEXT, report_json TEXT, report_digest TEXT, next_availability_revision TEXT);
+        CREATE TABLE IF NOT EXISTS remote_transfers (assignment_id TEXT NOT NULL, direction TEXT NOT NULL, transfer_id TEXT NOT NULL, logical_name TEXT NOT NULL, digest TEXT NOT NULL, size_bytes INTEGER NOT NULL, private_path TEXT NOT NULL, received_bytes INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, descriptor_json TEXT, PRIMARY KEY(assignment_id, direction, transfer_id));
+        CREATE TABLE IF NOT EXISTS remote_transfer_authorizations (assignment_id TEXT NOT NULL, authorization_id TEXT NOT NULL, revision INTEGER NOT NULL, coordinator_epoch TEXT NOT NULL, operation_id TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, PRIMARY KEY(assignment_id, revision));
         """)
     else:
         conn.executescript("""
@@ -1148,10 +2265,225 @@ def initialize_agent_session_schema(
         """)
 
 
+def _target_remote_delivery(
+    daemon: "LocalDaemon",
+    *,
+    session_id: str,
+    availability_revision: str,
+    request: _DeliveredExecutionRequest,
+    run_uri: str,
+    input_paths: Mapping[str, Path],
+) -> None:
+    """Coordinator-private CAS target creation; delivery remains poll-owned."""
+    _identifier(session_id, "session_id")
+    _identifier(availability_revision, "availability_revision")
+    if not isinstance(request, _DeliveredExecutionRequest):
+        raise QueueServiceError("targeted delivery request is invalid")
+    _identifier(request.assignment_id, "assignment_id")
+    if not isinstance(run_uri, str) or not run_uri:
+        raise QueueServiceError("targeted delivery run identity is invalid")
+    expected_transfers = {item.transfer_id for item in request.inputs}
+    if set(input_paths) != expected_transfers:
+        raise QueueServiceError("targeted delivery input sources are incomplete")
+    encoded = _canonical_json(request.to_dict())
+    if len(encoded.encode("utf-8")) > _MAX_REMOTE_WIRE_VALUE_BYTES:
+        raise QueueServiceError("targeted delivery request is too large")
+    with daemon._connection() as conn:  # type: ignore[attr-defined]
+        conn.execute("BEGIN IMMEDIATE")
+        session = _session_from_row(
+            conn.execute(
+                "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+            ).fetchone(),
+            daemon._require_started(),  # type: ignore[attr-defined]
+        )
+        if (
+            session.state is not AgentSessionState.ACTIVE
+            or session.coordinator_epoch != daemon._epoch
+        ):  # type: ignore[attr-defined]
+            raise QueueConflictError("targeted delivery session is stale")
+        prior = conn.execute(
+            "SELECT request_json, session_id, availability_revision, coordinator_epoch "
+            "FROM agent_deliveries WHERE assignment_id = ?",
+            (request.assignment_id,),
+        ).fetchone()
+        if prior is not None:
+            if tuple(str(prior[index]) for index in range(4)) != (
+                encoded,
+                session_id,
+                availability_revision,
+                daemon._epoch,
+            ):  # type: ignore[attr-defined]
+                raise QueueConflictError(
+                    "targeted delivery conflicts with durable assignment"
+                )
+            retained = conn.execute(
+                "SELECT session_id, availability_revision, issuer_epoch, run_uri, "
+                "stage_work_id, stage_name, attempt, attempt_id, profile_json "
+                "FROM remote_assignments WHERE assignment_id = ?",
+                (request.assignment_id,),
+            ).fetchone()
+            if retained is None or tuple(retained) != (
+                session_id,
+                availability_revision,
+                daemon._epoch,  # type: ignore[attr-defined]
+                run_uri,
+                request.stage_work_id,
+                request.stage_name,
+                request.attempt,
+                request.attempt_id,
+                _canonical_json(request.profile.to_dict()),
+            ):
+                raise QueueConflictError(
+                    "targeted delivery owner identity conflicts with durable state"
+                )
+            transfer_rows = {
+                str(row["transfer_id"]): row
+                for row in conn.execute(
+                    "SELECT * FROM remote_transfers WHERE assignment_id = ? "
+                    "AND direction = 'input'",
+                    (request.assignment_id,),
+                )
+            }
+            if set(transfer_rows) != expected_transfers:
+                raise QueueConflictError(
+                    "targeted delivery input retention is incomplete"
+                )
+            for item in request.inputs:
+                row = transfer_rows[item.transfer_id]
+                target = (
+                    daemon.config.coordinator_root
+                    / "remote-relay"
+                    / request.assignment_id
+                    / "inputs"
+                    / item.transfer_id
+                )
+                if (
+                    str(row["logical_name"]) != item.logical_name
+                    or str(row["digest"]) != item.digest
+                    or int(row["size_bytes"]) != item.size_bytes
+                    or str(row["private_path"]) != str(target)
+                    or int(row["received_bytes"]) != item.size_bytes
+                    or not bool(row["finalized"])
+                    or str(row["descriptor_json"]) != _canonical_json(item.to_dict())
+                ):
+                    raise QueueConflictError(
+                        "targeted delivery input retention conflicts"
+                    )
+                try:
+                    retained_data = _read_regular_file_bytes(target)
+                except QueueConflictError as exc:
+                    raise QueueConflictError(
+                        "targeted delivery input bytes are unavailable"
+                    ) from exc
+                if (
+                    len(retained_data) != item.size_bytes
+                    or hashlib.sha256(retained_data).hexdigest() != item.digest
+                ):
+                    raise QueueConflictError(
+                        "targeted delivery input bytes conflict with durable state"
+                    )
+            conn.commit()
+            return
+        offer = conn.execute(
+            "SELECT offer_json, expires_at FROM agent_offers WHERE session_id = ? "
+            "AND availability_revision = ? AND coordinator_epoch = ? "
+            "AND current = 1",
+            (session_id, availability_revision, daemon._epoch),  # type: ignore[attr-defined]
+        ).fetchone()
+        if offer is None or str(offer["expires_at"]) < daemon._accepted_time(conn):  # type: ignore[attr-defined]
+            raise QueueConflictError("targeted delivery requires a current offer")
+        offer_value = json.loads(str(offer["offer_json"]))
+        offered_profiles = offer_value.get("resident_profiles", [])
+        if request.profile.to_dict() not in offered_profiles:
+            raise QueueConflictError(
+                "targeted delivery resident profile is not in the current offer"
+            )
+        retained_inputs: list[tuple[object, ...]] = []
+        for item in request.inputs:
+            unresolved_source = Path(input_paths[item.transfer_id])
+            if unresolved_source.is_symlink():
+                raise QueueServiceError("targeted remote input must be a regular file")
+            try:
+                source = unresolved_source.resolve(strict=True)
+                data = _read_regular_file_bytes(source)
+            except (OSError, QueueConflictError) as exc:
+                raise QueueServiceError(
+                    "targeted remote input must be a regular file"
+                ) from exc
+            if (
+                len(data) != item.size_bytes
+                or hashlib.sha256(data).hexdigest() != item.digest
+            ):
+                raise QueueConflictError(
+                    "targeted remote input changed before durable relay"
+                )
+            target = (
+                daemon.config.coordinator_root
+                / "remote-relay"
+                / request.assignment_id
+                / "inputs"
+                / item.transfer_id
+            )
+            _atomic_regular_file(target, data)
+            retained_inputs.append(
+                (
+                    request.assignment_id,
+                    "input",
+                    item.transfer_id,
+                    item.logical_name,
+                    item.digest,
+                    item.size_bytes,
+                    str(target),
+                    item.size_bytes,
+                    1,
+                    _canonical_json(item.to_dict()),
+                )
+            )
+        conn.execute(
+            "INSERT INTO remote_assignments(assignment_id, session_id, "
+            "availability_revision, issuer_epoch, run_uri, stage_work_id, "
+            "stage_name, attempt, attempt_id, profile_json, state) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'BOUND')",
+            (
+                request.assignment_id,
+                session_id,
+                availability_revision,
+                daemon._epoch,
+                run_uri,
+                request.stage_work_id,
+                request.stage_name,
+                request.attempt,
+                request.attempt_id,
+                _canonical_json(request.profile.to_dict()),
+            ),
+        )
+        conn.executemany(
+            "INSERT INTO remote_transfers(assignment_id, direction, transfer_id, "
+            "logical_name, digest, size_bytes, private_path, received_bytes, "
+            "finalized, descriptor_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            retained_inputs,
+        )
+        conn.execute(
+            "INSERT INTO agent_deliveries(assignment_id, session_id, availability_revision, coordinator_epoch, request_json, state, poll_id) VALUES (?, ?, ?, ?, ?, 'TARGETED', NULL)",
+            (
+                request.assignment_id,
+                session_id,
+                availability_revision,
+                daemon._epoch,
+                encoded,
+            ),  # type: ignore[attr-defined]
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_coordinator_references(session_id, reference_kind, reference_id, resolved) VALUES (?, 'delivery', ?, 0)",
+            (session_id, request.assignment_id),
+        )
+        conn.commit()
+
+
 def validate_agent_session_schema(
     conn: sqlite3.Connection, *, coordinator: bool
 ) -> None:
-    """Reject a current-version root whose required Phase 4 tables are missing."""
+    """Reject a current root missing required session or execution tables."""
     required = (
         {
             "agent_sessions": {
@@ -1206,6 +2538,52 @@ def validate_agent_session_schema(
             },
             "agent_retirement_proofs": {"session_id", "proof_json"},
             "agent_session_tombstones": {"session_id", "state"},
+            "agent_deliveries": {
+                "assignment_id",
+                "session_id",
+                "availability_revision",
+                "coordinator_epoch",
+                "request_json",
+                "state",
+                "poll_id",
+            },
+            "remote_assignments": {
+                "assignment_id",
+                "session_id",
+                "availability_revision",
+                "issuer_epoch",
+                "run_uri",
+                "stage_work_id",
+                "stage_name",
+                "attempt",
+                "attempt_id",
+                "profile_json",
+                "state",
+                "fence",
+                "report_json",
+                "report_digest",
+                "next_availability_revision",
+            },
+            "remote_transfers": {
+                "assignment_id",
+                "direction",
+                "transfer_id",
+                "logical_name",
+                "digest",
+                "size_bytes",
+                "private_path",
+                "received_bytes",
+                "finalized",
+                "descriptor_json",
+            },
+            "remote_transfer_authorizations": {
+                "assignment_id",
+                "authorization_id",
+                "revision",
+                "coordinator_epoch",
+                "operation_id",
+                "expires_at",
+            },
         }
         if coordinator
         else {
@@ -1474,7 +2852,12 @@ def _plain_result(value: object, path: str) -> Mapping[str, PlainData]:
 
 
 def _canonical_json(value: Mapping[str, PlainData]) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return json.dumps(
+        thaw_plain_data(value, path="agent session durable value"),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 def _digest(value: Mapping[str, PlainData]) -> str:
