@@ -221,11 +221,35 @@ class SQLiteReadyStageSubmissions:
         return _load(row[0])
 
     def consume_start(self, operation_id: str) -> bool:
-        current = self.read(operation_id)
-        if current.start_consumed:
-            return False
-        self._write(replace(current, start_consumed=True))
-        return True
+        """Consume the durable one-root permit exactly once.
+
+        The permit is intentionally owned by the submission record rather than
+        by a bootstrap process.  A conditional update keeps two concurrent
+        bootstrap incarnations from both observing an unconsumed value.
+        """
+
+        with sqlite3.connect(self.path) as conn:
+            row = conn.execute(
+                "SELECT value_json FROM ready_stage_submissions WHERE operation_id=?",
+                (operation_id,),
+            ).fetchone()
+            if row is None:
+                raise SlurmPlanningError("SLURM submission is not durable")
+            current = _load(row[0])
+            if current.start_consumed:
+                return False
+            consumed = replace(current, start_consumed=True)
+            result = conn.execute(
+                "UPDATE ready_stage_submissions SET state=?, value_json=? "
+                "WHERE operation_id=? AND value_json=?",
+                (
+                    consumed.state.value,
+                    _dump(consumed),
+                    operation_id,
+                    row[0],
+                ),
+            )
+            return result.rowcount == 1
 
     def _set(
         self,

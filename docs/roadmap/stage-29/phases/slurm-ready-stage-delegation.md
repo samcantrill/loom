@@ -646,22 +646,28 @@ Final commands:
   boundaries; the independent review remains required after implementation.
 - Implementation: in progress; correction 1/3 adds the profile-owned operation
   marker and command discovery seam before ready-stage dispatch wiring.
-- Refiner: not needed unless the executor returns one qualified blocker
+- Refiner: correction 2/3 completed the durable bootstrap one-start compare-and-
+  swap; the production explicit-SLURM composition blocker remains for manager
+  disposition because no protected profile/credential application boundary is
+  currently wired into the daemon path.
 - Pre-submit gate: pending manager-local validation and diff/contract review
 - Independent review: expected because the phase contains an external submit
   ambiguity and remote execution authorization boundary; confirm against the
   current workflow risk at phase preparation
-- Blocker corrections: 1/3 — superseded command-seam blocker; add profile-owned
-  operation comment/discovery rather than treating job status as identity.
+- Blocker corrections: 2/3 — correction 1 added profile-owned operation
+  comment/discovery rather than treating job status as identity; correction 2
+  made the submission-record root-launch permit atomic across concurrent
+  bootstrap incarnations. The missing production route/profile composition is
+  still unresolved.
 - PR and merge: pending; squash merge to `develop` after all gates pass
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | No implementation changes. The phase completion record was updated to retain the blocker. |
-| Tests added or updated | None; implementation was stopped before a safe concrete submission path could be added. |
-| Validated revision/tree state and evidence | Targeted exploratory unit coverage passed before it was removed; final tree contains only this completion-record update. Evidence: `src/loom/pipeline/executors/slurm/commands.py` defines `squeue` as `%i|%T|%r` and `sacct` as `JobIDRaw,State,ExitCode`, neither containing the required scheduler-visible operation metadata. |
-| Validation-relevant changes after evidence | Completion-record update only; full validation was not run because no implementation was retained. |
+| Implementation and changed paths | `src/loom/pipeline/executors/slurm/ready_stage.py` now consumes the durable root-launch permit with a conditional SQLite update, so concurrent bootstrap incarnations cannot both receive `True`. |
+| Tests added or updated | Added `tests/unit/loom/pipeline/executors/slurm/test_ready_stage.py`, which exercises two concurrent consumers of one accepted submission. |
+| Validated revision/tree state and evidence | `uv run pytest -q tests/unit/loom/pipeline/executors/slurm/test_ready_stage.py` passed (1 test). The compare-and-swap update changes the row only while its original serialized value is current. |
+| Validation-relevant changes after evidence | No changes after the focused test run. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Blocked. A profile-owned exact operation-discovery capability (including bounded safe parsing and zero/one/multiple cardinality) is required before `SUBMITTING` can be safely reconciled. No `sbatch`, bootstrap, authority, or historical whole-run SLURM path was changed. |
+| Residual risk and cleanup | Blocked. Although operation discovery and the one-start store gate now exist, no production caller composes a protected profile, exact bootstrap credential scope, assignment reservation/bind, and `SQLiteReadyStageSubmissions` around explicit-SLURM stage work. Adding that boundary requires manager confirmation of the concrete deployment composition; no `sbatch`, authority, or historical whole-run SLURM path was changed by this correction. |
