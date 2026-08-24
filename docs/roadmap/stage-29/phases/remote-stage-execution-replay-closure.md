@@ -148,8 +148,8 @@ Assumptions:
 Targeted commands:
 
     .venv/bin/pytest -q tests/unit/loom/queue/test_remote_stage_execution.py
-    .venv/bin/pytest -q tests/unit/loom/queue/test_agent_sessions.py tests/unit/loom/queue/test_agent_session_transport.py
-    .venv/bin/pytest -q tests/integration/queue/test_local_daemon.py
+    .venv/bin/pytest -q tests/unit/loom/queue/test_agent_sessions.py tests/integration/queue/test_agent_session_transport.py
+    .venv/bin/pytest -q tests/unit/loom/queue/test_local_daemon.py
 
 Final commands:
 
@@ -194,8 +194,16 @@ Final commands:
 - Implementation: complete at `4134d70` (`947cb87` selectively restores the
   approved Phase 5 source/test candidate without its superseded roadmap
   metadata; `4134d70` closes the replay window)
-- Refiner: not needed unless one qualified blocker consumes a correction pass
-- Pre-submit gate: complete at stable source/test revision `4134d70`
+- Manager review: complete. Relative to candidate `d536a1e`, only both transfer
+  finalizers and the causal tests differ; exact target identity is checked before
+  staging access, both SQLite owners adopt it transactionally, conflicts roll
+  back, and the focused manager matrix passed 54 tests.
+- Refiner: not used
+- Pre-submit gate: complete at stable source/test revision `4134d70`. The manager
+  reran `make validate-pr`: Ruff passed, Pyright reported zero findings, 2,436
+  default and 141 configuration-extra tests passed with 3 expected skips, and
+  both distributions built. Fresh `make test-summary` recorded 2,577 categorized
+  passes with no failures or errors.
 - Independent review: required after the manager gate because the repaired
   boundary publishes executable input and authoritative output across crashes
 - Blocker corrections: 0/3
@@ -206,8 +214,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Selectively restored the approved Phase 5 remote-stage execution source/test vertical path in `src/loom/pipeline/execution/managed_local.py`, `src/loom/pipeline/execution/stage_worker.py`, `src/loom/queue/_remote_stage_execution.py`, `src/loom/queue/_resident_stage_worker.py`, `src/loom/queue/agent_session_transport.py`, `src/loom/queue/agent_sessions.py`, `src/loom/queue/local_daemon.py`, `src/loom/queue/local_daemon_execution.py`, and `src/loom/queue/local_daemon_runtime.py`. The agent input workspace and coordinator output relay now adopt an exact, no-follow regular final target after a publish-before-commit crash, finalizing it in their existing SQLite transaction before enforcing normal replay range/byte checks. |
-| Tests added or updated | Restored the Phase 5 focused test changes in `tests/integration/queue/test_agent_session_transport.py`, `tests/unit/loom/pipeline/execution/test_managed_local.py`, `tests/unit/loom/queue/test_agent_sessions.py`, and `tests/unit/loom/queue/test_remote_stage_execution.py`. Added multi-chunk post-publication crash/replay and conflicting-final-target coverage for both input and output finalization in `test_remote_stage_execution.py`. Focused evidence: remote workspace `10 passed`; agent sessions `18 passed`; current transport harness `10 passed`; current local-daemon harness `16 passed`. The two plan-listed paths that are absent in this checkout were run at their current equivalent locations: integration `test_agent_session_transport.py` and unit `test_local_daemon.py`. |
-| Validated revision/tree state and evidence | At stable source/test revision `4134d70`, `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed (Ruff, Pyright, default/config-extra harnesses, and build). `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md`: package 118 passed; unit 1,733 passed; contract 295 passed; integration 233 passed; e2e 57 passed; config-extra 141 passed/3 skipped. |
-| Validation-relevant changes after evidence | None. This completion-record update is documentation-only. |
+| Tests added or updated | Restored the Phase 5 focused test changes in `tests/integration/queue/test_agent_session_transport.py`, `tests/unit/loom/pipeline/execution/test_managed_local.py`, `tests/unit/loom/queue/test_agent_sessions.py`, and `tests/unit/loom/queue/test_remote_stage_execution.py`. Added multi-chunk post-publication crash/replay and conflicting-final-target coverage for both input and output finalization in `test_remote_stage_execution.py`. Manager-focused evidence: remote workspace 10, agent sessions 18, transport 10, and local daemon 16, for 54 passes. |
+| Validated revision/tree state and evidence | At stable source/test revision `4134d70`, the manager reran `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`: Ruff passed; Pyright reported 0 errors/warnings; default passed 2,436 with 121 deselected; configuration-extra passed 141 with 3 expected skips and 2,439 deselected; source and wheel builds succeeded. Fresh `make test-summary` passed package 118, unit 1,733, contract 295, integration 233, e2e 57, and configuration-extra 141 with 3 expected skips, for 2,577 categorized passes and no failures/errors. |
+| Validation-relevant changes after evidence | Phase and manifest evidence/status metadata only. |
 | PR, review, and merge | Not prepared by executor; independent review remains required and PR/merge remain pending. |
 | Residual risk and cleanup | No product blocker or new contract decision found. The accepted bounded relay-throughput/retained-output debt remains deferred as planned; worktree and branch cleanup await manager workflow. |
