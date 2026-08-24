@@ -1,16 +1,17 @@
 # Roadmap Stage 29 Implementation Plan
 
 Status: implementation in progress; Phases 1-3D, 4A, 5A, and 6 merged,
-Phases 3A-3C, 4, and 5 retained as blocked evidence; Phase 7 pending
+Phases 3A-3C, 4, and 5 retained as blocked evidence; Phase 7 in progress
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 7 `pending`
+Current phase: Phase 7 `in_progress`
 Blockers: none. Phase 6 independent-review findings were closed by final
 correction `75cd70a`; [PR #241](https://github.com/samcantrill/loom/pull/241)
-passed CI and squash-merged into `develop` as `2c6d366`. Phase 7 is ready for
-manager preparation.
+passed CI and squash-merged into `develop` as `2c6d366`. Phase 7 manager
+preparation is complete on clean base `b57d65d`; no implementation blocker is
+known.
 
 ## Summary
 
@@ -654,7 +655,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 5 | `remote-stage-data-execution` | blocked | `docs/roadmap/stage-29/phases/remote-stage-data-execution.md` | `agent/stage-29-p5-remote-stage-data-execution` | not opened | Validated hard-cutover remote execution candidate; required review found that input/output publication can precede the matching SQLite finalization commit, so a crash can remove staging bytes while durable state remains unfinished and exact replay then strands the assignment | Preserve candidate `d536a1e` and its passing validation as read-only evidence; correction 3/3 is exhausted. |
 | 5A | `remote-stage-execution-replay-closure` | merged | `docs/roadmap/stage-29/phases/remote-stage-execution-replay-closure.md` | `agent/stage-29-p5a-remote-stage-execution-replay-closure` | [#240](https://github.com/samcantrill/loom/pull/240) merged | Selective Phase 5 source/test reuse; exact no-follow size/digest validation and transactional adoption of already-published input/output targets; post-publication/pre-commit crash tests; unchanged hard-cutover owner and protocol boundaries | Merge the complete remote CPU/memory execution path only after both transfer owners recover exact published bytes instead of requiring a vanished staging file. |
 | 6 | `gpu-preference-placement` | merged | `docs/roadmap/stage-29/phases/gpu-preference-placement.md` | `agent/stage-29-p6-gpu-preference-placement` | [#241](https://github.com/samcantrill/loom/pull/241) merged | Configured manageable GPU inventory; external-occupancy withdrawal; GPU planner/provider and claim contracts; planner-owned count/mode/per-device/topology feasibility; whole-placement constraints; tiered agent/model/packing preferences; quality-band fallback; strict future SLURM hard-mapping boundary; explicit no-OOM guarantee | Prove the generic resource and policy seams with safe exact GPU/VRAM managed placement and deterministic resource-relevant preferences that Phase 7 must map completely or reject. |
-| 7 | `slurm-ready-stage-delegation` | pending | `docs/roadmap/stage-29/phases/slurm-ready-stage-delegation.md` | `agent/stage-29-p7-slurm-ready-stage-delegation` | pending | Explicit route/profile resolution; protected profile registry and preflight; complete non-weakening request mapping; tagged target admission; durable at-most-one `sbatch` operation and exact reconciliation; assignment-scoped gated bootstrap; execution-only worker/result relay; external-scheduler observation and primitive cancel | Run one exact dependency-ready stage through one explicitly selected SLURM profile without duplicate submission/root launch, inferred fallback, weakened resources, or scheduler-state-as-Loom-success. |
+| 7 | `slurm-ready-stage-delegation` | in_progress | `docs/roadmap/stage-29/phases/slurm-ready-stage-delegation.md` | `agent/stage-29-p7-slurm-ready-stage-delegation` | pending | Explicit route/profile resolution; protected profile registry and preflight; complete non-weakening request mapping; tagged target admission; durable at-most-one `sbatch` operation and exact reconciliation; assignment-scoped gated bootstrap; execution-only worker/result relay; external-scheduler observation and primitive cancel | Run one exact dependency-ready stage through one explicitly selected SLURM profile without duplicate submission/root launch, inferred fallback, weakened resources, or scheduler-state-as-Loom-success. |
 | 8 | `agent-controls-cancellation` | pending | `docs/roadmap/stage-29/phases/agent-controls-cancellation.md` | `agent/stage-29-p8-agent-controls-cancellation` | pending | Serialized drain/resume; separate agent pool/provider/inventory and coordinator planner/rule/scorer/policy/profile reload transactions; retained owner-local descriptors and contract-skew ineligibility; coordinator request/authority cancellation epoch and complete managed/SLURM fan-out | Operate agents/profiles and cancel runs without mutating live claims, stranding durable component references, starting descendants, or treating disconnection/`scancel` acknowledgement as completion. |
 | 9 | `restart-guarded-recovery` | pending | `docs/roadmap/stage-29/phases/restart-guarded-recovery.md` | `agent/stage-29-p9-restart-guarded-recovery` | pending | Same-session agent restart; outbox/process reconciliation; SLURM submit/bootstrap/job/result reconciliation; normal reconciliation of all known terminal facts; positive-containment manual recovery; fence/close/retry; provider-release separation; complete request/delivery/preparation/claim/control/transfer/result/output/event/outbox session replacement; Phase 5 and Phase 7 restart regressions | Restart and recover unknown managed or SLURM work without duplicate submit/launch, overwritten terminal truth, unsafe capacity reuse, weak-evidence takeover, stale output commit, or automatic failover. |
 

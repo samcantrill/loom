@@ -2,15 +2,18 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 7
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p7-slurm-ready-stage-delegation`
-- Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop` after Phase 6 remotely merges
+- Worktree root and path: `/home/can134/work/active/loom-worktrees` and
+  `/home/can134/work/active/loom-worktrees/stage-29-p7-slurm-ready-stage-delegation`
+- Base revision: clean `origin/develop`
+  `b57d65d7790e88eb63bf25f1ff98c762d4853aa2`
 - PR target: `develop`
 - PR title: `feat(scheduling): delegate explicit ready stages to SLURM`
-- Dependencies: Phase 6 remotely merged; Phase 1 provides immutable route,
+- Dependencies: Phase 6 [PR #241](https://github.com/samcantrill/loom/pull/241)
+  passed CI and squash-merged as `2c6d366`; Phase 1 provides immutable route,
   ready-work, request, and descriptor contracts; Phase 2 provides tagged
   assignments, authority bind/grant/fence, and the execution-only stage worker;
   Phase 3 provides crash-durable coordinator state and scoped application
@@ -18,8 +21,9 @@
 - Workflow path: expanded because a durable database mutation, an external
   nontransactional `sbatch` side effect, a scheduler-started bootstrap, an
   authority grant, and output commit interact causally
-- Blockers: Phase 6 remote merge; the executor must confirm the current SLURM
-  command/mapping/script seams and Phase 2/5 handoff shapes on its exact base
+- Blockers: none. Current source confirms the fixed SLURM command/mapping/script
+  seams, Phase 2 execution-only worker and durable one-start journal, and Phase 5
+  exact relay/result paths on the prepared base.
 
 ## Objective And Context
 
@@ -45,6 +49,11 @@
 ## Current Source And Harness
 
 - Relevant files and symbols to re-check during phase preparation:
+  - `src/loom/pipeline/runtime/placement.py` already owns the closed
+    `ExecutionRouteKind`/`ExecutionRoute` values and includes the route in the
+    resolved placement fingerprint; `src/loom/pipeline/orchestration.py`
+    currently filters the managed route before kernel scheduling, leaving the
+    explicit SLURM route for this phase;
   - `src/loom/queue/slurm.py` and `SlurmQueueDispatchAdapter` currently own
     historical whole-run delegated queue dispatch and conservative
     `START_UNCERTAIN` classification;
@@ -66,8 +75,14 @@
     `run_stage_job` are the present stage-job surface. Phase 2 must already have
     extracted the execution-only worker that avoids whole-run lock and direct
     lifecycle-finalization assumptions;
-  - Phase 3 coordinator store/application and Phase 5 relay/result contracts are
-    the authoritative Stage 29 composition points.
+  - `src/loom/pipeline/execution/managed_local.py` now owns
+    `ManagedAssignment`, `SQLiteCoordinatorAssignments`, and the durable
+    `SQLiteAgentJournal.start_once` gate, while
+    `src/loom/pipeline/execution/stage_worker.py` owns the execution-only worker;
+  - `src/loom/queue/local_daemon_execution.py`,
+    `src/loom/queue/agent_sessions.py`, and
+    `src/loom/queue/_remote_stage_execution.py` are the current Phase 3/5
+    coordinator, authenticated application, exact relay, and result owners.
 - Existing tests and seams:
   - unit tests under `tests/unit/loom/pipeline/executors/slurm/` cover command,
     resource, script, status, cancellation, and submission behavior;
@@ -551,6 +566,16 @@ Phases 1–5 for route, assignment, coordinator store, bootstrap view, execution
 only worker, relay, status, and restart. Do not invent unstable test paths in
 this planning artifact; record the concrete commands during phase preparation.
 
+Current Stage 29 adjacent selectors:
+
+    pytest -q tests/unit/loom/scheduling/test_kernel.py
+    pytest -q tests/unit/loom/pipeline/execution/test_managed_local.py
+    pytest -q tests/unit/loom/queue/test_remote_stage_execution.py
+    pytest -q tests/unit/loom/queue/test_agent_sessions.py
+    pytest -q tests/integration/pipeline/test_managed_local_execution.py
+    pytest -q tests/integration/queue/test_managed_local_controller.py
+    pytest -q tests/integration/queue/test_agent_session_transport.py
+
 Final commands:
 
     make validate-pr
@@ -612,11 +637,13 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending after Phase 6 remotely merges; rediscover exact
-  contracts and prepare one worktree from current `origin/develop`
-- Expanded planning: required at phase time only if current source/harness
-  materially changes the external-call, bootstrap trust, or durable compatibility
-  boundary recorded here
+- Manager preparation: complete at clean `origin/develop` `b57d65d`; dedicated
+  branch/worktree, repository `samcantrill/loom`, verified Phase 6 merge,
+  current route, assignment/start, worker, relay/result, SLURM seams, exact test
+  selectors, target/title, and stop conditions recorded
+- Expanded planning: no extra planner pass needed. Current source/harness
+  matches the recorded external-call, bootstrap trust, and durable compatibility
+  boundaries; the independent review remains required after implementation.
 - Implementation: pending; one `loom_phase_executor`
 - Refiner: not needed unless the executor returns one qualified blocker
 - Pre-submit gate: pending manager-local validation and diff/contract review
