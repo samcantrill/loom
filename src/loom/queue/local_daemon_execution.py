@@ -47,6 +47,12 @@ from loom.pipeline.runtime import (
     resolve_run_runtime,
 )
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
+from loom.pipeline.runtime.scheduling_preferences import (
+    GpuModelPreferenceScorer,
+    OrderedAgentPreferenceScorer,
+    PackingPreferenceScorer,
+    ResourceAttributePreferenceScorer,
+)
 from loom.pipeline.specs import PipelineSpec, parse_pipeline_config
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
@@ -110,6 +116,16 @@ class ManagedLocalIntent:
 class LocalDaemonExecutionOutcome:
     state: LocalDaemonAdmissionState
     reason: str | None = None
+
+
+def _production_preference_scorers():
+    """The sole production registration of the resolved placement scorers."""
+    return {
+        "preferred_agent": OrderedAgentPreferenceScorer(),
+        "gpu_model": GpuModelPreferenceScorer(),
+        "resource_attribute": ResourceAttributePreferenceScorer(),
+        "packing": PackingPreferenceScorer(),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -803,6 +819,7 @@ class LocalDaemonExecution:
                             planners=self.planners,
                             policy=FifoSchedulingPolicy(),
                             component_epoch=self.coordinator_epoch,
+                            preference_scorers=_production_preference_scorers(),
                         ),
                         candidates=candidates,
                         as_of=snapshot.revision.sequence,
@@ -1123,22 +1140,38 @@ class LocalDaemonExecution:
                         ExactQuantity(1),
                     )
                 )
+            for device_id, _model, _vram in offer.gpu_devices:
+                atoms.append(
+                    CapacityAtom(
+                        "gpu", device_id, ExactQuantity(1), "count", ExactQuantity(1)
+                    )
+                )
             inventory: dict[str, ResourceInventoryEnvelope] = {}
             availability: dict[str, ResourceAvailabilityEnvelope] = {}
             for kind in {atom.owner_resource_kind for atom in atoms}:
                 kind_atoms = tuple(
                     atom for atom in atoms if atom.owner_resource_kind == kind
                 )
+                data: Mapping[str, PlainData] = {}
+                if kind == "gpu":
+                    data = cast(Mapping[str, PlainData], {"devices": [
+                        {"id": device_id, "model": model, "vram_bytes": vram,
+                         "allocation_mode": "exclusive", "provider": "exclusive",
+                         "features": [], "healthy": True}
+                        for device_id, model, vram in offer.gpu_devices
+                    ]})
                 inventory[kind] = ResourceInventoryEnvelope(
                     agent_id,
                     kind,
                     offer.availability_revision,
+                    data=data,
                     atoms=kind_atoms,
                 )
                 availability[kind] = ResourceAvailabilityEnvelope(
                     agent_id,
                     kind,
                     offer.availability_revision,
+                    data=data,
                     atoms=kind_atoms,
                 )
             candidate = Candidate(

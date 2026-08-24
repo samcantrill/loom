@@ -7,6 +7,7 @@ from loom.pipeline.execution.managed_local import (
     ManagedAssignment,
 )
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
+from loom.pipeline.execution.managed_local import ManagedLocalError
 from loom.scheduling import CapacityAtom, ExactQuantity, ResourceClaim
 
 
@@ -50,4 +51,13 @@ def test_gpu_provider_uses_only_the_journalled_claim_for_private_binding() -> No
     assert provider.prepare(command).outcome is ClaimOutcome.PREPARED
     assert provider.activate(command).outcome is ClaimOutcome.ACTIVE
     assert provider.binding_for_claim(command) == ("private-device-binding",)
+    assert provider.worker_environment(command) == {
+        "CUDA_VISIBLE_DEVICES": "private-device-binding"
+    }
     assert provider.release(command).outcome is ClaimOutcome.RELEASED
+    try:
+        provider.worker_environment(command)
+    except ManagedLocalError:
+        pass
+    else:  # pragma: no cover - documents the active-claim launch boundary.
+        raise AssertionError("released GPU claim supplied a worker binding")

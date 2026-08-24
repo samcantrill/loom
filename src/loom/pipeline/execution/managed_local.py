@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
@@ -57,6 +58,9 @@ class ManagedLocalError(ValueError):
 
 class ManagedProcessStartError(ManagedLocalError):
     """The launcher proved that no managed root was created or can later run."""
+
+
+_WORKER_ENVIRONMENT_LOCK = RLock()
 
 
 class ClaimOutcome(StrEnum):
@@ -2241,14 +2245,20 @@ def run_managed_local_assignment(
     process_id = process_execution_id or f"{assignment.assignment_id}:root"
 
     def execute_exact_worker() -> StageWorkerResult:
-        return execute_stage_worker_request(
-            run_store=run_store,
-            worker_request=worker_request,
-            executor=executor,
-            artifact_store_factory=artifact_store_factory,
-            selected_plugin_records=selected_plugin_records,
-            resource_validator_registry=resource_validator_registry,
-        )
+        environment: dict[str, str] = {}
+        for command in commands:
+            provider = providers[command.claim.resource_kind]
+            if isinstance(provider, GpuResourceProvider):
+                environment.update(provider.worker_environment(command))
+        with _worker_environment(environment):
+            return execute_stage_worker_request(
+                run_store=run_store,
+                worker_request=worker_request,
+                executor=executor,
+                artifact_store_factory=artifact_store_factory,
+                selected_plugin_records=selected_plugin_records,
+                resource_validator_registry=resource_validator_registry,
+            )
 
     def launch_exact_worker() -> str:
         launch = process_launcher or _launch_managed_worker
@@ -2419,6 +2429,10 @@ class GpuResourceProvider(AtomResourceProvider):
                     "GPU configured binding is unavailable"
                 ) from exc
 
+    def worker_environment(self, command: ClaimCommand) -> dict[str, str]:
+        """Return the sole GPU environment value derived from an active claim."""
+        return {"CUDA_VISIBLE_DEVICES": ",".join(self.binding_for_claim(command))}
+
 
 def _claim_command_dict(command: ClaimCommand) -> dict[str, PlainData]:
     claim = command.claim
@@ -2514,6 +2528,25 @@ def _require_worker_assignment_match(
         raise ManagedLocalError(
             "worker request does not match the exact assigned attempt"
         )
+
+
+@contextmanager
+def _worker_environment(values: Mapping[str, str]):
+    """Apply an assignment-private worker environment for one contained root."""
+    if not values:
+        yield
+        return
+    with _WORKER_ENVIRONMENT_LOCK:
+        prior = {key: os.environ.get(key) for key in values}
+        os.environ.update(values)
+        try:
+            yield
+        finally:
+            for key, value in prior.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 def _emit_assignment_event(

@@ -35,9 +35,11 @@ from loom.pipeline.execution.managed_local import (
     ManagedAssignment,
     ObserveRequest,
     SQLiteAgentJournal,
+    GpuResourceProvider,
 )
 from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
+from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.stores.atomic import atomic_write_bytes
 
 from .agent_sessions import (
@@ -824,6 +826,11 @@ class LocalDaemonAgentHttpClient:
             if (
                 offer.cpu > capacity.cpu_capacity
                 or offer.memory_bytes > capacity.memory_capacity_bytes
+                or {
+                    (device.device_id, device.model, device.vram_bytes)
+                    for device in capacity.gpu_devices
+                }
+                != set(offer.gpu_devices)
             ):
                 raise QueueConflictError("offer exceeds the resident capacity domain")
         journal = self._require_journal()
@@ -1273,6 +1280,10 @@ class LocalDaemonAgentHttpClient:
                         )
                     )
                 }
+                for command in commands:
+                    provider = providers[command.claim.resource_kind]
+                    if isinstance(provider, GpuResourceProvider):
+                        environment.update(provider.worker_environment(command))
                 child = subprocess.Popen(
                     [
                         str(profile.python_executable),
@@ -1577,6 +1588,7 @@ class LocalDaemonAgentHttpClient:
             planners = {
                 "cpu": CpuResourcePlanner(),
                 "memory": MemoryResourcePlanner(),
+                "gpu": GpuResourcePlanner(),
             }
             atoms = profile.capacity_atoms(session.agent_id)
             self._providers = {
@@ -1587,6 +1599,19 @@ class LocalDaemonAgentHttpClient:
                 )
                 for kind in {atom.owner_resource_kind for atom in atoms}
             }
+            if profile.gpu_devices:
+                gpu_atoms = tuple(
+                    atom for atom in atoms if atom.owner_resource_kind == "gpu"
+                )
+                self._providers["gpu"] = GpuResourceProvider(
+                    planners["gpu"].descriptor,
+                    planners["gpu"].claim_contracts,
+                    gpu_atoms,
+                    bindings={
+                        device.device_id: device.binding_value
+                        for device in profile.gpu_devices
+                    },
+                )
             for command in journal.retained_claim_commands():
                 provider = self._providers.get(command.claim.resource_kind)
                 if provider is None:
@@ -2174,11 +2199,13 @@ def _offer(value: Mapping[str, object]) -> AgentOffer:
             "pools",
             "reflected_claim_ids",
             "resident_profiles",
+            "gpu_devices",
         },
     )
     claims = value["reflected_claim_ids"]
     pools = value["pools"]
     profiles = value["resident_profiles"]
+    gpu_devices = value["gpu_devices"]
     if (
         not isinstance(claims, list)
         or any(not isinstance(item, str) for item in claims)
@@ -2186,6 +2213,8 @@ def _offer(value: Mapping[str, object]) -> AgentOffer:
         or any(not isinstance(item, str) for item in pools)
         or not isinstance(profiles, list)
         or any(not isinstance(item, Mapping) for item in profiles)
+        or not isinstance(gpu_devices, list)
+        or any(not isinstance(item, Mapping) for item in gpu_devices)
     ):
         raise QueueServiceError("agent offer scope is invalid")
     cpu, memory = _capacity_atoms(value["capacity_atoms"])
@@ -2203,16 +2232,22 @@ def _offer(value: Mapping[str, object]) -> AgentOffer:
         resident_profiles=tuple(
             ResidentProfileDescriptor.from_dict(item) for item in profiles
         ),
+        gpu_devices=tuple(
+            (_string(item, "id"), _string(item, "model"), _integer(item, "vram_bytes"))
+            for item in gpu_devices
+            if set(item) == {"id", "model", "vram_bytes"}
+        ),
     )
 
 
 def _capacity_atoms(value: object) -> tuple[int, int]:
-    if not isinstance(value, list) or not 1 <= len(value) <= 2:
+    if not isinstance(value, list) or not 1 <= len(value) <= 34:
         raise QueueServiceError("agent capacity atoms are invalid")
     quantities: dict[str, int] = {}
     expected = {
         "cpu": ("cpu", "count"),
         "memory": ("memory", "byte"),
+        "gpu": (None, "count"),
     }
     for item in value:
         if not isinstance(item, Mapping):
@@ -2228,11 +2263,11 @@ def _capacity_atoms(value: object) -> tuple[int, int]:
             },
         )
         kind = _string(item, "owner_resource_kind")
-        if kind not in expected or kind in quantities:
+        if kind not in expected or (kind in quantities and kind != "gpu"):
             raise QueueServiceError("agent capacity atom namespace is invalid")
         local_key, unit = expected[kind]
         if (
-            _string(item, "local_capacity_key") != local_key
+            (local_key is not None and _string(item, "local_capacity_key") != local_key)
             or _string(item, "unit") != unit
         ):
             raise QueueServiceError("agent capacity atom descriptor is invalid")
@@ -2240,7 +2275,8 @@ def _capacity_atoms(value: object) -> tuple[int, int]:
         granularity = _exact_integer_quantity(item["granularity"], "granularity")
         if amount <= 0 or granularity != 1:
             raise QueueServiceError("agent capacity atom quantity is invalid")
-        quantities[kind] = amount
+        if kind != "gpu":
+            quantities[kind] = amount
     return quantities.get("cpu", 0), quantities.get("memory", 0)
 
 

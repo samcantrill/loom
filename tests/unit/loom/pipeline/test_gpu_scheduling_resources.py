@@ -28,6 +28,20 @@ from loom.scheduling import (
 from loom.serialization import PlainData
 
 
+def test_production_daemon_registers_each_concrete_preference_scorer() -> None:
+    from loom.queue.local_daemon_execution import _production_preference_scorers
+
+    assert {
+        name: type(scorer)
+        for name, scorer in _production_preference_scorers().items()
+    } == {
+        "preferred_agent": OrderedAgentPreferenceScorer,
+        "gpu_model": GpuModelPreferenceScorer,
+        "resource_attribute": ResourceAttributePreferenceScorer,
+        "packing": PackingPreferenceScorer,
+    }
+
+
 def _gpu_candidate(name: str = "machine-B", *, large_model: str = "large") -> Candidate:
     atoms = (
         CapacityAtom("gpu", "gpu-A", ExactQuantity(1), "count", ExactQuantity(1)),

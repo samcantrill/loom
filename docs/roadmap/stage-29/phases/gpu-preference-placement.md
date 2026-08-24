@@ -19,7 +19,7 @@
 - Workflow path: expanded because exact device/provider accounting and
   wait-then-fallback preference ranking interact at the production assignment
   boundary; use one bounded phase-planner refinement and one independent review
-- Blockers: none. Opt-in hardware evidence is optional and must not block
+- Blockers: resolved production-wiring correction. Opt-in hardware evidence is optional and must not block
   simulated/default CI.
 
 ## Objective And Context
@@ -501,21 +501,21 @@ Final commands:
   binding, worker environment, and release, while concrete scorers contribute
   only utility/band evidence to the kernel-owned preference algebra
 - Implementation: pending
-- Refiner: not used
+- Refiner: completed one qualified production-wiring correction
 - Pre-submit gate: pending
 - Independent review: required after the manager gate because GPU claims cross
   configured inventory, coordinator selection, agent physical binding, and
   worker environment boundaries
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `fd03da0` adds the built-in exact GPU request/planner path, configured local GPU inventory and agent-local binding provider, and placement-local agent/model/attribute/packing scorers. Changed paths: `src/loom/pipeline/resources.py`, `src/loom/pipeline/runtime/{scheduling_resources.py,scheduling_preferences.py}`, `src/loom/pipeline/execution/managed_local.py`, and local daemon composition. |
-| Tests added or updated | `tests/unit/loom/pipeline/test_gpu_scheduling_resources.py` covers exact per-device VRAM selection, explicit share/fraction normalization, and kernel scorer evidence; `tests/unit/loom/pipeline/execution/test_gpu_resource_provider.py` proves an active journalled claim alone yields the distinct private binding and releases it. Existing runtime, kernel, remote execution/session, and package-import suites also passed targeted. |
-| Validated revision/tree state and evidence | At `fd03da0`, Ruff and Pyright passed. Targeted evidence: 174 passed across package-import, GPU, runtime-resource, kernel, remote-stage/session suites. `make validate-pr` reached the default suite but failed only three pre-existing SIGINT lifecycle tests (`tests/e2e/test_execution_lifecycle.py`); all other 2,437 selected tests passed. `make test-summary` was started for the stable implementation tree; receipt pending at handoff. |
-| Validation-relevant changes after evidence | None after `fd03da0`; this completion-record update is documentation only. |
+| Implementation and changed paths | `fd03da0` adds the GPU primitives. Follow-up correction wires the concrete scorer registry into the production kernel; carries safe remote GPU offer inventory into candidate selection; composes the remote GPU provider; and derives `CUDA_VISIBLE_DEVICES` only from the active journalled GPU claim for local/remote workers. It retains the existing claim/journal identity and releases that same command. |
+| Tests added or updated | Existing GPU provider coverage now proves its environment exists only while the exact claim is active; GPU scheduling coverage proves the production scorer registration. Focused offer/session, remote execution, and transport coverage exercises the revised remote profile/offer path. |
+| Validated revision/tree state and evidence | Correction revision pending commit: Ruff passed for all changed paths; focused pytest passed: 43 tests across GPU scheduling/provider, agent-session, remote-stage execution, and transport integration. |
+| Validation-relevant changes after evidence | One qualified correction after `a89194b`: production GPU binding/scorer/remote-offer closure. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | No GPU hardware/vendor dependency was introduced. The full gate remains blocked by the three SIGINT lifecycle failures above, which do not exercise GPU code; test-summary completion is pending. Worktree and branch retained for manager validation/review. |

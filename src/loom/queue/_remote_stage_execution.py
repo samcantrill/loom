@@ -148,6 +148,22 @@ class ResidentProfileDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
+class ResidentGpuDevice:
+    """One safe configured remote GPU identity and its private binding."""
+
+    device_id: str
+    binding_value: str
+    model: str
+    vram_bytes: int
+
+    def __post_init__(self) -> None:
+        for value, name in ((self.device_id, "device_id"), (self.binding_value, "binding_value"), (self.model, "model")):
+            _identifier(value, f"resident GPU {name}")
+        if "," in self.binding_value or isinstance(self.vram_bytes, bool) or not isinstance(self.vram_bytes, int) or self.vram_bytes <= 0:
+            raise QueueServiceError("resident GPU configuration is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class ResidentExecutionProfile:
     """Protected local profile; its paths never enter protocol values."""
 
@@ -156,6 +172,7 @@ class ResidentExecutionProfile:
     python_executable: Path
     cpu_capacity: int = 1
     memory_capacity_bytes: int = 0
+    gpu_devices: tuple[ResidentGpuDevice, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ResidentProfileDescriptor):
@@ -178,8 +195,12 @@ class ResidentExecutionProfile:
                 or value < (1 if positive else 0)
             ):
                 raise QueueServiceError(f"resident {name} is invalid")
+        gpu_devices = tuple(self.gpu_devices)
+        if any(not isinstance(item, ResidentGpuDevice) for item in gpu_devices) or len({item.device_id for item in gpu_devices}) != len(gpu_devices):
+            raise QueueServiceError("resident GPU devices are invalid")
         object.__setattr__(self, "project_root", project_root)
         object.__setattr__(self, "python_executable", executable)
+        object.__setattr__(self, "gpu_devices", gpu_devices)
 
     def capacity_atoms(self, agent_id: str) -> tuple[CapacityAtom, ...]:
         _identifier(agent_id, "agent_id")
@@ -202,6 +223,10 @@ class ResidentExecutionProfile:
                     ExactQuantity(1),
                 )
             )
+        atoms.extend(
+            CapacityAtom("gpu", device.device_id, ExactQuantity(1), "count", ExactQuantity(1))
+            for device in self.gpu_devices
+        )
         return tuple(atoms)
 
 

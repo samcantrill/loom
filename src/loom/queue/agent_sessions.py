@@ -264,6 +264,7 @@ class AgentOffer:
     pools: tuple[str, ...] = ("default",)
     reflected_claim_ids: tuple[str, ...] = ()
     resident_profiles: tuple[ResidentProfileDescriptor, ...] = ()
+    gpu_devices: tuple[tuple[str, str, int], ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -283,7 +284,7 @@ class AgentOffer:
                 raise QueueServiceError(
                     f"{name} must be a bounded non-negative integer"
                 )
-        if not self.cpu and not self.memory_bytes:
+        if not self.cpu and not self.memory_bytes and not self.gpu_devices:
             raise QueueServiceError("offer capacity must not be empty")
         if (
             isinstance(self.ttl_seconds, bool)
@@ -299,6 +300,16 @@ class AgentOffer:
         if len({item.profile_id for item in profiles}) != len(profiles):
             raise QueueServiceError("offer resident profile IDs must be unique")
         object.__setattr__(self, "resident_profiles", profiles)
+        devices = tuple(self.gpu_devices)
+        if any(
+            not isinstance(item, tuple) or len(item) != 3
+            or not isinstance(item[0], str) or not item[0]
+            or not isinstance(item[1], str) or not item[1]
+            or isinstance(item[2], bool) or not isinstance(item[2], int) or item[2] <= 0
+            for item in devices
+        ) or len({item[0] for item in devices}) != len(devices):
+            raise QueueServiceError("offer GPU devices are invalid")
+        object.__setattr__(self, "gpu_devices", devices)
 
     def value(self) -> dict[str, PlainData]:
         capacity_atoms: list[PlainData] = []
@@ -322,6 +333,14 @@ class AgentOffer:
                     "granularity": {"numerator": 1, "denominator": 1},
                 }
             )
+        capacity_atoms.extend(
+            {
+                "owner_resource_kind": "gpu", "local_capacity_key": device_id,
+                "amount": {"numerator": 1, "denominator": 1}, "unit": "count",
+                "granularity": {"numerator": 1, "denominator": 1},
+            }
+            for device_id, _model, _vram in self.gpu_devices
+        )
         return {
             "session_id": self.session_id,
             "coordinator_epoch": self.coordinator_epoch,
@@ -333,6 +352,10 @@ class AgentOffer:
             "pools": list(self.pools),
             "reflected_claim_ids": list(self.reflected_claim_ids),
             "resident_profiles": [item.to_dict() for item in self.resident_profiles],
+            "gpu_devices": [
+                {"id": device_id, "model": model, "vram_bytes": vram}
+                for device_id, model, vram in self.gpu_devices
+            ],
         }
 
     @classmethod
@@ -348,6 +371,7 @@ class AgentOffer:
             "pools",
             "reflected_claim_ids",
             "resident_profiles",
+            "gpu_devices",
         }
         if not isinstance(value, Mapping) or set(value) != expected:
             raise QueueServiceError("agent offer is invalid")
@@ -368,24 +392,26 @@ class AgentOffer:
             amount = atom.get("amount")
             granularity = atom.get("granularity")
             if (
-                kind not in {"cpu", "memory"}
-                or kind in capacities
+                kind not in {"cpu", "memory", "gpu"}
+                or (kind in capacities and kind != "gpu")
                 or not isinstance(amount, Mapping)
                 or set(amount) != {"numerator", "denominator"}
                 or amount.get("denominator") != 1
                 or isinstance(amount.get("numerator"), bool)
                 or not isinstance(amount.get("numerator"), int)
                 or cast(int, amount["numerator"]) <= 0
-                or atom.get("local_capacity_key") != kind
-                or atom.get("unit") != ("count" if kind == "cpu" else "byte")
+                or (kind in {"cpu", "memory"} and atom.get("local_capacity_key") != kind)
+                or atom.get("unit") != ("count" if kind in {"cpu", "gpu"} else "byte")
                 or not isinstance(granularity, Mapping)
                 or dict(granularity) != {"numerator": 1, "denominator": 1}
             ):
                 raise QueueServiceError("agent offer capacity is invalid")
-            capacities[cast(str, kind)] = cast(int, amount["numerator"])
+            if kind != "gpu":
+                capacities[cast(str, kind)] = cast(int, amount["numerator"])
         pools = value["pools"]
         claims = value["reflected_claim_ids"]
         profiles = value["resident_profiles"]
+        gpu_devices = value["gpu_devices"]
         if (
             not isinstance(pools, Sequence)
             or isinstance(pools, (str, bytes))
@@ -393,6 +419,8 @@ class AgentOffer:
             or isinstance(claims, (str, bytes))
             or not isinstance(profiles, Sequence)
             or isinstance(profiles, (str, bytes))
+            or not isinstance(gpu_devices, Sequence)
+            or isinstance(gpu_devices, (str, bytes))
         ):
             raise QueueServiceError("agent offer scope is invalid")
         return cls(
@@ -408,6 +436,11 @@ class AgentOffer:
             reflected_claim_ids=tuple(cast(Sequence[str], claims)),
             resident_profiles=tuple(
                 ResidentProfileDescriptor.from_dict(item) for item in profiles
+            ),
+            gpu_devices=tuple(
+                (cast(str, item["id"]), cast(str, item["model"]), cast(int, item["vram_bytes"]))
+                for item in cast(Sequence[Mapping[str, object]], gpu_devices)
+                if isinstance(item, Mapping) and set(item) == {"id", "model", "vram_bytes"}
             ),
         )
 
