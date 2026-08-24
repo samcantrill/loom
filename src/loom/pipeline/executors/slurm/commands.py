@@ -22,7 +22,9 @@ from .errors import (
 SLURM_COMMAND_RESULT_SCHEMA_VERSION = 1
 MAX_PERSISTED_COMMAND_OUTPUT_CHARS = 4096
 
-_SBATCH_PARSABLE_RE = re.compile(r"^(?P<job_id>[0-9]+)(?:;(?P<cluster>[A-Za-z0-9_.-]+))?$")
+_SBATCH_PARSABLE_RE = re.compile(
+    r"^(?P<job_id>[0-9]+)(?:;(?P<cluster>[A-Za-z0-9_.-]+))?$"
+)
 _COMMAND_RESULT_FIELDS = frozenset(
     {
         "schema_version",
@@ -95,10 +97,7 @@ class SlurmCommandResult:
             "argv",
             _argv_tuple(self.argv, path="SlurmCommandResult.argv"),
         )
-        if (
-            not isinstance(self.returncode, int)
-            or isinstance(self.returncode, bool)
-        ):
+        if not isinstance(self.returncode, int) or isinstance(self.returncode, bool):
             raise SlurmPlanningError("SlurmCommandResult.returncode must be an integer")
         object.__setattr__(
             self,
@@ -177,6 +176,7 @@ class SlurmCommandRunner(Protocol):
         script_path: str | Path,
         *,
         dependency_job_ids: Sequence[str] = (),
+        comment: str | None = None,
     ) -> SlurmCommandResult:
         """Submit one script with ``sbatch --parsable``."""
         ...
@@ -191,6 +191,10 @@ class SlurmCommandRunner(Protocol):
 
     def scancel(self, *, job_ids: Sequence[str]) -> SlurmCommandResult:
         """Cancel submitted jobs."""
+        ...
+
+    def discover_operation(self, operation_marker: str) -> SlurmCommandResult:
+        """Return bounded job/comment rows for one profile-owned marker."""
         ...
 
 
@@ -209,11 +213,14 @@ class SubprocessSlurmCommandRunner:
         script_path: str | Path,
         *,
         dependency_job_ids: Sequence[str] = (),
+        comment: str | None = None,
     ) -> SlurmCommandResult:
         argv = ["sbatch", "--parsable"]
         dependencies = _job_id_tuple(dependency_job_ids, field="dependency_job_ids")
         if dependencies:
             argv.append("--dependency=afterok:" + ":".join(dependencies))
+        if comment is not None:
+            argv.append("--comment=" + _operation_marker(comment))
         argv.append(str(script_path))
         return self._run("sbatch", argv)
 
@@ -242,6 +249,13 @@ class SubprocessSlurmCommandRunner:
         if not ids:
             raise SlurmPlanningError("scancel requires at least one job ID")
         return self._run("scancel", ["scancel", *ids])
+
+    def discover_operation(self, operation_marker: str) -> SlurmCommandResult:
+        _operation_marker(operation_marker)
+        return self._run(
+            "squeue",
+            ["squeue", "--noheader", "--format", "%i|%k"],
+        )
 
     def _run(self, command: str, argv: Sequence[str]) -> SlurmCommandResult:
         import subprocess
@@ -296,11 +310,14 @@ class FakeSlurmCommandRunner:
         script_path: str | Path,
         *,
         dependency_job_ids: Sequence[str] = (),
+        comment: str | None = None,
     ) -> SlurmCommandResult:
         argv = ["sbatch", "--parsable"]
         dependencies = _job_id_tuple(dependency_job_ids, field="dependency_job_ids")
         if dependencies:
             argv.append("--dependency=afterok:" + ":".join(dependencies))
+        if comment is not None:
+            argv.append("--comment=" + _operation_marker(comment))
         argv.append(str(script_path))
         fallback = SlurmCommandResult(
             command="sbatch",
@@ -350,6 +367,15 @@ class FakeSlurmCommandRunner:
             "scancel",
             argv,
             SlurmCommandResult(command="scancel", argv=argv, returncode=0),
+        )
+
+    def discover_operation(self, operation_marker: str) -> SlurmCommandResult:
+        _operation_marker(operation_marker)
+        argv = ("squeue", "--noheader", "--format", "%i|%k")
+        return self._result(
+            "squeue",
+            argv,
+            SlurmCommandResult(command="squeue", argv=argv, returncode=0),
         )
 
     def _result(
@@ -457,6 +483,21 @@ def _required_text(value: object, field: str) -> str:
         raise SlurmPlanningError(f"{field} must be a non-empty string")
     if any(ord(ch) < 32 for ch in value):
         raise SlurmPlanningError(f"{field} must not contain control characters")
+    return value
+
+
+def _operation_marker(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 120
+        or any(
+            char
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:@+"
+            for char in value
+        )
+    ):
+        raise SlurmPlanningError("operation marker is invalid")
     return value
 
 

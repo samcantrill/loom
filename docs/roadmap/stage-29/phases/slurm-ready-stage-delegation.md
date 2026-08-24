@@ -21,11 +21,9 @@
 - Workflow path: expanded because a durable database mutation, an external
   nontransactional `sbatch` side effect, a scheduler-started bootstrap, an
   authority grant, and output commit interact causally
-- Blockers: current `SlurmCommandRunner` can submit and inspect known job IDs,
-  but its fixed `squeue`/`sacct` formats expose only job ID/state/reason or exit
-  data. No protected profile capability or command seam can query the required
-  scheduler-visible stable operation identity, so the mandated exact zero/one/
-  multiple operation reconciliation cannot be implemented safely.
+- Blockers: none. The prior command-seam blocker is superseded by correction
+  1/3: profile-owned versioned operation comments and bounded exact discovery
+  are now being added without changing historical whole-run callers.
 
 ## Objective And Context
 
@@ -646,16 +644,15 @@ Final commands:
 - Expanded planning: no extra planner pass needed. Current source/harness
   matches the recorded external-call, bootstrap trust, and durable compatibility
   boundaries; the independent review remains required after implementation.
-- Implementation: blocked before source changes. The existing command boundary
-  cannot discover an exact stable submission operation identity; treating its
-  job-ID/status output as identity would permit wrong-job adoption or unsafe
-  resubmission after `SUBMITTING`.
+- Implementation: in progress; correction 1/3 adds the profile-owned operation
+  marker and command discovery seam before ready-stage dispatch wiring.
 - Refiner: not needed unless the executor returns one qualified blocker
 - Pre-submit gate: pending manager-local validation and diff/contract review
 - Independent review: expected because the phase contains an external submit
   ambiguity and remote execution authorization boundary; confirm against the
   current workflow risk at phase preparation
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 — superseded command-seam blocker; add profile-owned
+  operation comment/discovery rather than treating job status as identity.
 - PR and merge: pending; squash merge to `develop` after all gates pass
 
 ## Completion Record
