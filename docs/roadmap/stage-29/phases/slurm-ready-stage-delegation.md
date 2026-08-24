@@ -21,9 +21,11 @@
 - Workflow path: expanded because a durable database mutation, an external
   nontransactional `sbatch` side effect, a scheduler-started bootstrap, an
   authority grant, and output commit interact causally
-- Blockers: none. Current source confirms the fixed SLURM command/mapping/script
-  seams, Phase 2 execution-only worker and durable one-start journal, and Phase 5
-  exact relay/result paths on the prepared base.
+- Blockers: current `SlurmCommandRunner` can submit and inspect known job IDs,
+  but its fixed `squeue`/`sacct` formats expose only job ID/state/reason or exit
+  data. No protected profile capability or command seam can query the required
+  scheduler-visible stable operation identity, so the mandated exact zero/one/
+  multiple operation reconciliation cannot be implemented safely.
 
 ## Objective And Context
 
@@ -644,7 +646,10 @@ Final commands:
 - Expanded planning: no extra planner pass needed. Current source/harness
   matches the recorded external-call, bootstrap trust, and durable compatibility
   boundaries; the independent review remains required after implementation.
-- Implementation: pending; one `loom_phase_executor`
+- Implementation: blocked before source changes. The existing command boundary
+  cannot discover an exact stable submission operation identity; treating its
+  job-ID/status output as identity would permit wrong-job adoption or unsafe
+  resubmission after `SUBMITTING`.
 - Refiner: not needed unless the executor returns one qualified blocker
 - Pre-submit gate: pending manager-local validation and diff/contract review
 - Independent review: expected because the phase contains an external submit
@@ -657,9 +662,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
+| Implementation and changed paths | No implementation changes. The phase completion record was updated to retain the blocker. |
+| Tests added or updated | None; implementation was stopped before a safe concrete submission path could be added. |
+| Validated revision/tree state and evidence | Targeted exploratory unit coverage passed before it was removed; final tree contains only this completion-record update. Evidence: `src/loom/pipeline/executors/slurm/commands.py` defines `squeue` as `%i|%T|%r` and `sacct` as `JobIDRaw,State,ExitCode`, neither containing the required scheduler-visible operation metadata. |
+| Validation-relevant changes after evidence | Completion-record update only; full validation was not run because no implementation was retained. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Blocked. A profile-owned exact operation-discovery capability (including bounded safe parsing and zero/one/multiple cardinality) is required before `SUBMITTING` can be safely reconciled. No `sbatch`, bootstrap, authority, or historical whole-run SLURM path was changed. |
