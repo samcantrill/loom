@@ -17,11 +17,13 @@ from loom.pipeline.execution.lifecycle import bind_stage_inputs
 from loom.pipeline.execution.managed_local import (
     AtomResourceProvider,
     ClaimCommand,
+    GpuResourceProvider,
     ManagedAssignment,
     ManagedOfferSnapshot,
     ObserveRequest,
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
+    _configured_provider_descriptor,
     run_managed_local_assignment,
 )
 from loom.pipeline.orchestration import (
@@ -44,6 +46,13 @@ from loom.pipeline.runtime import (
     ResolvedStageRuntimeOptions,
     parallel_execution_options,
     resolve_run_runtime,
+)
+from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
+from loom.pipeline.runtime.scheduling_preferences import (
+    GpuModelPreferenceScorer,
+    OrderedAgentPreferenceScorer,
+    PackingPreferenceScorer,
+    ResourceAttributePreferenceScorer,
 )
 from loom.pipeline.specs import PipelineSpec, parse_pipeline_config
 from loom.pipeline.status import RunStatus, StageStatus
@@ -110,6 +119,16 @@ class LocalDaemonExecutionOutcome:
     reason: str | None = None
 
 
+def _production_preference_scorers():
+    """The sole production registration of the resolved placement scorers."""
+    return {
+        "preferred_agent": OrderedAgentPreferenceScorer(),
+        "gpu_model": GpuModelPreferenceScorer(),
+        "resource_attribute": ResourceAttributePreferenceScorer(),
+        "packing": PackingPreferenceScorer(),
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class _RemoteCandidateTarget:
     agent_id: str
@@ -137,13 +156,23 @@ def _coordinator_capacity(config: LocalDaemonConfig) -> tuple[CapacityAtom, ...]
             config.memory_capacity_bytes,
             "B",
         )
+    gpu_atoms: list[CapacityAtom] = []
+    for device in config.gpu_devices:
+        descriptor = device.descriptor
+        gpu_atoms.append(
+            descriptor.capacity_atom(f"{config.machine_id}:{descriptor.device_id}")
+        )
     for rule in config.agent_policy.agents:
         amounts[("cpu", f"{rule.agent_id}:cpu")] = (maximum, "count")
         amounts[("memory", f"{rule.agent_id}:memory")] = (maximum, "B")
+        gpu_atoms.extend(
+            device.capacity_atom(f"{rule.agent_id}:{device.device_id}")
+            for device in rule.gpu_devices
+        )
     return tuple(
         CapacityAtom(kind, key, ExactQuantity(amount), unit, ExactQuantity(1))
         for (kind, key), (amount, unit) in sorted(amounts.items())
-    )
+    ) + tuple(gpu_atoms)
 
 
 def initialize_local_daemon_owner_stores(
@@ -535,9 +564,11 @@ class LocalDaemonExecution:
         )
         self.cpu_planner = CpuResourcePlanner()
         self.memory_planner = MemoryResourcePlanner()
+        self.gpu_planner = GpuResourcePlanner()
         self.planners = {
             "cpu": self.cpu_planner,
             "memory": self.memory_planner,
+            "gpu": self.gpu_planner,
         }
         local_capacity: list[CapacityAtom] = [
             CapacityAtom(
@@ -558,6 +589,11 @@ class LocalDaemonExecution:
                     ExactQuantity(1),
                 )
             )
+        for device in config.gpu_devices:
+            descriptor = device.descriptor
+            local_capacity.append(
+                descriptor.capacity_atom(f"{config.machine_id}:{descriptor.device_id}")
+            )
         self.local_capacity = tuple(local_capacity)
         self.capacity = _coordinator_capacity(config)
         self.coordinator = SQLiteCoordinatorAssignments(
@@ -573,18 +609,43 @@ class LocalDaemonExecution:
             agent_id=self.agent_id,
         ):
             raise QueueServiceError("retained daemon owner state is unavailable")
-        self.providers = {
-            kind: AtomResourceProvider(
-                self.planners[kind].descriptor,
-                self.planners[kind].claim_contracts,
-                tuple(
-                    atom
-                    for atom in self.local_capacity
-                    if atom.owner_resource_kind == kind
-                ),
+        self.providers = {}
+        for kind in {atom.owner_resource_kind for atom in self.local_capacity}:
+            if kind == "gpu":
+                continue
+            provider_atoms = tuple(
+                atom
+                for atom in self.local_capacity
+                if atom.owner_resource_kind == kind
             )
-            for kind in {atom.owner_resource_kind for atom in self.local_capacity}
-        }
+            self.providers[kind] = AtomResourceProvider(
+                _configured_provider_descriptor(kind, provider_atoms),
+                self.planners[kind].claim_contracts,
+                provider_atoms,
+            )
+        if config.gpu_devices:
+            healthy_gpu_keys = {
+                f"{config.machine_id}:{device.descriptor.device_id}"
+                for device in config.gpu_devices
+                if device.descriptor.healthy
+            }
+            gpu_atoms = tuple(
+                atom
+                for atom in self.local_capacity
+                if atom.owner_resource_kind == "gpu"
+                and atom.local_capacity_key in healthy_gpu_keys
+            )
+            self.providers["gpu"] = GpuResourceProvider(
+                self.gpu_planner.claim_contracts,
+                gpu_atoms,
+                bindings={
+                    f"{config.machine_id}:{device.descriptor.device_id}": (
+                        device.binding_value
+                    )
+                    for device in config.gpu_devices
+                    if device.descriptor.healthy
+                },
+            )
         self.provider = self.providers["cpu"]
         # A new in-memory provider must never begin by advertising capacity that
         # a durable accepted/granted/running/unknown assignment might retain.
@@ -682,6 +743,9 @@ class LocalDaemonExecution:
             try:
                 if self.cancellation_operation(admission.admission_id) is not None:
                     return self._cancel(admission, scoped_authority)
+                decision_as_of, snapshot_time = (
+                    self._daemon_owner()._accepted_snapshot()
+                )
                 snapshot = scoped_authority.open_run(admission.run_uri)
                 terminal = self._terminal_outcome(
                     intent.plan, snapshot, scoped_authority
@@ -698,7 +762,7 @@ class LocalDaemonExecution:
                     plan=intent.plan,
                     authority_snapshot=snapshot,
                     placements=placements,
-                    ready_at=snapshot.revision.sequence,
+                    ready_at=snapshot_time,
                     controller_action=lambda stage_plan, readiness: (
                         self._apply_controller_action(
                             scoped_authority,
@@ -731,9 +795,10 @@ class LocalDaemonExecution:
                             planners=self.planners,
                             policy=FifoSchedulingPolicy(),
                             component_epoch=self.coordinator_epoch,
+                            preference_scorers=_production_preference_scorers(),
                         ),
                         candidates=candidates,
-                        as_of=snapshot.revision.sequence,
+                        as_of=snapshot_time,
                         admission_id=admission.admission_id,
                     )
                     if decision.state is not PolicyDecisionState.SELECT:
@@ -771,6 +836,7 @@ class LocalDaemonExecution:
                     remote_targets={
                         key: value[1] for key, value in remote_targets.items()
                     },
+                    decision_as_of=decision_as_of,
                     execution_started=release_launch,
                 )
                 if remote_started:
@@ -949,10 +1015,27 @@ class LocalDaemonExecution:
                     f"candidate-observe-{kind}-{utc_timestamp()}",
                 )
             )
+            data: Mapping[str, PlainData] = {}
+            if kind == "gpu":
+                data = cast(
+                    Mapping[str, PlainData],
+                    {
+                        "devices": [
+                            device.descriptor.to_dict(
+                                device_id=(
+                                    f"{self.config.machine_id}:"
+                                    f"{device.descriptor.device_id}"
+                                )
+                            )
+                            for device in self.config.gpu_devices
+                        ]
+                    },
+                )
             inventory[kind] = ResourceInventoryEnvelope(
                 self.config.machine_id,
                 kind,
                 observed.availability_revision,
+                data=data,
                 atoms=tuple(
                     atom
                     for atom in self.local_capacity
@@ -963,6 +1046,7 @@ class LocalDaemonExecution:
                 self.config.machine_id,
                 kind,
                 observed.availability_revision,
+                data=data,
                 atoms=observed.atoms,
             )
         return Candidate(
@@ -1009,44 +1093,83 @@ class LocalDaemonExecution:
                 continue
             profile = sorted(matching, key=lambda item: item.profile_id)[0]
             agent_id = str(row["agent_id"])
-            atoms: list[CapacityAtom] = []
+            availability_atoms: list[CapacityAtom] = []
+            inventory_atoms: list[CapacityAtom] = []
             if offer.cpu:
-                atoms.append(
-                    CapacityAtom(
-                        "cpu",
-                        f"{agent_id}:cpu",
-                        ExactQuantity(offer.cpu),
-                        "count",
-                        ExactQuantity(1),
-                    )
+                cpu_atom = CapacityAtom(
+                    "cpu",
+                    f"{agent_id}:cpu",
+                    ExactQuantity(offer.cpu),
+                    "count",
+                    ExactQuantity(1),
                 )
+                inventory_atoms.append(cpu_atom)
+                availability_atoms.append(cpu_atom)
             if offer.memory_bytes:
-                atoms.append(
-                    CapacityAtom(
-                        "memory",
-                        f"{agent_id}:memory",
-                        ExactQuantity(offer.memory_bytes),
-                        "B",
-                        ExactQuantity(1),
-                    )
+                memory_atom = CapacityAtom(
+                    "memory",
+                    f"{agent_id}:memory",
+                    ExactQuantity(offer.memory_bytes),
+                    "B",
+                    ExactQuantity(1),
                 )
+                inventory_atoms.append(memory_atom)
+                availability_atoms.append(memory_atom)
+            inventory_atoms.extend(
+                device.capacity_atom(f"{agent_id}:{device.device_id}")
+                for device in offer.gpu_devices
+            )
+            availability_atoms.extend(
+                CapacityAtom(
+                    "gpu",
+                    f"{agent_id}:{atom.local_capacity_key}",
+                    atom.amount,
+                    atom.unit,
+                    atom.granularity,
+                )
+                for atom in offer.gpu_atoms
+            )
             inventory: dict[str, ResourceInventoryEnvelope] = {}
             availability: dict[str, ResourceAvailabilityEnvelope] = {}
-            for kind in {atom.owner_resource_kind for atom in atoms}:
-                kind_atoms = tuple(
-                    atom for atom in atoms if atom.owner_resource_kind == kind
+            for kind in {
+                atom.owner_resource_kind for atom in inventory_atoms
+            }:
+                kind_inventory_atoms = tuple(
+                    atom
+                    for atom in inventory_atoms
+                    if atom.owner_resource_kind == kind
                 )
+                kind_availability_atoms = tuple(
+                    atom
+                    for atom in availability_atoms
+                    if atom.owner_resource_kind == kind
+                )
+                data: Mapping[str, PlainData] = {}
+                if kind == "gpu":
+                    data = cast(
+                        Mapping[str, PlainData],
+                        {
+                            "devices": [
+                                device.to_dict(
+                                    device_id=f"{agent_id}:{device.device_id}"
+                                )
+                                for device in offer.gpu_devices
+                            ]
+                        },
+                    )
                 inventory[kind] = ResourceInventoryEnvelope(
                     agent_id,
                     kind,
                     offer.availability_revision,
-                    atoms=kind_atoms,
+                    data=data,
+                    atoms=kind_inventory_atoms,
                 )
                 availability[kind] = ResourceAvailabilityEnvelope(
                     agent_id,
                     kind,
                     offer.availability_revision,
-                    atoms=kind_atoms,
+                    data=data,
+                    atoms=kind_availability_atoms,
                 )
             candidate = Candidate(
                 agent_id,
@@ -1084,7 +1207,8 @@ class LocalDaemonExecution:
                     component_descriptors=tuple(
                         self.planners[kind].descriptor for kind in sorted(inventory)
                     ),
-                    atoms=tuple(atoms),
+                    provider_descriptors=offer.provider_descriptors,
+                    atoms=tuple(availability_atoms),
                     reflected_claim_ids=offer.reflected_claim_ids,
                 )
             )
@@ -1146,6 +1270,7 @@ class LocalDaemonExecution:
         record: StageWorkRecord,
         decision: object,
         remote_targets: Mapping[str, _RemoteCandidateTarget],
+        decision_as_of: str,
         execution_started: Callable[[], None],
     ) -> bool:
         selected = getattr(decision, "selected")
@@ -1227,6 +1352,10 @@ class LocalDaemonExecution:
                     component_descriptors=tuple(
                         self.planners[kind].descriptor for kind in sorted(observations)
                     ),
+                    provider_descriptors=tuple(
+                        self.providers[kind].descriptor
+                        for kind in sorted(observations)
+                    ),
                     atoms=tuple(
                         atom
                         for kind in sorted(observations)
@@ -1243,11 +1372,20 @@ class LocalDaemonExecution:
                     ),
                 )
             )
+        provider_descriptors = {
+            descriptor.kind: descriptor
+            for descriptor in (
+                remote_target.offer.provider_descriptors
+                if remote_target is not None
+                else tuple(provider.descriptor for provider in self.providers.values())
+            )
+        }
         commands = tuple(
             ClaimCommand(
                 assignment,
                 f"{assignment_id}:prepare:{index}",
                 claim,
+                provider_descriptors[claim.resource_kind],
             )
             for index, claim in enumerate(claims)
         )
@@ -1299,11 +1437,15 @@ class LocalDaemonExecution:
             "snapshot_revision": snapshot_revision,
             "offer_revision": offer_id,
             "score_summary": {"preference_vector": list(selected.preference_vector)},
-            "fallback_eligible": False,
-            "as_of": utc_timestamp(),
+            "fallback_eligible": selected.fallback_eligible,
+            "as_of": decision_as_of,
             "reason_codes": ["selected"],
             "component_descriptors": [
                 self.planners[kind].descriptor.to_dict()
+                for kind in sorted(claim.resource_kind for claim in claims)
+            ],
+            "provider_descriptors": [
+                provider_descriptors[kind].to_dict()
                 for kind in sorted(claim.resource_kind for claim in claims)
             ],
             "claim_contract_descriptors": [
@@ -1354,6 +1496,9 @@ class LocalDaemonExecution:
                 inputs=tuple(remote_inputs),
                 declared_outputs=tuple(sorted(stage.outputs)),
                 claims=claims,
+                provider_descriptors=tuple(
+                    provider_descriptors[claim.resource_kind] for claim in claims
+                ),
             )
             self.coordinator.reserve(
                 assignment,

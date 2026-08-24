@@ -66,7 +66,7 @@ def test_builtin_provider_lifecycle_is_exact_and_idempotent(
         ),
         1,
     )
-    command = ClaimCommand(assignment, "prepare-1", claim)
+    command = ClaimCommand(assignment, "prepare-1", claim, provider.descriptor)
 
     assert provider.prepare(command).outcome is ClaimOutcome.PREPARED
     assert provider.prepare(command).outcome is ClaimOutcome.PREPARED
@@ -102,7 +102,9 @@ def test_provider_declines_known_overcommit_without_claiming_os_enforcement() ->
         1,
     )
 
-    result = provider.prepare(ClaimCommand(assignment, "prepare-1", claim))
+    result = provider.prepare(
+        ClaimCommand(assignment, "prepare-1", claim, provider.descriptor)
+    )
 
     assert result.outcome is ClaimOutcome.DECLINED
     assert "configured capacity" in (result.detail or "")

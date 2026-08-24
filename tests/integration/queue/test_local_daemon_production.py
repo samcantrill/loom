@@ -12,7 +12,7 @@ from typing import Never, cast
 
 import pytest
 
-from loom.pipeline import PipelineSpec
+from loom.pipeline import PipelineSpec, parse_resource_request
 from loom.pipeline.execution.managed_local import (
     AssignmentState,
     AtomResourceProvider,
@@ -20,9 +20,11 @@ from loom.pipeline.execution.managed_local import (
     ManagedAssignment,
     ObserveRequest,
     SQLiteAgentJournal,
+    _configured_provider_descriptor,
 )
 from loom.pipeline.planning import PlanSelectors, plan_pipeline
 from loom.pipeline.planning import ExecutionPlan
+from loom.pipeline.runtime import scheduling_entry_view
 from loom.pipeline.runtime.options import ExecutionOptions
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
@@ -35,12 +37,15 @@ from loom.pipeline.stores import (
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.scheduling import (
     CapacityAtom,
+    ClaimSearchBudget,
+    ClaimSearchState,
     ExactQuantity,
     ResourceClaim,
     ResourceClaimContractDescriptor,
-    SchedulingComponentDescriptor,
 )
 from loom.queue import (
+    ConfiguredGpuDevice,
+    GpuDeviceDescriptor,
     LocalDaemon,
     LocalDaemonAdmission,
     LocalDaemonAdmissionRequest,
@@ -66,6 +71,77 @@ from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
 
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize(
+    ("second_fabric", "expected_claims"),
+    [("fabric-a", 1), ("fabric-b", 0)],
+)
+def test_production_gpu_projection_preserves_multi_device_fabric_groups(
+    tmp_path: Path,
+    second_fabric: str,
+    expected_claims: int,
+) -> None:
+    devices = (
+        ConfiguredGpuDevice(
+            GpuDeviceDescriptor(
+                "gpu-0", "large", 80 * 1024**3, fabric_group="fabric-a"
+            ),
+            "private-0",
+        ),
+        ConfiguredGpuDevice(
+            GpuDeviceDescriptor(
+                "gpu-1", "large", 80 * 1024**3, fabric_group=second_fabric
+            ),
+            "private-1",
+        ),
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=tmp_path / "runs",
+        gpu_devices=devices,
+    )
+    execution = _execution(config)
+    candidate = execution._candidate()
+    request = parse_resource_request(
+        {
+            "entries": {
+                "gpu": {
+                    "kind": "gpu",
+                    "amount": 2,
+                    "unit": "count",
+                    "attributes": {
+                        "allocation_mode": "exclusive",
+                        "fabric_group": "fabric-a",
+                    },
+                }
+            }
+        }
+    ).entries["gpu"]
+    resolved = execution.gpu_planner.resolve_request(
+        scheduling_entry_view(request), None
+    )
+    assert resolved.request is not None
+    opportunity = execution.gpu_planner.validate_opportunity(
+        candidate.inventory["gpu"], candidate.availability["gpu"]
+    )
+    assert opportunity.opportunity is not None
+    result = execution.gpu_planner.propose_claims(
+        resolved.request,
+        opportunity.opportunity,
+        ClaimSearchBudget(4),
+    )
+
+    assert result.state is ClaimSearchState.COMPLETE
+    assert len(result.claims) == expected_claims
+    projected_devices = cast(
+        tuple[Mapping[str, object], ...],
+        candidate.inventory["gpu"].data["devices"],
+    )
+    assert [
+        item["fabric_group"] for item in projected_devices
+    ] == ["fabric-a", second_fabric]
 
 
 def test_persisted_preprocess_train_run_completes_without_injected_runtime_objects(
@@ -970,8 +1046,15 @@ def _retained_claim(config: LocalDaemonConfig, *, assignment_id: str) -> ClaimCo
     atom = CapacityAtom(
         "cpu", f"{config.machine_id}:cpu", ExactQuantity(1), "count", ExactQuantity(1)
     )
+    capacity = CapacityAtom(
+        "cpu",
+        f"{config.machine_id}:cpu",
+        ExactQuantity(config.cpu_capacity),
+        "count",
+        ExactQuantity(1),
+    )
     contract = ResourceClaimContractDescriptor("cpu", 1, "loom.cpu.claim.v1")
-    descriptor = SchedulingComponentDescriptor("cpu", 1, "test", "test", "test")
+    descriptor = _configured_provider_descriptor("cpu", (capacity,))
     assignment = ManagedAssignment(
         assignment_id=assignment_id,
         run_uri="file:///retained-run",
@@ -985,11 +1068,14 @@ def _retained_claim(config: LocalDaemonConfig, *, assignment_id: str) -> ClaimCo
         claim_id=f"claim-{assignment_id}",
     )
     command = ClaimCommand(
-        assignment, "prepare", ResourceClaim("cpu", contract, (atom,), 1)
+        assignment,
+        "prepare",
+        ResourceClaim("cpu", contract, (atom,), 1),
+        descriptor,
     )
     journal = SQLiteAgentJournal(config.agent_journal)
     journal.persist_request(assignment, {"request": "durable"})
-    provider = AtomResourceProvider(descriptor, (contract,), (atom,))
+    provider = AtomResourceProvider(descriptor, (contract,), (capacity,))
     assert (
         journal.prepare_composite(assignment, (command,), {"cpu": provider})
         is AssignmentState.PREPARED

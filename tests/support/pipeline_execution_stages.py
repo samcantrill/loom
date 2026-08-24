@@ -34,6 +34,32 @@ class JsonProducerStage:
         }
 
 
+class EnvironmentProducerStage:
+    """Persist one worker-local environment value for process-boundary tests."""
+
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        _ = inputs
+        raw_name = context.stage_config.get("environment_name", "CUDA_VISIBLE_DEVICES")
+        if not isinstance(raw_name, str) or not raw_name:
+            raise ValueError("environment_name must be a non-empty string")
+        return {
+            "data": context.save_artifact(
+                "data",
+                {
+                    "name": raw_name,
+                    "value": os.environ.get(raw_name),
+                    "pid": os.getpid(),
+                },
+                artifact_type="json",
+                codec_key="json.v1",
+            )
+        }
+
+
 class ConfiguredProducerStage:
     def __init__(self, *, constructor_value: int) -> None:
         self.constructor_value = constructor_value

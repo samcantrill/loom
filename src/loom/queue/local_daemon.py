@@ -31,7 +31,7 @@ from .agent_sessions import (
     initialize_agent_session_schema,
     validate_agent_session_schema,
 )
-from ._remote_stage_execution import ResidentProfileDescriptor
+from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
 if TYPE_CHECKING:
@@ -65,6 +65,34 @@ class LocalDaemonRole(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ConfiguredGpuDevice:
+    """One configured manageable GPU; ``binding_value`` never leaves the agent."""
+
+    descriptor: GpuDeviceDescriptor
+    binding_value: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.descriptor, GpuDeviceDescriptor):
+            raise QueueServiceError("configured GPU descriptor is invalid")
+        if self.descriptor.allocation_mode != "exclusive":
+            raise QueueServiceError(
+                "configured GPU sharing requires an enforceable provider adapter"
+            )
+        if (
+            not isinstance(self.binding_value, str)
+            or not self.binding_value
+            or "\0" in self.binding_value
+        ):
+            raise QueueServiceError(
+                "configured GPU binding_value must be a safe non-empty string"
+            )
+        if "," in self.binding_value:
+            raise QueueServiceError(
+                "configured GPU binding_value must not contain a list separator"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class LocalDaemonPrincipal:
     """Trusted adapter-derived principal; request bodies never select it."""
 
@@ -92,6 +120,7 @@ class LocalDaemonConfig:
     machine_id: str = "machine-A"
     cpu_capacity: int = 1
     memory_capacity_bytes: int = 0
+    gpu_devices: tuple[ConfiguredGpuDevice, ...] = ()
     poll_interval_seconds: float = 0.05
     agent_policy: AgentPolicyConfig = AgentPolicyConfig()
     remote_profiles: tuple[ResidentProfileDescriptor, ...] = ()
@@ -120,6 +149,13 @@ class LocalDaemonConfig:
             raise QueueServiceError(
                 "memory_capacity_bytes must be a non-negative integer"
             )
+        gpu_devices = tuple(self.gpu_devices)
+        if any(not isinstance(item, ConfiguredGpuDevice) for item in gpu_devices):
+            raise QueueServiceError("gpu_devices must be configured GPU devices")
+        if len({item.descriptor.device_id for item in gpu_devices}) != len(gpu_devices):
+            raise QueueServiceError("configured GPU device IDs must be unique")
+        if len({item.binding_value for item in gpu_devices}) != len(gpu_devices):
+            raise QueueServiceError("configured GPU bindings must be unique")
         if (
             isinstance(self.poll_interval_seconds, bool)
             or not isinstance(self.poll_interval_seconds, (int, float))
@@ -141,6 +177,11 @@ class LocalDaemonConfig:
         object.__setattr__(self, "agent_root", agent)
         object.__setattr__(self, "run_store_root", run_store)
         object.__setattr__(self, "remote_profiles", profiles)
+        object.__setattr__(
+            self,
+            "gpu_devices",
+            tuple(sorted(gpu_devices, key=lambda item: item.descriptor.device_id)),
+        )
         object.__setattr__(
             self, "poll_interval_seconds", float(self.poll_interval_seconds)
         )
@@ -873,6 +914,14 @@ class LocalDaemon:
             (accepted,),
         )
         return accepted
+
+    def _accepted_snapshot(self) -> tuple[str, int]:
+        """Return one monotonic accepted timestamp and whole-second snapshot time."""
+
+        with self._connection() as conn:
+            accepted = self._accepted_time(conn)
+            conn.commit()
+        return accepted, int(parse_timestamp(accepted).timestamp())
 
 
 @dataclass(frozen=True, slots=True)

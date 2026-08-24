@@ -943,7 +943,6 @@ def test_slurm_dry_run_preflight_emits_stable_checks_and_warns_without_sbatch(
                                     "amount": 4,
                                     "unit": "GiB",
                                 },
-                                "gpu": {"kind": "gpu", "amount": 0},
                             }
                         }
                     }

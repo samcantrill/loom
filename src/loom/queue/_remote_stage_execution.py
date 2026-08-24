@@ -34,6 +34,7 @@ from loom.scheduling import (
     ExactQuantity,
     ResourceClaim,
     ResourceClaimContractDescriptor,
+    SchedulingComponentDescriptor,
 )
 from loom.serialization import (
     PlainData,
@@ -45,8 +46,8 @@ from loom.serialization import (
 from .errors import QueueConflictError, QueueServiceError
 
 
-REMOTE_EXECUTION_SCHEMA_VERSION = 2
-REMOTE_EXECUTION_CAPABILITY = "remote-stage-execution-v2"
+REMOTE_EXECUTION_SCHEMA_VERSION = 3
+REMOTE_EXECUTION_CAPABILITY = "remote-stage-execution-v3"
 REGULAR_FILE_RELAY_CAPABILITY = "regular-file-relay-v1"
 MAX_TRANSFER_BYTES = 64 * 1024 * 1024
 TRANSFER_CHUNK_BYTES = 32 * 1024
@@ -148,6 +149,197 @@ class ResidentProfileDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
+class GpuDeviceDescriptor:
+    """Safe configured GPU identity carried across the agent protocol."""
+
+    device_id: str
+    model: str
+    vram_bytes: int
+    allocation_mode: str = "exclusive"
+    provider: str = "exclusive"
+    granularity: int = 1
+    share_numerator: int = 1
+    share_denominator: int = 1
+    share_granularity_numerator: int = 1
+    share_granularity_denominator: int = 1
+    fabric_group: str | None = None
+    features: tuple[str, ...] = ()
+    healthy: bool = True
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.device_id, "device_id"),
+            (self.model, "model"),
+            (self.provider, "provider"),
+        ):
+            _identifier(value, f"GPU {name}")
+        if self.allocation_mode not in {
+            "exclusive",
+            "vram_share",
+            "provider_fraction",
+        }:
+            raise QueueServiceError("GPU allocation mode is unsupported")
+        if self.allocation_mode == "exclusive" and self.provider != "exclusive":
+            raise QueueServiceError("exclusive GPU provider must be exclusive")
+        for value, name in (
+            (self.vram_bytes, "vram_bytes"),
+            (self.granularity, "granularity"),
+            (self.share_numerator, "share_numerator"),
+            (self.share_denominator, "share_denominator"),
+            (self.share_granularity_numerator, "share_granularity_numerator"),
+            (self.share_granularity_denominator, "share_granularity_denominator"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise QueueServiceError(f"GPU {name} must be a positive integer")
+        if self.allocation_mode == "exclusive" and self.granularity != 1:
+            raise QueueServiceError("exclusive GPU granularity must be one device")
+        if self.allocation_mode == "vram_share" and (
+            self.vram_bytes % self.granularity
+        ):
+            raise QueueServiceError("GPU VRAM capacity must be a granularity multiple")
+        if self.allocation_mode == "provider_fraction":
+            capacity = ExactQuantity(self.share_numerator, self.share_denominator)
+            granularity = ExactQuantity(
+                self.share_granularity_numerator,
+                self.share_granularity_denominator,
+            )
+            if capacity.fraction % granularity.fraction:
+                raise QueueServiceError(
+                    "GPU share capacity must be a granularity multiple"
+                )
+            object.__setattr__(self, "share_numerator", capacity.numerator)
+            object.__setattr__(self, "share_denominator", capacity.denominator)
+            object.__setattr__(
+                self, "share_granularity_numerator", granularity.numerator
+            )
+            object.__setattr__(
+                self, "share_granularity_denominator", granularity.denominator
+            )
+        if self.fabric_group is not None:
+            _identifier(self.fabric_group, "GPU fabric_group")
+        features = tuple(self.features)
+        if any(not isinstance(value, str) or not value for value in features) or len(
+            set(features)
+        ) != len(features):
+            raise QueueServiceError("GPU features are invalid")
+        if not isinstance(self.healthy, bool):
+            raise QueueServiceError("GPU health is invalid")
+        object.__setattr__(self, "features", tuple(sorted(features)))
+
+    @property
+    def unit(self) -> str:
+        return {
+            "exclusive": "count",
+            "vram_share": "B",
+            "provider_fraction": "share",
+        }[self.allocation_mode]
+
+    @property
+    def capacity(self) -> ExactQuantity:
+        if self.allocation_mode == "exclusive":
+            return ExactQuantity(1)
+        if self.allocation_mode == "vram_share":
+            return ExactQuantity(self.vram_bytes)
+        return ExactQuantity(self.share_numerator, self.share_denominator)
+
+    @property
+    def capacity_granularity(self) -> ExactQuantity:
+        if self.allocation_mode == "exclusive":
+            return ExactQuantity(1)
+        if self.allocation_mode == "vram_share":
+            return ExactQuantity(self.granularity)
+        return ExactQuantity(
+            self.share_granularity_numerator,
+            self.share_granularity_denominator,
+        )
+
+    def capacity_atom(self, local_capacity_key: str | None = None) -> CapacityAtom:
+        return CapacityAtom(
+            "gpu",
+            local_capacity_key or self.device_id,
+            self.capacity,
+            self.unit,
+            self.capacity_granularity,
+        )
+
+    def to_dict(self, *, device_id: str | None = None) -> dict[str, PlainData]:
+        return {
+            "id": device_id or self.device_id,
+            "model": self.model,
+            "vram_bytes": self.vram_bytes,
+            "allocation_mode": self.allocation_mode,
+            "provider": self.provider,
+            "granularity": self.granularity,
+            "share_numerator": self.share_numerator,
+            "share_denominator": self.share_denominator,
+            "share_granularity_numerator": self.share_granularity_numerator,
+            "share_granularity_denominator": self.share_granularity_denominator,
+            "fabric_group": self.fabric_group,
+            "features": list(self.features),
+            "healthy": self.healthy,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "GpuDeviceDescriptor":
+        expected = {
+            "id",
+            "model",
+            "vram_bytes",
+            "allocation_mode",
+            "provider",
+            "granularity",
+            "share_numerator",
+            "share_denominator",
+            "share_granularity_numerator",
+            "share_granularity_denominator",
+            "fabric_group",
+            "features",
+            "healthy",
+        }
+        if not isinstance(value, Mapping) or set(value) != expected:
+            raise QueueServiceError("GPU device descriptor is invalid")
+        features = value["features"]
+        if not isinstance(features, Sequence) or isinstance(features, (str, bytes)):
+            raise QueueServiceError("GPU device features are invalid")
+        return cls(
+            device_id=cast(str, value["id"]),
+            model=cast(str, value["model"]),
+            vram_bytes=cast(int, value["vram_bytes"]),
+            allocation_mode=cast(str, value["allocation_mode"]),
+            provider=cast(str, value["provider"]),
+            granularity=cast(int, value["granularity"]),
+            share_numerator=cast(int, value["share_numerator"]),
+            share_denominator=cast(int, value["share_denominator"]),
+            share_granularity_numerator=cast(int, value["share_granularity_numerator"]),
+            share_granularity_denominator=cast(
+                int, value["share_granularity_denominator"]
+            ),
+            fabric_group=cast(str | None, value["fabric_group"]),
+            features=tuple(cast(Sequence[str], features)),
+            healthy=cast(bool, value["healthy"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ResidentGpuDevice:
+    """One safe remote GPU descriptor plus its agent-private binding."""
+
+    descriptor: GpuDeviceDescriptor
+    binding_value: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.descriptor, GpuDeviceDescriptor):
+            raise QueueServiceError("resident GPU descriptor is invalid")
+        if self.descriptor.allocation_mode != "exclusive":
+            raise QueueServiceError(
+                "resident GPU sharing requires an enforceable provider adapter"
+            )
+        _identifier(self.binding_value, "resident GPU binding_value")
+        if "," in self.binding_value:
+            raise QueueServiceError("resident GPU binding value is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class ResidentExecutionProfile:
     """Protected local profile; its paths never enter protocol values."""
 
@@ -156,6 +348,7 @@ class ResidentExecutionProfile:
     python_executable: Path
     cpu_capacity: int = 1
     memory_capacity_bytes: int = 0
+    gpu_devices: tuple[ResidentGpuDevice, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ResidentProfileDescriptor):
@@ -178,8 +371,14 @@ class ResidentExecutionProfile:
                 or value < (1 if positive else 0)
             ):
                 raise QueueServiceError(f"resident {name} is invalid")
+        gpu_devices = tuple(self.gpu_devices)
+        if any(not isinstance(item, ResidentGpuDevice) for item in gpu_devices) or len(
+            {item.descriptor.device_id for item in gpu_devices}
+        ) != len(gpu_devices):
+            raise QueueServiceError("resident GPU devices are invalid")
         object.__setattr__(self, "project_root", project_root)
         object.__setattr__(self, "python_executable", executable)
+        object.__setattr__(self, "gpu_devices", gpu_devices)
 
     def capacity_atoms(self, agent_id: str) -> tuple[CapacityAtom, ...]:
         _identifier(agent_id, "agent_id")
@@ -202,6 +401,10 @@ class ResidentExecutionProfile:
                     ExactQuantity(1),
                 )
             )
+        atoms.extend(
+            device.descriptor.capacity_atom(f"{agent_id}:{device.descriptor.device_id}")
+            for device in self.gpu_devices
+        )
         return tuple(atoms)
 
 
@@ -428,6 +631,7 @@ class _DeliveredExecutionRequest:
     inputs: tuple[_RemoteArtifact, ...]
     declared_outputs: tuple[str, ...]
     claims: tuple[ResourceClaim, ...]
+    provider_descriptors: tuple[SchedulingComponentDescriptor, ...]
     schema_version: int = REMOTE_EXECUTION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -508,9 +712,28 @@ class _DeliveredExecutionRequest:
             or len({item.resource_kind for item in claims}) != len(claims)
         ):
             raise QueueServiceError("remote request requires exact resource claims")
+        provider_descriptors = tuple(self.provider_descriptors)
+        if any(
+            not isinstance(item, SchedulingComponentDescriptor)
+            for item in provider_descriptors
+        ) or len({item.kind for item in provider_descriptors}) != len(
+            provider_descriptors
+        ):
+            raise QueueServiceError("remote provider descriptors are invalid")
+        if {item.kind for item in provider_descriptors} != {
+            claim.resource_kind for claim in claims
+        }:
+            raise QueueServiceError(
+                "remote provider descriptors do not match resource claims"
+            )
         object.__setattr__(self, "inputs", inputs)
         object.__setattr__(self, "declared_outputs", outputs)
         object.__setattr__(self, "claims", claims)
+        object.__setattr__(
+            self,
+            "provider_descriptors",
+            tuple(sorted(provider_descriptors, key=lambda item: item.kind)),
+        )
 
     @classmethod
     def from_worker_request(
@@ -526,6 +749,7 @@ class _DeliveredExecutionRequest:
         inputs: tuple[_RemoteArtifact, ...],
         declared_outputs: tuple[str, ...],
         claims: tuple[ResourceClaim, ...],
+        provider_descriptors: tuple[SchedulingComponentDescriptor, ...],
     ) -> "_DeliveredExecutionRequest":
         if not isinstance(worker_request, StageWorkerRequest):
             raise QueueServiceError(
@@ -555,6 +779,7 @@ class _DeliveredExecutionRequest:
             inputs=inputs,
             declared_outputs=declared_outputs,
             claims=claims,
+            provider_descriptors=provider_descriptors,
         )
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -580,6 +805,9 @@ class _DeliveredExecutionRequest:
             "inputs": [item.to_dict() for item in self.inputs],
             "declared_outputs": list(self.declared_outputs),
             "claims": [_claim_to_dict(item) for item in self.claims],
+            "provider_descriptors": [
+                item.to_dict() for item in self.provider_descriptors
+            ],
         }
 
     @classmethod
@@ -602,10 +830,16 @@ class _DeliveredExecutionRequest:
             "inputs",
             "declared_outputs",
             "claims",
+            "provider_descriptors",
         }
         if not isinstance(value, Mapping) or set(value) != expected:
             raise QueueServiceError("remote execution request is invalid")
-        for field_name in ("inputs", "declared_outputs", "claims"):
+        for field_name in (
+            "inputs",
+            "declared_outputs",
+            "claims",
+            "provider_descriptors",
+        ):
             field_value = value[field_name]
             if not isinstance(field_value, Sequence) or isinstance(
                 field_value, (str, bytes)
@@ -628,6 +862,10 @@ class _DeliveredExecutionRequest:
             inputs=tuple(_RemoteArtifact.from_dict(item) for item in value["inputs"]),
             declared_outputs=tuple(cast(Sequence[str], value["declared_outputs"])),
             claims=tuple(_claim_from_dict(item) for item in value["claims"]),
+            provider_descriptors=tuple(
+                SchedulingComponentDescriptor.from_dict(item)
+                for item in value["provider_descriptors"]
+            ),
             schema_version=cast(int, value["schema_version"]),
         )
 
@@ -1002,9 +1240,7 @@ class _RemoteAssignmentWorkspace:
                     raise QueueConflictError("input replay exceeds durable content")
                 existing = _read_regular_file_bytes(target)[offset : offset + len(data)]
                 if existing != data:
-                    raise QueueConflictError(
-                        "input replay conflicts with durable bytes"
-                    )
+                    raise QueueConflictError("input replay conflicts with durable bytes")
                 return int(row["size_bytes"])
             if _published_file_matches(
                 target,
@@ -1021,7 +1257,9 @@ class _RemoteAssignmentWorkspace:
                     raise QueueConflictError("input replay exceeds durable content")
                 existing = _read_regular_file_range(target, offset, len(data))
                 if existing != data:
-                    raise QueueConflictError("input replay conflicts with durable bytes")
+                    raise QueueConflictError(
+                        "input replay conflicts with durable bytes"
+                    )
                 conn.commit()
                 return received
             received = _append_exact_chunk(part, offset, received, data)
@@ -1621,6 +1859,8 @@ __all__ = [
     "REGULAR_FILE_RELAY_CAPABILITY",
     "REMOTE_EXECUTION_CAPABILITY",
     "REMOTE_EXECUTION_SCHEMA_VERSION",
+    "GpuDeviceDescriptor",
     "ResidentExecutionProfile",
+    "ResidentGpuDevice",
     "ResidentProfileDescriptor",
 ]

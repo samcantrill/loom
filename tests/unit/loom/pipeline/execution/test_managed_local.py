@@ -64,7 +64,7 @@ def _provider() -> tuple[AtomResourceProvider, ClaimCommand]:
     atom = CapacityAtom("cpu", "cpu-0", ExactQuantity(2), "count", ExactQuantity(1))
     provider = AtomResourceProvider(descriptor, (contract,), (atom,))
     claim = ResourceClaim("cpu", contract, (atom,), 1)
-    return provider, ClaimCommand(_assignment(), "prepare-1", claim)
+    return provider, ClaimCommand(_assignment(), "prepare-1", claim, descriptor)
 
 
 def _seed_stage_work(path, assignment: ManagedAssignment) -> None:
@@ -113,6 +113,11 @@ def _decision_receipt(
                 "cpu", 1, "1", "implementation", "configured"
             ).to_dict()
         ],
+        "provider_descriptors": [
+            SchedulingComponentDescriptor(
+                "cpu", 1, "1", "implementation", "configured"
+            ).to_dict()
+        ],
         "claim_contract_descriptors": [claim.contract.to_dict()],
     }
 
@@ -131,6 +136,11 @@ def _offer(
         inventory_revision="inventory-1",
         availability_revision=f"availability-{assignment.offer_id}",
         component_descriptors=(
+            SchedulingComponentDescriptor(
+                "cpu", 1, "1", "implementation", "configured"
+            ),
+        ),
+        provider_descriptors=(
             SchedulingComponentDescriptor(
                 "cpu", 1, "1", "implementation", "configured"
             ),
@@ -183,7 +193,9 @@ def test_composite_prepare_compensates_exact_prior_claims(
     )
     memory_provider = provider_type(memory_descriptor, (memory_contract,), ())
     memory_claim = ResourceClaim("memory", memory_contract, (memory_atom,), 1)
-    memory_command = ClaimCommand(assignment, "prepare-memory", memory_claim)
+    memory_command = ClaimCommand(
+        assignment, "prepare-memory", memory_claim, memory_descriptor
+    )
     journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
     journal.persist_request(assignment, {"request": "durable"})
 

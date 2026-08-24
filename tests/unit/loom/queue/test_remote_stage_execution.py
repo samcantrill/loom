@@ -49,8 +49,18 @@ from loom.scheduling import (
     ExactQuantity,
     ResourceClaim,
     ResourceClaimContractDescriptor,
+    SchedulingComponentDescriptor,
 )
 from loom.serialization import thaw_plain_data
+
+
+def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, ...]:
+    return tuple(
+        SchedulingComponentDescriptor(
+            kind, 1, "1", f"test-{kind}-provider", f"{kind}-configuration"
+        )
+        for kind in sorted(kinds)
+    )
 
 
 def _profile(tmp_path: Path) -> ResidentExecutionProfile:
@@ -139,6 +149,7 @@ def _request(profile: ResidentExecutionProfile) -> _DeliveredExecutionRequest:
         ),
         declared_outputs=("result",),
         claims=(claim,),
+        provider_descriptors=_provider_descriptors("cpu"),
     )
 
 
@@ -257,7 +268,7 @@ def test_remote_regular_file_input_rejects_a_symlink(tmp_path: Path) -> None:
 
 def test_remote_request_rejects_the_old_wire_schema(tmp_path: Path) -> None:
     encoded = _request(_profile(tmp_path)).to_dict()
-    encoded["schema_version"] = 1
+    encoded["schema_version"] = 2
 
     with pytest.raises(QueueServiceError, match="schema is unsupported"):
         _DeliveredExecutionRequest.from_dict(encoded)
@@ -477,6 +488,7 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
                 1,
                 1,
                 30,
+                _provider_descriptors("cpu", "memory"),
                 resident_profiles=(profile.descriptor,),
             ),
             idempotency_key="offer-1",

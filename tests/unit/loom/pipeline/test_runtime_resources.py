@@ -73,7 +73,7 @@ def test_parse_resource_request_accepts_authored_entries_without_schema() -> Non
             "entries": {
                 "cpu": {"kind": "cpu", "amount": 2, "unit": "count"},
                 "memory": {"kind": "memory", "amount": 512, "unit": "MiB"},
-                "gpu": {"kind": "gpu", "amount": 0},
+                "gpu": {"kind": "gpu", "amount": 1},
             },
         }
     )
@@ -82,7 +82,7 @@ def test_parse_resource_request_accepts_authored_entries_without_schema() -> Non
     assert request.entries["memory"] == ResourceEntry(
         kind="memory", amount=512, unit="MiB"
     )
-    assert request.entries["gpu"] == ResourceEntry(kind="gpu", amount=0)
+    assert request.entries["gpu"] == ResourceEntry(kind="gpu", amount=1)
 
 
 @pytest.mark.parametrize(
@@ -136,8 +136,9 @@ def test_resource_kind_syntax_rejects_invalid_kinds(kind: str) -> None:
             {"kind": "memory", "amount": 1, "unit": "MiB", "attributes": {"node": "a"}},
             "attributes",
         ),
-        ({"kind": "gpu", "amount": -1}, "non-negative"),
-        ({"kind": "gpu", "amount": 0.5}, "non-negative integer"),
+        ({"kind": "gpu", "amount": -1}, "positive integer"),
+        ({"kind": "gpu", "amount": 0}, "positive integer"),
+        ({"kind": "gpu", "amount": 0.5}, "positive integer"),
         ({"kind": "gpu", "amount": True}, "finite numeric"),
         ({"kind": "gpu", "amount": 1, "unit": "device"}, "count"),
         ({"kind": "gpu", "amount": 1, "attributes": {"model": "a100"}}, "attributes"),

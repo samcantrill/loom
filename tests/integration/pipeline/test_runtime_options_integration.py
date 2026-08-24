@@ -34,7 +34,7 @@ def test_python_callers_construct_runtime_options_for_exact_stage_ids() -> None:
             "train": {
                 "resources": {
                     "entries": {
-                        "gpu": {"kind": "gpu", "amount": 0},
+                        "gpu": {"kind": "gpu", "amount": 1},
                     }
                 }
             },

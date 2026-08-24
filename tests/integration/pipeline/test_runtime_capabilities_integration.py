@@ -64,10 +64,10 @@ def test_merged_runtime_options_validate_against_default_local_descriptor() -> N
                 "train": {
                     "resources": {
                         "entries": {
-                            "gpu": {
-                                "kind": "gpu",
-                                "amount": 0,
-                            }
+                                "gpu": {
+                                    "kind": "gpu",
+                                    "amount": 1,
+                                }
                         }
                     }
                 }

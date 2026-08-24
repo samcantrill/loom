@@ -35,10 +35,14 @@ from loom.pipeline.execution.managed_local import (
     ManagedAssignment,
     ObserveRequest,
     SQLiteAgentJournal,
+    GpuResourceProvider,
+    _configured_provider_descriptor,
 )
 from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
+from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.stores.atomic import atomic_write_bytes
+from loom.scheduling import SchedulingComponentDescriptor
 
 from .agent_sessions import (
     AgentOffer,
@@ -58,7 +62,6 @@ from ._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
     ResidentExecutionProfile,
-    ResidentProfileDescriptor,
     _DeliveredExecutionRequest,
     _RemoteAssignmentWorkspace,
     _RemoteExecutionReport,
@@ -141,7 +144,12 @@ class AgentTlsClientConfig:
         if len({item.descriptor.profile_id for item in profiles}) != len(profiles):
             raise QueueServiceError("agent resident profile IDs must be unique")
         capacity_domains = {
-            (item.cpu_capacity, item.memory_capacity_bytes) for item in profiles
+            (
+                item.cpu_capacity,
+                item.memory_capacity_bytes,
+                tuple(device.descriptor for device in item.gpu_devices),
+            )
+            for item in profiles
         }
         if len(capacity_domains) > 1:
             raise QueueServiceError(
@@ -150,6 +158,39 @@ class AgentTlsClientConfig:
         if profiles and self.agent_root is None:
             raise QueueServiceError("resident execution requires an agent root")
         object.__setattr__(self, "resident_profiles", profiles)
+
+
+def _resident_provider_descriptors(
+    profile: ResidentExecutionProfile,
+    agent_id: str,
+    *,
+    resource_kinds: set[str] | None = None,
+) -> tuple[SchedulingComponentDescriptor, ...]:
+    """Derive safe provider identities from one protected resident profile."""
+
+    atoms = profile.capacity_atoms(agent_id)
+    kinds = resource_kinds or {atom.owner_resource_kind for atom in atoms}
+    result: list[SchedulingComponentDescriptor] = []
+    for kind in sorted(kinds):
+        provider_atoms = tuple(
+            atom for atom in atoms if atom.owner_resource_kind == kind
+        )
+        bindings: Mapping[str, str] | None = None
+        if kind == "gpu":
+            bindings = {
+                f"{agent_id}:{device.descriptor.device_id}": device.binding_value
+                for device in profile.gpu_devices
+                if device.descriptor.healthy
+            }
+            provider_atoms = tuple(
+                atom
+                for atom in provider_atoms
+                if atom.local_capacity_key in bindings
+            )
+        result.append(
+            _configured_provider_descriptor(kind, provider_atoms, bindings=bindings)
+        )
+    return tuple(result)
 
 
 class _RemoteAgentJournal:
@@ -763,14 +804,14 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v2",
+                    "agent-sessions-v3",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
             ):
                 raise QueueServiceError(
                     "agent coordinator protocol is unsupported; hard cut-over "
-                    "requires version 2"
+                    f"requires version {PROTOCOL_VERSION}"
                 )
         return result
 
@@ -824,8 +865,38 @@ class LocalDaemonAgentHttpClient:
             if (
                 offer.cpu > capacity.cpu_capacity
                 or offer.memory_bytes > capacity.memory_capacity_bytes
+                or tuple(
+                    sorted(
+                        (device.descriptor for device in capacity.gpu_devices),
+                        key=lambda item: item.device_id,
+                    )
+                )
+                != offer.gpu_devices
             ):
                 raise QueueConflictError("offer exceeds the resident capacity domain")
+            configured_gpu = {
+                device.descriptor.device_id: device.descriptor.capacity_atom()
+                for device in capacity.gpu_devices
+            }
+            if any(
+                atom.local_capacity_key not in configured_gpu
+                or atom.unit != configured_gpu[atom.local_capacity_key].unit
+                or atom.granularity
+                != configured_gpu[atom.local_capacity_key].granularity
+                or atom.amount.fraction
+                > configured_gpu[atom.local_capacity_key].amount.fraction
+                for atom in offer.gpu_atoms
+            ):
+                raise QueueConflictError("offer exceeds the resident GPU capacity")
+            expected_provider_descriptors = _resident_provider_descriptors(
+                capacity,
+                self._require_journal().session(offer.session_id).agent_id,
+                resource_kinds={item.kind for item in offer.provider_descriptors},
+            )
+            if offer.provider_descriptors != expected_provider_descriptors:
+                raise QueueConflictError(
+                    "offer provider identity differs from resident configuration"
+                )
         journal = self._require_journal()
         journal.prepare_offer(offer, idempotency_key)
         result = self._call(
@@ -1135,6 +1206,10 @@ class LocalDaemonAgentHttpClient:
                 assignment,
                 f"{request.assignment_id}:prepare:{index}",
                 claim,
+                {
+                    descriptor.kind: descriptor
+                    for descriptor in request.provider_descriptors
+                }[claim.resource_kind],
             )
             for index, claim in enumerate(request.claims)
         )
@@ -1273,6 +1348,10 @@ class LocalDaemonAgentHttpClient:
                         )
                     )
                 }
+                for command in commands:
+                    provider = providers[command.claim.resource_kind]
+                    if isinstance(provider, GpuResourceProvider):
+                        environment.update(provider.worker_environment(command))
                 child = subprocess.Popen(
                     [
                         str(profile.python_executable),
@@ -1391,6 +1470,7 @@ class LocalDaemonAgentHttpClient:
                     assignment,
                     f"{command.operation_id}:release",
                     command.claim,
+                    command.provider_descriptor,
                 )
             )
             if released.outcome is not ClaimOutcome.RELEASED:
@@ -1577,16 +1657,44 @@ class LocalDaemonAgentHttpClient:
             planners = {
                 "cpu": CpuResourcePlanner(),
                 "memory": MemoryResourcePlanner(),
+                "gpu": GpuResourcePlanner(),
             }
             atoms = profile.capacity_atoms(session.agent_id)
-            self._providers = {
-                kind: AtomResourceProvider(
-                    planners[kind].descriptor,
-                    planners[kind].claim_contracts,
-                    tuple(atom for atom in atoms if atom.owner_resource_kind == kind),
+            self._providers = {}
+            for kind in {atom.owner_resource_kind for atom in atoms}:
+                if kind == "gpu":
+                    continue
+                provider_atoms = tuple(
+                    atom for atom in atoms if atom.owner_resource_kind == kind
                 )
-                for kind in {atom.owner_resource_kind for atom in atoms}
-            }
+                self._providers[kind] = AtomResourceProvider(
+                    _configured_provider_descriptor(kind, provider_atoms),
+                    planners[kind].claim_contracts,
+                    provider_atoms,
+                )
+            if profile.gpu_devices:
+                healthy_gpu_keys = {
+                    f"{session.agent_id}:{device.descriptor.device_id}"
+                    for device in profile.gpu_devices
+                    if device.descriptor.healthy
+                }
+                gpu_atoms = tuple(
+                    atom
+                    for atom in atoms
+                    if atom.owner_resource_kind == "gpu"
+                    and atom.local_capacity_key in healthy_gpu_keys
+                )
+                self._providers["gpu"] = GpuResourceProvider(
+                    planners["gpu"].claim_contracts,
+                    gpu_atoms,
+                    bindings={
+                        f"{session.agent_id}:{device.descriptor.device_id}": (
+                            device.binding_value
+                        )
+                        for device in profile.gpu_devices
+                        if device.descriptor.healthy
+                    },
+                )
             for command in journal.retained_claim_commands():
                 provider = self._providers.get(command.claim.resource_kind)
                 if provider is None:
@@ -2161,87 +2269,12 @@ def _registration(value: Mapping[str, object]) -> AgentRegistration:
 
 
 def _offer(value: Mapping[str, object]) -> AgentOffer:
-    _exact(
-        value,
-        {
-            "session_id",
-            "coordinator_epoch",
-            "config_revision",
-            "inventory_revision",
-            "availability_revision",
-            "capacity_atoms",
-            "ttl_seconds",
-            "pools",
-            "reflected_claim_ids",
-            "resident_profiles",
-        },
-    )
-    claims = value["reflected_claim_ids"]
-    pools = value["pools"]
-    profiles = value["resident_profiles"]
-    if (
-        not isinstance(claims, list)
-        or any(not isinstance(item, str) for item in claims)
-        or not isinstance(pools, list)
-        or any(not isinstance(item, str) for item in pools)
-        or not isinstance(profiles, list)
-        or any(not isinstance(item, Mapping) for item in profiles)
-    ):
-        raise QueueServiceError("agent offer scope is invalid")
-    cpu, memory = _capacity_atoms(value["capacity_atoms"])
-    return AgentOffer(
-        session_id=_string(value, "session_id"),
-        coordinator_epoch=_string(value, "coordinator_epoch"),
-        config_revision=_string(value, "config_revision"),
-        inventory_revision=_string(value, "inventory_revision"),
-        availability_revision=_string(value, "availability_revision"),
-        cpu=cpu,
-        memory_bytes=memory,
-        ttl_seconds=_integer(value, "ttl_seconds"),
-        pools=tuple(pools),
-        reflected_claim_ids=tuple(claims),
-        resident_profiles=tuple(
-            ResidentProfileDescriptor.from_dict(item) for item in profiles
-        ),
-    )
-
-
-def _capacity_atoms(value: object) -> tuple[int, int]:
-    if not isinstance(value, list) or not 1 <= len(value) <= 2:
-        raise QueueServiceError("agent capacity atoms are invalid")
-    quantities: dict[str, int] = {}
-    expected = {
-        "cpu": ("cpu", "count"),
-        "memory": ("memory", "byte"),
-    }
-    for item in value:
-        if not isinstance(item, Mapping):
-            raise QueueServiceError("agent capacity atom is invalid")
-        _exact(
-            item,
-            {
-                "owner_resource_kind",
-                "local_capacity_key",
-                "amount",
-                "unit",
-                "granularity",
-            },
-        )
-        kind = _string(item, "owner_resource_kind")
-        if kind not in expected or kind in quantities:
-            raise QueueServiceError("agent capacity atom namespace is invalid")
-        local_key, unit = expected[kind]
-        if (
-            _string(item, "local_capacity_key") != local_key
-            or _string(item, "unit") != unit
-        ):
-            raise QueueServiceError("agent capacity atom descriptor is invalid")
-        amount = _exact_integer_quantity(item["amount"], "amount")
-        granularity = _exact_integer_quantity(item["granularity"], "granularity")
-        if amount <= 0 or granularity != 1:
-            raise QueueServiceError("agent capacity atom quantity is invalid")
-        quantities[kind] = amount
-    return quantities.get("cpu", 0), quantities.get("memory", 0)
+    try:
+        return AgentOffer.from_value(value)
+    except Exception as exc:
+        if isinstance(exc, QueueServiceError):
+            raise
+        raise QueueServiceError("agent offer is invalid") from exc
 
 
 def _exact_integer_quantity(value: object, name: str) -> int:

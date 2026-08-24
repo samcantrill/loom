@@ -357,7 +357,7 @@ def test_merge_run_options_applies_base_profile_explicit_precedence() -> None:
                     "adapter_options": {"docker": {"image": "profile"}},
                 },
                 "evaluate": {
-                    "resources": {"entries": {"gpu": {"kind": "gpu", "amount": 0}}}
+                    "resources": {"entries": {}}
                 },
             },
         }

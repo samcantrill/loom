@@ -206,6 +206,7 @@ def _decision_receipt(
         "as_of": "2020-01-01T00:00:00Z",
         "reason_codes": ["selected"],
         "component_descriptors": [descriptor.to_dict()],
+        "provider_descriptors": [descriptor.to_dict()],
         "claim_contract_descriptors": [claim.contract.to_dict()],
     }
 
@@ -226,6 +227,7 @@ def _offer_snapshot(
         inventory_revision="inventory-1",
         availability_revision=availability_revision,
         component_descriptors=(descriptor,),
+        provider_descriptors=(descriptor,),
         atoms=atoms,
         reflected_claim_ids=reflected_claim_ids,
     )
@@ -303,7 +305,9 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
         "cpu", 1, "1", "cpu-provider", "configured"
     )
     provider = AtomResourceProvider(descriptor, (contract,), (atom,))
-    command = ClaimCommand(assignment, "claim-build-1:prepare", claim)
+    command = ClaimCommand(
+        assignment, "claim-build-1:prepare", claim, descriptor
+    )
     coordinator_path = tmp_path / "coordinator" / "state.sqlite"
     _seed_stage_work(
         coordinator_path,
@@ -492,7 +496,11 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
             assignment=assignment,
             worker_request=worker_request,
             claims=(claim,),
-            commands=(ClaimCommand(assignment, "claim-build-failed:prepare", claim),),
+            commands=(
+                ClaimCommand(
+                    assignment, "claim-build-failed:prepare", claim, descriptor
+                ),
+            ),
             providers={"cpu": provider},
             run_store=run_store,
             max_parallel_stages=1,
@@ -616,7 +624,11 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
             assignment=assignment,
             worker_request=worker_request,
             claims=(claim,),
-            commands=(ClaimCommand(assignment, "claim-build-declined:prepare", claim),),
+            commands=(
+                ClaimCommand(
+                    assignment, "claim-build-declined:prepare", claim, descriptor
+                ),
+            ),
             providers={"cpu": provider},
             run_store=run_store,
             max_parallel_stages=1,
@@ -781,7 +793,11 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
             assignment=assignment,
             worker_request=requests[name],
             claims=(claim,),
-            commands=(ClaimCommand(assignment, f"claim-{name}:prepare", claim),),
+            commands=(
+                ClaimCommand(
+                    assignment, f"claim-{name}:prepare", claim, descriptor
+                ),
+            ),
             providers={"cpu": provider},
             run_store=run_store,
             max_parallel_stages=2,

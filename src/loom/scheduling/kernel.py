@@ -404,6 +404,7 @@ class SchedulingKernel:
                 return _CandidateResult(WorkSearchState.COMPLETE)
 
         scores: dict[int, int] = {}
+        fallback_eligible = False
         for spec in work.preferences:
             scorer = self._preference.get(spec.scorer)
             if scorer is None or spec.descriptor is None:
@@ -443,12 +444,14 @@ class SchedulingKernel:
                     WorkSearchState.INVALID,
                     explanation=f"preference {spec.identifier} returned an unknown band",
                 )
-            if (
+            is_fallback = (
                 spec.fallback_band is not None
                 and score.quality_band == spec.fallback_band
-                and as_of < work.ready_at + cast(int, spec.fallback_after_seconds)
-            ):
-                return _CandidateResult(WorkSearchState.COMPLETE)
+            )
+            if is_fallback:
+                if as_of < work.ready_at + cast(int, spec.fallback_after_seconds):
+                    return _CandidateResult(WorkSearchState.COMPLETE)
+                fallback_eligible = True
             try:
                 scores[spec.tier] = _checked_add(
                     scores.get(spec.tier, 0),
@@ -466,6 +469,7 @@ class SchedulingKernel:
                 candidate_id=candidate.candidate_id,
                 claims=claims,
                 preference_vector=vector,
+                fallback_eligible=fallback_eligible,
             ),
         )
 
