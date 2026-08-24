@@ -25,7 +25,12 @@ from uuid import uuid4
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp, utc_timestamp
 
-from .agent_sessions import AgentPolicyConfig, AgentSessionView, initialize_agent_session_schema
+from .agent_sessions import (
+    AgentPolicyConfig,
+    AgentSessionView,
+    initialize_agent_session_schema,
+    validate_agent_session_schema,
+)
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
 if TYPE_CHECKING:
@@ -315,7 +320,7 @@ class LocalDaemon:
             )
         _initialize_root(config.coordinator_root, role="coordinator")
         try:
-            _initialize_root(config.agent_root, role="local-agent")
+            cls.initialize_agent_root(config.agent_root)
             from .local_daemon_execution import initialize_local_daemon_owner_stores
 
             initialize_local_daemon_owner_stores(
@@ -325,6 +330,14 @@ class LocalDaemon:
             )
         except Exception:
             raise
+
+    @classmethod
+    def initialize_agent_root(cls, root: Path) -> None:
+        """Create one fresh protected agent root for an outbound agent owner."""
+        path = Path(root)
+        if path.exists():
+            raise QueueServiceError("remote agent requires a fresh root")
+        _initialize_root(path, role="local-agent")
 
     def start(self) -> LocalDaemonStatus:
         if self._coordinator_lock is not None:
@@ -967,10 +980,7 @@ def _open_root(path: Path, *, role: str) -> str:
             raise QueueStorageError(
                 f"{role} daemon schema is unsupported; fresh roots are required"
             )
-        else:
-            # Phase 4 additions remain isolated from the Phase 3 root contract.
-            initialize_agent_session_schema(conn, coordinator=role == "coordinator")
-            conn.commit()
+        validate_agent_session_schema(conn, coordinator=role == "coordinator")
         values = {
             str(row[0]): str(row[1])
             for row in conn.execute("SELECT key, value FROM root_metadata")

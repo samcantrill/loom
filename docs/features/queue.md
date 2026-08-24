@@ -231,6 +231,20 @@ CPU/memory offer, and hold one current revision-bound work poll. A poll returns
 only `wait` in this phase. Those offers are coordinator-retained protocol state,
 not inputs to the local scheduling kernel or assignment store.
 
+The outbound agent must open an explicitly initialized, owner-private agent
+root before it can mutate session state. That root records the canonical
+registration intent before the request is sent and records the returned session
+before an offer or poll is allowed. The coordinator never creates or repairs
+this remote journal. A missing, replaced, locked, permission-unsafe, or
+incomplete agent root therefore fails closed; loss of that root requires the
+later guarded-recovery phase rather than coordinator-side reconstruction.
+
+Offers use exact bounded CPU and memory capacity atoms, one shared availability
+revision across every authorized pool, and coordinator-accepted time for TTL.
+The held poll is digest-bound and renews current policy while waiting. A lost
+response retains the same local operation identity so an exact retry can recover
+the coordinator's durable result; changed-content reuse conflicts.
+
 Every operation rechecks the protected current policy, so removing a credential
 fences an already-connected peer without retiring its session. Registration and
 offer mutations are canonical-digest/idempotency-key bound. A coordinator restart
@@ -239,6 +253,13 @@ fresh offer before polling. Clean retirement requires the authenticated old
 session, withdrawn offer/poll, and an empty protected reference set; it records
 a rejecting `RETIRED_CLEAN` tombstone. Lost state, expiry, a new connection, or
 credential rotation is not retirement.
+
+This is a hard cut-over for Phase 4: no compatibility path interprets an
+earlier, unmerged agent-session candidate or silently fills in missing current
+tables. Valid Phase 3 version-1 roots receive only the additive Phase 4 tables
+and retain their existing identities and admissions. A root already claiming
+the current version must contain the complete current schema or startup rejects
+it without repair.
 
 Client and operator status/admission operations can use the same protected mTLS
 adapter with their separately configured roles. The owner-only Unix client route

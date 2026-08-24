@@ -215,51 +215,46 @@ a default-CI prerequisite.
   with no durable session on the remote agent; exact replay does not repair the
   agent, and clean retirement checks the coordinator host's agent journal rather
   than the authenticated remote owner's evidence.
-- Treat this as one qualified remote-session ownership and continuity blocker.
-  The bounded correction must move registration/session persistence to an
-  outbound agent-owned journal, make exact replay persist the returned result,
-  reconcile the complete persisted revision tuple, retain effective pool and
-  capability scope, withdraw/fence before proof-based clean retirement, and
-  digest-bind one current policy-rechecked poll. It must retain the no-launch
-  boundary and Phase 3 root continuity. Refiner pending; blocker corrections
-  remain `1/3` until that pass completes.
-- Refiner correction: complete at the current commit. The HTTP caller now owns
-  a separate durable agent journal: it persists canonical registration intent
-  before send and persists exact replay results, including after a lost
-  response. Coordinator state retains only coordinator facts. Reconciliation
-  checks the complete durable revision tuple and effective pool/capability
-  scope; offers project bounded CPU/memory for that scope. Polls are
-  digest-bound, current-policy-rechecked exact replays. Retirement durably
-  fences offer and poll state before both the remote-agent and coordinator
-  empty-reference proofs, records the remote proof, then tombstones. The
-  restricted agent path remains outside all assignment, provider, artifact,
-  and launcher owners. Focused unit and loopback TLS tests pass (12 tests), as
-  do scoped Ruff and Pyright checks. Blocker corrections are now `2/3`.
+- Refiner correction `c145a7b` moved the journal to the HTTP caller but remained
+  incomplete: it created missing state, accepted an unbound retirement proof,
+  did not hold the poll, retained a scalar offer wire shape, and could not repair
+  a lost reconciliation response safely. Manager verification rejected that
+  correction; blocker corrections used: `2/3`.
+- Final manager correction `3/3` is implemented in the worktree. The caller now
+  opens one explicitly initialized and locked owner-private agent root, records
+  intent before network mutation and results before later operations, and never
+  creates or repairs missing current state. Coordinator receipts and the remote
+  journal repair lost registration/reconciliation responses with exact replay.
+  Sessions retain their complete root, revision, pool, and capability tuple;
+  superseded or retired receipts are non-actionable.
+- The final correction also uses exact capacity atoms, one actually held and
+  current-policy-renewed poll, and structured root/session/revision-bound
+  retirement evidence. Both owners fence first; unresolved references leave a
+  durable `RETIRING` session that can finish after restart or credential
+  rotation, while a lost/replaced root cannot produce the proof. Valid Phase 3
+  roots migrate additively; incomplete current-version candidate state fails
+  closed with no compatibility repair.
+- Focused evidence is currently clean: 16 authenticated-session unit/loopback
+  tests, 57 adjacent daemon/contract tests, scoped Ruff, and scoped Pyright.
+  Fresh full validation, independent PR review, CI, and merge remain pending.
 
 ## Candidate Evidence
 
-- Implementation: added private coordinator-owned authenticated session and
-  mTLS adapter modules; extended the persistent daemon with an agent view,
-  protected current policy, additive V1-to-V2 root schema, agent registration
-  journal, retained safe offers, wait-only polls, clean-retirement tombstones,
-  and deterministic live-control substitution diagnostics. Remote offers do not
-  enter `managed_local` assignment/provider state.
+- Implementation: private authenticated session and mTLS adapter modules add a
+  coordinator-owned protocol view and a distinct outbound-agent-owned durable
+  journal. The daemon retains current policy, coordinator-issued sessions,
+  exact receipts, bounded offers, held wait-only polls, retirement evidence,
+  and tombstones. Remote offers remain outside `managed_local` assignment and
+  provider state.
 - Changed paths: `src/loom/queue/agent_sessions.py`,
   `src/loom/queue/agent_session_transport.py`,
   `src/loom/queue/local_daemon.py`, `docs/features/queue.md`, and focused
   unit/integration tests.
-- Tests: unit coverage covers policy removal/overlap, digest replay/conflict,
-  coordinator-issued sessions, V1 continuity, restart/re-offer, offer expiry,
-  stale polls, retirement tombstones, and no-launch database sentinels.
-  Loopback integration coverage creates its own mTLS CA/peer credentials and
-  proves verified-fingerprint credentials, service-CA/client-role rejection,
-  live policy removal on one connection, and client-view parity.
-- Validation: `make validate-pr` passed at `b7699c5` (Ruff, Pyright, 2,406
-  default tests, 141 config-extra tests, and build). `make test-summary` passed
-  on the same validation-relevant revision: 118 package, 1,710 unit, 295
-  contract, 226 integration, 57 E2E, and 141 config-extra tests; evidence is
-  `build/test-summary.md`.
-- The receipt above applies only to the rejected executor candidate and becomes
-  stale when the qualified correction changes source or tests. PR, independent
-  review, and merge remain pending. Remote assignment, transfer, and launch
-  remain intentionally unavailable until Phase 5.
+- Focused tests cover exact replay/conflict, lost responses, restart and
+  re-offer, live policy removal and credential rotation, root loss/replacement,
+  schema continuity/rejection, exact capacity wire shape, held/concurrent polls,
+  clean retirement, and causal no-launch sentinels over assignment, provider,
+  artifact, and launcher owners.
+- The earlier `b7699c5` validation receipt belongs to the rejected candidate and
+  is stale. Record the final `make validate-pr` and `make test-summary` receipt
+  here after the final correction is committed and the fresh gates pass.
