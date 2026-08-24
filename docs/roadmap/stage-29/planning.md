@@ -1,6 +1,6 @@
 # Roadmap Stage 29 Planning: Durable Dependency-Aware Stage Scheduling
 
-Status: implementation blocked; Phases 1-3D, 4A, 5A, and 6 merged; Phases
+Status: Phase 7A pending; Phases 1-3D, 4A, 5A, and 6 merged; Phases
 3A-3C, 4, 5, and 7 retained as blocked evidence
 Roadmap stage: 29
 Evidence baseline: repository source at
@@ -15,14 +15,14 @@ merge `2d273b8`; Phase 5/5A evidence `d536a1e`/`4134d70` and merge `5116f18`;
 Phase 6 source/test evidence `75cd70a` and merge `2c6d366`; and blocked Phase 7
 candidate/review evidence `3515400`/`1eb7c2c`
 Planning route: the original expanded Stage 29 design remains authoritative.
-The hard cut-over remains approved, but a fresh Phase 7 recovery cannot be
-shaped until its external bootstrap-capability delivery boundary is selected.
-Current gate: Phase 7 is blocked read-only evidence after PR #242 passed local
-and CI gates but failed required review. Phases 8 and 9 cannot start.
-Blockers: Loom has no repository-native channel that releases one opaque
-assignment capability only to the allocated SLURM job outside scripts,
-arguments, scheduler metadata, and environment. The maintainer must select the
-supported site-owned delivery mechanism before recovery planning resumes.
+The maintainer approved the hard cut-over and selected a Slurm prolog/container-
+provisioned allocation-private capability file for fresh Phase 7A.
+Current gate: Phase 7A is implementation-ready after one bounded expanded-path
+plan refinement. Phase 7 remains blocked read-only evidence; Phases 8 and 9
+cannot start until Phase 7A merges.
+Blockers: none. The approved site provider owns one-use secret generation,
+protected staging, allocation-only file materialization, expiry, and
+revocation; Loom owns only its verifier and atomic assignment-bound consumption.
 
 This file is the current Stage 29 authority. It supersedes the earlier Stage 29
 whole-run placement design. A user still submits, observes, and cancels a run,
@@ -45,8 +45,8 @@ different resources and useful placements.
 | Phase 5A execution evidence | Fresh candidate `4134d70` selectively reused Phase 5 and transactionally adopted exact already-published input/output targets after the crash boundary. It passed 2,577 categorized tests, the full gate, independent review, and CI. | None. PR #240 squash-merged as `5116f18`. | Preserve the merged relay/replay owner boundary. |
 | Phase 6 execution evidence | Source/test candidate `75cd70a` completed GPU/VRAM feasibility, exact claims, external-occupancy withdrawal, whole-placement constraints, and deterministic preferences while keeping SLURM hard mapping strict. It passed the full gate, categorized summary, review, and CI. | None. PR #241 squash-merged as `2c6d366`. | Use Phase 6 as the clean base dependency for any future ready-stage recovery. |
 | Phase 7 execution evidence | Candidate `3515400` completed the explicit ready-stage route, durable at-most-one submission, fixed bootstrap, relay/result, and mixed-route path; 2,620 categorized tests, the full gate, and CI passed. | Required review found inherited submit overrides/secret export, profile-wide bootstrap authority, route-local starvation, and incomplete fresh-process restart evidence after correction 3/3. PR #242 closed without merge. | Preserve Phase 7 as blocked read-only evidence. Do not stack or support its unmerged schemas. |
-| Phase 7 recovery decision | Submit isolation, scheduling continuation, restart coverage, and assignment-bound verifier/consumption have existing owners. Secret delivery does not: profile mTLS is shared transport identity and Phase 5 relay begins only after authorization. | Loom needs a supported site-owned mechanism that makes one opaque assignment capability available only to the allocated job without putting secret bytes in scripts, arguments, scheduler metadata, or environment. No repository-native channel satisfies that contract. | Select the concrete site delivery boundary before shaping a fresh Phase 7 recovery. Phases 8 and 9 remain blocked. |
-| Approval | The maintainer approved the Stage 29 hard cut-over and explicitly rejected candidate-schema compatibility or migration. Phase 7 recovery must likewise start fresh and reject the unmerged candidate. | The site-owned allocated-job capability-delivery mechanism is not selected; that is a material deployment/trust decision rather than repository mechanics. | Obtain one maintainer decision, then shape the smallest fresh Phase 7 recovery around it. |
+| Phase 7A recovery agreement | Submit isolation, scheduling continuation, fresh-process restart coverage, and assignment-bound verifier/consumption have repository owners. The selected site provider uses Slurm prolog/container isolation to materialize a one-use secret file only inside the allocated job; profile mTLS remains transport identity and Phase 5 relay remains post-authorization data movement. | None. Provider preparation must be stable-operation idempotent and complete before `SUBMITTING`; Loom retains only the verifier/non-secret receipt, and registration consumes it before delivery or grant. | Implement the refined Phase 7A plan from current `develop`. Phases 8 and 9 remain blocked until it merges. |
+| Approval | The maintainer approved the Stage 29 hard cut-over, explicitly rejected candidate-schema compatibility or migration, and approved the Slurm prolog/container-provisioned job-private capability-file contract for fresh Phase 7A. | None. | Preserve the decision during expanded plan refinement and implementation. |
 
 ## Evidence And Scope
 
@@ -69,7 +69,7 @@ different resources and useful placements.
 | Stage 25/27/28 extension seams | Queue selection already validates a narrow injected policy result; local assignment/GPU providers separate safe evidence from live tokens; Stage 28 uses instance-local registries, explicit trusted activation, durable identity-only evidence, and opt-in conformance reports. | Reuse these safety patterns for subsystem scheduling protocols rather than exposing lifecycle mutation or inventing a universal registry. | FR-22–FR-24 |
 | Authority HTTP/protocol and artifact backend seams | Existing request IDs, idempotency metadata, versioned plain-data operations, capability descriptors, payload handlers, and safe errors provide patterns. The current local FastAPI authority is loopback-oriented and does not provide the Stage 29 principal/authorization boundary. | Add connection-derived principals, per-operation authorization, bounded envelopes, assignment-scoped artifact operations, and an authenticated least-privilege coordinator-to-authority channel. | FR-12, FR-17, FR-25 |
 | Delegated SLURM | `SlurmCommandRunner`, resource/directive mapping, deterministic scripts, `sbatch --parsable` parsing, `squeue`/`sacct` inspection, `scancel`, live manifests, and a conservative whole-run `START_UNCERTAIN` result already exist. Current live submission still plans either one whole run or a pre-submitted `afterok` DAG, and some command/parse exceptions are recorded as definite failure. | Preserve whole-run delegation unchanged; add a distinct managed ready-stage path that submits one gated bootstrap for one exact authority-ready attempt, records submit ambiguity durably, and never treats SLURM nodes as agent offers. | FR-18, FR-27–FR-30 |
-| Blocked Phase 7 candidate and independent review | Candidate `3515400` supplies the distinct ready-stage profile/dispatcher/bootstrap path and passed local/CI gates. Review showed that the production submit subprocess inherits `SBATCH_*` overrides and secret-bearing daemon variables; profile mTLS plus caller-selected operation/digest/handle can claim another same-profile assignment; the first unavailable route returns before independent work is considered; and restart tests do not reconstruct fresh coordinator processes across retained submission states. The repository contains no job-private capability-delivery channel, and Phase 5 relay cannot bootstrap one because it is authorized only after registration. | Reuse the candidate selectively only after a site channel is selected. Isolate ready-stage submission with a bounded protected allowlist plus `--export=NIL`; bind a provider-delivered one-use capability and retained bootstrap session to assignment/operation/request/issuer/policy/handle/incarnation; continue after route-local waits; and prove fresh-process no-resubmit. Keep historical whole-run SLURM unchanged and reject every unmerged candidate schema. | FR-4, FR-18, FR-20, FR-25, FR-27–FR-30 |
+| Blocked Phase 7 candidate and independent review | Candidate `3515400` supplies the distinct ready-stage profile/dispatcher/bootstrap path and passed local/CI gates. Review showed that the production submit subprocess inherits `SBATCH_*` overrides and secret-bearing daemon variables; profile mTLS plus caller-selected operation/digest/handle can claim another same-profile assignment; the first unavailable route returns before independent work is considered; and restart tests do not reconstruct fresh coordinator processes across retained submission states. The repository contains no job-private capability-delivery channel, and Phase 5 relay cannot bootstrap one because it is authorized only after registration. | Reuse the candidate selectively with the approved prolog/container job-private-file provider. Isolate ready-stage submission with a bounded protected allowlist plus `--export=NIL`; bind the provider-prepared one-use capability and retained bootstrap session to assignment/operation/request/issuer/policy/handle/incarnation; continue after route-local waits; and prove fresh-process no-resubmit. Keep historical whole-run SLURM unchanged and reject every unmerged candidate schema. | FR-4, FR-18, FR-20, FR-25, FR-27–FR-30 |
 
 - User-visible outcome: submit one pipeline run; Loom prepares its plan, runs all
   immediately resolvable reuse/skip actions, exposes only dependency-ready
@@ -876,10 +876,15 @@ bootstrap incarnation. Its verifier/consumption and exact replay belong to the
 coordinator's SLURM assignment owner. Secret delivery belongs to a protected
 site mechanism that releases the capability only to the allocated job; the
 secret may not appear in the batch script, arguments, scheduler metadata, or
-environment. Loom currently has no such native channel, and the artifact relay
-cannot provide it because relay authorization follows bootstrap registration.
-Until a supported scheduler/site-managed job-private file, credential broker,
-or equivalent channel is selected, the ready-stage route remains blocked.
+environment. The selected `job_private_file_v1` provider uses Slurm prolog or
+container isolation to generate/stage the secret and materialize a bounded no-
+follow regular file only inside the allocation, even when jobs share a Unix
+account. Provider preparation is idempotent by stable operation and returns
+only a verifier, non-secret receipt, expiry, fixed in-job path, and descriptor
+to Loom before `SUBMITTING`. Bootstrap reads and unlinks the file, then the
+coordinator verifies and atomically consumes it before any delivery or grant.
+The artifact relay cannot bootstrap this proof because relay authorization
+still follows registration.
 
 SLURM feasibility means request representability and operational admission, not
 known free capacity. A concrete built-in mapper translates the already-resolved
@@ -1786,10 +1791,12 @@ should be tested at their owning boundary rather than as a Cartesian matrix.
 | 5A — remote execution replay closure | Remote CPU/memory stages execute end to end and both transfer owners recover an exact final target published before a lost SQLite commit. | Selective Phase 5 reuse plus no-follow regular-file/size/digest adoption in the existing owner transaction; no migration, new backend, directory relay, or owner change. | Phase 4A plus read-only Phase 5 evidence. | Source/test `4134d70` passed 2,577 categorized tests, full validation, independent review, and CI; PR #240 squash-merged as `5116f18`. | merged |
 | 6 — GPU, VRAM, and preference placement | GPU stages select only capable devices/agents and deterministically honor relevant model, agent, packing, target, and fallback rules. | Configured manageable GPU inventory/planner/provider and exact claim contract; conservative external-occupancy withdrawal; planner-owned count/mode/per-device/topology feasibility; whole-placement constraints; tiered model/agent/packing preferences and guarded fallback. SLURM hard mapping remains strict; no OOM guarantee, implicit sharing, general solver, or duplicate intrinsic hard-rule owner. | Phase 5A. | Source/test `75cd70a` passed the full gate and categorized summary; independent review and CI passed; PR #241 squash-merged as `2c6d366`. | merged |
 | 7 — blocked explicit ready-stage SLURM candidate | Candidate `3515400` implements the explicit route, durable at-most-one `sbatch`, fixed bootstrap, bounded relay/result, and mixed-route execution but cannot merge. | Evidence only. Its ready-stage submit inherits directive overrides and daemon secrets, profile transport identity is not assignment authority, the first unavailable route can starve independent work, and fresh-process restart proof is incomplete. A job-private capability delivery channel is not repository-native. Existing whole-run/`afterok` behavior remains separate and unchanged. | Phase 6 plus Phase 2 worker/assignment fence and Phase 5 relay. | 2,620 categorized passes, full local gate, focused 60-unit/21-integration tests, and CI succeeded; required review blocked PR #242 after correction 3/3. | blocked |
+| 7A — ready-stage SLURM trust closure | One explicitly routed ready stage submits once, authenticates one allocated job to one assignment, relays inputs/results, and completes without starving independent managed work. | Selectively reuse Phase 7; add the concrete prolog/container-provisioned `job_private_file_v1` provider, verifier-only Loom state and atomic assignment/job/incarnation consumption, protected ready-stage submit environment plus `--export=NIL`, route-local continuation, and fresh coordinator/store no-resubmit evidence. Reject the unmerged schemas; preserve profile mTLS as transport-only, one-root authority fencing, Phase 5 relay/result ownership, explicit no-fallback, and historical whole-run SLURM unchanged. No generic broker/plugin framework or Phase 8/9 control/recovery. | Phase 6 plus read-only Phase 7 evidence. | Provider intent/prepare/receipt/submit/register crash matrix; same-profile cross-assignment attack; secret redaction/file isolation; ambient override/export sentinels; mixed-route permutations; fresh-object `SUBMITTING`/`ACCEPTED`/`UNKNOWN` one-call tests; full gate, independent review, and CI. | pending |
 | 8 — controls and stage-aware cancellation | Operators drain, resume, or reload agents/profiles and cancel runs without mutating live claims/submissions, stranding referenced components, or treating connectivity loss/`scancel` success as completion. | Serialized scoped control intents; availability withdrawal; separate agent and coordinator component/profile transactions with exact retained descriptors; coordinator request/authority cancellation epoch; complete agent/SLURM fan-out; pre-grant bootstrap denial, idempotent external cancel request, exact status/containment settling, and owner-labelled status. No distributed config swap, automatic route change, manual unknown-work fencing, or session takeover. | An approved and merged fresh ready-stage recovery; blocked Phase 7 evidence is not a dependency base. | Agent/profile reload authorization and idempotency; retained nonterminal submission descriptor; agent-first/coordinator-first skew; request/authority-outage recovery; cancel before/after SLURM intent/call/bootstrap/grant/start/result; `scancel`/status uncertainty; disconnected unknown behavior. | pending |
 | 9 — restart and guarded recovery | Agents and SLURM assignments restart/reconcile without duplicate launch/submission, and privileged operators can resolve positively contained unknown work or replace a fully contained old agent session. | Same-session agent journal/process/outbox recovery; SLURM known/unknown operation/handle/bootstrap reconciliation without resubmit; user-service operation; agent or trusted exact SLURM positive-containment evidence; normal reconciliation of every verified current-fence terminal fact; cross-store fence/close/retry reconciliation; execution-close/provider/profile-slot release separation; stale-event/result rejection; complete agent-session replacement set; regression only for earlier ordinary coordinator/authority restart. No second automatic restart state machine, automatic failover/fallback, or coordinator HA. | Phase 8. | Restart at every agent and SLURM submit/bootstrap/result edge; zero/one/multiple job discovery; coordinator/authority restart regression; weak SLURM absence rejection; idempotent recovery; success/failure/cancellation versus close; agent provider/profile slot release and stale-output races; complete session-reference query; full Stage 29 validation. | pending |
 
-Nine numbered phases plus Phase 3B, Phase 3C, Phase 3D, Phase 4A, and Phase 5A
+Nine numbered phases plus Phase 3B, Phase 3C, Phase 3D, Phase 4A, Phase 5A,
+and Phase 7A
 recovery subphases are an explicit exception to the normal one-to-three
 preference. Phase 3B was a fresh
 replacement after Phase 3A exhausted its correction budget; it then exhausted
@@ -1807,10 +1814,11 @@ only the per-session retirement possession proof, principal-scoped poll key,
 and the already validated Phase 4 vertical outcome in one new independently
 reviewed PR before Phase 5 begins. Phase 7 then exhausted correction 3/3 after
 its required review found three production failures and a fresh-process evidence
-gap. A Phase 7 recovery subphase is deliberately not shaped yet: unlike the
-repository-owned corrections, secure capability delivery requires a concrete
-site-owned job-private channel and planning cannot invent that deployment
-contract. Phases 8 and 9 remain pending behind the unresolved choice.
+gap. Fresh Phase 7A starts from current `develop`, treats Phase 7 as read-only
+evidence, and owns only the complete validated vertical plus the approved
+prolog/container job-private capability file, ready-stage submit isolation,
+route-local continuation, and fresh-process proof. It is not correction 4/3 or
+a stacked PR. Phases 8 and 9 remain pending until it merges.
 
 The broader nine-phase shape remains justified by the original boundaries.
 The former three phases each crossed several independent durable, trust, data,
@@ -1856,11 +1864,13 @@ route choices remain in phase-executor discretion.
 | Phase 5 recovery evidence | Candidate `d536a1e` passed its full gate but review found the publish-before-SQLite-commit replay gap. Fresh Phase 5A added exact final-target adoption at both owners without a new schema or abstraction, then passed 2,577 categorized tests, full validation, independent review, and CI before PR #240 squash-merged as `5116f18`. | pass |
 | Phase 6 execution evidence | Source/test `75cd70a` completed the approved GPU/VRAM/provider/preference path, kept simulated evidence hardware-independent and SLURM mapping strict, and passed the full gate, categorized summary, independent review, and CI before PR #241 squash-merged as `2c6d366`. | pass |
 | Phase 7 execution evidence | Candidate `3515400` passed the full gate, 2,620 categorized tests, focused 60-unit/21-integration tests, and CI. Required review found inherited submit overrides/secret export, profile-wide bootstrap authorization, route-local starvation, and missing fresh-process restart evidence; correction 3/3 was exhausted and PR #242 closed. | blocked evidence retained |
-| No unresolved blocker | Loom has no repository-native way to deliver an opaque assignment capability only to the allocated SLURM job outside scripts, arguments, scheduler metadata, and environment. A supported site-owned delivery channel must be selected before a fresh recovery phase can be approved. | blocked |
+| Phase 7A recovery agreement | The maintainer selected a Slurm prolog/container-provisioned allocation-private capability file. The site provider owns idempotent secret preparation/delivery/revocation; Loom stores only the verifier/non-secret receipt and consumes it against the exact registration before delivery/grant. Ready-stage submit isolation, route-local continuation, fresh-process at-most-one evidence, hard candidate-schema rejection, and historical whole-run separation are explicit. One bounded phase-plan refinement fixed provider ownership and causal prepare/register/unlink ordering without reopening a decision. | pass |
+| No unresolved blocker | The material site-delivery decision is approved, the fresh plan has one owner per invariant, and no candidate compatibility or migration is required. | pass |
 
-Gate result: blocked at the Phase 7 recovery boundary. Phase 7 is read-only
-evidence; no Phase 7 recovery plan is approved, and Phases 8 and 9 cannot start
-until the maintainer selects the site-owned job-private capability channel.
+Gate result: Phase 7A recovery design and execution plan are approved with no
+unresolved product or deployment decision. Phase 7 remains read-only evidence;
+Phase 7A is ready for manager worktree/executor handoff, and Phases 8 and 9
+cannot start until it merges.
 The previous expanded design,
 startup, extension/security, phase-shaping, deep scheduler, manager-local
 whole-stage correctness, deployment clarification, and explicit ready-stage
@@ -1909,6 +1919,6 @@ false success, or silent agent fallback.
 | Cross-owner run deletion | Deferred; retain bounded admission, ownership, session, and replay tombstones. | Independent age-based cleanup can re-enable duplicate admission or erase continuity/fencing evidence. | An accepted run-forget operation with authority/coordinator/agent acknowledgement and failure recovery. |
 | Identity federation/message signing/at-rest encryption | Deferred beyond configured mTLS principals, scopes, expected-state/idempotency, and filesystem permissions. | Initial deployment is an internal trusted-user pool without a selected IdP/KMS/proxy threat model. | Internet/multi-tenant deployment, TLS termination middleware, or regulated storage requirement. |
 | Code shipment | Deferred; use resident project fingerprints. | Avoid remote arbitrary-code packaging and trust expansion. | Accepted reproducible bundle format and sandbox. |
-| Ready-stage SLURM route | Retain the explicit per-stage named-profile design and blocked candidate evidence; do not merge or stack it until the allocated job receives one assignment-scoped capability through a selected site-owned job-private channel. Preserve whole-run delegation unchanged. | Profile mTLS alone is too broad, while scripts, arguments, scheduler metadata, environment, and the post-authentication relay cannot securely bootstrap the secret. | Maintainer selects a supported scheduler prolog/container secret file, credential broker, or equivalent delivery boundary; then shape a fresh hard-cut recovery. |
+| Ready-stage SLURM route | Retain the explicit per-stage named-profile design and blocked candidate evidence. Fresh Phase 7A uses a protected `job_private_file_v1` provider: Slurm prolog/container isolation materializes one capability only inside the allocation; Loom stores only its verifier/non-secret receipt and consumes it against the exact assignment/job/bootstrap registration. The ready-stage submit path uses a protected environment and `--export=NIL`; hard candidate-schema rejection and whole-run delegation separation remain unchanged. | Profile mTLS alone is too broad, while scripts, arguments, scheduler metadata, environment, shared same-user files, and the post-authentication relay cannot securely bootstrap the secret. The selected provider is the smallest concrete site boundary that closes that failure without a generic broker framework. | A demonstrated cluster that cannot provide allocation-private file isolation, or a concrete need for a credential broker/stronger scheduler identity. |
 | Automatic agent/SLURM fallback | Deferred, including elapsed-time fallback, multiple-profile ranking, inferred route, and retry on another target. | It needs durable route-wait policy, atomic arbitration, comparable outcome/cost/quota semantics, and a rule that unknown submission can never fall back. | Demonstrated need after explicit-route lifecycle acceptance. |
 | Allocation-fed agents and automatic allocation provisioning | Deferred. | Allocation identity, resource-envelope publication, expiry/drain, no-double-publication, provisioning quotas/backoff, and release ownership are a separate capacity lifecycle. | Concrete need to expose already-acquired or dynamically provisioned allocation capacity. |

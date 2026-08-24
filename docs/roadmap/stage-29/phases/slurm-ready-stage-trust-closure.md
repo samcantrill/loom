@@ -2,14 +2,14 @@
 
 ## Metadata
 
-- Status: planned
+- Status: pending
 - Roadmap stage and phase: Stage 29, Phase 7A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p7a-slurm-ready-stage-trust-closure`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees` and
   `/home/can134/work/active/loom-worktrees/stage-29-p7a-slurm-ready-stage-trust-closure`
-- Base revision: clean `develop`
-  `5d466bd45b25c5f28d03d70cd5f66fe067fe7f39`
+- Base revision: current clean `origin/develop` after the approved recovery-
+  planning metadata; record the exact revision during worktree preparation
 - PR target: `develop`
 - PR title: `feat(scheduling): secure ready-stage SLURM delegation`
 - Dependencies: Phase 6 [PR #241](https://github.com/samcantrill/loom/pull/241)
