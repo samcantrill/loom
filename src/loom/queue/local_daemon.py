@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 import fcntl
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -27,6 +28,7 @@ from loom.timestamps import parse_timestamp, utc_timestamp
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 
 from .agent_sessions import (
+    AgentControl,
     AgentPolicyConfig,
     AgentSessionView,
     initialize_agent_session_schema,
@@ -42,7 +44,7 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 3
+_LOCAL_DAEMON_SCHEMA_VERSION = 4
 
 
 class LocalDaemonAdmissionState(StrEnum):
@@ -803,6 +805,52 @@ class LocalDaemon:
         self._wake.set()
         return self._admission(admission.admission_id)
 
+    def _control_agent(
+        self, principal: LocalDaemonPrincipal, control: AgentControl
+    ) -> Mapping[str, PlainData]:
+        """Commit one scoped control before the outbound agent may observe it."""
+
+        self._require_view_role(principal, LocalDaemonRole.OPERATOR)
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            session = conn.execute(
+                "SELECT session_id, agent_id, config_revision, pools_json, state "
+                "FROM agent_sessions WHERE session_id = ?",
+                (control.expected_session_id,),
+            ).fetchone()
+            if session is None or str(session["state"]) != "ACTIVE":
+                raise QueueConflictError("agent control session is stale")
+            if (
+                str(session["agent_id"]) != control.agent_id
+                or str(session["config_revision"]) != control.expected_config_revision
+            ):
+                raise QueueConflictError("agent control revision is stale")
+            pools = json.loads(str(session["pools_json"]))
+            if control.pool is not None and control.pool not in pools:
+                raise QueueServiceError("agent control pool is not authorized")
+            encoded = json.dumps(control.value(), sort_keys=True, separators=(",", ":"))
+            prior = conn.execute(
+                "SELECT principal_id, request_json, state, result_code FROM agent_controls "
+                "WHERE operation_id = ?", (control.operation_id,)
+            ).fetchone()
+            if prior is not None:
+                if str(prior["principal_id"]) != principal.subject or str(prior["request_json"]) != encoded:
+                    raise QueueConflictError("agent control operation conflicts")
+                conn.commit()
+                return freeze_plain_data({"operation_id": control.operation_id, "state": str(prior["state"]), "code": prior["result_code"]}, path="agent control receipt")
+            conn.execute(
+                "INSERT INTO agent_controls(operation_id, principal_id, session_id, agent_id, request_json, state, result_code, acknowledged) VALUES (?, ?, ?, ?, ?, 'pending_delivery', NULL, 0)",
+                (control.operation_id, principal.subject, control.expected_session_id, control.agent_id, encoded),
+            )
+            # Withdrawal is coordinator-owned and happens before delivery.  It
+            # changes only future offers; it never releases a durable claim.
+            if control.kind.value in {"drain", "reload"}:
+                conn.execute("UPDATE agent_offers SET current = 0 WHERE session_id = ?", (control.expected_session_id,))
+                conn.execute("UPDATE agent_polls SET active = 0 WHERE session_id = ?", (control.expected_session_id,))
+            conn.commit()
+        self._wake.set()
+        return freeze_plain_data({"operation_id": control.operation_id, "state": "pending_delivery", "code": None}, path="agent control receipt")
+
     def _wait(
         self, queue_item_id: str, *, timeout_seconds: float | None
     ) -> LocalDaemonAdmission:
@@ -1012,6 +1060,9 @@ class LocalDaemonOperatorView:
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.reconcile_once()
+
+    def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
+        return self._daemon._control_agent(self._principal, control)
 
 
 @dataclass(frozen=True, slots=True)

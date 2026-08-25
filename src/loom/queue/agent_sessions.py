@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from .local_daemon import LocalDaemon, LocalDaemonPrincipal
 
 
-PROTOCOL_VERSION = "3"
+PROTOCOL_VERSION = "4"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -84,6 +84,60 @@ class AgentSessionState(StrEnum):
     ACTIVE = "ACTIVE"
     RETIRING = "RETIRING"
     RETIRED_CLEAN = "RETIRED_CLEAN"
+
+
+class AgentControlKind(StrEnum):
+    DRAIN = "drain"
+    RESUME = "resume"
+    RELOAD = "reload"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentControl:
+    """Inert, authenticated control data; it never carries configuration."""
+
+    operation_id: str
+    kind: AgentControlKind
+    agent_id: str
+    expected_session_id: str
+    expected_config_revision: str
+    pool: str | None
+    cancel_active: bool
+    reason: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "operation_id", "agent_id", "expected_session_id", "expected_config_revision"
+        ):
+            _identifier(getattr(self, name), name)
+        object.__setattr__(self, "kind", AgentControlKind(self.kind))
+        if self.pool is not None:
+            _identifier(self.pool, "pool")
+        if not isinstance(self.cancel_active, bool):
+            raise QueueServiceError("control cancel_active must be boolean")
+        if not isinstance(self.reason, str) or not self.reason or len(self.reason) > 512:
+            raise QueueServiceError("control reason must be 1..512 characters")
+
+    def value(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id, "kind": self.kind.value,
+            "agent_id": self.agent_id, "expected_session_id": self.expected_session_id,
+            "expected_config_revision": self.expected_config_revision, "pool": self.pool,
+            "cancel_active": self.cancel_active, "reason": self.reason,
+        }
+
+    @classmethod
+    def from_value(cls, value: Mapping[str, object]) -> "AgentControl":
+        fields = {"operation_id", "kind", "agent_id", "expected_session_id", "expected_config_revision", "pool", "cancel_active", "reason"}
+        if set(value) != fields:
+            raise QueueServiceError("agent control fields are invalid")
+        pool = value["pool"]
+        if pool is not None and not isinstance(pool, str):
+            raise QueueServiceError("control pool is invalid")
+        required = ("operation_id", "kind", "agent_id", "expected_session_id", "expected_config_revision", "reason")
+        if any(not isinstance(value[name], str) for name in required) or not isinstance(value["cancel_active"], bool):
+            raise QueueServiceError("agent control fields are invalid")
+        return cls(cast(str, value["operation_id"]), AgentControlKind(cast(str, value["kind"])), cast(str, value["agent_id"]), cast(str, value["expected_session_id"]), cast(str, value["expected_config_revision"]), pool, cast(bool, value["cancel_active"]), cast(str, value["reason"]))
 
 
 class AgentPollActiveError(QueueConflictError):
@@ -644,6 +698,7 @@ class ScopedAuthorizer:
             "output",
             "result",
             "release",
+            "control",
             "retire",
         }:
             raise QueueServiceError("agent operation is unsupported")
@@ -877,6 +932,12 @@ class AgentSessionView:
             proof, idempotency_key=idempotency_key
         )
 
+    def next_control(self, session_id: str) -> AgentControl | None:
+        return AgentSessionService(self._daemon, self._principal).next_control(session_id)
+
+    def acknowledge_control(self, session_id: str, operation_id: str, *, code: str) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).acknowledge_control(session_id, operation_id, code=code)
+
 
 class AgentSessionService:
     """Coordinator-owned durable transitions for the restricted agent view."""
@@ -901,7 +962,7 @@ class AgentSessionService:
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
-                    "agent-sessions-v3",
+                    "agent-sessions-v4",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],
@@ -911,6 +972,43 @@ class AgentSessionService:
             },
             path="agent handshake",
         )
+
+    def next_control(self, session_id: str) -> AgentControl | None:
+        rule, revision = self._authorize("control")
+        _identifier(session_id, "session_id")
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            session = _session_from_row(conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone(), self._daemon._require_started(), expected_principal=rule.principal_id)  # type: ignore[attr-defined]
+            self._check_current_session(session, rule, self._daemon._epoch or "", revision)  # type: ignore[attr-defined]
+            row = conn.execute("SELECT operation_id, request_json FROM agent_controls WHERE session_id = ? AND state IN ('pending_delivery', 'applying') ORDER BY operation_id LIMIT 1", (session_id,)).fetchone()
+            if row is None:
+                conn.commit()
+                return None
+            control = AgentControl.from_value(json.loads(str(row["request_json"])))
+            if control.expected_config_revision != session.config_revision:
+                conn.execute("UPDATE agent_controls SET state = 'failed', result_code = 'stale_revision' WHERE operation_id = ?", (control.operation_id,))
+                conn.commit()
+                return None
+            conn.execute("UPDATE agent_controls SET state = 'applying' WHERE operation_id = ?", (control.operation_id,))
+            conn.commit()
+            return control
+
+    def acknowledge_control(self, session_id: str, operation_id: str, *, code: str) -> Mapping[str, PlainData]:
+        rule, revision = self._authorize("control")
+        _identifier(session_id, "session_id")
+        _identifier(operation_id, "operation_id")
+        _identifier(code, "control result code")
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            session = _session_from_row(conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone(), self._daemon._require_started(), expected_principal=rule.principal_id)  # type: ignore[attr-defined]
+            self._check_current_session(session, rule, self._daemon._epoch or "", revision)  # type: ignore[attr-defined]
+            row = conn.execute("SELECT request_json FROM agent_controls WHERE operation_id = ? AND session_id = ?", (operation_id, session_id)).fetchone()
+            if row is None:
+                raise QueueConflictError("agent control is unavailable")
+            control = AgentControl.from_value(json.loads(str(row["request_json"])))
+            conn.execute("UPDATE agent_controls SET state = ?, result_code = ?, acknowledged = 1 WHERE operation_id = ?", ("applied" if code == "applied" else "failed", code, operation_id))
+            conn.commit()
+        return freeze_plain_data({"operation_id": control.operation_id, "state": "applied" if code == "applied" else "failed", "code": code}, path="agent control acknowledgement")
 
     def register(self, request: AgentRegistration) -> AgentSession:
         rule, policy_revision = self._authorize("register")
@@ -2374,7 +2472,7 @@ class AgentSessionService:
 def initialize_agent_session_schema(
     conn: sqlite3.Connection, *, coordinator: bool
 ) -> None:
-    """Create the current tables in a freshly initialized version-3 root."""
+    """Create the current tables in a freshly initialized version-4 root."""
     if coordinator:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, agent_root_id TEXT NOT NULL, principal_id TEXT NOT NULL, policy_revision TEXT NOT NULL, config_revision TEXT NOT NULL, inventory_revision TEXT NOT NULL, availability_revision TEXT NOT NULL, capabilities_json TEXT NOT NULL, pools_json TEXT NOT NULL, retirement_verifier TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -2389,6 +2487,7 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS remote_assignments (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, issuer_epoch TEXT NOT NULL, run_uri TEXT NOT NULL, stage_work_id TEXT NOT NULL, stage_name TEXT NOT NULL, attempt INTEGER NOT NULL, attempt_id TEXT NOT NULL, profile_json TEXT NOT NULL, state TEXT NOT NULL, fence TEXT, report_json TEXT, report_digest TEXT, next_availability_revision TEXT);
         CREATE TABLE IF NOT EXISTS remote_transfers (assignment_id TEXT NOT NULL, direction TEXT NOT NULL, transfer_id TEXT NOT NULL, logical_name TEXT NOT NULL, digest TEXT NOT NULL, size_bytes INTEGER NOT NULL, private_path TEXT NOT NULL, received_bytes INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, descriptor_json TEXT, PRIMARY KEY(assignment_id, direction, transfer_id));
         CREATE TABLE IF NOT EXISTS remote_transfer_authorizations (assignment_id TEXT NOT NULL, authorization_id TEXT NOT NULL, revision INTEGER NOT NULL, coordinator_epoch TEXT NOT NULL, operation_id TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, PRIMARY KEY(assignment_id, revision));
+        CREATE TABLE IF NOT EXISTS agent_controls (operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         """)
     else:
         conn.executescript("""
@@ -2404,6 +2503,7 @@ def initialize_agent_session_schema(
         CREATE TRIGGER IF NOT EXISTS agent_reference_revision_update AFTER UPDATE ON agent_session_references BEGIN UPDATE agent_reference_revision SET revision = revision + 1 WHERE singleton = 1; END;
         CREATE TRIGGER IF NOT EXISTS agent_reference_revision_delete AFTER DELETE ON agent_session_references BEGIN UPDATE agent_reference_revision SET revision = revision + 1 WHERE singleton = 1; END;
         CREATE TABLE IF NOT EXISTS agent_retirement_proofs_local (session_id TEXT PRIMARY KEY, proof_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS agent_controls_local (operation_id TEXT PRIMARY KEY, request_json TEXT NOT NULL, effect_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         """)
 
 
@@ -2726,6 +2826,7 @@ def validate_agent_session_schema(
                 "operation_id",
                 "expires_at",
             },
+            "agent_controls": {"operation_id", "principal_id", "session_id", "agent_id", "request_json", "state", "result_code", "acknowledged"},
         }
         if coordinator
         else {
@@ -2769,6 +2870,7 @@ def validate_agent_session_schema(
             },
             "agent_reference_revision": {"singleton", "revision"},
             "agent_retirement_proofs_local": {"session_id", "proof_json"},
+            "agent_controls_local": {"operation_id", "request_json", "effect_json", "acknowledged"},
         }
     )
     present = {
@@ -3045,6 +3147,8 @@ def _add_seconds(timestamp: str, seconds: int) -> str:
 
 
 __all__ = [
+    "AgentControl",
+    "AgentControlKind",
     "AgentOffer",
     "AgentPolicyConfig",
     "AgentPrincipalPolicy",

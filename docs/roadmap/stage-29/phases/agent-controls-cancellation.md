@@ -589,9 +589,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Agent-control v4 control delivery/effect/acknowledgement in `agent_sessions.py`, `agent_session_transport.py`, `local_daemon.py`, and public queue import wiring; authority epoch lifecycle fence in `sqlite_authority.py`. |
+| Tests added or updated | Agent-control withdrawal/acknowledgement and effective epoch prepare/grant fence tests. |
+| Validated revision/tree state and evidence | Targeted unit/contract/package checks passed: 201 tests total; `git diff --check` passed. |
+| Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

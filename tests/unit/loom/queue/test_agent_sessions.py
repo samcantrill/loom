@@ -20,6 +20,8 @@ from loom.queue import (
 )
 from loom.queue.agent_sessions import (
     AgentOffer,
+    AgentControl,
+    AgentControlKind,
     AgentPolicyConfig,
     AgentPrincipalPolicy,
     AgentRegistration,
@@ -210,6 +212,41 @@ def test_registration_replay_is_coordinator_issued_and_digest_bound(
                     retirement_verifier=_TEST_RETIREMENT_VERIFIER,
                 )
             )
+    finally:
+        daemon.stop()
+
+
+def test_agent_control_withdraws_offer_then_requires_agent_acknowledgement(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        session = _register(daemon)
+        _view(daemon).publish_offer(
+            _offer(session.session_id, session.coordinator_epoch), idempotency_key="offer-control"
+        )
+        control = AgentControl(
+            operation_id="control-1", kind=AgentControlKind.DRAIN,
+            agent_id=session.agent_id, expected_session_id=session.session_id,
+            expected_config_revision=session.config_revision, pool="default",
+            cancel_active=False, reason="maintenance",
+        )
+        operator = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        )
+        assert operator.control_agent(control)["state"] == "pending_delivery"
+        delivered = _view(daemon).next_control(session.session_id)
+        assert delivered == control
+        assert _view(daemon).acknowledge_control(
+            session.session_id, control.operation_id, code="applied"
+        )["state"] == "applied"
+        with daemon._connection() as conn:
+            assert conn.execute(
+                "SELECT current FROM agent_offers WHERE session_id = ?", (session.session_id,)
+            ).fetchone()[0] == 0
     finally:
         daemon.stop()
 

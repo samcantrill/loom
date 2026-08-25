@@ -46,6 +46,7 @@ from loom.scheduling import SchedulingComponentDescriptor
 
 from .agent_sessions import (
     AgentOffer,
+    AgentControl,
     AgentPollActiveError,
     AgentRegistration,
     AgentRetirementProof,
@@ -212,7 +213,7 @@ class _RemoteAgentJournal:
             raise QueueServiceError("remote agent control state is unavailable")
         try:
             with self._connection() as conn:
-                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 3:
+                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 4:
                     raise QueueServiceError("remote agent root schema is unsupported")
                 metadata = {
                     str(row[0]): str(row[1])
@@ -492,6 +493,42 @@ class _RemoteAgentJournal:
                 "UPDATE agent_polls_local SET state = 'FENCED' WHERE poll_id = ?",
                 (poll_id,),
             )
+            conn.commit()
+
+    def apply_control(self, control: AgentControl) -> str:
+        """Persist the local effect before reporting it to the coordinator."""
+        encoded = _canonical_json(control.value())
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT request_json, effect_json FROM agent_controls_local WHERE operation_id = ?", (control.operation_id,)).fetchone()
+            if row is not None:
+                if str(row["request_json"]) != encoded:
+                    raise QueueConflictError("agent control operation conflicts")
+                if row["effect_json"] is not None:
+                    conn.commit()
+                    return str(json.loads(str(row["effect_json"]))["code"])
+            else:
+                conn.execute("INSERT INTO agent_controls_local(operation_id, request_json, effect_json, acknowledged) VALUES (?, ?, NULL, 0)", (control.operation_id, encoded))
+            session = self.session(control.expected_session_id)
+            if session.config_revision != control.expected_config_revision:
+                code = "stale_revision"
+            elif control.kind.value in {"drain", "reload"}:
+                conn.execute("UPDATE agent_offers_local SET state = 'DRAINED' WHERE session_id = ?", (session.session_id,))
+                conn.execute("UPDATE agent_polls_local SET state = 'FENCED' WHERE session_id = ?", (session.session_id,))
+                code = "applied"
+            elif control.kind.value == "resume":
+                # Resumption permits a later fresh observed offer; it never
+                # reactivates a withdrawn availability revision.
+                code = "applied"
+            else:
+                code = "unsupported"
+            conn.execute("UPDATE agent_controls_local SET effect_json = ? WHERE operation_id = ?", (_canonical_json({"code": code}), control.operation_id))
+            conn.commit()
+        return code
+
+    def acknowledge_control(self, operation_id: str) -> None:
+        with self._connection() as conn:
+            conn.execute("UPDATE agent_controls_local SET acknowledged = 1 WHERE operation_id = ? AND effect_json IS NOT NULL", (operation_id,))
             conn.commit()
 
     def retain_assignment_reference(self, session_id: str, assignment_id: str) -> None:
@@ -804,7 +841,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v3",
+                    "agent-sessions-v4",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -941,6 +978,25 @@ class LocalDaemonAgentHttpClient:
             raise
         journal.complete_mutation("poll", poll_id, result)
         return result
+
+    def poll_control(self, session_id: str) -> AgentControl | None:
+        result = self._call("control", {"session_id": session_id})
+        raw = result.get("control")
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping):
+            raise QueueServiceError("agent control response is invalid")
+        control = AgentControl.from_value(raw)
+        code = self._require_journal().apply_control(control)
+        self._call("control_ack", {"session_id": session_id, "operation_id": control.operation_id, "code": code})
+        self._require_journal().acknowledge_control(control.operation_id)
+        return control
+
+    def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
+        """Issue the same typed operator command over authenticated HTTP."""
+        return self._call(
+            "agent_control", {"control": control.value()}, role="operator"
+        )
 
     def authorize_transfers(
         self,
@@ -1940,6 +1996,8 @@ class _Handler(BaseHTTPRequestHandler):
                     "output",
                     "result",
                     "release",
+                    "control",
+                    "control_ack",
                     "retire",
                 }:
                     raise QueueServiceError("agent protocol operation is unsupported")
@@ -2174,6 +2232,16 @@ def _dispatch(
             fence=_string(value, "fence"),
             availability_revision=_string(value, "availability_revision"),
         ).value()
+    if operation == "control":
+        _exact(value, {"session_id"})
+        control = view.next_control(_string(value, "session_id"))
+        return {"control": None if control is None else control.value()}
+    if operation == "control_ack":
+        _exact(value, {"session_id", "operation_id", "code"})
+        return view.acknowledge_control(
+            _string(value, "session_id"), _string(value, "operation_id"),
+            code=_string(value, "code"),
+        )
     _exact(value, {"proof", "idempotency_key"})
     proof = value["proof"]
     if not isinstance(proof, Mapping):
@@ -2231,6 +2299,12 @@ def _dispatch_application(
                     admission.to_dict() for admission in view.reconcile_once()
                 ]
             }
+        if operation == "agent_control":
+            _exact(value, {"control"})
+            control = value["control"]
+            if not isinstance(control, Mapping):
+                raise QueueServiceError("agent control request is invalid")
+            return view.control_agent(AgentControl.from_value(control))
     elif role == LocalDaemonRole.SLURM_BOOTSTRAP.value:
         view = daemon.slurm_bootstrap_view(principal)
         if operation == "register":

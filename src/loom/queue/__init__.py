@@ -10,6 +10,7 @@ from .client import QueueClient
 if TYPE_CHECKING:
     from ._remote_stage_execution import GpuDeviceDescriptor
     from .local_daemon import (
+        AgentControl,
         LocalDaemon,
         LocalDaemonAdmission,
         LocalDaemonAdmissionRequest,
@@ -106,6 +107,7 @@ from .selection import (
 _LOCAL_DAEMON_EXPORTS = frozenset(
     {
         "LocalDaemon",
+        "AgentControl",
         "LocalDaemonAdmission",
         "LocalDaemonAdmissionRequest",
         "LocalDaemonAdmissionState",
@@ -150,6 +152,7 @@ __all__ = [
     "GpuDeviceDescriptor",
     "LaunchContract",
     "LocalDaemon",
+    "AgentControl",
     "LocalDaemonAdmission",
     "LocalDaemonAdmissionRequest",
     "LocalDaemonAdmissionState",
