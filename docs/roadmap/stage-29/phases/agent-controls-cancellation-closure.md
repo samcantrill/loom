@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 8A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p8a-agent-controls-cancellation-closure`
@@ -221,7 +221,7 @@ Final commands:
 - Independent review: required after PR
 - Blocker corrections: 2/3 used; one bounded correction remains if independent
   review finds a product blocker
-- PR and merge: pending
+- PR and merge: PR #245 open against `develop`; CI and independent review pending
 
 ## Completion Record
 
@@ -231,5 +231,5 @@ Final commands:
 | Tests added or updated | Phase 8 focused queue, managed-local, authority, SLURM, transport, production, CLI, contract, package, and scheduling-kernel coverage; causal cases cover denial before persistence, old/candidate v1–v4 rejection, retained accepted intents, stale fresh intents, old/new work in one decision, component/profile identity collision, exact retained-profile dispatch, provider-release retry, prepared and never-ready cancellation, live-binding refusal, terminal winners, and mixed owner settlement. |
 | Validated revision/tree state and evidence | `80b4655` clean implementation tree: all focused suites passed; `make validate-pr` passed lint, type checking, the 2,534-test default suite, the 141-test configuration-extra suite with 3 skips, and package builds. [Test summary](../../../../build/test-summary.md) reports 2,675 passed, 0 failed, 0 errors, and 3 skipped across 2,678 selected tests. |
 | Validation-relevant changes after evidence | None; this completion-record-only update is not validation-relevant. |
-| PR, review, and merge | pending |
+| PR, review, and merge | PR #245 is open, non-draft, mergeable, and targets `develop`; CI and the required independent review are pending. |
 | Residual risk and cleanup | No implementation blocker. Unknown local, remote, or SLURM ownership remains `CANCELLING` until positive owner settlement; Phase 9 recovery remains out of scope. Worktree and branch retained for manager PR/review. |
