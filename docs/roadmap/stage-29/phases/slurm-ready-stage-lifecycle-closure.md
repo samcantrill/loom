@@ -327,20 +327,21 @@ Final commands:
 - Refiner: correction 2/3 complete; both terminal-return sites reconcile exact
   retained SLURM result/binding/fence evidence and use the shared
   revoke-before-final-release owner before terminal admission return
-- Pre-submit gate: passed; `make validate-pr` and `make test-summary` passed
-- Independent review: required after a stable validated implementation
-- Blocker corrections: 2/3; restored mixed-route end-to-end replay plus focused
-  crash-boundary and lost-revoke-response coverage passed with no new planning
-  decision
+- Manager correction: correction 3/3 makes the intermediate `terminal` state an
+  exact replay that continues to logical release; the full gate exposed the
+  coordinator/bootstrap concurrency window after focused validation
+- Pre-submit gate: pending a fresh full run after correction 3/3
+- Independent review: complete; its terminal-reconciliation blocker is addressed
+- Blocker corrections: 3/3; no further correction pass remains
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Correction 2/3 gates the later `LocalDaemonExecution.advance()` terminal return with the same fresh exact-SLURM reconciliation/revoke check as the earlier return. The existing shared revoke owner remains the sole final-release path. |
-| Tests added or updated | Restored the successful mixed-route end-to-end replay, final run state, one-root, script-redaction, and release assertions. Kept separate integration cases for crashes after authority-result and assignment-terminal commits, with a lost revoke acknowledgement requiring replay before `released`. |
-| Validated revision/tree state and evidence | `uv run pytest -q tests/integration/queue/test_slurm_ready_stage.py`: 6 passed. `uv run pytest -q tests/unit/loom/queue/test_slurm_bootstrap.py tests/unit/loom/queue/test_local_daemon.py`: 19 passed. Ruff and `git diff --check` passed. |
+| Implementation and changed paths | Corrections 1-2 gate both terminal admission returns through exact authority/assignment reconciliation and the shared revoke owner. Correction 3 makes a retained intermediate `terminal` transition replay-safe under coordinator/bootstrap concurrency. |
+| Tests added or updated | Restored the successful mixed-route end-to-end replay, final run state, one-root, script-redaction, and release assertions. Separate integration cases now stop causally after authority-result and the actual assignment-`terminal` commit, then lose the first revoke acknowledgement and require replay before `released`. |
+| Validated revision/tree state and evidence | Focused and full validation pending after correction 3/3; the preceding full gate exposed the now-corrected intermediate-terminal replay conflict after 2,494 other tests passed. |
 | Validation-relevant changes after evidence | None. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Unknown containment remains Phase 9; real site-helper/prolog validation remains opt-in. No further qualified blocker is known. |

@@ -500,10 +500,16 @@ def _exercise_mixed_route_run(
             if terminal_boundary == "authority_result" and not terminal_crash_injected:
                 terminal_crash_injected = True
                 raise OSError("simulated crash after authority result commit")
-            original_mark_terminal(candidate_assignment_id)
             if terminal_boundary == "assignment_terminal" and not terminal_crash_injected:
+                retained = execution.slurm_assignments.read(candidate_assignment_id)
+                execution.slurm_assignments.advance(
+                    candidate_assignment_id,
+                    expected=retained.state,
+                    next_state="terminal",
+                )
                 terminal_crash_injected = True
                 raise OSError("simulated crash after assignment terminal commit")
+            original_mark_terminal(candidate_assignment_id)
 
         revoke_calls = 0
         original_revoke = SlurmJobPrivateFileProvider.revoke
@@ -523,11 +529,15 @@ def _exercise_mixed_route_run(
             mark_terminal_at_crash_boundary,
         )
         monkeypatch.setattr(SlurmJobPrivateFileProvider, "revoke", revoke_with_lost_response)
-        with pytest.raises(OSError, match="simulated crash"):
-            view.commit_result(assignment_id, incarnation, fence)
-        monkeypatch.setattr(
-            execution.slurm_assignments, "mark_terminal", original_mark_terminal
-        )
+        execution._launch_lock.acquire()
+        try:
+            with pytest.raises(OSError, match="simulated crash"):
+                view.commit_result(assignment_id, incarnation, fence)
+        finally:
+            monkeypatch.setattr(
+                execution.slurm_assignments, "mark_terminal", original_mark_terminal
+            )
+            execution._launch_lock.release()
 
         deadline = time.monotonic() + 2
         while (

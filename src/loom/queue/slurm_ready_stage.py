@@ -1142,6 +1142,13 @@ class SQLiteSlurmStageAssignments:
         record = self.read(assignment_id)
         if record.state in {"logical_released", "released"}:
             return
+        if record.state == "terminal":
+            self.advance(
+                assignment_id,
+                expected="terminal",
+                next_state="logical_released",
+            )
+            return
         if record.state not in {"granted", "running"}:
             raise QueueConflictError("SLURM assignment is not result-committable")
         self.advance(assignment_id, expected=record.state, next_state="terminal")
