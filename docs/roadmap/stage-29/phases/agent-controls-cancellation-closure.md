@@ -211,13 +211,13 @@ Final commands:
 - Manager preparation: complete on clean merged Phase 7B baseline
 - Expanded planning: architecture boundary explored; no phase-planner pass
   needed because the approved three-finding recovery is decision-complete
-- Implementation: initial executor packet in `0059d55`; manager correction in
-  progress on the current branch closes the full component-epoch and terminal
-  cancellation boundaries found during verification
+- Implementation: initial executor packet in `0059d55`; manager correction
+  `80b4655` closes the full component-epoch, exact retained SLURM dispatch and
+  release, and terminal cancellation boundaries found during verification
 - Refiner: one bounded pass used for the first qualified blocker; it stopped
   without changes, and the manager completed the concrete repair locally
-- Pre-submit gate: pending on the corrected tree; evidence from `0059d55` is
-  stale because validation-relevant source and test changes followed
+- Pre-submit gate: passed on clean `80b4655`; `make validate-pr` and
+  `make test-summary` completed successfully
 - Independent review: required after PR
 - Blocker corrections: 2/3 used; one bounded correction remains if independent
   review finds a product blocker
@@ -227,9 +227,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `0059d55`: restored the approved Phase 8 packet with fresh v5 agent/journal and daemon schemas plus v3 CLI result; scoped control admission, durable delivery/replay, scheduling reload, exact local/remote/SLURM cancellation settlement, authority fences, CLI, and `docs/features/queue.md`. |
-| Tests added or updated | Phase 8 focused queue, managed-local, authority, SLURM, transport, production, CLI, contract, and package coverage; added scoped-denial-before-mutation and previous/candidate v1–v4 hard-cut rejection cases. |
-| Validated revision/tree state and evidence | `0059d55` clean implementation tree: focused unit/contract/integration suites passed; `make validate-pr` passed; [test summary](../../../../build/test-summary.md) reports 2,651 passed, 0 failed, 0 errors, and 3 skipped across 2,654 selected tests. |
+| Implementation and changed paths | `0059d55` restored the approved Phase 8 packet with fresh v5 agent/journal and daemon schemas plus v3 CLI result. `80b4655` adds exact action/target authorization, complete active/retained planner-rule-scorer-policy and SLURM epochs, serialized fresh admission/reload, mixed-epoch evaluation, canonical whole-plan cancellation, authority-owned finalization, and exact provider-release settlement. Feature behavior is current in `docs/features/queue.md`. |
+| Tests added or updated | Phase 8 focused queue, managed-local, authority, SLURM, transport, production, CLI, contract, package, and scheduling-kernel coverage; causal cases cover denial before persistence, old/candidate v1–v4 rejection, retained accepted intents, stale fresh intents, old/new work in one decision, component/profile identity collision, exact retained-profile dispatch, provider-release retry, prepared and never-ready cancellation, live-binding refusal, terminal winners, and mixed owner settlement. |
+| Validated revision/tree state and evidence | `80b4655` clean implementation tree: all focused suites passed; `make validate-pr` passed lint, type checking, the 2,534-test default suite, the 141-test configuration-extra suite with 3 skips, and package builds. [Test summary](../../../../build/test-summary.md) reports 2,675 passed, 0 failed, 0 errors, and 3 skipped across 2,678 selected tests. |
 | Validation-relevant changes after evidence | None; this completion-record-only update is not validation-relevant. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | No implementation blocker. Unknown local, remote, or SLURM ownership remains `CANCELLING` until positive owner settlement; Phase 9 recovery remains out of scope. Worktree and branch retained for manager PR/review. |
