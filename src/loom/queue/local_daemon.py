@@ -13,6 +13,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 import fcntl
+import hashlib
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -27,6 +29,8 @@ from loom.timestamps import parse_timestamp, utc_timestamp
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 
 from .agent_sessions import (
+    AgentControl,
+    AgentControlEffect,
     AgentPolicyConfig,
     AgentSessionView,
     initialize_agent_session_schema,
@@ -42,7 +46,7 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 3
+_LOCAL_DAEMON_SCHEMA_VERSION = 5
 
 
 class LocalDaemonAdmissionState(StrEnum):
@@ -57,6 +61,53 @@ class LocalDaemonAdmissionState(StrEnum):
     CANCELLING = "CANCELLING"
     CANCELLED = "CANCELLED"
     BLOCKED = "BLOCKED"
+
+
+@dataclass(frozen=True, slots=True)
+class CoordinatorSchedulingReload:
+    """Inert request to read and install protected coordinator-local config."""
+
+    operation_id: str
+    expected_scheduling_epoch: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.operation_id, "operation_id"),
+            (self.expected_scheduling_epoch, "expected_scheduling_epoch"),
+        ):
+            if not isinstance(value, str) or not value or len(value) > 160:
+                raise QueueServiceError(f"{name} must be a bounded non-empty string")
+        if (
+            not isinstance(self.reason, str)
+            or not self.reason
+            or len(self.reason) > 512
+        ):
+            raise QueueServiceError(
+                "scheduling reload reason must be 1..512 characters"
+            )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "expected_scheduling_epoch": self.expected_scheduling_epoch,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "CoordinatorSchedulingReload":
+        _exact_fields(
+            data,
+            {"operation_id", "expected_scheduling_epoch", "reason"},
+            "coordinator scheduling reload",
+        )
+        return cls(
+            operation_id=_required_string(data, "operation_id"),
+            expected_scheduling_epoch=_required_string(
+                data, "expected_scheduling_epoch"
+            ),
+            reason=_required_string(data, "reason"),
+        )
 
 
 class LocalDaemonRole(StrEnum):
@@ -277,6 +328,7 @@ class LocalDaemonAdmission:
     accepted_at: str
     authority_operation_id: str
     cancellation_operation_id: str | None = None
+    cancellation_principal_id: str | None = None
     blocked_reason: str | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -291,11 +343,30 @@ class LocalDaemonAdmission:
             "accepted_at": self.accepted_at,
             "authority_operation_id": self.authority_operation_id,
             "cancellation_operation_id": self.cancellation_operation_id,
+            "cancellation_principal_id": self.cancellation_principal_id,
             "blocked_reason": self.blocked_reason,
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "LocalDaemonAdmission":
+        _exact_fields(
+            data,
+            {
+                "admission_id",
+                "queue_item_id",
+                "coordinator_id",
+                "run_uri",
+                "intent_digest",
+                "execution_owner",
+                "state",
+                "accepted_at",
+                "authority_operation_id",
+                "cancellation_operation_id",
+                "cancellation_principal_id",
+                "blocked_reason",
+            },
+            "local daemon admission",
+        )
         return cls(
             admission_id=_required_string(data, "admission_id"),
             queue_item_id=_required_string(data, "queue_item_id"),
@@ -308,6 +379,9 @@ class LocalDaemonAdmission:
             authority_operation_id=_required_string(data, "authority_operation_id"),
             cancellation_operation_id=_optional_string(
                 data, "cancellation_operation_id"
+            ),
+            cancellation_principal_id=_optional_string(
+                data, "cancellation_principal_id"
             ),
             blocked_reason=_optional_string(data, "blocked_reason"),
         )
@@ -322,6 +396,8 @@ class LocalDaemonStatus:
     service_health: str
     service_diagnostic: str | None
     admissions: tuple[LocalDaemonAdmission, ...]
+    scheduling_epoch: str
+    controls: tuple[Mapping[str, PlainData], ...] = ()
     runs: tuple[Mapping[str, PlainData], ...] = ()
 
     @property
@@ -343,8 +419,13 @@ class LocalDaemonStatus:
             "accepted_time": self.accepted_time,
             "service_health": self.service_health,
             "service_diagnostic": self.service_diagnostic,
+            "scheduling_epoch": self.scheduling_epoch,
             "scheduling_ready": self.scheduling_ready,
             "admissions": [item.to_dict() for item in self.admissions],
+            "controls": [
+                thaw_plain_data(item, path="local_daemon_status.controls")
+                for item in self.controls
+            ],
             "runs": [
                 thaw_plain_data(item, path="local_daemon_status.runs")
                 for item in self.runs
@@ -353,6 +434,23 @@ class LocalDaemonStatus:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "LocalDaemonStatus":
+        _exact_fields(
+            data,
+            {
+                "coordinator_id",
+                "coordinator_epoch",
+                "as_of",
+                "accepted_time",
+                "service_health",
+                "service_diagnostic",
+                "scheduling_epoch",
+                "scheduling_ready",
+                "admissions",
+                "controls",
+                "runs",
+            },
+            "local daemon status",
+        )
         admissions = data.get("admissions")
         if not isinstance(admissions, list) or any(
             not isinstance(item, Mapping) for item in admissions
@@ -363,6 +461,11 @@ class LocalDaemonStatus:
             not isinstance(item, Mapping) for item in runs
         ):
             raise QueueServiceError("runs must be a list of owner views")
+        controls = data.get("controls")
+        if not isinstance(controls, list) or any(
+            not isinstance(item, Mapping) for item in controls
+        ):
+            raise QueueServiceError("controls must be a list of owner views")
         return cls(
             coordinator_id=_required_string(data, "coordinator_id"),
             coordinator_epoch=_required_string(data, "coordinator_epoch"),
@@ -370,8 +473,13 @@ class LocalDaemonStatus:
             accepted_time=_required_string(data, "accepted_time"),
             service_health=_required_string(data, "service_health"),
             service_diagnostic=_optional_string(data, "service_diagnostic"),
+            scheduling_epoch=_required_string(data, "scheduling_epoch"),
             admissions=tuple(
                 LocalDaemonAdmission.from_dict(item) for item in admissions
+            ),
+            controls=tuple(
+                freeze_plain_data(item, path="local_daemon_status.controls")
+                for item in controls
             ),
             runs=tuple(
                 freeze_plain_data(item, path="local_daemon_status.runs")
@@ -388,14 +496,17 @@ class LocalDaemon:
         config: LocalDaemonConfig,
         *,
         clock: Callable[[], str] = utc_timestamp,
+        trusted_scheduling_loader: Callable[[], LocalDaemonConfig] | None = None,
     ) -> None:
         self.config = config
         self._clock = clock
+        self._trusted_scheduling_loader = trusted_scheduling_loader
         self._coordinator_lock: object | None = None
         self._agent_lock: object | None = None
         self._coordinator_id: str | None = None
         self._agent_id: str | None = None
         self._epoch: str | None = None
+        self._scheduling_epoch: str | None = None
         self._stop = Event()
         self._wake = Event()
         self._thread: Thread | None = None
@@ -417,6 +528,18 @@ class LocalDaemon:
             )
         _initialize_root(config.coordinator_root, role="coordinator")
         try:
+            with sqlite3.connect(config.control_database) as conn:
+                conn.execute(
+                    "INSERT INTO daemon_metadata(key, value) "
+                    "VALUES ('scheduling_epoch', ?)",
+                    (f"scheduling-epoch-{uuid4()}",),
+                )
+                conn.execute(
+                    "INSERT INTO daemon_metadata(key, value) "
+                    "VALUES ('scheduling_fingerprint', ?)",
+                    (_scheduling_fingerprint(config),),
+                )
+                conn.commit()
             cls.initialize_agent_root(config.agent_root)
             from .local_daemon_execution import initialize_local_daemon_owner_stores
 
@@ -459,6 +582,22 @@ class LocalDaemon:
             self._agent_id = agent_id
             epoch = f"coordinator-epoch-{uuid4()}"
             with self._connection() as conn:
+                scheduling = {
+                    str(row["key"]): str(row["value"])
+                    for row in conn.execute(
+                        "SELECT key, value FROM daemon_metadata WHERE key IN "
+                        "('scheduling_epoch', 'scheduling_fingerprint')"
+                    )
+                }
+                if scheduling.get("scheduling_fingerprint") != _scheduling_fingerprint(
+                    self.config
+                ):
+                    raise QueueConflictError(
+                        "protected scheduling configuration changed without reload"
+                    )
+                scheduling_epoch = scheduling.get("scheduling_epoch")
+                if scheduling_epoch is None:
+                    raise QueueStorageError("scheduling epoch is unavailable")
                 conn.execute(
                     "INSERT INTO coordinator_epochs (epoch, started_at) VALUES (?, ?)",
                     (epoch, self._accepted_time(conn)),
@@ -469,6 +608,7 @@ class LocalDaemon:
             coordinator_lock.close()
             self._coordinator_id = None
             self._agent_id = None
+            self._scheduling_epoch = None
             raise
         assignment_workers = ThreadPoolExecutor(
             max_workers=self.config.cpu_capacity,
@@ -482,6 +622,7 @@ class LocalDaemon:
                 coordinator_id=coordinator_id,
                 agent_id=agent_id,
                 coordinator_epoch=epoch,
+                scheduling_epoch=scheduling_epoch,
                 cancellation_operation=self._cancellation_operation_id,
                 admission_activated=self._activate_admission,
                 daemon=self,
@@ -505,6 +646,7 @@ class LocalDaemon:
         self._coordinator_id = coordinator_id
         self._agent_id = agent_id
         self._epoch = epoch
+        self._scheduling_epoch = scheduling_epoch
         self._service_error = None
         self._stop.clear()
         self._wake.set()
@@ -539,6 +681,7 @@ class LocalDaemon:
         self._coordinator_id = None
         self._agent_id = None
         self._epoch = None
+        self._scheduling_epoch = None
 
     def client_view(self, principal: LocalDaemonPrincipal) -> "LocalDaemonClientView":
         return LocalDaemonClientView(self, principal)
@@ -600,6 +743,89 @@ class LocalDaemon:
             if revision_row is None:
                 raise QueueStorageError("coordinator admission status is unavailable")
             admission_revision = int(revision_row["revision"])
+            controls: list[Mapping[str, PlainData]] = []
+            for row in conn.execute(
+                "SELECT principal_id, request_json, state, result_code, "
+                "effect_json, acknowledged FROM agent_controls ORDER BY operation_id"
+            ):
+                request = AgentControl.from_value(json.loads(str(row["request_json"])))
+                effect = (
+                    None
+                    if row["effect_json"] is None
+                    else AgentControlEffect.from_value(
+                        json.loads(str(row["effect_json"]))
+                    )
+                )
+                controls.append(
+                    freeze_plain_data(
+                        {
+                            "owner": "agent-control",
+                            "operation_id": request.operation_id,
+                            "principal": str(row["principal_id"]),
+                            "kind": request.kind.value,
+                            "agent_id": request.agent_id,
+                            "session_id": request.expected_session_id,
+                            "pool": request.pool,
+                            "cancel_active": request.cancel_active,
+                            "state": str(row["state"]),
+                            "code": row["result_code"],
+                            "config_revision": (
+                                None if effect is None else effect.config_revision
+                            ),
+                            "inventory_revision": (
+                                None if effect is None else effect.inventory_revision
+                            ),
+                            "availability_revision": (
+                                None if effect is None else effect.availability_revision
+                            ),
+                            "acknowledged": bool(row["acknowledged"]),
+                        },
+                        path="agent control status",
+                    )
+                )
+            for row in conn.execute(
+                "SELECT principal_id, request_json, state, result_code, "
+                "scheduling_epoch FROM scheduling_reloads ORDER BY operation_id"
+            ):
+                request = CoordinatorSchedulingReload.from_dict(
+                    json.loads(str(row["request_json"]))
+                )
+                controls.append(
+                    freeze_plain_data(
+                        {
+                            "owner": "coordinator-scheduling",
+                            "operation_id": request.operation_id,
+                            "principal": str(row["principal_id"]),
+                            "state": str(row["state"]),
+                            "code": row["result_code"],
+                            "scheduling_epoch": row["scheduling_epoch"],
+                        },
+                        path="scheduling reload status",
+                    )
+                )
+            for row in conn.execute(
+                "SELECT request_json, state, result_code, acknowledged "
+                "FROM remote_assignment_controls ORDER BY operation_id"
+            ):
+                from .agent_sessions import AgentAssignmentControl
+
+                request = AgentAssignmentControl.from_value(
+                    json.loads(str(row["request_json"]))
+                )
+                controls.append(
+                    freeze_plain_data(
+                        {
+                            "owner": "remote-assignment-control",
+                            "operation_id": request.operation_id,
+                            "session_id": request.session_id,
+                            "assignment_id": request.assignment_id,
+                            "state": str(row["state"]),
+                            "code": row["result_code"],
+                            "acknowledged": bool(row["acknowledged"]),
+                        },
+                        path="remote assignment control status",
+                    )
+                )
             conn.commit()
         from .local_daemon_execution import (
             build_local_daemon_owner_views,
@@ -640,7 +866,9 @@ class LocalDaemon:
             service_diagnostic=(
                 "owner_status_unavailable" if unavailable else self._service_error
             ),
+            scheduling_epoch=self._scheduling_epoch or "",
             admissions=admissions,
+            controls=tuple(controls),
             runs=views,
         )
 
@@ -768,8 +996,10 @@ class LocalDaemon:
         self._wake.set()
         return self._admission(admission_id)
 
-    def _cancel(self, queue_item_id: str) -> LocalDaemonAdmission:
+    def _cancel(self, queue_item_id: str, *, principal_id: str) -> LocalDaemonAdmission:
         self._require_started()
+        if not isinstance(principal_id, str) or not principal_id:
+            raise QueueServiceError("cancellation principal is required")
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -791,17 +1021,307 @@ class LocalDaemon:
             )
             conn.execute(
                 "UPDATE managed_admissions SET state = ?, "
-                "cancellation_operation_id = ?, blocked_reason = NULL "
+                "cancellation_operation_id = ?, "
+                "cancellation_principal_id = COALESCE("
+                "cancellation_principal_id, ?), blocked_reason = NULL "
                 "WHERE admission_id = ?",
                 (
                     LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
                     operation_id,
+                    principal_id,
                     admission.admission_id,
                 ),
             )
             conn.commit()
         self._wake.set()
         return self._admission(admission.admission_id)
+
+    def _control_agent(
+        self, principal: LocalDaemonPrincipal, control: AgentControl
+    ) -> Mapping[str, PlainData]:
+        """Commit one scoped control before the outbound agent may observe it."""
+
+        from .agent_sessions import ScopedAuthorizer
+
+        authorizer = ScopedAuthorizer(self._agent_policy)
+        authorizer.require_operator(
+            principal,
+            control.kind.value,
+            agent_id=control.agent_id,
+            pool=control.pool,
+        )
+        if control.cancel_active:
+            authorizer.require_operator(
+                principal,
+                "cancel_active",
+                agent_id=control.agent_id,
+                pool=control.pool,
+            )
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            session = conn.execute(
+                "SELECT session_id, agent_id, config_revision, pools_json, state "
+                "FROM agent_sessions WHERE session_id = ?",
+                (control.expected_session_id,),
+            ).fetchone()
+            if session is None or str(session["state"]) != "ACTIVE":
+                raise QueueConflictError("agent control session is stale")
+            if (
+                str(session["agent_id"]) != control.agent_id
+                or str(session["config_revision"]) != control.expected_config_revision
+            ):
+                raise QueueConflictError("agent control revision is stale")
+            pools = json.loads(str(session["pools_json"]))
+            if control.pool is not None and control.pool not in pools:
+                raise QueueServiceError("agent control pool is not authorized")
+            if control.pool is not None and set(pools) != {control.pool}:
+                raise QueueServiceError(
+                    "pool-scoped control requires an independently controllable agent"
+                )
+            encoded = json.dumps(control.value(), sort_keys=True, separators=(",", ":"))
+            prior = conn.execute(
+                "SELECT principal_id, request_json, state, result_code FROM agent_controls "
+                "WHERE operation_id = ?",
+                (control.operation_id,),
+            ).fetchone()
+            if prior is not None:
+                if (
+                    str(prior["principal_id"]) != principal.subject
+                    or str(prior["request_json"]) != encoded
+                ):
+                    raise QueueConflictError("agent control operation conflicts")
+                conn.commit()
+                return freeze_plain_data(
+                    {
+                        "operation_id": control.operation_id,
+                        "state": str(prior["state"]),
+                        "code": prior["result_code"],
+                    },
+                    path="agent control receipt",
+                )
+            active = conn.execute(
+                "SELECT operation_id FROM agent_controls WHERE session_id = ? "
+                "AND state IN ('pending_delivery', 'applying') LIMIT 1",
+                (control.expected_session_id,),
+            ).fetchone()
+            if active is not None:
+                raise QueueConflictError("another agent control is still in progress")
+            conn.execute(
+                "INSERT INTO agent_controls(operation_id, principal_id, session_id, agent_id, request_json, state, result_code, acknowledged) VALUES (?, ?, ?, ?, ?, 'pending_delivery', NULL, 0)",
+                (
+                    control.operation_id,
+                    principal.subject,
+                    control.expected_session_id,
+                    control.agent_id,
+                    encoded,
+                ),
+            )
+            # Withdrawal is coordinator-owned and happens before delivery.  It
+            # changes only future offers; it never releases a durable claim.
+            if control.kind.value in {"drain", "reload"}:
+                conn.execute(
+                    "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
+                    (control.expected_session_id,),
+                )
+                conn.execute(
+                    "UPDATE agent_polls SET active = 0 WHERE session_id = ?",
+                    (control.expected_session_id,),
+                )
+            if control.cancel_active:
+                run_rows = tuple(
+                    conn.execute(
+                        "SELECT DISTINCT run_uri FROM remote_assignments "
+                        "WHERE session_id = ? AND state != 'RELEASED'",
+                        (control.expected_session_id,),
+                    )
+                )
+                for run_row in run_rows:
+                    run_uri = str(run_row["run_uri"])
+                    cancellation_operation_id = (
+                        "agent-control-cancel-"
+                        + hashlib.sha256(
+                            f"{control.operation_id}\0{run_uri}".encode()
+                        ).hexdigest()
+                    )
+                    conn.execute(
+                        "UPDATE managed_admissions SET state = ?, "
+                        "cancellation_operation_id = COALESCE("
+                        "cancellation_operation_id, ?), "
+                        "cancellation_principal_id = COALESCE("
+                        "cancellation_principal_id, ?), blocked_reason = NULL "
+                        "WHERE run_uri = ? AND state NOT IN (?, ?, ?)",
+                        (
+                            LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
+                            cancellation_operation_id,
+                            principal.subject,
+                            run_uri,
+                            LocalDaemonAdmissionState.SUCCEEDED.value,
+                            LocalDaemonAdmissionState.FAILED.value,
+                            LocalDaemonAdmissionState.CANCELLED.value,
+                        ),
+                    )
+            conn.commit()
+        self._wake.set()
+        return freeze_plain_data(
+            {
+                "operation_id": control.operation_id,
+                "state": "pending_delivery",
+                "code": None,
+            },
+            path="agent control receipt",
+        )
+
+    def _reload_scheduling(
+        self,
+        principal: LocalDaemonPrincipal,
+        request: CoordinatorSchedulingReload,
+    ) -> Mapping[str, PlainData]:
+        """Install one complete protected coordinator scheduling epoch."""
+
+        from .agent_sessions import ScopedAuthorizer
+
+        ScopedAuthorizer(self._agent_policy).require_operator(
+            principal, "scheduling_reload"
+        )
+        encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
+        with self._cycle_lock:
+            with self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                prior = conn.execute(
+                    "SELECT principal_id, request_json, state, result_code, "
+                    "scheduling_epoch FROM scheduling_reloads WHERE operation_id = ?",
+                    (request.operation_id,),
+                ).fetchone()
+                if prior is not None:
+                    if (
+                        str(prior["principal_id"]) != principal.subject
+                        or str(prior["request_json"]) != encoded
+                    ):
+                        raise QueueConflictError(
+                            "scheduling reload operation conflicts"
+                        )
+                    conn.commit()
+                    return freeze_plain_data(
+                        {
+                            "operation_id": request.operation_id,
+                            "state": str(prior["state"]),
+                            "code": prior["result_code"],
+                            "scheduling_epoch": prior["scheduling_epoch"],
+                        },
+                        path="scheduling reload receipt",
+                    )
+                if request.expected_scheduling_epoch != self._scheduling_epoch:
+                    raise QueueConflictError("scheduling reload epoch is stale")
+                conn.execute(
+                    "INSERT INTO scheduling_reloads(operation_id, principal_id, "
+                    "request_json, state, result_code, scheduling_epoch) "
+                    "VALUES (?, ?, ?, 'applying', NULL, NULL)",
+                    (request.operation_id, principal.subject, encoded),
+                )
+                conn.commit()
+
+            try:
+                loader = self._trusted_scheduling_loader
+                if loader is None:
+                    raise QueueServiceError(
+                        "trusted scheduling configuration loader is unavailable"
+                    )
+                replacement = loader()
+                self._validate_scheduling_replacement(replacement)
+                execution = self._execution
+                if execution is None:
+                    raise QueueServiceError("coordinator execution is unavailable")
+                reload_plan = execution.prepare_scheduling_reload(replacement)
+                next_epoch = (
+                    "scheduling-epoch-"
+                    + hashlib.sha256(
+                        (
+                            request.operation_id
+                            + "\0"
+                            + _scheduling_fingerprint(replacement)
+                        ).encode()
+                    ).hexdigest()
+                )
+            except Exception:
+                with self._connection() as conn:
+                    conn.execute(
+                        "UPDATE scheduling_reloads SET state = 'failed', "
+                        "result_code = 'reload_rejected' WHERE operation_id = ?",
+                        (request.operation_id,),
+                    )
+                    conn.commit()
+                return freeze_plain_data(
+                    {
+                        "operation_id": request.operation_id,
+                        "state": "failed",
+                        "code": "reload_rejected",
+                        "scheduling_epoch": self._scheduling_epoch,
+                    },
+                    path="scheduling reload receipt",
+                )
+            with self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                    "VALUES ('scheduling_epoch', ?)",
+                    (next_epoch,),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                    "VALUES ('scheduling_fingerprint', ?)",
+                    (_scheduling_fingerprint(replacement),),
+                )
+                conn.execute(
+                    "UPDATE scheduling_reloads SET state = 'applied', "
+                    "result_code = 'applied', scheduling_epoch = ? "
+                    "WHERE operation_id = ?",
+                    (next_epoch, request.operation_id),
+                )
+                conn.commit()
+            execution.apply_scheduling_reload(replacement, reload_plan, next_epoch)
+            self.config = replacement
+            self._agent_policy = replacement.agent_policy
+            self._scheduling_epoch = next_epoch
+        self._wake.set()
+        return freeze_plain_data(
+            {
+                "operation_id": request.operation_id,
+                "state": "applied",
+                "code": "applied",
+                "scheduling_epoch": next_epoch,
+            },
+            path="scheduling reload receipt",
+        )
+
+    def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig) -> None:
+        if not isinstance(replacement, LocalDaemonConfig):
+            raise QueueServiceError("trusted scheduling configuration is invalid")
+        immutable = (
+            "coordinator_root",
+            "agent_root",
+            "run_store_root",
+            "machine_id",
+            "cpu_capacity",
+            "memory_capacity_bytes",
+            "gpu_devices",
+            "poll_interval_seconds",
+        )
+        if any(
+            getattr(replacement, name) != getattr(self.config, name)
+            for name in immutable
+        ):
+            raise QueueConflictError(
+                "scheduling reload cannot replace process or agent-owned configuration"
+            )
+        if replacement.agent_policy != self._agent_policy:
+            with self._connection() as conn:
+                active = conn.execute(
+                    "SELECT 1 FROM agent_sessions WHERE state = 'ACTIVE' LIMIT 1"
+                ).fetchone()
+            if active is not None:
+                raise QueueConflictError(
+                    "scheduling reload cannot replace credentials for a live agent session"
+                )
 
     def _wait(
         self, queue_item_id: str, *, timeout_seconds: float | None
@@ -997,7 +1517,7 @@ class LocalDaemonClientView:
 
     def cancel(self, queue_item_id: str) -> LocalDaemonAdmission:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
-        return self._daemon._cancel(queue_item_id)
+        return self._daemon._cancel(queue_item_id, principal_id=self._principal.subject)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1012,6 +1532,14 @@ class LocalDaemonOperatorView:
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.reconcile_once()
+
+    def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
+        return self._daemon._control_agent(self._principal, control)
+
+    def reload_scheduling(
+        self, request: CoordinatorSchedulingReload
+    ) -> Mapping[str, PlainData]:
+        return self._daemon._reload_scheduling(self._principal, request)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1251,10 +1779,17 @@ def _initialize_root(path: Path, *, role: str) -> None:
                     accepted_at TEXT NOT NULL,
                     authority_operation_id TEXT NOT NULL,
                     cancellation_operation_id TEXT,
+                    cancellation_principal_id TEXT,
                     blocked_reason TEXT,
                     UNIQUE(coordinator_id, run_uri)
                 )
                 """
+            )
+            conn.execute(
+                "CREATE TABLE scheduling_reloads ("
+                "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+                "request_json TEXT NOT NULL, state TEXT NOT NULL, "
+                "result_code TEXT, scheduling_epoch TEXT)"
             )
             conn.executescript(
                 """
@@ -1343,6 +1878,11 @@ def _admission_from_row(row: sqlite3.Row) -> LocalDaemonAdmission:
             if row["cancellation_operation_id"] is None
             else str(row["cancellation_operation_id"])
         ),
+        cancellation_principal_id=(
+            None
+            if row["cancellation_principal_id"] is None
+            else str(row["cancellation_principal_id"])
+        ),
         blocked_reason=(
             None if row["blocked_reason"] is None else str(row["blocked_reason"])
         ),
@@ -1370,7 +1910,39 @@ def _exact_fields(data: Mapping[str, object], fields: set[str], label: str) -> N
         )
 
 
+def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
+    payload = {
+        "machine_id": config.machine_id,
+        "cpu_capacity": config.cpu_capacity,
+        "memory_capacity_bytes": config.memory_capacity_bytes,
+        "gpu_devices": [
+            {
+                "descriptor": item.descriptor.to_dict(),
+                "binding_digest": hashlib.sha256(
+                    item.binding_value.encode()
+                ).hexdigest(),
+            }
+            for item in config.gpu_devices
+        ],
+        "agent_policy": repr(config.agent_policy),
+        "remote_profiles": [item.to_dict() for item in config.remote_profiles],
+        "slurm_profiles": [
+            {
+                "profile_id": item.profile_id,
+                "configuration_fingerprint": item.configuration_fingerprint,
+                "available": item.available,
+            }
+            for item in config.slurm_profiles
+        ],
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
+    return "scheduling-" + hashlib.sha256(encoded).hexdigest()
+
+
 __all__ = [
+    "CoordinatorSchedulingReload",
     "LocalDaemon",
     "LocalDaemonAdmission",
     "LocalDaemonAdmissionRequest",

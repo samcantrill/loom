@@ -28,6 +28,7 @@ from loom.pipeline.executors.slurm.errors import (
 from loom.pipeline.execution.lifecycle import bind_stage_inputs
 from loom.pipeline.execution.managed_local import (
     AtomResourceProvider,
+    AssignmentState,
     ClaimCommand,
     GpuResourceProvider,
     ManagedAssignment,
@@ -455,6 +456,10 @@ class _ScopedCoordinatorAuthority:
             raise QueueConflictError("scoped authority coordinator conflicts")
         return self._store.install_cancellation_epoch(run_uri, request)
 
+    def read_cancellation_epoch_receipt(self, run_uri: str, operation_id: str):
+        self._run(run_uri)
+        return self._store.read_cancellation_epoch_receipt(run_uri, operation_id)
+
     def record_managed_attempt_terminal(
         self,
         run_uri: str,
@@ -610,14 +615,22 @@ class LocalDaemonExecution:
         coordinator_id: str,
         agent_id: str,
         coordinator_epoch: str,
+        scheduling_epoch: str,
         cancellation_operation: Callable[[str], str | None],
         admission_activated: Callable[[str], None],
         daemon: LocalDaemon | None = None,
     ) -> None:
         self.config = config
+        self._active_slurm_profiles = {
+            item.profile_id: item for item in config.slurm_profiles
+        }
+        self._retained_slurm_profiles: dict[
+            tuple[str, str], SlurmReadyStageProfile
+        ] = {}
         self.coordinator_id = coordinator_id
         self.agent_id = agent_id
         self.coordinator_epoch = coordinator_epoch
+        self.scheduling_epoch = scheduling_epoch
         self.cancellation_operation = cancellation_operation
         self.admission_activated = admission_activated
         self.daemon = daemon
@@ -903,7 +916,7 @@ class LocalDaemonExecution:
                         kernel=SchedulingKernel(
                             planners=self.planners,
                             policy=FifoSchedulingPolicy(),
-                            component_epoch=self.coordinator_epoch,
+                            component_epoch=self.scheduling_epoch,
                             preference_scorers=_production_preference_scorers(),
                         ),
                         candidates=candidates,
@@ -1011,6 +1024,16 @@ class LocalDaemonExecution:
             verifier=capability.verifier,
         )
 
+    def _before_slurm_runner(
+        self,
+        assignment_id: str,
+        submission: SlurmReadyStageSubmission,
+    ) -> bool:
+        """Publish the durable handoff, then make the final no-call decision."""
+
+        self._mirror_slurm_submission_eligibility(assignment_id, submission)
+        return self._run_cancellation_operation(submission.request.run_uri) is None
+
     def _submit_slurm_ready(
         self,
         *,
@@ -1028,7 +1051,7 @@ class LocalDaemonExecution:
             request,
             profile,
             script_path,
-            before_runner=lambda submitting: self._mirror_slurm_submission_eligibility(
+            before_runner=lambda submitting: self._before_slurm_runner(
                 assignment_id, submitting
             ),
         )
@@ -1061,7 +1084,8 @@ class LocalDaemonExecution:
         ):
             raise QueueConflictError("SLURM provider release binding conflicts")
         self._slurm_profile(
-            record.assignment.profile_id
+            record.assignment.profile_id,
+            record.assignment.profile_configuration_fingerprint,
         ).job_private_file_provider.revoke(capability)
         self.slurm_assignments.release(assignment_id)
 
@@ -1082,6 +1106,12 @@ class LocalDaemonExecution:
                 record = self.slurm_assignments.read(assignment_id)
             if record.state in {"logical_released", "terminal", "rejected"}:
                 try:
+                    if record.state == "rejected":
+                        authority.unbind_prepared_attempt(
+                            record.assignment.run_uri,
+                            assignment_id=assignment_id,
+                            attempt_id=record.assignment.attempt_id,
+                        )
                     self._release_slurm_assignment(assignment_id)
                 except SlurmPlanningError:
                     in_flight = True
@@ -1105,7 +1135,10 @@ class LocalDaemonExecution:
                 )
                 record = self.slurm_assignments.read(assignment_id)
             if record.state in {"bound", "submitting", "unknown"}:
-                profile = self._slurm_profile(record.assignment.profile_id)
+                profile = self._slurm_profile(
+                    record.assignment.profile_id,
+                    record.assignment.profile_configuration_fingerprint,
+                )
                 submission = self.slurm_submissions.find(record.assignment.operation_id)
                 if submission is None or submission.state is ReadyStageState.INTENT:
                     if record.state != "bound":
@@ -1147,7 +1180,10 @@ class LocalDaemonExecution:
                 current_state in {"accepted", "granted", "running"}
                 and operation_id not in self._slurm_observed_operations
             ):
-                profile = self._slurm_profile(record.assignment.profile_id)
+                profile = self._slurm_profile(
+                    record.assignment.profile_id,
+                    record.assignment.profile_configuration_fingerprint,
+                )
                 self.slurm_submissions.observe(operation_id, profile)
                 self._slurm_observed_operations.add(operation_id)
             in_flight = True
@@ -1364,6 +1400,11 @@ class LocalDaemonExecution:
                 cluster=submission.cluster,
             )
             if submission.state is ReadyStageState.REJECTED:
+                authority.unbind_prepared_attempt(
+                    record.run_uri,
+                    assignment_id=assignment_id,
+                    attempt_id=record.attempt_id,
+                )
                 self._release_slurm_assignment(assignment_id)
         except SlurmResourceMappingError:
             return LocalDaemonExecutionOutcome(
@@ -1409,18 +1450,85 @@ class LocalDaemonExecution:
             }.get(submission.state, "explicit SLURM assignment was submitted"),
         )
 
-    def _slurm_profile(self, profile_id: str):
-        profile = next(
-            (
-                item
-                for item in self.config.slurm_profiles
-                if item.profile_id == profile_id
-            ),
-            None,
+    def _slurm_profile(
+        self, profile_id: str, configuration_fingerprint: str | None = None
+    ) -> SlurmReadyStageProfile:
+        profile = (
+            self._active_slurm_profiles.get(profile_id)
+            if configuration_fingerprint is None
+            else self._retained_slurm_profiles.get(
+                (profile_id, configuration_fingerprint)
+            )
+            or next(
+                (
+                    item
+                    for item in self._active_slurm_profiles.values()
+                    if item.profile_id == profile_id
+                    and item.configuration_fingerprint == configuration_fingerprint
+                ),
+                None,
+            )
         )
         if profile is None:
             raise QueueConflictError("SLURM profile is not configured")
         return profile
+
+    def prepare_scheduling_reload(
+        self, replacement: LocalDaemonConfig
+    ) -> tuple[
+        dict[tuple[str, str], SlurmReadyStageProfile],
+        dict[str, SlurmReadyStageProfile],
+    ]:
+        """Build and validate complete active/retained profile maps."""
+
+        replacement_capacity = _coordinator_capacity(replacement)
+        if replacement_capacity != self.capacity:
+            raise QueueConflictError(
+                "scheduling reload cannot reinterpret configured capacity"
+            )
+        retained = dict(self._retained_slurm_profiles)
+        for submission in self.slurm_submissions.list_nonterminal():
+            profile = self._slurm_profile(
+                submission.request.profile_id,
+                submission.request.profile_descriptor.configuration_fingerprint,
+            )
+            retained[(profile.profile_id, profile.configuration_fingerprint)] = profile
+        active = {item.profile_id: item for item in replacement.slurm_profiles}
+        if len(active) != len(replacement.slurm_profiles):
+            raise QueueConflictError("replacement SLURM profile IDs conflict")
+        active_credentials = {
+            item.credential_reference: item for item in active.values()
+        }
+        for retained_profile in retained.values():
+            replacement_profile = active_credentials.get(
+                retained_profile.credential_reference
+            )
+            if (
+                replacement_profile is not None
+                and replacement_profile.bootstrap_principal_id
+                != retained_profile.bootstrap_principal_id
+            ):
+                raise QueueConflictError(
+                    "scheduling reload cannot reinterpret a retained credential"
+                )
+        return retained, active
+
+    def apply_scheduling_reload(
+        self,
+        replacement: LocalDaemonConfig,
+        plan: tuple[
+            dict[tuple[str, str], SlurmReadyStageProfile],
+            dict[str, SlurmReadyStageProfile],
+        ],
+        scheduling_epoch: str,
+    ) -> None:
+        """Install one already-validated scheduling plan without fallible work."""
+
+        retained, active = plan
+        self._retained_slurm_profiles = retained
+        self._active_slurm_profiles = active
+        self.config = replacement
+        self.scheduling_epoch = scheduling_epoch
 
     def _apply_controller_action(
         self,
@@ -1540,6 +1648,20 @@ class LocalDaemonExecution:
             return LocalDaemonExecutionOutcome(
                 LocalDaemonAdmissionState.CANCELLATION_REQUESTED
             )
+        # A terminal authority fact wins a late client request.  Installing a
+        # cancellation epoch against it is neither needed nor generally a
+        # valid authority mutation.
+        before = authority.open_run(admission.run_uri)
+        terminal = {
+            RunStatus.SUCCEEDED: LocalDaemonAdmissionState.SUCCEEDED,
+            RunStatus.FAILED: LocalDaemonAdmissionState.FAILED,
+            RunStatus.INTERRUPTED: LocalDaemonAdmissionState.FAILED,
+            RunStatus.CANCELLED: LocalDaemonAdmissionState.CANCELLED,
+        }
+        if before.status in terminal:
+            return LocalDaemonExecutionOutcome(
+                terminal[before.status], "authority_terminal_before_cancellation"
+            )
         authority.install_cancellation_epoch(
             admission.run_uri,
             CancellationEpochRequest(
@@ -1547,6 +1669,20 @@ class LocalDaemonExecution:
                 coordinator_id=self.coordinator_id,
                 run_uri=admission.run_uri,
             ),
+        )
+        # An effective epoch prevents a later bootstrap grant/start, but it is
+        # not containment for a job which has already reached the external
+        # scheduler.  Fan out only to the exact retained handles and retain
+        # every other submission (including SUBMITTING-without-a-handle) for
+        # reconciliation.  In particular, do not let a successful scancel
+        # response turn the run terminal: it is merely a requested fact.
+        settling = self._fan_out_slurm_cancellation(admission.run_uri)
+        settling = self._fan_out_local_cancellation(
+            admission.run_uri, authority
+        ) or settling
+        settling = (
+            self._fan_out_remote_cancellation(admission.run_uri, operation_id)
+            or settling
         )
         snapshot = authority.open_run(admission.run_uri)
         if snapshot.status is RunStatus.CANCELLED:
@@ -1561,6 +1697,11 @@ class LocalDaemonExecution:
                 terminal[snapshot.status],
                 "authority_terminal_before_cancellation",
             )
+        if settling:
+            return LocalDaemonExecutionOutcome(
+                LocalDaemonAdmissionState.CANCELLING,
+                "cancellation epoch is installed; SLURM cancellation is settling",
+            )
         try:
             authority.transition_run(
                 admission.run_uri,
@@ -1574,6 +1715,215 @@ class LocalDaemonExecution:
                 "cancellation epoch is installed; active or unknown work remains",
             )
         return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
+
+    def _fan_out_local_cancellation(
+        self, run_uri: str, authority: _ScopedCoordinatorAuthority
+    ) -> bool:
+        """Join coordinator and journal truth before allowing terminal cancellation.
+
+        A reservation is releasable only when the journal has no request at all.
+        Once the journal owns a request, it alone proves a pre-grant abort.  Any
+        grant, launch, unknown state, or failed containment remains settling.
+        """
+
+        settling = False
+        for assignment_id, coordinator_state in self.coordinator.list_run_live_states(
+            run_uri
+        ):
+            journal_state = self.journal.find_state(assignment_id)
+            if coordinator_state == "reserved" and journal_state is None:
+                self.coordinator.cancellation_release_unstarted(assignment_id)
+                continue
+            if coordinator_state not in {"bound", "accepted"}:
+                # A process-local handle is useful only for a pre-run gate; an
+                # absent/finished handle is never containment evidence.
+                handle = self.journal.process_handle(assignment_id)
+                if handle is not None and journal_state is AssignmentState.START_INTENT:
+                    handle.cancel_before_run()
+                settling = True
+                continue
+            if journal_state is None:
+                authority.unbind_prepared_attempt(
+                    run_uri, assignment_id=assignment_id, attempt_id=self._attempt_id(assignment_id)
+                )
+                self.coordinator.cancellation_release_pregrant(assignment_id)
+                continue
+            if journal_state in {
+                AssignmentState.REQUEST_DURABLE,
+                AssignmentState.PREPARED,
+                AssignmentState.ACCEPTED,
+                AssignmentState.DECLINED,
+            }:
+                try:
+                    self.journal.cancel_pregrant(assignment_id, self.providers)
+                    authority.unbind_prepared_attempt(
+                        run_uri,
+                        assignment_id=assignment_id,
+                        attempt_id=self._attempt_id(assignment_id),
+                    )
+                    self.coordinator.cancellation_release_pregrant(assignment_id)
+                except Exception:
+                    settling = True
+                continue
+            settling = True
+        return settling
+
+    def _attempt_id(self, assignment_id: str) -> str:
+        """Read the immutable authority attempt identity from the coordinator owner."""
+
+        with sqlite3.connect(self.coordinator.path) as conn:
+            row = conn.execute(
+                "SELECT identity_json FROM coordinator_assignments WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+        if row is None:
+            raise QueueConflictError("local cancellation assignment is unavailable")
+        value = json.loads(cast(str, row[0]))
+        attempt_id = value.get("attempt_id") if isinstance(value, dict) else None
+        if not isinstance(attempt_id, str) or not attempt_id:
+            raise QueueConflictError("local cancellation attempt identity is invalid")
+        return attempt_id
+
+    def _fan_out_slurm_cancellation(self, run_uri: str) -> bool:
+        """Request cancellation for retained exact SLURM handles.
+
+        This deliberately has no release or terminal side effect.  A missing
+        handle after durable submission is unknown work, and a rejected or
+        unavailable external request is still settling work.  The ready-stage
+        owner is the single place that records the exact request result.
+        """
+
+        settling = False
+        for record in self.slurm_assignments.list_run_unreleased(run_uri):
+            if record.state in {"released", "terminal", "logical_released", "rejected"}:
+                continue
+            submission = self.slurm_submissions.find(record.assignment.operation_id)
+            if record.state == "bound" and (
+                submission is None or submission.state is ReadyStageState.INTENT
+            ):
+                authority = self._remote_authority(run_uri)
+                if submission is not None:
+                    self.slurm_submissions.suppress_before_submit(
+                        record.assignment.operation_id
+                    )
+                self.slurm_assignments.record_submission(
+                    record.assignment.assignment_id,
+                    state=ReadyStageState.REJECTED.value,
+                    job_id=None,
+                    cluster=None,
+                )
+                authority.unbind_prepared_attempt(
+                    run_uri,
+                    assignment_id=record.assignment.assignment_id,
+                    attempt_id=record.assignment.attempt_id,
+                )
+                if submission is None:
+                    self.slurm_assignments.advance(
+                        record.assignment.assignment_id,
+                        expected="rejected",
+                        next_state="logical_released",
+                    )
+                    self.slurm_assignments.release(record.assignment.assignment_id)
+                else:
+                    self._release_slurm_assignment(record.assignment.assignment_id)
+                continue
+            if submission is None or submission.job_id is None:
+                # Before an exact handle exists, suppression/reconciliation is
+                # the only truthful action.  The authority epoch blocks grant
+                # and start while this durable reference remains retained.
+                settling = True
+                continue
+            try:
+                profile = self._slurm_profile(
+                    record.assignment.profile_id,
+                    record.assignment.profile_configuration_fingerprint,
+                )
+                self.slurm_submissions.request_cancel(
+                    record.assignment.operation_id, profile
+                )
+            except SlurmPlanningError:
+                # A retained binding that cannot currently perform its exact
+                # cancellation stays visible and bound; no inference is safe.
+                settling = True
+                continue
+            # Even a positive scancel response is not containment evidence.
+            settling = True
+        return settling
+
+    def _fan_out_remote_cancellation(
+        self, run_uri: str, cancellation_operation_id: str
+    ) -> bool:
+        """Retain exact per-assignment controls until each remote owner settles."""
+
+        from .agent_sessions import AgentAssignmentControl
+
+        settling = False
+        with sqlite3.connect(self.config.control_database) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN IMMEDIATE")
+            if (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'remote_assignments'"
+                ).fetchone()
+                is None
+            ):
+                conn.commit()
+                return False
+            rows = tuple(
+                conn.execute(
+                    "SELECT assignment_id, session_id, state, fence "
+                    "FROM remote_assignments WHERE run_uri = ? "
+                    "AND state != 'RELEASED' ORDER BY assignment_id",
+                    (run_uri,),
+                )
+            )
+            for row in rows:
+                settling = True
+                assignment_id = str(row["assignment_id"])
+                operation_id = (
+                    "cancel-remote-"
+                    + hashlib.sha256(
+                        f"{cancellation_operation_id}\0{assignment_id}".encode()
+                    ).hexdigest()
+                )
+                control = AgentAssignmentControl(
+                    operation_id=operation_id,
+                    session_id=str(row["session_id"]),
+                    assignment_id=assignment_id,
+                    fence=None if row["fence"] is None else str(row["fence"]),
+                    process_execution_id=(
+                        f"{assignment_id}:root"
+                        if str(row["state"])
+                        in {"RUNNING", "RESULT_RETAINED", "TERMINAL"}
+                        else None
+                    ),
+                )
+                encoded = json.dumps(
+                    control.value(), sort_keys=True, separators=(",", ":")
+                )
+                prior = conn.execute(
+                    "SELECT request_json, state FROM remote_assignment_controls "
+                    "WHERE operation_id = ?",
+                    (operation_id,),
+                ).fetchone()
+                if prior is None:
+                    conn.execute(
+                        "INSERT INTO remote_assignment_controls("
+                        "operation_id, session_id, assignment_id, request_json, "
+                        "state, result_code, acknowledged) "
+                        "VALUES (?, ?, ?, ?, 'pending_delivery', NULL, 0)",
+                        (
+                            operation_id,
+                            control.session_id,
+                            assignment_id,
+                            encoded,
+                        ),
+                    )
+                elif str(prior["request_json"]) != encoded:
+                    raise QueueConflictError("remote cancellation operation conflicts")
+            conn.commit()
+        return settling
 
     def _candidate(self) -> Candidate:
         inventory: dict[str, ResourceInventoryEnvelope] = {}
@@ -2190,6 +2540,29 @@ class LocalDaemonExecution:
             )
         return fence.fencing_token
 
+    def remote_start_permit(self, assignment_id: str, *, fence: str) -> bool:
+        """Fail closed when the exact run cancellation barrier is effective."""
+
+        record = self._remote_assignment_record(assignment_id)
+        authority = self._remote_authority(str(record["run_uri"]))
+        operation_id = self._run_cancellation_operation(str(record["run_uri"]))
+        if (
+            operation_id is not None
+            and authority.read_cancellation_epoch_receipt(
+                str(record["run_uri"]), operation_id
+            )
+            is not None
+        ):
+            return False
+        granted = authority.grant_prepared_attempt(
+            str(record["run_uri"]),
+            assignment_id=assignment_id,
+            attempt_id=str(record["attempt_id"]),
+        )
+        if granted.fencing_token != fence:
+            raise QueueConflictError("remote start permit fence conflicts")
+        return True
+
     def remote_decline(self, assignment_id: str) -> None:
         """Release a pre-grant assignment after definitive physical decline."""
 
@@ -2331,8 +2704,12 @@ class LocalDaemonExecution:
         incarnation: str,
         capability: str,
     ) -> SlurmStageRecord:
-        profile = self._slurm_profile_for_principal(principal_id, credential_id)
         retained = self.slurm_assignments.read_operation(operation_id)
+        profile = self._slurm_profile(
+            retained.assignment.profile_id,
+            retained.assignment.profile_configuration_fingerprint,
+        )
+        self._require_slurm_profile_principal(profile, principal_id, credential_id)
         if (
             retained.assignment.profile_id != profile.profile_id
             or retained.assignment.profile_descriptor != profile.descriptor
@@ -2415,15 +2792,27 @@ class LocalDaemonExecution:
         )
         if not record.input_ready:
             raise QueueConflictError("SLURM grant requires durable inputs")
-        authority = self._remote_authority(record.assignment.run_uri)
-        fence = authority.grant_prepared_attempt(
-            record.assignment.run_uri,
-            assignment_id=assignment_id,
-            attempt_id=record.assignment.attempt_id,
-        )
-        self.slurm_assignments.mark_granted(
-            assignment_id, incarnation, fence.fencing_token
-        )
+        if record.fence is not None:
+            return record.fence
+        with sqlite3.connect(self.config.control_database) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cancellation = conn.execute(
+                "SELECT cancellation_operation_id FROM managed_admissions "
+                "WHERE run_uri = ?",
+                (record.assignment.run_uri,),
+            ).fetchone()
+            if cancellation is not None and cancellation[0] is not None:
+                raise QueueConflictError("SLURM assignment run is cancelling")
+            authority = self._remote_authority(record.assignment.run_uri)
+            fence = authority.grant_prepared_attempt(
+                record.assignment.run_uri,
+                assignment_id=assignment_id,
+                attempt_id=record.assignment.attempt_id,
+            )
+            self.slurm_assignments.mark_granted(
+                assignment_id, incarnation, fence.fencing_token
+            )
+            conn.commit()
         return fence.fencing_token
 
     def slurm_start_permit(
@@ -2446,7 +2835,21 @@ class LocalDaemonExecution:
             "released",
         }:
             raise QueueConflictError("SLURM start permit fence conflicts")
-        return self.slurm_submissions.consume_start(record.assignment.operation_id)
+        with sqlite3.connect(self.config.control_database) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cancellation = conn.execute(
+                "SELECT cancellation_operation_id FROM managed_admissions "
+                "WHERE run_uri = ?",
+                (record.assignment.run_uri,),
+            ).fetchone()
+            if cancellation is not None and cancellation[0] is not None:
+                conn.commit()
+                return False
+            permitted = self.slurm_submissions.consume_start(
+                record.assignment.operation_id
+            )
+            conn.commit()
+            return permitted
 
     def slurm_started(
         self,
@@ -2588,8 +2991,12 @@ class LocalDaemonExecution:
         assignment_id: str,
         incarnation: str,
     ) -> SlurmStageRecord:
-        profile = self._slurm_profile_for_principal(principal_id, credential_id)
         record = self.slurm_assignments.read(assignment_id)
+        profile = self._slurm_profile(
+            record.assignment.profile_id,
+            record.assignment.profile_configuration_fingerprint,
+        )
+        self._require_slurm_profile_principal(profile, principal_id, credential_id)
         if (
             record.assignment.profile_id != profile.profile_id
             or record.assignment.profile_descriptor != profile.descriptor
@@ -2600,11 +3007,14 @@ class LocalDaemonExecution:
 
     def _slurm_profile_for_principal(
         self, principal_id: str, credential_id: str | None
-    ):
+    ) -> SlurmReadyStageProfile:
         profile = next(
             (
                 item
-                for item in self.config.slurm_profiles
+                for item in (
+                    *self._active_slurm_profiles.values(),
+                    *self._retained_slurm_profiles.values(),
+                )
                 if item.bootstrap_principal_id == principal_id
                 and item.credential_reference == credential_id
             ),
@@ -2613,6 +3023,33 @@ class LocalDaemonExecution:
         if profile is None:
             raise QueueServiceError("SLURM bootstrap principal is not authorized")
         return profile
+
+    def _slurm_profile_for_credential(
+        self, credential_id: str
+    ) -> SlurmReadyStageProfile | None:
+        return next(
+            (
+                item
+                for item in (
+                    *self._active_slurm_profiles.values(),
+                    *self._retained_slurm_profiles.values(),
+                )
+                if item.credential_reference == credential_id
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _require_slurm_profile_principal(
+        profile: SlurmReadyStageProfile,
+        principal_id: str,
+        credential_id: str | None,
+    ) -> None:
+        if (
+            profile.bootstrap_principal_id != principal_id
+            or profile.credential_reference != credential_id
+        ):
+            raise QueueServiceError("SLURM bootstrap principal is not authorized")
 
     def _remote_assignment_record(self, assignment_id: str) -> sqlite3.Row:
         with sqlite3.connect(self.config.control_database) as conn:
@@ -2633,6 +3070,17 @@ class LocalDaemonExecution:
             run_uri=run_uri,
             coordinator_id=self.coordinator_id,
         )
+
+    def _run_cancellation_operation(self, run_uri: str) -> str | None:
+        with sqlite3.connect(self.config.control_database) as conn:
+            row = conn.execute(
+                "SELECT cancellation_operation_id FROM managed_admissions "
+                "WHERE run_uri = ?",
+                (run_uri,),
+            ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
 
     def _capacity_holding_coordinator_assignments(self) -> set[str]:
         """Return only coordinator states that can retain a physical claim.
@@ -3026,12 +3474,24 @@ def build_local_daemon_owner_views(
                     "journal": agent_work_by_run.get(admission.run_uri, []),
                 },
                 "cancellation": {
-                    "owner": "per-run-authority",
+                    "owner": "coordinator-and-per-run-authority",
                     "availability": authority_view["availability"],
                     "state": (
-                        "unavailable"
+                        "requested_degraded"
                         if authority_view["availability"] == "unavailable"
-                        else "installed"
+                        and admission.cancellation_operation_id is not None
+                        else "terminal"
+                        if admission.state is LocalDaemonAdmissionState.CANCELLED
+                        else "terminal_prevailed"
+                        if admission.cancellation_operation_id is not None
+                        and admission.state
+                        in {
+                            LocalDaemonAdmissionState.SUCCEEDED,
+                            LocalDaemonAdmissionState.FAILED,
+                        }
+                        else "settling"
+                        if admission.state is LocalDaemonAdmissionState.CANCELLING
+                        else "effective"
                         if cancellation_receipt is not None
                         else "requested"
                         if admission.cancellation_operation_id is not None
@@ -3039,6 +3499,15 @@ def build_local_daemon_owner_views(
                     ),
                     "requested": admission.cancellation_operation_id is not None,
                     "operation_id": admission.cancellation_operation_id,
+                    "principal": admission.cancellation_principal_id,
+                    "effective": cancellation_receipt is not None,
+                    "settling": admission.state is LocalDaemonAdmissionState.CANCELLING,
+                    "terminal": admission.state
+                    in {
+                        LocalDaemonAdmissionState.CANCELLED,
+                        LocalDaemonAdmissionState.SUCCEEDED,
+                        LocalDaemonAdmissionState.FAILED,
+                    },
                     "receipt": cancellation_receipt,
                     "observed_at": authority_observed_at,
                     "freshness": (

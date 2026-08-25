@@ -812,7 +812,7 @@ class SQLiteReadyStageSubmissions:
         profile: SlurmReadyStageProfile,
         script_path: str | Path,
         *,
-        before_runner: Callable[[SlurmReadyStageSubmission], None] | None = None,
+        before_runner: Callable[[SlurmReadyStageSubmission], bool | None] | None = None,
     ) -> SlurmReadyStageSubmission:
         """Persist intent and ``SUBMITTING`` before the one automatic call."""
 
@@ -826,8 +826,12 @@ class SQLiteReadyStageSubmissions:
         )
         if submitting.state is not ReadyStageState.SUBMITTING:
             return submitting
-        if before_runner is not None:
-            before_runner(submitting)
+        if before_runner is not None and before_runner(submitting) is False:
+            return self._record_outcome(
+                request.operation_id,
+                ReadyStageState.REJECTED,
+                evidence="slurm_submit_suppressed_before_call",
+            )
         script = Path(script_path)
         try:
             result = profile.runner.sbatch(
@@ -947,6 +951,39 @@ class SQLiteReadyStageSubmissions:
                 )
             )
         return tuple(_submission_from_json(str(row[0])) for row in rows)
+
+    def suppress_before_submit(self, operation_id: str) -> SlurmReadyStageSubmission:
+        """Close an INTENT with durable proof that ``sbatch`` was never invoked."""
+
+        with self._transaction() as conn:
+            row = conn.execute(
+                f"SELECT value_json FROM {_SUBMISSION_TABLE} WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if row is None:
+                raise SlurmPlanningError("SLURM submission is not durable")
+            current = _submission_from_json(str(row[0]))
+            if current.state is ReadyStageState.REJECTED:
+                return current
+            if current.state is not ReadyStageState.INTENT:
+                raise SlurmPlanningError(
+                    "only an unsubmitted SLURM intent can be suppressed"
+                )
+            suppressed = replace(
+                current,
+                state=ReadyStageState.REJECTED,
+                evidence="slurm_submit_suppressed_before_call",
+            )
+            conn.execute(
+                f"UPDATE {_SUBMISSION_TABLE} SET state = ?, value_json = ? "
+                "WHERE operation_id = ?",
+                (
+                    suppressed.state.value,
+                    _submission_json(suppressed),
+                    operation_id,
+                ),
+            )
+        return suppressed
 
     def consume_start(self, operation_id: str) -> bool:
         """Atomically consume the one authored-root permit after acceptance."""

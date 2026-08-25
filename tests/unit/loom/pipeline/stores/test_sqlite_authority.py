@@ -960,6 +960,36 @@ def test_cancellation_epoch_is_durable_singleton_and_replays_receipts(
         )
 
 
+def test_effective_cancellation_epoch_fences_prepare_bind_and_grant(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "cancellation-fence")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    store.bind_coordinator_admission(
+        run_uri,
+        CoordinatorAdmissionRequest("admit-1", "coordinator-1", run_uri, "intent-1"),
+    )
+    prepared = store.ensure_prepared_attempt(
+        run_uri, _prepared_request(store.open_run(run_uri).revision)
+    )
+    store.bind_prepared_attempt(
+        run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+    )
+    store.install_cancellation_epoch(
+        run_uri,
+        CancellationEpochRequest("cancel-1", "coordinator-1", run_uri),
+    )
+    with pytest.raises(AuthorityStoreError, match="cancellation epoch is effective"):
+        store.grant_prepared_attempt(
+            run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+        )
+    with pytest.raises(AuthorityStoreError, match="cancellation epoch is effective"):
+        store.ensure_prepared_attempt(
+            run_uri, _prepared_request(store.open_run(run_uri).revision, operation_id="prepare-2")
+        )
+
+
 def test_v5_authority_database_migrates_daemon_authority_receipts(
     tmp_path: Path,
 ) -> None:

@@ -268,6 +268,27 @@ def test_ready_stage_publishes_the_submit_barrier_before_runner(
     assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
 
 
+def test_ready_stage_can_suppress_sbatch_at_the_final_submit_barrier(
+    tmp_path: Path,
+) -> None:
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner)
+    request = _request(profile)
+    store = SQLiteReadyStageSubmissions(tmp_path / "submissions.sqlite")
+
+    result = store.submit(
+        request,
+        profile,
+        _script(tmp_path, request),
+        before_runner=lambda submitting: False,
+    )
+
+    assert result.state is ReadyStageState.REJECTED
+    assert result.evidence == "slurm_submit_suppressed_before_call"
+    assert not [call for call in runner.calls if call[0] == "sbatch"]
+    assert store.read(request.operation_id) == result
+
+
 def test_ready_stage_hard_cut_rejects_prior_wire_and_store_versions(
     tmp_path: Path,
 ) -> None:

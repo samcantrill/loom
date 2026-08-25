@@ -29,7 +29,10 @@ if TYPE_CHECKING:
 
     from loom.pipeline.stores import AuthorityConfig
     from loom.queue import QueueDrainResult, QueueService
-    from loom.queue.controller import QueueDispatchAdapter, QueueInspectableDispatchAdapter
+    from loom.queue.controller import (
+        QueueDispatchAdapter,
+        QueueInspectableDispatchAdapter,
+    )
     from loom.queue.preflight import QueuePreflightResult
     from loom.queue.status import QueueOperationalStatus
 
@@ -38,7 +41,7 @@ QUEUE_PREFLIGHT_SCHEMA_VERSION = "loom.cli.queue.preflight.v1"
 QUEUE_STATUS_SCHEMA_VERSION = "loom.cli.queue.status.v1"
 QUEUE_CANCEL_SCHEMA_VERSION = "loom.cli.queue.cancel.v1"
 QUEUE_DRAIN_SCHEMA_VERSION = "loom.cli.queue.drain.v1"
-LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v1"
+LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v3"
 
 
 def register_subparser(
@@ -176,6 +179,32 @@ def register_subparser(
         _add_output_options(daemon_client)
         daemon_client.set_defaults(handler=handler)
 
+    for kind in ("drain", "resume", "reload"):
+        control = queue_subparsers.add_parser(
+            f"daemon-agent-{kind}", help=f"{kind} one managed agent"
+        )
+        control.add_argument("--endpoint", required=True, type=Path)
+        control.add_argument("--operation-id", required=True)
+        control.add_argument("--agent-id", required=True)
+        control.add_argument("--session-id", required=True)
+        control.add_argument("--config-revision", required=True)
+        control.add_argument("--pool")
+        control.add_argument("--cancel-active", action="store_true")
+        control.add_argument("--reason", default=f"cli-{kind}")
+        control.set_defaults(handler=handle_daemon_agent_control, agent_control=kind)
+        _add_output_options(control)
+
+    scheduling_reload = queue_subparsers.add_parser(
+        "daemon-scheduling-reload",
+        help="reload protected coordinator scheduling configuration",
+    )
+    scheduling_reload.add_argument("--endpoint", required=True, type=Path)
+    scheduling_reload.add_argument("--operation-id", required=True)
+    scheduling_reload.add_argument("--expected-scheduling-epoch", required=True)
+    scheduling_reload.add_argument("--reason", default="cli-scheduling-reload")
+    scheduling_reload.set_defaults(handler=handle_daemon_scheduling_reload)
+    _add_output_options(scheduling_reload)
+
 
 def handle_preflight(namespace: argparse.Namespace) -> int:
     """Handle ``loom queue preflight``."""
@@ -198,9 +227,7 @@ def handle_preflight(namespace: argparse.Namespace) -> int:
     else:
         sys.stdout.write(format_queue_preflight_text(result) + "\n")
     return int(
-        ExitCode.PIPELINE
-        if _enum_value(result.status) == "FAIL"
-        else ExitCode.SUCCESS
+        ExitCode.PIPELINE if _enum_value(result.status) == "FAIL" else ExitCode.SUCCESS
     )
 
 
@@ -373,6 +400,43 @@ def handle_daemon_cancel(namespace: argparse.Namespace) -> int:
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
+def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
+    from loom.queue import AgentControl, LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).control_agent(
+            AgentControl(
+                operation_id=namespace.operation_id,
+                kind=namespace.agent_control,
+                agent_id=namespace.agent_id,
+                expected_session_id=namespace.session_id,
+                expected_config_revision=namespace.config_revision,
+                pool=namespace.pool,
+                cancel_active=bool(namespace.cancel_active),
+                reason=namespace.reason,
+            )
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
+
+
+def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
+    from loom.queue import CoordinatorSchedulingReload, LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).reload_scheduling(
+            CoordinatorSchedulingReload(
+                operation_id=namespace.operation_id,
+                expected_scheduling_epoch=namespace.expected_scheduling_epoch,
+                reason=namespace.reason,
+            )
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
+
+
 def build_queue_preflight_result(
     config_path: str | Path,
     *,
@@ -533,7 +597,9 @@ def _default_dispatch_adapters(
 
 
 def _queue_cli_error(error: QueueError) -> CliError:
-    exit_code = ExitCode.CONFIG if isinstance(error, QueueConfigError) else ExitCode.RUN_STATE
+    exit_code = (
+        ExitCode.CONFIG if isinstance(error, QueueConfigError) else ExitCode.RUN_STATE
+    )
     code = (
         "cli.queue.config_error"
         if isinstance(error, QueueConfigError)
@@ -645,9 +711,11 @@ __all__ = [
     "handle_cancel",
     "handle_drain_foreground",
     "handle_daemon_cancel",
+    "handle_daemon_agent_control",
     "handle_daemon_init",
     "handle_daemon_serve",
     "handle_daemon_status",
+    "handle_daemon_scheduling_reload",
     "handle_daemon_submit",
     "handle_daemon_wait",
     "handle_preflight",

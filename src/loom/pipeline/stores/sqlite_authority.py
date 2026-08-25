@@ -592,6 +592,7 @@ class SQLitePerRunAuthorityStore:
         if lease_ttl_seconds is not None:
             _positive_seconds(lease_ttl_seconds)
         with self._transaction(run_uri) as conn:
+            _require_no_cancellation_epoch(conn)
             now = self._now()
             active = _active_stage_lease_row(conn, stage_name, now)
             if active is not None:
@@ -705,6 +706,7 @@ class SQLitePerRunAuthorityStore:
                         "prepared attempt operation conflicts with its receipt"
                     )
                 return receipt
+            _require_no_cancellation_epoch(conn)
             existing = conn.execute(
                 """
                 SELECT 1 FROM prepared_attempt_receipts
@@ -943,6 +945,10 @@ class SQLitePerRunAuthorityStore:
                 if receipt.request != request:
                     raise AuthorityStoreError("cancellation epoch receipt conflicts")
                 return receipt
+            if _require_run_status(conn) in {
+                RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.INTERRUPTED
+            }:
+                raise AuthorityStoreError("terminal run cannot install cancellation")
             binding = conn.execute(
                 "SELECT request_json FROM coordinator_admission_receipts LIMIT 1"
             ).fetchone()
@@ -1020,6 +1026,7 @@ class SQLitePerRunAuthorityStore:
                 if row["attempt_id"] != attempt_id:
                     raise AuthorityStoreError("assignment binding conflicts")
                 return
+            _require_no_cancellation_epoch(conn)
             run_status = RunStatus(
                 cast(
                     str,
@@ -1129,6 +1136,7 @@ class SQLitePerRunAuthorityStore:
                 return ExecutionFence(
                     assignment_id, attempt_id, cast(str, row["fence"])
                 )
+            _require_no_cancellation_epoch(conn)
             if row["state"] != "bound":
                 raise AuthorityStoreError("prepared attempt binding is not grantable")
             attempt = conn.execute(
@@ -1171,6 +1179,7 @@ class SQLitePerRunAuthorityStore:
                 raise AuthorityStoreError("stale execution fence")
             if row["state"] in {"running", "terminal"}:
                 return
+            _require_no_cancellation_epoch(conn)
             if row["state"] != "granted":
                 raise AuthorityStoreError("execution fence is not granted")
             attempt = conn.execute(
@@ -3724,6 +3733,13 @@ def _require_run_status(conn: sqlite3.Connection) -> RunStatus:
     if row is None:
         raise AuthorityStoreError("unknown run")
     return RunStatus(cast(str, row["status"]))
+
+
+def _require_no_cancellation_epoch(conn: sqlite3.Connection) -> None:
+    """Fence lifecycle creation while the effective cancellation settles."""
+
+    if conn.execute("SELECT 1 FROM cancellation_epochs WHERE id = 1").fetchone():
+        raise AuthorityStoreError("run cancellation epoch is effective")
 
 
 def _touch_run(conn: sqlite3.Connection, revision: BackendRevision) -> None:

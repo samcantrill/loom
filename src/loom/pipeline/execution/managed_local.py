@@ -811,6 +811,81 @@ class SQLiteAgentJournal:
             assignment_id, AssignmentState.PREPARED, AssignmentState.ACCEPTED
         )
 
+    def decline_before_prepare(self, assignment_id: str) -> AssignmentState:
+        """Prove a durable request acquired no provider claims."""
+
+        return self._advance(
+            assignment_id, AssignmentState.REQUEST_DURABLE, AssignmentState.DECLINED
+        )
+
+    def abort_pregrant(
+        self,
+        assignment_id: str,
+        commands: Sequence[ClaimCommand],
+        providers: Mapping[str, AgentResourceProvider],
+    ) -> AssignmentState:
+        """Release every exact prepared claim before remote grant."""
+
+        with self._transaction() as conn:
+            state = AssignmentState(self._assignment(conn, assignment_id)["state"])
+            if state is AssignmentState.DECLINED:
+                return state
+            if state not in {AssignmentState.PREPARED, AssignmentState.ACCEPTED}:
+                raise ManagedLocalError("only prepared pre-grant claims can be aborted")
+        for command in sorted(
+            commands, key=lambda item: item.claim.resource_kind, reverse=True
+        ):
+            provider = providers.get(command.claim.resource_kind)
+            if provider is None:
+                raise ManagedLocalError("no provider for claim resource kind")
+            if (
+                _provider_call(provider.abort, command).outcome
+                is not ClaimOutcome.RELEASED
+            ):
+                raise ManagedLocalError("pre-grant claim abort is indeterminate")
+        return self._set_declined(assignment_id)
+
+    def cancel_pregrant(
+        self, assignment_id: str, providers: Mapping[str, AgentResourceProvider]
+    ) -> AssignmentState:
+        """Settle a durable no-start local claim using its retained exact commands."""
+
+        with self._transaction() as conn:
+            row = self._assignment(conn, assignment_id)
+            state = AssignmentState(row["state"])
+            if state is AssignmentState.REQUEST_DURABLE:
+                conn.execute(
+                    "UPDATE assignments SET state = ? WHERE assignment_id = ?",
+                    (AssignmentState.DECLINED.value, assignment_id),
+                )
+                return AssignmentState.DECLINED
+            if state is AssignmentState.DECLINED:
+                return state
+            if state not in {AssignmentState.PREPARED, AssignmentState.ACCEPTED}:
+                raise ManagedLocalError("local assignment is not proven pre-grant")
+            identity = json.loads(cast(str, row["identity_json"]))
+            commands = json.loads(cast(str, row["claims_json"]))
+        values = commands.get("commands") if isinstance(commands, dict) else None
+        if not isinstance(values, list):
+            raise ManagedLocalError("retained local claim commands are invalid")
+        assignment = ManagedAssignment(
+            assignment_id=cast(str, identity["assignment_id"]),
+            run_uri=cast(str, identity["run_uri"]),
+            stage_work_id=cast(str, identity["stage_work_id"]),
+            stage_name=cast(str, identity["stage_name"]),
+            attempt=cast(int, identity["attempt"]),
+            attempt_id=cast(str, identity["attempt_id"]),
+            agent_id=cast(str, identity["agent_id"]),
+            session_id=cast(str, identity["session_id"]),
+            offer_id=cast(str, identity["offer_id"]),
+            claim_id=cast(str, identity["claim_id"]),
+        )
+        return self.abort_pregrant(
+            assignment_id,
+            tuple(_claim_command_from_dict(assignment, value) for value in values),
+            providers,
+        )
+
     def grant(self, assignment_id: str, fence: str) -> AssignmentState:
         if not fence:
             raise ManagedLocalError("grant fence is required")
@@ -1053,6 +1128,37 @@ class SQLiteAgentJournal:
             )
             return AssignmentState.RESULT_DURABLE
 
+    def record_cancelled_before_start(
+        self, assignment_id: str, result: Mapping[str, PlainData]
+    ) -> AssignmentState:
+        """Record positive no-launch cancellation without fabricating a start."""
+
+        parsed = StageWorkerResult.from_dict(result)
+        if parsed.status is not StageStatus.CANCELLED:
+            raise ManagedLocalError("no-start result must be cancelled")
+        with self._transaction() as conn:
+            row = self._assignment(conn, assignment_id)
+            state = AssignmentState(row["state"])
+            encoded = _json(result)
+            if state is AssignmentState.RESULT_DURABLE:
+                if row["result_json"] != encoded:
+                    raise ManagedLocalError("result conflicts with durable result")
+                return state
+            if state is not AssignmentState.ACTIVE:
+                raise ManagedLocalError(
+                    "no-start cancellation requires an active unstarted assignment"
+                )
+            if row["process_execution_id"] is not None:
+                raise ManagedLocalError(
+                    "no-start cancellation conflicts with start intent"
+                )
+            conn.execute(
+                "UPDATE assignments SET state = ?, result_json = ? "
+                "WHERE assignment_id = ?",
+                (AssignmentState.RESULT_DURABLE.value, encoded, assignment_id),
+            )
+            return AssignmentState.RESULT_DURABLE
+
     def acknowledge_terminal(self, assignment_id: str) -> AssignmentState:
         return self._advance(
             assignment_id,
@@ -1124,6 +1230,20 @@ class SQLiteAgentJournal:
     def read_state(self, assignment_id: str) -> AssignmentState:
         with self._transaction() as conn:
             return AssignmentState(self._assignment(conn, assignment_id)["state"])
+
+    def find_state(self, assignment_id: str) -> AssignmentState | None:
+        """Return one exact durable local fact without treating absence as progress."""
+
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT state FROM assignments WHERE assignment_id = ?", (assignment_id,)
+            ).fetchone()
+            return None if row is None else AssignmentState(row["state"])
+
+    def read_grant_fence(self, assignment_id: str) -> str | None:
+        with self._transaction() as conn:
+            value = self._assignment(conn, assignment_id)["grant_fence"]
+        return None if value is None else str(value)
 
     def read_result(self, assignment_id: str) -> StageWorkerResult | None:
         with self._transaction() as conn:
@@ -1820,6 +1940,59 @@ class SQLiteCoordinatorAssignments:
                     (row["agent_id"], row["session_id"], row["offer_id"]),
                 )
             return "released"
+
+    def cancellation_release_unstarted(self, assignment_id: str) -> str:
+        """Release an exact reservation only after the caller proves no local request."""
+
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT state FROM coordinator_assignments WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+            if row is None:
+                raise ManagedLocalError("assignment is not reserved")
+            if row["state"] == "released":
+                return "released"
+            if row["state"] != "reserved":
+                raise ManagedLocalError("only an unbound reservation can be released")
+            conn.execute(
+                "UPDATE coordinator_assignments SET state = 'released' WHERE assignment_id = ?",
+                (assignment_id,),
+            )
+            return "released"
+
+    def cancellation_release_pregrant(self, assignment_id: str) -> str:
+        """Release one exact reservation after journal-owned no-start settlement."""
+
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT state FROM coordinator_assignments WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+            if row is None:
+                raise ManagedLocalError("assignment is not reserved")
+            if row["state"] == "released":
+                return "released"
+            if row["state"] not in {"bound", "accepted"}:
+                raise ManagedLocalError("local assignment is not proven pre-grant")
+            conn.execute(
+                "UPDATE coordinator_assignments SET state = 'released' WHERE assignment_id = ?",
+                (assignment_id,),
+            )
+            return "released"
+
+    def list_run_live_states(self, run_uri: str) -> tuple[tuple[str, str], ...]:
+        """Return coordinator-owned nonterminal assignment facts for cancellation."""
+
+        with self._transaction() as conn:
+            return tuple(
+                (str(row["assignment_id"]), str(row["state"]))
+                for row in conn.execute(
+                    "SELECT assignment_id, state FROM coordinator_assignments "
+                    "WHERE run_uri = ? AND state != 'released' ORDER BY assignment_id",
+                    (run_uri,),
+                )
+            )
 
     def record_event(
         self,
