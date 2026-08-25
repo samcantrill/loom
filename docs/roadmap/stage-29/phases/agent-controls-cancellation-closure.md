@@ -207,9 +207,10 @@ Final commands:
 - Manager preparation: complete on clean merged Phase 7B baseline
 - Expanded planning: architecture boundary explored; no phase-planner pass
   needed because the approved three-finding recovery is decision-complete
-- Implementation: pending one executor
+- Implementation: complete in `0059d55`
 - Refiner: not used
-- Pre-submit gate: pending
+- Pre-submit gate: passed at `0059d55`; `make validate-pr` and
+  `make test-summary` completed with no validation-relevant changes afterward
 - Independent review: required after PR
 - Blocker corrections: 0/3
 - PR and merge: pending
@@ -218,9 +219,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | `0059d55`: restored the approved Phase 8 packet with fresh v5 agent/journal and daemon schemas plus v3 CLI result; scoped control admission, durable delivery/replay, scheduling reload, exact local/remote/SLURM cancellation settlement, authority fences, CLI, and `docs/features/queue.md`. |
+| Tests added or updated | Phase 8 focused queue, managed-local, authority, SLURM, transport, production, CLI, contract, and package coverage; added scoped-denial-before-mutation and previous/candidate v1–v4 hard-cut rejection cases. |
+| Validated revision/tree state and evidence | `0059d55` clean implementation tree: focused unit/contract/integration suites passed; `make validate-pr` passed; [test summary](../../../../build/test-summary.md) reports 2,651 passed, 0 failed, 0 errors, and 3 skipped across 2,654 selected tests. |
+| Validation-relevant changes after evidence | None; this completion-record-only update is not validation-relevant. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No implementation blocker. Unknown local, remote, or SLURM ownership remains `CANCELLING` until positive owner settlement; Phase 9 recovery remains out of scope. Worktree and branch retained for manager PR/review. |
