@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 8
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p8-agent-controls-cancellation`
@@ -19,7 +19,11 @@
   external observation/cancel evidence, and joined status
 - Workflow path: expanded because configuration mutation, availability,
   cancellation, process containment, and authorization races interact
-- Blockers: none
+- Blockers: independent review confirmed that unresolved local/prepared work is
+  absent from the final cancellation-settlement barrier; operator controls lack
+  protected action/agent/pool authorization scopes; and coordinator reload does
+  not replace or retain the accepted complete planner/rule/scorer/policy epoch.
+  Correction 3/3 is exhausted.
 
 ## Objective And Context
 
@@ -593,11 +597,12 @@ Final commands:
   the isolated default and configuration-extra suites with 3 expected environment
   skips, configuration checks, and source/wheel builds; `make test-summary`
   recorded 2,648 categorized passes, 3 expected skips, and no failures or errors
-- Independent review: required because control races can release live resources
-  or authorize mutation; pending against PR #244
+- Independent review: complete; three accepted-contract product blockers were
+  confirmed against the candidate. Required causal authorization, outage/replay,
+  retained-binding, and mixed-target evidence is consequently incomplete
 - Blocker corrections: 3/3
 - PR and merge: [PR #244](https://github.com/samcantrill/loom/pull/244)
-  is open against `develop`; review, CI, and merge are pending
+  passed CI but closed without merge after required review blocked the candidate
 
 ## Completion Record
 
@@ -607,5 +612,5 @@ Final commands:
 | Tests added or updated | Unit and integration coverage proves serialized/replayed controls, work-withdrawal before delivery, trusted-local reload, retained-binding identity, live-credential reload rejection, cancellation principal/status truth, pre-grant cleanup, grant/start race fencing, response-loss acknowledgement replay, contained exact-child cancellation, pre-`sbatch` suppression, and exact retained-profile SLURM fan-out. |
 | Validated revision/tree state and evidence | Source/test revision `db254bd`: focused and adjacent matrices passed, including the final 276-test contract matrix. Fresh `make validate-pr` passed Ruff, Pyright with zero errors, isolated default and configuration-extra suites with 3 expected environment skips, configuration checks, and source/wheel builds. Fresh `make test-summary` passed package 118, unit 1,791, contract 295, integration 246, E2E 57, and configuration-extra 141 with 3 expected skips, for 2,648 categorized passes and no failures/errors. |
 | Validation-relevant changes after evidence | Phase-plan PR/status metadata only. |
-| PR, review, and merge | [PR #244](https://github.com/samcantrill/loom/pull/244) targets `develop` with the required title; independent review, CI, and merge are pending. |
-| Residual risk and cleanup | Unknown accepted/started work intentionally remains cancellation-settling until Phase 9 proves positive containment. This is a hard cut-over: old daemon status, local-store, and agent protocol schemas are rejected rather than migrated or dual-read, so coordinator and agents must be drained and deployed together; in-flight work must finish under its exact retained old binding before that binding can be collected. Independent review, CI, merge, and worktree cleanup remain pending. |
+| PR, review, and merge | [PR #244](https://github.com/samcantrill/loom/pull/244) targeted `develop` with the required title and passed CI. Required independent review found three accepted-contract blockers: false terminal cancellation can bypass unresolved local/prepared work; operator controls are not action/agent/pool scoped; and scheduling reload does not replace/retain the complete component epoch. The PR closed without merge after correction 3/3. |
+| Residual risk and cleanup | The hard-cut schemas are unmerged and unsupported. Preserve the branch/worktree as read-only evidence; do not deploy, stack, reopen, or treat the candidate protocol/store/status shapes as compatible. Phase 9 remains dependency-blocked because Phase 8 did not merge. |
