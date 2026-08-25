@@ -1,6 +1,6 @@
 # Roadmap Stage 29 Planning: Durable Dependency-Aware Stage Scheduling
 
-Status: Phase 8A in progress; Phases 1-3D, 4A, 5A, 6, and 7B merged; Phases
+Status: Phase 8A merged; Phases 1-3D, 4A, 5A, 6, 7B, and 8A merged; Phases
 3A-3C, 4, 5, 7, 7A, and 8 retained as blocked evidence
 Roadmap stage: 29
 Evidence baseline: repository source at
@@ -15,18 +15,17 @@ merge `2d273b8`; Phase 5/5A evidence `d536a1e`/`4134d70` and merge `5116f18`;
 Phase 6 source/test evidence `75cd70a` and merge `2c6d366`; blocked Phase 7
 candidate/review evidence `3515400`/`1eb7c2c`; blocked Phase 7A validated/review
 evidence `ac1bfd9`/`a70986c`; Phase 7B validated source/test evidence `35cb848`
-plus squash merge `d0da216`; and blocked Phase 8 source/test candidate `db254bd`
-plus required review and passing CI in closed PR #244
+plus squash merge `d0da216`; blocked Phase 8 source/test candidate `db254bd`
+plus required review and passing CI in closed PR #244; and Phase 8A validated
+source/test evidence `80b4655`, independent review at `7901d74`, and squash
+merge `900a461`
 Planning route: the original expanded Stage 29 design remains authoritative.
 The maintainer approved the hard cut-over and selected a Slurm prolog/container-
 provisioned allocation-private capability file for the ready-stage recovery.
-Current gate: Phase 8 candidate `db254bd` passed local validation and PR #244
-CI, but required review found three accepted-contract blockers after correction
-3/3. PR #244 closed without merge. The maintainer approved fresh Phase 8A from
-current `develop`; Phase 9 remains dependent on its merge.
-Blockers: none for Phase 8A. Its execution plan fixes exact operator scopes,
-complete active/retained component reload, and prepared/local/remote/SLURM
-cancellation settlement with an authority final CAS and fresh hard-cut IDs.
+Current gate: Phase 8A passed local validation, independent review, and final
+CI; PR #245 squash-merged into `develop` as `900a461`.
+Blockers: none. Phase 9 is ready for manager preparation from current
+`develop`.
 
 This file is the current Stage 29 authority. It supersedes the earlier Stage 29
 whole-run placement design. A user still submits, observes, and cancels a run,
@@ -54,7 +53,8 @@ different resources and useful placements.
 | Phase 7B recovery agreement | The assignment owner receives the exact retained verifier before `SUBMITTING`/`sbatch`; definite terminal/rejected work reaches final release only after replay-safe provider revocation; the parallel-limit test waits for accepted mirrors. | None. Unknown containment remains Phase 9 and no compatibility is required. | Preserve merged Phase 7B behavior as the Phase 8 dependency. |
 | Phase 7B execution evidence | Validated implementation `35cb848` passed the full local gate and 2,636 categorized tests with 3 expected skips. Independent review and the manager gate closed the terminal lifecycle findings; CI passed. | None. PR #243 squash-merged as `d0da216`. | Prepare Phase 8 from current `develop`; retain Phase 7/7A only as blocked evidence. |
 | Phase 8 execution evidence | Candidate `db254bd` implemented the hard-cut controls/reload/cancellation path and passed the full gate, 2,648 categorized tests, and PR #244 CI. | Required review found false terminal cancellation around unresolved local/prepared work, missing action/agent/pool operator scopes, and SLURM-only coordinator reload after correction 3/3. | Preserve Phase 8/PR #244 as read-only evidence; use only a fresh Phase 8A branch downstream. |
-| Phase 8A recovery agreement | Selectively reuse Phase 8 behavior while adding a common default-deny operator scope check before persistence, one complete active/retained component epoch, all-owner cancellation settlement plus authority final CAS, and fresh version identities. | None. Same-version live binding retention is not compatibility; old and candidate formats remain rejected. | Implement the linked decision-complete Phase 8A plan, require independent review, and keep Phase 9 blocked until merge. |
+| Phase 8A recovery agreement | Selectively reuse Phase 8 behavior while adding a common default-deny operator scope check before persistence, one complete active/retained component epoch, all-owner cancellation settlement plus authority final CAS, and fresh version identities. | None. Same-version live binding retention is not compatibility; old and candidate formats remain rejected. | Preserve the merged Phase 8A boundary and use it as the Phase 9 dependency. |
+| Phase 8A execution evidence | Implementation `80b4655` closes exact operator scopes, complete mixed-epoch component/profile retention, and authority-owned all-owner cancellation finalization. The full gate and 2,675-pass summary succeeded with 3 expected skips; independent review and final CI passed. | None. PR #245 squash-merged as `900a461`; genuinely unknown ownership remains Phase 9. | Prepare Phase 9 from current `develop`; retain Phase 8 only as blocked evidence. |
 | Approval | The maintainer approved the Stage 29 hard cut-over, explicitly rejected candidate-schema compatibility or migration, approved the Slurm job-private capability contract and Phase 7B closure, and approved the fresh narrow Phase 8A recovery after Phase 8 review. | None. | Preserve these decisions during refinement and implementation. |
 
 ## Evidence And Scope
@@ -1803,7 +1803,7 @@ should be tested at their owning boundary rather than as a Cartesian matrix.
 | 7A — blocked ready-stage SLURM trust-closure candidate | Validated candidate closes the Phase 7 submit-isolation, assignment-capability, scheduler-continuation, and restart-evidence gaps but cannot merge. | Evidence only. A fast allocation can register before its durable prepared verifier is copied into the assignment owner, and successful terminal release does not revoke remaining provider state. | Phase 6 plus read-only Phase 7 evidence. | Implementation `ac1bfd9` passed the focused matrix, full gate, and 2,631 categorized tests; required review found two supported-path blockers and one localized flaky wait after correction 3/3. | blocked |
 | 7B — ready-stage SLURM lifecycle closure | One explicitly routed ready stage prepares one private capability, publishes its verifier before Slurm can start bootstrap, submits/launches once, relays its result, and revokes provider state before final release. | Selectively reuse Phase 7A; add an idempotent prepared-verifier handoff before `SUBMITTING`/`sbatch`, shared replay-safe revoke-before-release for normal terminal and definite rejection, a stable parallel-limit wait, and fresh final schema identities. Preserve allocation-private delivery, verifier-only Loom state, protected submission, no fallback, one root, Phase 5 relay/result, and historical whole-run separation. No migration, public provider framework, Phase 8 cancellation/reload, or Phase 9 unknown containment. | Phase 6 plus read-only Phase 7/7A evidence. | Validated implementation `35cb848` passed focused/full gates and 2,636 categorized tests with 3 skips; independent review and CI passed; PR #243 squash-merged as `d0da216`. | merged |
 | 8 — controls and stage-aware cancellation | Candidate `db254bd` implemented drain/resume/reload and cancellation but cannot merge. | Evidence only: review proved local/prepared unresolved work can be bypassed by terminal cancellation, operator policy is role-only, and reload replaces only SLURM profiles. Candidate schemas are unsupported. | Merged Phase 7B at `d0da216`; blocked Phase 7/7A evidence is not a dependency base. | Full local gates, 2,648 categorized tests, and PR #244 CI passed; required review blocked after correction 3/3. | blocked |
-| 8A — control and cancellation closure | Operators use exactly scoped controls; trusted reload swaps one complete component epoch; cancellation becomes terminal only after every prepared/local/remote/SLURM owner settles. | Selective Phase 8 reuse plus protected action/agent/pool grants, existing `ComponentRegistry` and descriptor owners, authority final-cancellation CAS, and fresh protocol/store/CLI IDs. No compatibility or Phase 9 inference. | Phase 7B plus read-only Phase 8 evidence. | Causal authorization negatives, old/new retained component use, authority outage/replay, every local boundary, mixed-target cancellation, strict-version rejection, full local gates, CI, and independent review. | in_progress |
+| 8A — control and cancellation closure | Operators use exactly scoped controls; trusted reload swaps one complete component epoch; cancellation becomes terminal only after every prepared/local/remote/SLURM owner settles. | Selective Phase 8 reuse plus protected action/agent/pool grants, existing `ComponentRegistry` and descriptor owners, authority final-cancellation CAS, and fresh protocol/store/CLI IDs. No compatibility or Phase 9 inference. | Phase 7B plus read-only Phase 8 evidence. | Causal authorization negatives, old/new retained component use, authority outage/replay, every local boundary, mixed-target cancellation, strict-version rejection, full local gates, CI, and independent review. | merged |
 | 9 — restart and guarded recovery | Agents and SLURM assignments restart/reconcile without duplicate launch/submission, and privileged operators can resolve positively contained unknown work or replace a fully contained old agent session. | Same-session agent journal/process/outbox recovery; SLURM known/unknown operation/handle/bootstrap reconciliation without resubmit; user-service operation; agent or trusted exact SLURM positive-containment evidence; normal reconciliation of every verified current-fence terminal fact; cross-store fence/close/retry reconciliation; execution-close/provider/profile-slot release separation; stale-event/result rejection; complete agent-session replacement set; regression only for earlier ordinary coordinator/authority restart. No second automatic restart state machine, automatic failover/fallback, or coordinator HA. | Phase 8A. | Restart at every agent and SLURM submit/bootstrap/result edge; zero/one/multiple job discovery; coordinator/authority restart regression; weak SLURM absence rejection; idempotent recovery; success/failure/cancellation versus close; agent provider/profile slot release and stale-output races; complete session-reference query; full Stage 29 validation. | pending |
 
 Nine numbered phases plus Phase 3B, Phase 3C, Phase 3D, Phase 4A, Phase 5A,
@@ -1831,8 +1831,8 @@ and missing normal terminal provider revocation. Phase 7A is read-only evidence,
 not correction 4/3 or a stacked PR. Fresh Phase 7B owned only those two
 lifecycle orderings plus the causal wait and hard schema cut, treated both
 candidates as read-only evidence, and merged as `d0da216`. Phase 8 then
-exhausted correction 3/3 with three review blockers. Fresh approved Phase 8A
-owns only those closures; Phase 9 remains dependent on Phase 8A.
+exhausted correction 3/3 with three review blockers. Fresh Phase 8A owned only
+those closures and merged as `900a461`; Phase 9 is next.
 
 The broader nine-phase shape remains justified by the original boundaries.
 The former three phases each crossed several independent durable, trust, data,
@@ -1884,11 +1884,12 @@ route choices remain in phase-executor discretion.
 | Phase 7B execution evidence | Implementation `35cb848` passed the full local gate and 2,636 categorized tests with 3 expected skips. Independent review found one terminal reconciliation blocker; corrections closed it and the manager-found intermediate-terminal replay race, CI passed, and PR #243 squash-merged as `d0da216`. | pass |
 | Phase 8 execution evidence | Candidate `db254bd` passed the full local gate, 2,648 categorized tests, and PR #244 CI. Required review found incomplete local/prepared settlement, role-only operator authorization, and incomplete component reload after correction 3/3; PR #244 closed without merge. | blocked evidence retained |
 | Phase 8A recovery agreement | Exact protected operator scopes precede intent persistence; one private epoch composes the existing active/retained registries and profile owner; all prepared/local/remote/SLURM owners settle before an authority final CAS; fresh identities reject old and candidate formats. | pass |
+| Phase 8A execution evidence | Implementation `80b4655` passed the full gate and a 2,675-pass summary with 3 expected skips. Independent review returned PASS with no blocker, final CI passed, and PR #245 squash-merged as `900a461`. | pass |
 | No unresolved planning blocker | The maintainer approved the bounded Phase 8A recovery; its linked plan names the three findings, owners, causal coverage, hard-cut boundary, and Phase 9 stop without reopening accepted behavior. | pass |
 
-Gate result: Phase 8A is approved and in progress from current `develop` with no
-unresolved planning blocker. Phases 7, 7A, and 8 remain read-only evidence;
-Phase 9 remains dependent on Phase 8A.
+Gate result: Phase 8A merged into current `develop` with no unresolved blocker.
+Phases 7, 7A, and 8 remain read-only evidence; Phase 9 is ready for manager
+preparation.
 The previous expanded design,
 startup, extension/security, phase-shaping, deep scheduler, manager-local
 whole-stage correctness, deployment clarification, and explicit ready-stage
