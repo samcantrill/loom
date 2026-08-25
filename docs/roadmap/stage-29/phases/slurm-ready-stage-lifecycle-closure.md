@@ -330,8 +330,10 @@ Final commands:
 - Manager correction: correction 3/3 makes the intermediate `terminal` state an
   exact replay that continues to logical release; the full gate exposed the
   coordinator/bootstrap concurrency window after focused validation
-- Pre-submit gate: pending a fresh full run after correction 3/3
-- Independent review: complete; its terminal-reconciliation blocker is addressed
+- Pre-submit gate: passed at validated implementation revision `35cb848`;
+  `make validate-pr` and `make test-summary` are current
+- Independent review: complete; its terminal-reconciliation blocker and the
+  manager-found exact-replay concurrency edge are addressed with causal tests
 - Blocker corrections: 3/3; no further correction pass remains
 - PR and merge: pending
 
@@ -341,7 +343,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Corrections 1-2 gate both terminal admission returns through exact authority/assignment reconciliation and the shared revoke owner. Correction 3 makes a retained intermediate `terminal` transition replay-safe under coordinator/bootstrap concurrency. |
 | Tests added or updated | Restored the successful mixed-route end-to-end replay, final run state, one-root, script-redaction, and release assertions. Separate integration cases now stop causally after authority-result and the actual assignment-`terminal` commit, then lose the first revoke acknowledgement and require replay before `released`. |
-| Validated revision/tree state and evidence | Focused and full validation pending after correction 3/3; the preceding full gate exposed the now-corrected intermediate-terminal replay conflict after 2,494 other tests passed. |
-| Validation-relevant changes after evidence | None. |
+| Validated revision/tree state and evidence | Validated implementation revision `35cb848`: affected focused matrix 25 passed; `make validate-pr` passed lint, typing, 2,495 default tests, 141 optional-config tests with 3 skipped, and package builds; `make test-summary` passed with 2,636 passed, 3 skipped, 0 failures/errors. |
+| Validation-relevant changes after evidence | None; only this concise phase metadata was updated after validation. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Unknown containment remains Phase 9; real site-helper/prolog validation remains opt-in. No further qualified blocker is known. |
