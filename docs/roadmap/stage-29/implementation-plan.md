@@ -1,16 +1,16 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: Phase 7B PR open; Phases 1-3D, 4A, 5A, and 6 merged,
+Status: implementation in progress; Phases 1-3D, 4A, 5A, 6, and 7B merged,
 Phases 3A-3C, 4, 5, 7, and 7A retained as blocked evidence
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 7B `pr_open`
-Blockers: none. The maintainer approved a fresh hard-cut recovery that publishes
-the exact verifier before `sbatch`, requires replay-safe provider revocation
-before final release, and fixes the causal parallel-limit wait. Phases 8 and 9
-remain dependency-blocked until Phase 7B merges.
+Current phase: Phase 8 `pending`
+Blockers: none. Phase 7B passed local validation, independent review, and CI;
+[PR #243](https://github.com/samcantrill/loom/pull/243) squash-merged into
+`develop` as `d0da216`. Phase 8 is ready for manager preparation; Phase 9
+remains dependency-blocked until Phase 8 merges.
 
 ## Summary
 
@@ -656,7 +656,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 6 | `gpu-preference-placement` | merged | `docs/roadmap/stage-29/phases/gpu-preference-placement.md` | `agent/stage-29-p6-gpu-preference-placement` | [#241](https://github.com/samcantrill/loom/pull/241) merged | Configured manageable GPU inventory; external-occupancy withdrawal; GPU planner/provider and claim contracts; planner-owned count/mode/per-device/topology feasibility; whole-placement constraints; tiered agent/model/packing preferences; quality-band fallback; strict future SLURM hard-mapping boundary; explicit no-OOM guarantee | Prove the generic resource and policy seams with safe exact GPU/VRAM managed placement and deterministic resource-relevant preferences that Phase 7 must map completely or reject. |
 | 7 | `slurm-ready-stage-delegation` | blocked | `docs/roadmap/stage-29/phases/slurm-ready-stage-delegation.md` | `agent/stage-29-p7-slurm-ready-stage-delegation` | [#242](https://github.com/samcantrill/loom/pull/242) closed without merge | Validated explicit-route, durable-submit, bootstrap, relay, and mixed-route candidate; required review found an unsanitized submit environment, profile-wide bootstrap authority, and route-local waiting that can starve other work | Preserve candidate `3515400` and its passing validation/CI as read-only evidence; correction 3/3 is exhausted. |
 | 7A | `slurm-ready-stage-trust-closure` | blocked | `docs/roadmap/stage-29/phases/slurm-ready-stage-trust-closure.md` | `agent/stage-29-p7a-slurm-ready-stage-trust-closure` | not opened | Validated hard-cut trust-closure candidate; required review found that a fast bootstrap can register before the prepared verifier reaches the assignment owner and normal terminal release never revokes site provider state | Preserve validated implementation `ac1bfd9` and its passing focused/full gates as read-only evidence; correction 3/3 is exhausted. |
-| 7B | `slurm-ready-stage-lifecycle-closure` | pr_open | `docs/roadmap/stage-29/phases/slurm-ready-stage-lifecycle-closure.md` | `agent/stage-29-p7b-slurm-ready-stage-lifecycle-closure` | [#243](https://github.com/samcantrill/loom/pull/243) open | Selective Phase 7A source/test reuse; durable verifier handoff before `SUBMITTING`/`sbatch`; shared replay-safe provider revoke before final release; stable parallel-limit evidence; fresh hard-cut schemas | Local gates and independent review passed after three scoped lifecycle corrections; CI and automatic squash merge remain. |
+| 7B | `slurm-ready-stage-lifecycle-closure` | merged | `docs/roadmap/stage-29/phases/slurm-ready-stage-lifecycle-closure.md` | `agent/stage-29-p7b-slurm-ready-stage-lifecycle-closure` | [#243](https://github.com/samcantrill/loom/pull/243) merged | Selective Phase 7A source/test reuse; durable verifier handoff before `SUBMITTING`/`sbatch`; shared replay-safe provider revoke before final release; stable parallel-limit evidence; fresh hard-cut schemas | Local gates, independent review, and CI passed after three scoped lifecycle corrections; squash-merged as `d0da216`. |
 | 8 | `agent-controls-cancellation` | pending | `docs/roadmap/stage-29/phases/agent-controls-cancellation.md` | `agent/stage-29-p8-agent-controls-cancellation` | pending | Serialized drain/resume; separate agent pool/provider/inventory and coordinator planner/rule/scorer/policy/profile reload transactions; retained owner-local descriptors and contract-skew ineligibility; coordinator request/authority cancellation epoch and complete managed/SLURM fan-out | Operate agents/profiles and cancel runs without mutating live claims, stranding durable component references, starting descendants, or treating disconnection/`scancel` acknowledgement as completion. |
 | 9 | `restart-guarded-recovery` | pending | `docs/roadmap/stage-29/phases/restart-guarded-recovery.md` | `agent/stage-29-p9-restart-guarded-recovery` | pending | Same-session agent restart; outbox/process reconciliation; SLURM submit/bootstrap/job/result reconciliation; normal reconciliation of all known terminal facts; positive-containment manual recovery; fence/close/retry; provider-release separation; complete request/delivery/preparation/claim/control/transfer/result/output/event/outbox session replacement; Phase 5 and Phase 7 restart regressions | Restart and recover unknown managed or SLURM work without duplicate submit/launch, overwritten terminal truth, unsafe capacity reuse, weak-evidence takeover, stale output commit, or automatic failover. |
 
@@ -672,11 +672,11 @@ execution connectivity/security gate plus the retirement-possession and poll-
 isolation closures. Phase 5 is blocked evidence after required review found a
 transfer publication/finalization crash window. Fresh Phase 5A merged the same
 accepted remote assignment and artifact-byte path plus only that replay closure.
-Phase 7 and Phase 7A are blocked evidence. Phase 7B starts from current
-`develop`, selectively reuses validated Phase 7A source/tests, publishes the
-verifier before `sbatch`, makes provider revocation a prerequisite for final
-release, and rejects both unmerged candidate shapes. Phases 8 and 9 remain
-pending until Phase 7B merges.
+Phase 7 and Phase 7A are blocked evidence. Phase 7B selectively reused their
+validated source/tests, published the verifier before `sbatch`, made provider
+revocation a prerequisite for final release, rejected both unmerged candidate
+shapes, and merged as `d0da216`. Phase 8 is next; Phase 9 remains pending until
+Phase 8 merges.
 
 ## Quality Gate
 
@@ -837,10 +837,11 @@ pending until Phase 7B merges.
   one owner per accepted verifier-publication, submit, revoke, and release
   invariant. No product, public API, provider, compatibility, or Phase 8/9
   decision is reopened; an independent planning pass is not needed.
-- Phase 7B PR [#243](https://github.com/samcantrill/loom/pull/243) is open after
-  the approved verifier publication, replay-safe provider revoke, causal wait,
-  and fresh-only schema cut passed local validation and independent review.
-  Phases 8 and 9 cannot start until Phase 7B merges.
+- Phase 7B completion: validated implementation `35cb848` passed the full local
+  gate and 2,636 categorized tests with 3 expected skips. Independent review
+  and the manager gate closed the terminal lifecycle findings; CI passed and
+  PR [#243](https://github.com/samcantrill/loom/pull/243) squash-merged as
+  `d0da216`. Phase 8 is ready; Phase 9 remains dependent on Phase 8.
 - Accepted risks: FIFO starvation, complete-search exhaustion/delay, coordinator relay
   bottleneck, agent result retention, resident-project drift, trusted
   in-process downstream extension hang/misbehavior, configuration-driven
@@ -874,6 +875,6 @@ pending until Phase 7B merges.
 | 6 | [PR #241](https://github.com/samcantrill/loom/pull/241), squash-merged as `2c6d366` | Source/test revision `75cd70a`; `make validate-pr` passed 2,456 default and 141 configuration-extra tests with 3 expected skips plus lint, zero-finding type checks, and builds; fresh summary recorded package 118, unit 1,749, contract 295, integration 237, E2E 57, and config-extra 141; independent-review findings resolved by correction 3/3, manager-verified, and CI passed | No known blocker. Intentional hard cut rejects pre-provider-descriptor offers, remote execution schema/capability v2, and retained claim rows without provider identity; simulated GPU/provider evidence remains hardware-independent | Phase 6 worktree and local/remote branches removed after merge; blocked evidence worktrees retained |
 | 7 | [#242](https://github.com/samcantrill/loom/pull/242), closed without merge | Candidate `3515400` passed `make validate-pr`, a fresh `make test-summary` with 2,620 categorized passes and 3 expected skips, focused 60-unit/21-integration tests, and CI; required independent review then blocked it | Inherited `SBATCH_*` variables can weaken hard requests, coordinator variables can leak into the job, profile credentials can claim another assignment, a blocked SLURM route can starve independent work, fresh-process restart evidence is incomplete, and Loom lacks a job-private capability-delivery channel | Correction 3/3 exhausted; dedicated branch/worktree retained as read-only evidence |
 | 7A | No PR opened; blocked implementation `ac1bfd9` | Focused 153 tests, `make validate-pr`, and 2,631 categorized tests passed; required review found a fast-bootstrap verifier-publication race, missing normal terminal provider revocation, and one localized flaky wait | Supported allocation can receive a definitive registration conflict; provider state can survive successful completion | Correction 3/3 exhausted; dedicated branch/worktree retained as read-only evidence |
-| 7B | [#243](https://github.com/samcantrill/loom/pull/243) open | Validated implementation revision `35cb848`; `make validate-pr` passed; fresh summary recorded 2,636 passed and 3 skipped; independent review blocker and manager-found terminal replay edge were closed with causal tests | CI and automatic squash merge pending; no known blocker | Unknown preparation/submission/start containment remains Phase 9; real site-helper/prolog validation remains opt-in |
+| 7B | [#243](https://github.com/samcantrill/loom/pull/243), squash-merged as `d0da216` | Validated implementation revision `35cb848`; `make validate-pr` passed; fresh summary recorded 2,636 passed and 3 skipped; independent review blocker and manager-found terminal replay edge were closed with causal tests; CI passed | No known blocker; unknown preparation/submission/start containment remains Phase 9 and real site-helper/prolog validation remains opt-in | Phase 7B worktree and local/remote branches removed; blocked Phase 7/7A evidence retained |
 | 8 | pending | pending | pending | pending |
 | 9 | pending | pending | pending | pending |

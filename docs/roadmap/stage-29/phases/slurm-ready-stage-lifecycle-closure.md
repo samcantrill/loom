@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 29, Phase 7B
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p7b-slurm-ready-stage-lifecycle-closure`
@@ -12,7 +12,8 @@
   `84ccb2a77c6e39268bdb07edba594bc82bf0c187`
 - PR target: `develop`
 - PR title: `feat(scheduling): close ready-stage SLURM lifecycle ordering`
-- PR: [#243](https://github.com/samcantrill/loom/pull/243)
+- PR: [#243](https://github.com/samcantrill/loom/pull/243), squash-merged as
+  `d0da216`
 - Dependencies: Phase 6 merged as `2c6d366`; Phase 7 candidate `3515400` and
   Phase 7A implementation `ac1bfd9` are selective read-only source/test
   evidence, never branch bases
@@ -337,7 +338,7 @@ Final commands:
   manager-found exact-replay concurrency edge are addressed with causal tests
 - Blocker corrections: 3/3; no further correction pass remains
 - PR and merge: PR [#243](https://github.com/samcantrill/loom/pull/243)
-  is open against `develop`; CI and automatic squash merge are pending
+  passed CI and squash-merged into `develop` as `d0da216`
 
 ## Completion Record
 
@@ -347,5 +348,5 @@ Final commands:
 | Tests added or updated | Restored the successful mixed-route end-to-end replay, final run state, one-root, script-redaction, and release assertions. Separate integration cases now stop causally after authority-result and the actual assignment-`terminal` commit, then lose the first revoke acknowledgement and require replay before `released`. |
 | Validated revision/tree state and evidence | Validated implementation revision `35cb848`: affected focused matrix 25 passed; `make validate-pr` passed lint, typing, 2,495 default tests, 141 optional-config tests with 3 skipped, and package builds; `make test-summary` passed with 2,636 passed, 3 skipped, 0 failures/errors. |
 | Validation-relevant changes after evidence | None; only this concise phase metadata was updated after validation. |
-| PR, review, and merge | Independent review completed and its blocker was corrected; PR [#243](https://github.com/samcantrill/loom/pull/243) is open, non-draft, and mergeable against `develop` with CI pending. |
-| Residual risk and cleanup | Unknown containment remains Phase 9; real site-helper/prolog validation remains opt-in. No further qualified blocker is known. |
+| PR, review, and merge | Independent review completed and its blocker was corrected; PR [#243](https://github.com/samcantrill/loom/pull/243) passed CI and squash-merged into `develop` as `d0da216`. |
+| Residual risk and cleanup | Unknown containment remains Phase 9; real site-helper/prolog validation remains opt-in. The Phase 7B worktree and local/remote branches were removed after merge; blocked Phase 7/7A evidence remains read-only. |
