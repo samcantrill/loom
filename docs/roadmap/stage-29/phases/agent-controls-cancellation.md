@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 8
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p8-agent-controls-cancellation`
@@ -594,9 +594,10 @@ Final commands:
   skips, configuration checks, and source/wheel builds; `make test-summary`
   recorded 2,648 categorized passes, 3 expected skips, and no failures or errors
 - Independent review: required because control races can release live resources
-  or authorize mutation; pending PR review
+  or authorize mutation; pending against PR #244
 - Blocker corrections: 3/3
-- PR and merge: pending
+- PR and merge: [PR #244](https://github.com/samcantrill/loom/pull/244)
+  is open against `develop`; review, CI, and merge are pending
 
 ## Completion Record
 
@@ -604,7 +605,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Protocol-v4 durable agent controls and response-loss replay in `agent_sessions.py` and `agent_session_transport.py`; authenticated daemon/CLI drain, resume, agent reload, coordinator scheduling reload, cancellation projection, and hard schema cut in `local_daemon.py`, `local_daemon_transport.py`, and `cli/queue.py`; exact retained profile resolution plus cancellation fan-out and serialized SLURM grant/start permits in `local_daemon_execution.py`; exact pre-grant cleanup and grant-fence reads in `managed_local.py`; durable cancelled-before-start remote results in `_remote_stage_execution.py`; and pre-`sbatch` no-call proof in `ready_stage.py`. Operational hard-cut examples are recorded in `docs/features/queue.md`. |
 | Tests added or updated | Unit and integration coverage proves serialized/replayed controls, work-withdrawal before delivery, trusted-local reload, retained-binding identity, live-credential reload rejection, cancellation principal/status truth, pre-grant cleanup, grant/start race fencing, response-loss acknowledgement replay, contained exact-child cancellation, pre-`sbatch` suppression, and exact retained-profile SLURM fan-out. |
-| Validated revision/tree state and evidence | Current source/test tree: focused and adjacent matrices passed, including the final 276-test contract matrix. Fresh `make validate-pr` passed Ruff, Pyright with zero errors, isolated default and configuration-extra suites with 3 expected environment skips, configuration checks, and source/wheel builds. Fresh `make test-summary` passed package 118, unit 1,791, contract 295, integration 246, E2E 57, and configuration-extra 141 with 3 expected skips, for 2,648 categorized passes and no failures/errors. |
-| Validation-relevant changes after evidence | Phase-plan record updated only. |
-| PR, review, and merge | pending |
+| Validated revision/tree state and evidence | Source/test revision `db254bd`: focused and adjacent matrices passed, including the final 276-test contract matrix. Fresh `make validate-pr` passed Ruff, Pyright with zero errors, isolated default and configuration-extra suites with 3 expected environment skips, configuration checks, and source/wheel builds. Fresh `make test-summary` passed package 118, unit 1,791, contract 295, integration 246, E2E 57, and configuration-extra 141 with 3 expected skips, for 2,648 categorized passes and no failures/errors. |
+| Validation-relevant changes after evidence | Phase-plan PR/status metadata only. |
+| PR, review, and merge | [PR #244](https://github.com/samcantrill/loom/pull/244) targets `develop` with the required title; independent review, CI, and merge are pending. |
 | Residual risk and cleanup | Unknown accepted/started work intentionally remains cancellation-settling until Phase 9 proves positive containment. This is a hard cut-over: old daemon status, local-store, and agent protocol schemas are rejected rather than migrated or dual-read, so coordinator and agents must be drained and deployed together; in-flight work must finish under its exact retained old binding before that binding can be collected. Independent review, CI, merge, and worktree cleanup remain pending. |
