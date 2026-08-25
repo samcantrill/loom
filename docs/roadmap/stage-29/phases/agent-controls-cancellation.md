@@ -2,21 +2,24 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 8
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p8-agent-controls-cancellation`
-- Worktree root and path: record during phase preparation
-- Base revision: current `origin/develop` after Phase 7 remotely merges
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+  `/home/can134/work/active/loom-worktrees/stage-29-p8-agent-controls-cancellation`
+- Base revision: clean `origin/develop` at
+  `74e4b8354d82eb4fb727453ac6e4c9307b8fb3fb`
 - PR target: `develop`
 - PR title: `feat(scheduling): add agent controls and cancellation`
-- Dependencies: Phase 7 merged with complete local/remote stage lifecycle,
+- Dependencies: Phase 7B squash-merged as `d0da216` with complete local/remote
+  stage lifecycle,
   authenticated operator views, configured resources/providers, exact live
   claims, explicit ready-stage SLURM profiles/submissions/bootstrap, primitive
   external observation/cancel evidence, and joined status
 - Workflow path: expanded because configuration mutation, availability,
   cancellation, process containment, and authorization races interact
-- Blockers: Phase 7 remote merge
+- Blockers: none
 
 ## Objective And Context
 
@@ -39,17 +42,36 @@
 
 ## Current Source And Harness
 
-- Reuse authenticated operator/client/agent/bootstrap views, principal/object/
-  pool/profile scopes,
-  idempotency receipts, expected revisions, agent journal/outbox, assignment
-  controls, process containment, transfer state, provider registries, and safe
-  status/audit from prior phases.
-- Rediscover existing cancellation/status/reliability operations and local
-  process cancellation helpers on the phase branch.
-- Reuse fake clocks/networks, real process barriers, multi-agent loopback,
-  provider partial-failure fixtures, and configuration/fingerprint tests.
+- Extend the authenticated application views and direct/HTTP dispatch in
+  `src/loom/queue/local_daemon.py` and
+  `src/loom/queue/agent_session_transport.py`; the existing client owns run
+  cancellation and the operator owns status/reconciliation, so new operations
+  must preserve role-derived principals and direct/HTTP semantic conformance.
+- Reuse the durable client cancellation request in
+  `src/loom/queue/local_daemon.py`, authority cancellation epochs in
+  `src/loom/pipeline/stores/authority.py` and
+  `src/loom/pipeline/stores/sqlite_authority.py`, readiness gating in
+  `src/loom/pipeline/planning/readiness.py`, and reconciliation/fan-out in
+  `src/loom/queue/local_daemon_execution.py`.
+- Extend the existing managed process/claim cancellation and retained provider
+  bindings in `src/loom/pipeline/execution/managed_local.py` and
+  `src/loom/scheduling/registry.py`; do not introduce a second claim or
+  provider owner.
+- Extend the existing remote session/assignment journal and retained-profile
+  seams in `src/loom/queue/agent_sessions.py`, ready-stage assignment owner in
+  `src/loom/queue/slurm_ready_stage.py`, ready-stage cancel request in
+  `src/loom/pipeline/executors/slurm/ready_stage.py`, and trusted local runtime
+  reconstruction in `src/loom/queue/local_daemon_runtime.py`.
+- Extend `loom queue daemon-*` operations in `src/loom/cli/queue.py` only as a
+  thin adapter over the public authenticated Python operations; status remains
+  owner-labelled and redacted.
+- Reuse the cancellation, transport, process, profile, provider, status, and
+  package tests named by the targeted commands below. Add causal barriers only
+  where the new control/reload/cancellation ordering requires them.
 - Remote control payloads remain versioned inert data. Trusted configuration is
   read locally by the owning daemon/coordinator from protected deployment state.
+  This phase is a hard cut: new durable/wire shapes receive fresh final version
+  identities and all older or candidate shapes are rejected without migration.
 
 ## Scope
 
@@ -210,7 +232,7 @@ Out of scope:
 - New scheduler/resource semantics, preemption, checkpointing, live migration,
   automatic managed-agent/SLURM fallback, allocation-fed agents, generic
   external-scheduler plugins, or SLURM lifecycle changes beyond composing the
-  Phase 7 exact target/control evidence.
+  merged Phase 7B exact target/control evidence.
 
 Assumptions:
 
@@ -394,7 +416,18 @@ privileged Phase 9 recovery.
 | Integration | Required | Control delivery, independent config epoch replacement, cancellation and live managed/SLURM races | Agent-first/coordinator-first contract skew becomes ineligible then compatible; restart with pending custom work/live claim/submission; authority outage after request/before epoch; barriers at readiness, submit, bootstrap, bind, grant, before/after start intent, launcher outcome/event, terminal result, upload, commit, release |
 | E2E / opt-in | Required loopback | Operable mixed-target pool | Drain/reload/resume resources/profiles and cancel a mixed managed/SLURM multi-stage run while another continues |
 
-Targeted commands are fixed during phase preparation. Final commands:
+Targeted commands:
+
+    uv run pytest -q tests/unit/loom/pipeline/stores/test_sqlite_authority.py
+    uv run pytest -q tests/unit/loom/pipeline/execution/test_managed_local.py
+    uv run pytest -q tests/unit/loom/queue/test_agent_sessions.py tests/unit/loom/queue/test_local_daemon.py tests/unit/loom/queue/test_slurm_ready_stage.py
+    uv run pytest -q tests/unit/loom/cli/test_queue.py
+    uv run pytest -q tests/contracts/test_local_daemon_authority_contract.py
+    uv run pytest -q tests/integration/queue/test_local_daemon_production.py
+    uv run pytest -q tests/integration/queue/test_agent_session_transport.py tests/integration/queue/test_slurm_ready_stage.py
+    uv run pytest -q tests/package/test_import_boundaries.py
+
+Final commands:
 
     make validate-pr
     make test-summary
@@ -427,26 +460,29 @@ Targeted commands are fixed during phase preparation. Final commands:
 
 ## Executor Handoff
 
-- Read this file, Phase 7 completion record, manifest control/security
-  constraints, and planning FR-2, FR-10, FR-14–FR-16, FR-19, FR-21, FR-23,
-  FR-25–FR-30, DQ-21, DQ-23, DQ-28, and DQ-30.
+- Read `AGENTS.md`, `.codex/workflows/roadmap-stage-implementation.md`,
+  `.codex/prompts/phase-loop-management.md`, and this file's `Metadata`,
+  `Objective And Context`, `Current Source And Harness`, `Scope`, `Fixed
+  Contracts And Private Discretion`, `Implementation Slices`, `Test And
+  Validation Plan`, `Risks, Review, And Stops`, and `Executor Handoff`
+  sections.
 - Keep ordinary controls and cancellation separate from Phase 9 privileged
   recovery even if internal serialization helpers are shared.
 - Decisions not to revisit: local trusted reload, withdraw first, exact
   descriptor retention for referenced pending/live state, reject-before-swap on
   retention failure, coordinator request then authority cancellation epoch
   before managed/SLURM fan-out, retained profile identity, `scancel` as request
-  only, truthful terminal facts, owner-labelled status, and no timeout-based
-  release.
+  only, truthful terminal facts, owner-labelled status, no timeout-based
+  release, and a fresh hard-cut schema with no compatibility or migration path.
 - Escalate any need for remote config, hidden force, weak containment, or changed
   retry ownership.
 
 ## Workflow State
 
-- Manager preparation: pending Phase 7 merge, worktree/base recording, and
-  exact control/config/process test rediscovery
+- Manager preparation: complete on clean merged Phase 7B baseline; worktree,
+  base, current source owners, targeted commands, and hard-cut boundary recorded
 - Expanded planning: required by mutable configuration and cancellation races;
-  phase plan finalized
+  one bounded `loom_phase_planner` refinement pending
 - Implementation: pending
 - Refiner: not used
 - Pre-submit gate: pending

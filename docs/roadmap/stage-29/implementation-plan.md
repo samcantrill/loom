@@ -6,11 +6,12 @@ Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 8 `pending`
+Current phase: Phase 8 `in_progress`
 Blockers: none. Phase 7B passed local validation, independent review, and CI;
 [PR #243](https://github.com/samcantrill/loom/pull/243) squash-merged into
-`develop` as `d0da216`. Phase 8 is ready for manager preparation; Phase 9
-remains dependency-blocked until Phase 8 merges.
+`develop` as `d0da216`. Phase 8 manager preparation is complete on
+`74e4b83`; its one expanded-path plan refinement is pending. Phase 9 remains
+dependency-blocked until Phase 8 merges.
 
 ## Summary
 
@@ -657,7 +658,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 7 | `slurm-ready-stage-delegation` | blocked | `docs/roadmap/stage-29/phases/slurm-ready-stage-delegation.md` | `agent/stage-29-p7-slurm-ready-stage-delegation` | [#242](https://github.com/samcantrill/loom/pull/242) closed without merge | Validated explicit-route, durable-submit, bootstrap, relay, and mixed-route candidate; required review found an unsanitized submit environment, profile-wide bootstrap authority, and route-local waiting that can starve other work | Preserve candidate `3515400` and its passing validation/CI as read-only evidence; correction 3/3 is exhausted. |
 | 7A | `slurm-ready-stage-trust-closure` | blocked | `docs/roadmap/stage-29/phases/slurm-ready-stage-trust-closure.md` | `agent/stage-29-p7a-slurm-ready-stage-trust-closure` | not opened | Validated hard-cut trust-closure candidate; required review found that a fast bootstrap can register before the prepared verifier reaches the assignment owner and normal terminal release never revokes site provider state | Preserve validated implementation `ac1bfd9` and its passing focused/full gates as read-only evidence; correction 3/3 is exhausted. |
 | 7B | `slurm-ready-stage-lifecycle-closure` | merged | `docs/roadmap/stage-29/phases/slurm-ready-stage-lifecycle-closure.md` | `agent/stage-29-p7b-slurm-ready-stage-lifecycle-closure` | [#243](https://github.com/samcantrill/loom/pull/243) merged | Selective Phase 7A source/test reuse; durable verifier handoff before `SUBMITTING`/`sbatch`; shared replay-safe provider revoke before final release; stable parallel-limit evidence; fresh hard-cut schemas | Local gates, independent review, and CI passed after three scoped lifecycle corrections; squash-merged as `d0da216`. |
-| 8 | `agent-controls-cancellation` | pending | `docs/roadmap/stage-29/phases/agent-controls-cancellation.md` | `agent/stage-29-p8-agent-controls-cancellation` | pending | Serialized drain/resume; separate agent pool/provider/inventory and coordinator planner/rule/scorer/policy/profile reload transactions; retained owner-local descriptors and contract-skew ineligibility; coordinator request/authority cancellation epoch and complete managed/SLURM fan-out | Operate agents/profiles and cancel runs without mutating live claims, stranding durable component references, starting descendants, or treating disconnection/`scancel` acknowledgement as completion. |
+| 8 | `agent-controls-cancellation` | in_progress | `docs/roadmap/stage-29/phases/agent-controls-cancellation.md` | `agent/stage-29-p8-agent-controls-cancellation` | pending | Serialized drain/resume; separate agent pool/provider/inventory and coordinator planner/rule/scorer/policy/profile reload transactions; retained owner-local descriptors and contract-skew ineligibility; coordinator request/authority cancellation epoch and complete managed/SLURM fan-out | Manager preparation complete on `74e4b83`; run the bounded expanded-path plan refinement, then operate agents/profiles and cancel runs without mutating live claims, stranding durable component references, starting descendants, or treating disconnection/`scancel` acknowledgement as completion. |
 | 9 | `restart-guarded-recovery` | pending | `docs/roadmap/stage-29/phases/restart-guarded-recovery.md` | `agent/stage-29-p9-restart-guarded-recovery` | pending | Same-session agent restart; outbox/process reconciliation; SLURM submit/bootstrap/job/result reconciliation; normal reconciliation of all known terminal facts; positive-containment manual recovery; fence/close/retry; provider-release separation; complete request/delivery/preparation/claim/control/transfer/result/output/event/outbox session replacement; Phase 5 and Phase 7 restart regressions | Restart and recover unknown managed or SLURM work without duplicate submit/launch, overwritten terminal truth, unsafe capacity reuse, weak-evidence takeover, stale output commit, or automatic failover. |
 
 Phase 1 is the pure-kernel/preparation/projection architectural gate: its only
