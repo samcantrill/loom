@@ -29,6 +29,7 @@ from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.queue import (
     LocalDaemon,
     LocalDaemonAdmissionRequest,
+    LocalDaemonAdmissionState,
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
@@ -73,12 +74,10 @@ def _profile(
     )
 
 
-@pytest.mark.parametrize(
-    "terminal_boundary",
-    ["authority_result", "assignment_terminal"],
-)
-def test_terminal_slurm_result_reconciliation_releases_after_crash_boundary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_boundary: str
+def _exercise_mixed_route_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_boundary: str | None = None,
 ) -> None:
     runner = FakeSlurmCommandRunner(starting_job_id=1200)
     profile = _profile(runner)
@@ -445,6 +444,54 @@ def test_terminal_slurm_result_reconciliation_releases_after_crash_boundary(
                 )
                 if final:
                     break
+        if terminal_boundary is None:
+            view.commit_result(assignment_id, incarnation, fence)
+            view.release(assignment_id, incarnation)
+
+            # A bootstrap restart may replay retained evidence, but the consumed
+            # root-launch permit never becomes available again.
+            replayed = SlurmBootstrapWorkspace(tmp_path / "compute", assignment_id)
+            assert replayed.retained_report() == report
+            view.inputs_ready(assignment_id, incarnation)
+            assert view.grant(assignment_id, incarnation) == fence
+            assert view.start_permit(assignment_id, incarnation, fence) is False
+            view.declare_report(assignment_id, incarnation, fence, report)
+            for output in report.outputs:
+                data, final = replayed.output_chunk(output.transfer_id, 0)
+                assert final is True
+                assert (
+                    view.output_chunk(
+                        assignment_id,
+                        incarnation,
+                        output.transfer_id,
+                        offset=0,
+                        data=data,
+                        final=True,
+                    )
+                    == output.size_bytes
+                )
+            view.commit_result(assignment_id, incarnation, fence)
+            view.release(assignment_id, incarnation)
+
+            completed = client.wait("mixed-route", timeout_seconds=10)
+            assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
+            snapshot = authority.open_run(run_uri)
+            assert snapshot.status is RunStatus.SUCCEEDED
+            assert [stage.status for stage in snapshot.stages] == [
+                StageStatus.SUCCEEDED,
+                StageStatus.SUCCEEDED,
+                StageStatus.SUCCEEDED,
+            ]
+            assert execution.slurm_assignments.read(assignment_id).state == "released"
+            script = (
+                config.slurm_script_root / f"{record.assignment.assignment_id}.sh"
+            ).read_text(encoding="utf-8")
+            assert run_uri not in script
+            assert profile.credential_reference not in script
+            assert "TextConsumerStage" not in script
+            assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+            return
+
         original_mark_terminal = execution.slurm_assignments.mark_terminal
         terminal_crash_injected = False
 
@@ -494,6 +541,22 @@ def test_terminal_slurm_result_reconciliation_releases_after_crash_boundary(
         assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
     finally:
         daemon.stop()
+
+
+def test_mixed_route_run_uses_one_slurm_submit_and_verified_loom_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _exercise_mixed_route_run(tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize(
+    "terminal_boundary",
+    ["authority_result", "assignment_terminal"],
+)
+def test_terminal_slurm_result_reconciliation_releases_after_crash_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_boundary: str
+) -> None:
+    _exercise_mixed_route_run(tmp_path, monkeypatch, terminal_boundary)
 
 
 def test_unavailable_slurm_root_does_not_starve_independent_managed_root(

@@ -857,10 +857,20 @@ class LocalDaemonExecution:
                     ),
                 )
                 snapshot = scoped_authority.open_run(admission.run_uri)
+                slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+                    admission.run_uri, scoped_authority
+                )
+                snapshot = scoped_authority.open_run(admission.run_uri)
                 terminal = self._terminal_outcome(
                     intent.plan, snapshot, scoped_authority
                 )
                 if terminal is not None:
+                    if slurm_in_flight:
+                        return LocalDaemonExecutionOutcome(
+                            LocalDaemonAdmissionState.ACTIVE,
+                            slurm_diagnostic
+                            or "SLURM release remains durably in flight",
+                        )
                     return terminal
                 slurm_dispatch = self._dispatch_slurm_ready(
                     admission=admission,
