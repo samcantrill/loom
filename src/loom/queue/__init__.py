@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from ._remote_stage_execution import GpuDeviceDescriptor
     from .local_daemon import (
         AgentControl,
+        CoordinatorSchedulingReload,
         LocalDaemon,
         LocalDaemonAdmission,
         LocalDaemonAdmissionRequest,
@@ -108,6 +109,7 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
     {
         "LocalDaemon",
         "AgentControl",
+        "CoordinatorSchedulingReload",
         "LocalDaemonAdmission",
         "LocalDaemonAdmissionRequest",
         "LocalDaemonAdmissionState",
@@ -153,6 +155,7 @@ __all__ = [
     "LaunchContract",
     "LocalDaemon",
     "AgentControl",
+    "CoordinatorSchedulingReload",
     "LocalDaemonAdmission",
     "LocalDaemonAdmissionRequest",
     "LocalDaemonAdmissionState",

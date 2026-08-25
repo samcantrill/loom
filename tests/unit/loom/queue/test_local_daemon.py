@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from shutil import copyfile
 import sqlite3
@@ -12,13 +13,16 @@ import pytest
 
 import loom.queue.local_daemon_execution as local_daemon_execution
 from loom.queue import (
+    CoordinatorSchedulingReload,
     LocalDaemon,
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    QueueConflictError,
     QueueServiceError,
     QueueStorageError,
 )
+from loom.queue.agent_sessions import AgentPolicyConfig
 
 
 def _config(tmp_path: Path) -> LocalDaemonConfig:
@@ -44,6 +48,70 @@ def test_initialize_start_restart_preserves_owner_and_rotates_epoch(
 
     assert second_status.coordinator_id == first_status.coordinator_id
     assert second_status.coordinator_epoch != first_status.coordinator_epoch
+
+
+def test_scheduling_reload_is_local_atomic_and_durable(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    replacement = replace(config, agent_policy=AgentPolicyConfig(revision="policy-2"))
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    request = CoordinatorSchedulingReload(
+        operation_id="reload-scheduling-1",
+        expected_scheduling_epoch=before.scheduling_epoch,
+        reason="site policy changed",
+    )
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+    )
+    try:
+        receipt = operator.reload_scheduling(request)
+        assert receipt["state"] == "applied"
+        assert receipt["scheduling_epoch"] != before.scheduling_epoch
+        assert operator.reload_scheduling(request) == receipt
+        status = operator.status()
+        assert status.scheduling_epoch == receipt["scheduling_epoch"]
+        assert any(
+            item.get("owner") == "coordinator-scheduling"
+            and item.get("state") == "applied"
+            for item in status.controls
+        )
+    finally:
+        daemon.stop()
+
+    with pytest.raises(QueueConflictError, match="changed without reload"):
+        LocalDaemon(config).start()
+    restarted = LocalDaemon(replacement)
+    restarted.start()
+    restarted.stop()
+
+
+def test_scheduling_reload_without_trusted_loader_fails_without_swap(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    before = daemon.start()
+    try:
+        receipt = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                operation_id="reload-scheduling-1",
+                expected_scheduling_epoch=before.scheduling_epoch,
+                reason="no protected loader",
+            )
+        )
+        assert receipt == {
+            "operation_id": "reload-scheduling-1",
+            "state": "failed",
+            "code": "reload_rejected",
+            "scheduling_epoch": before.scheduling_epoch,
+        }
+        assert daemon.config is config
+    finally:
+        daemon.stop()
 
 
 def test_start_is_open_only_and_second_owner_fails_closed(tmp_path: Path) -> None:
@@ -179,11 +247,19 @@ def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
 
     known = SimpleNamespace(
         state="accepted",
-        assignment=SimpleNamespace(operation_id="known", profile_id="profile-a"),
+        assignment=SimpleNamespace(
+            operation_id="known",
+            profile_id="profile-a",
+            profile_configuration_fingerprint="config-a",
+        ),
     )
     unknown = SimpleNamespace(
         state="submitting",
-        assignment=SimpleNamespace(operation_id="unknown", profile_id="profile-a"),
+        assignment=SimpleNamespace(
+            operation_id="unknown",
+            profile_id="profile-a",
+            profile_configuration_fingerprint="config-a",
+        ),
     )
 
     class _Assignments:
@@ -209,10 +285,71 @@ def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
     subject = cast(Any, execution)
     subject.slurm_assignments = _Assignments()
     subject.slurm_submissions = _Submissions()
-    subject._slurm_profile = lambda profile_id: f"resolved:{profile_id}"
+    subject._slurm_profile = lambda profile_id, fingerprint: (
+        f"resolved:{profile_id}:{fingerprint}"
+    )
 
     assert execution._fan_out_slurm_cancellation("run://example") is True
-    assert calls == [("known", "resolved:profile-a")]
+    assert calls == [("known", "resolved:profile-a:config-a")]
+
+
+def test_slurm_grant_and_start_are_blocked_by_the_durable_cancel_request(
+    tmp_path: Path,
+) -> None:
+    control_database = tmp_path / "control.sqlite"
+    with sqlite3.connect(control_database) as conn:
+        conn.execute(
+            "CREATE TABLE managed_admissions ("
+            "run_uri TEXT PRIMARY KEY, cancellation_operation_id TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO managed_admissions VALUES ('run://cancelled', 'cancel-1')"
+        )
+        conn.commit()
+
+    record = SimpleNamespace(
+        input_ready=True,
+        fence=None,
+        state="accepted",
+        assignment=SimpleNamespace(
+            run_uri="run://cancelled",
+            operation_id="slurm-operation-1",
+            attempt_id="attempt-1",
+        ),
+    )
+    execution = object.__new__(local_daemon_execution.LocalDaemonExecution)
+    subject = cast(Any, execution)
+    subject.config = SimpleNamespace(control_database=control_database)
+    subject._slurm_authorized_record = lambda *args, **kwargs: record
+    subject._remote_authority = lambda run_uri: pytest.fail(
+        "cancellation must block authority grant"
+    )
+    subject.slurm_submissions = SimpleNamespace(
+        consume_start=lambda operation_id: pytest.fail(
+            "cancellation must block authored-root start"
+        )
+    )
+
+    with pytest.raises(QueueConflictError, match="run is cancelling"):
+        execution.slurm_grant(
+            principal_id="slurm-principal",
+            credential_id="slurm-credential",
+            assignment_id="assignment-1",
+            incarnation="bootstrap-1",
+        )
+
+    record.fence = "fence-1"
+    record.state = "granted"
+    assert (
+        execution.slurm_start_permit(
+            principal_id="slurm-principal",
+            credential_id="slurm-credential",
+            assignment_id="assignment-1",
+            incarnation="bootstrap-1",
+            fence="fence-1",
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize("owner_store", ("execution_database", "agent_journal"))

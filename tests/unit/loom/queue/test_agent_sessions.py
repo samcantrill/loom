@@ -12,15 +12,21 @@ from time import monotonic, sleep
 import pytest
 
 from loom.queue import (
+    CoordinatorSchedulingReload,
     GpuDeviceDescriptor,
     LocalDaemon,
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
 )
+from loom.queue._remote_stage_execution import (
+    REGULAR_FILE_RELAY_CAPABILITY,
+    REMOTE_EXECUTION_CAPABILITY,
+)
 from loom.queue.agent_sessions import (
     AgentOffer,
     AgentControl,
+    AgentControlEffect,
     AgentControlKind,
     AgentPolicyConfig,
     AgentPrincipalPolicy,
@@ -226,13 +232,18 @@ def test_agent_control_withdraws_offer_then_requires_agent_acknowledgement(
     try:
         session = _register(daemon)
         _view(daemon).publish_offer(
-            _offer(session.session_id, session.coordinator_epoch), idempotency_key="offer-control"
+            _offer(session.session_id, session.coordinator_epoch),
+            idempotency_key="offer-control",
         )
         control = AgentControl(
-            operation_id="control-1", kind=AgentControlKind.DRAIN,
-            agent_id=session.agent_id, expected_session_id=session.session_id,
-            expected_config_revision=session.config_revision, pool="default",
-            cancel_active=False, reason="maintenance",
+            operation_id="control-1",
+            kind=AgentControlKind.DRAIN,
+            agent_id=session.agent_id,
+            expected_session_id=session.session_id,
+            expected_config_revision=session.config_revision,
+            pool="default",
+            cancel_active=False,
+            reason="maintenance",
         )
         operator = daemon.operator_view(
             LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
@@ -240,13 +251,171 @@ def test_agent_control_withdraws_offer_then_requires_agent_acknowledgement(
         assert operator.control_agent(control)["state"] == "pending_delivery"
         delivered = _view(daemon).next_control(session.session_id)
         assert delivered == control
-        assert _view(daemon).acknowledge_control(
-            session.session_id, control.operation_id, code="applied"
-        )["state"] == "applied"
+        with pytest.raises(QueueConflictError, match="still in progress"):
+            operator.control_agent(
+                replace(
+                    control,
+                    operation_id="control-2",
+                    kind=AgentControlKind.RESUME,
+                    pool=None,
+                )
+            )
+        assert (
+            _view(daemon).acknowledge_control(
+                session.session_id,
+                AgentControlEffect(
+                    operation_id=control.operation_id,
+                    code="applied",
+                    config_revision=session.config_revision,
+                    inventory_revision=session.inventory_revision,
+                    availability_revision="availability-drained",
+                ),
+            )["state"]
+            == "applied"
+        )
         with daemon._connection() as conn:
-            assert conn.execute(
-                "SELECT current FROM agent_offers WHERE session_id = ?", (session.session_id,)
-            ).fetchone()[0] == 0
+            assert (
+                conn.execute(
+                    "SELECT current FROM agent_offers WHERE session_id = ?",
+                    (session.session_id,),
+                ).fetchone()[0]
+                == 0
+            )
+    finally:
+        daemon.stop()
+
+
+def test_remote_start_permit_serializes_with_cancellation_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                credential_id="agent-a",
+                principal_id="principal-a",
+                agent_id="agent-a",
+                pools=("default",),
+                capabilities=capabilities,
+            ),
+        )
+    )
+    config = _config(tmp_path, policy)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        handshake = _view(daemon).handshake()
+        session = _view(daemon).register(
+            AgentRegistration(
+                idempotency_key="register-start-permit",
+                coordinator_id=str(handshake["coordinator_id"]),
+                coordinator_epoch=str(handshake["coordinator_epoch"]),
+                agent_root_id="agent-root-start-permit",
+                config_revision="config-1",
+                inventory_revision="inventory-1",
+                availability_revision="availability-1",
+                declared_pools=("default",),
+                declared_capabilities=capabilities,
+                retirement_verifier=_TEST_RETIREMENT_VERIFIER,
+            )
+        )
+        with daemon._connection() as conn:
+            for assignment_id, run_uri in (
+                ("assignment-permitted", "run://permitted"),
+                ("assignment-cancelled", "run://cancelled"),
+            ):
+                conn.execute(
+                    "INSERT INTO remote_assignments(assignment_id, session_id, "
+                    "availability_revision, issuer_epoch, run_uri, stage_work_id, "
+                    "stage_name, attempt, attempt_id, profile_json, state, fence) "
+                    "VALUES (?, ?, 'availability-1', ?, ?, ?, 'stage', 1, ?, '{}', "
+                    "'GRANTED', ?)",
+                    (
+                        assignment_id,
+                        session.session_id,
+                        session.coordinator_epoch,
+                        run_uri,
+                        f"work-{assignment_id}",
+                        f"attempt-{assignment_id}",
+                        f"fence-{assignment_id}",
+                    ),
+                )
+            conn.execute(
+                "INSERT INTO managed_admissions(admission_id, queue_item_id, "
+                "coordinator_id, run_uri, intent_digest, execution_owner, state, "
+                "accepted_at, authority_operation_id, cancellation_operation_id) "
+                "VALUES ('admission-cancelled', 'item-cancelled', ?, "
+                "'run://cancelled', 'digest', 'managed-stage', 'CANCELLED', ?, "
+                "'authority-op', 'cancel-op')",
+                (str(handshake["coordinator_id"]), "2020-01-01T00:00:00Z"),
+            )
+            conn.commit()
+
+        execution = daemon._execution
+        assert execution is not None
+        calls: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            execution,
+            "remote_start_permit",
+            lambda assignment_id, *, fence: (
+                calls.append((assignment_id, fence)) or True
+            ),
+        )
+        assert _view(daemon).start_permit(
+            session.session_id,
+            "assignment-permitted",
+            fence="fence-assignment-permitted",
+        )
+        assert not _view(daemon).start_permit(
+            session.session_id,
+            "assignment-cancelled",
+            fence="fence-assignment-cancelled",
+        )
+        assert calls == [("assignment-permitted", "fence-assignment-permitted")]
+        with daemon._connection() as conn:
+            rows = dict(
+                conn.execute(
+                    "SELECT assignment_id, start_permitted FROM remote_assignments"
+                )
+            )
+        assert rows == {
+            "assignment-permitted": 1,
+            "assignment-cancelled": 0,
+        }
+    finally:
+        daemon.stop()
+
+
+def test_scheduling_reload_rejects_credential_change_for_a_live_agent_session(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, _policy())
+    replacement = replace(
+        config,
+        agent_policy=_policy(revision="policy-2", credential="agent-b"),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        _register(daemon)
+        result = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                operation_id="reload-live-agent-policy",
+                expected_scheduling_epoch=before.scheduling_epoch,
+                reason="rotate agent credential",
+            )
+        )
+        assert result["state"] == "failed"
+        assert result["code"] == "reload_rejected"
+        assert daemon.config is config
     finally:
         daemon.stop()
 

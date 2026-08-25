@@ -181,7 +181,7 @@ def test_queue_daemon_status_uses_owner_only_socket_client(tmp_path: Path) -> No
 
     payload = json.loads(stdout.getvalue())
     assert exit_code == 0
-    assert payload["schema_version"] == "loom.cli.queue.local-daemon.v1"
+    assert payload["schema_version"] == "loom.cli.queue.local-daemon.v2"
     assert payload["result"]["service_health"] == "healthy"
 
 

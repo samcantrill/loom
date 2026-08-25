@@ -23,6 +23,8 @@ from .errors import (
     QueueValidationError,
 )
 from .local_daemon import (
+    AgentControl,
+    CoordinatorSchedulingReload,
     LocalDaemon,
     LocalDaemonAdmission,
     LocalDaemonAdmissionRequest,
@@ -109,6 +111,9 @@ class LocalDaemonSocketServer:
             client = self._daemon.client_view(
                 LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.CLIENT)
             )
+            operator = self._daemon.operator_view(
+                LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.OPERATOR)
+            )
             if operation == "submit":
                 request = payload.get("request")
                 if not isinstance(request, Mapping):
@@ -123,6 +128,22 @@ class LocalDaemonSocketServer:
                 if not isinstance(queue_item_id, str) or not queue_item_id:
                     raise QueueServiceError("queue_item_id must be a non-empty string")
                 result = client.cancel(queue_item_id).to_dict()
+            elif operation == "agent_control":
+                control = payload.get("control")
+                if not isinstance(control, Mapping):
+                    raise QueueServiceError("agent control must be a mapping")
+                result = dict(operator.control_agent(AgentControl.from_value(control)))
+            elif operation == "scheduling_reload":
+                request = payload.get("request")
+                if not isinstance(request, Mapping):
+                    raise QueueServiceError(
+                        "scheduling reload request must be a mapping"
+                    )
+                result = dict(
+                    operator.reload_scheduling(
+                        CoordinatorSchedulingReload.from_dict(request)
+                    )
+                )
             else:
                 raise QueueServiceError("local daemon operation is unsupported")
             response: PlainData = {"ok": True, "result": result}
@@ -181,6 +202,22 @@ class LocalDaemonSocketClient:
     def cancel(self, queue_item_id: str) -> LocalDaemonAdmission:
         result = self._call({"operation": "cancel", "queue_item_id": queue_item_id})
         return LocalDaemonAdmission.from_dict(result)
+
+    def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
+        return cast(
+            Mapping[str, PlainData],
+            self._call({"operation": "agent_control", "control": control.value()}),
+        )
+
+    def reload_scheduling(
+        self, request: CoordinatorSchedulingReload
+    ) -> Mapping[str, PlainData]:
+        return cast(
+            Mapping[str, PlainData],
+            self._call(
+                {"operation": "scheduling_reload", "request": request.to_dict()}
+            ),
+        )
 
     def _call(self, request: Mapping[str, PlainData]) -> Mapping[str, object]:
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

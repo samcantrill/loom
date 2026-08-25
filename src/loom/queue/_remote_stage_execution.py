@@ -1240,7 +1240,9 @@ class _RemoteAssignmentWorkspace:
                     raise QueueConflictError("input replay exceeds durable content")
                 existing = _read_regular_file_bytes(target)[offset : offset + len(data)]
                 if existing != data:
-                    raise QueueConflictError("input replay conflicts with durable bytes")
+                    raise QueueConflictError(
+                        "input replay conflicts with durable bytes"
+                    )
                 return int(row["size_bytes"])
             if _published_file_matches(
                 target,
@@ -1407,6 +1409,37 @@ class _RemoteAssignmentWorkspace:
                 )
             if row["result_json"] is not None and str(row["result_json"]) != encoded:
                 raise QueueConflictError("resident worker result replay conflicts")
+            conn.execute(
+                "UPDATE request SET state = 'RESULT', result_json = ? "
+                "WHERE singleton = 1",
+                (encoded,),
+            )
+
+    def persist_cancelled_before_start(self, result: StageWorkerResult) -> None:
+        """Persist a cancelled outcome after the owner proves no launch occurred."""
+
+        request = self.request()
+        if (
+            result.status is not StageStatus.CANCELLED
+            or result.run_uri != f"loom-agent:{request.assignment_id}"
+            or result.stage_name != request.stage_name
+            or result.attempt != request.attempt
+        ):
+            raise QueueConflictError("resident no-start result identity conflicts")
+        encoded = _canonical_json(result.to_dict())
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT state, process_execution_id, result_json FROM request "
+                "WHERE singleton = 1"
+            ).fetchone()
+            if row is None or str(row["state"]) not in {"GRANTED", "RESULT"}:
+                raise QueueConflictError(
+                    "resident no-start result requires a durable grant"
+                )
+            if row["process_execution_id"] is not None:
+                raise QueueConflictError("resident no-start proof conflicts with start")
+            if row["result_json"] is not None and str(row["result_json"]) != encoded:
+                raise QueueConflictError("resident no-start result replay conflicts")
             conn.execute(
                 "UPDATE request SET state = 'RESULT', result_json = ? "
                 "WHERE singleton = 1",
@@ -1798,7 +1831,9 @@ def _published_file_matches(path: Path, *, size_bytes: int, digest: str) -> bool
     if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
         raise QueueConflictError("remote transfer target is not a regular file")
     if details.st_size != size_bytes or _file_digest(path) != digest:
-        raise QueueConflictError("remote transfer target conflicts with durable identity")
+        raise QueueConflictError(
+            "remote transfer target conflicts with durable identity"
+        )
     return True
 
 

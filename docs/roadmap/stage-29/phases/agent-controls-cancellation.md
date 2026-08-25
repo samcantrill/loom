@@ -577,24 +577,34 @@ Final commands:
   base, current source owners, targeted commands, and hard-cut boundary recorded
 - Expanded planning: required by mutable configuration and cancellation races;
   one bounded `loom_phase_planner` refinement complete; executor packet is ready
-- Implementation: in progress; v4 control delivery/authority fencing is committed,
-  and the bounded cancellation settlement correction is committed locally
+- Implementation: complete in the current tree. Agent and coordinator controls,
+  trusted-local reload with retained exact bindings, authority/grant/start
+  cancellation fences, contained process cancellation, pre-`sbatch`
+  suppression, exact-handle SLURM fan-out, and hard-cut status/protocol schemas
+  are implemented
 - Refiner: used for blocker correction 2/3: retained ready-stage SLURM work now
   receives exact-handle cancellation fan-out and remains settling rather than
   being represented as contained
-- Pre-submit gate: pending
-- Independent review: expected because control races can release live resources
-  or authorize mutation; confirm during preparation
-- Blocker corrections: 2/3
+- Manager correction: correction 3/3 complete in the current tree. It closes the
+  remaining grant/start race under coordinator serialization, preserves exact
+  retained bindings across reload, persists and replays response-loss control
+  acknowledgements, and prevents pre-grant claim/input leakage
+- Pre-submit gate: complete. `make validate-pr` passed Ruff, zero-error Pyright,
+  the isolated default and configuration-extra suites with 3 expected environment
+  skips, configuration checks, and source/wheel builds; `make test-summary`
+  recorded 2,648 categorized passes, 3 expected skips, and no failures or errors
+- Independent review: required because control races can release live resources
+  or authorize mutation; pending PR review
+- Blocker corrections: 3/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Agent-control v4 control delivery/effect/acknowledgement in `agent_sessions.py`, `agent_session_transport.py`, `local_daemon.py`, and public queue import wiring; authority epoch lifecycle fence in `sqlite_authority.py`. The current correction in `local_daemon_execution.py` checks terminal authority truth before epoch installation, fans effective cancellation to only exact retained SLURM handles, and keeps handle-less/external-request work in `CANCELLING`. |
-| Tests added or updated | Agent-control withdrawal/acknowledgement and effective epoch prepare/grant fence tests; focused local-daemon fan-out test proving only the exact known SLURM handle receives cancellation. |
-| Validated revision/tree state and evidence | Targeted authority/readiness/orchestration/managed-local/ready-stage unit suites: 88 passed; queue unit suites: 47 passed; contract suites: 11 passed; local-daemon production integration: 30 passed; package/import and managed-controller integration: 73 passed. `ruff check` and `git diff --check` passed. |
+| Implementation and changed paths | Protocol-v4 durable agent controls and response-loss replay in `agent_sessions.py` and `agent_session_transport.py`; authenticated daemon/CLI drain, resume, agent reload, coordinator scheduling reload, cancellation projection, and hard schema cut in `local_daemon.py`, `local_daemon_transport.py`, and `cli/queue.py`; exact retained profile resolution plus cancellation fan-out and serialized SLURM grant/start permits in `local_daemon_execution.py`; exact pre-grant cleanup and grant-fence reads in `managed_local.py`; durable cancelled-before-start remote results in `_remote_stage_execution.py`; and pre-`sbatch` no-call proof in `ready_stage.py`. Operational hard-cut examples are recorded in `docs/features/queue.md`. |
+| Tests added or updated | Unit and integration coverage proves serialized/replayed controls, work-withdrawal before delivery, trusted-local reload, retained-binding identity, live-credential reload rejection, cancellation principal/status truth, pre-grant cleanup, grant/start race fencing, response-loss acknowledgement replay, contained exact-child cancellation, pre-`sbatch` suppression, and exact retained-profile SLURM fan-out. |
+| Validated revision/tree state and evidence | Current source/test tree: focused and adjacent matrices passed, including the final 276-test contract matrix. Fresh `make validate-pr` passed Ruff, Pyright with zero errors, isolated default and configuration-extra suites with 3 expected environment skips, configuration checks, and source/wheel builds. Fresh `make test-summary` passed package 118, unit 1,791, contract 295, integration 246, E2E 57, and configuration-extra 141 with 3 expected skips, for 2,648 categorized passes and no failures/errors. |
 | Validation-relevant changes after evidence | Phase-plan record updated only. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Unknown accepted/started work intentionally remains cancellation-settling until Phase 9 proves positive containment. This is a hard cut-over: old daemon status, local-store, and agent protocol schemas are rejected rather than migrated or dual-read, so coordinator and agents must be drained and deployed together; in-flight work must finish under its exact retained old binding before that binding can be collected. Independent review, CI, merge, and worktree cleanup remain pending. |

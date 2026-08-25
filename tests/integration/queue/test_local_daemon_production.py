@@ -139,9 +139,10 @@ def test_production_gpu_projection_preserves_multi_device_fabric_groups(
         tuple[Mapping[str, object], ...],
         candidate.inventory["gpu"].data["devices"],
     )
-    assert [
-        item["fabric_group"] for item in projected_devices
-    ] == ["fabric-a", second_fabric]
+    assert [item["fabric_group"] for item in projected_devices] == [
+        "fabric-a",
+        second_fabric,
+    ]
 
 
 def test_persisted_preprocess_train_run_completes_without_injected_runtime_objects(
@@ -251,9 +252,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         assert assignment_view["owner"] == "coordinator-assignments"
         assert len(cast(list[object], assignment_view["assignments"])) == 2
         execution_view = cast(Mapping[str, object], owner_view["execution"])
-        assert execution_view["owner"] == (
-            "local-agent"
-        )
+        assert execution_view["owner"] == ("local-agent")
         assert (
             len(
                 cast(
@@ -612,7 +611,10 @@ def test_status_degrades_per_run_for_corrupt_or_missing_owner_data(
         "owner_status_unavailable"
     )
     assert cast(Mapping[str, object], view["cancellation"])["receipt"] is None
-    assert cast(Mapping[str, object], view["cancellation"])["state"] == "unavailable"
+    assert (
+        cast(Mapping[str, object], view["cancellation"])["state"]
+        == "requested_degraded"
+    )
     for axis_name in ("scheduling", "assignment", "execution"):
         axis = cast(Mapping[str, object], view[axis_name])
         assert axis["availability"] == "unavailable"
@@ -721,7 +723,10 @@ def test_pending_cancellation_installs_authority_epoch_before_any_stage(
         )
         receipt = cast(Mapping[str, object], cancellation["receipt"])
         request = cast(Mapping[str, object], receipt["request"])
-        assert cancellation["state"] == "installed"
+        assert cancellation["state"] == "terminal"
+        assert cancellation["principal"] == "integration-client"
+        assert cancellation["effective"] is True
+        assert cancellation["terminal"] is True
         assert request["operation_id"] == requested.cancellation_operation_id
         assert isinstance(receipt["epoch"], str)
     finally:

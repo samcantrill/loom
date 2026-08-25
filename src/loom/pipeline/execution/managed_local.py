@@ -811,6 +811,40 @@ class SQLiteAgentJournal:
             assignment_id, AssignmentState.PREPARED, AssignmentState.ACCEPTED
         )
 
+    def decline_before_prepare(self, assignment_id: str) -> AssignmentState:
+        """Prove a durable request acquired no provider claims."""
+
+        return self._advance(
+            assignment_id, AssignmentState.REQUEST_DURABLE, AssignmentState.DECLINED
+        )
+
+    def abort_pregrant(
+        self,
+        assignment_id: str,
+        commands: Sequence[ClaimCommand],
+        providers: Mapping[str, AgentResourceProvider],
+    ) -> AssignmentState:
+        """Release every exact prepared claim before remote grant."""
+
+        with self._transaction() as conn:
+            state = AssignmentState(self._assignment(conn, assignment_id)["state"])
+            if state is AssignmentState.DECLINED:
+                return state
+            if state not in {AssignmentState.PREPARED, AssignmentState.ACCEPTED}:
+                raise ManagedLocalError("only prepared pre-grant claims can be aborted")
+        for command in sorted(
+            commands, key=lambda item: item.claim.resource_kind, reverse=True
+        ):
+            provider = providers.get(command.claim.resource_kind)
+            if provider is None:
+                raise ManagedLocalError("no provider for claim resource kind")
+            if (
+                _provider_call(provider.abort, command).outcome
+                is not ClaimOutcome.RELEASED
+            ):
+                raise ManagedLocalError("pre-grant claim abort is indeterminate")
+        return self._set_declined(assignment_id)
+
     def grant(self, assignment_id: str, fence: str) -> AssignmentState:
         if not fence:
             raise ManagedLocalError("grant fence is required")
@@ -1053,6 +1087,37 @@ class SQLiteAgentJournal:
             )
             return AssignmentState.RESULT_DURABLE
 
+    def record_cancelled_before_start(
+        self, assignment_id: str, result: Mapping[str, PlainData]
+    ) -> AssignmentState:
+        """Record positive no-launch cancellation without fabricating a start."""
+
+        parsed = StageWorkerResult.from_dict(result)
+        if parsed.status is not StageStatus.CANCELLED:
+            raise ManagedLocalError("no-start result must be cancelled")
+        with self._transaction() as conn:
+            row = self._assignment(conn, assignment_id)
+            state = AssignmentState(row["state"])
+            encoded = _json(result)
+            if state is AssignmentState.RESULT_DURABLE:
+                if row["result_json"] != encoded:
+                    raise ManagedLocalError("result conflicts with durable result")
+                return state
+            if state is not AssignmentState.ACTIVE:
+                raise ManagedLocalError(
+                    "no-start cancellation requires an active unstarted assignment"
+                )
+            if row["process_execution_id"] is not None:
+                raise ManagedLocalError(
+                    "no-start cancellation conflicts with start intent"
+                )
+            conn.execute(
+                "UPDATE assignments SET state = ?, result_json = ? "
+                "WHERE assignment_id = ?",
+                (AssignmentState.RESULT_DURABLE.value, encoded, assignment_id),
+            )
+            return AssignmentState.RESULT_DURABLE
+
     def acknowledge_terminal(self, assignment_id: str) -> AssignmentState:
         return self._advance(
             assignment_id,
@@ -1124,6 +1189,11 @@ class SQLiteAgentJournal:
     def read_state(self, assignment_id: str) -> AssignmentState:
         with self._transaction() as conn:
             return AssignmentState(self._assignment(conn, assignment_id)["state"])
+
+    def read_grant_fence(self, assignment_id: str) -> str | None:
+        with self._transaction() as conn:
+            value = self._assignment(conn, assignment_id)["grant_fence"]
+        return None if value is None else str(value)
 
     def read_result(self, assignment_id: str) -> StageWorkerResult | None:
         with self._transaction() as conn:
