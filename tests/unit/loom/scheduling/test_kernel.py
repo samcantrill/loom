@@ -539,7 +539,16 @@ def test_runtime_placement_preserves_minima_route_and_fingerprint() -> None:
         policy=StagePlacementPolicy(
             pool_name="training",
             route=ExecutionRoute(
-                ExecutionRouteKind.SLURM, "gpu", "profile-fingerprint"
+                ExecutionRouteKind.SLURM,
+                "gpu",
+                SchedulingComponentDescriptor(
+                    kind="slurm_profile",
+                    contract_version=1,
+                    implementation_version="1",
+                    implementation_fingerprint="profile-implementation",
+                    configuration_fingerprint="profile-fingerprint",
+                ),
+                "profile-fingerprint",
             ),
         ),
         planners={"cpu": CpuResourcePlanner()},
@@ -550,6 +559,15 @@ def test_runtime_placement_preserves_minima_route_and_fingerprint() -> None:
     assert managed.fingerprint != slurm.fingerprint
     assert "max_parallel_stages" not in managed.to_dict()
     assert ResolvedStagePlacement.from_dict(managed.to_dict()) == managed
+    legacy = managed.to_dict()
+    legacy["schema_version"] = 1
+    legacy["route"] = {
+        "kind": "slurm",
+        "profile_name": "gpu",
+        "profile_fingerprint": "profile-fingerprint",
+    }
+    with pytest.raises(RuntimeResourceError, match="fields are unsupported"):
+        ResolvedStagePlacement.from_dict(legacy)
     with pytest.raises(RuntimeResourceError, match="explicit profile"):
         ExecutionRoute(ExecutionRouteKind.SLURM)
 

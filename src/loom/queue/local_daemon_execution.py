@@ -13,6 +13,18 @@ from typing import cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.execution import StageWorkerRequest, prepare_stage_attempt
+from loom.pipeline.executors.slurm.ready_stage import (
+    ReadyStageState,
+    SQLiteReadyStageSubmissions,
+    SlurmReadyStageProfile,
+    SlurmReadyStageRequest,
+    SlurmReadyStageSubmission,
+    map_ready_stage,
+)
+from loom.pipeline.executors.slurm.errors import (
+    SlurmPlanningError,
+    SlurmResourceMappingError,
+)
 from loom.pipeline.execution.lifecycle import bind_stage_inputs
 from loom.pipeline.execution.managed_local import (
     AtomResourceProvider,
@@ -28,6 +40,7 @@ from loom.pipeline.execution.managed_local import (
 )
 from loom.pipeline.orchestration import (
     RunOrchestrator,
+    SchedulingProjectionState,
     SQLiteStageWorkStore,
     StageWorkRecord,
 )
@@ -40,6 +53,7 @@ from loom.pipeline.planning import (
 )
 from loom.pipeline.runtime import (
     CpuResourcePlanner,
+    ExecutionRouteKind,
     MemoryResourcePlanner,
     RunOptions,
     ResolvedStagePlacement,
@@ -71,6 +85,7 @@ from loom.pipeline.stores.authority import (
     StatusTransition,
 )
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.scheduling import (
     Candidate,
     CapacityAtom,
@@ -101,6 +116,12 @@ from .local_daemon import (
     LocalDaemonConfig,
 )
 from .local_daemon_runtime import load_managed_local_runtime_record
+from .slurm_ready_stage import (
+    SQLiteSlurmStageAssignments,
+    SlurmStageAssignment,
+    SlurmStageDelivery,
+    SlurmStageRecord,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +207,10 @@ def initialize_local_daemon_owner_stores(
     capacity = _coordinator_capacity(config)
     SQLiteStageWorkStore(config.execution_database)._initialize()
     SQLiteCoordinatorAssignments(config.execution_database, capacity)._initialize()
+    SQLiteReadyStageSubmissions(config.execution_database)._open_existing()
+    SQLiteSlurmStageAssignments(
+        config.execution_database, config.slurm_transfer_root
+    )._initialize()
     SQLiteAgentJournal(config.agent_journal)._initialize()
     _initialize_owner_status_revisions(config)
     _bind_owner_store(
@@ -209,6 +234,14 @@ def local_daemon_owner_stores_available(
         )._open_existing()
         SQLiteCoordinatorAssignments(
             config.execution_database, capacity, _allow_initialize=False
+        )._open_existing()
+        SQLiteReadyStageSubmissions(
+            config.execution_database, _allow_initialize=False
+        )._open_existing()
+        SQLiteSlurmStageAssignments(
+            config.execution_database,
+            config.slurm_transfer_root,
+            _allow_initialize=False,
         )._open_existing()
         SQLiteAgentJournal(
             config.agent_journal, _allow_initialize=False
@@ -304,6 +337,22 @@ def _initialize_owner_status_revisions(config: LocalDaemonConfig) -> None:
                     SET revision = revision + 1 WHERE axis = 'assignment'; END;
             CREATE TRIGGER IF NOT EXISTS local_daemon_assignment_event_insert
                 AFTER INSERT ON coordinator_events
+                BEGIN UPDATE local_daemon_status_revisions
+                    SET revision = revision + 1 WHERE axis = 'assignment'; END;
+            CREATE TRIGGER IF NOT EXISTS local_daemon_slurm_assignment_insert
+                AFTER INSERT ON slurm_stage_assignments
+                BEGIN UPDATE local_daemon_status_revisions
+                    SET revision = revision + 1 WHERE axis = 'assignment'; END;
+            CREATE TRIGGER IF NOT EXISTS local_daemon_slurm_assignment_update
+                AFTER UPDATE ON slurm_stage_assignments
+                BEGIN UPDATE local_daemon_status_revisions
+                    SET revision = revision + 1 WHERE axis = 'assignment'; END;
+            CREATE TRIGGER IF NOT EXISTS local_daemon_slurm_submission_insert
+                AFTER INSERT ON ready_stage_submissions
+                BEGIN UPDATE local_daemon_status_revisions
+                    SET revision = revision + 1 WHERE axis = 'assignment'; END;
+            CREATE TRIGGER IF NOT EXISTS local_daemon_slurm_submission_update
+                AFTER UPDATE ON ready_stage_submissions
                 BEGIN UPDATE local_daemon_status_revisions
                     SET revision = revision + 1 WHERE axis = 'assignment'; END;
             """
@@ -517,11 +566,25 @@ def load_managed_local_intent(
     allowed_targets = {config.machine_id} | {
         rule.agent_id for rule in config.agent_policy.agents
     }
+    slurm_profiles = {profile.profile_id: profile for profile in config.slurm_profiles}
     for placement in placements.values():
-        if placement.target is not None and placement.target not in allowed_targets:
+        if placement.route.kind is ExecutionRouteKind.MANAGED_AGENT and (
+            placement.target is not None and placement.target not in allowed_targets
+        ):
             raise QueueServiceError(
                 "exact runtime record targets an unauthorized managed agent"
             )
+        if placement.route.kind is ExecutionRouteKind.SLURM:
+            profile = slurm_profiles.get(cast(str, placement.route.profile_id))
+            if (
+                profile is None
+                or placement.route.profile_descriptor != profile.descriptor
+                or placement.route.profile_configuration_fingerprint
+                != profile.configuration_fingerprint
+            ):
+                raise QueueServiceError(
+                    "exact runtime record names a changed or unavailable SLURM profile"
+                )
     if (
         parallel_execution_options(runtime_options).max_parallel_stages
         != record["max_parallel_stages"]
@@ -599,9 +662,19 @@ class LocalDaemonExecution:
         self.coordinator = SQLiteCoordinatorAssignments(
             config.execution_database, self.capacity, _allow_initialize=False
         )
+        self.slurm_submissions = SQLiteReadyStageSubmissions(
+            config.execution_database, _allow_initialize=False
+        )
+        self.slurm_assignments = SQLiteSlurmStageAssignments(
+            config.execution_database,
+            config.slurm_transfer_root,
+            _allow_initialize=False,
+        )
         self.journal = SQLiteAgentJournal(config.agent_journal, _allow_initialize=False)
         self.stage_work_store._open_existing()
         self.coordinator._open_existing()
+        self.slurm_submissions._open_existing()
+        self.slurm_assignments._open_existing()
         self.journal._open_existing()
         if not local_daemon_owner_stores_available(
             self.config,
@@ -614,9 +687,7 @@ class LocalDaemonExecution:
             if kind == "gpu":
                 continue
             provider_atoms = tuple(
-                atom
-                for atom in self.local_capacity
-                if atom.owner_resource_kind == kind
+                atom for atom in self.local_capacity if atom.owner_resource_kind == kind
             )
             self.providers[kind] = AtomResourceProvider(
                 _configured_provider_descriptor(kind, provider_atoms),
@@ -670,6 +741,7 @@ class LocalDaemonExecution:
                 )
             provider.restore_capacity_holding(command)
         self._launch_lock = Lock()
+        self._slurm_observed_operations: set[str] = set()
 
     def open_owner_stores(self) -> None:
         """Recheck retained owners before any new scheduling mutation."""
@@ -677,6 +749,8 @@ class LocalDaemonExecution:
         try:
             self.stage_work_store._open_existing()
             self.coordinator._open_existing()
+            self.slurm_submissions._open_existing()
+            self.slurm_assignments._open_existing()
             self.journal._open_existing()
             if not local_daemon_owner_stores_available(
                 self.config,
@@ -752,6 +826,9 @@ class LocalDaemonExecution:
                 )
                 if terminal is not None:
                     return terminal
+                slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+                    admission.run_uri, scoped_authority
+                )
                 if self._remote_run_in_flight(admission.run_uri):
                     return LocalDaemonExecutionOutcome(
                         LocalDaemonAdmissionState.ACTIVE,
@@ -778,6 +855,21 @@ class LocalDaemonExecution:
                 )
                 if terminal is not None:
                     return terminal
+                slurm_dispatch = self._dispatch_slurm_ready(
+                    admission=admission,
+                    intent=intent,
+                    authority=scoped_authority,
+                    snapshot=snapshot,
+                )
+                if slurm_dispatch is not None:
+                    # A pinned route may be unavailable without becoming a
+                    # global scheduling barrier.  Keep its diagnostic, but
+                    # allow the ordinary managed decision below to advance
+                    # independent ready work in this same cycle.
+                    if slurm_dispatch.state is LocalDaemonAdmissionState.WAITING:
+                        slurm_diagnostic = slurm_dispatch.reason
+                    else:
+                        return slurm_dispatch
                 remote_targets = self._remote_candidates()
                 local_candidate = self._candidate()
                 remote_rejected = False
@@ -802,6 +894,17 @@ class LocalDaemonExecution:
                         admission_id=admission.admission_id,
                     )
                     if decision.state is not PolicyDecisionState.SELECT:
+                        if slurm_in_flight:
+                            return LocalDaemonExecutionOutcome(
+                                LocalDaemonAdmissionState.ACTIVE,
+                                slurm_diagnostic
+                                or "explicit SLURM assignment remains durably in flight",
+                            )
+                        if slurm_diagnostic is not None:
+                            return LocalDaemonExecutionOutcome(
+                                LocalDaemonAdmissionState.WAITING,
+                                slurm_diagnostic,
+                            )
                         reason = (
                             "selected remote capacity does not support path-free "
                             "regular-file execution"
@@ -850,6 +953,413 @@ class LocalDaemonExecution:
             LocalDaemonAdmissionState.WAITING,
             "bounded reconciliation window exhausted",
         )
+
+    def _publish_slurm_verifier(
+        self,
+        assignment_id: str,
+        submission: SlurmReadyStageSubmission,
+    ) -> None:
+        """Publish one retained verifier to bootstrap authority."""
+
+        capability = submission.capability
+        if capability is None:
+            raise SlurmPlanningError("ready-stage submission requires a capability")
+        request = submission.request
+        self.slurm_assignments.install_capability(
+            assignment_id,
+            operation_id=request.operation_id,
+            request_digest=request.digest,
+            profile_id=request.profile_id,
+            profile_descriptor=request.profile_descriptor,
+            verifier=capability.verifier,
+        )
+
+    def _mirror_slurm_submission_eligibility(
+        self,
+        assignment_id: str,
+        submission: SlurmReadyStageSubmission,
+    ) -> None:
+        """Mirror one committed submit barrier to bootstrap authority."""
+
+        capability = submission.capability
+        if capability is None:
+            raise SlurmPlanningError("ready-stage submission requires a capability")
+        request = submission.request
+        self.slurm_assignments.mark_submission_eligible(
+            assignment_id,
+            operation_id=request.operation_id,
+            request_digest=request.digest,
+            profile_id=request.profile_id,
+            profile_descriptor=request.profile_descriptor,
+            verifier=capability.verifier,
+        )
+
+    def _submit_slurm_ready(
+        self,
+        *,
+        assignment_id: str,
+        request: SlurmReadyStageRequest,
+        profile: SlurmReadyStageProfile,
+        script_path: Path,
+    ) -> SlurmReadyStageSubmission:
+        """Commit the cross-owner handoff before the one external submission."""
+
+        prepared = self.slurm_submissions.prepare(request, profile, script_path)
+        if prepared.state is ReadyStageState.INTENT:
+            self._publish_slurm_verifier(assignment_id, prepared)
+        return self.slurm_submissions.submit(
+            request,
+            profile,
+            script_path,
+            before_runner=lambda submitting: self._mirror_slurm_submission_eligibility(
+                assignment_id, submitting
+            ),
+        )
+
+    def _release_slurm_assignment(self, assignment_id: str) -> None:
+        """Revoke one exact site receipt before committing final release."""
+
+        record = self.slurm_assignments.read(assignment_id)
+        if record.state == "released":
+            return
+        if record.state == "terminal":
+            self.slurm_assignments.advance(
+                assignment_id, expected="terminal", next_state="logical_released"
+            )
+        elif record.state == "rejected":
+            self.slurm_assignments.advance(
+                assignment_id, expected="rejected", next_state="logical_released"
+            )
+        elif record.state != "logical_released":
+            raise QueueConflictError("SLURM assignment is not releasable")
+        submission = self.slurm_submissions.read(record.assignment.operation_id)
+        capability = submission.capability
+        request = submission.request
+        if (
+            capability is None
+            or request.operation_id != record.assignment.operation_id
+            or request.digest != record.assignment.request_digest
+            or request.profile_id != record.assignment.profile_id
+            or request.profile_descriptor != record.assignment.profile_descriptor
+        ):
+            raise QueueConflictError("SLURM provider release binding conflicts")
+        self._slurm_profile(
+            record.assignment.profile_id
+        ).job_private_file_provider.revoke(capability)
+        self.slurm_assignments.release(assignment_id)
+
+    def _reconcile_slurm_run(
+        self,
+        run_uri: str,
+        authority: _ScopedCoordinatorAuthority,
+    ) -> tuple[bool, str | None]:
+        records = self.slurm_assignments.list_run_unreleased(run_uri)
+        if not records:
+            return False, None
+        in_flight = False
+        diagnostic: str | None = None
+        for retained in records:
+            record = retained
+            assignment_id = record.assignment.assignment_id
+            if record.state in {"logical_released", "terminal", "rejected"}:
+                try:
+                    self._release_slurm_assignment(assignment_id)
+                except SlurmPlanningError:
+                    in_flight = True
+                    diagnostic = diagnostic or "slurm_release_awaiting_acknowledgement"
+                    continue
+                if record.state == "rejected":
+                    diagnostic = diagnostic or "slurm_submission_rejected"
+                continue
+            if record.state == "conflict":
+                in_flight = True
+                diagnostic = diagnostic or "slurm_submission_conflict"
+                continue
+            if record.state == "reserved":
+                authority.bind_prepared_attempt(
+                    record.assignment.run_uri,
+                    assignment_id=assignment_id,
+                    attempt_id=record.assignment.attempt_id,
+                )
+                self.slurm_assignments.advance(
+                    assignment_id, expected="reserved", next_state="bound"
+                )
+                record = self.slurm_assignments.read(assignment_id)
+            if record.state in {"bound", "submitting", "unknown"}:
+                profile = self._slurm_profile(record.assignment.profile_id)
+                submission = self.slurm_submissions.find(record.assignment.operation_id)
+                if submission is None or submission.state is ReadyStageState.INTENT:
+                    if record.state != "bound":
+                        in_flight = True
+                        diagnostic = diagnostic or "slurm_submission_intent_unavailable"
+                        continue
+                    request = SlurmReadyStageRequest.from_dict(record.request)
+                    script_path = self.config.slurm_script_root / f"{assignment_id}.sh"
+                    submission = self._submit_slurm_ready(
+                        assignment_id=assignment_id,
+                        request=request,
+                        profile=profile,
+                        script_path=script_path,
+                    )
+                elif submission.state is ReadyStageState.SUBMITTING:
+                    self._mirror_slurm_submission_eligibility(assignment_id, submission)
+                if submission.state in {
+                    ReadyStageState.SUBMITTING,
+                    ReadyStageState.UNKNOWN,
+                }:
+                    submission = self.slurm_submissions.reconcile(
+                        record.assignment.operation_id, profile
+                    )
+                state = self.slurm_assignments.record_submission(
+                    assignment_id,
+                    state=submission.state.value,
+                    job_id=submission.job_id,
+                    cluster=submission.cluster,
+                )
+                if state == "rejected":
+                    self._release_slurm_assignment(assignment_id)
+                    diagnostic = diagnostic or "slurm_submission_rejected"
+                    continue
+                if state == "conflict":
+                    diagnostic = diagnostic or "slurm_submission_conflict"
+            current_state = self.slurm_assignments.read(assignment_id).state
+            operation_id = record.assignment.operation_id
+            if (
+                current_state in {"accepted", "granted", "running"}
+                and operation_id not in self._slurm_observed_operations
+            ):
+                profile = self._slurm_profile(record.assignment.profile_id)
+                self.slurm_submissions.observe(operation_id, profile)
+                self._slurm_observed_operations.add(operation_id)
+            in_flight = True
+        return in_flight, diagnostic
+
+    def _dispatch_slurm_ready(
+        self,
+        *,
+        admission: LocalDaemonAdmission,
+        intent: ManagedLocalIntent,
+        authority: _ScopedCoordinatorAuthority,
+        snapshot: AuthoritativeRunSnapshot,
+    ) -> LocalDaemonExecutionOutcome | None:
+        records = tuple(
+            sorted(
+                (
+                    record
+                    for record in self.stage_work_store.list_stage_work()
+                    if record.admission_id == admission.admission_id
+                    and record.scheduling_state is SchedulingProjectionState.READY
+                    and record.placement.route.kind is ExecutionRouteKind.SLURM
+                ),
+                key=lambda item: (
+                    item.ready_at,
+                    item.ready_order,
+                    item.stage_work_id,
+                ),
+            )
+        )
+        if not records:
+            return None
+        record = records[0]
+        profile = self._slurm_profile(cast(str, record.placement.route.profile_id))
+        operation_id = (
+            "slurm-op-"
+            + hashlib.sha256(
+                (
+                    admission.admission_id
+                    + "\0"
+                    + record.stage_work_id
+                    + "\0"
+                    + profile.configuration_fingerprint
+                ).encode()
+            ).hexdigest()
+        )
+        assignment_id = (
+            "slurm-assignment-"
+            + hashlib.sha256(
+                (record.stage_work_id + "\0" + operation_id).encode()
+            ).hexdigest()
+        )
+        try:
+            request = map_ready_stage(
+                placement=record.placement,
+                profile=profile,
+                operation_id=operation_id,
+                stage_work_id=record.stage_work_id,
+                run_uri=record.run_uri,
+                attempt_id=record.attempt_id,
+            )
+            stage = intent.pipeline.get_stage(record.stage_name)
+            stage_plan = next(
+                item
+                for item in intent.plan.ordered_stage_plans
+                if item.stage_name == record.stage_name
+            )
+            raw_worker_request = self.run_store.read_stage_worker_request(
+                record.run_uri,
+                record.stage_name,
+                attempt=record.attempt,
+            )
+            worker_request = (
+                StageWorkerRequest.from_dict(raw_worker_request)
+                if raw_worker_request is not None
+                else prepare_stage_attempt(
+                    run_store=self.run_store,
+                    run_uri=record.run_uri,
+                    stage=stage,
+                    stage_plan=stage_plan,
+                    produced_outputs=_produced_outputs(snapshot),
+                    fingerprint_context=intent.plan.fingerprint_context,
+                    resolved_runtime=intent.runtime[record.stage_name],
+                )
+            )
+            if (
+                worker_request.run_uri != record.run_uri
+                or worker_request.stage_name != record.stage_name
+                or worker_request.attempt != record.attempt
+                or worker_request.executor_name != profile.executor_name
+            ):
+                raise QueueConflictError("SLURM worker preparation identity conflicts")
+            assignment = SlurmStageAssignment(
+                assignment_id=assignment_id,
+                operation_id=operation_id,
+                run_uri=record.run_uri,
+                stage_work_id=record.stage_work_id,
+                stage_name=record.stage_name,
+                attempt=record.attempt,
+                attempt_id=record.attempt_id,
+                profile_id=profile.profile_id,
+                profile_descriptor=profile.descriptor,
+                profile_configuration_fingerprint=profile.configuration_fingerprint,
+                request_digest=request.digest,
+            )
+            remote_inputs: list[_RemoteArtifact] = []
+            input_paths: dict[str, Path] = {}
+            total_bytes = 0
+            for logical_name, ref in sorted(worker_request.inputs.items()):
+                transfer_id = (
+                    "input-"
+                    + hashlib.sha256(
+                        (
+                            assignment.assignment_id
+                            + "\0"
+                            + logical_name
+                            + "\0"
+                            + ref.artifact_id
+                        ).encode()
+                    ).hexdigest()
+                )
+                descriptor, source = _RemoteArtifact.from_local_ref(
+                    transfer_id=transfer_id,
+                    logical_name=logical_name,
+                    ref=ref,
+                )
+                total_bytes += descriptor.size_bytes
+                if total_bytes > MAX_TRANSFER_BYTES:
+                    raise QueueServiceError(
+                        "SLURM assignment inputs exceed the configured bound"
+                    )
+                remote_inputs.append(descriptor)
+                input_paths[transfer_id] = source
+            delivery = SlurmStageDelivery.from_worker_request(
+                assignment=assignment,
+                worker_request=worker_request,
+                project_fingerprint=profile.project_fingerprint,
+                environment_fingerprint=profile.environment_fingerprint,
+                executor_fingerprint=profile.executor_fingerprint,
+                inputs=tuple(remote_inputs),
+                declared_outputs=tuple(sorted(stage.outputs)),
+            )
+            script_path = self.config.slurm_script_root / f"{assignment_id}.sh"
+            atomic_write_bytes(script_path, request.script.encode("utf-8"))
+            script_path.chmod(0o600)
+            self.slurm_assignments.reserve(
+                assignment,
+                request_json=request.to_dict(),
+                delivery=delivery,
+                input_paths=input_paths,
+                issuer_epoch=self.coordinator_epoch,
+                max_parallel_stages=intent.max_parallel_stages,
+                max_profile_outstanding=profile.max_outstanding,
+            )
+            authority.bind_prepared_attempt(
+                record.run_uri,
+                assignment_id=assignment_id,
+                attempt_id=record.attempt_id,
+            )
+            self.slurm_assignments.advance(
+                assignment_id, expected="reserved", next_state="bound"
+            )
+            submission = self._submit_slurm_ready(
+                assignment_id=assignment_id,
+                request=request,
+                profile=profile,
+                script_path=script_path,
+            )
+            self.slurm_assignments.record_submission(
+                assignment_id,
+                state=submission.state.value,
+                job_id=submission.job_id,
+                cluster=submission.cluster,
+            )
+            if submission.state is ReadyStageState.REJECTED:
+                self._release_slurm_assignment(assignment_id)
+        except SlurmResourceMappingError:
+            return LocalDaemonExecutionOutcome(
+                LocalDaemonAdmissionState.WAITING,
+                "slurm_route_unmappable",
+            )
+        except SlurmPlanningError as exc:
+            diagnostic = str(exc)
+            return LocalDaemonExecutionOutcome(
+                LocalDaemonAdmissionState.WAITING,
+                (
+                    diagnostic
+                    if diagnostic
+                    in {
+                        "slurm_profile_unavailable",
+                        "slurm_profile_operation_discovery_unavailable",
+                        "slurm_profile_changed",
+                    }
+                    else "slurm_route_unavailable_or_unmappable"
+                ),
+            )
+        except (
+            QueueConflictError,
+            QueueServiceError,
+            OSError,
+            ValueError,
+        ):
+            return LocalDaemonExecutionOutcome(
+                LocalDaemonAdmissionState.WAITING,
+                "slurm_route_unavailable_or_unmappable",
+            )
+        return LocalDaemonExecutionOutcome(
+            (
+                LocalDaemonAdmissionState.WAITING
+                if submission.state
+                in {ReadyStageState.REJECTED, ReadyStageState.CONFLICT}
+                else LocalDaemonAdmissionState.ACTIVE
+            ),
+            {
+                ReadyStageState.REJECTED: "slurm_submission_rejected",
+                ReadyStageState.CONFLICT: "slurm_submission_conflict",
+                ReadyStageState.UNKNOWN: "slurm_submission_unknown",
+            }.get(submission.state, "explicit SLURM assignment was submitted"),
+        )
+
+    def _slurm_profile(self, profile_id: str):
+        profile = next(
+            (
+                item
+                for item in self.config.slurm_profiles
+                if item.profile_id == profile_id
+            ),
+            None,
+        )
+        if profile is None:
+            raise QueueConflictError("SLURM profile is not configured")
+        return profile
 
     def _apply_controller_action(
         self,
@@ -1131,13 +1641,9 @@ class LocalDaemonExecution:
             )
             inventory: dict[str, ResourceInventoryEnvelope] = {}
             availability: dict[str, ResourceAvailabilityEnvelope] = {}
-            for kind in {
-                atom.owner_resource_kind for atom in inventory_atoms
-            }:
+            for kind in {atom.owner_resource_kind for atom in inventory_atoms}:
                 kind_inventory_atoms = tuple(
-                    atom
-                    for atom in inventory_atoms
-                    if atom.owner_resource_kind == kind
+                    atom for atom in inventory_atoms if atom.owner_resource_kind == kind
                 )
                 kind_availability_atoms = tuple(
                     atom
@@ -1353,8 +1859,7 @@ class LocalDaemonExecution:
                         self.planners[kind].descriptor for kind in sorted(observations)
                     ),
                     provider_descriptors=tuple(
-                        self.providers[kind].descriptor
-                        for kind in sorted(observations)
+                        self.providers[kind].descriptor for kind in sorted(observations)
                     ),
                     atoms=tuple(
                         atom
@@ -1639,17 +2144,7 @@ class LocalDaemonExecution:
             assignment_id=assignment_id,
             attempt_id=str(record["attempt_id"]),
         )
-        self.coordinator.advance(assignment_id, expected="bound", next_state="terminal")
-        self.coordinator.advance(
-            assignment_id,
-            expected="terminal",
-            next_state="logical_released",
-        )
-        self.coordinator.advance(
-            assignment_id,
-            expected="logical_released",
-            next_state="released",
-        )
+        self.coordinator.release_unaccepted(assignment_id)
 
     def remote_started(
         self, assignment_id: str, *, fence: str, process_execution_id: str
@@ -1763,6 +2258,301 @@ class LocalDaemonExecution:
         elif state != "released":
             raise QueueConflictError("remote assignment is not logically released")
 
+    def slurm_register(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str | None,
+        operation_id: str,
+        request_digest: str,
+        job_id: str,
+        cluster: str | None,
+        incarnation: str,
+        capability: str,
+    ) -> SlurmStageRecord:
+        profile = self._slurm_profile_for_principal(principal_id, credential_id)
+        retained = self.slurm_assignments.read_operation(operation_id)
+        if (
+            retained.assignment.profile_id != profile.profile_id
+            or retained.assignment.profile_descriptor != profile.descriptor
+            or retained.assignment.profile_configuration_fingerprint
+            != profile.configuration_fingerprint
+            or retained.assignment.request_digest != request_digest
+        ):
+            raise QueueConflictError("SLURM bootstrap profile conflicts")
+        # A rejected capability must not associate or conflict a scheduler
+        # handle.  The assignment store owns proof, binding, consumption, and
+        # replay in one transaction; only that proof can cross the submission
+        # mutation boundary below.
+        submission_before = self.slurm_submissions.read(operation_id)
+        if submission_before.job_id is not None and (
+            submission_before.job_id != job_id or submission_before.cluster != cluster
+        ):
+            raise QueueConflictError("SLURM bootstrap job handle conflicts")
+        registered = self.slurm_assignments.register_bootstrap(
+            operation_id,
+            request_digest=request_digest,
+            job_id=job_id,
+            cluster=cluster,
+            incarnation=incarnation,
+            capability=capability,
+        )
+        submission = self.slurm_submissions.associate_handle(
+            operation_id,
+            profile,
+            job_id=job_id,
+            cluster=cluster,
+        )
+        self.slurm_assignments.record_submission(
+            retained.assignment.assignment_id,
+            state=submission.state.value,
+            job_id=submission.job_id,
+            cluster=submission.cluster,
+        )
+        return registered
+
+    def slurm_input_chunk(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str | None,
+        assignment_id: str,
+        incarnation: str,
+        transfer_id: str,
+        offset: int,
+    ) -> tuple[bytes, bool]:
+        self._slurm_authorized_record(
+            principal_id, credential_id, assignment_id, incarnation
+        )
+        return self.slurm_assignments.read_input_chunk(
+            assignment_id, incarnation, transfer_id, offset
+        )
+
+    def slurm_inputs_ready(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str | None,
+        assignment_id: str,
+        incarnation: str,
+    ) -> None:
+        self._slurm_authorized_record(
+            principal_id, credential_id, assignment_id, incarnation
+        )
+        self.slurm_assignments.mark_input_ready(assignment_id, incarnation)
+
+    def slurm_grant(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str | None,
+        assignment_id: str,
+        incarnation: str,
+    ) -> str:
+        record = self._slurm_authorized_record(
+            principal_id, credential_id, assignment_id, incarnation
+        )
+        if not record.input_ready:
+            raise QueueConflictError("SLURM grant requires durable inputs")
+        authority = self._remote_authority(record.assignment.run_uri)
+        fence = authority.grant_prepared_attempt(
+            record.assignment.run_uri,
+            assignment_id=assignment_id,
+            attempt_id=record.assignment.attempt_id,
+        )
+        self.slurm_assignments.mark_granted(
+            assignment_id, incarnation, fence.fencing_token
+        )
+        return fence.fencing_token
+
+    def slurm_start_permit(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str | None,
+        assignment_id: str,
+        incarnation: str,
+        fence: str,
+    ) -> bool:
+        record = self._slurm_authorized_record(
+            principal_id, credential_id, assignment_id, incarnation
+        )
+        if record.fence != fence or record.state not in {
+            "granted",
+            "running",
+            "terminal",
+            "logical_released",
+            "released",
+        }:
+            raise QueueConflictError("SLURM start permit fence conflicts")
+        return self.slurm_submissions.consume_start(record.assignment.operation_id)
+
+    def slurm_started(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str | None,
+        assignment_id: str,
+        incarnation: str,
+        fence: str,
+        process_execution_id: str,
+    ) -> None:
+        _safe_identifier(process_execution_id, "SLURM process execution ID")
+        record = self._slurm_authorized_record(
+            principal_id, credential_id, assignment_id, incarnation
+        )
+        authority = self._remote_authority(record.assignment.run_uri)
+        granted = authority.grant_prepared_attempt(
+            record.assignment.run_uri,
+            assignment_id=assignment_id,
+            attempt_id=record.assignment.attempt_id,
+        )
+        if granted.fencing_token != fence:
+            raise QueueConflictError("SLURM execution fence conflicts")
+        authority.confirm_execution_started(record.assignment.run_uri, fence=granted)
+        self.slurm_assignments.mark_running(
+            assignment_id,
+            incarnation,
+            fence,
+            process_execution_id,
+        )
+
+    def slurm_declare_report(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str | None,
+        assignment_id: str,
+        incarnation: str,
+        fence: str,
+        report: _RemoteExecutionReport,
+    ) -> None:
+        self._slurm_authorized_record(
+            principal_id, credential_id, assignment_id, incarnation
+        )
+        self.slurm_assignments.declare_report(assignment_id, incarnation, fence, report)
+
+    def slurm_output_chunk(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str | None,
+        assignment_id: str,
+        incarnation: str,
+        transfer_id: str,
+        offset: int,
+        data: bytes,
+        final: bool,
+    ) -> int:
+        self._slurm_authorized_record(
+            principal_id, credential_id, assignment_id, incarnation
+        )
+        return self.slurm_assignments.write_output_chunk(
+            assignment_id,
+            incarnation,
+            transfer_id,
+            offset,
+            data,
+            final=final,
+        )
+
+    def slurm_commit_result(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str | None,
+        assignment_id: str,
+        incarnation: str,
+        fence: str,
+    ) -> None:
+        record = self._slurm_authorized_record(
+            principal_id, credential_id, assignment_id, incarnation
+        )
+        report, outputs = self.slurm_assignments.committed_result(
+            assignment_id, incarnation, fence
+        )
+        authority = self._remote_authority(record.assignment.run_uri)
+        granted = authority.grant_prepared_attempt(
+            record.assignment.run_uri,
+            assignment_id=assignment_id,
+            attempt_id=record.assignment.attempt_id,
+        )
+        if granted.fencing_token != fence:
+            raise QueueConflictError("SLURM terminal fence conflicts")
+        if report.status is StageStatus.SUCCEEDED:
+            authority.record_output_commit(
+                record.assignment.run_uri,
+                record.assignment.stage_name,
+                attempt_id=record.assignment.attempt_id,
+                fencing_token=fence,
+                outputs=outputs,
+                assignment_id=assignment_id,
+            )
+        else:
+            authority.record_managed_attempt_terminal(
+                record.assignment.run_uri,
+                fence=granted,
+                status=report.status,
+                reason=LifecycleReason(
+                    code=(
+                        "worker.slurm_cancelled"
+                        if report.status is StageStatus.CANCELLED
+                        else "worker.slurm_failed"
+                    ),
+                    detail={
+                        "failure_type": report.failure_type,
+                        "message": report.message,
+                    },
+                ),
+            )
+        self.slurm_assignments.mark_terminal(assignment_id)
+
+    def slurm_release(
+        self,
+        *,
+        principal_id: str,
+        credential_id: str | None,
+        assignment_id: str,
+        incarnation: str,
+    ) -> None:
+        self._slurm_authorized_record(
+            principal_id, credential_id, assignment_id, incarnation
+        )
+        self._release_slurm_assignment(assignment_id)
+
+    def _slurm_authorized_record(
+        self,
+        principal_id: str,
+        credential_id: str | None,
+        assignment_id: str,
+        incarnation: str,
+    ) -> SlurmStageRecord:
+        profile = self._slurm_profile_for_principal(principal_id, credential_id)
+        record = self.slurm_assignments.read(assignment_id)
+        if (
+            record.assignment.profile_id != profile.profile_id
+            or record.assignment.profile_descriptor != profile.descriptor
+            or record.bootstrap_incarnation != incarnation
+        ):
+            raise QueueConflictError("SLURM bootstrap authorization conflicts")
+        return record
+
+    def _slurm_profile_for_principal(
+        self, principal_id: str, credential_id: str | None
+    ):
+        profile = next(
+            (
+                item
+                for item in self.config.slurm_profiles
+                if item.bootstrap_principal_id == principal_id
+                and item.credential_reference == credential_id
+            ),
+            None,
+        )
+        if profile is None:
+            raise QueueServiceError("SLURM bootstrap principal is not authorized")
+        return profile
+
     def _remote_assignment_record(self, assignment_id: str) -> sqlite3.Row:
         with sqlite3.connect(self.config.control_database) as conn:
             conn.row_factory = sqlite3.Row
@@ -1829,6 +2619,35 @@ def _stage_work(store: SQLiteStageWorkStore, stage_work_id: str) -> StageWorkRec
     raise QueueServiceError("selected stage work disappeared before reservation")
 
 
+def _safe_identifier(value: object, field: str) -> str:
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:@+"
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 160
+        or any(char not in allowed for char in value)
+    ):
+        raise QueueServiceError(f"{field} is invalid")
+    return value
+
+
+def _slurm_state_diagnostic(state: str) -> str | None:
+    return {
+        "reserved": "slurm_awaiting_authority_bind",
+        "bound": "slurm_awaiting_submission",
+        "submitting": "slurm_submission_unknown",
+        "unknown": "slurm_submission_unknown",
+        "conflict": "slurm_submission_conflict",
+        "rejected": "slurm_submission_rejected",
+        "accepted": "slurm_bootstrap_awaiting_registration",
+        "granted": "slurm_bootstrap_awaiting_start",
+        "running": "slurm_loom_result_awaiting_commit",
+        "terminal": "slurm_result_committed",
+        "logical_released": "slurm_release_awaiting_acknowledgement",
+        "released": "slurm_released",
+    }.get(state)
+
+
 def _produced_outputs(
     snapshot: AuthoritativeRunSnapshot,
 ) -> dict[str, dict[str, ArtifactRef]]:
@@ -1854,6 +2673,8 @@ def build_local_daemon_owner_views(
 
     stage_work_by_run: dict[str, list[dict[str, PlainData]]] = {}
     assignments_by_run: dict[str, list[dict[str, PlainData]]] = {}
+    slurm_by_run: dict[str, list[dict[str, PlainData]]] = {}
+    slurm_submission_by_operation: dict[str, dict[str, PlainData]] = {}
     agent_work_by_run: dict[str, list[dict[str, PlainData]]] = {}
     execution_available = False
     agent_available = False
@@ -1895,6 +2716,7 @@ def build_local_daemon_owner_views(
                 assignments_by_run.setdefault(str(row[1]), []).append(
                     {
                         "assignment_id": str(row[0]),
+                        "target": "managed_agent",
                         "state": str(row[2]),
                         "session_id": str(row[3]),
                         "offer_id": str(row[4]),
@@ -1904,10 +2726,72 @@ def build_local_daemon_owner_views(
                         ).hexdigest(),
                     }
                 )
+            for operation_id, value_json in conn.execute(
+                "SELECT operation_id, value_json FROM ready_stage_submissions"
+            ):
+                submission = SlurmReadyStageSubmission.from_dict(
+                    json.loads(str(value_json))
+                )
+                slurm_submission_by_operation[str(operation_id)] = {
+                    "dispatch_state": submission.state.value,
+                    "scheduler_state": submission.scheduler_state,
+                    "scheduler_source": submission.scheduler_source,
+                    "scheduler_observed_at": submission.scheduler_observed_at,
+                    "conflicting_handles": [
+                        {"job_id": job_id, "cluster": cluster}
+                        for job_id, cluster in submission.conflicting_handles
+                    ],
+                    "cancel_requested": submission.cancel_requested,
+                }
+            for row in conn.execute(
+                "SELECT assignment_id, run_uri, state, profile_id, operation_id, "
+                "job_id, cluster, bootstrap_incarnation, input_ready, fence, "
+                "process_execution_id, report_json FROM slurm_stage_assignments "
+                "ORDER BY assignment_id"
+            ):
+                report_status: str | None = None
+                if row[11] is not None:
+                    report = json.loads(str(row[11]))
+                    if isinstance(report, Mapping) and isinstance(
+                        report.get("status"), str
+                    ):
+                        report_status = cast(str, report["status"])
+                slurm_by_run.setdefault(str(row[1]), []).append(
+                    {
+                        "assignment_id": str(row[0]),
+                        "target": "slurm",
+                        "state": str(row[2]),
+                        "profile_id": str(row[3]),
+                        "operation_id": str(row[4]),
+                        "job_id": None if row[5] is None else str(row[5]),
+                        "cluster": None if row[6] is None else str(row[6]),
+                        "bootstrap_registered": row[7] is not None,
+                        "input_ready": bool(row[8]),
+                        "fence_bound": row[9] is not None,
+                        "process_execution_id": (
+                            None if row[10] is None else str(row[10])
+                        ),
+                        "loom_result_status": report_status,
+                        "diagnostic": _slurm_state_diagnostic(str(row[2])),
+                        "submission": slurm_submission_by_operation.get(
+                            str(row[4]),
+                            {
+                                "dispatch_state": "unavailable",
+                                "scheduler_state": None,
+                                "scheduler_source": None,
+                                "scheduler_observed_at": None,
+                                "conflicting_handles": [],
+                                "cancel_requested": False,
+                            },
+                        ),
+                    }
+                )
             execution_available = True
     except Exception:  # corrupt owner data is unavailable, never partial healthy work
         stage_work_by_run.clear()
         assignments_by_run.clear()
+        slurm_by_run.clear()
+        slurm_submission_by_operation.clear()
         scheduling_revision = None
         assignment_revision = None
         execution_available = False
@@ -2041,6 +2925,26 @@ def build_local_daemon_owner_views(
                     if execution_available
                     else "execution_store_unavailable",
                     "assignments": assignments_by_run.get(admission.run_uri, []),
+                },
+                "slurm": {
+                    "owner": "coordinator-slurm",
+                    "availability": (
+                        "available" if execution_available else "unavailable"
+                    ),
+                    "state": (
+                        "unavailable"
+                        if not execution_available
+                        else "populated"
+                        if slurm_by_run.get(admission.run_uri)
+                        else "empty"
+                    ),
+                    "revision": assignment_revision,
+                    "observed_at": execution_observed_at,
+                    "freshness": ("current" if execution_available else "unavailable"),
+                    "diagnostic": (
+                        None if execution_available else "execution_store_unavailable"
+                    ),
+                    "assignments": slurm_by_run.get(admission.run_uri, []),
                 },
                 "execution": {
                     "owner": "local-agent",

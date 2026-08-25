@@ -321,9 +321,11 @@ Final commands:
   version-3/helper-v2 hard cut, causal parallel-limit barrier, crash/replay
   coverage, private discretion, and Phase 9 stop boundary are implementation-
   ready with no reopened decision
-- Implementation: pending one executor
+- Implementation: complete; Phase 7A's selected vertical source/test/doc
+  baseline is restored with the final v3/helper-v2 hard cut, pre-`sbatch`
+  verifier/eligibility ordering, and shared revoke-before-final-release owner
 - Refiner: not needed unless a qualified blocker is demonstrated
-- Pre-submit gate: pending
+- Pre-submit gate: passed; `make validate-pr` and `make test-summary` passed
 - Independent review: required after a stable validated implementation
 - Blocker corrections: 0/3
 - PR and merge: pending
@@ -332,9 +334,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Restored the approved ready-stage vertical path under `src/loom/**`; Phase 7B changes center on ready-stage submission/assignment ownership and local-daemon composition, with matching SLURM feature documentation. |
+| Tests added or updated | Added pre-run barrier and v3 store hard-cut unit coverage, assignment-store schema coverage, synchronous-`sbatch` bootstrap registration, revoke-before-release assertion, and causal parallel-limit evidence; updated the deterministic helper to envelope v2. |
+| Validated revision/tree state and evidence | Focused ready-stage matrix: 34 passed; daemon/session: 29 passed; SLURM/contract/import: 181 passed. `make validate-pr` passed. `make test-summary` passed: 2,634 passed, 3 skipped, 0 failed/errors (350.98s). |
+| Validation-relevant changes after evidence | None. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Unknown containment remains Phase 9; real site-helper/prolog validation remains opt-in. |

@@ -30,7 +30,7 @@ from loom.serialization import PlainData, stable_json_dumps
 
 from .scheduling_resources import scheduling_entry_view
 
-RESOLVED_STAGE_PLACEMENT_SCHEMA_VERSION = 1
+RESOLVED_STAGE_PLACEMENT_SCHEMA_VERSION = 2
 
 
 class ExecutionRouteKind(StrEnum):
@@ -41,27 +41,56 @@ class ExecutionRouteKind(StrEnum):
 @dataclass(frozen=True, slots=True)
 class ExecutionRoute:
     kind: ExecutionRouteKind = ExecutionRouteKind.MANAGED_AGENT
-    profile_name: str | None = None
-    profile_fingerprint: str | None = None
+    profile_id: str | None = None
+    profile_descriptor: SchedulingComponentDescriptor | None = None
+    profile_configuration_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kind", ExecutionRouteKind(self.kind))
         if self.kind is ExecutionRouteKind.MANAGED_AGENT:
-            if self.profile_name is not None or self.profile_fingerprint is not None:
+            if any(
+                value is not None
+                for value in (
+                    self.profile_id,
+                    self.profile_descriptor,
+                    self.profile_configuration_fingerprint,
+                )
+            ):
                 raise RuntimeResourceError(
                     "managed_agent route must not contain a SLURM profile"
                 )
             return
-        if not self.profile_name or not self.profile_fingerprint:
+        if (
+            not isinstance(self.profile_id, str)
+            or not self.profile_id
+            or any(char.isspace() or ord(char) < 32 for char in self.profile_id)
+            or not isinstance(self.profile_descriptor, SchedulingComponentDescriptor)
+            or not isinstance(self.profile_configuration_fingerprint, str)
+            or not self.profile_configuration_fingerprint
+        ):
             raise RuntimeResourceError(
-                "slurm route requires an explicit profile name and fingerprint"
+                "slurm route requires an explicit profile identity and descriptor"
+            )
+        if (
+            self.profile_descriptor.configuration_fingerprint
+            != self.profile_configuration_fingerprint
+        ):
+            raise RuntimeResourceError(
+                "slurm route profile descriptor and configuration conflict"
             )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "kind": self.kind.value,
-            "profile_name": self.profile_name,
-            "profile_fingerprint": self.profile_fingerprint,
+            "profile_id": self.profile_id,
+            "profile_descriptor": (
+                None
+                if self.profile_descriptor is None
+                else self.profile_descriptor.to_dict()
+            ),
+            "profile_configuration_fingerprint": (
+                self.profile_configuration_fingerprint
+            ),
         }
 
 
@@ -251,6 +280,16 @@ class ResolvedStagePlacement:
             _required(mapping, "route", "ResolvedStagePlacement"),
             "ResolvedStagePlacement.route",
         )
+        _exact_fields(
+            route_data,
+            {
+                "kind",
+                "profile_id",
+                "profile_descriptor",
+                "profile_configuration_fingerprint",
+            },
+            "ResolvedStagePlacement.route",
+        )
         limits_data = _mapping(
             _required(mapping, "search_limits", "ResolvedStagePlacement"),
             "ResolvedStagePlacement.search_limits",
@@ -285,9 +324,17 @@ class ResolvedStagePlacement:
                         _required(route_data, "kind", "ResolvedStagePlacement.route"),
                     )
                 ),
-                profile_name=cast(str | None, route_data.get("profile_name")),
-                profile_fingerprint=cast(
-                    str | None, route_data.get("profile_fingerprint")
+                profile_id=cast(str | None, route_data.get("profile_id")),
+                profile_descriptor=(
+                    None
+                    if route_data.get("profile_descriptor") is None
+                    else SchedulingComponentDescriptor.from_dict(
+                        route_data["profile_descriptor"]
+                    )
+                ),
+                profile_configuration_fingerprint=cast(
+                    str | None,
+                    route_data.get("profile_configuration_fingerprint"),
                 ),
             ),
             search_limits=SchedulingLimits(
@@ -539,6 +586,11 @@ def _mapping(value: object, path: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
         raise RuntimeResourceError(f"{path} must be a string-keyed mapping")
     return cast(Mapping[str, object], value)
+
+
+def _exact_fields(value: Mapping[str, object], expected: set[str], path: str) -> None:
+    if set(value) != expected:
+        raise RuntimeResourceError(f"{path} fields are unsupported")
 
 
 def _sequence(value: object, path: str) -> tuple[object, ...]:

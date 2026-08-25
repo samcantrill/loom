@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp, utc_timestamp
+from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 
 from .agent_sessions import (
     AgentPolicyConfig,
@@ -62,6 +63,7 @@ class LocalDaemonRole(StrEnum):
     CLIENT = "client"
     OPERATOR = "operator"
     AGENT = "agent"
+    SLURM_BOOTSTRAP = "slurm_bootstrap"
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +126,7 @@ class LocalDaemonConfig:
     poll_interval_seconds: float = 0.05
     agent_policy: AgentPolicyConfig = AgentPolicyConfig()
     remote_profiles: tuple[ResidentProfileDescriptor, ...] = ()
+    slurm_profiles: tuple[SlurmReadyStageProfile, ...] = ()
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
@@ -173,10 +176,34 @@ class LocalDaemonConfig:
             raise QueueServiceError("remote resident profiles are invalid")
         if len({item.profile_id for item in profiles}) != len(profiles):
             raise QueueServiceError("remote resident profile IDs must be unique")
+        slurm_profiles = tuple(self.slurm_profiles)
+        if any(not isinstance(item, SlurmReadyStageProfile) for item in slurm_profiles):
+            raise QueueServiceError("protected SLURM profiles are invalid")
+        if len({item.profile_id for item in slurm_profiles}) != len(slurm_profiles):
+            raise QueueServiceError("protected SLURM profile IDs must be unique")
+        if len({item.bootstrap_principal_id for item in slurm_profiles}) != len(
+            slurm_profiles
+        ):
+            raise QueueServiceError("SLURM bootstrap principals must be unique")
+        if len({item.credential_reference for item in slurm_profiles}) != len(
+            slurm_profiles
+        ):
+            raise QueueServiceError("SLURM bootstrap credentials must be unique")
+        existing_credentials = {
+            item.credential_id
+            for item in (*self.agent_policy.agents, *self.agent_policy.principals)
+        }
+        if any(
+            item.credential_reference in existing_credentials for item in slurm_profiles
+        ):
+            raise QueueServiceError(
+                "SLURM bootstrap credentials must be role-exclusive"
+            )
         object.__setattr__(self, "coordinator_root", coordinator)
         object.__setattr__(self, "agent_root", agent)
         object.__setattr__(self, "run_store_root", run_store)
         object.__setattr__(self, "remote_profiles", profiles)
+        object.__setattr__(self, "slurm_profiles", slurm_profiles)
         object.__setattr__(
             self,
             "gpu_devices",
@@ -201,6 +228,14 @@ class LocalDaemonConfig:
     @property
     def agent_journal(self) -> Path:
         return self.agent_root / "journal.sqlite"
+
+    @property
+    def slurm_transfer_root(self) -> Path:
+        return self.coordinator_root / "slurm-transfers"
+
+    @property
+    def slurm_script_root(self) -> Path:
+        return self.coordinator_root / "slurm-scripts"
 
 
 @dataclass(frozen=True, slots=True)
@@ -517,10 +552,27 @@ class LocalDaemon:
         """Return the restricted authenticated agent view for a trusted principal."""
         return AgentSessionView(self, principal)
 
+    def slurm_bootstrap_view(
+        self, principal: LocalDaemonPrincipal
+    ) -> "LocalDaemonSlurmBootstrapView":
+        """Return the assignment-scoped fixed-bootstrap application view."""
+
+        return LocalDaemonSlurmBootstrapView(self, principal)
+
     def replace_agent_policy(self, policy: AgentPolicyConfig) -> None:
         """Install a new protected policy; later operations re-authorize it."""
         if not isinstance(policy, AgentPolicyConfig):
             raise QueueServiceError("agent policy is invalid")
+        slurm_credentials = {
+            profile.credential_reference for profile in self.config.slurm_profiles
+        }
+        policy_credentials = {
+            item.credential_id for item in (*policy.agents, *policy.principals)
+        }
+        if slurm_credentials & policy_credentials:
+            raise QueueServiceError(
+                "SLURM bootstrap credentials must remain role-exclusive"
+            )
         self._agent_policy = policy
 
     def _require_view_role(
@@ -960,6 +1012,192 @@ class LocalDaemonOperatorView:
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.reconcile_once()
+
+
+@dataclass(frozen=True, slots=True)
+class LocalDaemonSlurmBootstrapView:
+    """Least-privilege view for one protected SLURM profile credential."""
+
+    _daemon: LocalDaemon
+    _principal: LocalDaemonPrincipal
+
+    def _execution(self):  # type: ignore[no-untyped-def]
+        _require_role(self._principal, LocalDaemonRole.SLURM_BOOTSTRAP)
+        execution = self._daemon._execution
+        if execution is None:
+            raise QueueServiceError("SLURM coordinator execution is unavailable")
+        return execution
+
+    def handshake(self) -> Mapping[str, PlainData]:
+        execution = self._execution()
+        profile = execution._slurm_profile_for_principal(
+            self._principal.subject, self._principal.credential_id
+        )
+        return freeze_plain_data(
+            {
+                "protocol_version": "1",
+                "capabilities": ["slurm-ready-stage-bootstrap-v1"],
+                "coordinator_id": self._daemon._require_started(),
+                "coordinator_epoch": self._daemon._epoch or "",
+                "role": LocalDaemonRole.SLURM_BOOTSTRAP.value,
+                "profile_id": profile.profile_id,
+                "profile_descriptor": profile.descriptor.to_dict(),
+                "credential_policy_revision": profile.credential_policy_revision,
+            },
+            path="SLURM bootstrap handshake",
+        )
+
+    def register(
+        self,
+        *,
+        operation_id: str,
+        request_digest: str,
+        job_id: str,
+        cluster: str | None,
+        incarnation: str,
+        capability: str,
+    ) -> Mapping[str, PlainData]:
+        record = self._execution().slurm_register(
+            principal_id=self._principal.subject,
+            credential_id=self._principal.credential_id,
+            operation_id=operation_id,
+            request_digest=request_digest,
+            job_id=job_id,
+            cluster=cluster,
+            incarnation=incarnation,
+            capability=capability,
+        )
+        return freeze_plain_data(
+            {
+                "assignment_id": record.assignment.assignment_id,
+                "operation_id": record.assignment.operation_id,
+                "issuer_epoch": record.issuer_epoch,
+                "job_id": record.job_id,
+                "cluster": record.cluster,
+                "incarnation": record.bootstrap_incarnation,
+                "delivery": record.delivery.to_dict(),
+            },
+            path="SLURM bootstrap registration",
+        )
+
+    def input_chunk(
+        self,
+        assignment_id: str,
+        incarnation: str,
+        transfer_id: str,
+        *,
+        offset: int,
+    ) -> tuple[bytes, bool]:
+        return self._execution().slurm_input_chunk(
+            principal_id=self._principal.subject,
+            credential_id=self._principal.credential_id,
+            assignment_id=assignment_id,
+            incarnation=incarnation,
+            transfer_id=transfer_id,
+            offset=offset,
+        )
+
+    def inputs_ready(self, assignment_id: str, incarnation: str) -> None:
+        self._execution().slurm_inputs_ready(
+            principal_id=self._principal.subject,
+            credential_id=self._principal.credential_id,
+            assignment_id=assignment_id,
+            incarnation=incarnation,
+        )
+
+    def grant(self, assignment_id: str, incarnation: str) -> str:
+        return self._execution().slurm_grant(
+            principal_id=self._principal.subject,
+            credential_id=self._principal.credential_id,
+            assignment_id=assignment_id,
+            incarnation=incarnation,
+        )
+
+    def start_permit(self, assignment_id: str, incarnation: str, fence: str) -> bool:
+        return self._execution().slurm_start_permit(
+            principal_id=self._principal.subject,
+            credential_id=self._principal.credential_id,
+            assignment_id=assignment_id,
+            incarnation=incarnation,
+            fence=fence,
+        )
+
+    def started(
+        self,
+        assignment_id: str,
+        incarnation: str,
+        fence: str,
+        process_execution_id: str,
+    ) -> None:
+        self._execution().slurm_started(
+            principal_id=self._principal.subject,
+            credential_id=self._principal.credential_id,
+            assignment_id=assignment_id,
+            incarnation=incarnation,
+            fence=fence,
+            process_execution_id=process_execution_id,
+        )
+
+    def declare_report(
+        self,
+        assignment_id: str,
+        incarnation: str,
+        fence: str,
+        report: object,
+    ) -> None:
+        from ._remote_stage_execution import _RemoteExecutionReport
+
+        parsed = (
+            report
+            if isinstance(report, _RemoteExecutionReport)
+            else _RemoteExecutionReport.from_dict(report)
+        )
+        self._execution().slurm_declare_report(
+            principal_id=self._principal.subject,
+            credential_id=self._principal.credential_id,
+            assignment_id=assignment_id,
+            incarnation=incarnation,
+            fence=fence,
+            report=parsed,
+        )
+
+    def output_chunk(
+        self,
+        assignment_id: str,
+        incarnation: str,
+        transfer_id: str,
+        *,
+        offset: int,
+        data: bytes,
+        final: bool,
+    ) -> int:
+        return self._execution().slurm_output_chunk(
+            principal_id=self._principal.subject,
+            credential_id=self._principal.credential_id,
+            assignment_id=assignment_id,
+            incarnation=incarnation,
+            transfer_id=transfer_id,
+            offset=offset,
+            data=data,
+            final=final,
+        )
+
+    def commit_result(self, assignment_id: str, incarnation: str, fence: str) -> None:
+        self._execution().slurm_commit_result(
+            principal_id=self._principal.subject,
+            credential_id=self._principal.credential_id,
+            assignment_id=assignment_id,
+            incarnation=incarnation,
+            fence=fence,
+        )
+
+    def release(self, assignment_id: str, incarnation: str) -> None:
+        self._execution().slurm_release(
+            principal_id=self._principal.subject,
+            credential_id=self._principal.credential_id,
+            assignment_id=assignment_id,
+            incarnation=incarnation,
+        )
 
 
 def _require_role(principal: LocalDaemonPrincipal, role: LocalDaemonRole) -> None:

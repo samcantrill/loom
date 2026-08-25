@@ -15,6 +15,8 @@ from typing import cast
 from loom.pipeline.planning import ExecutionPlan
 from loom.pipeline.runtime import (
     CpuResourcePlanner,
+    ExecutionRoute,
+    ExecutionRouteKind,
     MemoryResourcePlanner,
     RunOptions,
     StagePlacementPolicy,
@@ -30,6 +32,7 @@ from loom.pipeline.runtime.scheduling_preferences import (
     ResourceAttributePreferenceScorer,
 )
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 from loom.pipeline.specs import PipelineSpec, StageSpec
 from loom.scheduling import PreferenceSpec
 from loom.serialization import (
@@ -54,6 +57,7 @@ def prepare_managed_local_runtime_record(
     plan: ExecutionPlan,
     pipeline: PipelineSpec,
     options: RunOptions | Mapping[str, object] | None = None,
+    slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
 ) -> str:
     """Write the current exact managed-local execution intent once prepared.
 
@@ -86,6 +90,7 @@ def prepare_managed_local_runtime_record(
             "managed-local preparation requires a resolved config snapshot"
         )
     runtime = resolve_run_runtime(normalized, stage_ids=pipeline.stage_names)
+    profiles = _slurm_profile_registry(slurm_profiles)
     placements: dict[str, PlainData] = {}
     for stage in pipeline.stages:
         exact = runtime[stage.name]
@@ -103,7 +108,7 @@ def prepare_managed_local_runtime_record(
         placements[stage.name] = resolve_stage_placement(
             authored=stage.resource_request,
             runtime=resources,
-            policy=_stage_placement_policy(stage, resources),
+            policy=_stage_placement_policy(stage, resources, profiles),
             planners=planners,
         ).to_dict()
     payload: dict[str, PlainData] = {
@@ -128,10 +133,12 @@ def prepare_managed_local_runtime_record(
 
 
 def _stage_placement_policy(
-    stage: StageSpec, resources: ResourceRequest
+    stage: StageSpec,
+    resources: ResourceRequest,
+    slurm_profiles: Mapping[str, SlurmReadyStageProfile],
 ) -> StagePlacementPolicy:
     raw = dict(stage.placement)
-    unknown = set(raw) - {"pool", "target", "preferences"}
+    unknown = set(raw) - {"pool", "target", "preferences", "execution_route"}
     if unknown:
         raise QueueServiceError(
             "stage placement contains unsupported field(s): "
@@ -150,6 +157,44 @@ def _stage_placement_policy(
             entries={"cpu": ResourceEntry("cpu", 1, "count")}
         ),
         preferences=_resolved_preferences(stage, resources, raw.get("preferences")),
+        route=_execution_route(raw.get("execution_route"), slurm_profiles),
+    )
+
+
+def _slurm_profile_registry(
+    profiles: Sequence[SlurmReadyStageProfile],
+) -> dict[str, SlurmReadyStageProfile]:
+    result: dict[str, SlurmReadyStageProfile] = {}
+    for profile in profiles:
+        if not isinstance(profile, SlurmReadyStageProfile):
+            raise QueueServiceError("protected SLURM profiles are invalid")
+        if profile.profile_id in result:
+            raise QueueServiceError("protected SLURM profile IDs must be unique")
+        result[profile.profile_id] = profile
+    return result
+
+
+def _execution_route(
+    value: object,
+    profiles: Mapping[str, SlurmReadyStageProfile],
+) -> ExecutionRoute:
+    if value is None:
+        return ExecutionRoute()
+    if not isinstance(value, Mapping) or set(value) != {"kind", "profile"}:
+        raise QueueServiceError("stage execution_route fields are invalid")
+    if value.get("kind") != ExecutionRouteKind.SLURM.value:
+        raise QueueServiceError("stage execution_route kind is unsupported")
+    profile_id = value.get("profile")
+    if not isinstance(profile_id, str) or not profile_id:
+        raise QueueServiceError("stage SLURM profile must be a non-empty alias")
+    profile = profiles.get(profile_id)
+    if profile is None:
+        raise QueueServiceError("stage names an unknown protected SLURM profile")
+    return ExecutionRoute(
+        kind=ExecutionRouteKind.SLURM,
+        profile_id=profile.profile_id,
+        profile_descriptor=profile.descriptor,
+        profile_configuration_fingerprint=profile.configuration_fingerprint,
     )
 
 

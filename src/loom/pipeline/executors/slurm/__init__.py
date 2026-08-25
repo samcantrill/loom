@@ -97,6 +97,7 @@ from .rendering import (
     render_sbatch_directive,
     render_slurm_script,
 )
+from .ready_stage import SlurmReadyStageProfile
 from .resources import (
     SlurmSbatchDirective,
     build_sbatch_directives,
@@ -153,6 +154,7 @@ __all__ = [
     "SlurmPlannedSubmission",
     "SlurmPlanningError",
     "SlurmResourceMappingError",
+    "SlurmReadyStageProfile",
     "SlurmResolvedContainerTarget",
     "SlurmSbatchDirective",
     "SlurmSchedulerStatusSnapshot",

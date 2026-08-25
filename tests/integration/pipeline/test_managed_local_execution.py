@@ -28,6 +28,7 @@ from loom.pipeline.execution.managed_local import (
 )
 from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.orchestration import (
+    SchedulingProjectionState,
     SQLiteStageWorkStore,
     StageWorkRecord,
     stage_work_identity,
@@ -644,6 +645,13 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
         execute()
     assert coordinator.state(assignment.assignment_id) == "released"
     assert journal.read_state(assignment.assignment_id) is AssignmentState.RELEASED
+    reopened = next(
+        record
+        for record in SQLiteStageWorkStore(coordinator_path).list_stage_work()
+        if record.stage_work_id == assignment.stage_work_id
+    )
+    assert reopened.scheduling_state is SchedulingProjectionState.READY
+    assert reopened.projection_revision == 2
     with pytest.raises(ManagedLocalError, match="definitively declined"):
         execute()
     authority.unbind_prepared_attempt(

@@ -22,7 +22,9 @@ from .errors import (
 SLURM_COMMAND_RESULT_SCHEMA_VERSION = 1
 MAX_PERSISTED_COMMAND_OUTPUT_CHARS = 4096
 
-_SBATCH_PARSABLE_RE = re.compile(r"^(?P<job_id>[0-9]+)(?:;(?P<cluster>[A-Za-z0-9_.-]+))?$")
+_SBATCH_PARSABLE_RE = re.compile(
+    r"^(?P<job_id>[0-9]+)(?:;(?P<cluster>[A-Za-z0-9_.-]+))?$"
+)
 _COMMAND_RESULT_FIELDS = frozenset(
     {
         "schema_version",
@@ -95,10 +97,7 @@ class SlurmCommandResult:
             "argv",
             _argv_tuple(self.argv, path="SlurmCommandResult.argv"),
         )
-        if (
-            not isinstance(self.returncode, int)
-            or isinstance(self.returncode, bool)
-        ):
+        if not isinstance(self.returncode, int) or isinstance(self.returncode, bool):
             raise SlurmPlanningError("SlurmCommandResult.returncode must be an integer")
         object.__setattr__(
             self,
@@ -177,6 +176,8 @@ class SlurmCommandRunner(Protocol):
         script_path: str | Path,
         *,
         dependency_job_ids: Sequence[str] = (),
+        comment: str | None = None,
+        environment: Mapping[str, str] | None = None,
     ) -> SlurmCommandResult:
         """Submit one script with ``sbatch --parsable``."""
         ...
@@ -191,6 +192,16 @@ class SlurmCommandRunner(Protocol):
 
     def scancel(self, *, job_ids: Sequence[str]) -> SlurmCommandResult:
         """Cancel submitted jobs."""
+        ...
+
+    def discover_live_operations(self) -> SlurmCommandResult:
+        """Return bounded live job/comment rows for exact local filtering."""
+        ...
+
+    def discover_accounted_operations(
+        self, *, started_after: str
+    ) -> SlurmCommandResult:
+        """Return bounded retained allocation/comment rows for local filtering."""
         ...
 
 
@@ -209,13 +220,17 @@ class SubprocessSlurmCommandRunner:
         script_path: str | Path,
         *,
         dependency_job_ids: Sequence[str] = (),
+        comment: str | None = None,
+        environment: Mapping[str, str] | None = None,
     ) -> SlurmCommandResult:
         argv = ["sbatch", "--parsable"]
         dependencies = _job_id_tuple(dependency_job_ids, field="dependency_job_ids")
         if dependencies:
             argv.append("--dependency=afterok:" + ":".join(dependencies))
+        if comment is not None:
+            argv.append("--comment=" + _operation_marker(comment))
         argv.append(str(script_path))
-        return self._run("sbatch", argv)
+        return self._run("sbatch", argv, environment=environment)
 
     def squeue(self, *, job_ids: Sequence[str] = ()) -> SlurmCommandResult:
         argv = ["squeue", "--noheader", "--format", "%i|%T|%r"]
@@ -243,16 +258,48 @@ class SubprocessSlurmCommandRunner:
             raise SlurmPlanningError("scancel requires at least one job ID")
         return self._run("scancel", ["scancel", *ids])
 
-    def _run(self, command: str, argv: Sequence[str]) -> SlurmCommandResult:
+    def discover_live_operations(self) -> SlurmCommandResult:
+        return self._run(
+            "squeue",
+            ["squeue", "--noheader", "--format", "%i|%k"],
+        )
+
+    def discover_accounted_operations(
+        self, *, started_after: str
+    ) -> SlurmCommandResult:
+        timestamp = _required_text(started_after, "started_after")
+        return self._run(
+            "sacct",
+            [
+                "sacct",
+                "--noheader",
+                "--parsable2",
+                "--allocations",
+                f"--starttime={timestamp}",
+                "--format",
+                "JobIDRaw,Comment,Cluster",
+            ],
+        )
+
+    def _run(
+        self,
+        command: str,
+        argv: Sequence[str],
+        *,
+        environment: Mapping[str, str] | None = None,
+    ) -> SlurmCommandResult:
         import subprocess
 
         self.require(command)
         started_at = utc_timestamp()
+        if environment is not None and command == "sbatch":
+            argv = [*argv[:-1], "--export=NIL", argv[-1]]
         completed = subprocess.run(  # noqa: S603
             list(argv),
             check=False,
             capture_output=True,
             text=True,
+            env=None if environment is None else dict(environment),
         )
         return SlurmCommandResult(
             command=command,
@@ -283,6 +330,7 @@ class FakeSlurmCommandRunner:
         self._unavailable = frozenset(str(command) for command in unavailable_commands)
         self._next_job_id = starting_job_id
         self.calls: list[tuple[str, tuple[str, ...]]] = []
+        self.environments: list[Mapping[str, str] | None] = []
 
     def require(self, command: str) -> None:
         command_text = _required_text(command, "command")
@@ -296,12 +344,19 @@ class FakeSlurmCommandRunner:
         script_path: str | Path,
         *,
         dependency_job_ids: Sequence[str] = (),
+        comment: str | None = None,
+        environment: Mapping[str, str] | None = None,
     ) -> SlurmCommandResult:
         argv = ["sbatch", "--parsable"]
         dependencies = _job_id_tuple(dependency_job_ids, field="dependency_job_ids")
         if dependencies:
             argv.append("--dependency=afterok:" + ":".join(dependencies))
+        if comment is not None:
+            argv.append("--comment=" + _operation_marker(comment))
+        if environment is not None:
+            argv.append("--export=NIL")
         argv.append(str(script_path))
+        self.environments.append(None if environment is None else dict(environment))
         fallback = SlurmCommandResult(
             command="sbatch",
             argv=tuple(argv),
@@ -350,6 +405,33 @@ class FakeSlurmCommandRunner:
             "scancel",
             argv,
             SlurmCommandResult(command="scancel", argv=argv, returncode=0),
+        )
+
+    def discover_live_operations(self) -> SlurmCommandResult:
+        argv = ("squeue", "--noheader", "--format", "%i|%k")
+        return self._result(
+            "squeue",
+            argv,
+            SlurmCommandResult(command="squeue", argv=argv, returncode=0),
+        )
+
+    def discover_accounted_operations(
+        self, *, started_after: str
+    ) -> SlurmCommandResult:
+        timestamp = _required_text(started_after, "started_after")
+        argv = (
+            "sacct",
+            "--noheader",
+            "--parsable2",
+            "--allocations",
+            f"--starttime={timestamp}",
+            "--format",
+            "JobIDRaw,Comment,Cluster",
+        )
+        return self._result(
+            "sacct",
+            argv,
+            SlurmCommandResult(command="sacct", argv=argv, returncode=0),
         )
 
     def _result(
@@ -457,6 +539,21 @@ def _required_text(value: object, field: str) -> str:
         raise SlurmPlanningError(f"{field} must be a non-empty string")
     if any(ord(ch) < 32 for ch in value):
         raise SlurmPlanningError(f"{field} must not contain control characters")
+    return value
+
+
+def _operation_marker(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 120
+        or any(
+            char
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:@+"
+            for char in value
+        )
+    ):
+        raise SlurmPlanningError("operation marker is invalid")
     return value
 
 
