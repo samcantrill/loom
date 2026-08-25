@@ -67,19 +67,25 @@ In scope:
   documentation onto a fresh branch from current `develop`.
 - Split capability preparation from the external submission call sufficiently
   for the assignment authorization owner to durably install the exact verifier
-  before `SUBMITTING` and before `sbatch` can start a bootstrap.
+  before the submission owner can enter `SUBMITTING`. Mirror that eligible
+  submission state to the authorization owner before `sbatch`, so a bootstrap
+  that registers inside the synchronous call sees both facts.
 - Keep the retained prepared receipt replay-stable. A crash before verifier
   publication replays only the same handoff; a crash after publication but
   before `SUBMITTING` may make the one permitted submit; at or after
   `SUBMITTING`, neither provider preparation nor `sbatch` runs again.
 - Make provider revocation the required replay-safe step between definite
-  logical release and final `released`, shared by bootstrap release and
-  coordinator terminal reconciliation. Definite submit rejection uses the same
-  retryable cleanup rule.
-- Repair the parallel-limit integration wait so it observes both the expected
-  submit count and accepted assignment mirrors.
-- Use fresh final durable/wire/helper schema identities and reject the unmerged
-  Phase 7 and Phase 7A shapes without migration or mutation.
+  coordinator terminal reconciliation. Definite submit rejection enters that
+  same owner instead of calling the provider directly.
+- Repair the parallel-limit integration wait so completion is caused by the
+  expected submit count and accepted assignment mirrors; for the limiting case,
+  also observe a later limit decision while the first assignment is retained.
+- Use request, submission, and delivery schema version 3 and helper envelope
+  version 2. Reject the unmerged Phase 7 version-1 and Phase 7A version-2
+  durable/wire shapes, the Phase 7A helper version-1 envelope, and either old
+  assignment-store column set without migration or mutation. Retain the
+  approved `job_private_file_v1` delivery kind; helper-envelope version and
+  delivery kind are separate contracts.
 
 Out of scope:
 
@@ -109,26 +115,82 @@ Assumptions:
   secret and binding match. Wrong or early unsupported registration fails with
   zero mutation. Exactly one authored root remains possible.
 - Durable order: `intent -> prepared receipt -> assignment verifier installed
-  -> SUBMITTING -> submit outcome`. The authorization owner accepts only an
-  exact idempotent verifier handoff; changed assignment/request/profile/policy
-  or verifier conflicts.
-- Release order: authoritative terminal result -> logical release -> exact
-  provider revoke -> final released. A definite revoke failure or indeterminate
-  response leaves cleanup retryable and does not advertise final release.
-- Unknown behavior: no automatic revoke, retry, resubmit, fallback, or release
-  claim is inferred from absence or transport failure. Phase 9 owns positive
-  containment.
+  -> SUBMITTING -> authorization owner records submission eligibility -> sbatch
+  -> submit outcome`. `SUBMITTING` remains the at-most-once external-call
+  barrier; `sbatch` is unreachable until both owner-local commits are visible.
+  The authorization owner accepts only an exact idempotent verifier handoff;
+  changed assignment/operation/request/profile/policy or verifier conflicts
+  with zero mutation.
+- Release order: authoritative terminal result or definite submit rejection ->
+  logical release -> exact provider revoke -> final released. A definite revoke
+  failure or indeterminate response leaves cleanup retryable and does not
+  advertise final release.
+- Unknown behavior: for unknown preparation, submission, or start, no provider
+  revoke, external retry, resubmit, fallback, or release claim is inferred from
+  absence or transport failure. Phase 9 owns positive containment.
 - Trust boundary: Loom durably stores only the non-secret receipt/verifier/
   expiry/path/descriptor. Secret bytes never enter script, argv, scheduler
   metadata, submit/job environment, durable Loom/bootstrap state, diagnostics,
   status, logs, or shared same-user files.
-- Compatibility: hard cut. Reject every Phase 7/7A unmerged schema and helper
-  version directly. Existing merged whole-run SLURM behavior and its command
-  environment remain unchanged.
-- Private choices: exact private method names, whether the verifier handoff is
-  one transaction or an idempotent same-database operation, internal retry
-  scheduling, cleanup markers, and test fixture layout. Do not add a new public
-  provider protocol, generic lifecycle framework, or migration surface.
+- Compatibility: hard cut. The final ready-stage request, submission, and
+  delivery versions are 3; the final site-helper request/response envelope is
+  version 2; and both ready-stage SQLite stores require `PRAGMA user_version =
+  3` plus their final exact table/column sets. Decoders/openers reject old,
+  unversioned, or mixed shapes before mutation, and helper responses must match
+  the final exact field set. Existing merged whole-run SLURM behavior and its
+  command environment remain unchanged.
+- Private choices: exact private method/callback names, how the existing
+  composition invokes each owner, internal retry scheduling, and test fixture
+  layout. Reuse the assignment owner's existing logical/final release states;
+  do not add a new public provider protocol, generic lifecycle framework,
+  distributed transaction, migration surface, or compatibility adapter.
+
+## Causal Handoff And Release Protocol
+
+Verifier publication and submission use the two existing durable owners in this
+fixed order:
+
+1. The submission owner creates/replays the intent, invokes or exactly replays
+   the stable provider prepare operation under one operation identity, and
+   commits one complete non-secret prepared receipt. A response lost before
+   that commit may repeat the same provider operation, never rotate its identity.
+2. The composition hands that retained verifier to the assignment authorization
+   owner with the exact assignment, operation, request, profile, and policy
+   binding. The owner commits absent-to-exact once, accepts an exact replay, and
+   rejects any changed binding or verifier without mutation. A lost handoff
+   response therefore replays only this step; preparation and `sbatch` remain
+   unreachable.
+3. Only after the handoff succeeds may the submission owner commit
+   `SUBMITTING`. The composition then records the matching submission-eligible
+   state in the authorization owner before entering the runner. Once
+   `SUBMITTING` exists, restart/reconciliation never invokes prepare or `sbatch`
+   again; it may only replay the exact authorization-owner mirror and reconcile
+   external evidence.
+4. The synchronous `sbatch` call is last. Registration during that call accepts
+   the exact capability and binding because the verifier and eligible state are
+   already authoritative. Registration before eligibility, with a changed
+   binding, or without the verifier fails with zero mutation. The later exact
+   submit response may associate the same handle; a different handle conflicts.
+
+Crash coverage must distinguish: receipt commit before handoff, handoff commit
+before/lost response, handoff before `SUBMITTING`, `SUBMITTING` before its exact
+authorization mirror, the mirror before runner entry, bootstrap registration
+inside the runner call, and the existing call/response/outcome commits. Only a
+crash strictly before `SUBMITTING` may resume the one permitted submit.
+
+The existing local-daemon release composition is the sole provider-revoke-before-
+final-release owner. Definite submission rejection, authenticated bootstrap
+release after terminal result, and coordinator terminal reconciliation all
+request logical release through it. It reads the exact retained provider receipt
+from the submission owner, verifies the assignment/operation/profile binding,
+replays the stable provider revoke operation, and asks the assignment owner for
+final `released` only after a definite exact helper acknowledgement. Helper
+failure, malformed response, timeout, or response loss leaves logical release
+durable and retryable with the same receipt; exact replay after a committed
+final release is already successful. Submission/bootstrap states whose prepare,
+submit, or start outcome is unknown never enter this cleanup path. That unknown
+containment remains Phase 9; ambiguity of a revoke response for already-
+releasable work is instead handled by exact idempotent revoke replay here.
 
 ## Proportionality
 
@@ -148,25 +210,31 @@ Assumptions:
 
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
-| Registration always sees the prepared verifier once a job can start | Assignment authorization owner, fed by submission owner before `sbatch` | Scheduler starts bootstrap before synchronous `sbatch` returns | Legitimate job receives definitive conflict and stage strands | Runner barrier invokes real registration before returning the job handle |
-| One operation prepares and submits at most once across crashes | Ready-stage submission store | Crash before/after prepared receipt, verifier handoff, or `SUBMITTING` | Rotated secret or duplicate job | Fresh provider/runner/store crash matrix with exact call sentinels |
+| Registration always sees the prepared verifier and eligible state once a job can start | Assignment authorization owner, fed in order by submission composition before runner entry | Scheduler starts bootstrap before synchronous `sbatch` returns | Legitimate job receives definitive conflict and stage strands | Runner barrier invokes real registration before returning the job handle; pre-eligibility registration mutates nothing |
+| One operation retains one preparation and submits at most once across crashes | Ready-stage submission store | Crash or response loss before/after prepared receipt, verifier handoff, `SUBMITTING`, authorization mirror, or runner entry | Rotated secret or duplicate job | Fresh provider/runner/store crash matrix distinguishes every named edge with exact operation/call sentinels |
 | Wrong capability or changed binding mutates nothing | Assignment authorization transaction | Same-profile caller or concurrent different job/incarnation | Cross-assignment claim or consumed valid capability | Before/after snapshots plus concurrent exact replay/conflict |
-| Definite completion cannot outlive provider capability state | Shared release composition, with site helper owning physical revoke | Bootstrap release, coordinator reconciliation, helper timeout/response loss | Rematerializable secret or leaked provider capacity after `released` | Both release entries, exact replay, unavailable helper, and no premature final release |
-| Unknown work is retained, not guessed safe | Phase 9 boundary enforced by Phase 7B release logic | Unknown prepare/submit/start/revoke outcome | Unsafe duplicate or premature cleanup | Negative tests prove no revoke/final release for ambiguous state |
+| Definite completion or rejection cannot outlive provider capability state | Local-daemon release composition, with assignment owner holding release state and site helper owning physical revoke | Definite submit rejection, bootstrap release, coordinator reconciliation, helper timeout/response loss | Rematerializable secret or leaked provider capacity after `released` | All three entries converge on one operation; ack loss replays exact revoke; helper failure cannot commit final release |
+| Unknown work is retained, not guessed safe | Phase 9 boundary enforced by Phase 7B release logic | Unknown preparation, submission, or start outcome | Unsafe duplicate or premature cleanup | Negative tests prove no revoke/final release for those ambiguous states; ambiguous revoke responses after definite logical release instead replay exactly |
+| Unmerged candidate state cannot be adopted accidentally | Final codec/store/helper version checks | Phase 7/7A database, serialized value, delivery, or helper response | Silent mixed-contract execution or unsafe replay | Both prior versions, unversioned stores, mixed current/old fields, and helper envelopes reject before mutation |
 | Historical whole-run SLURM remains unchanged | Existing whole-run command owner | Shared command/helper edits | Existing submissions change environment or lifecycle | Existing contract/integration/E2E regressions and exact argv/environment split |
 
 ## Implementation Slices
 
-1. Selectively restore Phase 7A source/tests/docs onto current `develop`, assign
-   fresh final schema identities, and establish the focused baseline without
-   importing blocked roadmap metadata or branch history.
-2. Separate replay-stable capability preparation from submission; install the
-   exact verifier in the assignment owner before durable `SUBMITTING` and
-   `sbatch`; add the fast-bootstrap barrier and crash-order tests.
-3. Route normal terminal and definite-rejection cleanup through one idempotent
-   provider-revoke-before-final-release operation; retain retryable state on
+1. Selectively restore Phase 7A source/tests/docs onto current `develop`; set
+   request/submission/delivery and both SQLite-store identities to 3 and the
+   helper envelope to 2; establish the focused baseline without importing
+   blocked roadmap metadata or branch history.
+2. Separate replay-stable preparation, verifier publication, submission-state
+   commits, and runner entry at the existing composition seam. Add the exact
+   authorization-owner handoff, eligible-state mirror, fast-bootstrap barrier,
+   and every named crash-order test before enabling `sbatch`.
+3. Remove the submission owner's direct rejection revoke and route definite
+   rejection, bootstrap release, and terminal reconciliation through the one
+   local-daemon revoke-before-final-release operation. Retain logical release on
    helper failure or response ambiguity and leave Phase 9 unknowns untouched.
-4. Repair the parallel-limit wait and retain route-local continuation,
+4. Replace the parallel-limit sleep with a joint accepted-mirror predicate and
+   a post-acceptance limit-decision barrier for the one-slot case; retain
+   route-local continuation,
    response-loss registration, one-root, redaction, import-boundary, and
    historical whole-run regressions.
 5. Complete the focused matrix, full validation, categorized evidence,
@@ -177,9 +245,9 @@ Assumptions:
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | required | Import direction and cheap public imports | No eager `subprocess`, queue dependency from pure layers, or new public surface |
-| Unit | required | Prepare/publish/submit and cleanup ordering | Crash at each causal barrier; exact replay; zero reprepare/resubmit; revoke replay/failure; fresh schema rejection |
-| Contract | required | Final durable/wire/helper shapes and least privilege | Phase 7/7A shapes rejected; mTLS alone insufficient; exact capability result replay only |
-| Integration | required | Real coordinator/bootstrap interleaving and both release entries | Registration succeeds inside blocked `sbatch`; success commits then revokes then releases; helper outage stays retryable; stable parallel-limit wait |
+| Unit | required | Prepare/publish/submit and cleanup ordering | Crash at each named causal barrier; stable prepare replay; zero rotated prepare/resubmit; all three release entries use one revoke owner; ack loss retries exact revoke |
+| Contract | required | Final durable/wire/helper shapes and least privilege | Version-1/version-2 and unversioned/mixed stores or payloads reject before mutation; helper v1 rejects; mTLS alone insufficient; exact capability result replay only |
+| Integration | required | Real coordinator/bootstrap interleaving and release convergence | Registration succeeds inside blocked `sbatch`; definite rejection/bootstrap/coordinator cleanup each revoke then release; helper outage stays logically released and retryable; parallel limit uses causal barriers |
 | E2E / opt-in | mixed | Mixed managed/SLURM vertical and historical regression required; real site helper remains opt-in | One submit/root/result/revoke, no starvation/fallback, unchanged whole-run behavior |
 
 Targeted commands:
@@ -202,17 +270,26 @@ Final commands:
 
 - Main risks: publishing only submission-store state while the authorization
   owner remains null; allowing registration before an eligible submit state;
-  calling `sbatch` before the verifier handoff commits; rotating preparation on
-  replay; marking `released` before definite revoke; silently dropping a lost
-  revoke response; revoking unknown work; or changing whole-run submission.
-- Review focus: fast-bootstrap interleaving, exact crash order, one owner per
-  mutation, retryable revoke semantics on both release paths, hard schema cut,
-  secret redaction, no fallback, one root, and stable causal tests.
+  calling `sbatch` before the verifier handoff and eligible-state mirror commit;
+  treating a committed handoff with a lost response as conflict; rotating
+  preparation on replay; invoking a second `sbatch` after `SUBMITTING`; retaining
+  the rejection-only direct revoke; marking `released` before a definite revoke
+  acknowledgement; silently dropping a lost revoke response; revoking unknown
+  work; accepting either candidate schema/helper envelope; using elapsed time as
+  parallel-limit evidence; or changing whole-run submission.
+- Review focus: the exact receipt/handoff/`SUBMITTING`/authorization-mirror/
+  runner sequence, registration inside synchronous `sbatch`, exact crash replay,
+  one release-composition owner across all three entry paths, retryable revoke
+  semantics, version-3 store/wire and helper-v2 hard cuts, secret redaction, no
+  fallback, one root, and the post-acceptance limit-decision barrier.
 - Stop if the verifier cannot become authoritative before `sbatch` without
-  profile-wide authorization; release requires guessing containment; provider
-  revoke is not stable-operation idempotent; secret bytes must enter a visible
-  channel; a second submit/root remains reachable; or the fix requires a new
-  public provider framework or Phase 8/9 behavior.
+  profile-wide authorization; registration cannot be made eligible before
+  runner entry without weakening the at-most-once barrier; the three definite
+  release entries cannot share one exact retained receipt and release owner;
+  release requires guessing containment; provider revoke is not stable-operation
+  idempotent; secret bytes must enter a visible channel; a second submit/root
+  remains reachable; the hard cut needs migration/compatibility; or the fix
+  requires a new public provider framework or Phase 8/9 behavior.
 - Accepted debt and revisit trigger: unknown cleanup may hold provider state and
   capacity until Phase 9 positive containment. A real site-helper/prolog receipt
   remains opt-in until a configured cluster is available.
@@ -222,8 +299,9 @@ Final commands:
 - Read `Metadata` through `Implementation Slices`, then `Test And Validation
   Plan` and `Risks, Review, And Stops`.
 - Safe implementation slices: selective Phase 7A source/test port; final schema
-  cut; verifier handoff before `sbatch`; shared retryable revoke-before-release;
-  causal tests; feature documentation.
+  cut; exact verifier handoff before `SUBMITTING`; eligible-state mirror before
+  `sbatch`; shared retryable revoke-before-release; causal tests; feature
+  documentation.
 - Decisions not to revisit: allocation-private file provider, verifier-only Loom
   state, profile mTLS as transport-only, hard cut with no migration, explicit
   route/no fallback, Phase 5 relay/result ownership, historical whole-run
@@ -238,8 +316,11 @@ Final commands:
 - Manager preparation: complete; dedicated branch/worktree created from clean
   `origin/develop` `84ccb2a`, repository `samcantrill/loom`, target/title,
   predecessor evidence, write boundaries, gates, and stop conditions verified
-- Expanded planning: pending one bounded phase-plan refinement for the causal
-  cross-owner verifier and revoke ordering
+- Expanded planning: complete; the exact idempotent verifier handoff and
+  pre-runner eligibility order, three-entry shared revoke-before-release owner,
+  version-3/helper-v2 hard cut, causal parallel-limit barrier, crash/replay
+  coverage, private discretion, and Phase 9 stop boundary are implementation-
+  ready with no reopened decision
 - Implementation: pending one executor
 - Refiner: not needed unless a qualified blocker is demonstrated
 - Pre-submit gate: pending
