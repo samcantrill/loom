@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from shutil import copyfile
 import sqlite3
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -170,6 +172,47 @@ def test_failed_execution_construction_releases_daemon_ownership(
     restarted = LocalDaemon(config)
     restarted.start()
     restarted.stop()
+
+
+def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
+    """An epoch request is not mistaken for scheduler containment."""
+
+    known = SimpleNamespace(
+        state="accepted",
+        assignment=SimpleNamespace(operation_id="known", profile_id="profile-a"),
+    )
+    unknown = SimpleNamespace(
+        state="submitting",
+        assignment=SimpleNamespace(operation_id="unknown", profile_id="profile-a"),
+    )
+
+    class _Assignments:
+        def list_run_unreleased(self, run_uri: str) -> tuple[object, ...]:
+            assert run_uri == "run://example"
+            return (known, unknown)
+
+    calls: list[tuple[str, object]] = []
+
+    class _Submissions:
+        def find(self, operation_id: str) -> object:
+            return (
+                SimpleNamespace(job_id="1234")
+                if operation_id == "known"
+                else SimpleNamespace(job_id=None)
+            )
+
+        def request_cancel(self, operation_id: str, profile: object) -> object:
+            calls.append((operation_id, profile))
+            return SimpleNamespace(cancel_requested=True)
+
+    execution = object.__new__(local_daemon_execution.LocalDaemonExecution)
+    subject = cast(Any, execution)
+    subject.slurm_assignments = _Assignments()
+    subject.slurm_submissions = _Submissions()
+    subject._slurm_profile = lambda profile_id: f"resolved:{profile_id}"
+
+    assert execution._fan_out_slurm_cancellation("run://example") is True
+    assert calls == [("known", "resolved:profile-a")]
 
 
 @pytest.mark.parametrize("owner_store", ("execution_database", "agent_journal"))

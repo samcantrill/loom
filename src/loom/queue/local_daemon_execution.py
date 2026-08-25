@@ -1540,6 +1540,20 @@ class LocalDaemonExecution:
             return LocalDaemonExecutionOutcome(
                 LocalDaemonAdmissionState.CANCELLATION_REQUESTED
             )
+        # A terminal authority fact wins a late client request.  Installing a
+        # cancellation epoch against it is neither needed nor generally a
+        # valid authority mutation.
+        before = authority.open_run(admission.run_uri)
+        terminal = {
+            RunStatus.SUCCEEDED: LocalDaemonAdmissionState.SUCCEEDED,
+            RunStatus.FAILED: LocalDaemonAdmissionState.FAILED,
+            RunStatus.INTERRUPTED: LocalDaemonAdmissionState.FAILED,
+            RunStatus.CANCELLED: LocalDaemonAdmissionState.CANCELLED,
+        }
+        if before.status in terminal:
+            return LocalDaemonExecutionOutcome(
+                terminal[before.status], "authority_terminal_before_cancellation"
+            )
         authority.install_cancellation_epoch(
             admission.run_uri,
             CancellationEpochRequest(
@@ -1548,6 +1562,13 @@ class LocalDaemonExecution:
                 run_uri=admission.run_uri,
             ),
         )
+        # An effective epoch prevents a later bootstrap grant/start, but it is
+        # not containment for a job which has already reached the external
+        # scheduler.  Fan out only to the exact retained handles and retain
+        # every other submission (including SUBMITTING-without-a-handle) for
+        # reconciliation.  In particular, do not let a successful scancel
+        # response turn the run terminal: it is merely a requested fact.
+        settling = self._fan_out_slurm_cancellation(admission.run_uri)
         snapshot = authority.open_run(admission.run_uri)
         if snapshot.status is RunStatus.CANCELLED:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
@@ -1560,6 +1581,11 @@ class LocalDaemonExecution:
             return LocalDaemonExecutionOutcome(
                 terminal[snapshot.status],
                 "authority_terminal_before_cancellation",
+            )
+        if settling:
+            return LocalDaemonExecutionOutcome(
+                LocalDaemonAdmissionState.CANCELLING,
+                "cancellation epoch is installed; SLURM cancellation is settling",
             )
         try:
             authority.transition_run(
@@ -1574,6 +1600,40 @@ class LocalDaemonExecution:
                 "cancellation epoch is installed; active or unknown work remains",
             )
         return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
+
+    def _fan_out_slurm_cancellation(self, run_uri: str) -> bool:
+        """Request cancellation for retained exact SLURM handles.
+
+        This deliberately has no release or terminal side effect.  A missing
+        handle after durable submission is unknown work, and a rejected or
+        unavailable external request is still settling work.  The ready-stage
+        owner is the single place that records the exact request result.
+        """
+
+        settling = False
+        for record in self.slurm_assignments.list_run_unreleased(run_uri):
+            if record.state in {"released", "terminal", "logical_released", "rejected"}:
+                continue
+            submission = self.slurm_submissions.find(record.assignment.operation_id)
+            if submission is None or submission.job_id is None:
+                # Before an exact handle exists, suppression/reconciliation is
+                # the only truthful action.  The authority epoch blocks grant
+                # and start while this durable reference remains retained.
+                settling = True
+                continue
+            try:
+                profile = self._slurm_profile(record.assignment.profile_id)
+                self.slurm_submissions.request_cancel(
+                    record.assignment.operation_id, profile
+                )
+            except SlurmPlanningError:
+                # A retained binding that cannot currently perform its exact
+                # cancellation stays visible and bound; no inference is safe.
+                settling = True
+                continue
+            # Even a positive scancel response is not containment evidence.
+            settling = True
+        return settling
 
     def _candidate(self) -> Candidate:
         inventory: dict[str, ResourceInventoryEnvelope] = {}

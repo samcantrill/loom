@@ -577,21 +577,24 @@ Final commands:
   base, current source owners, targeted commands, and hard-cut boundary recorded
 - Expanded planning: required by mutable configuration and cancellation races;
   one bounded `loom_phase_planner` refinement complete; executor packet is ready
-- Implementation: pending
-- Refiner: not used
+- Implementation: in progress; v4 control delivery/authority fencing is committed,
+  and the bounded cancellation settlement correction is committed locally
+- Refiner: used for blocker correction 2/3: retained ready-stage SLURM work now
+  receives exact-handle cancellation fan-out and remains settling rather than
+  being represented as contained
 - Pre-submit gate: pending
 - Independent review: expected because control races can release live resources
   or authorize mutation; confirm during preparation
-- Blocker corrections: 0/3
+- Blocker corrections: 2/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Agent-control v4 control delivery/effect/acknowledgement in `agent_sessions.py`, `agent_session_transport.py`, `local_daemon.py`, and public queue import wiring; authority epoch lifecycle fence in `sqlite_authority.py`. |
-| Tests added or updated | Agent-control withdrawal/acknowledgement and effective epoch prepare/grant fence tests. |
-| Validated revision/tree state and evidence | Targeted unit/contract/package checks passed: 201 tests total; `git diff --check` passed. |
-| Validation-relevant changes after evidence | none |
+| Implementation and changed paths | Agent-control v4 control delivery/effect/acknowledgement in `agent_sessions.py`, `agent_session_transport.py`, `local_daemon.py`, and public queue import wiring; authority epoch lifecycle fence in `sqlite_authority.py`. The current correction in `local_daemon_execution.py` checks terminal authority truth before epoch installation, fans effective cancellation to only exact retained SLURM handles, and keeps handle-less/external-request work in `CANCELLING`. |
+| Tests added or updated | Agent-control withdrawal/acknowledgement and effective epoch prepare/grant fence tests; focused local-daemon fan-out test proving only the exact known SLURM handle receives cancellation. |
+| Validated revision/tree state and evidence | Targeted authority/readiness/orchestration/managed-local/ready-stage unit suites: 88 passed; queue unit suites: 47 passed; contract suites: 11 passed; local-daemon production integration: 30 passed; package/import and managed-controller integration: 73 passed. `ruff check` and `git diff --check` passed. |
+| Validation-relevant changes after evidence | Phase-plan record updated only. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
