@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import product
 from math import prod
-from typing import cast
+from typing import TypeVar, cast
 
 from .protocols import (
     HardConstraintEvaluator,
@@ -49,6 +49,7 @@ from .values import (
 
 _MIN_SCORE = -(2**63)
 _MAX_SCORE = 2**63 - 1
+_ComponentT = TypeVar("_ComponentT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,11 @@ class SchedulingKernel:
         policy: SchedulingPolicy,
         hard_evaluators: Mapping[str, HardConstraintEvaluator] | None = None,
         preference_scorers: Mapping[str, PreferenceScorer] | None = None,
+        work_planners: Mapping[str, Mapping[str, ResourcePlanner]] | None = None,
+        work_hard_evaluators: Mapping[str, Mapping[str, HardConstraintEvaluator]]
+        | None = None,
+        work_preference_scorers: Mapping[str, Mapping[str, PreferenceScorer]]
+        | None = None,
         limits: SchedulingLimits | None = None,
         claim_budget: ClaimSearchBudget | None = None,
         component_epoch: str = "default",
@@ -82,6 +88,9 @@ class SchedulingKernel:
         self._planners = dict(planners)
         self._hard = dict(hard_evaluators or {})
         self._preference = dict(preference_scorers or {})
+        self._work_planners = _copy_work_component_mappings(work_planners)
+        self._work_hard = _copy_work_component_mappings(work_hard_evaluators)
+        self._work_preference = _copy_work_component_mappings(work_preference_scorers)
         self._policy = policy
         self._validate_components()
 
@@ -228,8 +237,9 @@ class SchedulingKernel:
                 return _CandidateResult(WorkSearchState.COMPLETE)
 
         claim_groups: list[tuple[ResourceClaim, ...]] = []
+        planners = self._work_planners.get(work.stage_work_id, self._planners)
         for kind, request in sorted(work.requests.items()):
-            planner = self._planners.get(kind)
+            planner = planners.get(kind)
             if planner is None:
                 return _CandidateResult(
                     WorkSearchState.INVALID,
@@ -370,8 +380,9 @@ class SchedulingKernel:
                 WorkSearchState.INVALID,
                 explanation="composite placement duplicates a capacity atom",
             )
+        hard_evaluators = self._work_hard.get(work.stage_work_id, self._hard)
         for spec in work.hard_constraints:
-            evaluator = self._hard.get(spec.evaluator)
+            evaluator = hard_evaluators.get(spec.evaluator)
             if evaluator is None or spec.descriptor is None:
                 return _CandidateResult(
                     WorkSearchState.INVALID,
@@ -405,8 +416,11 @@ class SchedulingKernel:
 
         scores: dict[int, int] = {}
         fallback_eligible = False
+        preference_scorers = self._work_preference.get(
+            work.stage_work_id, self._preference
+        )
         for spec in work.preferences:
-            scorer = self._preference.get(spec.scorer)
+            scorer = preference_scorers.get(spec.scorer)
             if scorer is None or spec.descriptor is None:
                 return _CandidateResult(
                     WorkSearchState.INVALID,
@@ -493,25 +507,46 @@ class SchedulingKernel:
     def _validate_components(self) -> None:
         if not isinstance(self._policy, SchedulingPolicy):
             raise SchedulingError("policy does not satisfy SchedulingPolicy")
-        for kind, planner in self._planners.items():
-            if not isinstance(planner, ResourcePlanner):
-                raise SchedulingError(
-                    f"planner {kind!r} does not satisfy ResourcePlanner"
-                )
-            if planner.resource_kind != kind or planner.descriptor.kind != kind:
-                raise SchedulingError(f"planner {kind!r} identity is inconsistent")
-            if not planner.claim_contracts:
-                raise SchedulingError(f"planner {kind!r} has no claim contract")
-            if any(contract.kind != kind for contract in planner.claim_contracts):
-                raise SchedulingError(
-                    f"planner {kind!r} claim contract is inconsistent"
-                )
+        _validate_planner_mapping(self._planners)
         _validate_component_mapping(
             self._hard, HardConstraintEvaluator, "hard evaluator"
         )
         _validate_component_mapping(
             self._preference, PreferenceScorer, "preference scorer"
         )
+        for planners in self._work_planners.values():
+            _validate_planner_mapping(planners)
+        for hard_evaluators in self._work_hard.values():
+            _validate_component_mapping(
+                hard_evaluators, HardConstraintEvaluator, "hard evaluator"
+            )
+        for preference_scorers in self._work_preference.values():
+            _validate_component_mapping(
+                preference_scorers, PreferenceScorer, "preference scorer"
+            )
+
+
+def _copy_work_component_mappings(
+    values: Mapping[str, Mapping[str, _ComponentT]] | None,
+) -> dict[str, dict[str, _ComponentT]]:
+    result: dict[str, dict[str, _ComponentT]] = {}
+    for stage_work_id, components in (values or {}).items():
+        if not isinstance(stage_work_id, str) or not stage_work_id:
+            raise SchedulingError("work component binding requires stage_work_id")
+        result[stage_work_id] = dict(components)
+    return result
+
+
+def _validate_planner_mapping(values: Mapping[str, object]) -> None:
+    for kind, planner in values.items():
+        if not isinstance(planner, ResourcePlanner):
+            raise SchedulingError(f"planner {kind!r} does not satisfy ResourcePlanner")
+        if planner.resource_kind != kind or planner.descriptor.kind != kind:
+            raise SchedulingError(f"planner {kind!r} identity is inconsistent")
+        if not planner.claim_contracts:
+            raise SchedulingError(f"planner {kind!r} has no claim contract")
+        if any(contract.kind != kind for contract in planner.claim_contracts):
+            raise SchedulingError(f"planner {kind!r} claim contract is inconsistent")
 
 
 def _validate_component_mapping(

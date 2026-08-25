@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 import fcntl
 import hashlib
@@ -27,6 +27,13 @@ from uuid import uuid4
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp, utc_timestamp
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
+from loom.scheduling import (
+    HardConstraintEvaluator,
+    PreferenceScorer,
+    ResourcePlanner,
+    SchedulingComponentDescriptor,
+    SchedulingPolicy,
+)
 
 from .agent_sessions import (
     AgentControl,
@@ -164,6 +171,124 @@ class LocalDaemonPrincipal:
 
 
 @dataclass(frozen=True, slots=True)
+class LocalDaemonSchedulingComponents:
+    """Trusted, complete scheduling composition for one coordinator epoch.
+
+    The objects are trusted project code. Durable state records only their inert
+    descriptors; executable objects never cross a process or persistence boundary.
+    """
+
+    planners: tuple[ResourcePlanner, ...]
+    hard_evaluators: tuple[HardConstraintEvaluator, ...]
+    preference_scorers: tuple[PreferenceScorer, ...]
+    policy: SchedulingPolicy
+
+    def __post_init__(self) -> None:
+        planners = tuple(self.planners)
+        hard = tuple(self.hard_evaluators)
+        preferences = tuple(self.preference_scorers)
+        if not planners or any(
+            not isinstance(item, ResourcePlanner) for item in planners
+        ):
+            raise QueueServiceError("scheduling composition requires resource planners")
+        if not hard or any(
+            not isinstance(item, HardConstraintEvaluator) for item in hard
+        ):
+            raise QueueServiceError("scheduling composition requires hard evaluators")
+        if not preferences or any(
+            not isinstance(item, PreferenceScorer) for item in preferences
+        ):
+            raise QueueServiceError(
+                "scheduling composition requires preference scorers"
+            )
+        if not isinstance(self.policy, SchedulingPolicy):
+            raise QueueServiceError("scheduling composition requires one policy")
+        components = (*planners, *hard, *preferences, self.policy)
+        descriptors = tuple(getattr(item, "descriptor", None) for item in components)
+        if any(
+            not isinstance(item, SchedulingComponentDescriptor) for item in descriptors
+        ):
+            raise QueueServiceError("scheduling component descriptors are invalid")
+        typed_descriptors = tuple(
+            item
+            for item in descriptors
+            if isinstance(item, SchedulingComponentDescriptor)
+        )
+        if len({item.kind for item in typed_descriptors}) != len(typed_descriptors):
+            raise QueueServiceError("scheduling component kinds must be unique")
+        if any(
+            planner.resource_kind != planner.descriptor.kind for planner in planners
+        ):
+            raise QueueServiceError("resource planner identities are inconsistent")
+        if any(
+            not planner.claim_contracts
+            or any(
+                contract.kind != planner.resource_kind
+                for contract in planner.claim_contracts
+            )
+            for planner in planners
+        ):
+            raise QueueServiceError("resource planner claim contracts are inconsistent")
+        object.__setattr__(self, "planners", planners)
+        object.__setattr__(self, "hard_evaluators", hard)
+        object.__setattr__(self, "preference_scorers", preferences)
+
+    @property
+    def descriptors(self) -> tuple[SchedulingComponentDescriptor, ...]:
+        return tuple(
+            sorted(
+                (
+                    item.descriptor
+                    for item in (
+                        *self.planners,
+                        *self.hard_evaluators,
+                        *self.preference_scorers,
+                        self.policy,
+                    )
+                ),
+                key=lambda item: item.key,
+            )
+        )
+
+
+def _default_scheduling_components() -> LocalDaemonSchedulingComponents:
+    """Return the explicit built-in production composition."""
+
+    from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
+    from loom.pipeline.runtime.scheduling_preferences import (
+        GpuModelPreferenceScorer,
+        OrderedAgentPreferenceScorer,
+        PackingPreferenceScorer,
+        ResourceAttributePreferenceScorer,
+    )
+    from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
+    from loom.scheduling import (
+        AttributeConstraintEvaluator,
+        FifoSchedulingPolicy,
+        TargetConstraintEvaluator,
+    )
+
+    return LocalDaemonSchedulingComponents(
+        planners=(
+            CpuResourcePlanner(),
+            MemoryResourcePlanner(),
+            GpuResourcePlanner(),
+        ),
+        hard_evaluators=(
+            TargetConstraintEvaluator(),
+            AttributeConstraintEvaluator(),
+        ),
+        preference_scorers=(
+            OrderedAgentPreferenceScorer(),
+            GpuModelPreferenceScorer(),
+            ResourceAttributePreferenceScorer(),
+            PackingPreferenceScorer(),
+        ),
+        policy=FifoSchedulingPolicy(),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class LocalDaemonConfig:
     """Protected configuration for one local coordinator and agent."""
 
@@ -178,6 +303,9 @@ class LocalDaemonConfig:
     agent_policy: AgentPolicyConfig = AgentPolicyConfig()
     remote_profiles: tuple[ResidentProfileDescriptor, ...] = ()
     slurm_profiles: tuple[SlurmReadyStageProfile, ...] = ()
+    scheduling_components: LocalDaemonSchedulingComponents = field(
+        default_factory=_default_scheduling_components
+    )
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
@@ -218,6 +346,10 @@ class LocalDaemonConfig:
             raise QueueServiceError("poll_interval_seconds must be positive")
         if not isinstance(self.agent_policy, AgentPolicyConfig):
             raise QueueServiceError("agent_policy must be protected agent policy")
+        if not isinstance(self.scheduling_components, LocalDaemonSchedulingComponents):
+            raise QueueServiceError(
+                "scheduling_components must be a complete trusted composition"
+            )
         if any(rule.agent_id == self.machine_id for rule in self.agent_policy.agents):
             raise QueueServiceError(
                 "remote agent identities must be distinct from the local machine"
@@ -943,56 +1075,67 @@ class LocalDaemon:
         coordinator_id = self._require_started()
         from .local_daemon_execution import load_managed_local_intent
 
-        intent = load_managed_local_intent(self.config, request.run_uri)
-        with self._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT * FROM managed_admissions "
-                "WHERE coordinator_id = ? AND run_uri = ?",
-                (coordinator_id, request.run_uri),
-            ).fetchone()
+        with self._cycle_lock:
+            execution = self._execution
+            if execution is None:
+                raise QueueServiceError("coordinator execution is unavailable")
+            with self._connection() as conn:
+                row = conn.execute(
+                    "SELECT * FROM managed_admissions "
+                    "WHERE coordinator_id = ? AND run_uri = ?",
+                    (coordinator_id, request.run_uri),
+                ).fetchone()
+                other = conn.execute(
+                    "SELECT run_uri FROM managed_admissions WHERE queue_item_id = ?",
+                    (request.queue_item_id,),
+                ).fetchone()
             if row is not None:
                 existing = _admission_from_row(row)
+                intent = load_managed_local_intent(
+                    self.config,
+                    request.run_uri,
+                    slurm_profiles=execution.slurm_profiles,
+                )
                 if (
                     existing.intent_digest == intent.digest
                     and existing.queue_item_id == request.queue_item_id
                 ):
-                    conn.commit()
                     return existing
                 raise QueueConflictError("managed run admission intent conflicts")
-            other = conn.execute(
-                "SELECT run_uri FROM managed_admissions WHERE queue_item_id = ?",
-                (request.queue_item_id,),
-            ).fetchone()
             if other is not None:
                 raise QueueConflictError(
                     "queue item identity already admits another run"
                 )
+
+            intent = load_managed_local_intent(self.config, request.run_uri)
+            execution.validate_fresh_intent(intent)
             admission_id = f"admission-{uuid4()}"
             operation_id = f"authority-bind-{uuid4()}"
-            accepted_at = self._accepted_time(conn)
-            conn.execute(
-                """
-                INSERT INTO managed_admissions (
-                    admission_id, queue_item_id, coordinator_id, run_uri,
-                    intent_digest, execution_owner, state, accepted_at,
-                    authority_operation_id, cancellation_operation_id,
-                    blocked_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-                """,
-                (
-                    admission_id,
-                    request.queue_item_id,
-                    coordinator_id,
-                    request.run_uri,
-                    intent.digest,
-                    "managed-stage",
-                    LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
-                    accepted_at,
-                    operation_id,
-                ),
-            )
-            conn.commit()
+            with self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                accepted_at = self._accepted_time(conn)
+                conn.execute(
+                    """
+                    INSERT INTO managed_admissions (
+                        admission_id, queue_item_id, coordinator_id, run_uri,
+                        intent_digest, execution_owner, state, accepted_at,
+                        authority_operation_id, cancellation_operation_id,
+                        blocked_reason
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                    """,
+                    (
+                        admission_id,
+                        request.queue_item_id,
+                        coordinator_id,
+                        request.run_uri,
+                        intent.digest,
+                        "managed-stage",
+                        LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
+                        accepted_at,
+                        operation_id,
+                    ),
+                )
+                conn.commit()
         self._wake.set()
         return self._admission(admission_id)
 
@@ -1231,7 +1374,6 @@ class LocalDaemon:
                 execution = self._execution
                 if execution is None:
                     raise QueueServiceError("coordinator execution is unavailable")
-                reload_plan = execution.prepare_scheduling_reload(replacement)
                 next_epoch = (
                     "scheduling-epoch-"
                     + hashlib.sha256(
@@ -1243,45 +1385,39 @@ class LocalDaemon:
                     ).hexdigest()
                 )
             except Exception:
+                return self._reject_scheduling_reload(operation_id=request.operation_id)
+            with execution.scheduling_reload_guard():
+                try:
+                    reload_plan = execution.prepare_scheduling_reload(
+                        replacement, next_epoch
+                    )
+                except Exception:
+                    return self._reject_scheduling_reload(
+                        operation_id=request.operation_id
+                    )
                 with self._connection() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
                     conn.execute(
-                        "UPDATE scheduling_reloads SET state = 'failed', "
-                        "result_code = 'reload_rejected' WHERE operation_id = ?",
-                        (request.operation_id,),
+                        "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                        "VALUES ('scheduling_epoch', ?)",
+                        (next_epoch,),
+                    )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                        "VALUES ('scheduling_fingerprint', ?)",
+                        (_scheduling_fingerprint(replacement),),
+                    )
+                    conn.execute(
+                        "UPDATE scheduling_reloads SET state = 'applied', "
+                        "result_code = 'applied', scheduling_epoch = ? "
+                        "WHERE operation_id = ?",
+                        (next_epoch, request.operation_id),
                     )
                     conn.commit()
-                return freeze_plain_data(
-                    {
-                        "operation_id": request.operation_id,
-                        "state": "failed",
-                        "code": "reload_rejected",
-                        "scheduling_epoch": self._scheduling_epoch,
-                    },
-                    path="scheduling reload receipt",
-                )
-            with self._connection() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                conn.execute(
-                    "INSERT OR REPLACE INTO daemon_metadata(key, value) "
-                    "VALUES ('scheduling_epoch', ?)",
-                    (next_epoch,),
-                )
-                conn.execute(
-                    "INSERT OR REPLACE INTO daemon_metadata(key, value) "
-                    "VALUES ('scheduling_fingerprint', ?)",
-                    (_scheduling_fingerprint(replacement),),
-                )
-                conn.execute(
-                    "UPDATE scheduling_reloads SET state = 'applied', "
-                    "result_code = 'applied', scheduling_epoch = ? "
-                    "WHERE operation_id = ?",
-                    (next_epoch, request.operation_id),
-                )
-                conn.commit()
-            execution.apply_scheduling_reload(replacement, reload_plan, next_epoch)
-            self.config = replacement
-            self._agent_policy = replacement.agent_policy
-            self._scheduling_epoch = next_epoch
+                execution.apply_scheduling_reload(replacement, reload_plan)
+                self.config = replacement
+                self._agent_policy = replacement.agent_policy
+                self._scheduling_epoch = next_epoch
         self._wake.set()
         return freeze_plain_data(
             {
@@ -1289,6 +1425,27 @@ class LocalDaemon:
                 "state": "applied",
                 "code": "applied",
                 "scheduling_epoch": next_epoch,
+            },
+            path="scheduling reload receipt",
+        )
+
+    def _reject_scheduling_reload(
+        self, *, operation_id: str
+    ) -> Mapping[str, PlainData]:
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE scheduling_reloads SET state = 'failed', "
+                "result_code = 'reload_rejected', scheduling_epoch = ? "
+                "WHERE operation_id = ?",
+                (self._scheduling_epoch, operation_id),
+            )
+            conn.commit()
+        return freeze_plain_data(
+            {
+                "operation_id": operation_id,
+                "state": "failed",
+                "code": "reload_rejected",
+                "scheduling_epoch": self._scheduling_epoch,
             },
             path="scheduling reload receipt",
         )
@@ -1934,6 +2091,9 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
             }
             for item in config.slurm_profiles
         ],
+        "scheduling_components": [
+            item.to_dict() for item in config.scheduling_components.descriptors
+        ],
     }
     encoded = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -1950,6 +2110,7 @@ __all__ = [
     "AgentSessionView",
     "LocalDaemonClientView",
     "LocalDaemonConfig",
+    "LocalDaemonSchedulingComponents",
     "LocalDaemonOperatorView",
     "LocalDaemonPrincipal",
     "LocalDaemonRole",

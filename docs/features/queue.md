@@ -505,10 +505,16 @@ provider admission remains authoritative.
 Every scheduling/provider implementation has an immutable descriptor and is
 explicitly supplied through an instance-local registry frozen for one
 configuration epoch. Active bindings resolve fresh work; exact descriptor-keyed
-retained bindings reconstruct referenced nonterminal work and live claims, or a
-reload fails before swap. The descriptor has distinct implementation and non-secret canonical
-configuration fingerprints. Durable records keep identity/version/fingerprint only; unknown or
-changed contracts fail before scheduling/launch. A separate agent-side
+retained bindings reconstruct accepted runtime placements, referenced nonterminal
+stage work, and live claims, or a reload fails before swap. Admission and reload
+are serialized: an intent accepted before reload retains its exact bindings, while
+a stale not-yet-admitted intent is rejected before mutation. Ready work from
+different epochs may coexist in one decision: each stage-work identity is
+evaluated with its exact retained planner, hard-rule, and scorer bindings, while
+the one active policy compares the combined evaluations. The descriptor has
+distinct implementation and non-secret canonical configuration fingerprints.
+Durable records keep identity/version/fingerprint only; unknown or changed
+contracts fail before scheduling/launch. A separate agent-side
 `AgentResourceProvider` observes and performs assignment-scoped prepare,
 reconcile, activate, abort, and release through idempotent commands and closed
 typed outcomes. Public bounded conformance checks cover custom examples, but
@@ -693,9 +699,14 @@ requested, effective, settling, and terminal cancellation. After grant, an exact
 acknowledgement may prove no start intent/launcher invocation; once start intent
 exists without a known outcome, work remains unknown until reconciliation or
 containment. Cancellation becomes terminal only after terminal or positive-
-containment evidence. Existing whole-run queue rows
-remain readable and cancellable. New managed work uses a distinct orchestration
-state rather than silently reinterpreting historical `DISPATCHED`.
+containment evidence. The canonical cancellation request contains the complete,
+exact plan stage set. Once all physical owners settle, one authority transaction
+cancels prepared attempts and never-ready descendants, refuses any live binding,
+preserves an already-terminal success/failure winner, and CASes the run to
+`CANCELLED`. The old request shape without that stage set is rejected; it is not
+filled in or upgraded. Existing whole-run queue rows remain readable and
+cancellable. New managed work uses a distinct orchestration state rather than
+silently reinterpreting historical `DISPATCHED`.
 
 Stage 29 retains compact admission/owner, retired-session, idempotency, and event
 tombstones needed to reject duplicate or stale operations. It does not add an

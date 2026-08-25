@@ -99,7 +99,9 @@ def _decision_receipt(
 ) -> dict[str, PlainData]:
     return {
         "policy_epoch": "one",
-        "policy_descriptor": {"name": "fifo", "version": 1},
+        "policy_descriptor": SchedulingComponentDescriptor(
+            "fifo", 1, "1", "test-fifo", "configured"
+        ).to_dict(),
         "stage_work_id": assignment.stage_work_id,
         "candidate_id": assignment.agent_id,
         "stage_work_revision": 1,
@@ -333,6 +335,9 @@ def test_coordinator_reserves_atoms_and_run_slot_in_one_transaction(tmp_path) ->
         )
         == "reserved"
     )
+    assert {
+        descriptor.kind for descriptor in coordinator.retained_scheduling_descriptors()
+    } == {"cpu", "fifo"}
     assert (
         coordinator.reserve(
             command.assignment,

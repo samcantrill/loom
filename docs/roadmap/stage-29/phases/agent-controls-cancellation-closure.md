@@ -76,13 +76,17 @@ In scope:
   Trusted configuration supplies a complete composition; built-ins are an
   explicit composition, not hidden constructor constants.
 - Before reload mutation, build the complete replacement epoch and collect
-  exact descriptor references from nonterminal stage work, capacity-holding
-  managed assignments/decision receipts, and unreleased SLURM work. Resolve
-  each retained descriptor to its existing exact object and reject before swap
-  if any binding is missing, colliding, or reinterpreted. Fresh placement and
-  scheduling use active bindings. Existing referenced work uses retained
-  bindings. Commit the durable epoch/receipt only after all fallible planning;
-  the in-memory swap under the daemon cycle lock must then be non-fallible.
+  exact descriptor references from accepted nonterminal runtime placements,
+  nonterminal stage work, capacity-holding managed assignments/decision
+  receipts, and unreleased SLURM work. Serialize fresh admission with reload so
+  a pre-reload accepted intent is retained and a post-reload stale intent is
+  rejected before persistence. Resolve each retained descriptor to its existing
+  exact object and reject before swap if any binding is missing, colliding, or
+  reinterpreted. Fresh placement and scheduling use active bindings. Existing
+  referenced work uses retained bindings, including when old- and new-epoch
+  ready work coexist in one policy decision. Commit the durable epoch/receipt
+  only after all fallible planning; the in-memory swap under the daemon cycle
+  lock must then be non-fallible.
 - Complete cancellation settlement across all owners. An effective authority
   epoch first fences prepare/bind/grant/start/retry. Reconcile never-assigned
   prepared attempts and never-ready descendants through an idempotent
@@ -207,12 +211,16 @@ Final commands:
 - Manager preparation: complete on clean merged Phase 7B baseline
 - Expanded planning: architecture boundary explored; no phase-planner pass
   needed because the approved three-finding recovery is decision-complete
-- Implementation: complete in `0059d55`
-- Refiner: not used
-- Pre-submit gate: passed at `0059d55`; `make validate-pr` and
-  `make test-summary` completed with no validation-relevant changes afterward
+- Implementation: initial executor packet in `0059d55`; manager correction in
+  progress on the current branch closes the full component-epoch and terminal
+  cancellation boundaries found during verification
+- Refiner: one bounded pass used for the first qualified blocker; it stopped
+  without changes, and the manager completed the concrete repair locally
+- Pre-submit gate: pending on the corrected tree; evidence from `0059d55` is
+  stale because validation-relevant source and test changes followed
 - Independent review: required after PR
-- Blocker corrections: 0/3
+- Blocker corrections: 2/3 used; one bounded correction remains if independent
+  review finds a product blocker
 - PR and merge: pending
 
 ## Completion Record

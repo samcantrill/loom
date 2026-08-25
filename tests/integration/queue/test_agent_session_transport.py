@@ -2190,6 +2190,104 @@ def test_loopback_rejects_unmapped_client_certificate_and_wrong_service_ca(
         daemon.stop()
 
 
+def test_loopback_operator_scope_denial_matches_direct_before_persistence(
+    tmp_path: Path,
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    policy = AgentPolicyConfig(
+        agents=_policy().agents,
+        principals=(
+            TransportPrincipalPolicy(
+                "operator-credential",
+                "operator-principal",
+                "operator",
+                actions=("drain",),
+                agent_ids=("another-agent",),
+                pools=("default",),
+            ),
+        ),
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "agent-root",
+        tmp_path / "runs",
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(credentials["agent"].with_suffix(".crt")): (
+                    "agent-credential"
+                ),
+                _fingerprint(credentials["other"].with_suffix(".crt")): (
+                    "operator-credential"
+                ),
+            },
+        ),
+    )
+    server.start()
+    agent = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".key"),
+            _remote_agent_root(tmp_path),
+        )
+    )
+    operator = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".key"),
+        )
+    )
+    try:
+        handshake = agent.handshake()
+        session = agent.register(_request(handshake, agent.agent_root_id))
+        control = AgentControl(
+            operation_id="denied-control",
+            kind=AgentControlKind.DRAIN,
+            agent_id=session.agent_id,
+            expected_session_id=session.session_id,
+            expected_config_revision=session.config_revision,
+            pool="default",
+            cancel_active=False,
+            reason="outside exact agent scope",
+        )
+        direct = daemon.operator_view(
+            LocalDaemonPrincipal(
+                "operator-principal",
+                LocalDaemonRole.OPERATOR,
+                "operator-credential",
+            )
+        )
+        with pytest.raises(QueueServiceError, match="not authorized"):
+            direct.control_agent(control)
+        operator.handshake(role="operator")
+        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+            operator.control_agent(control)
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM agent_controls").fetchone()[0] == 0
+            )
+    finally:
+        agent.close()
+        operator.close()
+        server.stop()
+        daemon.stop()
+
+
 def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
     tmp_path: Path,
 ) -> None:

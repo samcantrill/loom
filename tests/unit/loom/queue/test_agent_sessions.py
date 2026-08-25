@@ -75,7 +75,13 @@ def _policy(
                 "operator-credential",
                 "operator",
                 "operator",
-                actions=("drain", "resume", "reload", "cancel_active", "scheduling_reload"),
+                actions=(
+                    "drain",
+                    "resume",
+                    "reload",
+                    "cancel_active",
+                    "scheduling_reload",
+                ),
                 agent_ids=("agent-a",),
                 pools=("default",),
             ),
@@ -296,8 +302,21 @@ def test_agent_control_withdraws_offer_then_requires_agent_acknowledgement(
         daemon.stop()
 
 
+@pytest.mark.parametrize(
+    ("actions", "agent_ids", "pools", "cancel_active"),
+    [
+        (("resume",), ("agent-a",), ("default",), False),
+        (("drain",), ("another-agent",), ("default",), False),
+        (("drain",), ("agent-a",), ("another-pool",), False),
+        (("drain",), ("agent-a",), ("default",), True),
+    ],
+)
 def test_operator_control_scope_denial_happens_before_control_persistence(
     tmp_path: Path,
+    actions: tuple[str, ...],
+    agent_ids: tuple[str, ...],
+    pools: tuple[str, ...],
+    cancel_active: bool,
 ) -> None:
     policy = AgentPolicyConfig(
         agents=_policy().agents,
@@ -306,9 +325,9 @@ def test_operator_control_scope_denial_happens_before_control_persistence(
                 "operator-credential",
                 "operator",
                 "operator",
-                actions=("drain",),
-                agent_ids=("another-agent",),
-                pools=("another-pool",),
+                actions=actions,
+                agent_ids=agent_ids,
+                pools=pools,
             ),
         ),
     )
@@ -325,7 +344,7 @@ def test_operator_control_scope_denial_happens_before_control_persistence(
             expected_session_id=session.session_id,
             expected_config_revision=session.config_revision,
             pool="default",
-            cancel_active=False,
+            cancel_active=cancel_active,
             reason="out-of-scope",
         )
         operator = daemon.operator_view(
@@ -334,7 +353,9 @@ def test_operator_control_scope_denial_happens_before_control_persistence(
         with pytest.raises(QueueServiceError, match="not authorized"):
             operator.control_agent(control)
         with sqlite3.connect(config.control_database) as conn:
-            assert conn.execute("SELECT COUNT(*) FROM agent_controls").fetchone()[0] == 0
+            assert (
+                conn.execute("SELECT COUNT(*) FROM agent_controls").fetchone()[0] == 0
+            )
     finally:
         daemon.stop()
 

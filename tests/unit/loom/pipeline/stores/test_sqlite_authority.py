@@ -932,6 +932,7 @@ def test_cancellation_epoch_is_durable_singleton_and_replays_receipts(
         operation_id="cancel-1",
         coordinator_id="coordinator-stable-1",
         run_uri=run_uri,
+        stage_names=("stage-a",),
     )
 
     receipt = store.install_cancellation_epoch(run_uri, request)
@@ -944,6 +945,7 @@ def test_cancellation_epoch_is_durable_singleton_and_replays_receipts(
             operation_id="cancel-2",
             coordinator_id="coordinator-stable-1",
             run_uri=run_uri,
+            stage_names=("stage-a",),
         ),
     )
     assert second.epoch == receipt.epoch
@@ -956,7 +958,29 @@ def test_cancellation_epoch_is_durable_singleton_and_replays_receipts(
                 operation_id=request.operation_id,
                 coordinator_id="other-coordinator",
                 run_uri=run_uri,
+                stage_names=("stage-a",),
             ),
+        )
+    with pytest.raises(AuthorityStoreError, match="scope conflicts"):
+        store.install_cancellation_epoch(
+            run_uri,
+            CancellationEpochRequest(
+                operation_id="cancel-different-scope",
+                coordinator_id="coordinator-stable-1",
+                run_uri=run_uri,
+                stage_names=("stage-a", "stage-b"),
+            ),
+        )
+
+
+def test_cancellation_epoch_request_rejects_the_pre_cutover_shape() -> None:
+    with pytest.raises(AuthorityStoreError, match="stage_names"):
+        CancellationEpochRequest.from_dict(
+            {
+                "operation_id": "cancel-1",
+                "coordinator_id": "coordinator-1",
+                "run_uri": "file:///run",
+            }
         )
 
 
@@ -978,16 +1002,109 @@ def test_effective_cancellation_epoch_fences_prepare_bind_and_grant(
     )
     store.install_cancellation_epoch(
         run_uri,
-        CancellationEpochRequest("cancel-1", "coordinator-1", run_uri),
+        CancellationEpochRequest("cancel-1", "coordinator-1", run_uri, ("stage-a",)),
     )
     with pytest.raises(AuthorityStoreError, match="cancellation epoch is effective"):
         store.grant_prepared_attempt(
-            run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+            run_uri,
+            assignment_id="assignment-1",
+            attempt_id=prepared.attempt.attempt_id,
         )
     with pytest.raises(AuthorityStoreError, match="cancellation epoch is effective"):
         store.ensure_prepared_attempt(
-            run_uri, _prepared_request(store.open_run(run_uri).revision, operation_id="prepare-2")
+            run_uri,
+            _prepared_request(
+                store.open_run(run_uri).revision, operation_id="prepare-2"
+            ),
         )
+
+
+def test_final_cancellation_settles_prepared_and_never_ready_stages_and_replays(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "cancellation-finalization")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri, status=RunStatus.RUNNING)
+    store.bind_coordinator_admission(
+        run_uri,
+        CoordinatorAdmissionRequest("admit-1", "coordinator-1", run_uri, "intent-1"),
+    )
+    prepared = store.ensure_prepared_attempt(
+        run_uri, _prepared_request(store.open_run(run_uri).revision)
+    )
+    request = CancellationEpochRequest(
+        "cancel-1", "coordinator-1", run_uri, ("build", "downstream")
+    )
+    store.install_cancellation_epoch(run_uri, request)
+
+    assert store.finalize_cancellation(run_uri, request) is RunStatus.CANCELLED
+    assert store.finalize_cancellation(run_uri, request) is RunStatus.CANCELLED
+    snapshot = store.open_run(run_uri)
+    stages = {stage.stage_name: stage for stage in snapshot.stages}
+    assert snapshot.status is RunStatus.CANCELLED
+    assert stages["build"].status is StageStatus.CANCELLED
+    assert stages["build"].attempts[-1].attempt_id == prepared.attempt.attempt_id
+    assert stages["build"].attempts[-1].status is StageStatus.CANCELLED
+    assert stages["downstream"].status is StageStatus.CANCELLED
+    assert stages["downstream"].attempts == ()
+
+
+def test_final_cancellation_refuses_a_live_binding_until_exact_unbind(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "cancellation-live-binding")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri, status=RunStatus.RUNNING)
+    store.bind_coordinator_admission(
+        run_uri,
+        CoordinatorAdmissionRequest("admit-1", "coordinator-1", run_uri, "intent-1"),
+    )
+    prepared = store.ensure_prepared_attempt(
+        run_uri, _prepared_request(store.open_run(run_uri).revision)
+    )
+    store.bind_prepared_attempt(
+        run_uri,
+        assignment_id="assignment-1",
+        attempt_id=prepared.attempt.attempt_id,
+    )
+    request = CancellationEpochRequest("cancel-1", "coordinator-1", run_uri, ("build",))
+    store.install_cancellation_epoch(run_uri, request)
+
+    with pytest.raises(AuthorityStoreError, match="binding remains live"):
+        store.finalize_cancellation(run_uri, request)
+    assert store.open_run(run_uri).status is RunStatus.RUNNING
+
+    store.unbind_prepared_attempt(
+        run_uri,
+        assignment_id="assignment-1",
+        attempt_id=prepared.attempt.attempt_id,
+    )
+    assert store.finalize_cancellation(run_uri, request) is RunStatus.CANCELLED
+
+
+@pytest.mark.parametrize("winner", [RunStatus.SUCCEEDED, RunStatus.FAILED])
+def test_final_cancellation_preserves_a_terminal_run_winner(
+    tmp_path: Path, winner: RunStatus
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / f"cancellation-winner-{winner.value.lower()}")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri, status=RunStatus.RUNNING)
+    store.bind_coordinator_admission(
+        run_uri,
+        CoordinatorAdmissionRequest("admit-1", "coordinator-1", run_uri, "intent-1"),
+    )
+    request = CancellationEpochRequest("cancel-1", "coordinator-1", run_uri, ("build",))
+    store.install_cancellation_epoch(run_uri, request)
+    snapshot = store.open_run(run_uri)
+    store.transition_run(
+        run_uri,
+        from_status=RunStatus.RUNNING,
+        to_status=winner,
+        expected_revision=snapshot.revision,
+    )
+
+    assert store.finalize_cancellation(run_uri, request) is winner
+    assert store.open_run(run_uri).status is winner
 
 
 def test_v5_authority_database_migrates_daemon_authority_receipts(

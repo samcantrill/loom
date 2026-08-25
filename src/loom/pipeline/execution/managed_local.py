@@ -1236,7 +1236,8 @@ class SQLiteAgentJournal:
 
         with self._transaction() as conn:
             row = conn.execute(
-                "SELECT state FROM assignments WHERE assignment_id = ?", (assignment_id,)
+                "SELECT state FROM assignments WHERE assignment_id = ?",
+                (assignment_id,),
             ).fetchone()
             return None if row is None else AssignmentState(row["state"])
 
@@ -1993,6 +1994,67 @@ class SQLiteCoordinatorAssignments:
                     (run_uri,),
                 )
             )
+
+    def retained_scheduling_descriptors(
+        self,
+    ) -> tuple[SchedulingComponentDescriptor, ...]:
+        """Return exact components referenced by capacity-holding decisions."""
+
+        references: dict[
+            tuple[str, int, str, str, str], SchedulingComponentDescriptor
+        ] = {}
+        with self._transaction() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT x.receipt_json, w.record_json "
+                    "FROM coordinator_assignments x JOIN stage_work w "
+                    "ON w.stage_work_id = x.stage_work_id "
+                    "WHERE x.state IN ('reserved','bound','accepted','granted',"
+                    "'running','unknown','terminal','logical_released') "
+                    "ORDER BY x.assignment_id"
+                )
+            )
+        try:
+            for row in rows:
+                receipt = json.loads(cast(str, row["receipt_json"]))
+                if not isinstance(receipt, Mapping):
+                    raise ManagedLocalError("retained decision receipt is invalid")
+                policy = SchedulingComponentDescriptor.from_dict(
+                    receipt.get("policy_descriptor")
+                )
+                references[policy.key] = policy
+                raw_components = receipt.get("component_descriptors")
+                if not isinstance(raw_components, list):
+                    raise ManagedLocalError(
+                        "retained decision component descriptors are invalid"
+                    )
+                for raw in raw_components:
+                    descriptor = SchedulingComponentDescriptor.from_dict(raw)
+                    references[descriptor.key] = descriptor
+                stage_work = StageWorkRecord.from_dict(
+                    json.loads(cast(str, row["record_json"]))
+                )
+                for descriptor in stage_work.placement.planner_descriptors.values():
+                    references[descriptor.key] = descriptor
+                for spec in stage_work.placement.hard_constraints:
+                    if spec.descriptor is None:
+                        raise ManagedLocalError(
+                            "retained hard evaluator descriptor is unavailable"
+                        )
+                    references[spec.descriptor.key] = spec.descriptor
+                for spec in stage_work.placement.preferences:
+                    if spec.descriptor is None:
+                        raise ManagedLocalError(
+                            "retained preference scorer descriptor is unavailable"
+                        )
+                    references[spec.descriptor.key] = spec.descriptor
+        except ManagedLocalError:
+            raise
+        except Exception as exc:
+            raise ManagedLocalError(
+                "retained scheduling component references are invalid"
+            ) from exc
+        return tuple(sorted(references.values(), key=lambda item: item.key))
 
     def record_event(
         self,

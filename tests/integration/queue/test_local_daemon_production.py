@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 import importlib
 from pathlib import Path
 import sqlite3
@@ -24,7 +25,7 @@ from loom.pipeline.execution.managed_local import (
 )
 from loom.pipeline.planning import PlanSelectors, plan_pipeline
 from loom.pipeline.planning import ExecutionPlan
-from loom.pipeline.runtime import scheduling_entry_view
+from loom.pipeline.runtime import CpuResourcePlanner, scheduling_entry_view
 from loom.pipeline.runtime.options import ExecutionOptions
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
@@ -51,6 +52,7 @@ from loom.queue import (
     LocalDaemonAdmissionRequest,
     LocalDaemonAdmissionState,
     LocalDaemonConfig,
+    LocalDaemonSchedulingComponents,
     LocalDaemonPrincipal,
     LocalDaemonRole,
     LocalDaemonSocketClient,
@@ -71,6 +73,14 @@ from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
 
 
 pytestmark = pytest.mark.integration
+
+
+class _ConfiguredCpuPlanner(CpuResourcePlanner):
+    descriptor = replace(
+        CpuResourcePlanner.descriptor,
+        implementation_version="configured-2",
+        implementation_fingerprint="test:configured-cpu:v2",
+    )
 
 
 @pytest.mark.parametrize(
@@ -410,6 +420,39 @@ def test_exact_runtime_record_keeps_attributes_settings_and_run_concurrency(
     assert settings["max_parallel_stages"] == 2
 
 
+def test_fresh_runtime_placement_uses_the_trusted_active_planner(
+    tmp_path: Path,
+) -> None:
+    store, run_uri, pipeline = _persist_single_stage_run(tmp_path / "runs")
+    base = _daemon_config(tmp_path)
+    components = LocalDaemonSchedulingComponents(
+        planners=tuple(
+            _ConfiguredCpuPlanner() if item.resource_kind == "cpu" else item
+            for item in base.scheduling_components.planners
+        ),
+        hard_evaluators=base.scheduling_components.hard_evaluators,
+        preference_scorers=base.scheduling_components.preference_scorers,
+        policy=base.scheduling_components.policy,
+    )
+    plan = ExecutionPlan.from_dict(store.read_plan(run_uri))
+    spec = PipelineSpec.from_config(pipeline)
+    prepare_managed_local_runtime_record(
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=spec,
+        scheduling_components=components,
+    )
+
+    intent = load_managed_local_intent(
+        replace(base, scheduling_components=components), run_uri
+    )
+    assert (
+        intent.placements["build"].planner_descriptors["cpu"]
+        == _ConfiguredCpuPlanner.descriptor
+    )
+
+
 @pytest.mark.parametrize(
     ("authority_status", "expected"),
     [
@@ -469,7 +512,10 @@ def test_post_bind_scoped_authority_rejects_wrong_run_and_coordinator(
         scoped.install_cancellation_epoch(
             first,
             CancellationEpochRequest(
-                operation_id="cancel", coordinator_id="coordinator-b", run_uri=first
+                operation_id="cancel",
+                coordinator_id="coordinator-b",
+                run_uri=first,
+                stage_names=("stage-a",),
             ),
         )
 
@@ -508,7 +554,10 @@ def test_cancelling_outcome_remains_reconcilable_until_authority_settles(
     )
 
     class _UnsettledAuthority(_ScopedCoordinatorAuthority):
-        def transition_run(self, run_uri: str, **kwargs: object) -> Never:
+        def finalize_cancellation(
+            self, run_uri: str, request: CancellationEpochRequest
+        ) -> Never:
+            del request
             self._run(run_uri)
             raise RuntimeError("transient transition outage")
 
@@ -518,13 +567,81 @@ def test_cancelling_outcome_remains_reconcilable_until_authority_settles(
         coordinator_id="coordinator",
     )
     assert (
-        execution._cancel(admission, unsettled).state
+        execution._cancel(admission, unsettled, ("build",)).state
         is LocalDaemonAdmissionState.CANCELLING
     )
     assert (
-        execution._cancel(admission, scoped).state
+        execution._cancel(admission, scoped, ("build",)).state
         is LocalDaemonAdmissionState.CANCELLED
     )
+
+
+def test_mixed_owner_cancellation_waits_for_every_owner_before_final_cas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _daemon_config(tmp_path)
+    execution = _execution(config)
+    run_uri = path_to_run_uri(tmp_path / "mixed-cancellation")
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    authority.bind_coordinator_admission(
+        run_uri,
+        CoordinatorAdmissionRequest(
+            operation_id="bind",
+            coordinator_id="coordinator",
+            run_uri=run_uri,
+            intent_digest="digest",
+        ),
+    )
+    scoped = _ScopedCoordinatorAuthority(
+        authority, run_uri=run_uri, coordinator_id="coordinator"
+    )
+    admission = LocalDaemonAdmission(
+        admission_id="admission",
+        queue_item_id="item",
+        coordinator_id="coordinator",
+        run_uri=run_uri,
+        intent_digest="digest",
+        execution_owner="managed-stage",
+        state=LocalDaemonAdmissionState.CANCELLING,
+        accepted_at="2020-01-01T00:00:00Z",
+        authority_operation_id="bind",
+        cancellation_operation_id="cancel",
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        execution,
+        "_fan_out_slurm_cancellation",
+        lambda _run_uri: calls.append("slurm") or False,
+    )
+    monkeypatch.setattr(
+        execution,
+        "_fan_out_local_cancellation",
+        lambda _run_uri, _authority: calls.append("local") or True,
+    )
+    monkeypatch.setattr(
+        execution,
+        "_fan_out_remote_cancellation",
+        lambda _run_uri, _operation_id: calls.append("remote") or False,
+    )
+
+    assert (
+        execution._cancel(admission, scoped, ("build",)).state
+        is LocalDaemonAdmissionState.CANCELLING
+    )
+    assert calls == ["slurm", "local", "remote"]
+    assert authority.open_run(run_uri).status is RunStatus.RUNNING
+
+    monkeypatch.setattr(
+        execution,
+        "_fan_out_local_cancellation",
+        lambda _run_uri, _authority: calls.append("local-settled") or False,
+    )
+    assert (
+        execution._cancel(admission, scoped, ("build",)).state
+        is LocalDaemonAdmissionState.CANCELLED
+    )
+    assert authority.open_run(run_uri).status is RunStatus.CANCELLED
 
 
 def test_daemon_reconciles_cancelling_and_wait_does_not_treat_it_as_terminal(
@@ -717,7 +834,10 @@ def test_pending_cancellation_installs_authority_epoch_before_any_stage(
         assert cancelled.state is LocalDaemonAdmissionState.CANCELLED
         snapshot = authority.open_run(run_uri)
         assert snapshot.status is RunStatus.CANCELLED
-        assert snapshot.stages == ()
+        assert len(snapshot.stages) == 1
+        assert snapshot.stages[0].stage_name == "build"
+        assert snapshot.stages[0].status is StageStatus.CANCELLED
+        assert snapshot.stages[0].attempts == ()
         cancellation = cast(
             Mapping[str, object], client.status().runs[0]["cancellation"]
         )

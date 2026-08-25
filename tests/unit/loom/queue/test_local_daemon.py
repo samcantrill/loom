@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 from pathlib import Path
 from shutil import copyfile
 import sqlite3
@@ -13,16 +14,114 @@ import pytest
 
 import loom.queue.local_daemon_execution as local_daemon_execution
 from loom.queue import (
+    AgentControl,
     CoordinatorSchedulingReload,
     LocalDaemon,
+    LocalDaemonAdmissionRequest,
+    LocalDaemonAdmissionState,
     LocalDaemonConfig,
+    LocalDaemonSchedulingComponents,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    LocalDaemonSocketClient,
+    LocalDaemonSocketServer,
     QueueConflictError,
     QueueServiceError,
     QueueStorageError,
 )
-from loom.queue.agent_sessions import AgentPolicyConfig, TransportPrincipalPolicy
+from loom.queue.agent_sessions import (
+    AgentControlKind,
+    AgentPolicyConfig,
+    AgentPrincipalPolicy,
+    AgentRegistration,
+    TransportPrincipalPolicy,
+)
+from loom.pipeline.orchestration import (
+    SchedulingProjectionState,
+    StageWorkRecord,
+    stage_work_identity,
+)
+from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+from loom.pipeline.executors.slurm.ready_stage import (
+    SlurmJobPrivateFileProvider,
+    SlurmReadyStageProfile,
+)
+from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.runtime import CpuResourcePlanner, ExecutionRouteKind
+from loom.pipeline.runtime.placement import (
+    StagePlacementPolicy,
+    resolve_stage_placement,
+)
+from loom.pipeline.runtime.scheduling_preferences import OrderedAgentPreferenceScorer
+from loom.pipeline.status import RunStatus
+from loom.pipeline.stores import PreparedAttemptRequest, path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.scheduling import (
+    FifoSchedulingPolicy,
+    ResourceClaimContractDescriptor,
+    TargetConstraintEvaluator,
+)
+
+
+class _CpuPlannerV2(CpuResourcePlanner):
+    descriptor = replace(
+        CpuResourcePlanner.descriptor,
+        implementation_version="2",
+        implementation_fingerprint="test:cpu:v2",
+    )
+
+
+class _IncompatibleCpuPlanner(CpuResourcePlanner):
+    descriptor = replace(
+        CpuResourcePlanner.descriptor,
+        implementation_version="incompatible",
+        implementation_fingerprint="test:cpu:incompatible",
+    )
+    claim_contracts = (ResourceClaimContractDescriptor("cpu", 2, "test-cpu-claim-v2"),)
+
+
+class _TargetEvaluatorV2(TargetConstraintEvaluator):
+    descriptor = replace(
+        TargetConstraintEvaluator.descriptor,
+        implementation_version="2",
+        implementation_fingerprint="test:target:v2",
+    )
+
+
+class _AgentPreferenceV2(OrderedAgentPreferenceScorer):
+    descriptor = replace(
+        OrderedAgentPreferenceScorer.descriptor,
+        implementation_version="2",
+        implementation_fingerprint="test:preferred-agent:v2",
+    )
+
+
+class _PolicyV2(FifoSchedulingPolicy):
+    descriptor = replace(
+        FifoSchedulingPolicy.descriptor,
+        implementation_version="2",
+        implementation_fingerprint="test:fifo:v2",
+    )
+
+
+def _replacement_components(
+    current: LocalDaemonSchedulingComponents,
+) -> LocalDaemonSchedulingComponents:
+    return LocalDaemonSchedulingComponents(
+        planners=tuple(
+            _CpuPlannerV2() if item.resource_kind == "cpu" else item
+            for item in current.planners
+        ),
+        hard_evaluators=tuple(
+            _TargetEvaluatorV2() if item.descriptor.kind == "target" else item
+            for item in current.hard_evaluators
+        ),
+        preference_scorers=tuple(
+            _AgentPreferenceV2() if item.descriptor.kind == "preferred_agent" else item
+            for item in current.preference_scorers
+        ),
+        policy=_PolicyV2(),
+    )
 
 
 def _config(tmp_path: Path) -> LocalDaemonConfig:
@@ -102,6 +201,613 @@ def test_scheduling_reload_is_local_atomic_and_durable(tmp_path: Path) -> None:
     restarted.stop()
 
 
+def test_complete_component_epoch_retains_old_bindings_and_activates_new_ones(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    old = config.scheduling_components
+    replacement = _replacement_components(old)
+    initial = local_daemon_execution._build_scheduling_epoch(
+        epoch_id="epoch-1",
+        composition=old,
+        active_slurm_profiles={},
+    )
+    old_cpu = next(item for item in old.planners if item.resource_kind == "cpu")
+    old_target = next(
+        item for item in old.hard_evaluators if item.descriptor.kind == "target"
+    )
+    old_preference = next(
+        item
+        for item in old.preference_scorers
+        if item.descriptor.kind == "preferred_agent"
+    )
+    replacement_epoch = local_daemon_execution._build_scheduling_epoch(
+        epoch_id="epoch-2",
+        composition=replacement,
+        active_slurm_profiles={},
+        current=initial,
+        referenced_descriptors=(
+            old_cpu.descriptor,
+            old_target.descriptor,
+            old_preference.descriptor,
+            old.policy.descriptor,
+        ),
+    )
+
+    old_record = cast(
+        Any,
+        SimpleNamespace(
+            stage_work_id="old-work",
+            placement=SimpleNamespace(
+                planner_descriptors={"cpu": old_cpu.descriptor},
+                hard_constraints=(
+                    SimpleNamespace(
+                        evaluator="target", descriptor=old_target.descriptor
+                    ),
+                ),
+                preferences=(
+                    SimpleNamespace(
+                        scorer="preferred_agent",
+                        descriptor=old_preference.descriptor,
+                    ),
+                ),
+            ),
+        ),
+    )
+    new_cpu = next(item for item in replacement.planners if item.resource_kind == "cpu")
+    new_target = next(
+        item for item in replacement.hard_evaluators if item.descriptor.kind == "target"
+    )
+    new_preference = next(
+        item
+        for item in replacement.preference_scorers
+        if item.descriptor.kind == "preferred_agent"
+    )
+    fresh_record = cast(
+        Any,
+        SimpleNamespace(
+            stage_work_id="fresh-work",
+            placement=SimpleNamespace(
+                planner_descriptors={"cpu": new_cpu.descriptor},
+                hard_constraints=(
+                    SimpleNamespace(
+                        evaluator="target", descriptor=new_target.descriptor
+                    ),
+                ),
+                preferences=(
+                    SimpleNamespace(
+                        scorer="preferred_agent",
+                        descriptor=new_preference.descriptor,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    mixed_kernel = cast(Any, replacement_epoch.kernel((old_record, fresh_record)))
+    assert mixed_kernel._work_planners["old-work"]["cpu"] is old_cpu
+    assert mixed_kernel._work_hard["old-work"]["target"] is old_target
+    assert (
+        mixed_kernel._work_preference["old-work"]["preferred_agent"] is old_preference
+    )
+    assert mixed_kernel._work_planners["fresh-work"]["cpu"] is new_cpu
+    assert mixed_kernel._work_hard["fresh-work"]["target"] is new_target
+    assert (
+        mixed_kernel._work_preference["fresh-work"]["preferred_agent"] is new_preference
+    )
+    assert mixed_kernel._policy is replacement.policy
+    assert replacement_epoch.registry.retained(old.policy.descriptor) is old.policy
+
+
+def test_component_reload_collision_rejects_before_epoch_or_config_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    replacement = replace(
+        config,
+        scheduling_components=LocalDaemonConfig(
+            tmp_path / "unused-coordinator",
+            tmp_path / "unused-agent",
+            tmp_path / "unused-runs",
+        ).scheduling_components,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    execution = cast(Any, daemon._execution)
+    old_epoch = execution._scheduling
+    monkeypatch.setattr(
+        execution,
+        "_referenced_component_descriptors",
+        lambda _placements=(): config.scheduling_components.descriptors,
+    )
+    try:
+        receipt = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                operation_id="reload-collision",
+                expected_scheduling_epoch=before.scheduling_epoch,
+                reason="same descriptor with different objects",
+            )
+        )
+        assert receipt["state"] == "failed"
+        assert execution._scheduling is old_epoch
+        assert daemon.config is config
+        assert daemon.status().scheduling_epoch == before.scheduling_epoch
+    finally:
+        daemon.stop()
+
+
+def test_reload_rejects_a_planner_the_local_provider_cannot_honor(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    replacement = replace(
+        config,
+        scheduling_components=replace(
+            config.scheduling_components,
+            planners=tuple(
+                _IncompatibleCpuPlanner() if item.resource_kind == "cpu" else item
+                for item in config.scheduling_components.planners
+            ),
+        ),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    execution = cast(Any, daemon._execution)
+    try:
+        receipt = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                operation_id="reload-incompatible-claim-contract",
+                expected_scheduling_epoch=before.scheduling_epoch,
+                reason="install incompatible planner",
+            )
+        )
+        assert receipt["state"] == "failed"
+        assert execution.scheduling_epoch == before.scheduling_epoch
+        assert daemon.config is config
+    finally:
+        daemon.stop()
+
+
+def test_reload_collects_nonterminal_stage_work_and_retains_its_exact_planner(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    replacement = replace(
+        config,
+        scheduling_components=_replacement_components(config.scheduling_components),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    execution = cast(Any, daemon._execution)
+    old_cpu = next(
+        item
+        for item in config.scheduling_components.planners
+        if item.resource_kind == "cpu"
+    )
+    run_uri = path_to_run_uri(tmp_path / "referenced-run")
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    prepared = authority.ensure_prepared_attempt(
+        run_uri,
+        PreparedAttemptRequest(
+            operation_id="prepare-1",
+            request_digest="digest-1",
+            admission_id="admission-1",
+            stage_name="build",
+            readiness_generation="ready-1",
+            expected_revision=authority.open_run(run_uri).revision,
+            expected_stage_status=None,
+            expected_attempt_id=None,
+            next_attempt=1,
+            owner_id="coordinator",
+            plan_fingerprint="plan-1",
+            bound_inputs={},
+            upstream_commits={},
+        ),
+    )
+    resources = ResourceRequest(entries={"cpu": ResourceEntry("cpu", 1, "count")})
+    stage_work_id = stage_work_identity(
+        "admission-1", "build", prepared.attempt.attempt_id, "ready-1"
+    )
+    execution.stage_work_store.create_or_refresh(
+        StageWorkRecord(
+            stage_work_id=stage_work_id,
+            admission_id="admission-1",
+            run_uri=run_uri,
+            stage_name="build",
+            attempt=1,
+            attempt_id=prepared.attempt.attempt_id,
+            readiness_generation="ready-1",
+            ready_at=1,
+            ready_order=1,
+            plan_fingerprint="plan-1",
+            authority_revision=prepared.attempt.revision,
+            bound_inputs={},
+            upstream_commits={},
+            placement=resolve_stage_placement(
+                authored=resources,
+                runtime=None,
+                policy=StagePlacementPolicy(),
+                planners={"cpu": old_cpu},
+            ),
+        )
+    )
+    try:
+        result = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                operation_id="reload-retain-stage-work",
+                expected_scheduling_epoch=before.scheduling_epoch,
+                reason="install new components",
+            )
+        )
+        assert result["state"] == "applied"
+        assert execution._scheduling.registry.retained(old_cpu.descriptor) is old_cpu
+        assert execution._scheduling.registry.active("cpu") is next(
+            item
+            for item in replacement.scheduling_components.planners
+            if item.resource_kind == "cpu"
+        )
+    finally:
+        daemon.stop()
+
+
+def test_reload_retains_exact_components_from_an_accepted_runtime_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    replacement = replace(
+        config,
+        scheduling_components=_replacement_components(config.scheduling_components),
+    )
+    old_cpu = next(
+        item
+        for item in config.scheduling_components.planners
+        if item.resource_kind == "cpu"
+    )
+    resources = ResourceRequest(entries={"cpu": ResourceEntry("cpu", 1, "count")})
+    placement = resolve_stage_placement(
+        authored=resources,
+        runtime=None,
+        policy=StagePlacementPolicy(),
+        planners={"cpu": old_cpu},
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    monkeypatch.setattr(daemon, "_serve", lambda: daemon._stop.wait())
+    before = daemon.start()
+    execution = cast(Any, daemon._execution)
+    run_uri = path_to_run_uri(tmp_path / "accepted-runtime")
+    monkeypatch.setattr(
+        local_daemon_execution,
+        "load_managed_local_runtime_record",
+        lambda _store, _run_uri: {
+            "digest": "intent-digest",
+            "placements": {"build": placement.to_dict()},
+        },
+    )
+    with sqlite3.connect(config.control_database) as conn:
+        conn.execute(
+            "INSERT INTO managed_admissions("
+            "admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, "
+            "execution_owner, state, accepted_at, authority_operation_id, "
+            "cancellation_operation_id, blocked_reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+            (
+                "admission-accepted",
+                "queue-accepted",
+                before.coordinator_id,
+                run_uri,
+                "intent-digest",
+                "managed-stage",
+                LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
+                "2020-01-01T00:00:00Z",
+                "authority-bind-accepted",
+            ),
+        )
+        conn.commit()
+    try:
+        result = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                operation_id="reload-retain-accepted-runtime",
+                expected_scheduling_epoch=before.scheduling_epoch,
+                reason="install new components",
+            )
+        )
+        assert result["state"] == "applied"
+        assert execution._scheduling.registry.retained(old_cpu.descriptor) is old_cpu
+    finally:
+        daemon.stop()
+
+
+def test_fresh_admission_rejects_a_pre_reload_runtime_before_persistence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = _config(tmp_path)
+    config = replace(
+        base,
+        scheduling_components=_replacement_components(base.scheduling_components),
+    )
+    old_cpu = next(
+        item
+        for item in base.scheduling_components.planners
+        if item.resource_kind == "cpu"
+    )
+    resources = ResourceRequest(entries={"cpu": ResourceEntry("cpu", 1, "count")})
+    placement = resolve_stage_placement(
+        authored=resources,
+        runtime=None,
+        policy=StagePlacementPolicy(),
+        planners={"cpu": old_cpu},
+    )
+    stale_intent = SimpleNamespace(
+        digest="stale-intent",
+        placements={"build": placement},
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    monkeypatch.setattr(daemon, "_serve", lambda: daemon._stop.wait())
+    daemon.start()
+    monkeypatch.setattr(
+        local_daemon_execution,
+        "load_managed_local_intent",
+        lambda _config, _run_uri, **_kwargs: stale_intent,
+    )
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    try:
+        with pytest.raises(QueueConflictError, match="another epoch"):
+            client.submit(
+                LocalDaemonAdmissionRequest(
+                    queue_item_id="stale-item",
+                    run_uri=path_to_run_uri(tmp_path / "stale-run"),
+                )
+            )
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM managed_admissions").fetchone()[0]
+                == 0
+            )
+    finally:
+        daemon.stop()
+
+
+@pytest.mark.parametrize(
+    "reference_owner",
+    ["accepted-runtime", "submission", "same-identity-collision"],
+)
+def test_reload_retains_the_exact_profile_for_nonterminal_slurm_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reference_owner: str,
+) -> None:
+    profile = SlurmReadyStageProfile(
+        profile_id="training",
+        partition="cpu",
+        max_outstanding=1,
+        bootstrap_argv=("loom", "slurm-bootstrap"),
+        runner=FakeSlurmCommandRunner(),
+        command_adapter_fingerprint="fake-slurm-v1",
+        bootstrap_principal_id="slurm-principal",
+        credential_reference="slurm-credential",
+        coordinator_endpoint="https://coordinator.example",
+        project_fingerprint="project-v1",
+        environment_fingerprint="environment-v1",
+        executor_fingerprint="executor-v1",
+        job_private_file_provider=SlurmJobPrivateFileProvider(
+            fixed_path="/tmp/loom-phase-8a-capability",
+            descriptor="fake-prolog-v1",
+            helper_argv=("/bin/true",),
+        ),
+        cluster="cluster-a",
+    )
+    config = replace(_config(tmp_path), slurm_profiles=(profile,))
+    replacement = replace(
+        config,
+        slurm_profiles=(
+            (replace(profile),) if reference_owner == "same-identity-collision" else ()
+        ),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    execution = cast(Any, daemon._execution)
+    if reference_owner in {"accepted-runtime", "same-identity-collision"}:
+        monkeypatch.setattr(
+            execution,
+            "_referenced_runtime_placements",
+            lambda: (
+                SimpleNamespace(
+                    planner_descriptors={},
+                    hard_constraints=(),
+                    preferences=(),
+                    route=SimpleNamespace(
+                        kind=ExecutionRouteKind.SLURM,
+                        profile_id=profile.profile_id,
+                        profile_configuration_fingerprint=(
+                            profile.configuration_fingerprint
+                        ),
+                    ),
+                ),
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            execution.slurm_submissions,
+            "list_nonterminal",
+            lambda: (
+                SimpleNamespace(
+                    request=SimpleNamespace(
+                        profile_id=profile.profile_id,
+                        profile_descriptor=profile.descriptor,
+                    )
+                ),
+            ),
+        )
+    try:
+        result = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                operation_id="reload-retain-slurm-profile",
+                expected_scheduling_epoch=before.scheduling_epoch,
+                reason="remove profile from fresh admission",
+            )
+        )
+        if reference_owner == "same-identity-collision":
+            assert result["state"] == "failed"
+            assert execution.scheduling_epoch == before.scheduling_epoch
+        else:
+            assert result["state"] == "applied"
+            assert execution._scheduling.active_slurm_profiles == {}
+            assert (
+                execution._slurm_profile(
+                    profile.profile_id, profile.configuration_fingerprint
+                )
+                is profile
+            )
+            if reference_owner == "accepted-runtime":
+                monkeypatch.setattr(
+                    execution, "_referenced_runtime_placements", lambda: ()
+                )
+                second = daemon.operator_view(
+                    LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+                ).reload_scheduling(
+                    CoordinatorSchedulingReload(
+                        operation_id="reload-drop-settled-profile",
+                        expected_scheduling_epoch=cast(str, result["scheduling_epoch"]),
+                        reason="all old profile references settled",
+                    )
+                )
+                assert second["state"] == "applied"
+                assert execution._scheduling.retained_slurm_profiles == {}
+    finally:
+        daemon.stop()
+
+
+def test_slurm_dispatch_resolves_the_exact_retained_profile() -> None:
+    route = SimpleNamespace(
+        kind=ExecutionRouteKind.SLURM,
+        profile_id="training",
+        profile_configuration_fingerprint="profile-fingerprint-v1",
+    )
+    record = SimpleNamespace(
+        admission_id="admission-1",
+        scheduling_state=SchedulingProjectionState.READY,
+        placement=SimpleNamespace(route=route),
+        ready_at=1,
+        ready_order=1,
+        stage_work_id="stage-work-1",
+    )
+    resolved: list[tuple[str, str | None]] = []
+
+    def resolve_profile(
+        profile_id: str, configuration_fingerprint: str | None = None
+    ) -> None:
+        resolved.append((profile_id, configuration_fingerprint))
+        raise QueueConflictError("stop after exact profile lookup")
+
+    subject = cast(
+        Any,
+        SimpleNamespace(
+            stage_work_store=SimpleNamespace(list_stage_work=lambda: (record,)),
+            _slurm_profile=resolve_profile,
+        ),
+    )
+    with pytest.raises(QueueConflictError, match="exact profile lookup"):
+        local_daemon_execution.LocalDaemonExecution._dispatch_slurm_ready(
+            subject,
+            admission=cast(Any, SimpleNamespace(admission_id="admission-1")),
+            intent=cast(Any, SimpleNamespace()),
+            authority=cast(Any, SimpleNamespace()),
+            snapshot=cast(Any, SimpleNamespace()),
+        )
+
+    assert resolved == [("training", "profile-fingerprint-v1")]
+
+
+def test_owner_socket_operator_scope_denial_happens_before_persistence(
+    tmp_path: Path,
+) -> None:
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-credential",
+                "agent-principal",
+                "agent-a",
+                ("default",),
+                ("python",),
+            ),
+        ),
+        principals=(
+            TransportPrincipalPolicy(
+                "owner-local",
+                f"uid:{os.getuid()}",
+                "operator",
+                actions=("drain",),
+                agent_ids=("another-agent",),
+                pools=("default",),
+            ),
+        ),
+    )
+    config = replace(_config(tmp_path), agent_policy=policy)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    agent = daemon.agent_view(
+        LocalDaemonPrincipal(
+            "agent-principal", LocalDaemonRole.AGENT, "agent-credential"
+        )
+    )
+    handshake = agent.handshake()
+    session = agent.register(
+        AgentRegistration(
+            "register-1",
+            str(handshake["coordinator_id"]),
+            str(handshake["coordinator_epoch"]),
+            "agent-root-a",
+            "config-1",
+            "inventory-1",
+            "availability-1",
+            ("default",),
+            ("python",),
+            retirement_verifier="01" * 32,
+        )
+    )
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server.start()
+    try:
+        with pytest.raises(QueueServiceError, match="local_daemon_request_rejected"):
+            LocalDaemonSocketClient(config.endpoint).control_agent(
+                AgentControl(
+                    operation_id="socket-denied-control",
+                    kind=AgentControlKind.DRAIN,
+                    agent_id=session.agent_id,
+                    expected_session_id=session.session_id,
+                    expected_config_revision=session.config_revision,
+                    pool="default",
+                    cancel_active=False,
+                    reason="outside owner socket scope",
+                )
+            )
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM agent_controls").fetchone()[0] == 0
+            )
+    finally:
+        server.stop()
+        daemon.stop()
+
+
 def test_scheduling_reload_without_trusted_loader_fails_without_swap(
     tmp_path: Path,
 ) -> None:
@@ -109,22 +815,23 @@ def test_scheduling_reload_without_trusted_loader_fails_without_swap(
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
     before = daemon.start()
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+    )
+    request = CoordinatorSchedulingReload(
+        operation_id="reload-scheduling-1",
+        expected_scheduling_epoch=before.scheduling_epoch,
+        reason="no protected loader",
+    )
     try:
-        receipt = daemon.operator_view(
-            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
-        ).reload_scheduling(
-            CoordinatorSchedulingReload(
-                operation_id="reload-scheduling-1",
-                expected_scheduling_epoch=before.scheduling_epoch,
-                reason="no protected loader",
-            )
-        )
+        receipt = operator.reload_scheduling(request)
         assert receipt == {
             "operation_id": "reload-scheduling-1",
             "state": "failed",
             "code": "reload_rejected",
             "scheduling_epoch": before.scheduling_epoch,
         }
+        assert operator.reload_scheduling(request) == receipt
         assert daemon.config is config
     finally:
         daemon.stop()
@@ -307,6 +1014,36 @@ def test_slurm_cancellation_fanout_uses_only_exact_known_handles() -> None:
 
     assert execution._fan_out_slurm_cancellation("run://example") is True
     assert calls == [("known", "resolved:profile-a:config-a")]
+
+
+def test_slurm_cancellation_waits_for_exact_provider_release() -> None:
+    record = SimpleNamespace(
+        state="logical_released",
+        assignment=SimpleNamespace(
+            assignment_id="assignment-1",
+            operation_id="operation-1",
+            attempt_id="attempt-1",
+        ),
+    )
+    execution = object.__new__(local_daemon_execution.LocalDaemonExecution)
+    subject = cast(Any, execution)
+    subject.slurm_assignments = SimpleNamespace(
+        list_run_unreleased=lambda _run_uri: (record,)
+    )
+    subject.slurm_submissions = SimpleNamespace(
+        find=lambda _operation_id: SimpleNamespace()
+    )
+
+    def unavailable(_assignment_id: str) -> None:
+        raise QueueConflictError("provider release is unavailable")
+
+    subject._release_slurm_assignment = unavailable
+    assert execution._fan_out_slurm_cancellation("run://example") is True
+
+    released: list[str] = []
+    subject._release_slurm_assignment = released.append
+    assert execution._fan_out_slurm_cancellation("run://example") is False
+    assert released == ["assignment-1"]
 
 
 def test_slurm_grant_and_start_are_blocked_by_the_durable_cancel_request(

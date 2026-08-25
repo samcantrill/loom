@@ -946,19 +946,26 @@ class SQLitePerRunAuthorityStore:
                     raise AuthorityStoreError("cancellation epoch receipt conflicts")
                 return receipt
             if _require_run_status(conn) in {
-                RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.INTERRUPTED
+                RunStatus.SUCCEEDED,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+                RunStatus.INTERRUPTED,
             }:
                 raise AuthorityStoreError("terminal run cannot install cancellation")
             binding = conn.execute(
                 "SELECT request_json FROM coordinator_admission_receipts LIMIT 1"
             ).fetchone()
             if binding is None:
-                raise AuthorityStoreError("cancellation requires a coordinator admission")
+                raise AuthorityStoreError(
+                    "cancellation requires a coordinator admission"
+                )
             bound = CoordinatorAdmissionRequest.from_dict(
                 _json_loads(cast(str, binding["request_json"]))
             )
             if bound.coordinator_id != request.coordinator_id:
-                raise AuthorityStoreError("cancellation coordinator conflicts with binding")
+                raise AuthorityStoreError(
+                    "cancellation coordinator conflicts with binding"
+                )
             epoch_row = conn.execute(
                 "SELECT epoch FROM cancellation_epochs WHERE id = 1"
             ).fetchone()
@@ -972,6 +979,25 @@ class SQLitePerRunAuthorityStore:
                 _touch_run(conn, revision)
             else:
                 epoch = cast(str, epoch_row["epoch"])
+                canonical_row = conn.execute(
+                    "SELECT request_json FROM cancellation_epoch_receipts "
+                    "ORDER BY operation_id LIMIT 1"
+                ).fetchone()
+                if canonical_row is None:
+                    raise AuthorityStoreError(
+                        "cancellation epoch has no canonical request"
+                    )
+                canonical = CancellationEpochRequest.from_dict(
+                    _json_loads(cast(str, canonical_row["request_json"]))
+                )
+                if (
+                    canonical.coordinator_id != request.coordinator_id
+                    or canonical.run_uri != request.run_uri
+                    or canonical.stage_names != request.stage_names
+                ):
+                    raise AuthorityStoreError(
+                        "cancellation epoch scope conflicts with its canonical request"
+                    )
             receipt = CancellationEpochReceipt(request=request, epoch=epoch)
             conn.execute(
                 "INSERT INTO cancellation_epoch_receipts "
@@ -1001,6 +1027,136 @@ class SQLitePerRunAuthorityStore:
                 _json_loads(cast(str, row["receipt_json"]))
             )
         )
+
+    def finalize_cancellation(
+        self, run_uri: str, request: CancellationEpochRequest
+    ) -> RunStatus:
+        """Atomically settle unassigned work and CAS the run to CANCELLED.
+
+        The coordinator joins physical owners before calling this operation. The
+        authority independently proves that no managed execution binding remains
+        live, closes prepared and never-ready stages, and preserves a terminal
+        success/failure winner in the same transaction.
+        """
+
+        self._bind_run_uri(run_uri)
+        if not isinstance(request, CancellationEpochRequest):
+            raise AuthorityStoreError("request must be a CancellationEpochRequest")
+        if request.run_uri != run_uri:
+            raise AuthorityStoreError("cancellation finalization run_uri conflicts")
+        with self._transaction(run_uri) as conn:
+            receipt_row = conn.execute(
+                "SELECT request_json FROM cancellation_epoch_receipts "
+                "WHERE operation_id = ?",
+                (request.operation_id,),
+            ).fetchone()
+            if receipt_row is None:
+                raise AuthorityStoreError(
+                    "cancellation finalization requires an effective epoch"
+                )
+            installed = CancellationEpochRequest.from_dict(
+                _json_loads(cast(str, receipt_row["request_json"]))
+            )
+            if installed != request:
+                raise AuthorityStoreError("cancellation finalization conflicts")
+            status = _require_run_status(conn)
+            if status in {
+                RunStatus.SUCCEEDED,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+                RunStatus.INTERRUPTED,
+            }:
+                return status
+            live_binding = conn.execute(
+                "SELECT 1 FROM managed_attempt_bindings "
+                "WHERE state != 'terminal' LIMIT 1"
+            ).fetchone()
+            if live_binding is not None:
+                raise AuthorityStoreError(
+                    "managed execution binding remains live or unknown"
+                )
+            stage_names = set(request.stage_names)
+            known_stage_names = {
+                cast(str, row["stage_name"])
+                for row in conn.execute("SELECT stage_name FROM stages")
+            } | {
+                cast(str, row["stage_name"])
+                for row in conn.execute("SELECT DISTINCT stage_name FROM attempts")
+            }
+            if not known_stage_names.issubset(stage_names):
+                raise AuthorityStoreError(
+                    "authority work is outside the cancellation stage set"
+                )
+            active_attempt = conn.execute(
+                "SELECT 1 FROM attempts WHERE status IN (?, ?) LIMIT 1",
+                (StageStatus.SUBMITTED.value, StageStatus.RUNNING.value),
+            ).fetchone()
+            if active_attempt is not None:
+                raise AuthorityStoreError(
+                    "authority execution attempt remains live or unknown"
+                )
+            active_stage = conn.execute(
+                "SELECT 1 FROM stages WHERE status IN (?, ?) LIMIT 1",
+                (StageStatus.SUBMITTED.value, StageStatus.RUNNING.value),
+            ).fetchone()
+            if active_stage is not None:
+                raise AuthorityStoreError("authority stage remains live or unknown")
+            try:
+                ensure_run_transition(status, RunStatus.CANCELLED)
+            except InvalidRunTransition as exc:
+                raise AuthorityStoreError(str(exc)) from exc
+            reason = LifecycleReason(
+                code="run.cancelled",
+                detail={"operation_id": request.operation_id},
+            )
+            revision = self._next_revision(conn)
+            conn.execute(
+                "UPDATE attempts SET status = ?, revision_sequence = ?, "
+                "reason_json = ? WHERE status = ?",
+                (
+                    StageStatus.CANCELLED.value,
+                    revision.sequence,
+                    _json_dumps(reason.to_dict()),
+                    StageStatus.PENDING.value,
+                ),
+            )
+            terminal_stages = {
+                StageStatus.SUCCEEDED,
+                StageStatus.FAILED,
+                StageStatus.BLOCKED,
+                StageStatus.SKIPPED,
+                StageStatus.STALE,
+                StageStatus.CANCELLED,
+            }
+            existing_stages = {
+                cast(str, row["stage_name"]): StageStatus(cast(str, row["status"]))
+                for row in conn.execute("SELECT stage_name, status FROM stages")
+            }
+            for stage_name in request.stage_names:
+                current = existing_stages.get(stage_name)
+                if current in terminal_stages:
+                    continue
+                try:
+                    ensure_stage_transition(current, StageStatus.CANCELLED)
+                except InvalidStageTransition as exc:
+                    raise AuthorityStoreError(str(exc)) from exc
+                _upsert_stage(
+                    conn,
+                    stage_name=stage_name,
+                    status=StageStatus.CANCELLED,
+                    revision=revision,
+                    reason=reason,
+                )
+            conn.execute(
+                "UPDATE run_state SET status = ?, updated_revision_sequence = ?, "
+                "reason_json = ? WHERE id = 1",
+                (
+                    RunStatus.CANCELLED.value,
+                    revision.sequence,
+                    _json_dumps(reason.to_dict()),
+                ),
+            )
+            return RunStatus.CANCELLED
 
     def bind_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str

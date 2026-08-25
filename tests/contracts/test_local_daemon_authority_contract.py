@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from loom.pipeline.status import RunStatus
 from loom.pipeline.stores import (
     CancellationEpochReceipt,
     CancellationEpochRequest,
@@ -39,10 +40,14 @@ def test_sqlite_daemon_authority_receipts_are_exact_and_serializable(
     )
 
     cancellation = CancellationEpochRequest(
-        operation_id="cancel-1", coordinator_id="coordinator-1", run_uri=run_uri
+        operation_id="cancel-1",
+        coordinator_id="coordinator-1",
+        run_uri=run_uri,
+        stage_names=("stage-a",),
     )
     cancellation_receipt = authority.install_cancellation_epoch(run_uri, cancellation)
     assert (
         CancellationEpochReceipt.from_dict(cancellation_receipt.to_dict())
         == cancellation_receipt
     )
+    assert authority.finalize_cancellation(run_uri, cancellation) is RunStatus.CANCELLED
