@@ -2,14 +2,14 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 7B
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p7b-slurm-ready-stage-lifecycle-closure`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees` and
   `/home/can134/work/active/loom-worktrees/stage-29-p7b-slurm-ready-stage-lifecycle-closure`
-- Base revision: current clean `origin/develop` after the approved Phase 7B
-  planning commit; planning evidence starts at `041fc4a`
+- Base revision: clean `origin/develop`
+  `84ccb2a77c6e39268bdb07edba594bc82bf0c187`
 - PR target: `develop`
 - PR title: `feat(scheduling): close ready-stage SLURM lifecycle ordering`
 - Dependencies: Phase 6 merged as `2c6d366`; Phase 7 candidate `3515400` and
@@ -235,8 +235,9 @@ Final commands:
 ## Workflow State
 
 - Manager planning: complete; maintainer approved the fresh Phase 7B recovery
-- Manager preparation: pending dedicated branch/worktree from the approved
-  planning commit
+- Manager preparation: complete; dedicated branch/worktree created from clean
+  `origin/develop` `84ccb2a`, repository `samcantrill/loom`, target/title,
+  predecessor evidence, write boundaries, gates, and stop conditions verified
 - Expanded planning: pending one bounded phase-plan refinement for the causal
   cross-owner verifier and revoke ordering
 - Implementation: pending one executor
