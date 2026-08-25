@@ -42,36 +42,62 @@
 
 ## Current Source And Harness
 
-- Extend the authenticated application views and direct/HTTP dispatch in
-  `src/loom/queue/local_daemon.py` and
-  `src/loom/queue/agent_session_transport.py`; the existing client owns run
-  cancellation and the operator owns status/reconciliation, so new operations
-  must preserve role-derived principals and direct/HTTP semantic conformance.
-- Reuse the durable client cancellation request in
-  `src/loom/queue/local_daemon.py`, authority cancellation epochs in
-  `src/loom/pipeline/stores/authority.py` and
-  `src/loom/pipeline/stores/sqlite_authority.py`, readiness gating in
-  `src/loom/pipeline/planning/readiness.py`, and reconciliation/fan-out in
-  `src/loom/queue/local_daemon_execution.py`.
-- Extend the existing managed process/claim cancellation and retained provider
-  bindings in `src/loom/pipeline/execution/managed_local.py` and
-  `src/loom/scheduling/registry.py`; do not introduce a second claim or
-  provider owner.
-- Extend the existing remote session/assignment journal and retained-profile
-  seams in `src/loom/queue/agent_sessions.py`, ready-stage assignment owner in
-  `src/loom/queue/slurm_ready_stage.py`, ready-stage cancel request in
-  `src/loom/pipeline/executors/slurm/ready_stage.py`, and trusted local runtime
-  reconstruction in `src/loom/queue/local_daemon_runtime.py`.
-- Extend `loom queue daemon-*` operations in `src/loom/cli/queue.py` only as a
-  thin adapter over the public authenticated Python operations; status remains
-  owner-labelled and redacted.
-- Reuse the cancellation, transport, process, profile, provider, status, and
-  package tests named by the targeted commands below. Add causal barriers only
-  where the new control/reload/cancellation ordering requires them.
+- `src/loom/queue/local_daemon.py` owns the durable admission/cancellation
+  request, the daemon cycle lock, role-scoped client/operator views, and the
+  joined status entry point. Extend those owners; do not add a parallel control
+  service or make a request body authoritative for principal or target scope.
+- `src/loom/queue/agent_sessions.py` owns coordinator sessions, offers, polls,
+  deliveries, exact receipts, and coordinator references.
+  `_RemoteAgentJournal` in `src/loom/queue/agent_session_transport.py` owns the
+  outbound agent's local intents, effects, and unresolved references. Extend
+  those two sides for replayable coordinator delivery, agent effect-before-result,
+  and acknowledgement-before-cleanup; do not create a second outbox/journal.
+- `src/loom/queue/agent_session_transport.py` owns authenticated direct/HTTP
+  application dispatch. `src/loom/queue/local_daemon_transport.py` separately
+  owns the same-user Unix-socket client adapter used by
+  `src/loom/cli/queue.py`. Keep each adapter thin over the typed views and prove
+  semantic conformance; do not conflate local peer credentials with the mTLS
+  principal policy.
+- `CancellationEpochRequest`/`CancellationEpochReceipt` and
+  `SQLitePerRunAuthorityStore` in `src/loom/pipeline/stores/authority.py` and
+  `src/loom/pipeline/stores/sqlite_authority.py` own the canonical effective
+  epoch. `evaluate_attempt_readiness()` in
+  `src/loom/pipeline/planning/readiness.py`, `RunOrchestrator` in
+  `src/loom/pipeline/orchestration.py`, and the authority prepare, bind, grant,
+  start, retry, and lifecycle CAS operations are the barrier enforcement seams.
+  The coordinator request must remain distinguishable while this owner is
+  unavailable.
+- `LocalDaemonExecution` in `src/loom/queue/local_daemon_execution.py` is the
+  existing composition/reconciliation owner. Reuse `SQLiteCoordinatorAssignments`
+  and `SQLiteAgentJournal` in
+  `src/loom/pipeline/execution/managed_local.py` for exact assignment, claim,
+  start-intent, process, result, and release truth. Reuse the active/retained
+  `ComponentRegistry` in `src/loom/scheduling/registry.py`; do not add a second
+  provider, claim, or component-reference owner.
+- `SQLiteReadyStageSubmissions` in
+  `src/loom/pipeline/executors/slurm/ready_stage.py` remains the sole submit,
+  exact-handle observation, start-permit, and `scancel`-request owner.
+  `SQLiteSlurmStageAssignments` in `src/loom/queue/slurm_ready_stage.py` remains
+  the bootstrap/transfer/result/release owner. Profile selection and retained
+  profile use stay in `LocalDaemonExecution`; cancellation must compose these
+  owners rather than introduce a generic scheduler-control layer.
+- `LocalDaemonConfig` and `ResidentExecutionProfile` are the current complete
+  protected compositions; `src/loom/queue/local_daemon_runtime.py` reconstructs
+  the exact admitted run/runtime identities that reload must not reinterpret.
+  The protected config source, parser layout, epoch assembly helpers, lock
+  placement, and in-memory registry representation remain private so long as
+  validation occurs before mutation and the accepted atomic owner boundaries
+  are preserved.
+- Reuse the named tests below and add deterministic barriers only at the causal
+  mutation boundaries. Same-session restart, takeover, and unknown-work closure
+  remain Phase 9 work; Phase 8 tests reload and disconnection/reconnection in
+  the current owner process without claiming restart recovery.
 - Remote control payloads remain versioned inert data. Trusted configuration is
   read locally by the owning daemon/coordinator from protected deployment state.
   This phase is a hard cut: new durable/wire shapes receive fresh final version
-  identities and all older or candidate shapes are rejected without migration.
+  identities. Every affected store/protocol decoder rejects the immediately
+  preceding and abandoned candidate identities without mutation; no Phase 8
+  upgrader, compatibility decoder, dual writer, or backfill is permitted.
 
 ## Scope
 
@@ -373,12 +399,12 @@ privileged Phase 9 recovery.
 | Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
 | --- | --- | --- | --- | --- |
 | Availability withdraws before mutation | Agent control state machine | Reload/drain request | New work on changing resources | Barrier tests at every control step |
-| Pending work and live claims retain exact implementation/config at their owner | Descriptor-keyed registries plus coordinator/agent durable references | Reload/provider/planner/rule/scorer change | Semantic reinterpretation, stranded work, or wrong token release/binding | Pure-pending, assigned/live, restart, drain, and old/new component tests |
+| Pending work and live claims retain exact implementation/config at their owner | Descriptor-keyed registries plus coordinator/agent durable references | Reload/provider/planner/rule/scorer change | Semantic reinterpretation, stranded work, or wrong token release/binding | Pure-pending and assigned/live work across same-process reload; old/new component use and owner-proven collection |
 | Each config replacement is owner-local, whole, and atomic | Agent config owner or coordinator scheduling-config owner | Invalid/partial config or cross-owner version skew | Mixed inventory/policy or hidden distributed swap | Full-plan validation, agent-first/coordinator-first skew, incompatibility, and failure tests |
-| Nonterminal SLURM work retains its exact profile implementation/configuration | Coordinator profile registry plus durable submission references | Profile disable/removal/reload | Uninspectable job, wrong cancel, or reinterpreted request | Live submission across reload/restart; rejected non-retaining swap |
+| Nonterminal SLURM work retains its exact profile implementation/configuration | Coordinator profile registry plus durable submission references | Profile disable/removal/reload | Uninspectable job, wrong cancel, or reinterpreted request | Live submission across same-process reload; old profile handles observe/cancel/release; rejected non-retaining swap |
 | Remote control cannot supply config | Codec/application authorizer | Crafted payload | Code/secret/config injection | Unknown/extra/path/import-field tests |
-| Cancellation request survives before authority availability | Coordinator cancellation store/reconciler | Authority outage or response loss | Lost user intent or false effective state | Request commit/restart/replay and requested-versus-effective tests |
-| One authority cancellation epoch stops lifecycle creation | Authority CAS + shared readiness/bind/grant/retry predicates | Concurrent preparation, grant, success, or retry | Work/descendants after cancel | Cancellation-epoch barriers across every lifecycle CAS |
+| Cancellation request survives before authority availability | Coordinator cancellation store/reconciler | Authority outage or response loss | Lost user intent or false effective state | Request commit, response-loss replay, authority recovery, and requested-versus-effective tests |
+| One authority cancellation epoch stops lifecycle creation | Authority CAS + shared readiness/bind/grant/retry predicates | Concurrent preparation, grant, success, or retry | Work/descendants after cancel | One cancel-first and one competing-CAS-first barrier per distinct authority mutation owner; success/descendant race covered separately |
 | Pre-grant unbind needs exact proof | Authority/agent reconciliation | Disconnection/ambiguous control | Duplicate later launch | Cancel/grant/reconnect tests |
 | Post-grant cancellation distinguishes never-started from start-unknown | Agent start journal/process owner | Grant/start/control race | Duplicate or uncontained process | Barriers before start intent, launcher return, and start event |
 | Running capacity releases only after containment | Agent process/resource owner | Client timeout/control send | Resource collision | Real-process cancellation tests |
@@ -388,43 +414,113 @@ privileged Phase 9 recovery.
 
 ## Implementation Slices
 
-1. Add versioned control commands/states/receipts, per-action scopes,
-   principal/content idempotency, expected revisions, serialized coordinator/
-   agent transitions, and direct/HTTP negative/conformance tests.
-2. Implement withdraw-first drain/resume and complete trusted agent-config epoch
-   reload, plus separate serialized coordinator scheduling-config reload, with
-   owner-local validation, active/descriptor-retained bindings, owner-checked
-   garbage collection, atomic swap/rejection, retained live SLURM profiles,
-   cross-owner compatibility skew, failure/reconnect behavior, and pool/GPU/
-   profile removal examples.
-3. Implement durable coordinator cancellation request -> canonical authority
-   cancellation-epoch reconciliation, gate every readiness/creation CAS, then
-   fan out across never-ready, prepared, ungranted, granted, transferring,
-   disconnected, and terminal managed/SLURM states with authority-outage,
-   submit/bootstrap/grant/terminal races. Compose exact-handle `scancel` and
-   bootstrap control without treating either response as containment.
-4. Add owner-labelled joined status/audit, CLI/Python operations, operational docs, multi-agent
-   reconfiguration/cancellation E2E, and canonical contract propagation.
+1. **Contracts, authorization, and hard cut.** Add the fixed control/reload
+   request and result codecs at their existing typed-view boundaries; allocate
+   fresh final identities for every changed wire/store shape and make strict
+   field/version checks reject old, extra, config-bearing, and candidate
+   payloads before mutation. Extend client/operator scopes and direct, HTTP,
+   Unix-socket, and CLI adapters only where their existing role exposes the
+   approved operation. Prove exact principal/operation/content replay,
+   changed-content conflict, expected session/config/scheduling revision
+   conflict, bounded reason/selector validation, and body-actor/target rejection.
+2. **Ordinary control and owner-local reload.** In the existing coordinator
+   control/session stores, commit one serialized per-agent intent before
+   delivery, withdraw the current offer and fence/cancel its outstanding poll
+   before drain/reload waits, and retain the request until the outbound agent
+   journal has durably recorded its effect/result. Implement drain and resume
+   against fresh observed availability revisions. Build and validate a complete
+   replacement agent epoch, retaining exact provider/component bindings selected
+   by unresolved agent-owned durable references, then atomically swap or reject
+   without partial mutation. Separately serialize and build the coordinator
+   scheduling epoch, retaining exact components and SLURM profiles named by
+   nonterminal coordinator work. Exercise agent-first and coordinator-first
+   version skew through the existing feasibility/final-CAS checks. Do not add a
+   distributed reload transaction, background migration, generic registry, or
+   new configuration transport.
+3. **Effective cancellation barrier.** Keep `LocalDaemon._cancel()` as the
+   coordinator request commit and make `LocalDaemonExecution` reconcile that
+   exact operation into the authority singleton epoch. Until the authority
+   receipt exists, report requested/degraded and retry without fan-out or false
+   effectiveness. Once effective, make readiness and each authority operation
+   that can create, bind, grant, start, retry, or unlock descendant work reject
+   the epoch in its own transaction. Terminalize never-ready/unassigned work
+   through existing lifecycle owners, preserving a terminal CAS that won before
+   cancellation and preventing its success from unlocking a descendant after
+   the epoch.
+4. **Exact assignment fan-out and settlement.** Extend existing coordinator
+   assignments, agent journals, remote delivery, and process controls with
+   assignment/session/fence-scoped cancellation. Distinguish bound/accepted,
+   granted-before-start-intent, durable-start-intent with unknown outcome,
+   confirmed process, transfer/result, disconnected, and already-terminal
+   evidence; release only after the corresponding exact acknowledgement,
+   containment, cleanup, and authority acknowledgement. In the ready-stage
+   owners, suppress a not-yet-`SUBMITTING` call with durable no-call proof; keep
+   `SUBMITTING` without a handle unknown and never resubmit; for an accepted
+   handle compose profile-owned `request_cancel()` with bootstrap grant/start
+   fencing and current-fence result retention. Neither `scancel` success nor
+   scheduler absence is terminal or containment evidence.
+5. **Projection and operability.** Extend owner-labelled status with separate
+   coordinator-request, authority-epoch, availability, assignment/process,
+   transfer, and external-scheduler facts plus safe settling/unknown codes.
+   Propagate the authenticated Python/CLI operations and abstract operational
+   examples, then cover the end-to-end `machine-A`/`machine-B` drain, trusted
+   edit, reload, resume, cancel, inspect, and wait path. Keep formatting and
+   helper/table decomposition private.
 
 ## Test And Validation Plan
 
 | Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
 | --- | --- | --- | --- |
 | Package | Required | Control models/views remain narrow and cheap | Import and public-operation surface |
-| Unit | Required | Expected versions, owner-local config validation, retained-descriptor/profile reachability, cancellation request/epoch states | Replay/change conflicts, full validation, no partial/cross-owner swap, no premature retained-binding collection, requested/effective/settling transitions |
-| Contract | Required | Direct/HTTP/operator, authority cancellation, component/provider/profile retention, and SLURM cancel evidence | Role/scope/body actor negatives; same cancellation outcome/idempotency; pure-pending and old/new provider/profile lifecycle; agent versus coordinator reload ownership; rejected non-retaining reload; `scancel` is request only |
-| Integration | Required | Control delivery, independent config epoch replacement, cancellation and live managed/SLURM races | Agent-first/coordinator-first contract skew becomes ineligible then compatible; restart with pending custom work/live claim/submission; authority outage after request/before epoch; barriers at readiness, submit, bootstrap, bind, grant, before/after start intent, launcher outcome/event, terminal result, upload, commit, release |
+| Unit | Required | Strict versions, owner-local config validation, retained-descriptor/profile reachability, and cancellation request/epoch states | Old/current-candidate/extra-field rejection before mutation; replay/change conflicts; no partial or cross-owner swap; no premature retained-binding collection; requested/effective/settling transitions |
+| Contract | Required | Typed views/adapters, authority cancellation, component/provider/profile retention, and SLURM cancel evidence | Role/scope/body-actor negatives; direct/HTTP semantic equality; same-operation idempotency; pure-pending and live old/new provider/profile use; rejected non-retaining reload; `scancel` is request only |
+| Integration | Required | Control delivery, independent config epoch replacement, and live managed/SLURM cancellation ordering | Current-process agent-first/coordinator-first skew becomes ineligible then compatible; response-loss replay; authority outage after request/before epoch; deterministic barriers only at the causal pairs listed below |
 | E2E / opt-in | Required loopback | Operable mixed-target pool | Drain/reload/resume resources/profiles and cancel a mixed managed/SLURM multi-stage run while another continues |
+
+Causal race cases (do not build a Cartesian matrix):
+
+- drain/reload intent commit versus active offer/poll: force the control commit
+  first and the poll/reservation CAS first; assert no withdrawn offer revives and
+  any already-bound work keeps its exact claim/config identity;
+- reload build/swap versus referenced work: pause after withdrawal and after the
+  durable-reference query; assert invalid/non-retaining replacement leaves the
+  old complete epoch installed, successful replacement publishes no capacity
+  before resume, and old bindings serve only their exact references until the
+  owner proves them collectible;
+- coordinator cancellation request versus authority epoch: lose the client
+  response and make authority unavailable, then recover; assert one request and
+  one epoch, with requested/degraded before and effective only after the receipt;
+- authority epoch versus readiness, prepare/bind, grant/start, retry, and
+  descendant creation: exercise cancel-first rejection and one competing CAS
+  that durably wins before the epoch for each distinct owner; assert no mutation
+  committed after the epoch and a winning terminal success cannot unlock a
+  descendant;
+- managed cancellation versus delivery acceptance, grant, durable start intent,
+  launcher outcome, confirmed process exit/containment, and result/output commit:
+  place barriers immediately before and after each durable boundary and assert
+  the state-table action, exact acknowledgement, no relaunch, truthful terminal
+  result, and capacity-release condition;
+- SLURM cancellation versus `SUBMITTING`, exact-handle association, bootstrap
+  grant/start permit, and current-fence result commit: assert no call before the
+  submit barrier, no resubmit/absence inference after it, exact-handle-only
+  `scancel`, no post-epoch grant/start, and no release from cancel response alone;
+- disconnect after control delivery and after local effect commit: replay the
+  same control on reconnect and assert changed content conflicts, acknowledgement
+  governs cleanup, and ambiguous assignment/process truth remains bound/settling.
 
 Targeted commands:
 
     uv run pytest -q tests/unit/loom/pipeline/stores/test_sqlite_authority.py
+    uv run pytest -q tests/unit/loom/pipeline/planning/test_readiness.py
+    uv run pytest -q tests/unit/loom/pipeline/test_orchestration.py
     uv run pytest -q tests/unit/loom/pipeline/execution/test_managed_local.py
+    uv run pytest -q tests/unit/loom/pipeline/executors/slurm/test_ready_stage.py
     uv run pytest -q tests/unit/loom/queue/test_agent_sessions.py tests/unit/loom/queue/test_local_daemon.py tests/unit/loom/queue/test_slurm_ready_stage.py
     uv run pytest -q tests/unit/loom/cli/test_queue.py
-    uv run pytest -q tests/contracts/test_local_daemon_authority_contract.py
+    uv run pytest -q tests/contracts/test_local_daemon_authority_contract.py tests/contracts/test_managed_authority_contract.py tests/contracts/test_queue_python_api_contract.py
     uv run pytest -q tests/integration/queue/test_local_daemon_production.py
     uv run pytest -q tests/integration/queue/test_agent_session_transport.py tests/integration/queue/test_slurm_ready_stage.py
+    uv run pytest -q tests/integration/queue/test_managed_local_controller.py
     uv run pytest -q tests/package/test_import_boundaries.py
 
 Final commands:
@@ -434,55 +530,53 @@ Final commands:
 
 ## Risks, Review, And Stops
 
-- Main risks: mutating a live provider, reinterpreting pending work through a new
-  component, pretending agent/coordinator configuration swaps atomically,
-  prematurely collecting retained descriptors, accepting config from network, mixed
-  inventory, losing a request before authority intent, treating coordinator
-  request or a sent cancel as the effective barrier/containment, losing truthful terminal facts, or
-  treating granted-without-observed-start as never launched, or allowing
-  credentials/generation to act as process fences; dropping a retained SLURM
-  profile; treating `scancel` success or scheduler absence as containment; or
-  granting a bootstrap after effective cancellation.
-- Review focus: withdraw-first ordering, complete owner-specific durable-reference
-  sets, independent agent/coordinator active/retained registry swaps and
-  compatibility negotiation, provider retention,
-  coordinator-request/authority-epoch cancellation ownership, every lifecycle
-  gate, managed/SLURM cancellation/start state table, retained profile identity,
-  exact-handle controls, owner-labelled status, role scopes, and race tests.
-- Stop if: providers cannot retain/reconcile old claims; pending work cannot
-  reconstruct its exact planner/rule/scorer identity; reload would require
-  partial hot mutation; cancellation cannot identify exact assignment/fence; or
-  current authority cannot preserve success while blocking descendants; a live
-  submission cannot retain the profile needed to inspect/cancel it; or external
-  cancel would be represented as terminal containment.
+- Main risks are cross-owner false inference: publishing availability before
+  withdrawal/reload observation, interpreting old work through a new binding,
+  treating independent agent/coordinator swaps as distributed atomicity,
+  dropping a referenced provider/component/profile, accepting replacement
+  content from the network, losing the coordinator request before authority is
+  reachable, treating requested as effective, treating a sent cancel as
+  containment, inferring never-started from a missing event, or allowing a
+  credential/session/process epoch to stand in for an execution fence.
+- Review the exact owner at each irreversible step: offer/poll withdrawal;
+  active/retained registry swap and owner-proven collection; request-to-epoch
+  reconciliation; authority lifecycle CAS gates; agent start journal and process
+  containment; ready-stage submit/start/cancel owners; result/output disposition;
+  acknowledgement-gated release; and redacted role-scoped projection. Require
+  the causal barrier cases above, not an all-states-by-all-targets matrix.
+- Reject optional machinery during review: migration/backfill/dual codecs,
+  remotely supplied config, a generic scheduler-control framework, a distributed
+  reload transaction, a second durable reference registry, timeout/PID/offline
+  inference, automatic takeover/requeue, or Phase 9 restart/recovery behavior.
+- Stop and return to the manager only if a supported accepted path cannot retain
+  its exact old provider/component/profile binding, a current owner lacks the
+  exact assignment/fence/process/submission identity needed for safe control,
+  the authority cannot preserve a terminal winner while blocking descendants,
+  or the accepted operation would require partial live mutation or representing
+  external cancellation as containment. A private helper/table/lock choice is
+  not a stop condition.
 - Accepted debt: unknown cancellation may remain pending until Phase 9 guarded
   recovery. This is required correctness, not a retry bug.
 
 ## Executor Handoff
 
-- Read `AGENTS.md`, `.codex/workflows/roadmap-stage-implementation.md`,
-  `.codex/prompts/phase-loop-management.md`, and this file's `Metadata`,
-  `Objective And Context`, `Current Source And Harness`, `Scope`, `Fixed
-  Contracts And Private Discretion`, `Implementation Slices`, `Test And
-  Validation Plan`, `Risks, Review, And Stops`, and `Executor Handoff`
-  sections.
-- Keep ordinary controls and cancellation separate from Phase 9 privileged
-  recovery even if internal serialization helpers are shared.
-- Decisions not to revisit: local trusted reload, withdraw first, exact
-  descriptor retention for referenced pending/live state, reject-before-swap on
-  retention failure, coordinator request then authority cancellation epoch
-  before managed/SLURM fan-out, retained profile identity, `scancel` as request
-  only, truthful terminal facts, owner-labelled status, no timeout-based
-  release, and a fresh hard-cut schema with no compatibility or migration path.
-- Escalate any need for remote config, hidden force, weak containment, or changed
-  retry ownership.
+- Read `AGENTS.md`, `.codex/workflows/roadmap-stage-implementation.md`, and
+  `.codex/prompts/phase-loop-management.md`.
+- Use this file's `Metadata`, `Objective And Context`, `Current Source And
+  Harness`, `Scope`, `Fixed Contracts And Private Discretion`, `Implementation
+  Slices`, `Test And Validation Plan`, and `Risks, Review, And Stops` as the
+  complete execution packet.
+- Do not load stage planning, unrelated phase plans, or Phase 9 unless a stop
+  condition in this file is reached. Preserve private implementation discretion
+  and stop for the manager rather than reopening an approved public, durable,
+  migration, trust-boundary, recovery, or cross-owner decision.
 
 ## Workflow State
 
 - Manager preparation: complete on clean merged Phase 7B baseline; worktree,
   base, current source owners, targeted commands, and hard-cut boundary recorded
 - Expanded planning: required by mutable configuration and cancellation races;
-  one bounded `loom_phase_planner` refinement pending
+  one bounded `loom_phase_planner` refinement complete; executor packet is ready
 - Implementation: pending
 - Refiner: not used
 - Pre-submit gate: pending
