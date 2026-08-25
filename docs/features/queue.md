@@ -505,10 +505,16 @@ provider admission remains authoritative.
 Every scheduling/provider implementation has an immutable descriptor and is
 explicitly supplied through an instance-local registry frozen for one
 configuration epoch. Active bindings resolve fresh work; exact descriptor-keyed
-retained bindings reconstruct referenced nonterminal work and live claims, or a
-reload fails before swap. The descriptor has distinct implementation and non-secret canonical
-configuration fingerprints. Durable records keep identity/version/fingerprint only; unknown or
-changed contracts fail before scheduling/launch. A separate agent-side
+retained bindings reconstruct accepted runtime placements, referenced nonterminal
+stage work, and live claims, or a reload fails before swap. Admission and reload
+are serialized: an intent accepted before reload retains its exact bindings, while
+a stale not-yet-admitted intent is rejected before mutation. Ready work from
+different epochs may coexist in one decision: each stage-work identity is
+evaluated with its exact retained planner, hard-rule, and scorer bindings, while
+the one active policy compares the combined evaluations. The descriptor has
+distinct implementation and non-secret canonical configuration fingerprints.
+Durable records keep identity/version/fingerprint only; unknown or changed
+contracts fail before scheduling/launch. A separate agent-side
 `AgentResourceProvider` observes and performs assignment-scoped prepare,
 reconcile, activate, abort, and release through idempotent commands and closed
 typed outcomes. Public bounded conformance checks cover custom examples, but
@@ -693,9 +699,14 @@ requested, effective, settling, and terminal cancellation. After grant, an exact
 acknowledgement may prove no start intent/launcher invocation; once start intent
 exists without a known outcome, work remains unknown until reconciliation or
 containment. Cancellation becomes terminal only after terminal or positive-
-containment evidence. Existing whole-run queue rows
-remain readable and cancellable. New managed work uses a distinct orchestration
-state rather than silently reinterpreting historical `DISPATCHED`.
+containment evidence. The canonical cancellation request contains the complete,
+exact plan stage set. Once all physical owners settle, one authority transaction
+cancels prepared attempts and never-ready descendants, refuses any live binding,
+preserves an already-terminal success/failure winner, and CASes the run to
+`CANCELLED`. The old request shape without that stage set is rejected; it is not
+filled in or upgraded. Existing whole-run queue rows remain readable and
+cancellable. New managed work uses a distinct orchestration state rather than
+silently reinterpreting historical `DISPATCHED`.
 
 Stage 29 retains compact admission/owner, retired-session, idempotency, and event
 tombstones needed to reject duplicate or stale operations. It does not add an
@@ -770,8 +781,66 @@ can add process supervision or socket transport.
 
 `loom queue drain-foreground` includes the fake adapter by default and can enable
 the built-in delegated SLURM adapter with `--slurm`. Managed local production
-adapters require authority coordination objects and are better constructed from
-Python in v11.
+adapters also expose an owner-only local daemon socket. A typical `machine-B`
+maintenance cut-over is:
+
+```bash
+loom queue daemon-status --endpoint COORDINATOR_SOCKET --format json
+
+loom queue daemon-agent-drain \
+  --endpoint COORDINATOR_SOCKET \
+  --operation-id drain-machine-B-1 \
+  --agent-id machine-B \
+  --session-id CURRENT_SESSION \
+  --config-revision CURRENT_CONFIG \
+  --reason maintenance
+
+# Edit machine-B's protected local agent configuration here. The command sends
+# no paths, code, credentials, or replacement configuration over the network.
+loom queue daemon-agent-reload \
+  --endpoint COORDINATOR_SOCKET \
+  --operation-id reload-machine-B-1 \
+  --agent-id machine-B \
+  --session-id CURRENT_SESSION \
+  --config-revision CURRENT_CONFIG \
+  --reason trusted-config-updated
+
+# Read the applied revision from daemon-status before resuming.
+loom queue daemon-agent-resume \
+  --endpoint COORDINATOR_SOCKET \
+  --operation-id resume-machine-B-1 \
+  --agent-id machine-B \
+  --session-id CURRENT_SESSION \
+  --config-revision RELOADED_CONFIG \
+  --reason maintenance-complete
+```
+
+Coordinator scheduling configuration is reloaded independently after its
+protected local file is edited:
+
+```bash
+loom queue daemon-scheduling-reload \
+  --endpoint COORDINATOR_SOCKET \
+  --operation-id reload-coordinator-1 \
+  --expected-scheduling-epoch CURRENT_SCHEDULING_EPOCH \
+  --reason trusted-site-config-updated
+```
+
+Cancellation commits the coordinator request before returning. Inspection may
+therefore show `requested`, then `effective` or `settling`, before terminal
+`CANCELLED`:
+
+```bash
+loom queue daemon-cancel --endpoint COORDINATOR_SOCKET QUEUE_ITEM
+loom queue daemon-status --endpoint COORDINATOR_SOCKET --format json
+loom queue daemon-wait --endpoint COORDINATOR_SOCKET QUEUE_ITEM
+```
+
+Reuse the same operation ID when retrying a response-loss case. Changed content
+under that ID conflicts. This is a hard cut-over: initialize fresh daemon/agent
+roots and use the v3 CLI result shape (agent protocol and journal schema v5);
+Loom does not upgrade or dual-read the
+previous control schema.
 
 ## Preflight And Status Output
 

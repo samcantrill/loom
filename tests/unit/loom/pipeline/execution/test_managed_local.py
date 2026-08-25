@@ -99,7 +99,9 @@ def _decision_receipt(
 ) -> dict[str, PlainData]:
     return {
         "policy_epoch": "one",
-        "policy_descriptor": {"name": "fifo", "version": 1},
+        "policy_descriptor": SchedulingComponentDescriptor(
+            "fifo", 1, "1", "test-fifo", "configured"
+        ).to_dict(),
         "stage_work_id": assignment.stage_work_id,
         "candidate_id": assignment.agent_id,
         "stage_work_revision": 1,
@@ -228,6 +230,7 @@ def test_journal_requires_grant_and_durable_start_intent_before_one_launch(
     )
     assert journal.accept(assignment.assignment_id) is AssignmentState.ACCEPTED
     assert journal.grant(assignment.assignment_id, "fence-1") is AssignmentState.GRANTED
+    assert journal.read_grant_fence(assignment.assignment_id) == "fence-1"
     assert (
         journal.activate_composite(
             assignment.assignment_id, (command,), {"cpu": provider}
@@ -263,6 +266,35 @@ def test_journal_requires_grant_and_durable_start_intent_before_one_launch(
     )
     assert (
         journal.publish_availability(assignment.assignment_id, "availability-1")
+        is AssignmentState.RELEASED
+    )
+
+
+def test_pregrant_cancellation_releases_exact_claim_before_decline(
+    tmp_path,
+) -> None:
+    journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
+    assignment = _assignment()
+    provider, command = _provider()
+    journal.persist_request(assignment, {"request": "durable"})
+    assert (
+        journal.prepare_composite(assignment, (command,), {"cpu": provider})
+        is AssignmentState.PREPARED
+    )
+    assert journal.accept(assignment.assignment_id) is AssignmentState.ACCEPTED
+
+    assert (
+        journal.abort_pregrant(
+            assignment.assignment_id,
+            (command,),
+            {"cpu": provider},
+        )
+        is AssignmentState.DECLINED
+    )
+    observed = provider.observe(ObserveRequest("agent", "session", "observe-cancel"))
+    assert observed.live_claim_ids == ()
+    assert (
+        journal.release_declined(assignment.assignment_id, "availability-cancelled")
         is AssignmentState.RELEASED
     )
 
@@ -303,6 +335,9 @@ def test_coordinator_reserves_atoms_and_run_slot_in_one_transaction(tmp_path) ->
         )
         == "reserved"
     )
+    assert {
+        descriptor.kind for descriptor in coordinator.retained_scheduling_descriptors()
+    } == {"cpu", "fifo"}
     assert (
         coordinator.reserve(
             command.assignment,

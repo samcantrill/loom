@@ -924,6 +924,19 @@ class SQLiteSlurmStageAssignments:
             )
             return tuple(self._record(row) for row in rows)
 
+    def list_unreleased(self) -> tuple[SlurmStageRecord, ...]:
+        """Return every assignment whose profile binding is still retained."""
+
+        with _connect(self.path, require_existing=True) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = tuple(
+                conn.execute(
+                    f"SELECT * FROM {_ASSIGNMENT_TABLE} "
+                    "WHERE state != 'released' ORDER BY assignment_id"
+                )
+            )
+            return tuple(self._record(row) for row in rows)
+
     def read_input_chunk(
         self, assignment_id: str, incarnation: str, transfer_id: str, offset: int
     ) -> tuple[bytes, bool]:

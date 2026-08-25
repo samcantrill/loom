@@ -14,27 +14,22 @@ from typing import cast
 
 from loom.pipeline.planning import ExecutionPlan
 from loom.pipeline.runtime import (
-    CpuResourcePlanner,
     ExecutionRoute,
     ExecutionRouteKind,
-    MemoryResourcePlanner,
     RunOptions,
     StagePlacementPolicy,
     parallel_execution_options,
     resolve_stage_placement,
     resolve_run_runtime,
 )
-from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
-from loom.pipeline.runtime.scheduling_preferences import (
-    GpuModelPreferenceScorer,
-    OrderedAgentPreferenceScorer,
-    PackingPreferenceScorer,
-    ResourceAttributePreferenceScorer,
-)
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 from loom.pipeline.specs import PipelineSpec, StageSpec
-from loom.scheduling import PreferenceSpec
+from loom.scheduling import (
+    PreferenceScorer,
+    PreferenceSpec,
+    SchedulingComponentDescriptor,
+)
 from loom.serialization import (
     PlainData,
     ensure_plain_data,
@@ -44,6 +39,10 @@ from loom.serialization import (
 from loom.pipeline.stores.local_runs import LocalRunStore, atomic_write_json
 
 from .errors import QueueServiceError
+from .local_daemon import (
+    LocalDaemonSchedulingComponents,
+    _default_scheduling_components,
+)
 
 
 _SCHEMA_VERSION = 1
@@ -58,6 +57,7 @@ def prepare_managed_local_runtime_record(
     pipeline: PipelineSpec,
     options: RunOptions | Mapping[str, object] | None = None,
     slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
+    scheduling_components: LocalDaemonSchedulingComponents | None = None,
 ) -> str:
     """Write the current exact managed-local execution intent once prepared.
 
@@ -79,10 +79,12 @@ def prepare_managed_local_runtime_record(
         raise QueueServiceError("managed-local runtime requires the local executor")
     runtime_options = normalized.to_dict()
     _reject_forbidden(runtime_options, path="runtime_options")
-    planners = {
-        "cpu": CpuResourcePlanner(),
-        "memory": MemoryResourcePlanner(),
-        "gpu": GpuResourcePlanner(),
+    composition = scheduling_components or _default_scheduling_components()
+    if not isinstance(composition, LocalDaemonSchedulingComponents):
+        raise QueueServiceError("managed-local scheduling composition is invalid")
+    planners = {item.resource_kind: item for item in composition.planners}
+    preference_scorers = {
+        item.descriptor.kind: item for item in composition.preference_scorers
     }
     resolved_snapshot = store.read_config_snapshot(run_uri, "resolved")
     if resolved_snapshot is None:
@@ -108,7 +110,12 @@ def prepare_managed_local_runtime_record(
         placements[stage.name] = resolve_stage_placement(
             authored=stage.resource_request,
             runtime=resources,
-            policy=_stage_placement_policy(stage, resources, profiles),
+            policy=_stage_placement_policy(
+                stage,
+                resources,
+                profiles,
+                preference_scorers=preference_scorers,
+            ),
             planners=planners,
         ).to_dict()
     payload: dict[str, PlainData] = {
@@ -136,6 +143,8 @@ def _stage_placement_policy(
     stage: StageSpec,
     resources: ResourceRequest,
     slurm_profiles: Mapping[str, SlurmReadyStageProfile],
+    *,
+    preference_scorers: Mapping[str, PreferenceScorer],
 ) -> StagePlacementPolicy:
     raw = dict(stage.placement)
     unknown = set(raw) - {"pool", "target", "preferences", "execution_route"}
@@ -156,7 +165,12 @@ def _stage_placement_policy(
         default_resources=ResourceRequest(
             entries={"cpu": ResourceEntry("cpu", 1, "count")}
         ),
-        preferences=_resolved_preferences(stage, resources, raw.get("preferences")),
+        preferences=_resolved_preferences(
+            stage,
+            resources,
+            raw.get("preferences"),
+            preference_scorers=preference_scorers,
+        ),
         route=_execution_route(raw.get("execution_route"), slurm_profiles),
     )
 
@@ -202,6 +216,8 @@ def _resolved_preferences(
     stage: StageSpec,
     resources: ResourceRequest,
     value: object,
+    *,
+    preference_scorers: Mapping[str, PreferenceScorer],
 ) -> tuple[PreferenceSpec, ...]:
     if value is None:
         return ()
@@ -212,11 +228,11 @@ def _resolved_preferences(
     result: list[PreferenceSpec] = []
     seen: set[str] = set()
     requested_kinds = set(stage.resource_request.entries) | set(resources.entries)
-    scorers = {
-        "agent_order": OrderedAgentPreferenceScorer(),
-        "gpu_model_order": GpuModelPreferenceScorer(),
-        "resource_attribute_order": ResourceAttributePreferenceScorer(),
-        "packing": PackingPreferenceScorer(),
+    scorer_kinds = {
+        "agent_order": "preferred_agent",
+        "gpu_model_order": "gpu_model",
+        "resource_attribute_order": "resource_attribute",
+        "packing": "packing",
     }
     tiers = {
         "agent_order": 0,
@@ -228,10 +244,15 @@ def _resolved_preferences(
         if not isinstance(item, Mapping):
             raise QueueServiceError("stage placement preference is invalid")
         kind = item.get("kind")
-        if not isinstance(kind, str) or kind not in scorers or kind in seen:
+        if not isinstance(kind, str) or kind not in scorer_kinds or kind in seen:
             raise QueueServiceError("stage placement preference kind is invalid")
         seen.add(kind)
-        scorer = scorers[kind]
+        scorer = preference_scorers.get(scorer_kinds[kind])
+        descriptor = getattr(scorer, "descriptor", None)
+        if scorer is None or not isinstance(descriptor, SchedulingComponentDescriptor):
+            raise QueueServiceError(
+                "stage placement preference scorer is not configured"
+            )
         fallback_after = item.get("fallback_after_seconds")
         if fallback_after is not None and (
             isinstance(fallback_after, bool)
@@ -294,7 +315,7 @@ def _resolved_preferences(
         result.append(
             PreferenceSpec(
                 identifier=f"{stage.name}:preference:{index}:{kind}",
-                scorer=scorer.descriptor.kind,
+                scorer=descriptor.kind,
                 tier=tiers[kind],
                 weight=1,
                 fallback_after_seconds=cast(int | None, fallback_after),
@@ -303,7 +324,7 @@ def _resolved_preferences(
                 utility_max=utility_max,
                 quality_bands=("preferred", "fallback"),
                 fallback_band=("fallback" if fallback_after is not None else None),
-                descriptor=scorer.descriptor,
+                descriptor=descriptor,
             )
         )
     return tuple(result)

@@ -71,10 +71,13 @@ from loom.queue.agent_session_transport import (
     _resident_provider_descriptors,
 )
 from loom.queue.agent_sessions import (
+    AgentControl,
+    AgentControlKind,
     AgentOffer,
     AgentPolicyConfig,
     AgentPrincipalPolicy,
     AgentRegistration,
+    AgentSession,
     AgentSessionState,
     AgentTransferAuthorizationStaleError,
     TransportPrincipalPolicy,
@@ -199,6 +202,148 @@ def _remote_agent_root(tmp_path: Path, name: str = "remote-owner") -> Path:
     root = tmp_path / name / "agent"
     LocalDaemon.initialize_agent_root(root)
     return root
+
+
+def test_agent_reload_reads_only_trusted_local_config_and_requires_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _remote_agent_root(tmp_path)
+    base = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        agent_root=root,
+    )
+    profile = ResidentExecutionProfile(
+        descriptor=ResidentProfileDescriptor(
+            "python", "2", "project-2", "environment-2", "executor-2"
+        ),
+        project_root=tmp_path,
+        python_executable=Path(sys.executable),
+    )
+    replacement = replace(base, resident_profiles=(profile,))
+    client = LocalDaemonAgentHttpClient(base, trusted_config_loader=lambda: replacement)
+    try:
+        registration = AgentRegistration(
+            idempotency_key="register-local-control",
+            coordinator_id="coordinator-a",
+            coordinator_epoch="coordinator-epoch-a",
+            agent_root_id=client.agent_root_id,
+            config_revision="config-1",
+            inventory_revision="inventory-1",
+            availability_revision="availability-1",
+            declared_pools=("default",),
+        )
+        persisted = client._require_journal().persist_registration_intent(registration)
+        session = AgentSession(
+            session_id="session-a",
+            coordinator_id="coordinator-a",
+            coordinator_epoch="coordinator-epoch-a",
+            agent_id="agent-a",
+            agent_root_id=client.agent_root_id,
+            policy_revision="policy-1",
+            config_revision="config-1",
+            inventory_revision="inventory-1",
+            availability_revision="availability-1",
+            capabilities=("python",),
+            pools=("default",),
+            state=AgentSessionState.ACTIVE,
+        )
+        client._require_journal().persist_session(
+            persisted.idempotency_key, persisted.value(), session
+        )
+
+        reload_control = AgentControl(
+            operation_id="reload-agent-1",
+            kind=AgentControlKind.RELOAD,
+            agent_id="agent-a",
+            expected_session_id="session-a",
+            expected_config_revision="config-1",
+            pool=None,
+            cancel_active=False,
+            reason="trusted config changed",
+        )
+        assert client._require_journal().prepare_control(reload_control) is None
+        effect = client._apply_agent_control(reload_control)
+        client._require_journal().record_control_effect(reload_control, effect)
+        assert effect.code == "applied"
+        assert effect.config_revision != "config-1"
+        assert client._drained is True
+        assert client._profiles == {"python": profile}
+        acknowledgements: list[Mapping[str, PlainData]] = []
+
+        def acknowledge(
+            operation: str,
+            value: Mapping[str, PlainData],
+            *,
+            role: str = "agent",
+        ) -> Mapping[str, PlainData]:
+            assert operation == "control_ack"
+            assert role == "agent"
+            acknowledgements.append(value)
+            return {"state": "applied"}
+
+        monkeypatch.setattr(client, "_call", acknowledge)
+        assert client.poll_control(session.session_id) == reload_control
+        assert len(acknowledgements) == 1
+        with sqlite3.connect(root / "control.sqlite") as conn:
+            assert (
+                conn.execute(
+                    "SELECT acknowledged FROM agent_controls_local "
+                    "WHERE operation_id = ?",
+                    (reload_control.operation_id,),
+                ).fetchone()[0]
+                == 1
+            )
+
+        resume = AgentControl(
+            operation_id="resume-agent-1",
+            kind=AgentControlKind.RESUME,
+            agent_id="agent-a",
+            expected_session_id="session-a",
+            expected_config_revision=effect.config_revision,
+            pool=None,
+            cancel_active=False,
+            reason="validated replacement",
+        )
+        assert client._require_journal().prepare_control(resume) is None
+        resumed = client._apply_agent_control(resume)
+        client._require_journal().record_control_effect(resume, resumed)
+        assert resumed.code == "applied"
+        assert client._drained is False
+    finally:
+        client.close()
+
+
+def test_agent_reload_rejects_changed_bindings_under_a_live_profile_identity(
+    tmp_path: Path,
+) -> None:
+    root = _remote_agent_root(tmp_path)
+    descriptor = ResidentProfileDescriptor(
+        "python", "1", "project-1", "environment-1", "executor-1"
+    )
+    original = ResidentExecutionProfile(
+        descriptor=descriptor,
+        project_root=tmp_path,
+        python_executable=Path(sys.executable),
+        cpu_capacity=1,
+    )
+    changed = replace(original, cpu_capacity=2)
+    base = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        agent_root=root,
+        resident_profiles=(original,),
+    )
+    client = LocalDaemonAgentHttpClient(base)
+    try:
+        with pytest.raises(QueueConflictError, match="reuses a live profile identity"):
+            client._validate_reload_config(replace(base, resident_profiles=(changed,)))
+    finally:
+        client.close()
 
 
 def _prepare_remote_producer_run(
@@ -2041,6 +2186,104 @@ def test_loopback_rejects_unmapped_client_certificate_and_wrong_service_ca(
         rejected.close()
         wrong_ca.close()
         wrong_service.close()
+        server.stop()
+        daemon.stop()
+
+
+def test_loopback_operator_scope_denial_matches_direct_before_persistence(
+    tmp_path: Path,
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    policy = AgentPolicyConfig(
+        agents=_policy().agents,
+        principals=(
+            TransportPrincipalPolicy(
+                "operator-credential",
+                "operator-principal",
+                "operator",
+                actions=("drain",),
+                agent_ids=("another-agent",),
+                pools=("default",),
+            ),
+        ),
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "agent-root",
+        tmp_path / "runs",
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(credentials["agent"].with_suffix(".crt")): (
+                    "agent-credential"
+                ),
+                _fingerprint(credentials["other"].with_suffix(".crt")): (
+                    "operator-credential"
+                ),
+            },
+        ),
+    )
+    server.start()
+    agent = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".key"),
+            _remote_agent_root(tmp_path),
+        )
+    )
+    operator = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".key"),
+        )
+    )
+    try:
+        handshake = agent.handshake()
+        session = agent.register(_request(handshake, agent.agent_root_id))
+        control = AgentControl(
+            operation_id="denied-control",
+            kind=AgentControlKind.DRAIN,
+            agent_id=session.agent_id,
+            expected_session_id=session.session_id,
+            expected_config_revision=session.config_revision,
+            pool="default",
+            cancel_active=False,
+            reason="outside exact agent scope",
+        )
+        direct = daemon.operator_view(
+            LocalDaemonPrincipal(
+                "operator-principal",
+                LocalDaemonRole.OPERATOR,
+                "operator-credential",
+            )
+        )
+        with pytest.raises(QueueServiceError, match="not authorized"):
+            direct.control_agent(control)
+        operator.handshake(role="operator")
+        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+            operator.control_agent(control)
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM agent_controls").fetchone()[0] == 0
+            )
+    finally:
+        agent.close()
+        operator.close()
         server.stop()
         daemon.stop()
 

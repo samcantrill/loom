@@ -20,7 +20,7 @@ import sqlite3
 import ssl
 import stat
 import subprocess
-from threading import Thread
+from threading import RLock, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import monotonic, sleep
 from typing import Any, cast
@@ -36,6 +36,7 @@ from loom.pipeline.execution.managed_local import (
     ObserveRequest,
     SQLiteAgentJournal,
     GpuResourceProvider,
+    _cancelled_worker_result,
     _configured_provider_descriptor,
 )
 from loom.pipeline.execution.models import StageWorkerResult
@@ -45,7 +46,10 @@ from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.scheduling import SchedulingComponentDescriptor
 
 from .agent_sessions import (
+    AgentAssignmentControl,
     AgentOffer,
+    AgentControl,
+    AgentControlEffect,
     AgentPollActiveError,
     AgentRegistration,
     AgentRetirementProof,
@@ -70,6 +74,7 @@ from ._remote_stage_execution import (
 )
 from .errors import QueueConflictError, QueueError, QueueServiceError
 from .local_daemon import (
+    CoordinatorSchedulingReload,
     LocalDaemon,
     LocalDaemonAdmissionRequest,
     LocalDaemonPrincipal,
@@ -183,9 +188,7 @@ def _resident_provider_descriptors(
                 if device.descriptor.healthy
             }
             provider_atoms = tuple(
-                atom
-                for atom in provider_atoms
-                if atom.local_capacity_key in bindings
+                atom for atom in provider_atoms if atom.local_capacity_key in bindings
             )
         result.append(
             _configured_provider_descriptor(kind, provider_atoms, bindings=bindings)
@@ -212,7 +215,7 @@ class _RemoteAgentJournal:
             raise QueueServiceError("remote agent control state is unavailable")
         try:
             with self._connection() as conn:
-                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 3:
+                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 5:
                     raise QueueServiceError("remote agent root schema is unsupported")
                 metadata = {
                     str(row[0]): str(row[1])
@@ -494,6 +497,205 @@ class _RemoteAgentJournal:
             )
             conn.commit()
 
+    def prepare_control(self, control: AgentControl) -> AgentControlEffect | None:
+        """Persist delivery and withdrawal before applying owner-local effects."""
+
+        encoded = _canonical_json(control.value())
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT request_json, effect_json FROM agent_controls_local "
+                "WHERE operation_id = ?",
+                (control.operation_id,),
+            ).fetchone()
+            if row is not None:
+                if str(row["request_json"]) != encoded:
+                    raise QueueConflictError("agent control operation conflicts")
+                if row["effect_json"] is not None:
+                    conn.commit()
+                    value = json.loads(str(row["effect_json"]))
+                    if not isinstance(value, Mapping):
+                        raise QueueServiceError("agent control effect is invalid")
+                    return AgentControlEffect.from_value(value)
+            else:
+                conn.execute(
+                    "INSERT INTO agent_controls_local(operation_id, request_json, "
+                    "effect_json, acknowledged) VALUES (?, ?, NULL, 0)",
+                    (control.operation_id, encoded),
+                )
+            session = self.session(control.expected_session_id)
+            if session.config_revision != control.expected_config_revision:
+                effect = AgentControlEffect(
+                    control.operation_id,
+                    "stale_revision",
+                    session.config_revision,
+                    session.inventory_revision,
+                    session.availability_revision,
+                )
+                conn.execute(
+                    "UPDATE agent_controls_local SET effect_json = ? "
+                    "WHERE operation_id = ?",
+                    (_canonical_json(effect.value()), control.operation_id),
+                )
+                conn.commit()
+                return effect
+            if control.kind.value in {"drain", "reload"}:
+                conn.execute(
+                    "UPDATE agent_offers_local SET state = 'DRAINED' "
+                    "WHERE session_id = ?",
+                    (session.session_id,),
+                )
+                conn.execute(
+                    "UPDATE agent_polls_local SET state = 'FENCED' "
+                    "WHERE session_id = ?",
+                    (session.session_id,),
+                )
+            conn.commit()
+        return None
+
+    def record_control_effect(
+        self, control: AgentControl, effect: AgentControlEffect
+    ) -> None:
+        """Record the completed local effect and its new whole-epoch revisions."""
+
+        if effect.operation_id != control.operation_id:
+            raise QueueConflictError("agent control effect identity conflicts")
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT request_json, effect_json FROM agent_controls_local "
+                "WHERE operation_id = ?",
+                (control.operation_id,),
+            ).fetchone()
+            if row is None or str(row["request_json"]) != _canonical_json(
+                control.value()
+            ):
+                raise QueueConflictError("agent control delivery is not durable")
+            encoded = _canonical_json(effect.value())
+            if row["effect_json"] is not None and str(row["effect_json"]) != encoded:
+                raise QueueConflictError("agent control effect conflicts")
+            session = self.session(control.expected_session_id)
+            if effect.code == "applied":
+                updated = replace(
+                    session,
+                    config_revision=effect.config_revision,
+                    inventory_revision=effect.inventory_revision,
+                    availability_revision=effect.availability_revision,
+                )
+                conn.execute(
+                    "UPDATE agent_sessions_local SET value_json = ? "
+                    "WHERE session_id = ?",
+                    (_canonical_json(updated.value()), updated.session_id),
+                )
+            elif (
+                effect.config_revision != session.config_revision
+                or effect.inventory_revision != session.inventory_revision
+                or effect.availability_revision != session.availability_revision
+            ):
+                raise QueueConflictError("failed agent control changed revisions")
+            conn.execute(
+                "UPDATE agent_controls_local SET effect_json = ? "
+                "WHERE operation_id = ?",
+                (encoded, control.operation_id),
+            )
+            conn.commit()
+
+    def acknowledge_control(self, operation_id: str) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE agent_controls_local SET acknowledged = 1 WHERE operation_id = ? AND effect_json IS NOT NULL",
+                (operation_id,),
+            )
+            conn.commit()
+
+    def next_unacknowledged_control(
+        self,
+    ) -> tuple[AgentControl, AgentControlEffect] | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT request_json, effect_json FROM agent_controls_local "
+                "WHERE acknowledged = 0 AND effect_json IS NOT NULL "
+                "ORDER BY operation_id LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        request = json.loads(str(row["request_json"]))
+        effect = json.loads(str(row["effect_json"]))
+        if not isinstance(request, Mapping) or not isinstance(effect, Mapping):
+            raise QueueServiceError("retained agent control evidence is invalid")
+        return AgentControl.from_value(request), AgentControlEffect.from_value(effect)
+
+    def prepare_assignment_control(self, control: AgentAssignmentControl) -> str | None:
+        encoded = _canonical_json(control.value())
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT request_json, result_code FROM "
+                "remote_assignment_controls_local WHERE operation_id = ?",
+                (control.operation_id,),
+            ).fetchone()
+            if row is not None:
+                if str(row["request_json"]) != encoded:
+                    raise QueueConflictError("assignment control conflicts")
+                conn.commit()
+                return None if row["result_code"] is None else str(row["result_code"])
+            conn.execute(
+                "INSERT INTO remote_assignment_controls_local(operation_id, "
+                "assignment_id, request_json, result_code, acknowledged) "
+                "VALUES (?, ?, ?, NULL, 0)",
+                (control.operation_id, control.assignment_id, encoded),
+            )
+            conn.commit()
+        return None
+
+    def record_assignment_control_result(
+        self, control: AgentAssignmentControl, code: str
+    ) -> None:
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT request_json, result_code FROM "
+                "remote_assignment_controls_local WHERE operation_id = ?",
+                (control.operation_id,),
+            ).fetchone()
+            if row is None or str(row["request_json"]) != _canonical_json(
+                control.value()
+            ):
+                raise QueueConflictError("assignment control is not durable")
+            if row["result_code"] is not None and str(row["result_code"]) != code:
+                raise QueueConflictError("assignment control result conflicts")
+            conn.execute(
+                "UPDATE remote_assignment_controls_local SET result_code = ? "
+                "WHERE operation_id = ?",
+                (code, control.operation_id),
+            )
+            conn.commit()
+
+    def acknowledge_assignment_control(self, operation_id: str) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE remote_assignment_controls_local SET acknowledged = 1 "
+                "WHERE operation_id = ? AND result_code IS NOT NULL",
+                (operation_id,),
+            )
+            conn.commit()
+
+    def next_unacknowledged_assignment_control(
+        self,
+    ) -> tuple[AgentAssignmentControl, str] | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT request_json, result_code FROM "
+                "remote_assignment_controls_local WHERE acknowledged = 0 "
+                "AND result_code IS NOT NULL ORDER BY operation_id LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        request = json.loads(str(row["request_json"]))
+        if not isinstance(request, Mapping):
+            raise QueueServiceError("retained assignment control evidence is invalid")
+        return AgentAssignmentControl.from_value(request), str(row["result_code"])
+
     def retain_assignment_reference(self, session_id: str, assignment_id: str) -> None:
         with self._connection() as conn:
             conn.execute(
@@ -741,8 +943,14 @@ class LocalDaemonAgentHttpServer:
 class LocalDaemonAgentHttpClient:
     """A no-redirect persistent HTTPS caller for one configured service name."""
 
-    def __init__(self, config: AgentTlsClientConfig) -> None:
+    def __init__(
+        self,
+        config: AgentTlsClientConfig,
+        *,
+        trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
+    ) -> None:
         self._config = config
+        self._trusted_config_loader = trusted_config_loader
         self._connection: http.client.HTTPSConnection | None = None
         self._journal = (
             _RemoteAgentJournal(config.agent_root) if config.agent_root else None
@@ -750,6 +958,7 @@ class LocalDaemonAgentHttpClient:
         self._profiles = {
             item.descriptor.profile_id: item for item in config.resident_profiles
         }
+        self._retained_profiles: dict[str, ResidentExecutionProfile] = {}
         self._execution_journal = (
             SQLiteAgentJournal(
                 Path(config.agent_root) / "journal.sqlite",
@@ -770,8 +979,12 @@ class LocalDaemonAgentHttpClient:
             else False
         )
         self._runtime_agent_id: str | None = None
+        self._runtime_provider_key: str | None = None
         self._providers: dict[str, AtomResourceProvider] = {}
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
+        self._cancelled_assignments: set[str] = set()
+        self._drained = False
+        self._control_lock = RLock()
 
     @property
     def agent_root_id(self) -> str:
@@ -804,7 +1017,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v3",
+                    "agent-sessions-v5",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -845,6 +1058,8 @@ class LocalDaemonAgentHttpClient:
     def publish_offer(
         self, offer: AgentOffer, *, idempotency_key: str
     ) -> Mapping[str, PlainData]:
+        if self._drained:
+            raise QueueConflictError("drained agent cannot advertise capacity")
         if self._restart_with_retained_work:
             raise QueueConflictError(
                 "restarted agent with retained remote work cannot advertise "
@@ -913,6 +1128,8 @@ class LocalDaemonAgentHttpClient:
         poll_id: str,
         wait_timeout_ms: int,
     ) -> Mapping[str, PlainData]:
+        if self._drained:
+            raise QueueConflictError("drained agent cannot poll for new work")
         if self._restart_with_retained_work:
             raise QueueConflictError(
                 "restarted agent with retained remote work cannot poll for new work"
@@ -941,6 +1158,184 @@ class LocalDaemonAgentHttpClient:
             raise
         journal.complete_mutation("poll", poll_id, result)
         return result
+
+    def poll_control(self, session_id: str) -> AgentControl | None:
+        journal = self._require_journal()
+        pending = journal.next_unacknowledged_control()
+        if pending is not None:
+            control, effect = pending
+            if control.expected_session_id != session_id:
+                raise QueueConflictError(
+                    "retained agent control belongs to another session"
+                )
+            self._call(
+                "control_ack",
+                {"session_id": session_id, "effect": effect.value()},
+            )
+            journal.acknowledge_control(control.operation_id)
+            return control
+        result = self._call("control", {"session_id": session_id})
+        raw = result.get("control")
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping):
+            raise QueueServiceError("agent control response is invalid")
+        control = AgentControl.from_value(raw)
+        effect = journal.prepare_control(control)
+        if effect is None:
+            effect = self._apply_agent_control(control)
+            journal.record_control_effect(control, effect)
+        self._call(
+            "control_ack",
+            {"session_id": session_id, "effect": effect.value()},
+        )
+        journal.acknowledge_control(control.operation_id)
+        return control
+
+    def _apply_agent_control(self, control: AgentControl) -> AgentControlEffect:
+        """Apply an inert command using only trusted owner-local configuration."""
+
+        session = self._require_journal().session(control.expected_session_id)
+        with self._control_lock:
+            if control.kind.value in {"drain", "reload"}:
+                self._drained = True
+            if control.cancel_active and not self._cancel_active_assignments():
+                return self._unchanged_control_effect(control, session, "unknown_work")
+            if control.kind.value == "reload":
+                loader = self._trusted_config_loader
+                if loader is None:
+                    return self._unchanged_control_effect(
+                        control, session, "reload_unavailable"
+                    )
+                try:
+                    replacement = loader()
+                    self._validate_reload_config(replacement)
+                except (QueueError, OSError, TypeError, ValueError):
+                    return self._unchanged_control_effect(
+                        control, session, "reload_rejected"
+                    )
+                retained = self._has_retained_agent_work()
+                if retained:
+                    self._retained_profiles.update(
+                        {
+                            _resident_profile_key(item): item
+                            for item in self._profiles.values()
+                        }
+                    )
+                self._config = replacement
+                self._profiles = {
+                    item.descriptor.profile_id: item
+                    for item in replacement.resident_profiles
+                }
+                if not retained:
+                    self._reset_runtime_providers()
+                config_revision = _agent_config_revision(replacement)
+                inventory_revision = _agent_inventory_revision(replacement)
+            else:
+                config_revision = session.config_revision
+                inventory_revision = session.inventory_revision
+            if control.kind.value == "resume":
+                if self._restart_with_retained_work or self._has_retained_agent_work():
+                    return self._unchanged_control_effect(
+                        control, session, "retained_work"
+                    )
+                self._retained_profiles.clear()
+                self._reset_runtime_providers()
+                self._drained = False
+            availability_revision = _agent_revision(
+                "availability",
+                {
+                    "operation_id": control.operation_id,
+                    "drained": self._drained,
+                    "inventory_revision": inventory_revision,
+                },
+            )
+            return AgentControlEffect(
+                operation_id=control.operation_id,
+                code="applied",
+                config_revision=config_revision,
+                inventory_revision=inventory_revision,
+                availability_revision=availability_revision,
+            )
+
+    @staticmethod
+    def _unchanged_control_effect(
+        control: AgentControl, session: AgentSession, code: str
+    ) -> AgentControlEffect:
+        return AgentControlEffect(
+            operation_id=control.operation_id,
+            code=code,
+            config_revision=session.config_revision,
+            inventory_revision=session.inventory_revision,
+            availability_revision=session.availability_revision,
+        )
+
+    def _validate_reload_config(self, replacement: AgentTlsClientConfig) -> None:
+        if not isinstance(replacement, AgentTlsClientConfig):
+            raise QueueServiceError("trusted agent configuration is invalid")
+        if (
+            replacement.agent_root != self._config.agent_root
+            or replacement.url != self._config.url
+            or replacement.server_ca_path != self._config.server_ca_path
+            or replacement.certificate_path != self._config.certificate_path
+            or replacement.private_key_path != self._config.private_key_path
+        ):
+            raise QueueServiceError(
+                "agent reload cannot replace its live transport or owner root"
+            )
+        existing = (*self._profiles.values(), *self._retained_profiles.values())
+        for candidate in replacement.resident_profiles:
+            for retained in existing:
+                if (
+                    retained.descriptor == candidate.descriptor
+                    and _resident_profile_key(retained)
+                    != _resident_profile_key(candidate)
+                ):
+                    raise QueueConflictError(
+                        "agent reload reuses a live profile identity for changed bindings"
+                    )
+
+    def _has_retained_agent_work(self) -> bool:
+        return (
+            any(process.poll() is None for process in self._processes.values())
+            or bool(
+                self._execution_journal.retained_claim_commands()
+                if self._execution_journal is not None
+                else ()
+            )
+            or bool(
+                self._journal.has_unresolved_assignment_references()
+                if self._journal is not None
+                else False
+            )
+        )
+
+    def _reset_runtime_providers(self) -> None:
+        self._runtime_agent_id = None
+        self._runtime_provider_key = None
+        self._providers = {}
+
+    def _cancel_active_assignments(self) -> bool:
+        contained = True
+        for assignment_id, process in tuple(self._processes.items()):
+            current = _terminate_owned_process(process)
+            if current:
+                self._cancelled_assignments.add(assignment_id)
+            contained = current and contained
+        return contained
+
+    def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
+        """Issue the same typed operator command over authenticated HTTP."""
+        return self._call(
+            "agent_control", {"control": control.value()}, role="operator"
+        )
+
+    def reload_scheduling(
+        self, request: CoordinatorSchedulingReload
+    ) -> Mapping[str, PlainData]:
+        return self._call(
+            "scheduling_reload", {"request": request.to_dict()}, role="operator"
+        )
 
     def authorize_transfers(
         self,
@@ -1008,6 +1403,100 @@ class LocalDaemonAgentHttpClient:
                 "request_digest": request_digest,
             },
         )
+
+    def start_permit(self, session_id: str, assignment_id: str, *, fence: str) -> bool:
+        result = self._call(
+            "start_permit",
+            {
+                "session_id": session_id,
+                "assignment_id": assignment_id,
+                "fence": fence,
+            },
+        )
+        permitted = result.get("permitted")
+        if not isinstance(permitted, bool):
+            raise QueueServiceError("remote start permit response is invalid")
+        return permitted
+
+    def poll_assignment_control(self, session_id: str) -> AgentAssignmentControl | None:
+        journal = self._require_journal()
+        pending = journal.next_unacknowledged_assignment_control()
+        if pending is not None:
+            control, code = pending
+            if control.session_id != session_id:
+                raise QueueConflictError(
+                    "retained assignment control belongs to another session"
+                )
+            self._acknowledge_assignment_control(session_id, control, code)
+            return control
+        result = self._call("assignment_control", {"session_id": session_id})
+        raw = result.get("control")
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping):
+            raise QueueServiceError("assignment control response is invalid")
+        control = AgentAssignmentControl.from_value(raw)
+        prior = journal.prepare_assignment_control(control)
+        if prior is not None:
+            self._acknowledge_assignment_control(session_id, control, prior)
+            return control
+        code = self._apply_assignment_control(control)
+        journal.record_assignment_control_result(control, code)
+        self._acknowledge_assignment_control(session_id, control, code)
+        return control
+
+    def _acknowledge_assignment_control(
+        self, session_id: str, control: AgentAssignmentControl, code: str
+    ) -> None:
+        self._call(
+            "assignment_control_ack",
+            {
+                "session_id": session_id,
+                "operation_id": control.operation_id,
+                "code": code,
+            },
+        )
+        self._require_journal().acknowledge_assignment_control(control.operation_id)
+
+    def _apply_assignment_control(self, control: AgentAssignmentControl) -> str:
+        with self._control_lock:
+            journal = self._execution_journal
+            if journal is None:
+                return "unknown"
+            try:
+                state = journal.read_state(control.assignment_id)
+                fence = journal.read_grant_fence(control.assignment_id)
+            except Exception:
+                return "unknown"
+            if control.fence != fence:
+                return "unknown"
+            process = self._processes.get(control.assignment_id)
+            if process is None:
+                if state in {
+                    AssignmentState.RESULT_DURABLE,
+                    AssignmentState.TERMINAL_ACKNOWLEDGED,
+                    AssignmentState.PROVIDERS_RELEASED,
+                    AssignmentState.RELEASED,
+                }:
+                    return "terminal"
+                if state in {
+                    AssignmentState.REQUEST_DURABLE,
+                    AssignmentState.PREPARED,
+                    AssignmentState.ACCEPTED,
+                    AssignmentState.GRANTED,
+                    AssignmentState.ACTIVE,
+                }:
+                    return "never_started"
+                return "unknown"
+            if control.process_execution_id not in {
+                None,
+                f"{control.assignment_id}:root",
+            }:
+                return "unknown"
+            if not _terminate_owned_process(process):
+                return "unknown"
+            self._cancelled_assignments.add(control.assignment_id)
+            return "contained"
 
     def decline_assignment(
         self,
@@ -1175,8 +1664,8 @@ class LocalDaemonAgentHttpClient:
         request = _DeliveredExecutionRequest.from_dict(
             thaw_plain_data(raw_request, path="remote delivered request")
         )
-        profile = self._profiles.get(request.profile.profile_id)
-        if profile is None or profile.descriptor != request.profile:
+        profile = self._profile_for_descriptor(request.profile)
+        if profile is None:
             raise QueueConflictError(
                 "delivered assignment has no exact resident profile"
             )
@@ -1214,6 +1703,16 @@ class LocalDaemonAgentHttpClient:
             for index, claim in enumerate(request.claims)
         )
         execution_journal.persist_request(assignment, request.to_dict())
+        cancelled = self._cancel_pregrant_if_requested(
+            session,
+            request.assignment_id,
+            assignment,
+            commands,
+            providers,
+            execution_journal,
+        )
+        if cancelled is not None:
+            return cancelled
 
         authorization = self._fresh_transfer_authorization(
             session_id=session_id,
@@ -1295,21 +1794,49 @@ class LocalDaemonAgentHttpClient:
             f"{request.assignment_id}:request-inputs-durable",
             {"kind": "request_and_inputs_durable"},
         )
+        cancelled = self._cancel_pregrant_if_requested(
+            session,
+            request.assignment_id,
+            assignment,
+            commands,
+            providers,
+            execution_journal,
+        )
+        if cancelled is not None:
+            return cancelled
         request_json = json.dumps(
             request.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
         )
-        grant = cast(
-            Mapping[str, PlainData],
-            self._assignment_call(
-                session_id,
-                request.assignment_id,
-                lambda: self.accept_assignment(
+        try:
+            grant = cast(
+                Mapping[str, PlainData],
+                self._assignment_call(
                     session_id,
                     request.assignment_id,
-                    request_digest=hashlib.sha256(request_json.encode()).hexdigest(),
+                    lambda: self.accept_assignment(
+                        session_id,
+                        request.assignment_id,
+                        request_digest=hashlib.sha256(
+                            request_json.encode()
+                        ).hexdigest(),
+                    ),
                 ),
-            ),
-        )
+            )
+        except QueueConflictError as conflict:
+            deadline = monotonic() + 5
+            while monotonic() < deadline:
+                cancelled = self._cancel_pregrant_if_requested(
+                    session,
+                    request.assignment_id,
+                    assignment,
+                    commands,
+                    providers,
+                    execution_journal,
+                )
+                if cancelled is not None:
+                    return cancelled
+                sleep(0.05)
+            raise conflict
         fence = cast(str, grant["fence"])
         execution_journal.grant(assignment.assignment_id, fence)
         workspace.grant(fence)
@@ -1326,6 +1853,7 @@ class LocalDaemonAgentHttpClient:
         execution_id = f"{request.assignment_id}:root"
         process = self._processes.get(request.assignment_id)
         result_path = workspace.root / "worker-result.json"
+        cancelled_before_start = False
         if execution_journal.read_state(assignment.assignment_id) in {
             AssignmentState.ACTIVE,
         }:
@@ -1370,37 +1898,84 @@ class LocalDaemonAgentHttpClient:
                 workspace.mark_process_started(execution_id, child.pid)
                 return execution_id
 
-            execution_journal.start_once(assignment.assignment_id, execution_id, launch)
-            process = self._processes[request.assignment_id]
-            atomic_write_bytes(workspace.root / "run.grant", b"granted\n")
-            workspace.append_event(
-                f"{request.assignment_id}:agent-process-started",
-                {"kind": "process_started"},
-            )
-            self._assignment_call(
-                session_id,
-                request.assignment_id,
-                lambda: self.confirm_started(
-                    session_id,
-                    request.assignment_id,
-                    fence=fence,
-                    process_execution_id=execution_id,
-                ),
-            )
+            with self._control_lock:
+                permitted = cast(
+                    bool,
+                    self._assignment_call(
+                        session_id,
+                        request.assignment_id,
+                        lambda: self.start_permit(
+                            session_id, request.assignment_id, fence=fence
+                        ),
+                    ),
+                )
+                if not permitted:
+                    result = _cancelled_worker_result(workspace.worker_request())
+                    atomic_write_bytes(
+                        result_path,
+                        json.dumps(
+                            result.to_dict(),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ).encode(),
+                    )
+                    workspace.persist_cancelled_before_start(result)
+                    execution_journal.record_cancelled_before_start(
+                        assignment.assignment_id, result.to_dict()
+                    )
+                    cancelled_before_start = True
+                else:
+                    execution_journal.start_once(
+                        assignment.assignment_id, execution_id, launch
+                    )
+                    process = self._processes[request.assignment_id]
+                    atomic_write_bytes(workspace.root / "run.grant", b"granted\n")
+                    workspace.append_event(
+                        f"{request.assignment_id}:agent-process-started",
+                        {"kind": "process_started"},
+                    )
+                    self._assignment_call(
+                        session_id,
+                        request.assignment_id,
+                        lambda: self.confirm_started(
+                            session_id,
+                            request.assignment_id,
+                            fence=fence,
+                            process_execution_id=execution_id,
+                        ),
+                    )
         self._flush_workspace_events(session_id, workspace)
         if process is not None:
-            process.wait()
+            while process.poll() is None:
+                self.poll_assignment_control(session_id)
+                sleep(0.05)
         elif not result_path.is_file():
             raise QueueConflictError(
                 "remote process outcome is unknown and cannot be relaunched"
+            )
+        if (
+            not result_path.is_file()
+            and request.assignment_id in self._cancelled_assignments
+        ):
+            cancelled = _cancelled_worker_result(workspace.worker_request())
+            atomic_write_bytes(
+                result_path,
+                json.dumps(
+                    cancelled.to_dict(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode(),
             )
         if not result_path.is_file():
             raise QueueConflictError(
                 "remote process exited without a durable worker result"
             )
         result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
-        workspace.persist_worker_result(result)
-        execution_journal.record_result(assignment.assignment_id, result.to_dict())
+        if not cancelled_before_start:
+            workspace.persist_worker_result(result)
+            execution_journal.record_result(assignment.assignment_id, result.to_dict())
         report = workspace.retain_outputs()
         workspace.append_event(
             f"{request.assignment_id}:result-output-durable",
@@ -1494,6 +2069,7 @@ class LocalDaemonAgentHttpClient:
             ),
         )
         self._processes.pop(request.assignment_id, None)
+        self._cancelled_assignments.discard(request.assignment_id)
         return freeze_plain_data(
             {
                 "result": "assignment",
@@ -1503,6 +2079,48 @@ class LocalDaemonAgentHttpClient:
             },
             path="remote execution completion",
         )
+
+    def _cancel_pregrant_if_requested(
+        self,
+        session: AgentSession,
+        assignment_id: str,
+        assignment: ManagedAssignment,
+        commands: tuple[ClaimCommand, ...],
+        providers: Mapping[str, AtomResourceProvider],
+        execution_journal: SQLiteAgentJournal,
+    ) -> Mapping[str, PlainData] | None:
+        for _ in range(32):
+            control = self.poll_assignment_control(session.session_id)
+            if control is None:
+                return None
+            if control.assignment_id != assignment_id:
+                continue
+            state = execution_journal.read_state(assignment_id)
+            if state is AssignmentState.REQUEST_DURABLE:
+                execution_journal.decline_before_prepare(assignment_id)
+            elif state in {AssignmentState.PREPARED, AssignmentState.ACCEPTED}:
+                execution_journal.abort_pregrant(assignment_id, commands, providers)
+            else:
+                return None
+            next_revision = self._availability_revision(
+                session, assignment_id, providers
+            )
+            execution_journal.release_declined(assignment_id, next_revision)
+            released_session = self.decline_assignment(
+                session.session_id,
+                assignment.assignment_id,
+                availability_revision=next_revision,
+            )
+            return freeze_plain_data(
+                {
+                    "result": "assignment",
+                    "assignment_id": assignment_id,
+                    "state": "CANCELLED_BEFORE_GRANT",
+                    "session": released_session.value(),
+                },
+                path="remote pre-grant cancellation",
+            )
+        raise QueueConflictError("assignment control delivery exceeds its bound")
 
     @staticmethod
     def _availability_revision(
@@ -1654,6 +2272,7 @@ class LocalDaemonAgentHttpClient:
             raise QueueServiceError("remote execution journal is required")
         if self._runtime_agent_id is None:
             self._runtime_agent_id = session.agent_id
+            self._runtime_provider_key = _resident_provider_key(profile)
             planners = {
                 "cpu": CpuResourcePlanner(),
                 "memory": MemoryResourcePlanner(),
@@ -1704,6 +2323,10 @@ class LocalDaemonAgentHttpClient:
                 provider.restore_capacity_holding(command)
         elif self._runtime_agent_id != session.agent_id:
             raise QueueConflictError("remote runtime agent identity changed")
+        elif self._runtime_provider_key != _resident_provider_key(profile):
+            raise QueueConflictError(
+                "resident provider configuration changed while claims are retained"
+            )
         if any(
             claim_kind not in self._providers
             for claim_kind in {
@@ -1713,6 +2336,21 @@ class LocalDaemonAgentHttpClient:
         ):
             raise QueueConflictError("resident provider composition changed")
         return self._providers, journal
+
+    def _profile_for_descriptor(
+        self, descriptor: object
+    ) -> ResidentExecutionProfile | None:
+        active = self._profiles.get(getattr(descriptor, "profile_id", ""))
+        if active is not None and active.descriptor == descriptor:
+            return active
+        return next(
+            (
+                profile
+                for profile in self._retained_profiles.values()
+                if profile.descriptor == descriptor
+            ),
+            None,
+        )
 
     def _flush_workspace_events(
         self, session_id: str, workspace: _RemoteAssignmentWorkspace
@@ -1887,13 +2525,11 @@ class _Handler(BaseHTTPRequestHandler):
             credential = self._daemon_server.credential_fingerprints.get(fingerprint)
             if credential is None:
                 raise QueueServiceError("agent TLS credential is not accepted")
-            slurm_profile = next(
-                (
-                    profile
-                    for profile in self._daemon_server.daemon_owner.config.slurm_profiles
-                    if profile.credential_reference == credential
-                ),
-                None,
+            execution = self._daemon_server.daemon_owner._execution
+            slurm_profile = (
+                None
+                if execution is None
+                else execution._slurm_profile_for_credential(credential)
             )
             if slurm_profile is None:
                 principal_id, mapped_role = ScopedAuthorizer(
@@ -1940,6 +2576,11 @@ class _Handler(BaseHTTPRequestHandler):
                     "output",
                     "result",
                     "release",
+                    "control",
+                    "control_ack",
+                    "assignment_control",
+                    "assignment_control_ack",
+                    "start_permit",
                     "retire",
                 }:
                     raise QueueServiceError("agent protocol operation is unsupported")
@@ -2174,6 +2815,38 @@ def _dispatch(
             fence=_string(value, "fence"),
             availability_revision=_string(value, "availability_revision"),
         ).value()
+    if operation == "control":
+        _exact(value, {"session_id"})
+        control = view.next_control(_string(value, "session_id"))
+        return {"control": None if control is None else control.value()}
+    if operation == "control_ack":
+        _exact(value, {"session_id", "effect"})
+        effect = value["effect"]
+        if not isinstance(effect, Mapping):
+            raise QueueServiceError("agent control effect is invalid")
+        return view.acknowledge_control(
+            _string(value, "session_id"), AgentControlEffect.from_value(effect)
+        )
+    if operation == "assignment_control":
+        _exact(value, {"session_id"})
+        control = view.next_assignment_control(_string(value, "session_id"))
+        return {"control": None if control is None else control.value()}
+    if operation == "assignment_control_ack":
+        _exact(value, {"session_id", "operation_id", "code"})
+        return view.acknowledge_assignment_control(
+            _string(value, "session_id"),
+            _string(value, "operation_id"),
+            code=_string(value, "code"),
+        )
+    if operation == "start_permit":
+        _exact(value, {"session_id", "assignment_id", "fence"})
+        return {
+            "permitted": view.start_permit(
+                _string(value, "session_id"),
+                _string(value, "assignment_id"),
+                fence=_string(value, "fence"),
+            )
+        }
     _exact(value, {"proof", "idempotency_key"})
     proof = value["proof"]
     if not isinstance(proof, Mapping):
@@ -2231,6 +2904,20 @@ def _dispatch_application(
                     admission.to_dict() for admission in view.reconcile_once()
                 ]
             }
+        if operation == "agent_control":
+            _exact(value, {"control"})
+            control = value["control"]
+            if not isinstance(control, Mapping):
+                raise QueueServiceError("agent control request is invalid")
+            return view.control_agent(AgentControl.from_value(control))
+        if operation == "scheduling_reload":
+            _exact(value, {"request"})
+            request = value["request"]
+            if not isinstance(request, Mapping):
+                raise QueueServiceError("scheduling reload request is invalid")
+            return view.reload_scheduling(
+                CoordinatorSchedulingReload.from_dict(request)
+            )
     elif role == LocalDaemonRole.SLURM_BOOTSTRAP.value:
         view = daemon.slurm_bootstrap_view(principal)
         if operation == "register":
@@ -2528,6 +3215,99 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 def _reject_constant(_value: str) -> object:
     raise ValueError("non-finite JSON value")
+
+
+def _resident_profile_key(profile: ResidentExecutionProfile) -> str:
+    return _agent_revision(
+        "resident-profile",
+        {
+            "descriptor": profile.descriptor.to_dict(),
+            "project_root": str(profile.project_root),
+            "python_executable": str(profile.python_executable),
+            "cpu_capacity": profile.cpu_capacity,
+            "memory_capacity_bytes": profile.memory_capacity_bytes,
+            "gpu_devices": [
+                {
+                    "descriptor": device.descriptor.to_dict(),
+                    "binding_value": device.binding_value,
+                }
+                for device in profile.gpu_devices
+            ],
+        },
+    )
+
+
+def _resident_provider_key(profile: ResidentExecutionProfile) -> str:
+    return _agent_revision(
+        "resident-provider",
+        {
+            "cpu_capacity": profile.cpu_capacity,
+            "memory_capacity_bytes": profile.memory_capacity_bytes,
+            "gpu_devices": [
+                {
+                    "descriptor": device.descriptor.to_dict(),
+                    "binding_value": device.binding_value,
+                }
+                for device in profile.gpu_devices
+            ],
+        },
+    )
+
+
+def _agent_config_revision(config: AgentTlsClientConfig) -> str:
+    return _agent_revision(
+        "config",
+        {
+            "profiles": [
+                _resident_profile_key(profile) for profile in config.resident_profiles
+            ]
+        },
+    )
+
+
+def _agent_inventory_revision(config: AgentTlsClientConfig) -> str:
+    return _agent_revision(
+        "inventory",
+        {
+            "profiles": [
+                {
+                    "descriptor": profile.descriptor.to_dict(),
+                    "cpu_capacity": profile.cpu_capacity,
+                    "memory_capacity_bytes": profile.memory_capacity_bytes,
+                    "gpu_devices": [
+                        device.descriptor.to_dict() for device in profile.gpu_devices
+                    ],
+                }
+                for profile in config.resident_profiles
+            ]
+        },
+    )
+
+
+def _agent_revision(prefix: str, value: Mapping[str, object]) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
+    return f"{prefix}-{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _terminate_owned_process(process: subprocess.Popen[bytes]) -> bool:
+    """Contain only the exact in-memory child handle owned by this agent."""
+
+    if process.poll() is not None:
+        return True
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+            process.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    except OSError:
+        return process.poll() is not None
+    return process.poll() is not None
 
 
 __all__ = [

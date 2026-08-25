@@ -10,11 +10,14 @@ from .client import QueueClient
 if TYPE_CHECKING:
     from ._remote_stage_execution import GpuDeviceDescriptor
     from .local_daemon import (
+        AgentControl,
+        CoordinatorSchedulingReload,
         LocalDaemon,
         LocalDaemonAdmission,
         LocalDaemonAdmissionRequest,
         LocalDaemonAdmissionState,
         LocalDaemonConfig,
+        LocalDaemonSchedulingComponents,
         ConfiguredGpuDevice,
         LocalDaemonPrincipal,
         LocalDaemonRole,
@@ -106,10 +109,13 @@ from .selection import (
 _LOCAL_DAEMON_EXPORTS = frozenset(
     {
         "LocalDaemon",
+        "AgentControl",
+        "CoordinatorSchedulingReload",
         "LocalDaemonAdmission",
         "LocalDaemonAdmissionRequest",
         "LocalDaemonAdmissionState",
         "LocalDaemonConfig",
+        "LocalDaemonSchedulingComponents",
         "ConfiguredGpuDevice",
         "LocalDaemonPrincipal",
         "LocalDaemonRole",
@@ -150,10 +156,13 @@ __all__ = [
     "GpuDeviceDescriptor",
     "LaunchContract",
     "LocalDaemon",
+    "AgentControl",
+    "CoordinatorSchedulingReload",
     "LocalDaemonAdmission",
     "LocalDaemonAdmissionRequest",
     "LocalDaemonAdmissionState",
     "LocalDaemonConfig",
+    "LocalDaemonSchedulingComponents",
     "ConfiguredGpuDevice",
     "LocalDaemonPrincipal",
     "LocalDaemonRole",

@@ -467,16 +467,26 @@ class CancellationEpochRequest:
     operation_id: str
     coordinator_id: str
     run_uri: str
+    stage_names: tuple[str, ...]
 
     def __post_init__(self) -> None:
         for field_name in ("operation_id", "coordinator_id", "run_uri"):
             _non_empty(getattr(self, field_name), field_name)
+        stages = tuple(self.stage_names)
+        if not stages or any(
+            not isinstance(stage_name, str) or not stage_name for stage_name in stages
+        ):
+            raise AuthorityStoreError("cancellation epoch requires exact stage names")
+        if len(stages) != len(set(stages)):
+            raise AuthorityStoreError("cancellation stage names must be unique")
+        object.__setattr__(self, "stage_names", stages)
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "operation_id": self.operation_id,
             "coordinator_id": self.coordinator_id,
             "run_uri": self.run_uri,
+            "stage_names": list(self.stage_names),
         }
 
     @classmethod
@@ -484,7 +494,7 @@ class CancellationEpochRequest:
         mapping = _mapping(data, "CancellationEpochRequest")
         _reject_unknown(
             mapping,
-            {"operation_id", "coordinator_id", "run_uri"},
+            {"operation_id", "coordinator_id", "run_uri", "stage_names"},
             "CancellationEpochRequest",
         )
         return cls(
@@ -493,6 +503,12 @@ class CancellationEpochRequest:
                 _required(mapping, "coordinator_id"), "coordinator_id"
             ),
             run_uri=_non_empty(_required(mapping, "run_uri"), "run_uri"),
+            stage_names=tuple(
+                _non_empty(stage_name, "stage_name")
+                for stage_name in _sequence(
+                    _required(mapping, "stage_names"), "stage_names"
+                )
+            ),
         )
 
 
@@ -532,6 +548,10 @@ class LocalDaemonAuthority(Protocol):
     def install_cancellation_epoch(
         self, run_uri: str, request: CancellationEpochRequest
     ) -> CancellationEpochReceipt: ...
+
+    def finalize_cancellation(
+        self, run_uri: str, request: CancellationEpochRequest
+    ) -> RunStatus: ...
 
 
 @dataclass(frozen=True, slots=True)

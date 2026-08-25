@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from .local_daemon import LocalDaemon, LocalDaemonPrincipal
 
 
-PROTOCOL_VERSION = "3"
+PROTOCOL_VERSION = "5"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -84,6 +84,204 @@ class AgentSessionState(StrEnum):
     ACTIVE = "ACTIVE"
     RETIRING = "RETIRING"
     RETIRED_CLEAN = "RETIRED_CLEAN"
+
+
+class AgentControlKind(StrEnum):
+    DRAIN = "drain"
+    RESUME = "resume"
+    RELOAD = "reload"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentControl:
+    """Inert, authenticated control data; it never carries configuration."""
+
+    operation_id: str
+    kind: AgentControlKind
+    agent_id: str
+    expected_session_id: str
+    expected_config_revision: str
+    pool: str | None
+    cancel_active: bool
+    reason: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "operation_id",
+            "agent_id",
+            "expected_session_id",
+            "expected_config_revision",
+        ):
+            _identifier(getattr(self, name), name)
+        object.__setattr__(self, "kind", AgentControlKind(self.kind))
+        if self.pool is not None:
+            _identifier(self.pool, "pool")
+        if not isinstance(self.cancel_active, bool):
+            raise QueueServiceError("control cancel_active must be boolean")
+        if (
+            not isinstance(self.reason, str)
+            or not self.reason
+            or len(self.reason) > 512
+        ):
+            raise QueueServiceError("control reason must be 1..512 characters")
+
+    def value(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "kind": self.kind.value,
+            "agent_id": self.agent_id,
+            "expected_session_id": self.expected_session_id,
+            "expected_config_revision": self.expected_config_revision,
+            "pool": self.pool,
+            "cancel_active": self.cancel_active,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_value(cls, value: Mapping[str, object]) -> "AgentControl":
+        fields = {
+            "operation_id",
+            "kind",
+            "agent_id",
+            "expected_session_id",
+            "expected_config_revision",
+            "pool",
+            "cancel_active",
+            "reason",
+        }
+        if set(value) != fields:
+            raise QueueServiceError("agent control fields are invalid")
+        pool = value["pool"]
+        if pool is not None and not isinstance(pool, str):
+            raise QueueServiceError("control pool is invalid")
+        required = (
+            "operation_id",
+            "kind",
+            "agent_id",
+            "expected_session_id",
+            "expected_config_revision",
+            "reason",
+        )
+        if any(not isinstance(value[name], str) for name in required) or not isinstance(
+            value["cancel_active"], bool
+        ):
+            raise QueueServiceError("agent control fields are invalid")
+        return cls(
+            cast(str, value["operation_id"]),
+            AgentControlKind(cast(str, value["kind"])),
+            cast(str, value["agent_id"]),
+            cast(str, value["expected_session_id"]),
+            cast(str, value["expected_config_revision"]),
+            pool,
+            cast(bool, value["cancel_active"]),
+            cast(str, value["reason"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AgentControlEffect:
+    """Safe owner-local result reported after a control effect is durable."""
+
+    operation_id: str
+    code: str
+    config_revision: str
+    inventory_revision: str
+    availability_revision: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "operation_id",
+            "code",
+            "config_revision",
+            "inventory_revision",
+            "availability_revision",
+        ):
+            _identifier(getattr(self, name), name)
+
+    def value(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "code": self.code,
+            "config_revision": self.config_revision,
+            "inventory_revision": self.inventory_revision,
+            "availability_revision": self.availability_revision,
+        }
+
+    @classmethod
+    def from_value(cls, value: Mapping[str, object]) -> "AgentControlEffect":
+        fields = {
+            "operation_id",
+            "code",
+            "config_revision",
+            "inventory_revision",
+            "availability_revision",
+        }
+        if set(value) != fields or any(
+            not isinstance(value[name], str) for name in fields
+        ):
+            raise QueueServiceError("agent control effect fields are invalid")
+        return cls(
+            operation_id=cast(str, value["operation_id"]),
+            code=cast(str, value["code"]),
+            config_revision=cast(str, value["config_revision"]),
+            inventory_revision=cast(str, value["inventory_revision"]),
+            availability_revision=cast(str, value["availability_revision"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AgentAssignmentControl:
+    """Exact cancellation request for one retained remote assignment."""
+
+    operation_id: str
+    session_id: str
+    assignment_id: str
+    fence: str | None
+    process_execution_id: str | None
+
+    def __post_init__(self) -> None:
+        for name in ("operation_id", "session_id", "assignment_id"):
+            _identifier(getattr(self, name), name)
+        for value, name in (
+            (self.fence, "fence"),
+            (self.process_execution_id, "process_execution_id"),
+        ):
+            if value is not None:
+                _identifier(value, name)
+
+    def value(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "session_id": self.session_id,
+            "assignment_id": self.assignment_id,
+            "fence": self.fence,
+            "process_execution_id": self.process_execution_id,
+        }
+
+    @classmethod
+    def from_value(cls, value: Mapping[str, object]) -> "AgentAssignmentControl":
+        fields = {
+            "operation_id",
+            "session_id",
+            "assignment_id",
+            "fence",
+            "process_execution_id",
+        }
+        if set(value) != fields or any(
+            not isinstance(value[name], str)
+            for name in ("operation_id", "session_id", "assignment_id")
+        ):
+            raise QueueServiceError("assignment control fields are invalid")
+        for name in ("fence", "process_execution_id"):
+            if value[name] is not None and not isinstance(value[name], str):
+                raise QueueServiceError("assignment control fields are invalid")
+        return cls(
+            operation_id=cast(str, value["operation_id"]),
+            session_id=cast(str, value["session_id"]),
+            assignment_id=cast(str, value["assignment_id"]),
+            fence=cast(str | None, value["fence"]),
+            process_execution_id=cast(str | None, value["process_execution_id"]),
+        )
 
 
 class AgentPollActiveError(QueueConflictError):
@@ -131,12 +329,36 @@ class TransportPrincipalPolicy:
     credential_id: str
     principal_id: str
     role: str
+    actions: tuple[str, ...] = ()
+    agent_ids: tuple[str, ...] = ()
+    pools: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _identifier(self.credential_id, "credential_id")
         _identifier(self.principal_id, "principal_id")
         if self.role not in {"client", "operator"}:
             raise QueueServiceError("transport principal role is unsupported")
+        actions = tuple(self.actions)
+        agent_ids = tuple(self.agent_ids)
+        pools = tuple(self.pools)
+        if self.role == "operator":
+            allowed = {
+                "drain",
+                "resume",
+                "reload",
+                "cancel_active",
+                "scheduling_reload",
+            }
+            if not set(actions).issubset(allowed):
+                raise QueueServiceError("operator actions must be an explicit finite set")
+            _identifiers(actions, "operator actions")
+            _identifiers(agent_ids, "operator agent targets")
+            _identifiers(pools, "operator pool targets")
+        elif actions or agent_ids or pools:
+            raise QueueServiceError("client principals cannot define operator scopes")
+        object.__setattr__(self, "actions", tuple(sorted(set(actions))))
+        object.__setattr__(self, "agent_ids", tuple(sorted(set(agent_ids))))
+        object.__setattr__(self, "pools", tuple(sorted(set(pools))))
 
 
 @dataclass(frozen=True, slots=True)
@@ -644,6 +866,9 @@ class ScopedAuthorizer:
             "output",
             "result",
             "release",
+            "control",
+            "assignment_control",
+            "start_permit",
             "retire",
         }:
             raise QueueServiceError("agent operation is unsupported")
@@ -656,14 +881,56 @@ class ScopedAuthorizer:
                 "daemon principal is not authorized for this operation"
             )
         # Existing owner-only Unix/direct views carry an already-trusted local
-        # principal, so their legacy no-credential form remains supported.
+        # principal. Only protected operator actions require an explicit scope;
+        # client and agent-less status views retain their existing local owner
+        # admission.
         if principal.credential_id is None:
-            return
+            if role != "operator":
+                return
+            if any(
+                rule.principal_id == principal.subject and rule.role == role
+                for rule in self.policy.principals
+            ):
+                return
+            raise QueueServiceError(
+                "daemon principal is not authorized for this operation"
+            )
         principal_id, mapped_role = self.transport_principal(principal.credential_id)
         if principal.subject != principal_id or mapped_role != role:
             raise QueueServiceError(
                 "daemon principal is not authorized for this operation"
             )
+
+    def require_operator(
+        self,
+        principal: "LocalDaemonPrincipal",
+        action: str,
+        *,
+        agent_id: str | None = None,
+        pool: str | None = None,
+    ) -> None:
+        """Authorize one exact protected operator action before mutation."""
+
+        self.require_role(principal, "operator")
+        matches = [
+            rule
+            for rule in self.policy.principals
+            if rule.role == "operator"
+            and rule.principal_id == principal.subject
+            and (
+                principal.credential_id is None
+                or rule.credential_id == principal.credential_id
+            )
+        ]
+        if len(matches) != 1:
+            raise QueueServiceError("daemon principal is not authorized for this operation")
+        rule = matches[0]
+        if action not in rule.actions:
+            raise QueueServiceError("daemon principal is not authorized for this operation")
+        if agent_id is not None and agent_id not in rule.agent_ids:
+            raise QueueServiceError("daemon principal is not authorized for this operation")
+        if pool is not None and pool not in rule.pools:
+            raise QueueServiceError("daemon principal is not authorized for this operation")
 
 
 class AgentSessionView:
@@ -759,6 +1026,11 @@ class AgentSessionView:
             session_id,
             assignment_id,
             request_digest=request_digest,
+        )
+
+    def start_permit(self, session_id: str, assignment_id: str, *, fence: str) -> bool:
+        return AgentSessionService(self._daemon, self._principal).start_permit(
+            session_id, assignment_id, fence=fence
         )
 
     def decline_assignment(
@@ -877,6 +1149,34 @@ class AgentSessionView:
             proof, idempotency_key=idempotency_key
         )
 
+    def next_control(self, session_id: str) -> AgentControl | None:
+        return AgentSessionService(self._daemon, self._principal).next_control(
+            session_id
+        )
+
+    def acknowledge_control(
+        self, session_id: str, effect: AgentControlEffect
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).acknowledge_control(
+            session_id, effect
+        )
+
+    def next_assignment_control(self, session_id: str) -> AgentAssignmentControl | None:
+        return AgentSessionService(
+            self._daemon, self._principal
+        ).next_assignment_control(session_id)
+
+    def acknowledge_assignment_control(
+        self,
+        session_id: str,
+        operation_id: str,
+        *,
+        code: str,
+    ) -> Mapping[str, PlainData]:
+        return AgentSessionService(
+            self._daemon, self._principal
+        ).acknowledge_assignment_control(session_id, operation_id, code=code)
+
 
 class AgentSessionService:
     """Coordinator-owned durable transitions for the restricted agent view."""
@@ -901,7 +1201,7 @@ class AgentSessionService:
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
-                    "agent-sessions-v3",
+                    "agent-sessions-v5",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],
@@ -910,6 +1210,254 @@ class AgentSessionService:
                 "role": "agent",
             },
             path="agent handshake",
+        )
+
+    def next_control(self, session_id: str) -> AgentControl | None:
+        rule, revision = self._authorize("control")
+        _identifier(session_id, "session_id")
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+                ).fetchone(),
+                self._daemon._require_started(),
+                expected_principal=rule.principal_id,
+            )  # type: ignore[attr-defined]
+            self._check_current_session(
+                session, rule, self._daemon._epoch or "", revision
+            )  # type: ignore[attr-defined]
+            row = conn.execute(
+                "SELECT operation_id, request_json FROM agent_controls WHERE session_id = ? AND state IN ('pending_delivery', 'applying') ORDER BY operation_id LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                conn.commit()
+                return None
+            control = AgentControl.from_value(json.loads(str(row["request_json"])))
+            if control.expected_config_revision != session.config_revision:
+                conn.execute(
+                    "UPDATE agent_controls SET state = 'failed', result_code = 'stale_revision' WHERE operation_id = ?",
+                    (control.operation_id,),
+                )
+                conn.commit()
+                return None
+            if control.cancel_active:
+                pending = tuple(
+                    conn.execute(
+                        "SELECT DISTINCT a.run_uri, a.cancellation_operation_id "
+                        "FROM remote_assignments r JOIN managed_admissions a "
+                        "ON a.run_uri = r.run_uri WHERE r.session_id = ? "
+                        "AND r.state != 'RELEASED' AND a.state NOT IN "
+                        "('SUCCEEDED', 'FAILED', 'CANCELLED')",
+                        (session_id,),
+                    )
+                )
+                for cancellation in pending:
+                    operation_id = cancellation["cancellation_operation_id"]
+                    if operation_id is None:
+                        conn.commit()
+                        return None
+                    try:
+                        from loom.pipeline.stores.sqlite_authority import (
+                            SQLitePerRunAuthorityStore,
+                        )
+
+                        receipt = SQLitePerRunAuthorityStore(
+                            str(cancellation["run_uri"])
+                        ).read_cancellation_epoch_receipt(
+                            str(cancellation["run_uri"]), str(operation_id)
+                        )
+                    except Exception:
+                        receipt = None
+                    if receipt is None:
+                        conn.commit()
+                        return None
+            conn.execute(
+                "UPDATE agent_controls SET state = 'applying' WHERE operation_id = ?",
+                (control.operation_id,),
+            )
+            conn.commit()
+            return control
+
+    def acknowledge_control(
+        self, session_id: str, effect: AgentControlEffect
+    ) -> Mapping[str, PlainData]:
+        rule, revision = self._authorize("control")
+        _identifier(session_id, "session_id")
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+                ).fetchone(),
+                self._daemon._require_started(),  # type: ignore[attr-defined]
+                expected_principal=rule.principal_id,
+            )
+            self._check_current_session(
+                session,
+                rule,
+                self._daemon._epoch or "",
+                revision,  # type: ignore[attr-defined]
+            )
+            row = conn.execute(
+                "SELECT request_json, state, effect_json FROM agent_controls "
+                "WHERE operation_id = ? AND session_id = ?",
+                (effect.operation_id, session_id),
+            ).fetchone()
+            if row is None:
+                raise QueueConflictError("agent control is unavailable")
+            control = AgentControl.from_value(json.loads(str(row["request_json"])))
+            encoded = _canonical_json(effect.value())
+            if row["effect_json"] is not None:
+                if str(row["effect_json"]) != encoded:
+                    raise QueueConflictError("agent control acknowledgement conflicts")
+                conn.commit()
+                return freeze_plain_data(
+                    {
+                        "operation_id": control.operation_id,
+                        "state": str(row["state"]),
+                        "code": effect.code,
+                    },
+                    path="agent control acknowledgement",
+                )
+            if control.expected_config_revision != session.config_revision:
+                raise QueueConflictError("agent control acknowledgement is stale")
+            applied = effect.code == "applied"
+            if applied:
+                conn.execute(
+                    "UPDATE agent_sessions SET config_revision = ?, "
+                    "inventory_revision = ?, availability_revision = ? "
+                    "WHERE session_id = ?",
+                    (
+                        effect.config_revision,
+                        effect.inventory_revision,
+                        effect.availability_revision,
+                        session_id,
+                    ),
+                )
+                conn.execute(
+                    "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
+                    (session_id,),
+                )
+                conn.execute(
+                    "UPDATE agent_polls SET active = 0 WHERE session_id = ?",
+                    (session_id,),
+                )
+            elif (
+                effect.config_revision != session.config_revision
+                or effect.inventory_revision != session.inventory_revision
+                or effect.availability_revision != session.availability_revision
+            ):
+                raise QueueConflictError("failed agent control changed revisions")
+            state = "applied" if applied else "failed"
+            conn.execute(
+                "UPDATE agent_controls SET state = ?, result_code = ?, "
+                "effect_json = ?, acknowledged = 1 WHERE operation_id = ?",
+                (state, effect.code, encoded, effect.operation_id),
+            )
+            conn.commit()
+        return freeze_plain_data(
+            {
+                "operation_id": control.operation_id,
+                "state": state,
+                "code": effect.code,
+            },
+            path="agent control acknowledgement",
+        )
+
+    def next_assignment_control(self, session_id: str) -> AgentAssignmentControl | None:
+        rule, revision = self._authorize("assignment_control")
+        _identifier(session_id, "session_id")
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+                ).fetchone(),
+                self._daemon._require_started(),  # type: ignore[attr-defined]
+                expected_principal=rule.principal_id,
+            )
+            self._check_current_session(
+                session,
+                rule,
+                self._daemon._epoch or "",
+                revision,  # type: ignore[attr-defined]
+            )
+            row = conn.execute(
+                "SELECT operation_id, request_json FROM remote_assignment_controls "
+                "WHERE session_id = ? AND state IN ('pending_delivery', 'applying') "
+                "ORDER BY operation_id LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                conn.commit()
+                return None
+            control = AgentAssignmentControl.from_value(
+                json.loads(str(row["request_json"]))
+            )
+            conn.execute(
+                "UPDATE remote_assignment_controls SET state = 'applying' "
+                "WHERE operation_id = ?",
+                (control.operation_id,),
+            )
+            conn.commit()
+            return control
+
+    def acknowledge_assignment_control(
+        self,
+        session_id: str,
+        operation_id: str,
+        *,
+        code: str,
+    ) -> Mapping[str, PlainData]:
+        rule, revision = self._authorize("assignment_control")
+        _identifier(session_id, "session_id")
+        _identifier(operation_id, "operation_id")
+        if code not in {"never_started", "contained", "terminal", "unknown"}:
+            raise QueueServiceError("assignment control result code is invalid")
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+                ).fetchone(),
+                self._daemon._require_started(),  # type: ignore[attr-defined]
+                expected_principal=rule.principal_id,
+            )
+            self._check_current_session(
+                session,
+                rule,
+                self._daemon._epoch or "",
+                revision,  # type: ignore[attr-defined]
+            )
+            row = conn.execute(
+                "SELECT request_json, result_code FROM remote_assignment_controls "
+                "WHERE operation_id = ? AND session_id = ?",
+                (operation_id, session_id),
+            ).fetchone()
+            if row is None:
+                raise QueueConflictError("assignment control is unavailable")
+            control = AgentAssignmentControl.from_value(
+                json.loads(str(row["request_json"]))
+            )
+            if row["result_code"] is not None and str(row["result_code"]) != code:
+                raise QueueConflictError("assignment control result conflicts")
+            state = "applied" if code != "unknown" else "settling"
+            conn.execute(
+                "UPDATE remote_assignment_controls SET state = ?, result_code = ?, "
+                "acknowledged = 1 WHERE operation_id = ?",
+                (state, code, operation_id),
+            )
+            conn.commit()
+        return freeze_plain_data(
+            {
+                "operation_id": control.operation_id,
+                "assignment_id": control.assignment_id,
+                "state": state,
+                "code": code,
+            },
+            path="assignment control acknowledgement",
         )
 
     def register(self, request: AgentRegistration) -> AgentSession:
@@ -1583,6 +2131,7 @@ class AgentSessionService:
         _secret_digest(request_digest, "request digest")
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
             self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
             row = self._require_remote_assignment(conn, session_id, assignment_id)
             delivery = conn.execute(
@@ -1598,6 +2147,7 @@ class AgentSessionService:
             ):
                 raise QueueConflictError("remote durable request digest conflicts")
             if row["fence"] is not None:
+                conn.commit()
                 return freeze_plain_data(
                     {
                         "assignment_id": assignment_id,
@@ -1606,13 +2156,14 @@ class AgentSessionService:
                     },
                     path="remote assignment grant",
                 )
-        execution = self._remote_execution()
-        fence = execution.remote_accept(assignment_id)
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
-            row = self._require_remote_assignment(conn, session_id, assignment_id)
-            if row["fence"] is not None and str(row["fence"]) != fence:
-                raise QueueConflictError("remote assignment grant replay conflicts")
+            cancellation = conn.execute(
+                "SELECT cancellation_operation_id FROM managed_admissions "
+                "WHERE run_uri = ?",
+                (str(row["run_uri"]),),
+            ).fetchone()
+            if cancellation is not None and cancellation[0] is not None:
+                raise QueueConflictError("remote assignment run is cancelling")
+            fence = self._remote_execution().remote_accept(assignment_id)
             conn.execute(
                 "UPDATE remote_assignments SET state = 'GRANTED', fence = ? "
                 "WHERE assignment_id = ?",
@@ -1623,6 +2174,41 @@ class AgentSessionService:
             {"assignment_id": assignment_id, "fence": fence, "state": "GRANTED"},
             path="remote assignment grant",
         )
+
+    def start_permit(self, session_id: str, assignment_id: str, *, fence: str) -> bool:
+        """Check the effective run barrier immediately before local launch."""
+
+        rule, policy_revision = self._authorize("start_permit")
+        _identifier(fence, "fence")
+        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+            row = self._require_remote_assignment(conn, session_id, assignment_id)
+            if row["fence"] != fence or str(row["state"]) not in {
+                "GRANTED",
+                "RUNNING",
+            }:
+                raise QueueConflictError("remote start permit fence is stale")
+            cancellation = conn.execute(
+                "SELECT cancellation_operation_id FROM managed_admissions "
+                "WHERE run_uri = ?",
+                (str(row["run_uri"]),),
+            ).fetchone()
+            if cancellation is not None and cancellation[0] is not None:
+                conn.commit()
+                return False
+            permitted = self._remote_execution().remote_start_permit(
+                assignment_id, fence=fence
+            )
+            if permitted:
+                conn.execute(
+                    "UPDATE remote_assignments SET start_permitted = 1 "
+                    "WHERE assignment_id = ? AND fence = ?",
+                    (assignment_id, fence),
+                )
+            conn.commit()
+            return permitted
 
     def decline_assignment(
         self,
@@ -1699,6 +2285,12 @@ class AgentSessionService:
                 "session_id = ? AND reference_kind = 'delivery' "
                 "AND reference_id = ?",
                 (session_id, assignment_id),
+            )
+            conn.execute(
+                "UPDATE remote_assignment_controls SET state = 'applied', "
+                "result_code = 'never_started', acknowledged = 1 "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
             )
             conn.commit()
         return resumed
@@ -1814,6 +2406,7 @@ class AgentSessionService:
                 epoch,
             )
             if row["fence"] != fence or str(row["state"]) not in {
+                "GRANTED",
                 "RUNNING",
                 "RESULT_RETAINED",
                 "TERMINAL",
@@ -1876,6 +2469,15 @@ class AgentSessionService:
                 "report_json = ?, report_digest = ? WHERE assignment_id = ?",
                 (encoded, digest, assignment_id),
             )
+            if report.status is StageStatus.CANCELLED:
+                code = (
+                    "contained" if str(row["state"]) == "RUNNING" else "never_started"
+                )
+                conn.execute(
+                    "UPDATE remote_assignment_controls SET state = 'applied', "
+                    "result_code = ?, acknowledged = 1 WHERE assignment_id = ?",
+                    (code, assignment_id),
+                )
             conn.commit()
         return freeze_plain_data(
             {"assignment_id": assignment_id, "state": "RESULT_RETAINED"},
@@ -1954,7 +2556,9 @@ class AgentSessionService:
                 if offset + len(data) > size:
                     raise QueueConflictError("output replay exceeds durable content")
                 if _read_regular_file_range(target, offset, len(data)) != data:
-                    raise QueueConflictError("output replay conflicts with durable bytes")
+                    raise QueueConflictError(
+                        "output replay conflicts with durable bytes"
+                    )
                 conn.commit()
                 return freeze_plain_data(
                     {"transfer_id": transfer_id, "received_bytes": size, "final": True},
@@ -2117,6 +2721,12 @@ class AgentSessionService:
                 "UPDATE agent_coordinator_references SET resolved = 1 WHERE "
                 "session_id = ? AND reference_kind = 'delivery' AND reference_id = ?",
                 (session_id, assignment_id),
+            )
+            conn.execute(
+                "UPDATE remote_assignment_controls SET state = 'applied', "
+                "result_code = COALESCE(result_code, 'terminal'), acknowledged = 1 "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
             )
             conn.commit()
         return resumed
@@ -2374,7 +2984,7 @@ class AgentSessionService:
 def initialize_agent_session_schema(
     conn: sqlite3.Connection, *, coordinator: bool
 ) -> None:
-    """Create the current tables in a freshly initialized version-3 root."""
+    """Create the current tables in a freshly initialized version-5 root."""
     if coordinator:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, agent_root_id TEXT NOT NULL, principal_id TEXT NOT NULL, policy_revision TEXT NOT NULL, config_revision TEXT NOT NULL, inventory_revision TEXT NOT NULL, availability_revision TEXT NOT NULL, capabilities_json TEXT NOT NULL, pools_json TEXT NOT NULL, retirement_verifier TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -2386,9 +2996,11 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS agent_retirement_proofs (session_id TEXT PRIMARY KEY, proof_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_session_tombstones (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_deliveries (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, poll_id TEXT);
-        CREATE TABLE IF NOT EXISTS remote_assignments (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, issuer_epoch TEXT NOT NULL, run_uri TEXT NOT NULL, stage_work_id TEXT NOT NULL, stage_name TEXT NOT NULL, attempt INTEGER NOT NULL, attempt_id TEXT NOT NULL, profile_json TEXT NOT NULL, state TEXT NOT NULL, fence TEXT, report_json TEXT, report_digest TEXT, next_availability_revision TEXT);
+        CREATE TABLE IF NOT EXISTS remote_assignments (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, issuer_epoch TEXT NOT NULL, run_uri TEXT NOT NULL, stage_work_id TEXT NOT NULL, stage_name TEXT NOT NULL, attempt INTEGER NOT NULL, attempt_id TEXT NOT NULL, profile_json TEXT NOT NULL, state TEXT NOT NULL, fence TEXT, start_permitted INTEGER NOT NULL DEFAULT 0, report_json TEXT, report_digest TEXT, next_availability_revision TEXT);
         CREATE TABLE IF NOT EXISTS remote_transfers (assignment_id TEXT NOT NULL, direction TEXT NOT NULL, transfer_id TEXT NOT NULL, logical_name TEXT NOT NULL, digest TEXT NOT NULL, size_bytes INTEGER NOT NULL, private_path TEXT NOT NULL, received_bytes INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, descriptor_json TEXT, PRIMARY KEY(assignment_id, direction, transfer_id));
         CREATE TABLE IF NOT EXISTS remote_transfer_authorizations (assignment_id TEXT NOT NULL, authorization_id TEXT NOT NULL, revision INTEGER NOT NULL, coordinator_epoch TEXT NOT NULL, operation_id TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, PRIMARY KEY(assignment_id, revision));
+        CREATE TABLE IF NOT EXISTS agent_controls (operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, effect_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS remote_assignment_controls (operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, assignment_id TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         """)
     else:
         conn.executescript("""
@@ -2404,6 +3016,8 @@ def initialize_agent_session_schema(
         CREATE TRIGGER IF NOT EXISTS agent_reference_revision_update AFTER UPDATE ON agent_session_references BEGIN UPDATE agent_reference_revision SET revision = revision + 1 WHERE singleton = 1; END;
         CREATE TRIGGER IF NOT EXISTS agent_reference_revision_delete AFTER DELETE ON agent_session_references BEGIN UPDATE agent_reference_revision SET revision = revision + 1 WHERE singleton = 1; END;
         CREATE TABLE IF NOT EXISTS agent_retirement_proofs_local (session_id TEXT PRIMARY KEY, proof_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS agent_controls_local (operation_id TEXT PRIMARY KEY, request_json TEXT NOT NULL, effect_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS remote_assignment_controls_local (operation_id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL, result_code TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         """)
 
 
@@ -2702,6 +3316,7 @@ def validate_agent_session_schema(
                 "profile_json",
                 "state",
                 "fence",
+                "start_permitted",
                 "report_json",
                 "report_digest",
                 "next_availability_revision",
@@ -2725,6 +3340,26 @@ def validate_agent_session_schema(
                 "coordinator_epoch",
                 "operation_id",
                 "expires_at",
+            },
+            "agent_controls": {
+                "operation_id",
+                "principal_id",
+                "session_id",
+                "agent_id",
+                "request_json",
+                "state",
+                "result_code",
+                "effect_json",
+                "acknowledged",
+            },
+            "remote_assignment_controls": {
+                "operation_id",
+                "session_id",
+                "assignment_id",
+                "request_json",
+                "state",
+                "result_code",
+                "acknowledged",
             },
         }
         if coordinator
@@ -2769,6 +3404,19 @@ def validate_agent_session_schema(
             },
             "agent_reference_revision": {"singleton", "revision"},
             "agent_retirement_proofs_local": {"session_id", "proof_json"},
+            "agent_controls_local": {
+                "operation_id",
+                "request_json",
+                "effect_json",
+                "acknowledged",
+            },
+            "remote_assignment_controls_local": {
+                "operation_id",
+                "assignment_id",
+                "request_json",
+                "result_code",
+                "acknowledged",
+            },
         }
     )
     present = {
@@ -3045,6 +3693,10 @@ def _add_seconds(timestamp: str, seconds: int) -> str:
 
 
 __all__ = [
+    "AgentAssignmentControl",
+    "AgentControl",
+    "AgentControlEffect",
+    "AgentControlKind",
     "AgentOffer",
     "AgentPolicyConfig",
     "AgentPrincipalPolicy",

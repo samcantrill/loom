@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -161,6 +162,21 @@ class _ConditionalExhaustedPlanner(CpuResourcePlanner):
         return super().propose_claims(request, opportunity, budget)
 
 
+class _EpochCpuPlanner(CpuResourcePlanner):
+    def __init__(self, version: str) -> None:
+        self.version = version
+        self.descriptor = replace(
+            CpuResourcePlanner.descriptor,
+            implementation_version=version,
+            implementation_fingerprint=f"test:cpu:{version}",
+        )
+
+    def propose_claims(self, request, opportunity, budget):
+        if opportunity.data.get("planner_version") != self.version:
+            return ClaimSearchResult(ClaimSearchState.COMPLETE)
+        return super().propose_claims(request, opportunity, budget)
+
+
 class _OversizedClaimPlanner(CpuResourcePlanner):
     def propose_claims(self, request, opportunity, budget):
         return ClaimSearchResult(
@@ -261,6 +277,59 @@ def test_kernel_selects_a_complete_claim_deterministically() -> None:
     assert (decision.stage_work_id, decision.candidate_id) == ("work", "a")
     assert decision.selected is not None
     assert decision.selected.claims[0].atoms[0].amount == ExactQuantity(1)
+
+
+def test_kernel_can_evaluate_mixed_epoch_work_with_exact_planner_bindings() -> None:
+    old_planner = _EpochCpuPlanner("old")
+    new_planner = _EpochCpuPlanner("new")
+    old_inventory, old_availability = _resource_envelopes(
+        "old-agent",
+        "cpu",
+        (_atom("cpu", "old", 4),),
+        data={"planner_version": "old"},
+    )
+    new_inventory, new_availability = _resource_envelopes(
+        "new-agent",
+        "cpu",
+        (_atom("cpu", "new", 4),),
+        data={"planner_version": "new"},
+    )
+    kernel = SchedulingKernel(
+        planners={"cpu": new_planner},
+        work_planners={
+            "old-work": {"cpu": old_planner},
+            "new-work": {"cpu": new_planner},
+        },
+        policy=FifoSchedulingPolicy(),
+        component_epoch="epoch-2",
+    )
+
+    decision = kernel.decide(
+        work=(_work("old-work", ready_at=1), _work("new-work", ready_at=2)),
+        candidates=(
+            Candidate(
+                "old-agent",
+                {"cpu": old_inventory},
+                {"cpu": old_availability},
+            ),
+            Candidate(
+                "new-agent",
+                {"cpu": new_inventory},
+                {"cpu": new_availability},
+            ),
+        ),
+        as_of=2,
+    )
+
+    assert decision.state is PolicyDecisionState.SELECT
+    assert (decision.stage_work_id, decision.candidate_id) == (
+        "old-work",
+        "old-agent",
+    )
+    assert tuple(
+        evaluation.candidates[0].candidate_id
+        for evaluation in decision.work_evaluations
+    ) == ("old-agent", "new-agent")
 
 
 def test_complete_claim_products_are_permutation_stable_and_composite_bounded() -> None:
