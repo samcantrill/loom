@@ -20,6 +20,7 @@ from loom.pipeline.execution.managed_local import (
     ObserveRequest,
 )
 from loom.pipeline.orchestration import (
+    SchedulingProjectionState,
     SQLiteStageWorkStore,
     StageWorkRecord,
     stage_work_identity,
@@ -557,6 +558,14 @@ def test_unaccepted_release_can_reopen_the_same_availability_offer(tmp_path) -> 
         coordinator.release_unaccepted(first.assignment_id, reopen_offer=True)
         == "released"
     )
+    reopened = next(
+        record
+        for record in SQLiteStageWorkStore(path).list_stage_work()
+        if record.stage_work_id == first.stage_work_id
+    )
+    assert reopened.scheduling_state is SchedulingProjectionState.READY
+    assert reopened.scheduling_diagnostics == {}
+    assert reopened.projection_revision == 2
     assert (
         coordinator.reserve(
             second,

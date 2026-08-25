@@ -324,6 +324,15 @@ class InMemoryStageWorkStore:
             self._work[record.stage_work_id] = record
             return record
         _require_same_projection_identity(existing, record)
+        if (
+            existing.scheduling_state is SchedulingProjectionState.DECIDED
+            and record.scheduling_state is SchedulingProjectionState.READY
+        ):
+            record = replace(
+                record,
+                scheduling_state=SchedulingProjectionState.DECIDED,
+                scheduling_diagnostics=existing.scheduling_diagnostics,
+            )
         refreshed = replace(
             record, projection_revision=existing.projection_revision + 1
         )
@@ -487,6 +496,15 @@ class SQLiteStageWorkStore:
             if existing.stage_work_id != record.stage_work_id:
                 raise CoordinatorStoreError("stage-work semantic key was re-keyed")
             _require_same_projection_identity(existing, record)
+            if (
+                existing.scheduling_state is SchedulingProjectionState.DECIDED
+                and record.scheduling_state is SchedulingProjectionState.READY
+            ):
+                record = replace(
+                    record,
+                    scheduling_state=SchedulingProjectionState.DECIDED,
+                    scheduling_diagnostics=existing.scheduling_diagnostics,
+                )
             refreshed = replace(
                 record, projection_revision=existing.projection_revision + 1
             )

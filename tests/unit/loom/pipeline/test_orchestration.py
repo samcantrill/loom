@@ -11,6 +11,7 @@ from loom.pipeline.orchestration import (
     CoordinatorStoreError,
     InMemoryStageWorkStore,
     RunOrchestrator,
+    SchedulingProjectionState,
     SQLiteStageWorkStore,
 )
 from loom.pipeline.planning import (
@@ -192,6 +193,63 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
     assert replay.projection_revision == 2
     assert len(authority.open_run(run_uri).stages[0].attempts) == 1
     assert replay_store.list_stage_work() == (replay,)
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_reconcile_preserves_a_durable_decision_until_authority_changes(
+    tmp_path: Path, kind: str
+) -> None:
+    run_uri = "file:///decided"
+    authority = _authority(run_uri)
+    store = (
+        InMemoryStageWorkStore()
+        if kind == "memory"
+        else SQLiteStageWorkStore(tmp_path / "stage-work.sqlite")
+    )
+    orchestrator = RunOrchestrator(
+        authority=authority, store=store, owner_id="coordinator"
+    )
+    plan = _plan(run_uri, _stage("train"))
+    initial = orchestrator.reconcile(
+        admission_id="admission-1",
+        plan=plan,
+        authority_snapshot=authority.open_run(run_uri),
+        placements={"train": _placement()},
+        ready_at=10,
+    )[0]
+    store.create_or_refresh(
+        replace(
+            initial,
+            scheduling_state=SchedulingProjectionState.DECIDED,
+            scheduling_diagnostics={"assignment_id": "assignment-1"},
+        )
+    )
+
+    orchestrator.reconcile(
+        admission_id="admission-1",
+        plan=plan,
+        authority_snapshot=authority.open_run(run_uri),
+        placements={"train": _placement()},
+        ready_at=20,
+    )
+    retained = store.list_stage_work()[0]
+    assert retained.scheduling_state is SchedulingProjectionState.DECIDED
+    assert retained.scheduling_diagnostics == {"assignment_id": "assignment-1"}
+
+    authority.transition_stage(
+        run_uri,
+        "train",
+        from_status=StageStatus.PENDING,
+        to_status=StageStatus.CANCELLED,
+    )
+    orchestrator.reconcile(
+        admission_id="admission-1",
+        plan=plan,
+        authority_snapshot=authority.open_run(run_uri),
+        placements={"train": _placement()},
+        ready_at=30,
+    )
+    assert store.list_stage_work()[0].scheduling_state is SchedulingProjectionState.WAIT
 
 
 def test_response_loss_after_authority_commit_replays_one_attempt(

@@ -793,7 +793,7 @@ class LocalDaemonAgentHttpClient:
         self._connection = None
 
     def handshake(self, *, role: str = "agent") -> Mapping[str, PlainData]:
-        if role not in {"agent", "client", "operator"}:
+        if role not in {"agent", "client", "operator", "slurm_bootstrap"}:
             raise QueueServiceError("authenticated application role is invalid")
         result = self._call("handshake", {}, role=role)
         if role == "agent":
@@ -1760,8 +1760,8 @@ class LocalDaemonAgentHttpClient:
     def call_application(
         self, role: str, operation: str, value: Mapping[str, PlainData]
     ) -> Mapping[str, PlainData]:
-        """Call the authenticated client/operator view selected by its certificate."""
-        if role not in {"client", "operator"}:
+        """Call the authenticated application view selected by its certificate."""
+        if role not in {"client", "operator", "slurm_bootstrap"}:
             raise QueueServiceError("authenticated application role is invalid")
         return self._call(operation, value, role=role)
 
@@ -1887,9 +1887,21 @@ class _Handler(BaseHTTPRequestHandler):
             credential = self._daemon_server.credential_fingerprints.get(fingerprint)
             if credential is None:
                 raise QueueServiceError("agent TLS credential is not accepted")
-            principal_id, mapped_role = ScopedAuthorizer(
-                self._daemon_server.daemon_owner._agent_policy
-            ).transport_principal(credential)
+            slurm_profile = next(
+                (
+                    profile
+                    for profile in self._daemon_server.daemon_owner.config.slurm_profiles
+                    if profile.credential_reference == credential
+                ),
+                None,
+            )
+            if slurm_profile is None:
+                principal_id, mapped_role = ScopedAuthorizer(
+                    self._daemon_server.daemon_owner._agent_policy
+                ).transport_principal(credential)
+            else:
+                principal_id = slurm_profile.bootstrap_principal_id
+                mapped_role = LocalDaemonRole.SLURM_BOOTSTRAP.value
             if self.headers.get("Content-Type") != "application/json":
                 raise QueueServiceError("agent protocol content type is invalid")
             lengths = self.headers.get_all("Content-Length", [])
@@ -2181,6 +2193,8 @@ def _dispatch_application(
 ) -> Mapping[str, PlainData]:
     if operation == "handshake":
         _exact(value, set())
+        if role == LocalDaemonRole.SLURM_BOOTSTRAP.value:
+            return daemon.slurm_bootstrap_view(principal).handshake()
         daemon._require_view_role(principal, LocalDaemonRole(role))
         return freeze_plain_data(
             {
@@ -2217,6 +2231,136 @@ def _dispatch_application(
                     admission.to_dict() for admission in view.reconcile_once()
                 ]
             }
+    elif role == LocalDaemonRole.SLURM_BOOTSTRAP.value:
+        view = daemon.slurm_bootstrap_view(principal)
+        if operation == "register":
+            _exact(
+                value,
+                {
+                    "operation_id",
+                    "request_digest",
+                    "job_id",
+                    "cluster",
+                    "incarnation",
+                    "capability",
+                },
+            )
+            cluster = value["cluster"]
+            if cluster is not None and not isinstance(cluster, str):
+                raise QueueServiceError("SLURM bootstrap cluster is invalid")
+            return view.register(
+                operation_id=_string(value, "operation_id"),
+                request_digest=_string(value, "request_digest"),
+                job_id=_string(value, "job_id"),
+                cluster=cast(str | None, cluster),
+                incarnation=_string(value, "incarnation"),
+                capability=_string(value, "capability"),
+            )
+        if operation == "input":
+            _exact(
+                value,
+                {"assignment_id", "incarnation", "transfer_id", "offset"},
+            )
+            data, final = view.input_chunk(
+                _string(value, "assignment_id"),
+                _string(value, "incarnation"),
+                _string(value, "transfer_id"),
+                offset=_integer(value, "offset"),
+            )
+            return {"data": _encode_chunk(data), "final": final}
+        if operation == "inputs_ready":
+            _exact(value, {"assignment_id", "incarnation"})
+            view.inputs_ready(
+                _string(value, "assignment_id"),
+                _string(value, "incarnation"),
+            )
+            return {"state": "input_ready"}
+        if operation == "grant":
+            _exact(value, {"assignment_id", "incarnation"})
+            return {
+                "fence": view.grant(
+                    _string(value, "assignment_id"),
+                    _string(value, "incarnation"),
+                )
+            }
+        if operation == "start":
+            _exact(value, {"assignment_id", "incarnation", "fence"})
+            return {
+                "permitted": view.start_permit(
+                    _string(value, "assignment_id"),
+                    _string(value, "incarnation"),
+                    _string(value, "fence"),
+                )
+            }
+        if operation == "started":
+            _exact(
+                value,
+                {
+                    "assignment_id",
+                    "incarnation",
+                    "fence",
+                    "process_execution_id",
+                },
+            )
+            view.started(
+                _string(value, "assignment_id"),
+                _string(value, "incarnation"),
+                _string(value, "fence"),
+                _string(value, "process_execution_id"),
+            )
+            return {"state": "running"}
+        if operation == "report":
+            _exact(value, {"assignment_id", "incarnation", "fence", "report"})
+            report = value["report"]
+            if not isinstance(report, Mapping):
+                raise QueueServiceError("SLURM result report is invalid")
+            view.declare_report(
+                _string(value, "assignment_id"),
+                _string(value, "incarnation"),
+                _string(value, "fence"),
+                report,
+            )
+            return {"state": "report_durable"}
+        if operation == "output":
+            _exact(
+                value,
+                {
+                    "assignment_id",
+                    "incarnation",
+                    "transfer_id",
+                    "offset",
+                    "data",
+                    "final",
+                },
+            )
+            final = value["final"]
+            if not isinstance(final, bool):
+                raise QueueServiceError("SLURM output final flag is invalid")
+            return {
+                "received": view.output_chunk(
+                    _string(value, "assignment_id"),
+                    _string(value, "incarnation"),
+                    _string(value, "transfer_id"),
+                    offset=_integer(value, "offset"),
+                    data=_decode_chunk(value["data"]),
+                    final=final,
+                )
+            }
+        if operation == "result":
+            _exact(value, {"assignment_id", "incarnation", "fence"})
+            view.commit_result(
+                _string(value, "assignment_id"),
+                _string(value, "incarnation"),
+                _string(value, "fence"),
+            )
+            return {"state": "terminal"}
+        if operation == "release":
+            _exact(value, {"assignment_id", "incarnation"})
+            view.release(
+                _string(value, "assignment_id"),
+                _string(value, "incarnation"),
+            )
+            return {"state": "released"}
     raise QueueServiceError("daemon protocol operation is unsupported")
 
 
