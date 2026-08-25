@@ -324,19 +324,22 @@ Final commands:
 - Implementation: complete; Phase 7A's selected vertical source/test/doc
   baseline is restored with the final v3/helper-v2 hard cut, pre-`sbatch`
   verifier/eligibility ordering, and shared revoke-before-final-release owner
-- Refiner: not needed unless a qualified blocker is demonstrated
+- Refiner: correction 1/3 complete; authority-terminal SLURM assignments now
+  reconcile their exact retained result/binding/fence before terminal admission
+  return, then use the shared revoke-before-final-release owner
 - Pre-submit gate: passed; `make validate-pr` and `make test-summary` passed
 - Independent review: required after a stable validated implementation
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3; focused crash-boundary and lost-revoke-response
+  coverage passed with no new planning decision
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Restored the approved ready-stage vertical path under `src/loom/**`; Phase 7B changes center on ready-stage submission/assignment ownership and local-daemon composition, with matching SLURM feature documentation. |
-| Tests added or updated | Added pre-run barrier and v3 store hard-cut unit coverage, assignment-store schema coverage, synchronous-`sbatch` bootstrap registration, revoke-before-release assertion, and causal parallel-limit evidence; updated the deterministic helper to envelope v2. |
-| Validated revision/tree state and evidence | Focused ready-stage matrix: 34 passed; daemon/session: 29 passed; SLURM/contract/import: 181 passed. `make validate-pr` passed. `make test-summary` passed: 2,634 passed, 3 skipped, 0 failed/errors (350.98s). |
+| Implementation and changed paths | Correction 1/3 updates `src/loom/queue/local_daemon_execution.py` so terminal authority evidence is reconciled to the exact retained SLURM assignment before terminal admission return; the existing shared revoke owner remains the sole final-release path. |
+| Tests added or updated | Ready-stage integration coverage now injects crashes after authority result commit and after assignment terminal commit, plus a lost revoke acknowledgement; both require replayed revoke before `released`. |
+| Validated revision/tree state and evidence | `uv run pytest -q tests/integration/queue/test_slurm_ready_stage.py`: 5 passed. `uv run pytest -q tests/unit/loom/queue/test_slurm_bootstrap.py tests/unit/loom/queue/test_local_daemon.py`: 19 passed. Ruff and `git diff --check` passed. |
 | Validation-relevant changes after evidence | None. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Unknown containment remains Phase 9; real site-helper/prolog validation remains opt-in. |
+| Residual risk and cleanup | Unknown containment remains Phase 9; real site-helper/prolog validation remains opt-in. No further qualified blocker is known. |

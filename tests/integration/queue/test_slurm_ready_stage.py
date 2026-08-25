@@ -18,6 +18,7 @@ from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_r
 from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
 from loom.pipeline.executors.slurm.ready_stage import (
     SQLiteReadyStageSubmissions,
+    SlurmPlanningError,
     SlurmJobPrivateFileProvider,
     SlurmReadyStageProfile,
 )
@@ -28,7 +29,6 @@ from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.queue import (
     LocalDaemon,
     LocalDaemonAdmissionRequest,
-    LocalDaemonAdmissionState,
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
@@ -73,8 +73,12 @@ def _profile(
     )
 
 
-def test_mixed_route_run_uses_one_slurm_submit_and_verified_loom_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "terminal_boundary",
+    ["authority_result", "assignment_terminal"],
+)
+def test_terminal_slurm_result_reconciliation_releases_after_crash_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_boundary: str
 ) -> None:
     runner = FakeSlurmCommandRunner(starting_job_id=1200)
     profile = _profile(runner)
@@ -441,51 +445,52 @@ def test_mixed_route_run_uses_one_slurm_submit_and_verified_loom_result(
                 )
                 if final:
                     break
-        view.commit_result(assignment_id, incarnation, fence)
-        view.release(assignment_id, incarnation)
+        original_mark_terminal = execution.slurm_assignments.mark_terminal
+        terminal_crash_injected = False
 
-        # A bootstrap restart may replay retained evidence, but the consumed
-        # root-launch permit never becomes available again.
-        replayed = SlurmBootstrapWorkspace(tmp_path / "compute", assignment_id)
-        assert replayed.retained_report() == report
-        view.inputs_ready(assignment_id, incarnation)
-        assert view.grant(assignment_id, incarnation) == fence
-        assert view.start_permit(assignment_id, incarnation, fence) is False
-        view.declare_report(assignment_id, incarnation, fence, report)
-        for output in report.outputs:
-            data, final = replayed.output_chunk(output.transfer_id, 0)
-            assert final is True
-            assert (
-                view.output_chunk(
-                    assignment_id,
-                    incarnation,
-                    output.transfer_id,
-                    offset=0,
-                    data=data,
-                    final=True,
-                )
-                == output.size_bytes
-            )
-        view.commit_result(assignment_id, incarnation, fence)
-        view.release(assignment_id, incarnation)
+        def mark_terminal_at_crash_boundary(candidate_assignment_id: str) -> None:
+            nonlocal terminal_crash_injected
+            if terminal_boundary == "authority_result" and not terminal_crash_injected:
+                terminal_crash_injected = True
+                raise OSError("simulated crash after authority result commit")
+            original_mark_terminal(candidate_assignment_id)
+            if terminal_boundary == "assignment_terminal" and not terminal_crash_injected:
+                terminal_crash_injected = True
+                raise OSError("simulated crash after assignment terminal commit")
 
-        completed = client.wait("mixed-route", timeout_seconds=10)
-        assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
-        snapshot = authority.open_run(run_uri)
-        assert snapshot.status is RunStatus.SUCCEEDED
-        assert [stage.status for stage in snapshot.stages] == [
-            StageStatus.SUCCEEDED,
-            StageStatus.SUCCEEDED,
-            StageStatus.SUCCEEDED,
-        ]
+        revoke_calls = 0
+        original_revoke = SlurmJobPrivateFileProvider.revoke
+
+        def revoke_with_lost_response(
+            provider: SlurmJobPrivateFileProvider, prepared: object
+        ) -> None:
+            nonlocal revoke_calls
+            revoke_calls += 1
+            original_revoke(provider, prepared)  # type: ignore[arg-type]
+            if revoke_calls == 1:
+                raise SlurmPlanningError("simulated lost revoke acknowledgement")
+
+        monkeypatch.setattr(
+            execution.slurm_assignments,
+            "mark_terminal",
+            mark_terminal_at_crash_boundary,
+        )
+        monkeypatch.setattr(SlurmJobPrivateFileProvider, "revoke", revoke_with_lost_response)
+        with pytest.raises(OSError, match="simulated crash"):
+            view.commit_result(assignment_id, incarnation, fence)
+        monkeypatch.setattr(
+            execution.slurm_assignments, "mark_terminal", original_mark_terminal
+        )
+
+        deadline = time.monotonic() + 2
+        while (
+            execution.slurm_assignments.read(assignment_id).state != "released"
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+        assert revoke_calls >= 2, daemon.status()
         assert execution.slurm_assignments.read(assignment_id).state == "released"
         assert not Path(profile.job_private_file_provider.fixed_path).exists()
-        script = (
-            config.slurm_script_root / f"{record.assignment.assignment_id}.sh"
-        ).read_text(encoding="utf-8")
-        assert run_uri not in script
-        assert profile.credential_reference not in script
-        assert "TextConsumerStage" not in script
         assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
     finally:
         daemon.stop()

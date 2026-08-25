@@ -821,14 +821,21 @@ class LocalDaemonExecution:
                     self._daemon_owner()._accepted_snapshot()
                 )
                 snapshot = scoped_authority.open_run(admission.run_uri)
+                slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+                    admission.run_uri, scoped_authority
+                )
+                snapshot = scoped_authority.open_run(admission.run_uri)
                 terminal = self._terminal_outcome(
                     intent.plan, snapshot, scoped_authority
                 )
                 if terminal is not None:
+                    if slurm_in_flight:
+                        return LocalDaemonExecutionOutcome(
+                            LocalDaemonAdmissionState.ACTIVE,
+                            slurm_diagnostic
+                            or "SLURM release remains durably in flight",
+                        )
                     return terminal
-                slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-                    admission.run_uri, scoped_authority
-                )
                 if self._remote_run_in_flight(admission.run_uri):
                     return LocalDaemonExecutionOutcome(
                         LocalDaemonAdmissionState.ACTIVE,
@@ -1061,6 +1068,8 @@ class LocalDaemonExecution:
         for retained in records:
             record = retained
             assignment_id = record.assignment.assignment_id
+            if self._reconcile_slurm_terminal_assignment(record, authority):
+                record = self.slurm_assignments.read(assignment_id)
             if record.state in {"logical_released", "terminal", "rejected"}:
                 try:
                     self._release_slurm_assignment(assignment_id)
@@ -1133,6 +1142,48 @@ class LocalDaemonExecution:
                 self._slurm_observed_operations.add(operation_id)
             in_flight = True
         return in_flight, diagnostic
+
+    def _reconcile_slurm_terminal_assignment(
+        self,
+        record: SlurmStageRecord,
+        authority: _ScopedCoordinatorAuthority,
+    ) -> bool:
+        """Mirror exact authority terminal evidence before provider release.
+
+        A bootstrap may lose its response after committing the authority result,
+        leaving the assignment in ``granted`` or ``running``.  The retained
+        report, assignment/attempt binding, fence, and authority stage result
+        must all agree before this recovery advances the assignment.  This
+        keeps an authority-terminal admission retryable until the shared revoke
+        owner receives a definite acknowledgement.
+        """
+
+        if record.state not in {"granted", "running"}:
+            return False
+        report = record.report
+        fence = record.fence
+        if report is None or fence is None:
+            return False
+        snapshot = authority.open_run(record.assignment.run_uri)
+        stage = next(
+            (
+                item
+                for item in snapshot.stages
+                if item.stage_name == record.assignment.stage_name
+            ),
+            None,
+        )
+        if stage is None or stage.status is not report.status:
+            return False
+        granted = authority.grant_prepared_attempt(
+            record.assignment.run_uri,
+            assignment_id=record.assignment.assignment_id,
+            attempt_id=record.assignment.attempt_id,
+        )
+        if granted.fencing_token != fence:
+            raise QueueConflictError("SLURM terminal fence conflicts")
+        self.slurm_assignments.mark_terminal(record.assignment.assignment_id)
+        return True
 
     def _dispatch_slurm_ready(
         self,
