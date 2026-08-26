@@ -72,7 +72,7 @@ def main() -> None:
         "stages": [
             {
                 "name": "produce",
-                "factory": {"_target_": "__main__.ProduceStage"},
+                "factory": {"_target_": "run_managed_local_queue.ProduceStage"},
                 "resources": _cpu_resource(),
                 "outputs": {
                     "data": {
@@ -83,7 +83,7 @@ def main() -> None:
             },
             {
                 "name": "consume",
-                "factory": {"_target_": "__main__.ConsumeStage"},
+                "factory": {"_target_": "run_managed_local_queue.ConsumeStage"},
                 "depends_on": ["produce"],
                 "inputs": {"data": "produce.data"},
                 "resources": _cpu_resource(),
@@ -129,7 +129,7 @@ def main() -> None:
         agent_root=example_root / "agent",
         run_store_root=run_root,
         resident_worker_launch_profile=ResidentWorkerLaunchProfile(
-            project_root=Path.cwd(),
+            project_root=here,
             python_executable=Path(sys.executable),
             descriptor={
                 "profile_id": "local-default",
