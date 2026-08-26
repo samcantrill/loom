@@ -1,7 +1,7 @@
 # Roadmap Stage 29 Planning: Durable Dependency-Aware Stage Scheduling
 
-Status: Phase 9D2 merged; Phases 1-3D, 4A, 5A, 6, 7B, 8A, 9C2, and 9D2
-merged; blocked predecessors remain read-only evidence
+Status: Phase 9E implementation active; Phases 1-3D, 4A, 5A, 6, 7B, 8A,
+9C2, and 9D2 merged; blocked predecessors remain read-only evidence
 Roadmap stage: 29
 Evidence baseline: repository source at
 `b045f45c763568d8d8cd3e2fbb1e5a8bf80ddf43` plus isolated blocked Phase 3A
@@ -25,11 +25,11 @@ PR CI, and squash merge `82b311f`
 Planning route: the original expanded Stage 29 design remains authoritative.
 The maintainer approved the hard cut-over and selected a Slurm prolog/container-
 provisioned allocation-private capability file for the ready-stage recovery.
-Current gate: Phase 9D2 passed focused/full local validation, required
-independent review, and exact PR CI; PR #247 squash-merged into `develop` as
-`82b311f`.
-Blockers: none in planning. Phase 9E is ready for manager preparation from
-current `develop`; blocked Phase 9D remains read-only evidence.
+Current gate: Phase 9E manager preparation is complete on post-9D2 `develop`;
+implementation is active on its dedicated branch and worktree.
+Blockers: none in planning. The accepted target-specific containment,
+terminal-or-close arbitration, and existing-policy retry contracts are fixed;
+blocked Phase 9D remains read-only evidence.
 
 This file is the current Stage 29 authority. It supersedes the earlier Stage 29
 whole-run placement design. A user still submits, observes, and cancels a run,
