@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: approved
 - Roadmap stage and phase: Stage 29, Phase 9D2
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p9d2-embedded-release-replay-closure`
@@ -194,11 +194,14 @@ Phase 9F continues to own `make test-summary` and the final Stage 29 summary.
   102-test affected matrix passed. Refreshed `make validate-pr` passed Ruff,
   zero-finding Pyright, 2,553 default tests, 141 config-extra tests with three
   expected skips, and source/wheel builds.
-- Independent review: required after manager validation.
+- Independent review: passed at PR head `b4fcfa8` with no product blocker,
+  localized correction, optional hardening, or scope finding. Review confirmed
+  both release callers/cuts, exact revision/event/receipt replay, one launch,
+  hard-cut boundaries, and validation/body accuracy.
 - Blocker corrections: 2/3.
 - PR and merge: [#247](https://github.com/samcantrill/loom/pull/247) is open,
-  non-draft, mergeable, and verified with base `develop`, exact head/title, and
-  body matching scope/evidence. Required independent review and CI are pending.
+  non-draft, reviewed, and verified with base `develop`, exact head/title, and
+  body matching scope/evidence. Merge is pending successful CI only.
 
 ## Completion Record
 
@@ -208,5 +211,5 @@ Phase 9F continues to own `make test-summary` and the final Stage 29 summary.
 | Tests added or updated | The managed-local integration now crashes both after availability publication with no final event and after final-event acknowledgement, for terminal success and definitive decline. Each case reconstructs journal/provider state, replays the saved revision, proves one acknowledged event at both stores, completes coordinator release, and retains one supervisor launch where applicable. |
 | Validated revision/tree state and evidence | Source/test revision `731b3c4`: focused four-case causal matrix passed in 2.76s; affected Phase 9D2 matrix passed 102 tests in 47.42s; `make validate-pr` passed Ruff, zero-finding Pyright, 2,553 default tests (121 deselected), 141 config-extra tests (3 expected skips), and source/wheel builds. |
 | Validation-relevant changes after evidence | none; this roadmap evidence update is non-validation metadata |
-| PR, review, and merge | [#247](https://github.com/samcantrill/loom/pull/247) open against `develop`; required independent review and CI pending. |
-| Residual risk and cleanup | pending |
+| PR, review, and merge | [#247](https://github.com/samcantrill/loom/pull/247) open against `develop`; required independent review passed with no finding; CI and squash merge pending. |
+| Residual risk and cleanup | Only explicit Phase 9E/9F scope remains: SLURM recovery, supervisor HA/other excluded recovery, and different-session replacement. Branch/worktree cleanup follows verified merge. |
