@@ -2570,13 +2570,13 @@ def run_managed_local_assignment(
             assignment_id=assignment.assignment_id,
             attempt_id=assignment.attempt_id,
         )
-        availability_revision = _fresh_availability_revision(
+        availability_revision = _release_revision(
+            journal=journal,
             assignment=assignment,
             providers=providers,
             operation="declined",
+            release=journal.release_declined,
         )
-        journal.release_declined(assignment.assignment_id, availability_revision)
-        coordinator.release_unaccepted(assignment.assignment_id)
         _emit_assignment_event(
             journal,
             coordinator,
@@ -2584,6 +2584,7 @@ def run_managed_local_assignment(
             "definitive_decline_released",
             {"availability_revision": availability_revision},
         )
+        coordinator.release_unaccepted(assignment.assignment_id)
         raise ManagedLocalError("managed assignment was definitively declined")
     if not _agent_at_or_after(prepared, AssignmentState.PREPARED):
         coordinator.advance(
@@ -2642,6 +2643,34 @@ def run_managed_local_assignment(
     def finalize_result(
         worker_result: StageWorkerResult, *, coordinator_expected: str
     ) -> ManagedExecutionReceipt:
+        if journal.read_state(assignment.assignment_id) is AssignmentState.RELEASED:
+            availability_revision = _release_revision(
+                journal=journal,
+                assignment=assignment,
+                providers=providers,
+                operation="released",
+                release=journal.publish_availability,
+            )
+            _emit_assignment_event(
+                journal,
+                coordinator,
+                assignment.assignment_id,
+                "provider_released_availability_fresh",
+                {"availability_revision": availability_revision},
+            )
+            if coordinator.state(assignment.assignment_id) == "logical_released":
+                coordinator.advance(
+                    assignment.assignment_id,
+                    expected="logical_released",
+                    next_state="released",
+                )
+            return ManagedExecutionReceipt(
+                assignment=assignment,
+                fence=fence,
+                worker_result=worker_result,
+                output_commit=None,
+                availability_revision=availability_revision,
+            )
         journal.record_result(assignment.assignment_id, worker_result.to_dict())
         _emit_assignment_event(
             journal,
@@ -2694,16 +2723,12 @@ def run_managed_local_assignment(
             if released.outcome is not ClaimOutcome.RELEASED:
                 raise ManagedLocalError("provider release is indeterminate")
         journal.mark_providers_released(assignment.assignment_id)
-        availability_revision = _fresh_availability_revision(
+        availability_revision = _release_revision(
+            journal=journal,
             assignment=assignment,
             providers=providers,
             operation="released",
-        )
-        journal.publish_availability(assignment.assignment_id, availability_revision)
-        coordinator.advance(
-            assignment.assignment_id,
-            expected="logical_released",
-            next_state="released",
+            release=journal.publish_availability,
         )
         _emit_assignment_event(
             journal,
@@ -2711,6 +2736,11 @@ def run_managed_local_assignment(
             assignment.assignment_id,
             "provider_released_availability_fresh",
             {"availability_revision": availability_revision},
+        )
+        coordinator.advance(
+            assignment.assignment_id,
+            expected="logical_released",
+            next_state="released",
         )
         return ManagedExecutionReceipt(
             assignment=assignment,
@@ -3325,6 +3355,29 @@ def _emit_assignment_event(
     sequence = journal.append_event(assignment_id, event_id, event_payload)
     coordinator.record_event(assignment_id, sequence, event_id, event_payload)
     journal.acknowledge(assignment_id, sequence)
+
+
+def _release_revision(
+    *,
+    journal: SQLiteAgentJournal,
+    assignment: ManagedAssignment,
+    providers: Mapping[str, AgentResourceProvider],
+    operation: str,
+    release: Callable[[str, str], AssignmentState],
+) -> str:
+    """Freshly observe release truth while preserving a committed revision."""
+
+    state = journal.read_state(assignment.assignment_id)
+    observed = _fresh_availability_revision(
+        assignment=assignment, providers=providers, operation=operation
+    )
+    if state is AssignmentState.RELEASED:
+        saved = journal.read_availability_revision(assignment.assignment_id)
+        if saved is None:
+            raise ManagedLocalError("released assignment lacks availability revision")
+        return saved
+    release(assignment.assignment_id, observed)
+    return observed
 
 
 def _fresh_availability_revision(
