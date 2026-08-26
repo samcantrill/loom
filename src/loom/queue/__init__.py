@@ -133,7 +133,10 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
         "LocalDaemonSocketClient",
         "LocalDaemonSocketServer",
         "LocalDaemonStatus",
+        "ManagedRecoveryTarget",
+        "RecoverUnknownAssignment",
         "ResidentWorkerLaunchProfile",
+        "SlurmRecoveryTarget",
     }
 )
 

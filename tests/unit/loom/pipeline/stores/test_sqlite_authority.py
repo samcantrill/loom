@@ -823,6 +823,52 @@ def test_managed_failure_can_terminalize_from_submitted_and_replays(
         )
 
 
+def test_recovery_close_is_fenced_and_an_ordinary_terminal_winner_supersedes(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "recovery-close")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    prepared = store.ensure_prepared_attempt(
+        run_uri, _prepared_request(store.create_run(run_uri))
+    )
+    store.bind_prepared_attempt(
+        run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+    )
+    fence = store.grant_prepared_attempt(
+        run_uri, assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id
+    )
+    current = store.open_run(run_uri)
+    close = store.close_managed_attempt_fence(
+        run_uri,
+        recovery_id="recovery-1",
+        fence=fence,
+        expected_state_version=current.stages[0].revision.sequence,
+        status=StageStatus.FAILED,
+        reason=LifecycleReason(code="operator.recovery_close"),
+    )
+    assert close.status is StageStatus.FAILED
+    with pytest.raises(AuthorityStoreError, match="stale execution fence"):
+        store.confirm_execution_started(run_uri, fence=fence)
+
+    other_uri = path_to_run_uri(tmp_path / "ordinary-wins")
+    other = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    prepared = other.ensure_prepared_attempt(
+        other_uri, _prepared_request(other.create_run(other_uri))
+    )
+    other.bind_prepared_attempt(other_uri, assignment_id="assignment-2", attempt_id=prepared.attempt.attempt_id)
+    other_fence = other.grant_prepared_attempt(other_uri, assignment_id="assignment-2", attempt_id=prepared.attempt.attempt_id)
+    other.record_managed_attempt_terminal(
+        other_uri, fence=other_fence, status=StageStatus.FAILED,
+        reason=LifecycleReason(code="worker.failed"),
+    )
+    with pytest.raises(AuthorityStoreError, match="supersedes recovery"):
+        other.close_managed_attempt_fence(
+            other_uri, recovery_id="recovery-2", fence=other_fence,
+            expected_state_version=1, status=StageStatus.FAILED,
+            reason=LifecycleReason(code="operator.recovery_close"),
+        )
+
+
 def test_v3_authority_database_migrates_managed_fence_table(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "v3-managed-migration")
     store = SQLitePerRunAuthorityStore(clock=FrozenClock())

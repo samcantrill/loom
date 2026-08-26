@@ -21,6 +21,7 @@ from loom.pipeline.executors.slurm.ready_stage import (
     SlurmPlanningError,
     SlurmJobPrivateFileProvider,
     SlurmReadyStageProfile,
+    resolve_slurm_containment,
 )
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.status import RunStatus, StageStatus
@@ -84,6 +85,27 @@ def _profile(
         cluster="cluster-a",
         available=available,
     )
+
+
+def test_slurm_containment_requires_exact_positive_echo() -> None:
+    runner = FakeSlurmCommandRunner()
+    request = {
+        "assignment_id": "assignment-1", "profile_id": "training",
+        "profile_configuration_fingerprint": "fingerprint", "submission_operation_id": "operation-1",
+        "cluster_id": "cluster-a", "job_id": "1", "bootstrap_incarnation_id": "bootstrap-1",
+        "process_execution_id": "process-1", "execution_fence": "fence-1",
+    }
+    profile = _profile(runner)
+    assert not resolve_slurm_containment(profile, request).contained
+    object.__setattr__(profile, "containment_helper_descriptor", "test-contained-v1")
+    object.__setattr__(profile, "containment_helper", lambda value: {
+        "state": "CONTAINED", "evidence_id": "proof-1", "evidence_revision": "1", "echo": value,
+    })
+    assert resolve_slurm_containment(profile, request).contained
+    object.__setattr__(profile, "containment_helper", lambda value: {
+        "state": "CONTAINED", "evidence_id": "proof-1", "evidence_revision": "1", "echo": {**value, "job_id": "2"},
+    })
+    assert not resolve_slurm_containment(profile, request).contained
 
 
 def _exercise_mixed_route_run(

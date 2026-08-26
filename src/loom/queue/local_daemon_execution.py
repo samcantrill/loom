@@ -15,6 +15,7 @@ from typing import cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.execution import StageWorkerRequest, prepare_stage_attempt
+from loom.pipeline.execution.reliability import record_retry_decision_for_stage_result
 from loom.pipeline.executors.slurm.ready_stage import (
     ReadyStageState,
     SQLiteReadyStageSubmissions,
@@ -22,6 +23,7 @@ from loom.pipeline.executors.slurm.ready_stage import (
     SlurmReadyStageRequest,
     SlurmReadyStageSubmission,
     map_ready_stage,
+    resolve_slurm_containment,
 )
 from loom.pipeline.executors.slurm.errors import (
     SlurmPlanningError,
@@ -110,6 +112,7 @@ from ._remote_stage_execution import (
 )
 from ._agent_process_supervisor import (
     AgentProcessSupervisorClient,
+    SupervisorLaunchState,
     SupervisorLaunchConfiguration,
 )
 from .agent_sessions import AgentOffer, _target_remote_delivery
@@ -119,6 +122,8 @@ from .local_daemon import (
     LocalDaemonAdmissionState,
     LocalDaemonConfig,
     LocalDaemonSchedulingComponents,
+    RecoverUnknownAssignment,
+    SlurmRecoveryTarget,
     _default_scheduling_components,
 )
 from .local_daemon_runtime import load_managed_local_runtime_record
@@ -669,6 +674,10 @@ class _ScopedCoordinatorAuthority:
         return self._store.record_managed_attempt_terminal(
             run_uri, fence=fence, status=status, reason=reason
         )
+
+    def close_managed_attempt_fence(self, run_uri: str, **kwargs: object):
+        self._run(run_uri)
+        return self._store.close_managed_attempt_fence(run_uri, **kwargs)  # type: ignore[arg-type]
 
     def record_output_commit(
         self,
@@ -1604,6 +1613,100 @@ class LocalDaemonExecution:
             raise QueueConflictError("SLURM terminal fence conflicts")
         self.slurm_assignments.mark_terminal(record.assignment.assignment_id)
         return True
+
+    def recover_unknown_assignment(
+        self, request: RecoverUnknownAssignment
+    ) -> dict[str, PlainData]:
+        """Close one exactly-contained unknown assignment without releasing it."""
+
+        binding = self._recovery_binding(request)
+        evidence = self._recovery_evidence(request, binding)
+        if evidence is None:
+            return {"recovery_id": request.recovery_id, "state": "unknown", "evidence": "UNKNOWN"}
+        run_uri, stage_name, attempt, attempt_id = binding[1:]
+        authority_store = SQLitePerRunAuthorityStore(run_uri)
+        authority_store.open_run(run_uri)
+        authority = _ScopedCoordinatorAuthority(authority_store, run_uri=run_uri, coordinator_id=self.coordinator_id)
+        status = StageStatus.FAILED if request.requested_outcome == "failed" else StageStatus.CANCELLED
+        try:
+            transition = authority.close_managed_attempt_fence(
+                run_uri,
+                recovery_id=request.recovery_id,
+                fence=ExecutionFence(request.assignment_id, attempt_id, request.execution_fence),
+                expected_state_version=request.expected_state_version,
+                status=status,
+                reason=LifecycleReason(
+                    code="operator.recovery_close", message=request.reason,
+                    detail={"assignment_id": request.assignment_id, "evidence": evidence},
+                ),
+            )
+        except Exception as exc:
+            if "supersedes recovery" in str(exc):
+                return {"recovery_id": request.recovery_id, "state": "superseded", "evidence": evidence}
+            raise
+        if request.consider_retry:
+            # This owner persists a decision only; RunOrchestrator remains the
+            # sole owner that materializes a permitted next attempt.
+            record_retry_decision_for_stage_result(
+                self.run_store, run_uri=run_uri, stage_name=stage_name, attempt=attempt,
+                stage_status=status, recorded_at=utc_timestamp(), policy=None, failure=None,
+            )
+        return {"recovery_id": request.recovery_id, "state": "closed", "evidence": evidence, "revision": transition.revision.sequence}
+
+    def _recovery_binding(
+        self, request: RecoverUnknownAssignment
+    ) -> tuple[object, str, str, int, str]:
+        if isinstance(request.target, SlurmRecoveryTarget):
+            record = self.slurm_assignments.read(request.assignment_id)
+            target = request.target
+            if (
+                record.assignment.operation_id != target.submission_operation_id
+                or record.assignment.profile_id != target.profile_id
+                or record.job_id != target.job_id
+                or record.cluster != target.cluster_id
+                or record.bootstrap_incarnation != target.bootstrap_incarnation_id
+                or record.fence != request.execution_fence
+                or record.process_execution_id != request.process_execution_id
+            ):
+                raise QueueConflictError("SLURM recovery target identity conflicts")
+            return record, record.assignment.run_uri, record.assignment.stage_name, record.assignment.attempt, record.assignment.attempt_id
+        matches = [
+            item for item in self.coordinator.retained_assignments(agent_id=request.target.agent_id)
+            if item[0].assignment_id == request.assignment_id and item[0].session_id == request.target.session_id
+        ]
+        if len(matches) != 1 or self.journal.read_grant_fence(request.assignment_id) != request.execution_fence:
+            raise QueueConflictError("managed recovery target identity conflicts")
+        assignment = matches[0][0]
+        return assignment, assignment.run_uri, assignment.stage_name, assignment.attempt, assignment.attempt_id
+
+    def _recovery_evidence(
+        self, request: RecoverUnknownAssignment, binding: tuple[object, str, str, int, str]
+    ) -> str | None:
+        if isinstance(request.target, SlurmRecoveryTarget):
+            record = cast(SlurmStageRecord, binding[0])
+            profile = self._slurm_profile(record.assignment.profile_id, record.assignment.profile_configuration_fingerprint)
+            proof: dict[str, PlainData] = {
+                "assignment_id": record.assignment.assignment_id, "profile_id": record.assignment.profile_id,
+                "profile_configuration_fingerprint": record.assignment.profile_configuration_fingerprint,
+                "submission_operation_id": record.assignment.operation_id, "cluster_id": cast(str, record.cluster),
+                "job_id": cast(str, record.job_id), "bootstrap_incarnation_id": record.bootstrap_incarnation,
+                "process_execution_id": request.process_execution_id, "execution_fence": request.execution_fence,
+            }
+            receipt = resolve_slurm_containment(profile, proof)
+            return None if not receipt.contained else f"slurm:{receipt.evidence_id}:{receipt.evidence_revision}"
+        assignment = cast(ManagedAssignment, binding[0])
+        raw = _ResidentAssignmentWorkspace(self.config.agent_root, assignment.assignment_id).supervisor_launch_json()
+        if raw is None:
+            return None
+        try:
+            from ._managed_local import _launch_from_value
+            launch = _launch_from_value(json.loads(raw))
+            if (launch.assignment_id != assignment.assignment_id or launch.agent_id != request.target.agent_id or launch.session_id != request.target.session_id or launch.process_execution_id != request.process_execution_id or launch.execution_fence != request.execution_fence):
+                return None
+            receipt = self.supervisor.contain(launch)
+        except Exception:
+            return None
+        return f"managed:{receipt.supervisor_revision}" if receipt.state is SupervisorLaunchState.CONTAINED else None
 
     def _dispatch_slurm_ready(
         self,

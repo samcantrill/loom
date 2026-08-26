@@ -348,6 +348,7 @@ class TransportPrincipalPolicy:
                 "reload",
                 "cancel_active",
                 "scheduling_reload",
+                "recover_unknown",
             }
             if not set(actions).issubset(allowed):
                 raise QueueServiceError(

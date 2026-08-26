@@ -219,7 +219,10 @@ observable status, and causal crash behavior above remain exact.
 
 - Manager preparation: complete on the post-9D2 branch; maintainer approval
   recorded
-- Implementation: pending
+- Implementation: complete at the phase implementation commit; guarded recovery
+  reuses retained SLURM operation identity/reconciliation, accepts only exact
+  target-owner containment evidence, arbitrates close at the authority fence,
+  and leaves physical ownership retained.
 - Validation and review: pending
 - PR and merge: pending
 
@@ -227,7 +230,7 @@ observable status, and causal crash behavior above remain exact.
 
 | Item | Result |
 | --- | --- |
-| Implementation and tests | pending |
-| Validated revision and evidence | pending |
+| Implementation and tests | Added retained-profile SLURM containment proof validation, a closed replay-safe operator recovery request/status surface, and one authority terminal-or-close CAS. The recovery path never submits, releases a profile slot/provider claim, or creates an attempt directly. Authority and SLURM tests cover terminal winner/stale-fence rejection and exact-positive versus weak-evidence containment. |
+| Validated revision and evidence | Focused authority and SLURM suites passed (41 tests), focused local-daemon retention/reload tests passed (11 tests), and changed-path Ruff/Pyright passed. `make validate-pr` then passed repository Ruff and Pyright but was cleanly interrupted during its default test harness because manager audit found a qualified product blocker requiring correction; this partial receipt is stale and is not a phase gate pass. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No known phase blocker. Different-session replacement, automatic takeover, and final Stage 29 surface work remain Phase 9F scope. |

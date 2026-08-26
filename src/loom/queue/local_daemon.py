@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 5
+_LOCAL_DAEMON_SCHEMA_VERSION = 6
 
 
 class LocalDaemonAdmissionState(StrEnum):
@@ -116,6 +116,84 @@ class CoordinatorSchedulingReload:
             ),
             reason=_required_string(data, "reason"),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedRecoveryTarget:
+    agent_id: str
+    session_id: str
+
+    def __post_init__(self) -> None:
+        for value in (self.agent_id, self.session_id):
+            _required_string({"value": value}, "value")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {"kind": "managed", "agent_id": self.agent_id, "session_id": self.session_id}
+
+
+@dataclass(frozen=True, slots=True)
+class SlurmRecoveryTarget:
+    profile_id: str
+    submission_operation_id: str
+    cluster_id: str
+    job_id: str
+    bootstrap_incarnation_id: str | None
+
+    def __post_init__(self) -> None:
+        for value in (self.profile_id, self.submission_operation_id, self.cluster_id, self.job_id):
+            _required_string({"value": value}, "value")
+        if self.bootstrap_incarnation_id is not None:
+            _required_string({"value": self.bootstrap_incarnation_id}, "value")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "kind": "slurm", "profile_id": self.profile_id,
+            "submission_operation_id": self.submission_operation_id,
+            "cluster_id": self.cluster_id, "job_id": self.job_id,
+            "bootstrap_incarnation_id": self.bootstrap_incarnation_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RecoverUnknownAssignment:
+    """Closed, replay-safe privileged recovery request.
+
+    Target-owned evidence is intentionally absent: a caller can request a
+    close but cannot assert that a process was contained.
+    """
+
+    recovery_id: str
+    assignment_id: str
+    process_execution_id: str
+    execution_fence: str
+    target: ManagedRecoveryTarget | SlurmRecoveryTarget
+    expected_state_version: int
+    requested_outcome: str
+    consider_retry: bool
+    reason: str
+
+    def __post_init__(self) -> None:
+        for value in (self.recovery_id, self.assignment_id, self.process_execution_id, self.execution_fence):
+            _required_string({"value": value}, "value")
+        if not isinstance(self.target, ManagedRecoveryTarget | SlurmRecoveryTarget):
+            raise QueueServiceError("recovery target is invalid")
+        if isinstance(self.expected_state_version, bool) or self.expected_state_version < 0:
+            raise QueueServiceError("recovery expected state version is invalid")
+        if self.requested_outcome not in {"failed", "cancelled"}:
+            raise QueueServiceError("recovery requested outcome is invalid")
+        if not isinstance(self.consider_retry, bool):
+            raise QueueServiceError("recovery retry decision is invalid")
+        if not isinstance(self.reason, str) or not self.reason or len(self.reason) > 512:
+            raise QueueServiceError("recovery reason is invalid")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "recovery_id": self.recovery_id, "assignment_id": self.assignment_id,
+            "process_execution_id": self.process_execution_id, "execution_fence": self.execution_fence,
+            "target": self.target.to_dict(), "expected_state_version": self.expected_state_version,
+            "requested_outcome": self.requested_outcome, "consider_retry": self.consider_retry,
+            "reason": self.reason,
+        }
 
 
 class LocalDaemonRole(StrEnum):
@@ -977,6 +1055,23 @@ class LocalDaemon:
                     )
                 )
             for row in conn.execute(
+                "SELECT principal_id, recovery_id, state, result_json "
+                "FROM recovery_operations ORDER BY recovery_id"
+            ):
+                result = json.loads(str(row["result_json"]))
+                controls.append(
+                    freeze_plain_data(
+                        {
+                            "owner": "guarded-recovery",
+                            "operation_id": str(row["recovery_id"]),
+                            "principal": str(row["principal_id"]),
+                            "state": str(row["state"]),
+                            "code": result.get("evidence"),
+                        },
+                        path="guarded recovery status",
+                    )
+                )
+            for row in conn.execute(
                 "SELECT request_json, state, result_code, acknowledged "
                 "FROM remote_assignment_controls ORDER BY operation_id"
             ):
@@ -1470,6 +1565,47 @@ class LocalDaemon:
             path="scheduling reload receipt",
         )
 
+    def _recover_unknown(
+        self, principal: LocalDaemonPrincipal, request: RecoverUnknownAssignment
+    ) -> Mapping[str, PlainData]:
+        """Persist one immutable request before its target owner is consulted."""
+
+        from .agent_sessions import ScopedAuthorizer
+
+        authorizer = ScopedAuthorizer(self._agent_policy)
+        authorizer.require_operator(principal, "recover_unknown")
+        encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
+        with self._cycle_lock:
+            with self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                prior = conn.execute(
+                    "SELECT principal_id, request_json, state, result_json FROM recovery_operations WHERE recovery_id = ?",
+                    (request.recovery_id,),
+                ).fetchone()
+                if prior is not None:
+                    if str(prior["principal_id"]) != principal.subject or str(prior["request_json"]) != encoded:
+                        raise QueueConflictError("recovery operation conflicts")
+                    conn.commit()
+                    return freeze_plain_data(json.loads(str(prior["result_json"])), path="recovery receipt")
+                conn.execute(
+                    "INSERT INTO recovery_operations(recovery_id, principal_id, request_json, state, result_json) VALUES (?, ?, ?, 'pending', ?)",
+                    (request.recovery_id, principal.subject, encoded, json.dumps({"recovery_id": request.recovery_id, "state": "pending"})),
+                )
+                conn.commit()
+            execution = self._execution
+            if execution is None:
+                raise QueueServiceError("recovery coordinator execution is unavailable")
+            result = execution.recover_unknown_assignment(request)
+            with self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "UPDATE recovery_operations SET state = ?, result_json = ? WHERE recovery_id = ?",
+                    (str(result["state"]), json.dumps(result, sort_keys=True, separators=(",", ":")), request.recovery_id),
+                )
+                conn.commit()
+        self._wake.set()
+        return freeze_plain_data(result, path="recovery receipt")
+
     def _reject_scheduling_reload(
         self, *, operation_id: str
     ) -> Mapping[str, PlainData]:
@@ -1739,6 +1875,10 @@ class LocalDaemonOperatorView:
     ) -> Mapping[str, PlainData]:
         return self._daemon._reload_scheduling(self._principal, request)
 
+    def recover_unknown(self, request: RecoverUnknownAssignment) -> Mapping[str, PlainData]:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return self._daemon._recover_unknown(self._principal, request)
+
 
 @dataclass(frozen=True, slots=True)
 class LocalDaemonSlurmBootstrapView:
@@ -1989,6 +2129,11 @@ def _initialize_root(path: Path, *, role: str) -> None:
                 "request_json TEXT NOT NULL, state TEXT NOT NULL, "
                 "result_code TEXT, scheduling_epoch TEXT)"
             )
+            conn.execute(
+                "CREATE TABLE recovery_operations ("
+                "recovery_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+                "request_json TEXT NOT NULL, state TEXT NOT NULL, result_json TEXT NOT NULL)"
+            )
             conn.executescript(
                 """
                 CREATE TRIGGER admission_status_revision_insert
@@ -2163,4 +2308,7 @@ __all__ = [
     "LocalDaemonPrincipal",
     "LocalDaemonRole",
     "LocalDaemonStatus",
+    "ManagedRecoveryTarget",
+    "RecoverUnknownAssignment",
+    "SlurmRecoveryTarget",
 ]

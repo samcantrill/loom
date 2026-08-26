@@ -1333,7 +1333,17 @@ class SQLitePerRunAuthorityStore:
             ).fetchone()
             if row is None:
                 raise AuthorityStoreError("stale execution fence")
-            if row["state"] in {"running", "terminal"}:
+            if row["state"] == "running":
+                return
+            if row["state"] == "terminal":
+                terminal = conn.execute(
+                    "SELECT reason_json FROM attempts WHERE attempt_id = ?",
+                    (fence.attempt_id,),
+                ).fetchone()
+                if terminal is not None and terminal["reason_json"] is not None:
+                    reason = _json_loads(cast(str, terminal["reason_json"]))
+                    if isinstance(reason, Mapping) and reason.get("code") == "operator.recovery_close":
+                        raise AuthorityStoreError("stale execution fence")
                 return
             _require_no_cancellation_epoch(conn)
             if row["state"] != "granted":
@@ -1459,6 +1469,93 @@ class SQLitePerRunAuthorityStore:
                 status=status,
                 revision=revision,
                 reason=reason,
+            )
+
+    def close_managed_attempt_fence(
+        self,
+        run_uri: str,
+        *,
+        recovery_id: str,
+        fence: ExecutionFence,
+        expected_state_version: int,
+        status: StageStatus,
+        reason: LifecycleReason,
+    ) -> StatusTransition:
+        """Atomically arbitrate a guarded close against ordinary terminal truth.
+
+        The recovery coordinator may name an outcome, but only reaches this
+        method after a target owner has produced exact containment evidence.
+        Keeping the compare-and-set beside ordinary terminal mutation makes a
+        late worker result and recovery close mutually exclusive.
+        """
+
+        self._bind_run_uri(run_uri)
+        _non_empty(recovery_id, "recovery_id")
+        if isinstance(expected_state_version, bool) or expected_state_version < 0:
+            raise AuthorityStoreError("recovery expected state version is invalid")
+        status = StageStatus(status)
+        if status not in {StageStatus.FAILED, StageStatus.CANCELLED}:
+            raise AuthorityStoreError("recovery close status must be FAILED or CANCELLED")
+        if not isinstance(reason, LifecycleReason):
+            raise AuthorityStoreError("recovery close reason is required")
+        with self._transaction(run_uri) as conn:
+            binding = conn.execute(
+                "SELECT state, terminal_status, terminal_digest FROM managed_attempt_bindings "
+                "WHERE assignment_id = ? AND attempt_id = ? AND fence = ?",
+                (fence.assignment_id, fence.attempt_id, fence.fencing_token),
+            ).fetchone()
+            if binding is None:
+                raise AuthorityStoreError("stale execution fence")
+            attempt = _require_row(
+                conn.execute(
+                    "SELECT stage_name, status, revision_sequence FROM attempts WHERE attempt_id = ?",
+                    (fence.attempt_id,),
+                ).fetchone(),
+                "unknown stage attempt",
+            )
+            stage_name = cast(str, attempt["stage_name"])
+            current = StageStatus(cast(str, attempt["status"]))
+            if binding["state"] == "terminal":
+                # An ordinary terminal fact is the winner.  We deliberately do
+                # not treat it as a recovery replay: recovery has no authority
+                # to rewrite or reinterpret a worker-owned terminal receipt.
+                raise AuthorityStoreError("ordinary terminal fact supersedes recovery")
+            if int(attempt["revision_sequence"]) != expected_state_version:
+                raise AuthorityStoreError("recovery expected state version is stale")
+            if binding["state"] not in {"granted", "running"} or current not in {
+                StageStatus.SUBMITTED,
+                StageStatus.RUNNING,
+            }:
+                raise AuthorityStoreError("execution fence is not recovery-closable")
+            ensure_stage_transition(current, status)
+            revision = self._next_revision(conn)
+            terminal_reason = LifecycleReason(
+                code=reason.code,
+                message=reason.message,
+                detail={**reason.detail, "recovery_id": recovery_id},
+            )
+            terminal_digest = _managed_terminal_digest(
+                status=status, reason=terminal_reason, outputs={}
+            )
+            conn.execute(
+                "UPDATE managed_attempt_bindings SET state = 'terminal', terminal_status = ?, "
+                "terminal_digest = ? WHERE assignment_id = ?",
+                (status.value, terminal_digest, fence.assignment_id),
+            )
+            conn.execute(
+                "UPDATE attempts SET status = ?, revision_sequence = ?, reason_json = ? "
+                "WHERE attempt_id = ?",
+                (status.value, revision.sequence, _json_dumps(terminal_reason.to_dict()), fence.attempt_id),
+            )
+            _upsert_stage(conn, stage_name=stage_name, status=status, revision=revision, reason=terminal_reason)
+            _touch_run(conn, revision)
+            return StatusTransition(
+                run_uri=run_uri,
+                stage_name=stage_name,
+                previous_status=current,
+                status=status,
+                revision=revision,
+                reason=terminal_reason,
             )
 
     def acquire_controller_lease(
