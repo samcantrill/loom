@@ -43,6 +43,7 @@ from loom.serialization import (
     thaw_plain_data,
 )
 
+from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 from .errors import QueueConflictError, QueueServiceError
 
 
@@ -406,6 +407,15 @@ class ResidentExecutionProfile:
             for device in self.gpu_devices
         )
         return tuple(atoms)
+
+    @property
+    def launch_profile(self) -> ResidentWorkerLaunchProfile:
+        """The immutable process-launch binding, separate from capacity."""
+        return ResidentWorkerLaunchProfile(
+            project_root=self.project_root,
+            python_executable=self.python_executable,
+            descriptor=self.descriptor.to_dict(),
+        )
 
 
 @dataclass(frozen=True, slots=True)

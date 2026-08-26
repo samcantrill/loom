@@ -266,9 +266,6 @@ def execute_resident_stage_worker_request(
     *,
     worker_request: StageWorkerRequest,
     workspace_root: Path,
-    executor: Executor | None = None,
-    clock: Clock = utc_timestamp,
-    resource_validator_registry: ResourceValidatorRegistry | None = None,
 ) -> StageWorkerResult:
     """Execute one path-free resident request in an agent-owned workspace.
 
@@ -285,10 +282,7 @@ def execute_resident_stage_worker_request(
     root = Path(workspace_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     fingerprint = cast(StageFingerprintRecord, worker_request.fingerprint)
-    stage = _stage_spec_from_request(
-        worker_request,
-        registry=resource_validator_registry,
-    )
+    stage = _stage_spec_from_request(worker_request)
     stage_plan = StagePlan(
         stage_name=worker_request.stage_name,
         action=PlanAction.RUN,
@@ -307,7 +301,7 @@ def execute_resident_stage_worker_request(
         invalidated_by=(),
     )
     artifact_store = LocalArtifactStore(root / "artifacts")
-    worker_executor = executor or LocalExecutor(capture_stdout_stderr=True)
+    worker_executor = LocalExecutor(capture_stdout_stderr=True)
     try:
         stage_object = construct_stage(
             factory=stage.factory,
@@ -348,7 +342,7 @@ def execute_resident_stage_worker_request(
                 metadata={"resident_worker_request": True},
                 resolved_runtime=_resolved_runtime_for_execution(
                     worker_request,
-                    registry=resource_validator_registry,
+                    registry=None,
                 ),
             )
         )
@@ -371,7 +365,7 @@ def execute_resident_stage_worker_request(
         return _failed_worker_result_from_exception(
             worker_request=worker_request,
             exc=exc,
-            clock=clock,
+            clock=utc_timestamp,
         )
 
 

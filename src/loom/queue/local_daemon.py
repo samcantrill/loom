@@ -691,9 +691,13 @@ class LocalDaemon:
             raise QueueServiceError("remote agent requires a fresh root")
         _initialize_root(path, role="local-agent")
         from loom.pipeline.execution.managed_local import SQLiteAgentJournal
+        from ._agent_process_supervisor import AgentProcessSupervisor
 
         SQLiteAgentJournal(path / "journal.sqlite")._initialize()
         (path / "journal.sqlite").chmod(0o600)
+        AgentProcessSupervisor.initialize_unbound(
+            path, agent_id=_open_root(path, role="local-agent")
+        )
 
     def start(self) -> LocalDaemonStatus:
         if self._coordinator_lock is not None:
