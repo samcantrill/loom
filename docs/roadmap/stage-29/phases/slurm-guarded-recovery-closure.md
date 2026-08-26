@@ -11,10 +11,10 @@
 - Base revision: current `origin/develop` after the Phase 9D merge
 - PR target: `develop`
 - PR title: `feat(scheduling): close SLURM guarded recovery`
-- Dependency: Phases 9C and 9D remotely merged. Blocked Phases 9, 9A, and 9B
-  remain read-only
-  evidence; its `Recovery request and evidence` and `Cross-store recovery saga`
-  headings retain the approved behavior contract.
+- Dependency: Phases 9C2 and 9D remotely merged. Blocked Phases 9 through 9C
+  remain read-only evidence; the blocked Phase 9 plan's `Recovery request and
+  evidence` and `Cross-store recovery saga` headings retain the approved
+  behavior contract.
 - Workflow path: expanded. Irreversible fence closure, external containment,
   and retry causally interact, so implementation requires one executor and one
   independent review unless manager evidence removes the residual risk.
@@ -22,7 +22,7 @@
 
 ## Objective And Context
 
-Close the exceptional recovery vertical after Phases 9C/9D supply trustworthy
+Close the exceptional recovery vertical after Phases 9C2/9D supply trustworthy
 managed-supervisor receipts. A coordinator restart must not repeat a ready-stage
 SLURM submission. An operator may close genuinely unknown managed or SLURM work
 only when a trusted target-specific owner proves positive containment. The
@@ -46,7 +46,7 @@ In scope:
 - Add the approved privileged `RecoverUnknownAssignment` operation as a closed
   managed/SLURM tagged target with exact operator scope, immutable request
   digest, idempotent `recovery_id`, expected state version, and audit/status.
-- Resolve managed evidence only from the Phase 9C/9D supervisor's persisted exact
+- Resolve managed evidence only from the Phase 9C2/9D supervisor's persisted exact
   `CONTAINED` receipt for the complete launch identity.
 - Resolve SLURM evidence only from the retained profile's optional protected,
   fingerprinted containment helper. Exact echoed identity plus a typed
@@ -142,7 +142,7 @@ new intent, submission, close, retry decision, or physical release.
 - Contract: direct and HTTP operations call the same authorizer/state machine;
   managed and SLURM evidence remain target-specific and non-forgeable.
 - Integration: fresh coordinator processes at every submission boundary; real
-  Phase 9C/9D supervisor receipts; fake protected SLURM helper; reordered terminal
+  Phase 9C2/9D supervisor receipts; fake protected SLURM helper; reordered terminal
   fact versus close; crash/replay at every saga commit; retry exactly once.
 - Regression: Phase 7B verifier/bootstrap/provider-revoke lifecycle and Phase 8A
   cancellation settlement remain unchanged.
@@ -163,7 +163,7 @@ new intent, submission, close, retry decision, or physical release.
 
 - Start only after Phase 9D is remotely merged and this branch is based on
   current `origin/develop`.
-- Read this plan, Phase 9C/9D completion records, and the blocked Phase 9 plan's
+- Read this plan, Phase 9C2/9D completion records, and the blocked Phase 9 plan's
   `Recovery request and evidence` and `Cross-store recovery saga` sections.
 - Implement the three slices, tests, and phase-specific operational guidance.
 - Do not edit roadmap metadata, perform GitHub operations, add compatibility,

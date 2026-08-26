@@ -11,10 +11,9 @@
 - Base revision: current `origin/develop` after the Phase 9E merge
 - PR target: `develop`
 - PR title: `feat(scheduling): close recovery operations and replacement`
-- Dependency: Phases 9C, 9D, and 9E remotely merged. Blocked Phases 9, 9A, and
-  9B remain
-  read-only evidence; its `Session replacement` heading retains the approved
-  behavior contract.
+- Dependency: Phases 9C2, 9D, and 9E remotely merged. Blocked Phases 9 through
+  9C remain read-only evidence; the blocked Phase 9 plan's `Session replacement`
+  heading retains the approved behavior contract.
 - Workflow path: expanded because session identity replacement joins every
   retained owner and closes the stage-wide public/operational surface.
 - Blocker corrections: 0/3
@@ -144,7 +143,7 @@ positive containment, authority CAS, or physical release evidence.
 
 - Start only after Phase 9E is remotely merged and this branch is based on
   current `origin/develop`.
-- Read this plan, Phase 9C/9D/9E completion records, and the blocked Phase 9 plan's
+- Read this plan, Phase 9C2/9D/9E completion records, and the blocked Phase 9 plan's
   `Session replacement` section.
 - Implement all three slices and run the final gates. Do not add compatibility,
   edit roadmap metadata, perform GitHub operations, or delegate.
