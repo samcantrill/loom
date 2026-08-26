@@ -184,15 +184,20 @@ owner or test-only production interface.
 
 - Manager preparation: complete on clean current `origin/develop`; dedicated
   branch/worktree and bounded successor plan recorded
-- Implementation: pending one `loom_phase_executor`
-- Validation/review: pending
+- Implementation: complete at `db8e9e2`. The six named Phase 9C production/test
+  commits were selectively restored; the successor rejects divergent executable
+  profile-set reload before swap, uses spawned interpreter A/B processes at all
+  four crash barriers, routes two selected profiles through one supervisor, and
+  updates current hard-cut guidance.
+- Validation/review: manager validation complete at `db8e9e2`; required
+  independent expanded-path review pending
 - PR/merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and tests | pending |
-| Validated revision and evidence | pending |
+| Implementation and tests | `db8e9e2`; executable profile-set add/remove/change and empty/non-empty reload transitions reject before configuration swap, canonical reorder remains accepted, the four restart barriers use distinct spawned interpreter PIDs against one continuous supervisor, and two supported selected profiles produce matching durable launch identities and terminal runs. |
+| Validated revision and evidence | `db8e9e2`; focused reload/restart/two-profile integration passed, 8 tests in 27.14s. `make validate-pr` exited 0 on 2026-08-26: repository Ruff passed; full Pyright reported 0 errors; default harness passed 2,548 tests with 121 deselected; config-extra passed 141 tests with 3 expected skips and 2,551 deselected; source and wheel builds passed. No detached Phase 9C2 supervisor remained. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
