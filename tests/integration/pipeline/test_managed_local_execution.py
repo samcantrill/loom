@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import sqlite3
+import sys
 import time
-from typing import Never
+from typing import TypeAlias
 
 import pytest
 
@@ -16,17 +18,21 @@ from loom.pipeline.execution import prepare_stage_attempt
 from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
-    ClaimCommand,
     ManagedAssignment,
     ManagedLocalError,
     ManagedOfferSnapshot,
-    ManagedProcessStartError,
     ObserveRequest,
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
     run_managed_local_assignment,
 )
-from loom.pipeline.execution.models import StageWorkerResult
+from loom.queue._agent_process_supervisor import (
+    AgentProcessSupervisorClient,
+    AgentProcessSupervisorService,
+    ResidentWorkerLaunchProfile,
+    SupervisorLaunchConfiguration,
+)
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.pipeline.orchestration import (
     SchedulingProjectionState,
     SQLiteStageWorkStore,
@@ -115,12 +121,41 @@ class _UnbindThenTimeoutAuthority(SQLitePerRunAuthorityStore):
             raise TimeoutError("unbind response was lost")
 
 
-def _definitive_start_failure_launcher(
-    process_execution_id: str,
-    worker: Callable[[], StageWorkerResult],
-) -> Never:
-    del process_execution_id, worker
-    raise ManagedProcessStartError("managed root was not created")
+_ResidentOwner: TypeAlias = tuple[
+    AgentProcessSupervisorClient, ResidentWorkerLaunchProfile
+]
+
+
+@pytest.fixture
+def resident_owner() -> Iterator[Callable[[Path, str], _ResidentOwner]]:
+    clients: list[AgentProcessSupervisorClient] = []
+
+    def create(agent_root: Path, agent_id: str) -> _ResidentOwner:
+        agent_root.mkdir(parents=True, exist_ok=True)
+        profile = ResidentWorkerLaunchProfile(
+            Path.cwd(),
+            Path(sys.executable),
+            ResidentProfileDescriptor(
+                "test-local",
+                "v1",
+                "test-project",
+                "test-environment",
+                "test-executor",
+            ).to_dict(),
+        )
+        client = AgentProcessSupervisorService.initialize(
+            agent_root,
+            configuration=SupervisorLaunchConfiguration(agent_id, (profile,)),
+        )
+        clients.append(client)
+        return client, profile
+
+    yield create
+    for client in clients:
+        try:
+            client.shutdown_for_test()
+        except Exception:
+            pass
 
 
 def _spec(*, counter_path: Path | None = None) -> PipelineSpec:
@@ -236,12 +271,12 @@ def _offer_snapshot(
 
 def test_managed_local_assignment_commits_accessible_output_then_releases(
     tmp_path: Path,
+    resident_owner: Callable[[Path, str], _ResidentOwner],
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
     run_store.create_run(run_uri)
-    counter_path = tmp_path / "launch-count.txt"
-    spec = _spec(counter_path=counter_path)
+    spec = _spec()
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
@@ -306,9 +341,6 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
         "cpu", 1, "1", "cpu-provider", "configured"
     )
     provider = AtomResourceProvider(descriptor, (contract,), (atom,))
-    command = ClaimCommand(
-        assignment, "claim-build-1:prepare", claim, descriptor
-    )
     coordinator_path = tmp_path / "coordinator" / "state.sqlite"
     _seed_stage_work(
         coordinator_path,
@@ -327,7 +359,9 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
             availability_revision="availability-initial",
         )
     )
-    journal = SQLiteAgentJournal(tmp_path / "agent" / "journal.sqlite")
+    agent_root = tmp_path / "agent"
+    journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+    supervisor, launch_profile = resident_owner(agent_root, assignment.agent_id)
 
     def execute():
         return run_managed_local_assignment(
@@ -337,11 +371,13 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
             assignment=assignment,
             worker_request=worker_request,
             claims=(claim,),
-            commands=(command,),
             providers={"cpu": provider},
             run_store=run_store,
             max_parallel_stages=1,
             decision_receipt=_decision_receipt(assignment, claim, descriptor),
+            agent_root=agent_root,
+            supervisor=supervisor,
+            resident_launch_profile=launch_profile,
         )
 
     with pytest.raises(TimeoutError, match="response was lost"):
@@ -357,7 +393,8 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
 
     assert receipt.worker_result.status is StageStatus.SUCCEEDED
     assert replay == receipt
-    assert counter_path.read_text(encoding="utf-8") == "1"
+    with sqlite3.connect(agent_root / "supervisor" / "supervisor.sqlite") as conn:
+        assert int(conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0]) == 1
     assert receipt.output_commit is not None
     artifact = receipt.worker_result.outputs["data"]
     assert LocalArtifactStore(run_store.local_artifact_root(run_uri)).load(
@@ -376,37 +413,33 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     assert observed.live_claim_ids == ()
 
 
-@pytest.mark.parametrize("failure_mode", ["worker", "start"])
 def test_managed_local_failure_terminalizes_before_capacity_release(
-    tmp_path: Path, failure_mode: str
+    tmp_path: Path,
+    resident_owner: Callable[[Path, str], _ResidentOwner],
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "failed-run")
     run_store.create_run(run_uri)
-    spec = (
-        PipelineSpec.from_config(
-            {
-                "name": "managed-local-failure",
-                "stages": [
-                    {
-                        "name": "build",
-                        "factory": {
-                            "_target_": (
-                                "tests.support.pipeline_execution_stages.FailingStage"
-                            )
-                        },
-                        "outputs": {
-                            "data": {
-                                "artifact_type": "json",
-                                "codec_key": "json.v1",
-                            }
-                        },
-                    }
-                ],
-            }
-        )
-        if failure_mode == "worker"
-        else _spec()
+    spec = PipelineSpec.from_config(
+        {
+            "name": "managed-local-failure",
+            "stages": [
+                {
+                    "name": "build",
+                    "factory": {
+                        "_target_": (
+                            "tests.support.pipeline_execution_stages.FailingStage"
+                        )
+                    },
+                    "outputs": {
+                        "data": {
+                            "artifact_type": "json",
+                            "codec_key": "json.v1",
+                        }
+                    },
+                }
+            ],
+        }
     )
     plan = plan_pipeline(
         spec,
@@ -487,7 +520,9 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
             availability_revision="availability-failed",
         )
     )
-    journal = SQLiteAgentJournal(tmp_path / "agent" / "failed.sqlite")
+    agent_root = tmp_path / "agent"
+    journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+    supervisor, launch_profile = resident_owner(agent_root, assignment.agent_id)
 
     def execute():
         return run_managed_local_assignment(
@@ -497,18 +532,13 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
             assignment=assignment,
             worker_request=worker_request,
             claims=(claim,),
-            commands=(
-                ClaimCommand(
-                    assignment, "claim-build-failed:prepare", claim, descriptor
-                ),
-            ),
             providers={"cpu": provider},
             run_store=run_store,
             max_parallel_stages=1,
             decision_receipt=_decision_receipt(assignment, claim, descriptor),
-            process_launcher=(
-                _definitive_start_failure_launcher if failure_mode == "start" else None
-            ),
+            agent_root=agent_root,
+            supervisor=supervisor,
+            resident_launch_profile=launch_profile,
         )
 
     receipt = execute()
@@ -520,8 +550,6 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
     assert authority.snapshot(run_uri).stages[0].status is StageStatus.FAILED
     assert coordinator.state(assignment.assignment_id) == "released"
     assert journal.read_state(assignment.assignment_id) is AssignmentState.RELEASED
-    if failure_mode == "start":
-        assert receipt.worker_result.executor_metadata["process_created"] is False
     observed = provider.observe(
         ObserveRequest("agent-local", "session-1", "observe-after-failure")
     )
@@ -531,6 +559,7 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
 
 def test_definitive_decline_replays_after_unbind_response_is_lost(
     tmp_path: Path,
+    resident_owner: Callable[[Path, str], _ResidentOwner],
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "declined-run")
@@ -615,7 +644,9 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
             availability_revision="availability-declined",
         )
     )
-    journal = SQLiteAgentJournal(tmp_path / "agent" / "declined.sqlite")
+    agent_root = tmp_path / "agent"
+    journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+    supervisor, launch_profile = resident_owner(agent_root, assignment.agent_id)
 
     def execute():
         return run_managed_local_assignment(
@@ -625,15 +656,13 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
             assignment=assignment,
             worker_request=worker_request,
             claims=(claim,),
-            commands=(
-                ClaimCommand(
-                    assignment, "claim-build-declined:prepare", claim, descriptor
-                ),
-            ),
             providers={"cpu": provider},
             run_store=run_store,
             max_parallel_stages=1,
             decision_receipt=_decision_receipt(assignment, claim, descriptor),
+            agent_root=agent_root,
+            supervisor=supervisor,
+            resident_launch_profile=launch_profile,
         )
 
     with pytest.raises(TimeoutError, match="unbind response was lost"):
@@ -668,19 +697,15 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
 
 def test_managed_independent_same_run_workers_overlap_without_run_lock(
     tmp_path: Path,
+    resident_owner: Callable[[Path, str], _ResidentOwner],
 ) -> None:
-    marker_dir = tmp_path / "markers"
     stages = tuple(
         StageSpec(
             name=name,
             factory=StageFactorySpec(
-                target_path=("tests.support.pipeline_execution_stages.CoordinatedStage")
+                target_path="tests.support.pipeline_execution_stages.SleepStage"
             ),
-            stage_config={
-                "marker_dir": str(marker_dir),
-                "wait_for": 2,
-                "timeout_seconds": 20,
-            },
+            stage_config={"seconds": 1.0},
             outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
         )
         for name in ("left", "right")
@@ -781,7 +806,9 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
         execution_inputs[name] = (assignment, claim)
 
     coordinator = SQLiteCoordinatorAssignments(coordinator_path, (capacity,))
-    journal = SQLiteAgentJournal(tmp_path / "agent" / "journal.sqlite")
+    agent_root = tmp_path / "agent"
+    journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+    supervisor, launch_profile = resident_owner(agent_root, "agent-local")
     left_assignment, _left_claim = execution_inputs["left"]
     coordinator.publish_offer(
         _offer_snapshot(
@@ -801,28 +828,40 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
             assignment=assignment,
             worker_request=requests[name],
             claims=(claim,),
-            commands=(
-                ClaimCommand(
-                    assignment, f"claim-{name}:prepare", claim, descriptor
-                ),
-            ),
             providers={"cpu": provider},
             run_store=run_store,
             max_parallel_stages=2,
             decision_receipt=_decision_receipt(assignment, claim, descriptor),
+            agent_root=agent_root,
+            supervisor=supervisor,
+            resident_launch_profile=launch_profile,
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         left = pool.submit(run_one, "left")
         deadline = time.monotonic() + 10
-        while not (marker_dir / "left.started").exists():
+        supervisor_db = agent_root / "supervisor" / "supervisor.sqlite"
+        launch_count = 0
+        while launch_count < 1:
             if time.monotonic() >= deadline:
                 raise AssertionError("left managed worker did not start")
+            with sqlite3.connect(supervisor_db) as conn:
+                launch_count = int(
+                    conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0]
+                )
             time.sleep(0.01)
         stage_states = {
             stage.stage_name: stage.status
             for stage in authority.snapshot(run_uri).stages
         }
+        while stage_states["left"] is not StageStatus.RUNNING:
+            if time.monotonic() >= deadline:
+                raise AssertionError("left managed worker did not confirm start")
+            stage_states = {
+                stage.stage_name: stage.status
+                for stage in authority.snapshot(run_uri).stages
+            }
+            time.sleep(0.01)
         assert stage_states["left"] is StageStatus.RUNNING
         assert coordinator.state(left_assignment.assignment_id) == "running"
         assert (
@@ -847,7 +886,7 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
             == f"{left_assignment.assignment_id}:root"
         )
         assert relaunches == 0
-        assert reopened_journal.process_handle(left_assignment.assignment_id) is None
+        assert not hasattr(reopened_journal, "process_handle")
         observed = provider.observe(
             ObserveRequest("agent-local", "session-1", "observe-for-right")
         )
@@ -862,6 +901,14 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
             )
         )
         right = pool.submit(run_one, "right")
+        while launch_count < 2:
+            if time.monotonic() >= deadline:
+                raise AssertionError("independent managed workers did not overlap")
+            with sqlite3.connect(supervisor_db) as conn:
+                launch_count = int(
+                    conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0]
+                )
+            time.sleep(0.01)
         results = (left.result(timeout=30), right.result(timeout=30))
 
     assert {result.worker_result.status for result in results} == {

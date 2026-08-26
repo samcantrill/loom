@@ -11,7 +11,7 @@ from loom.pipeline.execution.stage_worker import (
 )
 from loom.pipeline.stores.atomic import atomic_write_json
 
-from ._remote_stage_execution import _RemoteAssignmentWorkspace
+from ._remote_stage_execution import _ResidentAssignmentWorkspace
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     workspace_root = Path(arguments.workspace).resolve()
     assignment_id = workspace_root.name
     agent_root = workspace_root.parent.parent
-    workspace = _RemoteAssignmentWorkspace(agent_root, assignment_id)
+    workspace = _ResidentAssignmentWorkspace(agent_root, assignment_id)
     gate = workspace_root / "run.grant"
     while not gate.is_file():
         time.sleep(0.01)

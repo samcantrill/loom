@@ -1850,7 +1850,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
         assert remote_output["value"] == remote_binding
         assert local_output["value"] == local_binding
         assert preprocess_output["value"] is None
-        assert preprocess_output["pid"] == os.getpid()
+        assert preprocess_output["pid"] != os.getpid()
         assert remote_output["pid"] != os.getpid()
         assert local_output["pid"] != os.getpid()
 
@@ -1910,7 +1910,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
             if item["kind"] == "gpu"
         )
         with sqlite3.connect(
-            remote_root / "assignments" / remote_assignment_id / "remote.sqlite"
+            remote_root / "assignments" / remote_assignment_id / "resident.sqlite"
         ) as conn:
             delivered = cast(
                 dict[str, object],

@@ -141,3 +141,11 @@ Fresh initialization creates the matching one-profile supervisor service. A
 later daemon start verifies that exact protected profile before making the local
 agent available. If a profile value or root no longer matches, initialize fresh
 roots; existing local daemon roots are deliberately not migrated.
+
+The worker supervisor is a separate local service and remains the process owner
+when the daemon application stops. Restart the daemon with the same protected
+roots and exact profile. Startup stays unavailable while it joins any retained
+worker, imports its result, releases its claims, and publishes a fresh capacity
+observation. Loom will not launch a replacement process or reuse uncertain
+capacity. If the supervisor continuity or retained bundle cannot be proved,
+startup fails closed and the roots must be reinitialized deliberately.

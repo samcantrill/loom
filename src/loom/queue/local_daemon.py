@@ -319,11 +319,11 @@ class LocalDaemonConfig:
         try:
             descriptor = ResidentProfileDescriptor.from_dict(profile.descriptor)
         except (QueueServiceError, ValueError, TypeError) as exc:
-            raise QueueServiceError("resident worker launch profile is invalid") from exc
-        if descriptor.to_dict() != profile.descriptor:
             raise QueueServiceError(
-                "resident worker launch descriptor must be exact"
-            )
+                "resident worker launch profile is invalid"
+            ) from exc
+        if descriptor.to_dict() != profile.descriptor:
+            raise QueueServiceError("resident worker launch descriptor must be exact")
         if coordinator == agent:
             raise QueueServiceError(
                 "coordinator and local-agent roots must be distinct"
@@ -717,6 +717,7 @@ class LocalDaemon:
             raise QueueServiceError("remote agent requires a fresh root")
         _initialize_root(path, role="local-agent")
         from loom.queue._managed_local import SQLiteAgentJournal
+
         SQLiteAgentJournal(path / "journal.sqlite")._initialize()
         (path / "journal.sqlite").chmod(0o600)
 
@@ -795,6 +796,10 @@ class LocalDaemon:
                 admission_activated=self._activate_admission,
                 daemon=self,
             )
+            # The daemon is not observable or schedulable until every retained
+            # local launch has joined the continuous supervisor and completed
+            # ordinary result/output/provider replay.
+            execution.resume_retained_local_work()
         except Exception:
             assignment_workers.shutdown(wait=True)
             agent_lock.close()

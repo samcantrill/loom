@@ -89,6 +89,8 @@ def test_pipeline_execution_does_not_import_queue_managed_ownership() -> None:
     assert not hasattr(execution, "ManagedAssignment")
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("loom.pipeline.execution.managed_local")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("loom.pipeline.execution._managed_local_worker")
 
 
 def test_local_daemon_public_request_has_no_executable_or_privileged_fields(

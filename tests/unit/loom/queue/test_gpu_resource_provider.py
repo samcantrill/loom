@@ -106,9 +106,7 @@ def test_gpu_provider_rejects_retained_claim_after_private_mapping_drift() -> No
         "offer-1",
         "claim-1",
     )
-    retained = ClaimCommand(
-        assignment, "prepare-1", claim, previous.descriptor
-    )
+    retained = ClaimCommand(assignment, "prepare-1", claim, previous.descriptor)
 
     assert previous.descriptor != replacement.descriptor
     with pytest.raises(ManagedLocalError, match="provider descriptor conflicts"):

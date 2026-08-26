@@ -24,7 +24,6 @@ from loom.queue import (
     ResidentWorkerLaunchProfile,
     prepare_managed_local_runtime_record,
 )
-from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.serialization import json_dumps_pretty
 
 
@@ -61,9 +60,7 @@ class ConsumeStage:
 
 def main() -> None:
     here = Path(__file__).resolve().parent
-    output_root = Path(
-        os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", here / "output")
-    )
+    output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", here / "output"))
     output_root.mkdir(parents=True, exist_ok=True)
     example_root = Path(tempfile.mkdtemp(prefix="run-", dir=output_root))
     run_root = example_root / "runs"
@@ -112,8 +109,7 @@ def main() -> None:
         {
             "executor": "local",
             "stages": {
-                stage_name: {"executor": "local"}
-                for stage_name in spec.stage_names
+                stage_name: {"executor": "local"} for stage_name in spec.stage_names
             },
         },
     )
@@ -135,13 +131,13 @@ def main() -> None:
         resident_worker_launch_profile=ResidentWorkerLaunchProfile(
             project_root=Path.cwd(),
             python_executable=Path(sys.executable),
-            descriptor=ResidentProfileDescriptor(
-                "local-default",
-                "v1",
-                "managed-local-example",
-                "managed-local-example",
-                "local",
-            ).to_dict(),
+            descriptor={
+                "profile_id": "local-default",
+                "revision": "v1",
+                "project_fingerprint": "managed-local-example",
+                "environment_fingerprint": "managed-local-example",
+                "executor_fingerprint": "local",
+            },
         ),
     )
     LocalDaemon.initialize(config)
@@ -165,11 +161,7 @@ def main() -> None:
 
 
 def _cpu_resource() -> dict[str, object]:
-    return {
-        "entries": {
-            "cpu": {"kind": "cpu", "amount": 1, "unit": "count"}
-        }
-    }
+    return {"entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}}
 
 
 if __name__ == "__main__":

@@ -65,8 +65,8 @@ from ._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
     ResidentExecutionProfile,
-    _DeliveredExecutionRequest,
-    _RemoteAssignmentWorkspace,
+    _ResidentAssignmentBundle,
+    _ResidentAssignmentWorkspace,
     _RemoteExecutionReport,
     _decode_chunk,
     _encode_chunk,
@@ -473,7 +473,7 @@ class _RemoteAgentJournal:
                 poll_result = result.get("result")
                 if poll_result == "assignment":
                     request_value = result.get("request")
-                    request = _DeliveredExecutionRequest.from_dict(request_value)
+                    request = _ResidentAssignmentBundle.from_dict(request_value)
                     poll_request = json.loads(str(row["request_json"]))
                     if not isinstance(poll_request, Mapping):
                         raise QueueServiceError("agent poll intent is invalid")
@@ -1416,7 +1416,7 @@ class LocalDaemonAgentHttpClient:
             return True
         all_contained = True
         for _, assignment_id in journal.unresolved_assignment_references():
-            workspace = _RemoteAssignmentWorkspace(
+            workspace = _ResidentAssignmentWorkspace(
                 cast(Path, self._config.agent_root), assignment_id
             )
             encoded_launch = workspace.supervisor_launch_json()
@@ -1436,7 +1436,7 @@ class LocalDaemonAgentHttpClient:
         return all_contained
 
     def _record_contained_cancellation(
-        self, workspace: _RemoteAssignmentWorkspace
+        self, workspace: _ResidentAssignmentWorkspace
     ) -> None:
         """Make a positive supervisor containment result restart-durable."""
 
@@ -1602,7 +1602,7 @@ class LocalDaemonAgentHttpClient:
                 return "unknown"
             if control.fence != fence:
                 return "unknown"
-            workspace = _RemoteAssignmentWorkspace(
+            workspace = _ResidentAssignmentWorkspace(
                 cast(Path, self._config.agent_root), control.assignment_id
             )
             encoded_launch = workspace.supervisor_launch_json()
@@ -1804,7 +1804,7 @@ class LocalDaemonAgentHttpClient:
         if delivery.get("result") != "assignment":
             return delivery
         raw_request = delivery.get("request")
-        request = _DeliveredExecutionRequest.from_dict(
+        request = _ResidentAssignmentBundle.from_dict(
             thaw_plain_data(raw_request, path="remote delivered request")
         )
         profile = self._profile_for_descriptor(request.profile)
@@ -1813,7 +1813,7 @@ class LocalDaemonAgentHttpClient:
                 "delivered assignment has no exact resident profile"
             )
         session = self._require_journal().session(session_id)
-        workspace = _RemoteAssignmentWorkspace(
+        workspace = _ResidentAssignmentWorkspace(
             cast(Path, self._config.agent_root), request.assignment_id
         )
         workspace.persist_request(request, profile)
@@ -2185,7 +2185,7 @@ class LocalDaemonAgentHttpClient:
         completed: list[Mapping[str, PlainData]] = []
         for session_id, assignment_id in journal.unresolved_assignment_references():
             session = journal.session(session_id)
-            workspace = _RemoteAssignmentWorkspace(
+            workspace = _ResidentAssignmentWorkspace(
                 cast(Path, self._config.agent_root), assignment_id
             )
             request = workspace.request()
@@ -2290,8 +2290,8 @@ class LocalDaemonAgentHttpClient:
     def _join_retained_supervised_start(
         self,
         session: AgentSession,
-        request: _DeliveredExecutionRequest,
-        workspace: _RemoteAssignmentWorkspace,
+        request: _ResidentAssignmentBundle,
+        workspace: _ResidentAssignmentWorkspace,
         execution_journal: SQLiteAgentJournal,
         launch: ResidentWorkerLaunch,
         process_id: int,
@@ -2321,8 +2321,8 @@ class LocalDaemonAgentHttpClient:
     def _complete_remote_result_and_release(
         self,
         session: AgentSession,
-        request: _DeliveredExecutionRequest,
-        workspace: _RemoteAssignmentWorkspace,
+        request: _ResidentAssignmentBundle,
+        workspace: _ResidentAssignmentWorkspace,
         assignment: ManagedAssignment,
         commands: tuple[ClaimCommand, ...],
         providers: Mapping[str, AtomResourceProvider],
@@ -2734,7 +2734,7 @@ class LocalDaemonAgentHttpClient:
         )
 
     def _flush_workspace_events(
-        self, session_id: str, workspace: _RemoteAssignmentWorkspace
+        self, session_id: str, workspace: _ResidentAssignmentWorkspace
     ) -> None:
         for sequence, event_id, payload in workspace.pending_events():
             result = cast(
