@@ -19,7 +19,6 @@ import secrets
 import sqlite3
 import ssl
 import stat
-import subprocess
 from threading import RLock, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import monotonic, sleep
@@ -71,6 +70,16 @@ from ._remote_stage_execution import (
     _RemoteExecutionReport,
     _decode_chunk,
     _encode_chunk,
+)
+from ._agent_process_supervisor import (
+    AgentProcessSupervisorClient,
+    AgentProcessSupervisorError,
+    AgentProcessSupervisorService,
+    ResidentWorkerLaunch,
+    SupervisorLaunchConfiguration,
+    SupervisorLaunchState,
+    _launch_from_value,
+    _launch_value,
 )
 from .errors import QueueConflictError, QueueError, QueueServiceError
 from .local_daemon import (
@@ -958,6 +967,7 @@ class LocalDaemonAgentHttpClient:
         self._profiles = {
             item.descriptor.profile_id: item for item in config.resident_profiles
         }
+        self._supervisor = self._open_supervisor(config)
         self._retained_profiles: dict[str, ResidentExecutionProfile] = {}
         self._execution_journal = (
             SQLiteAgentJournal(
@@ -981,7 +991,6 @@ class LocalDaemonAgentHttpClient:
         self._runtime_agent_id: str | None = None
         self._runtime_provider_key: str | None = None
         self._providers: dict[str, AtomResourceProvider] = {}
-        self._processes: dict[str, subprocess.Popen[bytes]] = {}
         self._cancelled_assignments: set[str] = set()
         self._drained = False
         self._control_lock = RLock()
@@ -990,12 +999,55 @@ class LocalDaemonAgentHttpClient:
     def agent_root_id(self) -> str:
         return self._require_journal().root_id
 
+    @classmethod
+    def initialize_agent_root(cls, config: AgentTlsClientConfig) -> None:
+        """Create the complete remote root and its continuous private owner.
+
+        Remote configuration is trusted application configuration, so this is
+        the one place where the full resident profile set becomes durable.
+        Opening an existing root never fills in or upgrades that identity.
+        """
+        if config.agent_root is None or not config.resident_profiles:
+            raise QueueServiceError(
+                "remote agent initialization requires resident profiles"
+            )
+        LocalDaemon.initialize_agent_root(config.agent_root)
+        journal = _RemoteAgentJournal(config.agent_root)
+        try:
+            profiles = tuple(item.launch_profile for item in config.resident_profiles)
+            configuration = SupervisorLaunchConfiguration(journal.root_id, profiles)
+            AgentProcessSupervisorService.initialize(
+                config.agent_root, configuration=configuration
+            )
+        except AgentProcessSupervisorError as exc:
+            raise QueueServiceError(str(exc)) from exc
+        finally:
+            journal.close()
+
+    @staticmethod
+    def _open_supervisor(
+        config: AgentTlsClientConfig,
+    ) -> AgentProcessSupervisorClient | None:
+        if not config.resident_profiles:
+            return None
+        if config.agent_root is None:
+            raise QueueServiceError("remote resident execution requires an agent root")
+        # The journal verifies the root and serializes agent application use;
+        # its stable ID is the configuration's hard-bound agent identity.
+        root_id = _read_remote_agent_root_id(config.agent_root)
+        try:
+            return AgentProcessSupervisorClient(
+                config.agent_root,
+                SupervisorLaunchConfiguration(
+                    root_id,
+                    tuple(item.launch_profile for item in config.resident_profiles),
+                ),
+            )
+        except AgentProcessSupervisorError as exc:
+            raise QueueServiceError(str(exc)) from exc
+
     def close(self) -> None:
         self._close_connection()
-        if any(process.poll() is None for process in self._processes.values()):
-            raise QueueConflictError(
-                "remote agent cannot close while an assignment process is live"
-            )
         if self._journal is not None:
             self._journal.close()
             self._journal = None
@@ -1296,18 +1348,14 @@ class LocalDaemonAgentHttpClient:
                     )
 
     def _has_retained_agent_work(self) -> bool:
-        return (
-            any(process.poll() is None for process in self._processes.values())
-            or bool(
-                self._execution_journal.retained_claim_commands()
-                if self._execution_journal is not None
-                else ()
-            )
-            or bool(
-                self._journal.has_unresolved_assignment_references()
-                if self._journal is not None
-                else False
-            )
+        return bool(
+            self._execution_journal.retained_claim_commands()
+            if self._execution_journal is not None
+            else ()
+        ) or bool(
+            self._journal.has_unresolved_assignment_references()
+            if self._journal is not None
+            else False
         )
 
     def _reset_runtime_providers(self) -> None:
@@ -1316,13 +1364,9 @@ class LocalDaemonAgentHttpClient:
         self._providers = {}
 
     def _cancel_active_assignments(self) -> bool:
-        contained = True
-        for assignment_id, process in tuple(self._processes.items()):
-            current = _terminate_owned_process(process)
-            if current:
-                self._cancelled_assignments.add(assignment_id)
-            contained = current and contained
-        return contained
+        # The remote application has no live process handles.  Assignment
+        # controls route through exact durable supervisor launch receipts.
+        return True
 
     def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
         """Issue the same typed operator command over authenticated HTTP."""
@@ -1470,8 +1514,11 @@ class LocalDaemonAgentHttpClient:
                 return "unknown"
             if control.fence != fence:
                 return "unknown"
-            process = self._processes.get(control.assignment_id)
-            if process is None:
+            workspace = _RemoteAssignmentWorkspace(
+                cast(Path, self._config.agent_root), control.assignment_id
+            )
+            encoded_launch = workspace.supervisor_launch_json()
+            if encoded_launch is None:
                 if state in {
                     AssignmentState.RESULT_DURABLE,
                     AssignmentState.TERMINAL_ACKNOWLEDGED,
@@ -1493,7 +1540,15 @@ class LocalDaemonAgentHttpClient:
                 f"{control.assignment_id}:root",
             }:
                 return "unknown"
-            if not _terminate_owned_process(process):
+            if self._supervisor is None:
+                return "unknown"
+            try:
+                launch = _launch_from_value(json.loads(encoded_launch))
+                self._supervisor.request_stop(launch)
+                contained = self._supervisor.contain(launch)
+            except (AgentProcessSupervisorError, QueueError, ValueError):
+                return "unknown"
+            if contained.state is not SupervisorLaunchState.CONTAINED:
                 return "unknown"
             self._cancelled_assignments.add(control.assignment_id)
             return "contained"
@@ -1851,17 +1906,17 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("remote physical activation is indeterminate")
 
         execution_id = f"{request.assignment_id}:root"
-        process = self._processes.get(request.assignment_id)
+        supervisor = self._supervisor
+        if supervisor is None:
+            raise QueueConflictError("remote resident execution has no supervisor")
+        launch: ResidentWorkerLaunch | None = None
         result_path = workspace.root / "worker-result.json"
         cancelled_before_start = False
         if execution_journal.read_state(assignment.assignment_id) in {
             AssignmentState.ACTIVE,
         }:
 
-            def launch() -> str:
-                gate = workspace.root / "run.grant"
-                if gate.exists():
-                    raise QueueConflictError("remote run gate already exists")
+            def start_supervisor_launch() -> str:
                 environment = {
                     key: value
                     for key, value in os.environ.items()
@@ -1880,22 +1935,38 @@ class LocalDaemonAgentHttpClient:
                     provider = providers[command.claim.resource_kind]
                     if isinstance(provider, GpuResourceProvider):
                         environment.update(provider.worker_environment(command))
-                child = subprocess.Popen(
-                    [
-                        str(profile.python_executable),
-                        "-m",
-                        "loom.queue._resident_stage_worker",
-                        "--workspace",
-                        str(workspace.root),
-                    ],
-                    cwd=profile.project_root,
-                    env=environment,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                nonlocal launch
+                launch = ResidentWorkerLaunch(
+                    supervisor_id=supervisor.supervisor_id,
+                    continuity_epoch=supervisor.continuity_epoch,
+                    agent_id=supervisor.agent_id,
+                    session_id=session.session_id,
+                    assignment_id=request.assignment_id,
+                    process_execution_id=execution_id,
+                    execution_fence=fence,
+                    launch_operation_id=f"{request.assignment_id}:launch:{fence}",
+                    workspace_root=workspace.root,
+                    profile=profile.launch_profile,
+                    environment=environment,
                 )
-                self._processes[request.assignment_id] = child
-                workspace.mark_process_started(execution_id, child.pid)
+                workspace.persist_supervisor_launch(
+                    json.dumps(
+                        _launch_value(launch), sort_keys=True, separators=(",", ":")
+                    )
+                )
+                receipt = supervisor.launch(launch)
+                if (
+                    receipt.state
+                    not in {
+                        SupervisorLaunchState.STARTING,
+                        SupervisorLaunchState.RUNNING,
+                    }
+                    or receipt.process_id is None
+                ):
+                    raise QueueConflictError(
+                        "remote supervisor did not create a process root"
+                    )
+                workspace.mark_process_started(execution_id, receipt.process_id)
                 return execution_id
 
             with self._control_lock:
@@ -1927,10 +1998,8 @@ class LocalDaemonAgentHttpClient:
                     cancelled_before_start = True
                 else:
                     execution_journal.start_once(
-                        assignment.assignment_id, execution_id, launch
+                        assignment.assignment_id, execution_id, start_supervisor_launch
                     )
-                    process = self._processes[request.assignment_id]
-                    atomic_write_bytes(workspace.root / "run.grant", b"granted\n")
                     workspace.append_event(
                         f"{request.assignment_id}:agent-process-started",
                         {"kind": "process_started"},
@@ -1946,8 +2015,20 @@ class LocalDaemonAgentHttpClient:
                         ),
                     )
         self._flush_workspace_events(session_id, workspace)
-        if process is not None:
-            while process.poll() is None:
+        if launch is None:
+            retained_launch = workspace.supervisor_launch_json()
+            if retained_launch is not None:
+                launch = _launch_from_value(json.loads(retained_launch))
+        if launch is not None:
+            while True:
+                receipt = supervisor.query(launch)
+                if receipt.state in {
+                    SupervisorLaunchState.EXITED,
+                    SupervisorLaunchState.CONTAINED,
+                }:
+                    break
+                if receipt.state is SupervisorLaunchState.UNKNOWN:
+                    raise QueueConflictError("remote supervisor continuity is unknown")
                 self.poll_assignment_control(session_id)
                 sleep(0.05)
         elif not result_path.is_file():
@@ -1972,6 +2053,10 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError(
                 "remote process exited without a durable worker result"
             )
+        if launch is not None:
+            contained = supervisor.contain(launch)
+            if contained.state is not SupervisorLaunchState.CONTAINED:
+                raise QueueConflictError("remote process group containment is unknown")
         result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
         if not cancelled_before_start:
             workspace.persist_worker_result(result)
@@ -2068,7 +2153,6 @@ class LocalDaemonAgentHttpClient:
                 ),
             ),
         )
-        self._processes.pop(request.assignment_id, None)
         self._cancelled_assignments.discard(request.assignment_id)
         return freeze_plain_data(
             {
@@ -3291,23 +3375,19 @@ def _agent_revision(prefix: str, value: Mapping[str, object]) -> str:
     return f"{prefix}-{hashlib.sha256(encoded).hexdigest()}"
 
 
-def _terminate_owned_process(process: subprocess.Popen[bytes]) -> bool:
-    """Contain only the exact in-memory child handle owned by this agent."""
-
-    if process.poll() is not None:
-        return True
+def _read_remote_agent_root_id(root: Path) -> str:
+    """Read only the stable identity after protected-root validation."""
+    path = Path(root).resolve() / "control.sqlite"
     try:
-        process.terminate()
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        try:
-            process.kill()
-            process.wait(timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-    except OSError:
-        return process.poll() is not None
-    return process.poll() is not None
+        with sqlite3.connect(path) as conn:
+            row = conn.execute(
+                "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise QueueServiceError("remote agent control state is unavailable") from exc
+    if row is None or not isinstance(row[0], str) or not row[0]:
+        raise QueueServiceError("remote agent root identity is invalid")
+    return row[0]
 
 
 __all__ = [

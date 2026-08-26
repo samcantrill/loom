@@ -242,6 +242,20 @@ an offer or poll is allowed. A missing, replaced, locked, permission-unsafe, or
 incomplete agent root therefore fails closed; loss of that root requires the
 later guarded-recovery phase rather than coordinator-side reconstruction.
 
+For resident remote execution, initialization receives the complete current
+resident profile set and starts a separately locked, locally authenticated
+supervisor under that root. The supervisor records the fully materialized
+selected-profile launch before creating a fresh process group; the outbound
+agent retains no process handles. Opening an agent root verifies the exact
+profile-set fingerprint and the service continuity identity, so absent, copied,
+corrupt, old, or changed-profile state requires fresh initialization rather
+than migration or adoption. A root process exit, result file, stop response, or
+endpoint loss is not descendant containment. Only the continuous supervisor may
+report containment after bounded group-level termination proves that no member
+can continue. On an agent application restart, retained work remains
+unavailable until its durable workspace/journal references are reconciled with
+the same supervisor receipts and a fresh provider observation is published.
+
 Offers use exact bounded CPU and memory capacity atoms, one shared availability
 revision across every authorized pool, and coordinator-accepted time for TTL.
 The held poll is digest-bound and renews current policy while waiting. A lost

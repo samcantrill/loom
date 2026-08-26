@@ -204,6 +204,13 @@ def _remote_agent_root(tmp_path: Path, name: str = "remote-owner") -> Path:
     return root
 
 
+def _fresh_remote_agent_root(tmp_path: Path, name: str = "remote-owner") -> Path:
+    """Return a path for the explicit profile-set remote initializer."""
+    root = tmp_path / name / "agent"
+    root.parent.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def test_agent_reload_reads_only_trusted_local_config_and_requires_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -319,7 +326,7 @@ def test_agent_reload_reads_only_trusted_local_config_and_requires_resume(
 def test_agent_reload_rejects_changed_bindings_under_a_live_profile_identity(
     tmp_path: Path,
 ) -> None:
-    root = _remote_agent_root(tmp_path)
+    root = _fresh_remote_agent_root(tmp_path)
     descriptor = ResidentProfileDescriptor(
         "python", "1", "project-1", "environment-1", "executor-1"
     )
@@ -338,6 +345,7 @@ def test_agent_reload_rejects_changed_bindings_under_a_live_profile_identity(
         agent_root=root,
         resident_profiles=(original,),
     )
+    LocalDaemonAgentHttpClient.initialize_agent_root(base)
     client = LocalDaemonAgentHttpClient(base)
     try:
         with pytest.raises(QueueConflictError, match="reuses a live profile identity"):
@@ -508,7 +516,7 @@ def _sqlite_dump(path: Path) -> tuple[str, ...]:
 def test_restarted_agent_with_retained_claim_exposes_no_capacity(
     tmp_path: Path,
 ) -> None:
-    agent_root = _remote_agent_root(tmp_path)
+    agent_root = _fresh_remote_agent_root(tmp_path)
     project_root = tmp_path / "resident-project"
     project_root.mkdir()
     descriptor = ResidentProfileDescriptor(
@@ -519,6 +527,15 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
         project_root,
         Path(sys.executable),
     )
+    remote_config = AgentTlsClientConfig(
+        "https://localhost:1",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        agent_root,
+        (profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     assignment = ManagedAssignment(
         "assignment-1",
         "loom-agent:assignment-1",
@@ -566,16 +583,7 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
         is AssignmentState.PREPARED
     )
 
-    restarted = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
-            "https://localhost:1",
-            tmp_path / "ca.crt",
-            tmp_path / "agent.crt",
-            tmp_path / "agent.key",
-            agent_root,
-            (profile,),
-        )
-    )
+    restarted = LocalDaemonAgentHttpClient(remote_config)
     try:
         offer = AgentOffer(
             "session-1",
@@ -605,7 +613,7 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
 def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
     tmp_path: Path,
 ) -> None:
-    agent_root = _remote_agent_root(tmp_path)
+    agent_root = _fresh_remote_agent_root(tmp_path)
     project_root = tmp_path / "resident-project"
     project_root.mkdir()
     descriptor = ResidentProfileDescriptor(
@@ -616,6 +624,15 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
         project_root,
         Path(sys.executable),
     )
+    remote_config = AgentTlsClientConfig(
+        "https://localhost:1",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        agent_root,
+        (profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     with sqlite3.connect(agent_root / "control.sqlite") as conn:
         conn.execute(
             "INSERT INTO agent_polls_local(session_id, availability_revision, "
@@ -624,16 +641,7 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
         )
         conn.commit()
 
-    restarted = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
-            "https://localhost:1",
-            tmp_path / "ca.crt",
-            tmp_path / "agent.crt",
-            tmp_path / "agent.key",
-            agent_root,
-            (profile,),
-        )
-    )
+    restarted = LocalDaemonAgentHttpClient(remote_config)
     try:
         offer = AgentOffer(
             "session-1",
@@ -730,26 +738,26 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
         project_root,
         Path(sys.executable),
     )
-    agent_a = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
-            f"https://localhost:{server.port}",
-            credentials["ca"].with_suffix(".crt"),
-            credentials["agent"].with_suffix(".crt"),
-            credentials["agent"].with_suffix(".key"),
-            _remote_agent_root(tmp_path, "remote-owner-a"),
-            (profile,),
-        )
+    remote_a_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+        _fresh_remote_agent_root(tmp_path, "remote-owner-a"),
+        (profile,),
     )
-    agent_b = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
-            f"https://localhost:{server.port}",
-            credentials["ca"].with_suffix(".crt"),
-            credentials["other"].with_suffix(".crt"),
-            credentials["other"].with_suffix(".key"),
-            _remote_agent_root(tmp_path, "remote-owner-b"),
-            (profile,),
-        )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_a_config)
+    agent_a = LocalDaemonAgentHttpClient(remote_a_config)
+    remote_b_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["other"].with_suffix(".crt"),
+        credentials["other"].with_suffix(".key"),
+        _fresh_remote_agent_root(tmp_path, "remote-owner-b"),
+        (profile,),
     )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_b_config)
+    agent_b = LocalDaemonAgentHttpClient(remote_b_config)
 
     def register(client: LocalDaemonAgentHttpClient, suffix: str):
         handshake = client.handshake()
@@ -905,7 +913,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
         ),
     )
     server.start()
-    remote_root = _remote_agent_root(tmp_path)
+    remote_root = _fresh_remote_agent_root(tmp_path)
     profile = ResidentExecutionProfile(
         profile_descriptor,
         Path(__file__).resolve().parents[3],
@@ -915,16 +923,16 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
             ResidentGpuDevice(remote_gpu, remote_binding),
         ),
     )
-    agent = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
-            f"https://localhost:{server.port}",
-            credentials["ca"].with_suffix(".crt"),
-            credentials["agent"].with_suffix(".crt"),
-            credentials["agent"].with_suffix(".key"),
-            remote_root,
-            (profile,),
-        )
+    remote_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+        remote_root,
+        (profile,),
     )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
+    agent = LocalDaemonAgentHttpClient(remote_config)
     released_claims: list[tuple[str, str, tuple[str, ...], str]] = []
     original_release = GpuResourceProvider.release
 
@@ -1602,22 +1610,22 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
         ),
     )
     server.start()
-    remote_root = _remote_agent_root(tmp_path)
+    remote_root = _fresh_remote_agent_root(tmp_path)
     profile = ResidentExecutionProfile(
         descriptor,
         Path(__file__).resolve().parents[3],
         Path(sys.executable),
     )
-    agent = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
-            f"https://localhost:{server.port}",
-            credentials["ca"].with_suffix(".crt"),
-            credentials["agent"].with_suffix(".crt"),
-            credentials["agent"].with_suffix(".key"),
-            remote_root,
-            (profile,),
-        )
+    remote_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+        remote_root,
+        (profile,),
     )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
+    agent = LocalDaemonAgentHttpClient(remote_config)
     try:
         handshake = agent.handshake()
         session = agent.register(
