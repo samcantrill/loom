@@ -26,6 +26,8 @@ from loom.queue import (
     LocalDaemonRole,
     LocalDaemonSocketClient,
     LocalDaemonSocketServer,
+    ManagedRecoveryTarget,
+    RecoverUnknownAssignment,
     QueueConflictError,
     QueueServiceError,
     QueueStorageError,
@@ -81,6 +83,19 @@ class _IncompatibleCpuPlanner(CpuResourcePlanner):
         implementation_fingerprint="test:cpu:incompatible",
     )
     claim_contracts = (ResourceClaimContractDescriptor("cpu", 2, "test-cpu-claim-v2"),)
+
+
+def test_recovery_request_round_trips_complete_immutable_identity() -> None:
+    request = RecoverUnknownAssignment(
+        recovery_id="recovery-1", run_uri="file:///run", stage_name="train", attempt=2,
+        stage_work_id="work-1", assignment_id="assignment-1", process_execution_id="process-1",
+        execution_fence="fence-1", target=ManagedRecoveryTarget("agent-1", "session-1"),
+        expected_state_version=7, requested_outcome="failed", consider_retry=True, reason="contained",
+    )
+    assert RecoverUnknownAssignment.from_dict(request.to_dict()) == request
+    payload = request.to_dict()
+    payload["run_uri"] = "file:///other"
+    assert RecoverUnknownAssignment.from_dict(payload).run_uri == "file:///other"
 
 
 class _TargetEvaluatorV2(TargetConstraintEvaluator):

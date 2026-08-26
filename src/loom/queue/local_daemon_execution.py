@@ -15,7 +15,17 @@ from typing import cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.execution import StageWorkerRequest, prepare_stage_attempt
-from loom.pipeline.execution.reliability import record_retry_decision_for_stage_result
+from loom.pipeline.execution.reliability import (
+    record_retry_decision_for_stage_result,
+    record_stage_reliability_transition,
+)
+from loom.pipeline.reliability import (
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    StageAttemptTransactionState,
+    TimeoutOutcomeRecord,
+)
+from loom.pipeline.reliability import ReliabilityPolicy
 from loom.pipeline.executors.slurm.ready_stage import (
     ReadyStageState,
     SQLiteReadyStageSubmissions,
@@ -69,10 +79,14 @@ from loom.pipeline.stores import (
     CancellationEpochRequest,
     CoordinatorAdmissionRequest,
     LocalRunStore,
+    RunReliabilityStore,
 )
 from loom.pipeline.stores.read_models import (
     AuthoritativeRunSnapshot,
     LifecycleReason,
+    ReliabilityPolicyFact,
+    ReliabilityPolicyScope,
+    ReliabilityStatusDetail,
 )
 from loom.pipeline.stores.authority import (
     ExecutionFence,
@@ -827,6 +841,76 @@ def load_managed_local_intent(
         str(record["digest"]),
         cast(int, record["max_parallel_stages"]),
     )
+
+
+def _validate_recovery_request_identity(
+    request: RecoverUnknownAssignment, binding: tuple[object, str, str, int, str]
+) -> None:
+    target, run_uri, stage_name, attempt, _attempt_id = binding
+    assignment = getattr(target, "assignment", target)
+    if (
+        request.run_uri != run_uri
+        or request.stage_name != stage_name
+        or request.attempt != attempt
+        or request.stage_work_id != getattr(assignment, "stage_work_id", None)
+    ):
+        raise QueueConflictError("recovery request identity conflicts")
+
+
+def _recovery_retry_policy(
+    authority: SQLitePerRunAuthorityStore, run_uri: str, stage_name: str, attempt: int
+):
+    """Read the immutable attempt policy from the authority reliability owner."""
+
+    facts = authority.list_reliability_policy_facts(run_uri, stage_name=stage_name)
+    selected = [
+        fact for fact in facts
+        if fact.scope is ReliabilityPolicyScope.ATTEMPT and fact.attempt == attempt
+    ]
+    if not selected:
+        return None
+    policy = selected[-1].policy
+    return cast(ReliabilityPolicy, policy).retry
+
+
+class _AuthorityReliabilityStore:
+    """Narrow reliability facade that persists every fact in authority."""
+
+    def __init__(self, authority: SQLitePerRunAuthorityStore) -> None:
+        self._authority = authority
+
+    def write_reliability_policy_fact(self, run_uri: str, fact: ReliabilityPolicyFact) -> None:
+        self._authority.write_reliability_policy_fact(run_uri, fact)
+
+    def list_reliability_policy_facts(self, run_uri: str, *, stage_name: str | None = None) -> tuple[ReliabilityPolicyFact, ...]:
+        return self._authority.list_reliability_policy_facts(run_uri, stage_name=stage_name)
+
+    def write_reliability_status_detail(self, run_uri: str, detail: ReliabilityStatusDetail) -> None:
+        self._authority.write_reliability_status_detail(run_uri, detail)
+
+    def list_reliability_status_details(self, run_uri: str, *, stage_name: str | None = None) -> tuple[ReliabilityStatusDetail, ...]:
+        return self._authority.list_reliability_status_details(run_uri, stage_name=stage_name)
+
+    def write_stage_attempt_transaction(self, run_uri: str, transaction: StageAttemptTransaction) -> None:
+        self._authority.write_stage_attempt_transaction(run_uri, transaction)
+
+    def read_transaction_chain(self, run_uri: str, transaction_id: str) -> tuple[StageAttemptTransaction, ...]:
+        return self._authority.read_transaction_chain(run_uri, transaction_id)
+
+    def list_stage_attempt_transactions(self, run_uri: str, *, stage_name: str | None = None) -> tuple[StageAttemptTransaction, ...]:
+        return self._authority.list_stage_attempt_transactions(run_uri, stage_name=stage_name)
+
+    def write_retry_decision(self, run_uri: str, decision: RetryDecisionRecord) -> None:
+        self._authority.write_retry_decision(run_uri, decision)
+
+    def list_retry_decisions(self, run_uri: str, *, stage_name: str | None = None) -> tuple[RetryDecisionRecord, ...]:
+        return self._authority.list_retry_decisions(run_uri, stage_name=stage_name)
+
+    def write_timeout_outcome(self, run_uri: str, outcome: TimeoutOutcomeRecord) -> None:
+        self._authority.write_timeout_outcome(run_uri, outcome)
+
+    def list_timeout_outcomes(self, run_uri: str, *, stage_name: str | None = None) -> tuple[TimeoutOutcomeRecord, ...]:
+        return self._authority.list_timeout_outcomes(run_uri, stage_name=stage_name)
 
 
 class LocalDaemonExecution:
@@ -1647,9 +1731,16 @@ class LocalDaemonExecution:
         if request.consider_retry:
             # This owner persists a decision only; RunOrchestrator remains the
             # sole owner that materializes a permitted next attempt.
+            reliability_store: RunReliabilityStore = _AuthorityReliabilityStore(authority_store)
+            record_stage_reliability_transition(
+                reliability_store, run_uri=run_uri, stage_name=stage_name, attempt=attempt,
+                state=(StageAttemptTransactionState.FAILED if status is StageStatus.FAILED else StageAttemptTransactionState.CANCELLED),
+                stage_status=status, recorded_at=utc_timestamp(),
+            )
             record_retry_decision_for_stage_result(
-                self.run_store, run_uri=run_uri, stage_name=stage_name, attempt=attempt,
-                stage_status=status, recorded_at=utc_timestamp(), policy=None, failure=None,
+                reliability_store, run_uri=run_uri, stage_name=stage_name, attempt=attempt,
+                stage_status=status, recorded_at=utc_timestamp(),
+                policy=_recovery_retry_policy(authority_store, run_uri, stage_name, attempt), failure=None,
             )
         return {"recovery_id": request.recovery_id, "state": "closed", "evidence": evidence, "revision": transition.revision.sequence}
 
@@ -1669,7 +1760,9 @@ class LocalDaemonExecution:
                 or record.process_execution_id != request.process_execution_id
             ):
                 raise QueueConflictError("SLURM recovery target identity conflicts")
-            return record, record.assignment.run_uri, record.assignment.stage_name, record.assignment.attempt, record.assignment.attempt_id
+            binding = (record, record.assignment.run_uri, record.assignment.stage_name, record.assignment.attempt, record.assignment.attempt_id)
+            _validate_recovery_request_identity(request, binding)
+            return binding
         matches = [
             item for item in self.coordinator.retained_assignments(agent_id=request.target.agent_id)
             if item[0].assignment_id == request.assignment_id and item[0].session_id == request.target.session_id
@@ -1677,7 +1770,9 @@ class LocalDaemonExecution:
         if len(matches) != 1 or self.journal.read_grant_fence(request.assignment_id) != request.execution_fence:
             raise QueueConflictError("managed recovery target identity conflicts")
         assignment = matches[0][0]
-        return assignment, assignment.run_uri, assignment.stage_name, assignment.attempt, assignment.attempt_id
+        binding = (assignment, assignment.run_uri, assignment.stage_name, assignment.attempt, assignment.attempt_id)
+        _validate_recovery_request_identity(request, binding)
+        return binding
 
     def _recovery_evidence(
         self, request: RecoverUnknownAssignment, binding: tuple[object, str, str, int, str]

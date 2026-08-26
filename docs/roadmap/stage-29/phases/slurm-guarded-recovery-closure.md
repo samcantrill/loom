@@ -19,7 +19,7 @@
 - Workflow path: expanded. Irreversible fence closure, external containment,
   and retry causally interact, so implementation requires one executor and one
   independent review unless manager evidence removes the residual risk.
-- Blocker corrections: 1/3 in progress
+- Blocker corrections: 1/3 completed
 
 ## Objective And Context
 
@@ -219,12 +219,11 @@ observable status, and causal crash behavior above remain exact.
 
 - Manager preparation: complete on the post-9D2 branch; maintainer approval
   recorded
-- Implementation: candidate `024faaf` requires correction 1/3. Its durable
-  operation stops at `pending` after a crash, authority close does not replay as
-  the same recovery, and the SLURM evidence binding is an in-process callable
-  rather than the approved protected helper. The candidate also lacks the
-  causal end-to-end proof that rechecks ordinary terminal facts and feeds the
-  existing retry/orchestrator owners.
+- Implementation: correction 1 completes replay of a durable pending operation,
+  same-recovery authority-close replay, immutable request codecs over direct and
+  authenticated transports, and an exact retained SLURM helper process boundary.
+  Recovery retry facts now use the authority-backed reliability owner and its
+  recorded attempt policy; physical ownership remains untouched.
 - Validation and review: pending
 - PR and merge: pending
 
@@ -232,7 +231,7 @@ observable status, and causal crash behavior above remain exact.
 
 | Item | Result |
 | --- | --- |
-| Implementation and tests | Candidate `024faaf` added the initial operation, authority transition, and evidence shapes. Manager verification found that the supported authenticated recovery path is not yet a replay-safe cross-store saga and its SLURM evidence boundary is not the accepted protected helper. Correction 1/3 is active. |
-| Validated revision and evidence | Candidate focused authority/SLURM suites passed (41 tests), focused local-daemon tests passed (11 tests), and Ruff/Pyright passed. The full gate was intentionally stopped because the qualified blocker made its receipt stale. |
+| Implementation and tests | Correction 1 makes `pending` recovery replay through the same request and authority `recovery_id`, returns the previous recovery close after an authority-side crash, carries immutable run/stage/attempt/work identity through direct and authenticated codecs, and replaces the SLURM callable with a bounded retained helper process whose exact echo is required. Authority-backed retry evaluation reads the recorded attempt policy; it does not write recovery truth to the local run store. Added codec, close-replay, and protected-helper exact-echo coverage. |
+| Validated revision and evidence | `PYTHONPATH=src pytest -q tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/unit/loom/queue/test_local_daemon.py tests/integration/queue/test_slurm_ready_stage.py` passed (74 tests). Changed-path Ruff and Pyright passed. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Qualified blocker: a crash can strand `pending`, a post-authority-close replay can be misclassified, uncommitted ordinary terminal evidence can lose, retry is written with no policy to the wrong consumer store, and an in-memory callback can stand in for protected SLURM evidence. Smallest fix: complete the one existing daemon/authority saga with replayable states, target-owned persisted evidence, the fixed retained helper adapter, current-policy retry consumed by `RunOrchestrator`, authenticated transport wiring, and causal tests; retain physical ownership. |
+| Residual risk and cleanup | Correction 1 resolves the qualified candidate defects within the existing owners. This bounded pass does not alter physical release, submission ownership, session replacement, or Phase 9F surfaces. |

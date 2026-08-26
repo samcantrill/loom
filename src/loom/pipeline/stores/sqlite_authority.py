@@ -1508,7 +1508,7 @@ class SQLitePerRunAuthorityStore:
                 raise AuthorityStoreError("stale execution fence")
             attempt = _require_row(
                 conn.execute(
-                    "SELECT stage_name, status, revision_sequence FROM attempts WHERE attempt_id = ?",
+                "SELECT stage_name, status, revision_sequence, reason_json FROM attempts WHERE attempt_id = ?",
                     (fence.attempt_id,),
                 ).fetchone(),
                 "unknown stage attempt",
@@ -1516,6 +1516,25 @@ class SQLitePerRunAuthorityStore:
             stage_name = cast(str, attempt["stage_name"])
             current = StageStatus(cast(str, attempt["status"]))
             if binding["state"] == "terminal":
+                prior_reason = _json_loads(cast(str, attempt["reason_json"]))
+                if (
+                    isinstance(prior_reason, Mapping)
+                    and isinstance(prior_reason.get("detail"), Mapping)
+                    and prior_reason["detail"].get("recovery_id") == recovery_id
+                ):
+                    # The authority close already won.  Returning the same
+                    # durable result makes a coordinator crash after this CAS
+                    # replay the recovery rather than misclassifying it as an
+                    # ordinary terminal winner.
+                    resolved_reason = LifecycleReason.from_dict(prior_reason)
+                    return StatusTransition(
+                        run_uri=run_uri,
+                        stage_name=stage_name,
+                        previous_status=current,
+                        status=current,
+                        revision=BackendRevision(int(attempt["revision_sequence"]), "recovery-replay"),
+                        reason=resolved_reason,
+                    )
                 # An ordinary terminal fact is the winner.  We deliberately do
                 # not treat it as a recovery replay: recovery has no authority
                 # to rewrite or reinterpret a worker-owned terminal receipt.

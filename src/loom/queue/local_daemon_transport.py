@@ -31,6 +31,7 @@ from .local_daemon import (
     LocalDaemonPrincipal,
     LocalDaemonRole,
     LocalDaemonStatus,
+    RecoverUnknownAssignment,
 )
 
 
@@ -144,6 +145,11 @@ class LocalDaemonSocketServer:
                         CoordinatorSchedulingReload.from_dict(request)
                     )
                 )
+            elif operation == "recover_unknown":
+                request = payload.get("request")
+                if not isinstance(request, Mapping):
+                    raise QueueServiceError("recovery request must be a mapping")
+                result = dict(operator.recover_unknown(RecoverUnknownAssignment.from_dict(request)))
             else:
                 raise QueueServiceError("local daemon operation is unsupported")
             response: PlainData = {"ok": True, "result": result}
@@ -217,6 +223,12 @@ class LocalDaemonSocketClient:
             self._call(
                 {"operation": "scheduling_reload", "request": request.to_dict()}
             ),
+        )
+
+    def recover_unknown(self, request: RecoverUnknownAssignment) -> Mapping[str, PlainData]:
+        return cast(
+            Mapping[str, PlainData],
+            self._call({"operation": "recover_unknown", "request": request.to_dict()}),
         )
 
     def _call(self, request: Mapping[str, PlainData]) -> Mapping[str, object]:

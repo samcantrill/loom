@@ -847,6 +847,15 @@ def test_recovery_close_is_fenced_and_an_ordinary_terminal_winner_supersedes(
         reason=LifecycleReason(code="operator.recovery_close"),
     )
     assert close.status is StageStatus.FAILED
+    replay = store.close_managed_attempt_fence(
+        run_uri,
+        recovery_id="recovery-1",
+        fence=fence,
+        expected_state_version=current.stages[0].revision.sequence,
+        status=StageStatus.FAILED,
+        reason=LifecycleReason(code="operator.recovery_close"),
+    )
+    assert replay.status is StageStatus.FAILED
     with pytest.raises(AuthorityStoreError, match="stale execution fence"):
         store.confirm_execution_started(run_uri, fence=fence)
 

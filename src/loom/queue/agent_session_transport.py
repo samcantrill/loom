@@ -88,6 +88,7 @@ from .local_daemon import (
     LocalDaemonAdmissionRequest,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    RecoverUnknownAssignment,
 )
 
 
@@ -1465,6 +1466,11 @@ class LocalDaemonAgentHttpClient:
     ) -> Mapping[str, PlainData]:
         return self._call(
             "scheduling_reload", {"request": request.to_dict()}, role="operator"
+        )
+
+    def recover_unknown(self, request: RecoverUnknownAssignment) -> Mapping[str, PlainData]:
+        return self._call(
+            "recover_unknown", {"request": request.to_dict()}, role="operator"
         )
 
     def authorize_transfers(
@@ -3299,6 +3305,12 @@ def _dispatch_application(
             return view.reload_scheduling(
                 CoordinatorSchedulingReload.from_dict(request)
             )
+        if operation == "recover_unknown":
+            _exact(value, {"request"})
+            request = value["request"]
+            if not isinstance(request, Mapping):
+                raise QueueServiceError("recovery request is invalid")
+            return view.recover_unknown(RecoverUnknownAssignment.from_dict(request))
     elif role == LocalDaemonRole.SLURM_BOOTSTRAP.value:
         view = daemon.slurm_bootstrap_view(principal)
         if operation == "register":

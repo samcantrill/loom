@@ -130,6 +130,13 @@ class ManagedRecoveryTarget:
     def to_dict(self) -> dict[str, PlainData]:
         return {"kind": "managed", "agent_id": self.agent_id, "session_id": self.session_id}
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "ManagedRecoveryTarget":
+        _exact_fields(data, {"kind", "agent_id", "session_id"}, "managed recovery target")
+        if data.get("kind") != "managed":
+            raise QueueServiceError("managed recovery target kind is invalid")
+        return cls(_required_string(data, "agent_id"), _required_string(data, "session_id"))
+
 
 @dataclass(frozen=True, slots=True)
 class SlurmRecoveryTarget:
@@ -153,6 +160,16 @@ class SlurmRecoveryTarget:
             "bootstrap_incarnation_id": self.bootstrap_incarnation_id,
         }
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "SlurmRecoveryTarget":
+        _exact_fields(data, {"kind", "profile_id", "submission_operation_id", "cluster_id", "job_id", "bootstrap_incarnation_id"}, "SLURM recovery target")
+        if data.get("kind") != "slurm":
+            raise QueueServiceError("SLURM recovery target kind is invalid")
+        raw_incarnation = data.get("bootstrap_incarnation_id")
+        if raw_incarnation is not None and not isinstance(raw_incarnation, str):
+            raise QueueServiceError("SLURM recovery bootstrap incarnation is invalid")
+        return cls(_required_string(data, "profile_id"), _required_string(data, "submission_operation_id"), _required_string(data, "cluster_id"), _required_string(data, "job_id"), raw_incarnation)
+
 
 @dataclass(frozen=True, slots=True)
 class RecoverUnknownAssignment:
@@ -163,6 +180,10 @@ class RecoverUnknownAssignment:
     """
 
     recovery_id: str
+    run_uri: str
+    stage_name: str
+    attempt: int
+    stage_work_id: str
     assignment_id: str
     process_execution_id: str
     execution_fence: str
@@ -173,8 +194,10 @@ class RecoverUnknownAssignment:
     reason: str
 
     def __post_init__(self) -> None:
-        for value in (self.recovery_id, self.assignment_id, self.process_execution_id, self.execution_fence):
+        for value in (self.recovery_id, self.run_uri, self.stage_name, self.stage_work_id, self.assignment_id, self.process_execution_id, self.execution_fence):
             _required_string({"value": value}, "value")
+        if isinstance(self.attempt, bool) or self.attempt < 1:
+            raise QueueServiceError("recovery attempt is invalid")
         if not isinstance(self.target, ManagedRecoveryTarget | SlurmRecoveryTarget):
             raise QueueServiceError("recovery target is invalid")
         if isinstance(self.expected_state_version, bool) or self.expected_state_version < 0:
@@ -188,12 +211,36 @@ class RecoverUnknownAssignment:
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "recovery_id": self.recovery_id, "assignment_id": self.assignment_id,
+            "recovery_id": self.recovery_id, "run_uri": self.run_uri,
+            "stage_name": self.stage_name, "attempt": self.attempt,
+            "stage_work_id": self.stage_work_id, "assignment_id": self.assignment_id,
             "process_execution_id": self.process_execution_id, "execution_fence": self.execution_fence,
             "target": self.target.to_dict(), "expected_state_version": self.expected_state_version,
             "requested_outcome": self.requested_outcome, "consider_retry": self.consider_retry,
             "reason": self.reason,
         }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "RecoverUnknownAssignment":
+        _exact_fields(data, {"recovery_id", "run_uri", "stage_name", "attempt", "stage_work_id", "assignment_id", "process_execution_id", "execution_fence", "target", "expected_state_version", "requested_outcome", "consider_retry", "reason"}, "recovery request")
+        target = data.get("target")
+        if not isinstance(target, Mapping):
+            raise QueueServiceError("recovery target is invalid")
+        kind = target.get("kind")
+        if kind == "managed":
+            parsed_target: ManagedRecoveryTarget | SlurmRecoveryTarget = ManagedRecoveryTarget.from_dict(target)
+        elif kind == "slurm":
+            parsed_target = SlurmRecoveryTarget.from_dict(target)
+        else:
+            raise QueueServiceError("recovery target kind is invalid")
+        return cls(
+            recovery_id=_required_string(data, "recovery_id"), run_uri=_required_string(data, "run_uri"),
+            stage_name=_required_string(data, "stage_name"), attempt=_required_int(data, "attempt"),
+            stage_work_id=_required_string(data, "stage_work_id"), assignment_id=_required_string(data, "assignment_id"),
+            process_execution_id=_required_string(data, "process_execution_id"), execution_fence=_required_string(data, "execution_fence"),
+            target=parsed_target, expected_state_version=_required_int(data, "expected_state_version"),
+            requested_outcome=_required_string(data, "requested_outcome"), consider_retry=_required_bool(data, "consider_retry"), reason=_required_string(data, "reason"),
+        )
 
 
 class LocalDaemonRole(StrEnum):
@@ -1585,12 +1632,14 @@ class LocalDaemon:
                 if prior is not None:
                     if str(prior["principal_id"]) != principal.subject or str(prior["request_json"]) != encoded:
                         raise QueueConflictError("recovery operation conflicts")
-                    conn.commit()
-                    return freeze_plain_data(json.loads(str(prior["result_json"])), path="recovery receipt")
-                conn.execute(
+                    if str(prior["state"]) != "pending":
+                        conn.commit()
+                        return freeze_plain_data(json.loads(str(prior["result_json"])), path="recovery receipt")
+                else:
+                    conn.execute(
                     "INSERT INTO recovery_operations(recovery_id, principal_id, request_json, state, result_json) VALUES (?, ?, ?, 'pending', ?)",
                     (request.recovery_id, principal.subject, encoded, json.dumps({"recovery_id": request.recovery_id, "state": "pending"})),
-                )
+                    )
                 conn.commit()
             execution = self._execution
             if execution is None:
@@ -2236,6 +2285,20 @@ def _required_string(data: Mapping[str, object], field: str) -> str:
     value = data.get(field)
     if not isinstance(value, str) or not value:
         raise QueueServiceError(f"{field} must be a non-empty string")
+    return value
+
+
+def _required_int(data: Mapping[str, object], field: str) -> int:
+    value = data.get(field)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise QueueServiceError(f"{field} must be an integer")
+    return value
+
+
+def _required_bool(data: Mapping[str, object], field: str) -> bool:
+    value = data.get(field)
+    if not isinstance(value, bool):
+        raise QueueServiceError(f"{field} must be a boolean")
     return value
 
 

@@ -53,7 +53,7 @@ _TRANSACTION_STATE_ORDER = {
 
 
 def build_reliability_status_detail(
-    run_store: LegacyRunStore,
+    run_store: RunReliabilityStore,
     *,
     run_uri: str,
     stage_name: str,
@@ -125,7 +125,7 @@ def record_resolved_reliability_policy_fact(
 
 
 def record_stage_reliability_transition(
-    run_store: LegacyRunStore,
+    run_store: RunReliabilityStore,
     *,
     run_uri: str,
     stage_name: str,
@@ -151,7 +151,7 @@ def record_stage_reliability_transition(
 
 
 def record_reliability_transaction(
-    run_store: LegacyRunStore,
+    run_store: RunReliabilityStore,
     *,
     run_uri: str,
     status: ReliabilityStatusDetail,
@@ -236,7 +236,7 @@ def record_timeout_outcome_from_metadata(
 
 
 def record_retry_decision_for_stage_result(
-    run_store: LegacyRunStore,
+    run_store: RunReliabilityStore,
     *,
     run_uri: str,
     stage_name: str,
@@ -302,8 +302,12 @@ def record_retry_decision_for_stage_result(
     return decision
 
 
-def _current_run_status(run_store: LegacyRunStore, run_uri: str) -> RunStatus:
-    record = run_store.read_run_status(run_uri)
+def _current_run_status(run_store: RunReliabilityStore, run_uri: str) -> RunStatus:
+    # Authority-backed reliability stores intentionally expose only reliability
+    # facts.  Their close caller already established the run is live, so the
+    # default remains RUNNING without routing retry truth through a local store.
+    reader = getattr(run_store, "read_run_status", None)
+    record = None if reader is None else reader(run_uri)
     if record is None:
         return RunStatus.RUNNING
     return record.status

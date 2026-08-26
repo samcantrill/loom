@@ -20,6 +20,7 @@ from loom.pipeline.executors.slurm.ready_stage import (
     SQLiteReadyStageSubmissions,
     SlurmPlanningError,
     SlurmJobPrivateFileProvider,
+    SlurmContainmentHelper,
     SlurmReadyStageProfile,
     resolve_slurm_containment,
 )
@@ -97,14 +98,17 @@ def test_slurm_containment_requires_exact_positive_echo() -> None:
     }
     profile = _profile(runner)
     assert not resolve_slurm_containment(profile, request).contained
-    object.__setattr__(profile, "containment_helper_descriptor", "test-contained-v1")
-    object.__setattr__(profile, "containment_helper", lambda value: {
-        "state": "CONTAINED", "evidence_id": "proof-1", "evidence_revision": "1", "echo": value,
-    })
+    echo_program = (
+        "import json,sys; value=json.load(sys.stdin); "
+        "print(json.dumps({'state':'CONTAINED','evidence_id':'proof-1','evidence_revision':'1','echo':value}))"
+    )
+    object.__setattr__(profile, "containment_helper", SlurmContainmentHelper("test-contained-v1", (sys.executable, "-c", echo_program)))
     assert resolve_slurm_containment(profile, request).contained
-    object.__setattr__(profile, "containment_helper", lambda value: {
-        "state": "CONTAINED", "evidence_id": "proof-1", "evidence_revision": "1", "echo": {**value, "job_id": "2"},
-    })
+    mismatch_program = (
+        "import json,sys; value=json.load(sys.stdin); value['job_id']='2'; "
+        "print(json.dumps({'state':'CONTAINED','evidence_id':'proof-1','evidence_revision':'1','echo':value}))"
+    )
+    object.__setattr__(profile, "containment_helper", SlurmContainmentHelper("test-contained-v1", (sys.executable, "-c", mismatch_program)))
     assert not resolve_slurm_containment(profile, request).contained
 
 
