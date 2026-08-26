@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 9D2
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p9d2-embedded-release-replay-closure`
@@ -196,7 +196,9 @@ Phase 9F continues to own `make test-summary` and the final Stage 29 summary.
   expected skips, and source/wheel builds.
 - Independent review: required after manager validation.
 - Blocker corrections: 2/3.
-- PR and merge: pending.
+- PR and merge: [#247](https://github.com/samcantrill/loom/pull/247) is open,
+  non-draft, mergeable, and verified with base `develop`, exact head/title, and
+  body matching scope/evidence. Required independent review and CI are pending.
 
 ## Completion Record
 
@@ -206,5 +208,5 @@ Phase 9F continues to own `make test-summary` and the final Stage 29 summary.
 | Tests added or updated | The managed-local integration now crashes both after availability publication with no final event and after final-event acknowledgement, for terminal success and definitive decline. Each case reconstructs journal/provider state, replays the saved revision, proves one acknowledged event at both stores, completes coordinator release, and retains one supervisor launch where applicable. |
 | Validated revision/tree state and evidence | Source/test revision `731b3c4`: focused four-case causal matrix passed in 2.76s; affected Phase 9D2 matrix passed 102 tests in 47.42s; `make validate-pr` passed Ruff, zero-finding Pyright, 2,553 default tests (121 deselected), 141 config-extra tests (3 expected skips), and source/wheel builds. |
 | Validation-relevant changes after evidence | none; this roadmap evidence update is non-validation metadata |
-| PR, review, and merge | pending |
+| PR, review, and merge | [#247](https://github.com/samcantrill/loom/pull/247) open against `develop`; required independent review and CI pending. |
 | Residual risk and cleanup | pending |
