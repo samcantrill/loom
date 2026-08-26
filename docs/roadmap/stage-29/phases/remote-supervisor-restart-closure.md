@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 9C
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p9c-remote-supervisor-restart-closure`
@@ -219,9 +219,15 @@ ordinary result/output import. `UNKNOWN` withholds claims and never relaunches.
   exact `NOT_ACCEPTED` submission, accepted-start journal/coordinator joining,
   durable cancellation routing, provider-release/availability outbox replay, and
   one shared normal/restart result-output-release owner.
-- Validation/review: manager validation complete at `d9cc0ae`; independent
-  expanded-path review pending
-- PR/merge: pending
+- Validation/review: manager validation complete at `d9cc0ae`; required
+  independent review at `c240ec1` blocked the phase. A supported trusted reload
+  can replace the resident launch-profile set without replacing its bound
+  supervisor, so an advertised/granted new profile fails only at launch and
+  leaves its claim unavailable. Required fresh-process restart and two-profile
+  routing proof are also absent; the current restart matrix uses two client
+  objects in one pytest process and the two-profile test proves binding only.
+- PR/merge: no PR opened; correction 3/3 was already exhausted, so this branch
+  is read-only blocked evidence for a fresh bounded closure
 
 ## Completion Record
 
@@ -229,5 +235,5 @@ ordinary result/output import. `UNKNOWN` withholds claims and never relaunches.
 | --- | --- |
 | Implementation and tests | Complete through `d9cc0ae` (`8eb99d3` behavior closure plus validation-fixture typing/runtime repairs). Changed-path Ruff and formatting passed; changed-source Pyright reported 0 errors; the affected supervisor, remote-session, and managed-journal suite passed, 38 tests. Its causal restart matrix covers crash before/after supervisor acceptance, before result commit, and after local availability publication but before coordinator release; every case retains one supervisor launch, replays release, and enables a fresh offer only afterward. Test teardown leaves no detached supervisor. |
 | Validated revision and evidence | `d9cc0ae`; `make validate-pr` exited 0 on 2026-08-26. Repository Ruff and formatting, full Pyright (0 errors), the default test harness, the config-extra harness (141 passed, 3 skipped), and source/wheel builds passed. No detached Phase 9C supervisor process remained afterward. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| PR, review, and merge | Required independent review blocked submission at `c240ec1`; no PR opened or merge attempted. |
+| Residual risk and cleanup | Preserve this validated branch as read-only evidence. The smallest successor must reject any reload whose launch-profile-set fingerprint differs from the initialized supervisor, require fresh-root initialization, and prove the four restart barriers in fresh agent processes plus actual selection and launch routing for two bound profiles. No Phase 9D-9F behavior belongs in that closure. |
