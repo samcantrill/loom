@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 29, Phase 9E
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p9e-slurm-guarded-recovery-closure`
@@ -238,10 +238,10 @@ observable status, and causal crash behavior above remain exact.
   The fresh final `make validate-pr` also passes with 2,568 default tests, 141
   configuration-extra tests, 3 expected environment skips, zero lint/type
   findings, and successful source/wheel builds.
-- PR and merge: [PR #248](https://github.com/samcantrill/loom/pull/248) is open
-  against `develop`; GitHub reports it mergeable and non-draft. This repository
-  exposes no PR check run, so the fresh local implementation gate is the
-  submission evidence.
+- PR and merge: [PR #248](https://github.com/samcantrill/loom/pull/248)
+  squash-merged into `develop` as `0dab7a9`. The repository exposed no PR check
+  run, so the fresh local implementation gate supplied submission evidence.
+  The dedicated worktree and local/remote phase branches were removed.
 
 ## Completion Record
 
@@ -249,5 +249,5 @@ observable status, and causal crash behavior above remain exact.
 | --- | --- |
 | Implementation and tests | Correction 3 composes durable request, pre-persistence exact-unknown admission, freeze, ordinary-terminal recheck, exact target evidence, authority arbitration, existing-policy retry, and joined status across direct, Unix-socket, authenticated remote-agent, and SLURM paths. Tests now create real local supervisor uncertainty, expire the exact remote observation, and move the exact SLURM observation from `RUNNING` to unavailable; active and stale requests prove that no recovery row, evidence request, or ordinary freeze is created. Restart resumes valid pending and evidence-confirmed operations; late old-fence results conflict; accepted SLURM work is not resubmitted; closed capacity remains held. |
 | Validated revision and evidence | Pre-review candidate passed the authority/orchestration/SLURM slice (62 tests). Correction 3 focused evidence is 11 passing recovery/containment tests with changed-path Ruff and Pyright clean. Fresh final `make validate-pr` passed: Ruff clean, Pyright 0 errors, default 2,568 passed with 121 deselected, config-extra 141 passed with 3 expected environment skips and 2,571 deselected, and source/wheel builds succeeded. Phase 9F owns `make test-summary`. |
-| PR, review, and merge | Required expanded review completed with one blocker; correction 3 is manager-verified locally. [PR #248](https://github.com/samcantrill/loom/pull/248) targets `develop`, is non-draft and mergeable, and currently exposes no CI check run; merge is pending. |
-| Residual risk and cleanup | No known implementation blocker remains after the final scoped correction. Physical release, different-session replacement, and Phase 9F final surfaces remain deliberately unchanged. |
+| PR, review, and merge | Required expanded review completed with one blocker; correction 3 was manager-verified locally. [PR #248](https://github.com/samcantrill/loom/pull/248) exposed no CI check run and used the fresh local gate as submission evidence; it squash-merged into `develop` as `0dab7a9`. |
+| Residual risk and cleanup | No known implementation blocker remains after the final scoped correction. The dedicated worktree and local/remote phase branches were removed. Physical release, different-session replacement, and Phase 9F final surfaces remain deliberately unchanged. |
