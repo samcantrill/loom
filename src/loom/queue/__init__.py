@@ -9,6 +9,16 @@ from .client import QueueClient
 
 if TYPE_CHECKING:
     from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+    from ._managed_local import (
+        AgentResourceProvider,
+        ClaimCommand,
+        ClaimOutcome,
+        ClaimResult,
+        CpuResourceProvider,
+        MemoryResourceProvider,
+        ObserveRequest,
+        ObserveResult,
+    )
     from ._remote_stage_execution import GpuDeviceDescriptor
     from .local_daemon import (
         AgentControl,
@@ -127,12 +137,29 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
     }
 )
 
+_MANAGED_RESOURCE_EXPORTS = frozenset(
+    {
+        "AgentResourceProvider",
+        "ClaimCommand",
+        "ClaimOutcome",
+        "ClaimResult",
+        "CpuResourceProvider",
+        "MemoryResourceProvider",
+        "ObserveRequest",
+        "ObserveResult",
+    }
+)
+
 
 def __getattr__(name: str) -> object:
     if name == "ResidentWorkerLaunchProfile":
         from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 
         return ResidentWorkerLaunchProfile
+    if name in _MANAGED_RESOURCE_EXPORTS:
+        from . import _managed_local
+
+        return getattr(_managed_local, name)
     if name in _LOCAL_DAEMON_EXPORTS:
         if name in {"LocalDaemonSocketClient", "LocalDaemonSocketServer"}:
             from . import local_daemon_transport
@@ -157,6 +184,11 @@ __all__ = [
     "QUEUE_DB_SCHEMA_VERSION",
     "QUEUE_RECORD_SCHEMA_VERSION",
     "CancellationRecord",
+    "AgentResourceProvider",
+    "ClaimCommand",
+    "ClaimOutcome",
+    "ClaimResult",
+    "CpuResourceProvider",
     "DispatchHandle",
     "FakeQueueDispatchAdapter",
     "GpuDeviceDescriptor",
@@ -175,6 +207,9 @@ __all__ = [
     "LocalDaemonSocketClient",
     "LocalDaemonSocketServer",
     "LocalDaemonStatus",
+    "MemoryResourceProvider",
+    "ObserveRequest",
+    "ObserveResult",
     "ResidentWorkerLaunchProfile",
     "prepare_managed_local_runtime_record",
     "LaunchEnvironmentBindings",

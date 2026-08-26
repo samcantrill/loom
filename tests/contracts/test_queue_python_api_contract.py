@@ -118,9 +118,17 @@ def test_local_daemon_public_request_has_no_executable_or_privileged_fields(
     }
     assert config.machine_id == "machine-A"
     assert {
+        "AgentResourceProvider",
+        "ClaimCommand",
+        "ClaimOutcome",
+        "ClaimResult",
+        "CpuResourceProvider",
         "LocalDaemon",
         "LocalDaemonAdmissionRequest",
         "LocalDaemonSocketClient",
+        "MemoryResourceProvider",
+        "ObserveRequest",
+        "ObserveResult",
         "ResidentWorkerLaunchProfile",
     }.issubset(queue.__all__)
 

@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 import pytest
 
-from loom.pipeline.execution import (
+from loom.queue import (
     AgentResourceProvider,
     ClaimCommand,
     ClaimOutcome,
