@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 9C2
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p9c2-remote-supervisor-profile-proof-closure`
@@ -196,7 +196,9 @@ owner or test-only production interface.
   exact path; manager review verified the rejection precedes root-lock
   acquisition and a correctly configured reopen remains available. Refreshed
   focused and full validation passed with no detached supervisor.
-- PR/merge: pending
+- PR/merge: [#246](https://github.com/samcantrill/loom/pull/246) opened against
+  `develop`; verified non-draft, correct title/head/base, and mergeable. CI
+  pending.
 
 ## Completion Record
 
@@ -204,5 +206,5 @@ owner or test-only production interface.
 | --- | --- |
 | Implementation and tests | `db01737` (`db8e9e2` closure plus correction 1/3); executable profile-set add/remove/change and empty/non-empty reload transitions reject before configuration swap/open, canonical reorder remains accepted, a rejected open does not retain the root lock, the four restart barriers use distinct spawned interpreter PIDs against one continuous supervisor, and two supported selected profiles produce matching durable launch identities and terminal runs. |
 | Validated revision and evidence | `db01737`; focused reload/reopen/restart/two-profile integration passed, 9 tests in 25.32s. Refreshed `make validate-pr` exited 0 on 2026-08-26: repository Ruff passed; full Pyright reported 0 errors; default harness passed 2,549 tests with 121 deselected; config-extra passed 141 tests with 3 expected skips and 2,552 deselected; source and wheel builds passed. No detached Phase 9C2 supervisor remained. |
-| PR, review, and merge | pending |
+| PR, review, and merge | Required independent review identified one blocker and no optional hardening; correction `db01737` plus refreshed manager review/validation closed it. [#246](https://github.com/samcantrill/loom/pull/246) is open against `develop`; CI and merge pending. |
 | Residual risk and cleanup | No known phase blocker. Supervisor HA/adoption, live profile-set migration, embedded/local execution, SLURM recovery, and replacement remain explicitly deferred. Worktree cleanup follows remote merge. |
