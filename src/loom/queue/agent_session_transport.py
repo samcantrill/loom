@@ -2033,6 +2033,9 @@ class LocalDaemonAgentHttpClient:
                     process_execution_id=execution_id,
                     execution_fence=fence,
                     launch_operation_id=f"{request.assignment_id}:launch:{fence}",
+                    bundle_digest=hashlib.sha256(
+                        _canonical_json(request.to_dict()).encode("utf-8")
+                    ).hexdigest(),
                     workspace_root=workspace.root,
                     profile=profile.launch_profile,
                     environment=environment,

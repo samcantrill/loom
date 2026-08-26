@@ -39,6 +39,7 @@ def _launch(
         process_execution_id="process-A",
         execution_fence="fence-A",
         launch_operation_id="launch-A",
+        bundle_digest="a" * 64,
         workspace_root=workspace,
         profile=_profile(),
         environment={},
@@ -65,6 +66,8 @@ def test_launch_exact_replay_has_one_root_and_conflicting_identity_rejects(
     assert replay.state is SupervisorLaunchState.RUNNING
     with pytest.raises(AgentProcessSupervisorError, match="conflicts"):
         supervisor.launch(replace(launch, execution_fence="different-fence"))
+    with pytest.raises(AgentProcessSupervisorError, match="conflicts"):
+        supervisor.launch(replace(launch, bundle_digest="b" * 64))
 
 
 def test_reopened_supervisor_does_not_adopt_nonterminal_pid(tmp_path: Path) -> None:

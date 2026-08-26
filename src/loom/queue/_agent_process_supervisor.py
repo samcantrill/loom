@@ -131,6 +131,7 @@ class ResidentWorkerLaunch:
     process_execution_id: str
     execution_fence: str
     launch_operation_id: str
+    bundle_digest: str
     workspace_root: Path
     profile: ResidentWorkerLaunchProfile
     environment: Mapping[str, str]
@@ -145,10 +146,16 @@ class ResidentWorkerLaunch:
             "process_execution_id",
             "execution_fence",
             "launch_operation_id",
+            "bundle_digest",
         ):
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise AgentProcessSupervisorError(f"{name} must be a non-empty string")
+        if (
+            len(self.bundle_digest) != 64
+            or any(character not in "0123456789abcdef" for character in self.bundle_digest)
+        ):
+            raise AgentProcessSupervisorError("bundle_digest must be a SHA-256 digest")
         workspace = Path(self.workspace_root).resolve()
         if not workspace.is_dir():
             raise AgentProcessSupervisorError("resident workspace is unavailable")
@@ -175,6 +182,7 @@ class ResidentWorkerLaunch:
                 "process_execution_id": self.process_execution_id,
                 "execution_fence": self.execution_fence,
                 "launch_operation_id": self.launch_operation_id,
+                "bundle_digest": self.bundle_digest,
                 "workspace_root": str(self.workspace_root),
                 "profile_id": self.profile.profile_id,
                 "profile_fingerprint": self.profile.fingerprint,
@@ -540,6 +548,7 @@ def _launch_value(launch: ResidentWorkerLaunch) -> dict[str, object]:
         "process_execution_id": launch.process_execution_id,
         "execution_fence": launch.execution_fence,
         "launch_operation_id": launch.launch_operation_id,
+        "bundle_digest": launch.bundle_digest,
         "workspace_root": str(launch.workspace_root),
         "profile": _profile_value(launch.profile),
         "environment": dict(launch.environment),
@@ -556,6 +565,7 @@ def _launch_from_value(value: object) -> ResidentWorkerLaunch:
         "process_execution_id",
         "execution_fence",
         "launch_operation_id",
+        "bundle_digest",
         "workspace_root",
         "profile",
         "environment",
@@ -574,6 +584,7 @@ def _launch_from_value(value: object) -> ResidentWorkerLaunch:
         process_execution_id=cast(str, value["process_execution_id"]),
         execution_fence=cast(str, value["execution_fence"]),
         launch_operation_id=cast(str, value["launch_operation_id"]),
+        bundle_digest=cast(str, value["bundle_digest"]),
         workspace_root=Path(cast(str, value["workspace_root"])),
         profile=_profile_from_value(value["profile"]),
         environment={
