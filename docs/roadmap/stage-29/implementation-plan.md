@@ -1,12 +1,12 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: implementation in progress; Phases 1-3D, 4A, 5A, 6, 7B, and 8A merged;
+Status: implementation in progress; Phases 1-3D, 4A, 5A, 6, 7B, 8A, and 9C2 merged;
 Phases 3A-3C, 4, 5, 7, 7A, 8, 9, 9A, 9B, and 9C retained as blocked evidence
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 9C2 `in_progress`
+Current phase: Phase 9D `pending`
 Blockers: none at the stage level. Phase 9 correction budget 3/3 is exhausted
 after candidate `ef3be2f` implemented only the validated resident-worker service
 hard cut. Fresh Phase 9A selectively reused that source change and attempted the
@@ -16,8 +16,8 @@ configuration. Fresh Phase 9B fixed that identity but exhausted correction 3/3
 before closing its service/path/restart cluster. Phase 9C validated the remote
 supervisor/restart vertical but its required review found a live profile-set
 reload mismatch and missing fresh-process/two-profile proof after correction
-3/3. Fresh Phase 9C2 owns exactly those closures. Phase 9D owns embedded/local
-cut-over and restart; Phase 9E closes SLURM restart plus guarded recovery/retry;
+3/3. Fresh Phase 9C2 closed those findings and merged as `b0ed116`. Phase 9D
+now owns embedded/local cut-over and restart; Phase 9E closes SLURM restart plus guarded recovery/retry;
 Phase 9F closes session replacement, operations, and final validation. Every
 phase uses fresh schema identities.
 
@@ -74,8 +74,8 @@ phase uses fresh schema identities.
   close the service/path/restart cluster. Phase 9C validated remote supervision
   and restart but is blocked evidence after required review found a divergent
   trusted-reload profile set and missing process-level/two-profile proof. Fresh
-  Phase 9C2 owns only those closures; Phase 9D owns embedded/local cut-over and
-  restart. Phase 9E owns SLURM restart and privileged guarded recovery/retry.
+  Phase 9C2 closed only those findings and merged; Phase 9D owns embedded/local
+  cut-over and restart. Phase 9E owns SLURM restart and privileged guarded recovery/retry.
   Phase 9F owns different-session replacement, remaining operations, and final
   validation.
   The manifest intentionally records shared contracts rather than duplicating
@@ -685,7 +685,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 9A | `restart-guarded-recovery-closure` | blocked | `docs/roadmap/stage-29/phases/restart-guarded-recovery-closure.md` | `agent/stage-29-p9a-restart-guarded-recovery-closure` | No PR opened | Selective Phase 9 hard-cut reuse; private supervisor foundation and exact environment; fixed shared resident bundle; production integration absent | Preserve validated foundation evidence; correction 3/3 found that its one-profile root cannot serve the supported multi-profile remote configuration. |
 | 9B | `managed-supervisor-restart-final-closure` | blocked | `docs/roadmap/stage-29/phases/managed-supervisor-restart-final-closure.md` | `agent/stage-29-p9b-managed-supervisor-restart-final-closure` | No PR opened | Validated complete profile-set/schema-v2 foundation and explicit local-profile/CLI decision; service, both production routes, old-owner removal, and restart absent | Preserve `2fdfcf8` as selective evidence; correction 3/3 exhausted. |
 | 9C | `remote-supervisor-restart-closure` | blocked | `docs/roadmap/stage-29/phases/remote-supervisor-restart-closure.md` | `agent/stage-29-p9c-remote-supervisor-restart-closure` | No PR opened | Validated canonical remote profile-set supervisor and same-session replay candidate; required review found that trusted reload can diverge from the bound launch-profile set, while fresh-process restart and two-profile routing evidence are absent | Preserve validated implementation `d9cc0ae` and passing full-gate evidence as read-only input to a fresh bounded closure; correction 3/3 is exhausted. |
-| 9C2 | `remote-supervisor-profile-proof-closure` | pr_open | `docs/roadmap/stage-29/phases/remote-supervisor-profile-proof-closure.md` | `agent/stage-29-p9c2-remote-supervisor-profile-proof-closure` | [#246](https://github.com/samcantrill/loom/pull/246) open | Selective Phase 9C source/test reuse; reject any live reload/reopen whose executable profile set differs from the supervisor-bound set; real fresh-process four-barrier restart; actual two-profile selection and launch routing | Local gates and required review closure passed after correction 1/3; CI/merge pending. |
+| 9C2 | `remote-supervisor-profile-proof-closure` | merged | `docs/roadmap/stage-29/phases/remote-supervisor-profile-proof-closure.md` | `agent/stage-29-p9c2-remote-supervisor-profile-proof-closure` | [#246](https://github.com/samcantrill/loom/pull/246) merged | Selective Phase 9C source/test reuse; reject any live reload/reopen whose executable profile set differs from the supervisor-bound set; real fresh-process four-barrier restart; actual two-profile selection and launch routing | Local gates, required review closure, and CI passed after correction 1/3; squash-merged as `b0ed116`. |
 | 9D | `embedded-supervisor-restart-closure` | pending | `docs/roadmap/stage-29/phases/embedded-supervisor-restart-closure.md` | `agent/stage-29-p9d-embedded-supervisor-restart-closure` | pending | Required local profile and v4 CLI flags; shared resident bundle projection; embedded process-owner/callable hard cut; same-session local restart/replay | Merge the complete embedded/local consumer through the Phase 9C2 service without run-store serialization, compatibility, or early capacity. |
 | 9E | `slurm-guarded-recovery-closure` | pending | `docs/roadmap/stage-29/phases/slurm-guarded-recovery-closure.md` | `agent/stage-29-p9e-slurm-guarded-recovery-closure` | pending | Coordinator and SLURM restart; no-resubmit reconciliation; exact managed/SLURM containment evidence; privileged recovery close; authority terminal-or-close CAS; existing-policy retry | Merge exceptional guarded recovery without treating weak evidence as containment or introducing a second retry policy. |
 | 9F | `session-replacement-recovery-operations` | pending | `docs/roadmap/stage-29/phases/session-replacement-recovery-operations.md` | `agent/stage-29-p9f-session-replacement-recovery-operations` | pending | Complete different-session replacement; stale old-session fact rejection; remaining joined status and authenticated operations; operational guidance; final Stage 29 E2E/validation/summary | Complete the accepted recovery surface and close Stage 29 with fresh-process evidence and all gates. |
@@ -715,7 +715,7 @@ fixed the profile-set identity but exhausted its own correction 3/3 before the
 service/path/restart cluster was complete. Phase 9C validated the remote
 consumer vertical but required review found one supported profile-set reload
 failure and two missing causal proofs after correction 3/3. Fresh Phase 9C2
-owns exactly that remote closure before embedded/local Phase 9D. Phase 9E owns
+closed exactly that remote vertical and merged before embedded/local Phase 9D. Phase 9E owns
 SLURM restart and guarded recovery/retry; Phase 9F owns replacement, operations,
 and final validation.
 
@@ -862,7 +862,7 @@ and final validation.
   two-current-consumer integration cluster also needed vertical shaping. Remote
   9C then passed its full gate but required review found one profile-set reload
   contract failure and missing fresh-process/two-profile evidence after its
-  correction budget was exhausted. Fresh 9C2 owns only those exact findings;
+  correction budget was exhausted. Fresh 9C2 closed only those exact findings;
   embedded/local 9D and the later 9E/9F closures retain their unchanged outcome.
 - Phase 4A completion: source/test revision `41a6045` passed the full local gate
   and 2,557 categorized tests; independent review passed at `b5cf127`; CI passed
@@ -912,8 +912,8 @@ and final validation.
   implemented remote supervision/restart and passed `make validate-pr`, but its
   required review found that live reload may diverge from the bound profile set
   and that real fresh-process/two-profile routing evidence is absent after
-  correction 3/3. Fresh Phase 9C2 starts from current `develop`, reuses that
-  validated implementation selectively, and closes only those findings; linked
+  correction 3/3. Fresh Phase 9C2 selectively reused that validated
+  implementation, closed only those findings, and merged as `b0ed116`; linked
   Phases 9D–9F retain the unchanged embedded, recovery, and replacement outcomes.
 - Accepted risks: FIFO starvation, complete-search exhaustion/delay, coordinator relay
   bottleneck, agent result retention, resident-project drift, trusted
@@ -955,7 +955,7 @@ and final validation.
 | 9A | No PR opened | Foundation `ea6e06c` adds the resident-worker hard cut and private single-profile supervisor persistence; `24b8c9c` makes the child environment exact; focused refiner evidence was 26 passing tests; no production integration | Correction 3/3 found that the one-profile root cannot serve multiple supported remote profiles; no refiner source changes | Branch/worktree retained as read-only evidence |
 | 9B | No PR opened | Selective foundation `264ac1f`; correction 1/3 commit `2fdfcf8` adds required local profile wiring, schema-v2 complete-set identity, materialized launch JSON, and manager-verified Ruff/Pyright/35 passes; correction 2 fixed the CLI decision; correction 3 made no changes | Supervisor remains in-process, both managed paths retain old owners, and restart is absent | Correction 3/3 exhausted; branch/worktree retained read-only |
 | 9C | No PR opened | Validated implementation `d9cc0ae`; focused affected tests and `make validate-pr` passed; required independent review blocked submission | Trusted reload can diverge from the bound executable profile set; fresh-process restart and actual two-profile routing evidence are absent | Correction 3/3 exhausted; dedicated branch/worktree retained read-only |
-| 9C2 | [#246](https://github.com/samcantrill/loom/pull/246) open | Validated implementation `db01737`; focused 9-test matrix and refreshed `make validate-pr` passed; required review blocker closed by correction 1/3 | No known phase blocker; CI and remote merge pending | Dedicated fresh branch/worktree active |
-| 9D | pending after Phase 9C2 merges | pending | Embedded projection must not serialize `LegacyRunStore` or retain callable/thread ownership | Worktree and branch not yet created |
+| 9C2 | [#246](https://github.com/samcantrill/loom/pull/246), squash-merged as `b0ed116` | Validated implementation `db01737`; focused 9-test matrix and refreshed `make validate-pr` passed; required review blocker closed by correction 1/3; CI passed | No known phase blocker; embedded/local execution remains Phase 9D | Dedicated fresh branch/worktree and local/remote branches removed after verified merge |
+| 9D | pending after Phase 9C2 merge | pending | Embedded projection must not serialize `LegacyRunStore` or retain callable/thread ownership | Worktree and branch not yet created |
 | 9E | pending after Phase 9D merges | pending | Phase 9C2/9D must supply trustworthy managed containment receipts; weak SLURM or managed evidence must remain unknown | Worktree and branch not yet created |
 | 9F | pending after Phase 9E merges | pending | Replacement must not accept stale old-session facts or advertise capacity before the complete reference set is resolved | Worktree and branch not yet created |
