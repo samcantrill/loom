@@ -17,7 +17,7 @@
   selective read-only evidence, never dependency bases or supported schemas.
 - Workflow path: expanded because a separate process owner and restart capacity
   interact. One executor and one independent implementation review are required.
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3
 
 ## Objective And Context
 
@@ -209,7 +209,16 @@ ordinary result/output import. `UNKNOWN` withholds claims and never relaunches.
 
 - Manager preparation: complete on current `origin/develop`; dedicated worktree,
   finalized remote-only plan, and selective fresh foundation `718d3a5` recorded
-- Implementation: ready for one fresh Phase 9C executor
+- Implementation: executor correction 1 is anchored at `9794173`. It implements
+  the explicit complete-profile-set root initializer, separately locked and
+  authenticated supervisor service/client, materialized launch receipts,
+  group-containment owner, and remote-client cut-over. It also fails closed at
+  zero capacity when retained work is detected. The remaining qualified blocker
+  is the accepted same-session restart path: retained delivery/workspace,
+  execution-journal, supervisor, event/result/output/transfer, outbox, provider,
+  and availability evidence is not yet reconstructed and replayed to completion.
+  A test-only teardown gap also leaves detached supervisor services after the
+  affected integration tests. One Phase 9C refiner owns both concrete gaps.
 - Validation/review: pending
 - PR/merge: pending
 
@@ -217,7 +226,7 @@ ordinary result/output import. `UNKNOWN` withholds claims and never relaunches.
 
 | Item | Result |
 | --- | --- |
-| Implementation and tests | pending |
+| Implementation and tests | Partial correction 1 at `9794173`: changed-path Ruff passed; changed-source Pyright reported 0 errors; supervisor plus remote-agent integration tests passed, 19 tests. Successful retained-work restart/replay and explicit detached-service test teardown remain pending. |
 | Validated revision and evidence | pending |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
