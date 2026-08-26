@@ -4,6 +4,7 @@ import sys
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -97,19 +98,22 @@ def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
     launch = _launch(supervisor, workspace)
     original_popen = subprocess.Popen
 
-    def start_root(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
-        return original_popen(
-            [
-                sys.executable,
-                "-c",
-                (
-                    "import signal, subprocess, sys, time; "
-                    "subprocess.Popen([sys.executable, '-c', "
-                    "'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)']); "
-                    "time.sleep(30)"
-                ),
-            ],
-            **kwargs,
+    def start_root(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        return cast(
+            subprocess.Popen[bytes],
+            original_popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import signal, subprocess, sys, time; "
+                        "subprocess.Popen([sys.executable, '-c', "
+                        "'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)']); "
+                        "time.sleep(30)"
+                    ),
+                ],
+                **kwargs,
+            ),
         )
 
     monkeypatch.setattr(

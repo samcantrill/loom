@@ -849,10 +849,12 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             coordinator.submit(LocalDaemonAdmissionRequest("restart-item", run_uri))
             with pytest.raises(RuntimeError, match="application restart"):
                 execution.result(timeout=20)
-        supervisor_id = agent._supervisor.supervisor_id  # noqa: SLF001 - causal service receipt
+        supervisor_id = supervisor.supervisor_id
         agent.close()
         replacement = LocalDaemonAgentHttpClient(remote_config)
-        assert replacement._supervisor.supervisor_id == supervisor_id  # noqa: SLF001
+        replacement_supervisor = replacement._supervisor  # noqa: SLF001
+        assert replacement_supervisor is not None
+        assert replacement_supervisor.supervisor_id == supervisor_id
         with pytest.raises(QueueConflictError, match="cannot advertise"):
             replacement.publish_offer(offer, idempotency_key="offer-before-replay")
         (replayed,) = replacement.resume_retained_work()
@@ -879,10 +881,14 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
     finally:
         if replacement is not None:
-            replacement._supervisor.shutdown_for_test()  # noqa: SLF001
+            replacement_supervisor = replacement._supervisor  # noqa: SLF001
+            if replacement_supervisor is not None:
+                replacement_supervisor.shutdown_for_test()
             replacement.close()
         else:
-            agent._supervisor.shutdown_for_test()  # noqa: SLF001
+            agent_supervisor = agent._supervisor  # noqa: SLF001
+            if agent_supervisor is not None:
+                agent_supervisor.shutdown_for_test()
             agent.close()
         server.stop()
         daemon.stop()
