@@ -100,7 +100,7 @@ def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
 
     def start_root(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
         return cast(
-            subprocess.Popen[bytes],
+            Any,
             original_popen(
                 [
                     sys.executable,
