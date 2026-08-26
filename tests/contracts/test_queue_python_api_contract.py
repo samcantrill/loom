@@ -81,6 +81,16 @@ def test_managed_local_queue_runtime_api_is_removed() -> None:
         importlib.import_module("loom.queue.managed_local")
 
 
+def test_pipeline_execution_does_not_import_queue_managed_ownership() -> None:
+    import importlib
+
+    execution = importlib.import_module("loom.pipeline.execution")
+
+    assert not hasattr(execution, "ManagedAssignment")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("loom.pipeline.execution.managed_local")
+
+
 def test_local_daemon_public_request_has_no_executable_or_privileged_fields(
     tmp_path: Path,
 ) -> None:
