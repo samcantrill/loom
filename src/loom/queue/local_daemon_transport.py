@@ -13,7 +13,7 @@ from threading import Event, Thread
 import time
 from typing import cast
 
-from loom.serialization import PlainData
+from loom.serialization import PlainData, thaw_plain_data
 
 from .errors import (
     QueueConflictError,
@@ -31,6 +31,7 @@ from .local_daemon import (
     LocalDaemonPrincipal,
     LocalDaemonRole,
     LocalDaemonStatus,
+    RecoverUnknownAssignment,
 )
 
 
@@ -144,6 +145,15 @@ class LocalDaemonSocketServer:
                         CoordinatorSchedulingReload.from_dict(request)
                     )
                 )
+            elif operation == "recover_unknown":
+                request = payload.get("request")
+                if not isinstance(request, Mapping):
+                    raise QueueServiceError("recovery request must be a mapping")
+                result = dict(
+                    operator.recover_unknown(
+                        RecoverUnknownAssignment.from_dict(request)
+                    )
+                )
             else:
                 raise QueueServiceError("local daemon operation is unsupported")
             response: PlainData = {"ok": True, "result": result}
@@ -219,6 +229,14 @@ class LocalDaemonSocketClient:
             ),
         )
 
+    def recover_unknown(
+        self, request: RecoverUnknownAssignment
+    ) -> Mapping[str, PlainData]:
+        return cast(
+            Mapping[str, PlainData],
+            self._call({"operation": "recover_unknown", "request": request.to_dict()}),
+        )
+
     def _call(self, request: Mapping[str, PlainData]) -> Mapping[str, object]:
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
@@ -291,7 +309,12 @@ def _write_message(
     connection: socket.socket,
     value: Mapping[str, PlainData],
 ) -> None:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    payload = json.dumps(
+        thaw_plain_data(value, path="local daemon socket message"),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
     if len(payload) > _MAX_MESSAGE_BYTES:
         raise QueueServiceError("local daemon response is too large")
     connection.sendall(payload + b"\n")

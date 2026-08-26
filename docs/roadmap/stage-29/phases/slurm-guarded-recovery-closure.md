@@ -2,23 +2,24 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 9E
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p9e-slurm-guarded-recovery-closure`
 - Worktree root: `/home/can134/work/active/loom-worktrees`
-- Worktree path: create after Phase 9D is remotely merged
-- Base revision: current `origin/develop` after the Phase 9D merge
+- Worktree path: `/home/can134/work/active/loom-worktrees/stage-29-p9e-slurm-guarded-recovery-closure`
+- Base revision: `eadeead37099fac834d0c40f32910f4ee9d39bb8`
 - PR target: `develop`
 - PR title: `feat(scheduling): close SLURM guarded recovery`
-- Dependency: Phases 9C2 and 9D remotely merged. Blocked Phases 9 through 9C
+- Dependency: Phases 9C2 and 9D2 remotely merged as `b0ed116` and `82b311f`.
+  Blocked Phases 9 through 9D
   remain read-only evidence; the blocked Phase 9 plan's `Recovery request and
   evidence` and `Cross-store recovery saga` headings retain the approved
   behavior contract.
 - Workflow path: expanded. Irreversible fence closure, external containment,
   and retry causally interact, so implementation requires one executor and one
   independent review unless manager evidence removes the residual risk.
-- Blocker corrections: 0/3
+- Blocker corrections: 3/3 completed
 
 ## Objective And Context
 
@@ -32,6 +33,37 @@ existing reliability owner alone decides whether a fresh attempt is permitted.
 This phase does not reopen the hard-cut decision. Old Phase 9, supervisor,
 coordinator, authority, agent, or SLURM candidate schemas are rejected rather
 than migrated, adopted, or inferred.
+
+## Current Source And Harness
+
+- `src/loom/queue/local_daemon_execution.py` is the production coordinator and
+  already reconstructs retained managed and SLURM assignments. Its
+  `_reconcile_slurm_run()` path mirrors durable submission state and observes an
+  accepted operation without resubmitting it; extend this owner rather than
+  creating another restart loop.
+- `src/loom/queue/slurm_ready_stage.py` owns atomic SLURM assignment reservation,
+  submission/bootstrap facts, result evidence, and physical release state.
+  `src/loom/pipeline/executors/slurm/ready_stage.py` owns the retained profile,
+  durable submission operation, and site helper boundary.
+- `src/loom/queue/_managed_local.py` and the merged supervisor journal own exact
+  managed launch containment. `src/loom/queue/agent_sessions.py` and
+  `src/loom/queue/local_daemon.py` own authenticated operator scopes and the
+  daemon-facing operation surface.
+- `src/loom/pipeline/stores/sqlite_authority.py` owns fenced attempt truth and is
+  the only acceptable terminal-or-close arbitration point.
+  `src/loom/pipeline/execution/reliability.py` already owns
+  `record_retry_decision_for_stage_result()`; the current orchestrator remains
+  the only owner that materializes another attempt.
+- Primary harnesses are
+  `tests/integration/queue/test_local_daemon_production.py`,
+  `tests/integration/queue/test_slurm_ready_stage.py`,
+  `tests/integration/queue/test_agent_session_transport.py`,
+  `tests/unit/loom/queue/test_local_daemon.py`,
+  `tests/unit/loom/queue/test_agent_sessions.py`,
+  `tests/unit/loom/pipeline/stores/test_sqlite_authority.py`, and
+  `tests/contracts/test_managed_authority_contract.py`. Reuse their production
+  composition helpers; do not prove the phase with an isolated replacement
+  state machine.
 
 ## Scope
 
@@ -126,6 +158,20 @@ new intent, submission, close, retry decision, or physical release.
 | Retry policy has one owner | Existing reliability evaluator | Duplicate or policy-divergent attempts | Replay and success/failure/cancellation policy tests |
 | Lifecycle close does not imply capacity release | Provider/profile owner | Unsafe capacity reuse | Status and scheduling barriers until exact release |
 
+## Proportionality And Implementer Discretion
+
+The phase may add only the private durable request/status state, exact authority
+transition, scoped daemon operation, and optional retained-profile containment
+helper needed by the accepted end-to-end consumers. It must not add a generic
+recovery framework, a second retry abstraction, a public plugin surface, or a
+compatibility reader. Any changed durable identity is a hard cut: fresh roots
+use the new shape and older/candidate shapes fail closed.
+
+Private type, table, helper, and method names are implementer discretion. So are
+transaction-local representations and how the existing coordinator resumes the
+saga, provided the fixed cross-store order, trust boundaries, externally
+observable status, and causal crash behavior above remain exact.
+
 ## Implementation Slices
 
 1. Complete fresh coordinator restart and exact ready-stage SLURM submission/
@@ -161,9 +207,9 @@ new intent, submission, close, retry decision, or physical release.
 
 ## Executor Handoff
 
-- Start only after Phase 9D is remotely merged and this branch is based on
-  current `origin/develop`.
-- Read this plan, Phase 9C2/9D completion records, and the blocked Phase 9 plan's
+- Start from prepared revision recorded in metadata; the branch is based on the
+  current post-9D2 `origin/develop`.
+- Read this plan, Phase 9C2/9D2 completion records, and the blocked Phase 9 plan's
   `Recovery request and evidence` and `Cross-store recovery saga` sections.
 - Implement the three slices, tests, and phase-specific operational guidance.
 - Do not edit roadmap metadata, perform GitHub operations, add compatibility,
@@ -171,16 +217,37 @@ new intent, submission, close, retry decision, or physical release.
 
 ## Workflow State
 
-- Manager preparation: pending Phase 9D merge
-- Implementation: pending
-- Validation and review: pending
-- PR and merge: pending
+- Manager preparation: complete on the post-9D2 branch; maintainer approval
+  recorded
+- Implementation: correction 3 completes the fixed durable saga order for
+  local, remote, and SLURM targets; persists target-owned containment evidence
+  before authority close; permanently rejects the old fence after close; and
+  lets only the existing reliability owner authorize and materialize one retry.
+  The hard cut advances the authenticated agent protocol and root schema to v6,
+  with no compatibility reader. Exact physical ownership remains retained. The
+  final correction admits a new recovery intent only after complete identity,
+  authority version, and target-specific unknown state validation; active or
+  stale requests fail before persistence and therefore cannot freeze ordinary
+  work.
+- Validation and review: the first `make validate-pr` passed after causal
+  corrections for a cheap SLURM import boundary, first-attempt intent replay,
+  and transactionally consistent concurrent SQLite authority snapshots.
+  Independent review then found that active work could enter recovery before
+  identity/unknown-state validation. Correction 3 closes that blocker; its
+  focused local, remote, and SLURM recovery tests plus Ruff and Pyright pass.
+  The fresh final `make validate-pr` also passes with 2,568 default tests, 141
+  configuration-extra tests, 3 expected environment skips, zero lint/type
+  findings, and successful source/wheel builds.
+- PR and merge: [PR #248](https://github.com/samcantrill/loom/pull/248) is open
+  against `develop`; GitHub reports it mergeable and non-draft. This repository
+  exposes no PR check run, so the fresh local implementation gate is the
+  submission evidence.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and tests | pending |
-| Validated revision and evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and tests | Correction 3 composes durable request, pre-persistence exact-unknown admission, freeze, ordinary-terminal recheck, exact target evidence, authority arbitration, existing-policy retry, and joined status across direct, Unix-socket, authenticated remote-agent, and SLURM paths. Tests now create real local supervisor uncertainty, expire the exact remote observation, and move the exact SLURM observation from `RUNNING` to unavailable; active and stale requests prove that no recovery row, evidence request, or ordinary freeze is created. Restart resumes valid pending and evidence-confirmed operations; late old-fence results conflict; accepted SLURM work is not resubmitted; closed capacity remains held. |
+| Validated revision and evidence | Pre-review candidate passed the authority/orchestration/SLURM slice (62 tests). Correction 3 focused evidence is 11 passing recovery/containment tests with changed-path Ruff and Pyright clean. Fresh final `make validate-pr` passed: Ruff clean, Pyright 0 errors, default 2,568 passed with 121 deselected, config-extra 141 passed with 3 expected environment skips and 2,571 deselected, and source/wheel builds succeeded. Phase 9F owns `make test-summary`. |
+| PR, review, and merge | Required expanded review completed with one blocker; correction 3 is manager-verified locally. [PR #248](https://github.com/samcantrill/loom/pull/248) targets `develop`, is non-draft and mergeable, and currently exposes no CI check run; merge is pending. |
+| Residual risk and cleanup | No known implementation blocker remains after the final scoped correction. Physical release, different-session replacement, and Phase 9F final surfaces remain deliberately unchanged. |

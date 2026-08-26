@@ -298,6 +298,53 @@ def test_response_loss_after_authority_commit_replays_one_attempt(
     assert len(store.list_stage_work()) == 1
 
 
+def test_intent_replays_before_first_attempt_after_authority_advances(
+    tmp_path: Path,
+) -> None:
+    run_uri = "file:///intent-before-attempt"
+    authority = _authority(run_uri)
+
+    class LostBeforeCommit:
+        def __init__(self) -> None:
+            self.drop = True
+
+        def ensure_prepared_attempt(
+            self, run_uri: str, request: PreparedAttemptRequest
+        ) -> PreparedAttemptReceipt:
+            if self.drop:
+                self.drop = False
+                raise RuntimeError("request lost before authority commit")
+            return authority.ensure_prepared_attempt(run_uri, request)
+
+    store = SQLiteStageWorkStore(tmp_path / "coordinator.sqlite")
+    orchestrator = RunOrchestrator(
+        authority=LostBeforeCommit(), store=store, owner_id="coordinator"
+    )
+    plan = _plan(run_uri, _stage("left"), _stage("right"))
+    with pytest.raises(RuntimeError, match="before authority commit"):
+        orchestrator.reconcile(
+            admission_id="admission-1",
+            plan=plan,
+            authority_snapshot=authority.open_run(run_uri),
+            placements={"left": _placement(), "right": _placement()},
+            ready_at=10,
+        )
+
+    authority.allocate_stage_attempt(run_uri, "right", owner_id="worker")
+    result = orchestrator.reconcile(
+        admission_id="admission-1",
+        plan=plan,
+        authority_snapshot=authority.open_run(run_uri),
+        placements={"left": _placement(), "right": _placement()},
+        ready_at=20,
+    )
+
+    assert [record.stage_name for record in result] == ["left"]
+    left = next(stage for stage in authority.open_run(run_uri).stages if stage.stage_name == "left")
+    assert [attempt.attempt for attempt in left.attempts] == [1]
+    assert len(store.list_stage_work()) == 1
+
+
 def test_old_receipt_replay_does_not_regress_revision_for_new_retry() -> None:
     run_uri = "file:///replay-then-retry"
     authority = _authority(run_uri)
@@ -356,6 +403,69 @@ def test_old_receipt_replay_does_not_regress_revision_for_new_retry() -> None:
     )
     assert [record.stage_name for record in second] == ["left", "right"]
     assert second[1].attempt == allocation.attempt.attempt + 1
+
+
+def test_retry_uses_a_new_intent_after_the_prior_attempt_was_projected() -> None:
+    run_uri = "file:///projected-retry"
+    authority = _authority(run_uri)
+    store = InMemoryStageWorkStore()
+    orchestrator = RunOrchestrator(
+        authority=authority,
+        store=store,
+        owner_id="coordinator",
+    )
+    plan = _plan(run_uri, _stage("train"))
+    first = orchestrator.reconcile(
+        admission_id="admission-1",
+        plan=plan,
+        authority_snapshot=authority.open_run(run_uri),
+        placements={"train": _placement()},
+        ready_at=10,
+    )
+    assert len(first) == 1
+    assert first[0].attempt == 1
+    authority.transition_stage(
+        run_uri,
+        "train",
+        from_status=StageStatus.PENDING,
+        to_status=StageStatus.FAILED,
+    )
+    status = ReliabilityStatusDetail(
+        run_uri=run_uri,
+        run_status=RunStatus.RUNNING,
+        stage_id="train",
+        stage_status=StageStatus.FAILED,
+        attempt=1,
+        created_at="2020-01-01T00:00:00Z",
+    )
+    authority.write_retry_decision(
+        run_uri,
+        RetryDecisionRecord(
+            decision_id="retry-train",
+            transaction_id="tx-train",
+            should_retry=True,
+            next_attempt=2,
+            decision_reason="transient",
+            policy_max_attempts=2,
+            attempt_count=1,
+            status=status,
+            failure=FailureClassification(
+                reason_code="runtime_error", status=status, retriable=True
+            ),
+        ),
+    )
+
+    second = orchestrator.reconcile(
+        admission_id="admission-1",
+        plan=plan,
+        authority_snapshot=authority.open_run(run_uri),
+        placements={"train": _placement()},
+        ready_at=11,
+    )
+
+    assert len(second) == 1
+    assert second[0].attempt == 2
+    assert {item.attempt for item in store.list_stage_work()} == {1, 2}
 
 
 def test_replay_rejects_equal_revision_sequence_with_changed_token() -> None:

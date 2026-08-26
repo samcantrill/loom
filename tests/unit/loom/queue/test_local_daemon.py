@@ -26,6 +26,8 @@ from loom.queue import (
     LocalDaemonRole,
     LocalDaemonSocketClient,
     LocalDaemonSocketServer,
+    ManagedRecoveryTarget,
+    RecoverUnknownAssignment,
     QueueConflictError,
     QueueServiceError,
     QueueStorageError,
@@ -81,6 +83,148 @@ class _IncompatibleCpuPlanner(CpuResourcePlanner):
         implementation_fingerprint="test:cpu:incompatible",
     )
     claim_contracts = (ResourceClaimContractDescriptor("cpu", 2, "test-cpu-claim-v2"),)
+
+
+def test_recovery_request_round_trips_complete_immutable_identity() -> None:
+    request = RecoverUnknownAssignment(
+        recovery_id="recovery-1",
+        run_uri="file:///run",
+        stage_name="train",
+        attempt=2,
+        stage_work_id="work-1",
+        assignment_id="assignment-1",
+        process_execution_id="process-1",
+        execution_fence="fence-1",
+        target=ManagedRecoveryTarget("agent-1", "session-1"),
+        expected_state_version=7,
+        requested_outcome="failed",
+        consider_retry=True,
+        reason="contained",
+    )
+    assert RecoverUnknownAssignment.from_dict(request.to_dict()) == request
+    payload = request.to_dict()
+    payload["run_uri"] = "file:///other"
+    assert RecoverUnknownAssignment.from_dict(payload).run_uri == "file:///other"
+
+
+def test_recovery_persists_exact_evidence_before_close_and_replays_it(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config = replace(
+        config,
+        agent_policy=AgentPolicyConfig(
+            principals=(
+                TransportPrincipalPolicy(
+                    "operator-credential",
+                    f"uid:{os.getuid()}",
+                    "operator",
+                    actions=("recover_unknown",),
+                ),
+            )
+        ),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    request = RecoverUnknownAssignment(
+        recovery_id="recovery-crash-1",
+        run_uri="file:///run",
+        stage_name="train",
+        attempt=1,
+        stage_work_id="work-1",
+        assignment_id="assignment-1",
+        process_execution_id="process-1",
+        execution_fence="fence-1",
+        target=ManagedRecoveryTarget("agent-1", "session-1"),
+        expected_state_version=7,
+        requested_outcome="failed",
+        consider_retry=True,
+        reason="target owner contained the process",
+    )
+    evidence: dict[str, object] = {
+        "kind": "test-contained",
+        "state": "CONTAINED",
+        "receipt": "receipt-1",
+    }
+
+    class _CrashOnceExecution:
+        def __init__(self) -> None:
+            self.resolve_calls = 0
+            self.close_calls = 0
+
+        def recovery_has_ordinary_winner(self, _request: object) -> bool:
+            return False
+
+        def validate_recovery_admission(self, _request: object) -> None:
+            return None
+
+        def recovery_target_is_still_unknown(self, _request: object) -> bool:
+            return True
+
+        def resolve_recovery_evidence(
+            self, _request: object
+        ) -> tuple[str, dict[str, object]]:
+            self.resolve_calls += 1
+            return "contained", evidence
+
+        def close_recovered_assignment(
+            self, _request: object, persisted: object, *, recorded_at: str
+        ) -> dict[str, object]:
+            assert persisted == evidence
+            assert recorded_at
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise QueueServiceError("injected crash after evidence commit")
+            return {
+                "recovery_id": request.recovery_id,
+                "state": "closed",
+                "evidence": evidence,
+                "revision": 8,
+            }
+
+    execution = _CrashOnceExecution()
+    daemon._execution = cast(Any, execution)
+    with pytest.raises(QueueServiceError, match="not authorized"):
+        daemon.operator_view(
+            LocalDaemonPrincipal("intruder", LocalDaemonRole.OPERATOR)
+        ).recover_unknown(request)
+    with sqlite3.connect(config.control_database) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[0] == 0
+        )
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal(f"uid:{os.getuid()}", LocalDaemonRole.OPERATOR)
+    )
+
+    with pytest.raises(QueueServiceError, match="injected crash"):
+        operator.recover_unknown(request)
+    with sqlite3.connect(config.control_database) as conn:
+        state, persisted = conn.execute(
+            "SELECT state, evidence_json FROM recovery_operations "
+            "WHERE recovery_id = ?",
+            (request.recovery_id,),
+        ).fetchone()
+    assert state == "evidence_confirmed"
+    assert persisted is not None
+
+    replacement = LocalDaemon(config)
+    replacement._execution = cast(Any, execution)
+    replacement._resume_pending_recoveries(cast(Any, execution))
+    replacement_operator = replacement.operator_view(
+        LocalDaemonPrincipal(f"uid:{os.getuid()}", LocalDaemonRole.OPERATOR)
+    )
+    server = LocalDaemonSocketServer(replacement, config.endpoint)
+    server.start()
+    try:
+        result = LocalDaemonSocketClient(config.endpoint).recover_unknown(request)
+    finally:
+        server.stop()
+
+    assert result["state"] == "closed"
+    assert execution.resolve_calls == 1
+    assert execution.close_calls == 2
+    with pytest.raises(QueueConflictError, match="operation conflicts"):
+        replacement_operator.recover_unknown(replace(request, reason="changed replay"))
 
 
 class _TargetEvaluatorV2(TargetConstraintEvaluator):

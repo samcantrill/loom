@@ -21,7 +21,7 @@ import sqlite3
 import stat
 from threading import Event, RLock, Thread
 import time
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING, Iterator, cast
 from uuid import uuid4
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 5
+_LOCAL_DAEMON_SCHEMA_VERSION = 6
 
 
 class LocalDaemonAdmissionState(StrEnum):
@@ -114,6 +114,211 @@ class CoordinatorSchedulingReload:
             expected_scheduling_epoch=_required_string(
                 data, "expected_scheduling_epoch"
             ),
+            reason=_required_string(data, "reason"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedRecoveryTarget:
+    agent_id: str
+    session_id: str
+
+    def __post_init__(self) -> None:
+        for value in (self.agent_id, self.session_id):
+            _required_string({"value": value}, "value")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "kind": "managed",
+            "agent_id": self.agent_id,
+            "session_id": self.session_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "ManagedRecoveryTarget":
+        _exact_fields(
+            data, {"kind", "agent_id", "session_id"}, "managed recovery target"
+        )
+        if data.get("kind") != "managed":
+            raise QueueServiceError("managed recovery target kind is invalid")
+        return cls(
+            _required_string(data, "agent_id"), _required_string(data, "session_id")
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SlurmRecoveryTarget:
+    profile_id: str
+    submission_operation_id: str
+    cluster_id: str
+    job_id: str
+    bootstrap_incarnation_id: str | None
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.profile_id,
+            self.submission_operation_id,
+            self.cluster_id,
+            self.job_id,
+        ):
+            _required_string({"value": value}, "value")
+        if self.bootstrap_incarnation_id is not None:
+            _required_string({"value": self.bootstrap_incarnation_id}, "value")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "kind": "slurm",
+            "profile_id": self.profile_id,
+            "submission_operation_id": self.submission_operation_id,
+            "cluster_id": self.cluster_id,
+            "job_id": self.job_id,
+            "bootstrap_incarnation_id": self.bootstrap_incarnation_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "SlurmRecoveryTarget":
+        _exact_fields(
+            data,
+            {
+                "kind",
+                "profile_id",
+                "submission_operation_id",
+                "cluster_id",
+                "job_id",
+                "bootstrap_incarnation_id",
+            },
+            "SLURM recovery target",
+        )
+        if data.get("kind") != "slurm":
+            raise QueueServiceError("SLURM recovery target kind is invalid")
+        raw_incarnation = data.get("bootstrap_incarnation_id")
+        if raw_incarnation is not None and not isinstance(raw_incarnation, str):
+            raise QueueServiceError("SLURM recovery bootstrap incarnation is invalid")
+        return cls(
+            _required_string(data, "profile_id"),
+            _required_string(data, "submission_operation_id"),
+            _required_string(data, "cluster_id"),
+            _required_string(data, "job_id"),
+            raw_incarnation,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecoverUnknownAssignment:
+    """Closed, replay-safe privileged recovery request.
+
+    Target-owned evidence is intentionally absent: a caller can request a
+    close but cannot assert that a process was contained.
+    """
+
+    recovery_id: str
+    run_uri: str
+    stage_name: str
+    attempt: int
+    stage_work_id: str
+    assignment_id: str
+    process_execution_id: str
+    execution_fence: str
+    target: ManagedRecoveryTarget | SlurmRecoveryTarget
+    expected_state_version: int
+    requested_outcome: str
+    consider_retry: bool
+    reason: str
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.recovery_id,
+            self.run_uri,
+            self.stage_name,
+            self.stage_work_id,
+            self.assignment_id,
+            self.process_execution_id,
+            self.execution_fence,
+        ):
+            _required_string({"value": value}, "value")
+        if isinstance(self.attempt, bool) or self.attempt < 1:
+            raise QueueServiceError("recovery attempt is invalid")
+        if not isinstance(self.target, ManagedRecoveryTarget | SlurmRecoveryTarget):
+            raise QueueServiceError("recovery target is invalid")
+        if (
+            isinstance(self.expected_state_version, bool)
+            or self.expected_state_version < 0
+        ):
+            raise QueueServiceError("recovery expected state version is invalid")
+        if self.requested_outcome not in {"failed", "cancelled"}:
+            raise QueueServiceError("recovery requested outcome is invalid")
+        if not isinstance(self.consider_retry, bool):
+            raise QueueServiceError("recovery retry decision is invalid")
+        if (
+            not isinstance(self.reason, str)
+            or not self.reason
+            or len(self.reason) > 512
+        ):
+            raise QueueServiceError("recovery reason is invalid")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "recovery_id": self.recovery_id,
+            "run_uri": self.run_uri,
+            "stage_name": self.stage_name,
+            "attempt": self.attempt,
+            "stage_work_id": self.stage_work_id,
+            "assignment_id": self.assignment_id,
+            "process_execution_id": self.process_execution_id,
+            "execution_fence": self.execution_fence,
+            "target": self.target.to_dict(),
+            "expected_state_version": self.expected_state_version,
+            "requested_outcome": self.requested_outcome,
+            "consider_retry": self.consider_retry,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "RecoverUnknownAssignment":
+        _exact_fields(
+            data,
+            {
+                "recovery_id",
+                "run_uri",
+                "stage_name",
+                "attempt",
+                "stage_work_id",
+                "assignment_id",
+                "process_execution_id",
+                "execution_fence",
+                "target",
+                "expected_state_version",
+                "requested_outcome",
+                "consider_retry",
+                "reason",
+            },
+            "recovery request",
+        )
+        target = data.get("target")
+        if not isinstance(target, Mapping):
+            raise QueueServiceError("recovery target is invalid")
+        kind = target.get("kind")
+        if kind == "managed":
+            parsed_target: ManagedRecoveryTarget | SlurmRecoveryTarget = (
+                ManagedRecoveryTarget.from_dict(target)
+            )
+        elif kind == "slurm":
+            parsed_target = SlurmRecoveryTarget.from_dict(target)
+        else:
+            raise QueueServiceError("recovery target kind is invalid")
+        return cls(
+            recovery_id=_required_string(data, "recovery_id"),
+            run_uri=_required_string(data, "run_uri"),
+            stage_name=_required_string(data, "stage_name"),
+            attempt=_required_int(data, "attempt"),
+            stage_work_id=_required_string(data, "stage_work_id"),
+            assignment_id=_required_string(data, "assignment_id"),
+            process_execution_id=_required_string(data, "process_execution_id"),
+            execution_fence=_required_string(data, "execution_fence"),
+            target=parsed_target,
+            expected_state_version=_required_int(data, "expected_state_version"),
+            requested_outcome=_required_string(data, "requested_outcome"),
+            consider_retry=_required_bool(data, "consider_retry"),
             reason=_required_string(data, "reason"),
         )
 
@@ -796,6 +1001,10 @@ class LocalDaemon:
                 admission_activated=self._activate_admission,
                 daemon=self,
             )
+            # A persisted recovery may already have target-owned evidence from
+            # before the restart.  Replay it before ordinary retained work is
+            # allowed to mutate authority again.
+            self._resume_pending_recoveries(execution)
             # The daemon is not observable or schedulable until every retained
             # local launch has joined the continuous supervisor and completed
             # ordinary result/output/provider replay.
@@ -977,6 +1186,53 @@ class LocalDaemon:
                     )
                 )
             for row in conn.execute(
+                "SELECT principal_id, recovery_id, request_json, request_digest, "
+                "recorded_at, state, evidence_json, result_json "
+                "FROM recovery_operations ORDER BY recovery_id"
+            ):
+                request = RecoverUnknownAssignment.from_dict(
+                    json.loads(str(row["request_json"]))
+                )
+                result = json.loads(str(row["result_json"]))
+                if not isinstance(result, Mapping):
+                    raise QueueStorageError("guarded recovery result is invalid")
+                evidence = (
+                    None
+                    if row["evidence_json"] is None
+                    else json.loads(str(row["evidence_json"]))
+                )
+                controls.append(
+                    freeze_plain_data(
+                        {
+                            "owner": "guarded-recovery",
+                            "operation_id": str(row["recovery_id"]),
+                            "principal": str(row["principal_id"]),
+                            "state": str(row["state"]),
+                            "code": (
+                                "CONTAINED"
+                                if evidence is not None
+                                else result.get("evidence")
+                            ),
+                            "run_uri": request.run_uri,
+                            "stage_name": request.stage_name,
+                            "attempt": request.attempt,
+                            "assignment_id": request.assignment_id,
+                            "target": request.target.to_dict(),
+                            "requested_outcome": request.requested_outcome,
+                            "consider_retry": request.consider_retry,
+                            "expected_state_version": request.expected_state_version,
+                            "request_digest": str(row["request_digest"]),
+                            "recorded_at": str(row["recorded_at"]),
+                            "evidence_persisted": evidence is not None,
+                            "evidence": evidence,
+                            "retry_allowed": result.get("retry_allowed"),
+                            "next_attempt": result.get("next_attempt"),
+                            "physical_ownership": result.get("physical_ownership"),
+                        },
+                        path="guarded recovery status",
+                    )
+                )
+            for row in conn.execute(
                 "SELECT request_json, state, result_code, acknowledged "
                 "FROM remote_assignment_controls ORDER BY operation_id"
             ):
@@ -1056,6 +1312,7 @@ class LocalDaemon:
                 raise QueueServiceError("local daemon assignment supervisor is absent")
             execution.open_owner_stores()
             self._harvest_assignment_futures()
+            self._resume_pending_recoveries(execution)
             with self._connection() as conn:
                 admissions = tuple(
                     _admission_from_row(row)
@@ -1470,6 +1727,264 @@ class LocalDaemon:
             path="scheduling reload receipt",
         )
 
+    def _recover_unknown(
+        self, principal: LocalDaemonPrincipal, request: RecoverUnknownAssignment
+    ) -> Mapping[str, PlainData]:
+        """Persist and advance one immutable guarded-recovery saga."""
+
+        from .agent_sessions import ScopedAuthorizer
+
+        authorizer = ScopedAuthorizer(self._agent_policy)
+        authorizer.require_operator(principal, "recover_unknown")
+        encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        execution = self._execution
+        if execution is None:
+            raise QueueServiceError("recovery coordinator execution is unavailable")
+        with self._cycle_lock:
+            with self._connection() as conn:
+                prior = conn.execute(
+                    "SELECT principal_id, request_json, request_digest, recorded_at, "
+                    "state, evidence_json, result_json FROM recovery_operations "
+                    "WHERE recovery_id = ?",
+                    (request.recovery_id,),
+                ).fetchone()
+                if prior is not None:
+                    if (
+                        str(prior["principal_id"]) != principal.subject
+                        or str(prior["request_json"]) != encoded
+                        or str(prior["request_digest"]) != digest
+                    ):
+                        raise QueueConflictError("recovery operation conflicts")
+                    if str(prior["state"]) not in {"pending", "evidence_confirmed"}:
+                        return freeze_plain_data(
+                            json.loads(str(prior["result_json"])),
+                            path="recovery receipt",
+                        )
+                    recorded_at = str(prior["recorded_at"])
+                else:
+                    execution.validate_recovery_admission(request)
+                    conn.execute("BEGIN IMMEDIATE")
+                    raced = conn.execute(
+                        "SELECT recovery_id FROM recovery_operations "
+                        "WHERE recovery_id = ?",
+                        (request.recovery_id,),
+                    ).fetchone()
+                    if raced is not None:
+                        raise QueueConflictError("recovery operation conflicts")
+                    recorded_at = self._accepted_time(conn)
+                    conn.execute(
+                        "INSERT INTO recovery_operations("
+                        "recovery_id, principal_id, request_json, request_digest, "
+                        "recorded_at, state, evidence_json, result_json) "
+                        "VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?)",
+                        (
+                            request.recovery_id,
+                            principal.subject,
+                            encoded,
+                            digest,
+                            recorded_at,
+                            json.dumps(
+                                {
+                                    "recovery_id": request.recovery_id,
+                                    "state": "pending",
+                                    "evidence": "PENDING",
+                                },
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                        ),
+                    )
+                    conn.commit()
+            result = self._advance_recovery(execution, request, recorded_at)
+        self._wake.set()
+        return freeze_plain_data(result, path="recovery receipt")
+
+    def _advance_recovery(
+        self,
+        execution: "LocalDaemonExecution",
+        request: RecoverUnknownAssignment,
+        recorded_at: str,
+    ) -> Mapping[str, PlainData]:
+        """Advance only from facts already durable at each saga boundary."""
+
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT state, evidence_json, result_json FROM recovery_operations "
+                "WHERE recovery_id = ?",
+                (request.recovery_id,),
+            ).fetchone()
+        if row is None:
+            raise QueueStorageError("recovery intent is unavailable")
+        state = str(row["state"])
+        if state not in {"pending", "evidence_confirmed"}:
+            result = json.loads(str(row["result_json"]))
+            if not isinstance(result, Mapping):
+                raise QueueStorageError("recovery result is invalid")
+            return cast(Mapping[str, PlainData], result)
+
+        if execution.recovery_has_ordinary_winner(request):
+            return self._finish_recovery(
+                request.recovery_id,
+                {
+                    "recovery_id": request.recovery_id,
+                    "state": "superseded",
+                    "evidence": "ORDINARY_TERMINAL",
+                },
+            )
+        if not execution.recovery_target_is_still_unknown(request):
+            return self._finish_recovery(
+                request.recovery_id,
+                {
+                    "recovery_id": request.recovery_id,
+                    "state": "unknown",
+                    "evidence": "TARGET_STATE_CHANGED",
+                },
+            )
+
+        evidence: Mapping[str, PlainData] | None = None
+        if row["evidence_json"] is not None:
+            decoded = freeze_plain_data(
+                json.loads(str(row["evidence_json"])), path="recovery evidence"
+            )
+            if not isinstance(decoded, Mapping):
+                raise QueueStorageError("recovery evidence is invalid")
+            evidence = decoded
+        else:
+            evidence_state, resolved = execution.resolve_recovery_evidence(request)
+            if evidence_state == "pending":
+                return {
+                    "recovery_id": request.recovery_id,
+                    "state": "pending",
+                    "evidence": "PENDING",
+                }
+            if evidence_state != "contained" or resolved is None:
+                return self._finish_recovery(
+                    request.recovery_id,
+                    {
+                        "recovery_id": request.recovery_id,
+                        "state": "unknown",
+                        "evidence": "UNKNOWN",
+                    },
+                )
+            evidence = resolved
+            encoded_evidence = json.dumps(
+                thaw_plain_data(evidence, path="recovery evidence"),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            with self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                updated = conn.execute(
+                    "UPDATE recovery_operations SET state = 'evidence_confirmed', "
+                    "evidence_json = ? WHERE recovery_id = ? AND state = 'pending'",
+                    (encoded_evidence, request.recovery_id),
+                ).rowcount
+                if updated != 1:
+                    raise QueueConflictError("recovery evidence state conflicts")
+                conn.commit()
+
+        if execution.recovery_has_ordinary_winner(request):
+            return self._finish_recovery(
+                request.recovery_id,
+                {
+                    "recovery_id": request.recovery_id,
+                    "state": "superseded",
+                    "evidence": "ORDINARY_TERMINAL",
+                },
+            )
+        result = execution.close_recovered_assignment(
+            request, evidence, recorded_at=recorded_at
+        )
+        return self._finish_recovery(request.recovery_id, result)
+
+    def _finish_recovery(
+        self, recovery_id: str, result: Mapping[str, PlainData]
+    ) -> Mapping[str, PlainData]:
+        state = result.get("state")
+        if state not in {"closed", "superseded", "unknown"}:
+            raise QueueServiceError("recovery result state is invalid")
+        encoded = json.dumps(
+            thaw_plain_data(result, path="recovery result"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE recovery_operations SET state = ?, result_json = ? "
+                "WHERE recovery_id = ?",
+                (state, encoded, recovery_id),
+            )
+            conn.commit()
+        return result
+
+    def _resume_pending_recoveries(self, execution: "LocalDaemonExecution") -> None:
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT request_json, recorded_at FROM recovery_operations "
+                    "WHERE state IN ('pending', 'evidence_confirmed') "
+                    "ORDER BY recorded_at, recovery_id"
+                )
+            )
+        for row in rows:
+            request = RecoverUnknownAssignment.from_dict(
+                json.loads(str(row["request_json"]))
+            )
+            self._advance_recovery(execution, request, str(row["recorded_at"]))
+
+    def _recovery_fences_ordinary_terminal(self, assignment_id: str) -> bool:
+        """Whether recovery has permanently fenced ordinary terminal mutation."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT request_json FROM recovery_operations "
+                    "WHERE state IN ('pending', 'evidence_confirmed', 'closed')"
+                )
+            )
+        for row in rows:
+            value = json.loads(str(row["request_json"]))
+            if (
+                isinstance(value, Mapping)
+                and value.get("assignment_id") == assignment_id
+            ):
+                return True
+        return False
+
+    def _recovery_is_settling(self, assignment_id: str) -> bool:
+        """Whether close and its existing-policy retry decision are incomplete."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT request_json FROM recovery_operations "
+                    "WHERE state IN ('pending', 'evidence_confirmed')"
+                )
+            )
+        return any(
+            isinstance(value := json.loads(str(row["request_json"])), Mapping)
+            and value.get("assignment_id") == assignment_id
+            for row in rows
+        )
+
+    def _recovery_retains_assignment(self, assignment_id: str) -> bool:
+        """Whether recovery intentionally keeps this physical owner retained."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT request_json FROM recovery_operations "
+                    "WHERE state IN ('pending', 'evidence_confirmed', 'closed')"
+                )
+            )
+        return any(
+            isinstance(value := json.loads(str(row["request_json"])), Mapping)
+            and value.get("assignment_id") == assignment_id
+            for row in rows
+        )
+
     def _reject_scheduling_reload(
         self, *, operation_id: str
     ) -> Mapping[str, PlainData]:
@@ -1739,6 +2254,12 @@ class LocalDaemonOperatorView:
     ) -> Mapping[str, PlainData]:
         return self._daemon._reload_scheduling(self._principal, request)
 
+    def recover_unknown(
+        self, request: RecoverUnknownAssignment
+    ) -> Mapping[str, PlainData]:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return self._daemon._recover_unknown(self._principal, request)
+
 
 @dataclass(frozen=True, slots=True)
 class LocalDaemonSlurmBootstrapView:
@@ -1989,6 +2510,13 @@ def _initialize_root(path: Path, *, role: str) -> None:
                 "request_json TEXT NOT NULL, state TEXT NOT NULL, "
                 "result_code TEXT, scheduling_epoch TEXT)"
             )
+            conn.execute(
+                "CREATE TABLE recovery_operations ("
+                "recovery_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+                "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
+                "recorded_at TEXT NOT NULL, state TEXT NOT NULL, "
+                "evidence_json TEXT, result_json TEXT NOT NULL)"
+            )
             conn.executescript(
                 """
                 CREATE TRIGGER admission_status_revision_insert
@@ -2094,6 +2622,20 @@ def _required_string(data: Mapping[str, object], field: str) -> str:
     return value
 
 
+def _required_int(data: Mapping[str, object], field: str) -> int:
+    value = data.get(field)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise QueueServiceError(f"{field} must be an integer")
+    return value
+
+
+def _required_bool(data: Mapping[str, object], field: str) -> bool:
+    value = data.get(field)
+    if not isinstance(value, bool):
+        raise QueueServiceError(f"{field} must be a boolean")
+    return value
+
+
 def _optional_string(data: Mapping[str, object], field: str) -> str | None:
     value = data.get(field)
     if value is not None and (not isinstance(value, str) or not value):
@@ -2163,4 +2705,7 @@ __all__ = [
     "LocalDaemonPrincipal",
     "LocalDaemonRole",
     "LocalDaemonStatus",
+    "ManagedRecoveryTarget",
+    "RecoverUnknownAssignment",
+    "SlurmRecoveryTarget",
 ]

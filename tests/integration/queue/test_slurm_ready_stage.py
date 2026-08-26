@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 import base64
+import sqlite3
 import sys
 import time
 from threading import Event
@@ -20,7 +22,9 @@ from loom.pipeline.executors.slurm.ready_stage import (
     SQLiteReadyStageSubmissions,
     SlurmPlanningError,
     SlurmJobPrivateFileProvider,
+    SlurmContainmentHelper,
     SlurmReadyStageProfile,
+    resolve_slurm_containment,
 )
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.status import RunStatus, StageStatus
@@ -33,9 +37,12 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    RecoverUnknownAssignment,
     ResidentWorkerLaunchProfile,
+    SlurmRecoveryTarget,
     prepare_managed_local_runtime_record,
 )
+from loom.queue.agent_sessions import AgentPolicyConfig, TransportPrincipalPolicy
 from loom.queue.errors import QueueConflictError, QueueServiceError
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace, SlurmStageDelivery
@@ -61,7 +68,11 @@ def _launch_profile() -> ResidentWorkerLaunchProfile:
 
 
 def _profile(
-    runner: FakeSlurmCommandRunner, *, max_outstanding: int = 1, available: bool = True
+    runner: FakeSlurmCommandRunner,
+    *,
+    max_outstanding: int = 1,
+    available: bool = True,
+    containment_helper: SlurmContainmentHelper | None = None,
 ) -> SlurmReadyStageProfile:
     return SlurmReadyStageProfile(
         profile_id="training",
@@ -83,16 +94,81 @@ def _profile(
         ),
         cluster="cluster-a",
         available=available,
+        containment_helper=containment_helper,
     )
+
+
+def _positive_containment_helper() -> SlurmContainmentHelper:
+    program = (
+        "import json,sys; value=json.load(sys.stdin); "
+        "print(json.dumps({'state':'CONTAINED','evidence_id':'proof-1',"
+        "'evidence_revision':'1','echo':value}))"
+    )
+    return SlurmContainmentHelper("test-contained-v1", (sys.executable, "-c", program))
+
+
+def test_slurm_containment_requires_exact_positive_echo() -> None:
+    runner = FakeSlurmCommandRunner()
+    request = {
+        "assignment_id": "assignment-1",
+        "profile_id": "training",
+        "profile_configuration_fingerprint": "fingerprint",
+        "submission_operation_id": "operation-1",
+        "cluster_id": "cluster-a",
+        "job_id": "1",
+        "bootstrap_incarnation_id": "bootstrap-1",
+        "process_execution_id": "process-1",
+        "execution_fence": "fence-1",
+    }
+    profile = _profile(runner)
+    assert not resolve_slurm_containment(profile, request).contained
+    echo_program = (
+        "import json,sys; value=json.load(sys.stdin); "
+        "print(json.dumps({'state':'CONTAINED','evidence_id':'proof-1','evidence_revision':'1','echo':value}))"
+    )
+    object.__setattr__(
+        profile,
+        "containment_helper",
+        SlurmContainmentHelper(
+            "test-contained-v1", (sys.executable, "-c", echo_program)
+        ),
+    )
+    assert resolve_slurm_containment(profile, request).contained
+    mismatch_program = (
+        "import json,sys; value=json.load(sys.stdin); value['job_id']='2'; "
+        "print(json.dumps({'state':'CONTAINED','evidence_id':'proof-1','evidence_revision':'1','echo':value}))"
+    )
+    object.__setattr__(
+        profile,
+        "containment_helper",
+        SlurmContainmentHelper(
+            "test-contained-v1", (sys.executable, "-c", mismatch_program)
+        ),
+    )
+    assert not resolve_slurm_containment(profile, request).contained
+
+
+def test_slurm_containment_timeout_is_part_of_retained_profile_identity() -> None:
+    runner = FakeSlurmCommandRunner()
+    helper = SlurmContainmentHelper("site-helper-v1", ("site-helper",), 5.0)
+    slower = replace(helper, timeout_seconds=10.0)
+
+    first = replace(_profile(runner), containment_helper=helper)
+    second = replace(_profile(runner), containment_helper=slower)
+
+    assert first.configuration_fingerprint != second.configuration_fingerprint
 
 
 def _exercise_mixed_route_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     terminal_boundary: str | None = None,
+    *,
+    guarded_recovery: bool = False,
 ) -> None:
     runner = FakeSlurmCommandRunner(starting_job_id=1200)
-    profile = _profile(runner)
+    containment_helper = _positive_containment_helper() if guarded_recovery else None
+    profile = _profile(runner, containment_helper=containment_helper)
     original_compare_and_set = SQLiteReadyStageSubmissions._compare_and_set
     intent_crash_injected = False
 
@@ -178,11 +254,22 @@ def _exercise_mixed_route_run(
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
+    agent_policy = AgentPolicyConfig(
+        principals=(
+            TransportPrincipalPolicy(
+                "operator-credential",
+                "operator",
+                "operator",
+                actions=("recover_unknown",),
+            ),
+        )
+    )
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "daemon" / "coordinator",
         agent_root=tmp_path / "daemon" / "agent",
         run_store_root=run_root,
         resident_worker_launch_profile=_launch_profile(),
+        agent_policy=agent_policy,
         slurm_profiles=(profile,),
     )
     LocalDaemon.initialize(config)
@@ -240,16 +327,20 @@ def _exercise_mixed_route_run(
         fresh_runner = FakeSlurmCommandRunner(
             scripted_results={"sbatch": [AssertionError("must not submit")]}
         )
-        profile = _profile(fresh_runner)
+        profile = _profile(fresh_runner, containment_helper=containment_helper)
         reopened_config = LocalDaemonConfig(
             coordinator_root=tmp_path / "daemon" / "coordinator",
             agent_root=tmp_path / "daemon" / "agent",
             run_store_root=run_root,
             resident_worker_launch_profile=_launch_profile(),
+            agent_policy=agent_policy,
             slurm_profiles=(profile,),
         )
         daemon = LocalDaemon(reopened_config)
         daemon.start()
+        client = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
         execution = daemon._execution
         assert execution is not None
         assert (
@@ -410,6 +501,85 @@ def _exercise_mixed_route_run(
                 fence,
                 "slurm-root-process-2",
             )
+        recovery_receipt = None
+        if guarded_recovery:
+            before_recovery = authority.open_run(run_uri)
+            train = next(
+                item for item in before_recovery.stages if item.stage_name == "train"
+            )
+            attempt = next(
+                item
+                for item in train.attempts
+                if item.attempt_id == record.assignment.attempt_id
+            )
+            recovery_request = RecoverUnknownAssignment(
+                recovery_id="slurm-recovery-1",
+                run_uri=run_uri,
+                stage_name=record.assignment.stage_name,
+                attempt=record.assignment.attempt,
+                stage_work_id=record.assignment.stage_work_id,
+                assignment_id=assignment_id,
+                process_execution_id="slurm-root-process-1",
+                execution_fence=fence,
+                target=SlurmRecoveryTarget(
+                    profile.profile_id,
+                    record.assignment.operation_id,
+                    "cluster-a",
+                    "1200",
+                    incarnation,
+                ),
+                expected_state_version=attempt.revision.sequence,
+                requested_outcome="cancelled",
+                consider_retry=True,
+                reason="SLURM containment integration proof",
+            )
+            operator = daemon.operator_view(
+                LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+            )
+            execution.slurm_submissions._record_observation(  # noqa: SLF001
+                record.assignment.operation_id,
+                expected_job_id="1200",
+                scheduler_state="RUNNING",
+                scheduler_source="squeue",
+                observed_at="2030-01-01T00:00:00+00:00",
+            )
+            with pytest.raises(
+                QueueConflictError, match="not in an exact unknown state"
+            ):
+                operator.recover_unknown(
+                    replace(
+                        recovery_request,
+                        recovery_id="slurm-active-recovery",
+                        reason="must not close an observed running job",
+                    )
+                )
+            with sqlite3.connect(config.control_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM recovery_operations"
+                    ).fetchone()[0]
+                    == 0
+                )
+            assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
+                assignment_id
+            )
+
+            unknown_observation = execution.slurm_submissions._record_observation(  # noqa: SLF001
+                record.assignment.operation_id,
+                expected_job_id="1200",
+                scheduler_state=None,
+                scheduler_source="unavailable",
+                observed_at="2030-01-01T00:00:01+00:00",
+            )
+            assert unknown_observation.scheduler_source == "unavailable"
+            assert unknown_observation.scheduler_state is None
+            recovery_receipt = operator.recover_unknown(recovery_request)
+            assert recovery_receipt["state"] == "closed"
+            assert recovery_receipt["retry_allowed"] is False
+            recovery_evidence = cast(dict[str, object], recovery_receipt["evidence"])
+            assert recovery_evidence["kind"] == "slurm_helper"
+            assert recovery_evidence["helper_descriptor"] == "test-contained-v1"
+            assert authority.open_run(run_uri).stages[1].status is StageStatus.CANCELLED
         worker_result = execute_resident_stage_worker_request(
             worker_request=workspace.worker_request(),
             workspace_root=workspace.root,
@@ -458,6 +628,25 @@ def _exercise_mixed_route_run(
                 )
                 if final:
                     break
+        if guarded_recovery:
+            assert recovery_receipt is not None
+            with pytest.raises(QueueConflictError, match="frozen by guarded recovery"):
+                view.commit_result(assignment_id, incarnation, fence)
+            retained_after_close = execution.slurm_assignments.read(assignment_id)
+            assert retained_after_close.state != "released"
+            assert execution.slurm_assignments.list_run_unreleased(run_uri) == (
+                retained_after_close,
+            )
+            assert Path(profile.job_private_file_provider.fixed_path).exists()
+            recovery_status = next(
+                item
+                for item in client.status().controls
+                if item["owner"] == "guarded-recovery"
+            )
+            assert recovery_status["code"] == "CONTAINED"
+            assert recovery_status["physical_ownership"] == "retained"
+            assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+            return
         if terminal_boundary is None:
             view.commit_result(assignment_id, incarnation, fence)
             view.release(assignment_id, incarnation)
@@ -514,7 +703,10 @@ def _exercise_mixed_route_run(
             if terminal_boundary == "authority_result" and not terminal_crash_injected:
                 terminal_crash_injected = True
                 raise OSError("simulated crash after authority result commit")
-            if terminal_boundary == "assignment_terminal" and not terminal_crash_injected:
+            if (
+                terminal_boundary == "assignment_terminal"
+                and not terminal_crash_injected
+            ):
                 retained = execution.slurm_assignments.read(candidate_assignment_id)
                 execution.slurm_assignments.advance(
                     candidate_assignment_id,
@@ -542,7 +734,9 @@ def _exercise_mixed_route_run(
             "mark_terminal",
             mark_terminal_at_crash_boundary,
         )
-        monkeypatch.setattr(SlurmJobPrivateFileProvider, "revoke", revoke_with_lost_response)
+        monkeypatch.setattr(
+            SlurmJobPrivateFileProvider, "revoke", revoke_with_lost_response
+        )
         execution._launch_lock.acquire()
         try:
             with pytest.raises(OSError, match="simulated crash"):
@@ -571,6 +765,12 @@ def test_mixed_route_run_uses_one_slurm_submit_and_verified_loom_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _exercise_mixed_route_run(tmp_path, monkeypatch)
+
+
+def test_slurm_guarded_recovery_closes_from_exact_helper_and_retains_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _exercise_mixed_route_run(tmp_path, monkeypatch, guarded_recovery=True)
 
 
 @pytest.mark.parametrize(

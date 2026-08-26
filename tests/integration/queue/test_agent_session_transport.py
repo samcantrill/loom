@@ -15,6 +15,7 @@ import sqlite3
 import subprocess
 import sys
 from collections.abc import Mapping
+from threading import Event
 from time import monotonic, sleep
 from typing import Any, cast
 
@@ -55,6 +56,8 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    ManagedRecoveryTarget,
+    RecoverUnknownAssignment,
     ResidentWorkerLaunchProfile,
     prepare_managed_local_runtime_record,
 )
@@ -703,6 +706,334 @@ def _prepare_remote_producer_run(
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
     return run_uri, authority
+
+
+def _prepare_remote_sleep_run(
+    store: LocalRunStore, *, run_name: str, machine_id: str
+) -> tuple[str, SQLitePerRunAuthorityStore]:
+    run_uri = path_to_run_uri(store.root / run_name)
+    store.create_run(run_uri)
+    pipeline_config = {
+        "name": run_name,
+        "stages": [
+            {
+                "name": "slow",
+                "factory": {
+                    "_target_": "tests.support.pipeline_execution_stages.SleepStage"
+                },
+                "config": {"seconds": 30},
+                "resources": {
+                    "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
+                },
+                "placement": {"target": machine_id},
+                "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
+            }
+        ],
+    }
+    spec = PipelineSpec.from_config(pipeline_config)
+    plan = plan_pipeline(
+        spec,
+        run_uri=run_uri,
+        run_store=store,
+        artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
+        persist=True,
+    )
+    store.write_runtime_metadata(
+        run_uri,
+        {"executor": "local", "stages": {"slow": {"executor": "local"}}},
+    )
+    store.write_config_snapshot(
+        run_uri,
+        "resolved",
+        json_dumps_pretty({"pipeline": pipeline_config}),
+    )
+    prepare_managed_local_runtime_record(
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=spec,
+    )
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    return run_uri, authority
+
+
+def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    descriptor = ResidentProfileDescriptor(
+        "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+    )
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-credential",
+                "agent-principal",
+                "agent-a",
+                ("default",),
+                capabilities,
+            ),
+        ),
+        principals=(
+            TransportPrincipalPolicy(
+                "operator-credential",
+                "operator",
+                "operator",
+                actions=("recover_unknown",),
+            ),
+        ),
+    )
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri, authority = _prepare_remote_sleep_run(
+        store, run_name="remote-recovery", machine_id="agent-a"
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "coordinator-agent",
+        store.root,
+        _local_launch_profile(),
+        agent_policy=policy,
+        remote_profiles=(descriptor,),
+    )
+    LocalDaemon.initialize(config)
+    coordinator_now = ["2030-01-01T00:00:00+00:00"]
+    daemon = LocalDaemon(config, clock=lambda: coordinator_now[0])
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["agent"].with_suffix(".crt")
+                ): "agent-credential",
+                _fingerprint(
+                    credentials["other"].with_suffix(".crt")
+                ): "operator-credential",
+            },
+        ),
+    )
+    server.start()
+    profile = ResidentExecutionProfile(
+        descriptor, Path(__file__).resolve().parents[3], Path(sys.executable)
+    )
+    remote_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
+    agent = LocalDaemonAgentHttpClient(remote_config)
+    operator = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".key"),
+        )
+    )
+    release_agent = Event()
+    evidence_acknowledged = Event()
+    acknowledgement_failures: list[BaseException] = []
+    worker = None
+    workers: ThreadPoolExecutor | None = None
+    try:
+        handshake = agent.handshake()
+        session = agent.register(
+            AgentRegistration(
+                "register-recovery",
+                str(handshake["coordinator_id"]),
+                str(handshake["coordinator_epoch"]),
+                agent.agent_root_id,
+                "config-1",
+                "inventory-1",
+                "availability-1",
+                ("default",),
+                capabilities,
+            )
+        )
+        agent.publish_offer(
+            AgentOffer(
+                session.session_id,
+                session.coordinator_epoch,
+                session.config_revision,
+                session.inventory_revision,
+                session.availability_revision,
+                1,
+                0,
+                30,
+                _resident_provider_descriptors(profile, session.agent_id),
+                resident_profiles=(descriptor,),
+            ),
+            idempotency_key="offer-recovery",
+        )
+        coordinator = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+        workers = ThreadPoolExecutor(max_workers=1)
+        worker = workers.submit(
+            agent.execute_one,
+            session.session_id,
+            session.availability_revision,
+            poll_id="recovery-poll",
+            wait_timeout_ms=5_000,
+        )
+        coordinator.submit(LocalDaemonAdmissionRequest("recovery-item", run_uri))
+
+        deadline = monotonic() + 10
+        assignment_row = None
+        while monotonic() < deadline:
+            if worker.done():
+                worker.result()
+            with sqlite3.connect(config.control_database) as conn:
+                conn.row_factory = sqlite3.Row
+                assignment_row = conn.execute(
+                    "SELECT * FROM remote_assignments WHERE run_uri = ? "
+                    "AND state = 'RUNNING'",
+                    (run_uri,),
+                ).fetchone()
+            if assignment_row is not None:
+                break
+            sleep(0.02)
+        assert assignment_row is not None
+        assignment_id = str(assignment_row["assignment_id"])
+        fence = str(assignment_row["fence"])
+        snapshot = authority.open_run(run_uri)
+        stage = next(item for item in snapshot.stages if item.stage_name == "slow")
+        assert stage.status is StageStatus.RUNNING
+        attempt = next(
+            item
+            for item in stage.attempts
+            if item.attempt_id == str(assignment_row["attempt_id"])
+        )
+        request = RecoverUnknownAssignment(
+            recovery_id="remote-recovery-1",
+            run_uri=run_uri,
+            stage_name="slow",
+            attempt=int(assignment_row["attempt"]),
+            stage_work_id=str(assignment_row["stage_work_id"]),
+            assignment_id=assignment_id,
+            process_execution_id=f"{assignment_id}:root",
+            execution_fence=fence,
+            target=ManagedRecoveryTarget(session.agent_id, session.session_id),
+            expected_state_version=attempt.revision.sequence,
+            requested_outcome="cancelled",
+            consider_retry=True,
+            reason="remote containment integration proof",
+        )
+        original_ack = agent._acknowledge_assignment_control  # noqa: SLF001
+
+        def acknowledge_then_pause(*args: object, **kwargs: object) -> None:
+            try:
+                original_ack(*args, **kwargs)  # type: ignore[arg-type]
+            except BaseException as exc:
+                acknowledgement_failures.append(exc)
+                raise
+            finally:
+                evidence_acknowledged.set()
+            if not release_agent.wait(10):
+                raise AssertionError("recovery close did not consume remote evidence")
+
+        monkeypatch.setattr(
+            agent, "_acknowledge_assignment_control", acknowledge_then_pause
+        )
+        active_request = replace(
+            request,
+            recovery_id="remote-active-recovery",
+            reason="must not close a currently observed remote process",
+        )
+        with pytest.raises(
+            QueueConflictError, match="agent protocol conflict"
+        ):
+            operator.recover_unknown(active_request)
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM recovery_operations"
+                ).fetchone()[0]
+                == 0
+            )
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM remote_assignment_controls "
+                    "WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()[0]
+                == 0
+            )
+        assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
+            assignment_id
+        )
+
+        # The exact offer expiry is the coordinator-owned fact that turns the
+        # still-retained process outcome from actively observed into unknown.
+        coordinator_now[0] = "2030-01-01T00:00:31+00:00"
+        pending = operator.recover_unknown(request)
+        assert pending["state"] == "pending"
+        assert evidence_acknowledged.wait(10)
+        assert acknowledgement_failures == [], [
+            repr(item.__cause__) for item in acknowledgement_failures
+        ]
+
+        deadline = monotonic() + 10
+        receipt = operator.recover_unknown(request)
+        while receipt["state"] == "pending" and monotonic() < deadline:
+            sleep(0.02)
+            receipt = operator.recover_unknown(request)
+        assert receipt["state"] == "closed"
+        evidence = cast(Mapping[str, object], receipt["evidence"])
+        assert evidence["kind"] == "managed_supervisor"
+        assert evidence["assignment_id"] == assignment_id
+        assert evidence["execution_fence"] == fence
+        with sqlite3.connect(config.control_database) as conn:
+            control = conn.execute(
+                "SELECT result_code, evidence_json FROM remote_assignment_controls "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+        assert control is not None
+        assert control[0] == "contained"
+        assert control[1] is not None
+        assert authority.open_run(run_uri).stages[0].status is StageStatus.CANCELLED
+        release_agent.set()
+        with pytest.raises(QueueConflictError):
+            worker.result(timeout=10)
+        assert (
+            len(
+                SQLiteAgentJournal(
+                    cast(Path, remote_config.agent_root) / "journal.sqlite",
+                    _allow_initialize=False,
+                ).retained_claim_commands()
+            )
+            == 1
+        )
+    finally:
+        release_agent.set()
+        if worker is not None and not worker.done():
+            with suppress(Exception):
+                worker.result(timeout=10)
+        if workers is not None:
+            workers.shutdown(wait=True)
+        supervisor = agent._supervisor  # noqa: SLF001
+        if supervisor is not None:
+            supervisor.shutdown_for_test()
+        operator.close()
+        agent.close()
+        server.stop()
+        daemon.stop()
 
 
 def _prepare_gpu_environment_run(
@@ -2054,7 +2385,7 @@ def test_protocol_codec_rejects_duplicate_nonfinite_deep_and_oversized_json() ->
         _decode(b"{" + b" " * 65_536 + b"}")
 
 
-def test_agent_client_rejects_the_pre_gpu_coordinator_protocol(
+def test_agent_client_rejects_the_pre_containment_evidence_protocol(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client = LocalDaemonAgentHttpClient(
@@ -2074,8 +2405,8 @@ def test_agent_client_rejects_the_pre_gpu_coordinator_protocol(
     ) -> Mapping[str, PlainData]:
         _ = operation, value, role
         return {
-            "protocol_version": "2",
-            "capabilities": ["agent-sessions-v2"],
+            "protocol_version": "5",
+            "capabilities": ["agent-sessions-v5"],
             "coordinator_id": "coordinator-1",
             "coordinator_epoch": "epoch-1",
             "role": "agent",
@@ -2084,6 +2415,26 @@ def test_agent_client_rejects_the_pre_gpu_coordinator_protocol(
     monkeypatch.setattr(client, "_call", old_handshake)
     with pytest.raises(QueueServiceError, match="hard cut-over"):
         client.handshake()
+
+
+def test_agent_open_rejects_the_version_five_root_without_migration(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "version-five-agent"
+    LocalDaemon.initialize_agent_root(root)
+    with sqlite3.connect(root / "control.sqlite") as conn:
+        conn.execute("PRAGMA user_version = 5")
+
+    with pytest.raises(QueueServiceError, match="schema is unsupported"):
+        LocalDaemonAgentHttpClient(
+            AgentTlsClientConfig(
+                "https://localhost:1",
+                tmp_path / "ca.crt",
+                tmp_path / "agent.crt",
+                tmp_path / "agent.key",
+                agent_root=root,
+            )
+        )
 
 
 def test_loopback_mtls_derives_credential_and_rechecks_live_policy(

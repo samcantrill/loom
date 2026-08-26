@@ -378,6 +378,17 @@ class PreparedAttemptExecutionAuthority(PreparedAttemptAuthority, Protocol):
         reason: LifecycleReason,
     ) -> StatusTransition: ...
 
+    def close_managed_attempt_fence(
+        self,
+        run_uri: str,
+        *,
+        recovery_id: str,
+        fence: ExecutionFence,
+        expected_state_version: int,
+        status: StageStatus,
+        reason: LifecycleReason,
+    ) -> StatusTransition: ...
+
     def record_output_commit(
         self,
         run_uri: str,

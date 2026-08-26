@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from .local_daemon import LocalDaemon, LocalDaemonPrincipal
 
 
-PROTOCOL_VERSION = "5"
+PROTOCOL_VERSION = "6"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -284,6 +284,61 @@ class AgentAssignmentControl:
         )
 
 
+_MANAGED_CONTAINMENT_EVIDENCE_FIELDS = {
+    "kind",
+    "state",
+    "supervisor_id",
+    "continuity_epoch",
+    "agent_id",
+    "supervisor_agent_id",
+    "session_id",
+    "assignment_id",
+    "process_execution_id",
+    "execution_fence",
+    "launch_operation_id",
+    "launch_spec_digest",
+    "supervisor_revision",
+    "worker_result_digest",
+}
+
+
+def _managed_containment_evidence(
+    value: Mapping[str, object],
+) -> Mapping[str, PlainData]:
+    """Validate the exact receipt produced by the remote process owner."""
+
+    if set(value) != _MANAGED_CONTAINMENT_EVIDENCE_FIELDS:
+        raise QueueServiceError("managed containment evidence fields are invalid")
+    if value.get("kind") != "managed_supervisor" or value.get("state") != "CONTAINED":
+        raise QueueServiceError("managed containment evidence state is invalid")
+    for name in _MANAGED_CONTAINMENT_EVIDENCE_FIELDS - {
+        "kind",
+        "state",
+        "supervisor_revision",
+        "worker_result_digest",
+    }:
+        _identifier(value.get(name), name)
+    revision = value.get("supervisor_revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        raise QueueServiceError("managed containment evidence revision is invalid")
+    result_digest = value.get("worker_result_digest")
+    if result_digest is not None:
+        if (
+            not isinstance(result_digest, str)
+            or len(result_digest) != 64
+            or any(character not in "0123456789abcdef" for character in result_digest)
+        ):
+            raise QueueServiceError("managed containment result digest is invalid")
+    launch_digest = cast(str, value["launch_spec_digest"])
+    if len(launch_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in launch_digest
+    ):
+        raise QueueServiceError("managed containment launch digest is invalid")
+    frozen = freeze_plain_data(dict(value), path="managed containment evidence")
+    assert isinstance(frozen, Mapping)
+    return frozen
+
+
 class AgentPollActiveError(QueueConflictError):
     """An exact poll retry reached the still-held original poll."""
 
@@ -348,6 +403,7 @@ class TransportPrincipalPolicy:
                 "reload",
                 "cancel_active",
                 "scheduling_reload",
+                "recover_unknown",
             }
             if not set(actions).issubset(allowed):
                 raise QueueServiceError(
@@ -1182,10 +1238,13 @@ class AgentSessionView:
         operation_id: str,
         *,
         code: str,
+        evidence: Mapping[str, object] | None = None,
     ) -> Mapping[str, PlainData]:
         return AgentSessionService(
             self._daemon, self._principal
-        ).acknowledge_assignment_control(session_id, operation_id, code=code)
+        ).acknowledge_assignment_control(
+            session_id, operation_id, code=code, evidence=evidence
+        )
 
 
 class AgentSessionService:
@@ -1211,7 +1270,7 @@ class AgentSessionService:
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
-                    "agent-sessions-v5",
+                    "agent-sessions-v6",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],
@@ -1420,12 +1479,33 @@ class AgentSessionService:
         operation_id: str,
         *,
         code: str,
+        evidence: Mapping[str, object] | None = None,
     ) -> Mapping[str, PlainData]:
         rule, revision = self._authorize("assignment_control")
         _identifier(session_id, "session_id")
         _identifier(operation_id, "operation_id")
         if code not in {"never_started", "contained", "terminal", "unknown"}:
             raise QueueServiceError("assignment control result code is invalid")
+        parsed_evidence = (
+            _managed_containment_evidence(evidence)
+            if code == "contained" and evidence is not None
+            else None
+        )
+        if code == "contained" and parsed_evidence is None:
+            raise QueueServiceError(
+                "contained assignment control requires supervisor evidence"
+            )
+        if code != "contained" and evidence is not None:
+            raise QueueServiceError(
+                "non-contained assignment control cannot carry containment evidence"
+            )
+        encoded_evidence = (
+            None
+            if parsed_evidence is None
+            else json.dumps(
+                dict(parsed_evidence), sort_keys=True, separators=(",", ":")
+            )
+        )
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             conn.execute("BEGIN IMMEDIATE")
             session = _session_from_row(
@@ -1442,7 +1522,7 @@ class AgentSessionService:
                 revision,  # type: ignore[attr-defined]
             )
             row = conn.execute(
-                "SELECT request_json, result_code FROM remote_assignment_controls "
+                "SELECT request_json, result_code, evidence_json FROM remote_assignment_controls "
                 "WHERE operation_id = ? AND session_id = ?",
                 (operation_id, session_id),
             ).fetchone()
@@ -1453,11 +1533,16 @@ class AgentSessionService:
             )
             if row["result_code"] is not None and str(row["result_code"]) != code:
                 raise QueueConflictError("assignment control result conflicts")
+            if (
+                row["evidence_json"] is not None
+                and str(row["evidence_json"]) != encoded_evidence
+            ):
+                raise QueueConflictError("assignment control evidence conflicts")
             state = "applied" if code != "unknown" else "settling"
             conn.execute(
                 "UPDATE remote_assignment_controls SET state = ?, result_code = ?, "
-                "acknowledged = 1 WHERE operation_id = ?",
-                (state, code, operation_id),
+                "evidence_json = ?, acknowledged = 1 WHERE operation_id = ?",
+                (state, code, encoded_evidence, operation_id),
             )
             conn.commit()
         return freeze_plain_data(
@@ -1466,6 +1551,7 @@ class AgentSessionService:
                 "assignment_id": control.assignment_id,
                 "state": state,
                 "code": code,
+                "evidence": parsed_evidence,
             },
             path="assignment control acknowledgement",
         )
@@ -2994,7 +3080,7 @@ class AgentSessionService:
 def initialize_agent_session_schema(
     conn: sqlite3.Connection, *, coordinator: bool
 ) -> None:
-    """Create the current tables in a freshly initialized version-5 root."""
+    """Create the current tables in a freshly initialized version-6 root."""
     if coordinator:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, agent_root_id TEXT NOT NULL, principal_id TEXT NOT NULL, policy_revision TEXT NOT NULL, config_revision TEXT NOT NULL, inventory_revision TEXT NOT NULL, availability_revision TEXT NOT NULL, capabilities_json TEXT NOT NULL, pools_json TEXT NOT NULL, retirement_verifier TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -3010,7 +3096,7 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS remote_transfers (assignment_id TEXT NOT NULL, direction TEXT NOT NULL, transfer_id TEXT NOT NULL, logical_name TEXT NOT NULL, digest TEXT NOT NULL, size_bytes INTEGER NOT NULL, private_path TEXT NOT NULL, received_bytes INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, descriptor_json TEXT, PRIMARY KEY(assignment_id, direction, transfer_id));
         CREATE TABLE IF NOT EXISTS remote_transfer_authorizations (assignment_id TEXT NOT NULL, authorization_id TEXT NOT NULL, revision INTEGER NOT NULL, coordinator_epoch TEXT NOT NULL, operation_id TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, PRIMARY KEY(assignment_id, revision));
         CREATE TABLE IF NOT EXISTS agent_controls (operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, effect_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS remote_assignment_controls (operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, assignment_id TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS remote_assignment_controls (operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, assignment_id TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, evidence_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         """)
     else:
         conn.executescript("""
@@ -3027,7 +3113,7 @@ def initialize_agent_session_schema(
         CREATE TRIGGER IF NOT EXISTS agent_reference_revision_delete AFTER DELETE ON agent_session_references BEGIN UPDATE agent_reference_revision SET revision = revision + 1 WHERE singleton = 1; END;
         CREATE TABLE IF NOT EXISTS agent_retirement_proofs_local (session_id TEXT PRIMARY KEY, proof_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_controls_local (operation_id TEXT PRIMARY KEY, request_json TEXT NOT NULL, effect_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS remote_assignment_controls_local (operation_id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL, result_code TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS remote_assignment_controls_local (operation_id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL, result_code TEXT, evidence_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         """)
 
 
@@ -3369,6 +3455,7 @@ def validate_agent_session_schema(
                 "request_json",
                 "state",
                 "result_code",
+                "evidence_json",
                 "acknowledged",
             },
         }
@@ -3425,6 +3512,7 @@ def validate_agent_session_schema(
                 "assignment_id",
                 "request_json",
                 "result_code",
+                "evidence_json",
                 "acknowledged",
             },
         }

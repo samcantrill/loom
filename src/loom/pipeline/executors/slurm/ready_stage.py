@@ -36,6 +36,117 @@ _SUBMISSION_TABLE = "ready_stage_submissions"
 
 
 @dataclass(frozen=True, slots=True)
+class SlurmContainmentReceipt:
+    """A bounded site-owned proof for one retained ready-stage operation."""
+
+    state: str
+    evidence_id: str | None = None
+    evidence_revision: str | None = None
+    echo: Mapping[str, PlainData] | None = None
+
+    @property
+    def contained(self) -> bool:
+        return self.state == "CONTAINED"
+
+
+@dataclass(frozen=True, slots=True)
+class SlurmContainmentHelper:
+    """One protected, retained site helper invocation.
+
+    This is deliberately a process boundary rather than a composition-time
+    Python callback.  The descriptor and executable identity are incorporated
+    into the retained profile fingerprint below.
+    """
+
+    descriptor: str
+    argv: tuple[str, ...]
+    timeout_seconds: float = 5.0
+
+    def __post_init__(self) -> None:
+        _safe_text(self.descriptor)
+        if not self.argv or any(
+            not isinstance(value, str) or not value for value in self.argv
+        ):
+            raise SlurmPlanningError("SLURM containment helper command is invalid")
+        if (
+            not isinstance(self.timeout_seconds, (int, float))
+            or self.timeout_seconds <= 0
+        ):
+            raise SlurmPlanningError("SLURM containment helper timeout is invalid")
+
+    def resolve(
+        self, request: Mapping[str, PlainData]
+    ) -> Mapping[str, PlainData] | None:
+        import subprocess
+
+        try:
+            completed = subprocess.run(
+                self.argv,
+                input=stable_json_dumps(dict(request)).encode("utf-8"),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=float(self.timeout_seconds),
+            )
+            if completed.returncode != 0 or len(completed.stdout) > 16_384:
+                return None
+            value = json.loads(completed.stdout.decode("utf-8"))
+            return (
+                cast(Mapping[str, PlainData], value)
+                if isinstance(value, Mapping)
+                else None
+            )
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
+            return None
+
+
+def resolve_slurm_containment(
+    profile: "SlurmReadyStageProfile", request: Mapping[str, PlainData]
+) -> SlurmContainmentReceipt:
+    """Ask one retained protected helper, failing closed on every weak result."""
+
+    helper = profile.containment_helper
+    if helper is None:
+        return SlurmContainmentReceipt("UNKNOWN")
+    try:
+        value = helper.resolve(request)
+        if not isinstance(value, Mapping) or set(value) != {
+            "state",
+            "evidence_id",
+            "evidence_revision",
+            "echo",
+        }:
+            return SlurmContainmentReceipt("UNKNOWN")
+        if value["state"] != "CONTAINED":
+            return SlurmContainmentReceipt("UNKNOWN")
+        evidence_id = value["evidence_id"]
+        evidence_revision = value["evidence_revision"]
+        echo = value["echo"]
+        if (
+            not isinstance(evidence_id, str)
+            or not evidence_id
+            or not isinstance(evidence_revision, str)
+            or not evidence_revision
+            or not isinstance(echo, Mapping)
+            or dict(echo) != dict(request)
+        ):
+            return SlurmContainmentReceipt("UNKNOWN")
+        return SlurmContainmentReceipt(
+            "CONTAINED",
+            evidence_id=evidence_id,
+            evidence_revision=evidence_revision,
+            echo=cast(Mapping[str, PlainData], echo),
+        )
+    except Exception:
+        return SlurmContainmentReceipt("UNKNOWN")
+
+
+@dataclass(frozen=True, slots=True)
 class JobPrivateFilePrepared:
     """The only durable view of a site-provided allocation capability."""
 
@@ -227,6 +338,7 @@ class SlurmReadyStageProfile:
     qos: str | None = None
     cluster: str | None = None
     available: bool = True
+    containment_helper: SlurmContainmentHelper | None = field(default=None, repr=False)
     descriptor: SchedulingComponentDescriptor = field(init=False)
 
     def __post_init__(self) -> None:
@@ -287,6 +399,21 @@ class SlurmReadyStageProfile:
             "capability_delivery_kind": self.job_private_file_provider.delivery_kind,
             "capability_descriptor": self.job_private_file_provider.descriptor,
             "capability_path": self.job_private_file_provider.fixed_path,
+            "containment_helper_descriptor": (
+                None
+                if self.containment_helper is None
+                else self.containment_helper.descriptor
+            ),
+            "containment_helper_argv": (
+                None
+                if self.containment_helper is None
+                else list(self.containment_helper.argv)
+            ),
+            "containment_helper_timeout_seconds": (
+                None
+                if self.containment_helper is None
+                else float(self.containment_helper.timeout_seconds)
+            ),
         }
         object.__setattr__(
             self,
@@ -1471,11 +1598,13 @@ def _shell_quote(value: str) -> str:
 __all__ = [
     "READY_STAGE_REQUEST_SCHEMA_VERSION",
     "READY_STAGE_SUBMISSION_SCHEMA_VERSION",
+    "SlurmContainmentReceipt",
     "ReadyStageState",
     "SQLiteReadyStageSubmissions",
     "SlurmReadyStageProfile",
     "SlurmReadyStageRequest",
     "SlurmReadyStageSubmission",
+    "resolve_slurm_containment",
     "map_ready_stage",
     "operation_marker",
 ]
