@@ -1738,9 +1738,11 @@ class LocalDaemon:
         authorizer.require_operator(principal, "recover_unknown")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        execution = self._execution
+        if execution is None:
+            raise QueueServiceError("recovery coordinator execution is unavailable")
         with self._cycle_lock:
             with self._connection() as conn:
-                conn.execute("BEGIN IMMEDIATE")
                 prior = conn.execute(
                     "SELECT principal_id, request_json, request_digest, recorded_at, "
                     "state, evidence_json, result_json FROM recovery_operations "
@@ -1755,13 +1757,21 @@ class LocalDaemon:
                     ):
                         raise QueueConflictError("recovery operation conflicts")
                     if str(prior["state"]) not in {"pending", "evidence_confirmed"}:
-                        conn.commit()
                         return freeze_plain_data(
                             json.loads(str(prior["result_json"])),
                             path="recovery receipt",
                         )
                     recorded_at = str(prior["recorded_at"])
                 else:
+                    execution.validate_recovery_admission(request)
+                    conn.execute("BEGIN IMMEDIATE")
+                    raced = conn.execute(
+                        "SELECT recovery_id FROM recovery_operations "
+                        "WHERE recovery_id = ?",
+                        (request.recovery_id,),
+                    ).fetchone()
+                    if raced is not None:
+                        raise QueueConflictError("recovery operation conflicts")
                     recorded_at = self._accepted_time(conn)
                     conn.execute(
                         "INSERT INTO recovery_operations("
@@ -1785,10 +1795,7 @@ class LocalDaemon:
                             ),
                         ),
                     )
-                conn.commit()
-            execution = self._execution
-            if execution is None:
-                raise QueueServiceError("recovery coordinator execution is unavailable")
+                    conn.commit()
             result = self._advance_recovery(execution, request, recorded_at)
         self._wake.set()
         return freeze_plain_data(result, path="recovery receipt")
@@ -1823,6 +1830,15 @@ class LocalDaemon:
                     "recovery_id": request.recovery_id,
                     "state": "superseded",
                     "evidence": "ORDINARY_TERMINAL",
+                },
+            )
+        if not execution.recovery_target_is_still_unknown(request):
+            return self._finish_recovery(
+                request.recovery_id,
+                {
+                    "recovery_id": request.recovery_id,
+                    "state": "unknown",
+                    "evidence": "TARGET_STATE_CHANGED",
                 },
             )
 

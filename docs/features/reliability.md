@@ -157,6 +157,15 @@ contracts and phase ownership remain in
 ### Guarded-recovery operator procedure
 
 Use guarded recovery only for an assignment whose ordinary result is unknown.
+For a new request, Loom first revalidates the complete identity and requires a
+target-owned unknown observation: an exact local supervisor start uncertainty,
+an expired observation for the exact retained remote-agent process, or an
+unavailable/explicitly `UNKNOWN` scheduler observation for the exact retained
+SLURM job. A locally running process, a remotely observed live process, or a
+SLURM job observed as active is not eligible. Loom rejects active, terminal,
+version-stale, or identity-mismatched requests before writing recovery intent,
+so rejection does not freeze ordinary work.
+
 Copy the complete immutable assignment, attempt, fence, state-version, and
 target identity from current joined status; do not reconstruct missing values.
 The request deliberately contains no containment claim:

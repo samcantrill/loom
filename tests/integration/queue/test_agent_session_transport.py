@@ -802,7 +802,8 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
         remote_profiles=(descriptor,),
     )
     LocalDaemon.initialize(config)
-    daemon = LocalDaemon(config)
+    coordinator_now = ["2030-01-01T00:00:00+00:00"]
+    daemon = LocalDaemon(config, clock=lambda: coordinator_now[0])
     daemon.start()
     server = LocalDaemonAgentHttpServer(
         daemon,
@@ -949,6 +950,37 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
         monkeypatch.setattr(
             agent, "_acknowledge_assignment_control", acknowledge_then_pause
         )
+        active_request = replace(
+            request,
+            recovery_id="remote-active-recovery",
+            reason="must not close a currently observed remote process",
+        )
+        with pytest.raises(
+            QueueConflictError, match="agent protocol conflict"
+        ):
+            operator.recover_unknown(active_request)
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM recovery_operations"
+                ).fetchone()[0]
+                == 0
+            )
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM remote_assignment_controls "
+                    "WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()[0]
+                == 0
+            )
+        assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
+            assignment_id
+        )
+
+        # The exact offer expiry is the coordinator-owned fact that turns the
+        # still-retained process outcome from actively observed into unknown.
+        coordinator_now[0] = "2030-01-01T00:00:31+00:00"
         pending = operator.recover_unknown(request)
         assert pending["state"] == "pending"
         assert evidence_acknowledged.wait(10)

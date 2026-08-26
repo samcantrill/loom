@@ -19,7 +19,7 @@
 - Workflow path: expanded. Irreversible fence closure, external containment,
   and retry causally interact, so implementation requires one executor and one
   independent review unless manager evidence removes the residual risk.
-- Blocker corrections: 2/3 completed
+- Blocker corrections: 3/3 completed
 
 ## Objective And Context
 
@@ -219,23 +219,32 @@ observable status, and causal crash behavior above remain exact.
 
 - Manager preparation: complete on the post-9D2 branch; maintainer approval
   recorded
-- Implementation: correction 2 completes the fixed durable saga order for
+- Implementation: correction 3 completes the fixed durable saga order for
   local, remote, and SLURM targets; persists target-owned containment evidence
   before authority close; permanently rejects the old fence after close; and
   lets only the existing reliability owner authorize and materialize one retry.
   The hard cut advances the authenticated agent protocol and root schema to v6,
-  with no compatibility reader. Exact physical ownership remains retained.
-- Validation and review: `make validate-pr` passed after causal corrections for
-  a cheap SLURM import boundary, first-attempt intent replay, and transactionally
-  consistent concurrent SQLite authority snapshots. Independent review is
-  pending.
+  with no compatibility reader. Exact physical ownership remains retained. The
+  final correction admits a new recovery intent only after complete identity,
+  authority version, and target-specific unknown state validation; active or
+  stale requests fail before persistence and therefore cannot freeze ordinary
+  work.
+- Validation and review: the first `make validate-pr` passed after causal
+  corrections for a cheap SLURM import boundary, first-attempt intent replay,
+  and transactionally consistent concurrent SQLite authority snapshots.
+  Independent review then found that active work could enter recovery before
+  identity/unknown-state validation. Correction 3 closes that blocker; its
+  focused local, remote, and SLURM recovery tests plus Ruff and Pyright pass.
+  The fresh final `make validate-pr` also passes with 2,568 default tests, 141
+  configuration-extra tests, 3 expected environment skips, zero lint/type
+  findings, and successful source/wheel builds.
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and tests | Correction 2 composes durable request, freeze, ordinary-terminal recheck, exact target evidence, authority arbitration, existing-policy retry, and joined status across direct, Unix-socket, authenticated remote-agent, and SLURM paths. Restart resumes pending and evidence-confirmed operations; late old-fence results conflict; accepted SLURM work is not resubmitted; closed capacity remains held. Added local cancellation/failure policy, remote mTLS, exact SLURM helper, crash/replay, hard-cut rejection, and concurrent authority snapshot coverage. |
-| Validated revision and evidence | Phase candidate passed the authority/orchestration/SLURM slice (62 tests) and `make validate-pr`: Ruff clean, Pyright 0 errors, default 2,567 passed with 121 deselected, config-extra 141 passed with 3 environment skips and 2,570 deselected, and source/wheel builds succeeded. Phase 9F owns `make test-summary`. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | No known implementation blocker remains. Independent review is still required for the expanded path. Physical release, different-session replacement, and Phase 9F final surfaces remain deliberately unchanged. |
+| Implementation and tests | Correction 3 composes durable request, pre-persistence exact-unknown admission, freeze, ordinary-terminal recheck, exact target evidence, authority arbitration, existing-policy retry, and joined status across direct, Unix-socket, authenticated remote-agent, and SLURM paths. Tests now create real local supervisor uncertainty, expire the exact remote observation, and move the exact SLURM observation from `RUNNING` to unavailable; active and stale requests prove that no recovery row, evidence request, or ordinary freeze is created. Restart resumes valid pending and evidence-confirmed operations; late old-fence results conflict; accepted SLURM work is not resubmitted; closed capacity remains held. |
+| Validated revision and evidence | Pre-review candidate passed the authority/orchestration/SLURM slice (62 tests). Correction 3 focused evidence is 11 passing recovery/containment tests with changed-path Ruff and Pyright clean. Fresh final `make validate-pr` passed: Ruff clean, Pyright 0 errors, default 2,568 passed with 121 deselected, config-extra 141 passed with 3 expected environment skips and 2,571 deselected, and source/wheel builds succeeded. Phase 9F owns `make test-summary`. |
+| PR, review, and merge | Required expanded review completed with one blocker; correction 3 is manager-verified locally and PR/CI/merge remain pending. |
+| Residual risk and cleanup | No known implementation blocker remains after the final scoped correction. Physical release, different-session replacement, and Phase 9F final surfaces remain deliberately unchanged. |

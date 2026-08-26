@@ -29,6 +29,7 @@ from loom.queue._agent_process_supervisor import (
     AgentProcessSupervisorClient,
     AgentProcessSupervisorService,
     SupervisorLaunchConfiguration,
+    SupervisorLaunchState,
     _launch_from_value,
 )
 from loom.pipeline.planning import PlanSelectors, plan_pipeline
@@ -66,6 +67,7 @@ from loom.queue import (
     LocalDaemonSocketClient,
     LocalDaemonSocketServer,
     ManagedRecoveryTarget,
+    QueueConflictError,
     QueueServiceError,
     RecoverUnknownAssignment,
     ResidentWorkerLaunchProfile,
@@ -1160,6 +1162,7 @@ def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
 )
 def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     requested_outcome: str,
     retry_max_attempts: int,
     expected_status: StageStatus,
@@ -1196,23 +1199,53 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
     client = daemon.client_view(
         LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
     )
+    execution = daemon._execution
+    assert execution is not None
+    original_launch = execution.supervisor.launch
+    original_query = execution.supervisor.query
+    launch_response_lost = False
+
+    def launch_then_lose_response(launch: object):
+        nonlocal launch_response_lost
+        original_launch(launch)  # type: ignore[arg-type]
+        launch_response_lost = True
+        raise OSError("simulated lost supervisor launch response")
+
+    def query_unknown_launch(launch: object):
+        receipt = original_query(launch)  # type: ignore[arg-type]
+        if launch_response_lost and receipt.state in {
+            SupervisorLaunchState.STARTING,
+            SupervisorLaunchState.RUNNING,
+        }:
+            return replace(
+                receipt,
+                state=SupervisorLaunchState.UNKNOWN,
+                process_id=None,
+            )
+        return receipt
+
+    monkeypatch.setattr(execution.supervisor, "launch", launch_then_lose_response)
+    monkeypatch.setattr(execution.supervisor, "query", query_unknown_launch)
     client.submit(LocalDaemonAdmissionRequest("recovery-item", run_uri))
     _wait_for_supervisor_launch_count(config, expected=1)
     deadline = time.monotonic() + 5
     snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
     while time.monotonic() < deadline:
         snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
-        if any(
-            item.stage_name == "slow" and item.status is StageStatus.RUNNING
-            for item in snapshot.stages
+        retained = execution.coordinator.retained_assignments(
+            agent_id=config.machine_id
+        )
+        if retained and execution._is_exact_retained_unknown(  # noqa: SLF001
+            retained[0][0].assignment_id
         ):
             break
         time.sleep(0.02)
-    execution = daemon._execution
-    assert execution is not None
     retained = execution.coordinator.retained_assignments(agent_id=config.machine_id)
     assert len(retained) == 1
     assignment = retained[0][0]
+    assert execution._is_exact_retained_unknown(  # noqa: SLF001
+        assignment.assignment_id
+    )
     workspace = _ResidentAssignmentWorkspace(
         config.agent_root, assignment.assignment_id
     )
@@ -1220,7 +1253,7 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
     assert launch_json is not None
     launch = _launch_from_value(json.loads(launch_json))
     stage = next(item for item in snapshot.stages if item.stage_name == "slow")
-    assert stage.status is StageStatus.RUNNING
+    assert stage.status is StageStatus.SUBMITTED
     attempt = next(
         item for item in stage.attempts if item.attempt_id == assignment.attempt_id
     )
@@ -1243,6 +1276,26 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
         LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
     )
     try:
+        stale = replace(
+            request,
+            recovery_id="recovery-stale-identity",
+            execution_fence="stale-fence",
+        )
+        with pytest.raises(
+            QueueConflictError, match="managed recovery target identity conflicts"
+        ):
+            operator.recover_unknown(stale)
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM recovery_operations"
+                ).fetchone()[0]
+                == 0
+            )
+        assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
+            assignment.assignment_id
+        )
+
         receipt = operator.recover_unknown(request)
         replay = operator.recover_unknown(request)
 
@@ -1324,6 +1377,103 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
         assert observed.live_claim_ids == (assignment.claim_id,)
     finally:
         replacement.stop()
+
+
+def test_guarded_recovery_rejects_active_managed_work_without_freezing_it(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "runs"
+    run_uri = _persist_sleep_run(
+        run_root,
+        run_name="active-recovery-run",
+        stage_name="slow",
+        seconds=30.0,
+        retry_max_attempts=1,
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+        agent_policy=AgentPolicyConfig(
+            principals=(
+                TransportPrincipalPolicy(
+                    "operator-credential",
+                    "operator",
+                    "operator",
+                    actions=("recover_unknown",),
+                ),
+            )
+        ),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        ).submit(LocalDaemonAdmissionRequest("active-recovery-item", run_uri))
+        _wait_for_supervisor_launch_count(config, expected=1)
+        authority = SQLitePerRunAuthorityStore(run_uri)
+        deadline = time.monotonic() + 5
+        snapshot = authority.open_run(run_uri)
+        while time.monotonic() < deadline:
+            snapshot = authority.open_run(run_uri)
+            if snapshot.stages[0].status is StageStatus.RUNNING:
+                break
+            time.sleep(0.02)
+        assert snapshot.stages[0].status is StageStatus.RUNNING
+        execution = daemon._execution
+        assert execution is not None
+        (assignment, _receipt), = execution.coordinator.retained_assignments(
+            agent_id=config.machine_id
+        )
+        workspace = _ResidentAssignmentWorkspace(
+            config.agent_root, assignment.assignment_id
+        )
+        launch_json = workspace.supervisor_launch_json()
+        assert launch_json is not None
+        launch = _launch_from_value(json.loads(launch_json))
+        attempt = next(
+            item
+            for item in snapshot.stages[0].attempts
+            if item.attempt_id == assignment.attempt_id
+        )
+        request = RecoverUnknownAssignment(
+            recovery_id="active-managed-recovery",
+            run_uri=run_uri,
+            stage_name=assignment.stage_name,
+            attempt=assignment.attempt,
+            stage_work_id=assignment.stage_work_id,
+            assignment_id=assignment.assignment_id,
+            process_execution_id=launch.process_execution_id,
+            execution_fence=launch.execution_fence,
+            target=ManagedRecoveryTarget(assignment.agent_id, assignment.session_id),
+            expected_state_version=attempt.revision.sequence,
+            requested_outcome="cancelled",
+            consider_retry=False,
+            reason="must not close active work",
+        )
+
+        with pytest.raises(
+            QueueConflictError, match="not in an exact unknown state"
+        ):
+            daemon.operator_view(
+                LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+            ).recover_unknown(request)
+        with sqlite3.connect(config.control_database) as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM recovery_operations"
+                ).fetchone()[0]
+                == 0
+            )
+        assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
+            assignment.assignment_id
+        )
+        assert authority.open_run(run_uri).stages[0].status is StageStatus.RUNNING
+    finally:
+        daemon.stop()
 
 
 def test_daemon_reconciles_skip_without_creating_an_assignment(

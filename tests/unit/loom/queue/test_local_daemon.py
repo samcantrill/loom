@@ -155,6 +155,12 @@ def test_recovery_persists_exact_evidence_before_close_and_replays_it(
         def recovery_has_ordinary_winner(self, _request: object) -> bool:
             return False
 
+        def validate_recovery_admission(self, _request: object) -> None:
+            return None
+
+        def recovery_target_is_still_unknown(self, _request: object) -> bool:
+            return True
+
         def resolve_recovery_evidence(
             self, _request: object
         ) -> tuple[str, dict[str, object]]:

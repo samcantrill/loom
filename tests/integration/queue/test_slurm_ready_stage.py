@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 import base64
+import sqlite3
 import sys
 import time
 from threading import Event
@@ -511,31 +512,68 @@ def _exercise_mixed_route_run(
                 for item in train.attempts
                 if item.attempt_id == record.assignment.attempt_id
             )
-            recovery_receipt = daemon.operator_view(
-                LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
-            ).recover_unknown(
-                RecoverUnknownAssignment(
-                    recovery_id="slurm-recovery-1",
-                    run_uri=run_uri,
-                    stage_name=record.assignment.stage_name,
-                    attempt=record.assignment.attempt,
-                    stage_work_id=record.assignment.stage_work_id,
-                    assignment_id=assignment_id,
-                    process_execution_id="slurm-root-process-1",
-                    execution_fence=fence,
-                    target=SlurmRecoveryTarget(
-                        profile.profile_id,
-                        record.assignment.operation_id,
-                        "cluster-a",
-                        "1200",
-                        incarnation,
-                    ),
-                    expected_state_version=attempt.revision.sequence,
-                    requested_outcome="cancelled",
-                    consider_retry=True,
-                    reason="SLURM containment integration proof",
-                )
+            recovery_request = RecoverUnknownAssignment(
+                recovery_id="slurm-recovery-1",
+                run_uri=run_uri,
+                stage_name=record.assignment.stage_name,
+                attempt=record.assignment.attempt,
+                stage_work_id=record.assignment.stage_work_id,
+                assignment_id=assignment_id,
+                process_execution_id="slurm-root-process-1",
+                execution_fence=fence,
+                target=SlurmRecoveryTarget(
+                    profile.profile_id,
+                    record.assignment.operation_id,
+                    "cluster-a",
+                    "1200",
+                    incarnation,
+                ),
+                expected_state_version=attempt.revision.sequence,
+                requested_outcome="cancelled",
+                consider_retry=True,
+                reason="SLURM containment integration proof",
             )
+            operator = daemon.operator_view(
+                LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+            )
+            execution.slurm_submissions._record_observation(  # noqa: SLF001
+                record.assignment.operation_id,
+                expected_job_id="1200",
+                scheduler_state="RUNNING",
+                scheduler_source="squeue",
+                observed_at="2030-01-01T00:00:00+00:00",
+            )
+            with pytest.raises(
+                QueueConflictError, match="not in an exact unknown state"
+            ):
+                operator.recover_unknown(
+                    replace(
+                        recovery_request,
+                        recovery_id="slurm-active-recovery",
+                        reason="must not close an observed running job",
+                    )
+                )
+            with sqlite3.connect(config.control_database) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM recovery_operations"
+                    ).fetchone()[0]
+                    == 0
+                )
+            assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
+                assignment_id
+            )
+
+            unknown_observation = execution.slurm_submissions._record_observation(  # noqa: SLF001
+                record.assignment.operation_id,
+                expected_job_id="1200",
+                scheduler_state=None,
+                scheduler_source="unavailable",
+                observed_at="2030-01-01T00:00:01+00:00",
+            )
+            assert unknown_observation.scheduler_source == "unavailable"
+            assert unknown_observation.scheduler_state is None
+            recovery_receipt = operator.recover_unknown(recovery_request)
             assert recovery_receipt["state"] == "closed"
             assert recovery_receipt["retry_allowed"] is False
             recovery_evidence = cast(dict[str, object], recovery_receipt["evidence"])

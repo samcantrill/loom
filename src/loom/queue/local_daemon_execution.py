@@ -1852,6 +1852,91 @@ class LocalDaemonExecution:
             return self._remote_result_is_complete(request.assignment_id)
         return self.journal.read_result(request.assignment_id) is not None
 
+    def validate_recovery_admission(self, request: RecoverUnknownAssignment) -> None:
+        """Require an exact current unknown target before recovery is durable."""
+
+        binding = self._recovery_binding(request)
+        run_uri, stage_name, attempt, attempt_id = binding[1:]
+        snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
+        matches = [
+            item
+            for stage in snapshot.stages
+            if stage.stage_name == stage_name
+            for item in stage.attempts
+            if item.attempt == attempt and item.attempt_id == attempt_id
+        ]
+        if len(matches) != 1:
+            raise QueueConflictError("recovery authority identity conflicts")
+        current = matches[0]
+        if (
+            current.revision.sequence != request.expected_state_version
+            or current.status not in {StageStatus.SUBMITTED, StageStatus.RUNNING}
+        ):
+            raise QueueConflictError("recovery expected state conflicts")
+        if not self._recovery_binding_is_unknown(request, binding):
+            raise QueueConflictError(
+                "recovery target is not in an exact unknown state"
+            )
+
+    def recovery_target_is_still_unknown(
+        self, request: RecoverUnknownAssignment
+    ) -> bool:
+        """Recheck the target-owned unknown fact after intent wins admission."""
+
+        binding = self._recovery_binding(request)
+        return self._recovery_binding_is_unknown(request, binding)
+
+    def _recovery_binding_is_unknown(
+        self,
+        request: RecoverUnknownAssignment,
+        binding: tuple[object, str, str, int, str],
+    ) -> bool:
+        if isinstance(request.target, SlurmRecoveryTarget):
+            record = cast(SlurmStageRecord, binding[0])
+            if record.report is not None:
+                return False
+            if record.state == "unknown":
+                return True
+            if record.state != "running":
+                return False
+            submission = self.slurm_submissions.find(
+                record.assignment.operation_id
+            )
+            return submission is not None and (
+                submission.scheduler_source == "unavailable"
+                or submission.scheduler_state == "UNKNOWN"
+            )
+        if self._managed_target_is_remote(request.assignment_id):
+            with sqlite3.connect(self.config.control_database) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT state, report_json, session_id FROM remote_assignments "
+                    "WHERE assignment_id = ?",
+                    (request.assignment_id,),
+                ).fetchone()
+                if row is None or row["report_json"] is not None:
+                    return False
+                coordinator_state = self.coordinator.state(request.assignment_id)
+                if coordinator_state == "unknown":
+                    return str(row["state"]) in {"GRANTED", "RUNNING", "UNKNOWN"}
+                if (
+                    coordinator_state not in {"granted", "running"}
+                    or str(row["state"]) not in {"GRANTED", "RUNNING"}
+                ):
+                    return False
+                offer = conn.execute(
+                    "SELECT expires_at FROM agent_offers "
+                    "WHERE session_id = ? AND current = 1",
+                    (str(row["session_id"]),),
+                ).fetchone()
+            observed_at = (
+                utc_timestamp()
+                if self.daemon is None
+                else self._daemon_owner()._clock()  # noqa: SLF001
+            )
+            return offer is not None and str(offer["expires_at"]) < observed_at
+        return self._is_exact_retained_unknown(request.assignment_id)
+
     def resolve_recovery_evidence(
         self, request: RecoverUnknownAssignment
     ) -> tuple[str, Mapping[str, PlainData] | None]:
