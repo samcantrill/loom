@@ -1365,6 +1365,13 @@ class LocalDaemonAgentHttpClient:
             raise QueueServiceError(
                 "agent reload cannot replace its live transport or owner root"
             )
+        if _resident_launch_profile_set(replacement) != _resident_launch_profile_set(
+            self._config
+        ):
+            raise QueueConflictError(
+                "agent reload requires fresh agent-root initialization for "
+                "resident profile set"
+            )
         existing = (*self._profiles.values(), *self._retained_profiles.values())
         for candidate in replacement.resident_profiles:
             for retained in existing:
@@ -3596,6 +3603,26 @@ def _resident_profile_key(profile: ResidentExecutionProfile) -> str:
                 for device in profile.gpu_devices
             ],
         },
+    )
+
+
+def _resident_launch_profile_set(
+    config: AgentTlsClientConfig,
+) -> tuple[tuple[str, str], ...]:
+    """Canonical executable bindings held by the initialized supervisor.
+
+    Capacity is intentionally absent: it contributes to provider inventory, not
+    the protected worker executable, descriptor, or project binding.
+    """
+
+    return tuple(
+        sorted(
+            (
+                profile.descriptor.profile_id,
+                profile.launch_profile.fingerprint,
+            )
+            for profile in config.resident_profiles
+        )
     )
 
 

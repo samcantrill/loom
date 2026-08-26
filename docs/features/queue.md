@@ -249,12 +249,16 @@ selected-profile launch before creating a fresh process group; the outbound
 agent retains no process handles. Opening an agent root verifies the exact
 profile-set fingerprint and the service continuity identity, so absent, copied,
 corrupt, old, or changed-profile state requires fresh initialization rather
-than migration or adoption. A root process exit, result file, stop response, or
-endpoint loss is not descendant containment. Only the continuous supervisor may
-report containment after bounded group-level termination proves that no member
-can continue. On an agent application restart, retained work remains
-unavailable until its durable workspace/journal references are reconciled with
-the same supervisor receipts and a fresh provider observation is published.
+than migration or adoption. Trusted reload compares its complete canonical
+executable profile set before swapping local configuration: reordering is
+harmless, while adding, removing, or changing a descriptor, project root, or
+Python executable is rejected before an offer, grant, or provider claim. A root
+process exit, result file, stop response, or endpoint loss is not descendant
+containment. Only the continuous supervisor may report containment after bounded
+group-level termination proves that no member can continue. On an agent
+application restart, retained work remains unavailable until its durable
+workspace/journal references are reconciled with the same supervisor receipts
+and a fresh provider observation is published.
 
 Offers use exact bounded CPU and memory capacity atoms, one shared availability
 revision across every authorized pool, and coordinator-accepted time for TTL.
@@ -863,6 +867,11 @@ fresh provider observation or poll for more work.  The application joins the
 continuous supervisor's exact receipts; it never starts a replacement root.
 Any receipt whose continuity is `UNKNOWN` keeps its claim unavailable and
 requires operator recovery rather than relaunch.
+
+Reloading a resident remote agent cannot change its executable profile set. To
+add, remove, or alter a resident executable binding, drain the old root and
+initialize a fresh one; a trusted reload that differs only in profile ordering
+is accepted.
 
 ## Preflight And Status Output
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import suppress
 import hashlib
 import json
+from multiprocessing import get_context
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -15,7 +16,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from time import monotonic, sleep
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -216,6 +217,160 @@ def _fresh_remote_agent_root(tmp_path: Path, name: str = "remote-owner") -> Path
     return root
 
 
+def _crash_remote_agent_application(
+    config: AgentTlsClientConfig,
+    capabilities: tuple[str, ...],
+    barrier: str,
+    events: object,
+) -> None:
+    """Run application A in a spawned interpreter until one owned crash point."""
+
+    queue = cast(Any, events)
+    agent = LocalDaemonAgentHttpClient(config)
+    try:
+        handshake = agent.handshake()
+        session = agent.register(
+            AgentRegistration(
+                "register-fresh-restart",
+                str(handshake["coordinator_id"]),
+                str(handshake["coordinator_epoch"]),
+                agent.agent_root_id,
+                "config-1",
+                "inventory-1",
+                "availability-1",
+                ("default",),
+                capabilities,
+            )
+        )
+        profile = config.resident_profiles[0]
+        offer = AgentOffer(
+            session.session_id,
+            session.coordinator_epoch,
+            session.config_revision,
+            session.inventory_revision,
+            session.availability_revision,
+            1,
+            0,
+            30,
+            _resident_provider_descriptors(profile, session.agent_id),
+            resident_profiles=(profile.descriptor,),
+        )
+        agent.publish_offer(offer, idempotency_key="offer-fresh-restart")
+        supervisor = agent._supervisor  # noqa: SLF001 - crash barrier evidence
+        assert supervisor is not None
+        if barrier in {"before_supervisor_accept", "after_supervisor_accept"}:
+            original_launch = supervisor.launch
+
+            def interrupt_launch(launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+                if barrier == "before_supervisor_accept":
+                    raise RuntimeError("simulated fresh agent application restart")
+                original_launch(launch)
+                raise RuntimeError("simulated fresh agent application restart")
+
+            setattr(cast(Any, supervisor), "launch", interrupt_launch)
+        elif barrier == "before_result_commit":
+
+            def interrupt_result(*args: object, **kwargs: object) -> object:
+                raise RuntimeError("simulated fresh agent application restart")
+
+            setattr(cast(Any, agent), "commit_result", interrupt_result)
+        else:
+
+            def interrupt_release(*args: object, **kwargs: object) -> object:
+                raise RuntimeError("simulated fresh agent application restart")
+
+            setattr(cast(Any, agent), "release_assignment", interrupt_release)
+        queue.put(("ready", os.getpid(), session.value(), supervisor.supervisor_id))
+        try:
+            agent.execute_one(
+                session.session_id,
+                session.availability_revision,
+                poll_id="fresh-restart-poll",
+                wait_timeout_ms=5_000,
+            )
+        except RuntimeError as exc:
+            queue.put(("crashed", os.getpid(), str(exc), supervisor.supervisor_id))
+            return
+        queue.put(("unexpected_completion", os.getpid()))
+    except Exception as exc:  # pragma: no cover - surfaced by the parent assertion
+        queue.put(("error", os.getpid(), repr(exc)))
+    finally:
+        agent.close()
+
+
+def _reconcile_remote_agent_application(
+    config: AgentTlsClientConfig,
+    session_id: str,
+    events: object,
+) -> None:
+    """Run application B in another interpreter and replay the retained work."""
+
+    queue = cast(Any, events)
+    agent = LocalDaemonAgentHttpClient(config)
+    try:
+        session = agent._require_journal().session(session_id)  # noqa: SLF001
+        profile = config.resident_profiles[0]
+        offer = AgentOffer(
+            session.session_id,
+            session.coordinator_epoch,
+            session.config_revision,
+            session.inventory_revision,
+            session.availability_revision,
+            1,
+            0,
+            30,
+            _resident_provider_descriptors(profile, session.agent_id),
+            resident_profiles=(profile.descriptor,),
+        )
+        blocked_offer = blocked_poll = False
+        try:
+            agent.publish_offer(offer, idempotency_key="offer-before-fresh-replay")
+        except QueueConflictError:
+            blocked_offer = True
+        try:
+            agent.wait_for_work(
+                session.session_id,
+                session.availability_revision,
+                poll_id="poll-before-fresh-replay",
+                wait_timeout_ms=1,
+            )
+        except QueueConflictError:
+            blocked_poll = True
+        replayed = agent.resume_retained_work()
+        released = agent._require_journal().session(session_id)  # noqa: SLF001
+        agent.publish_offer(
+            AgentOffer(
+                released.session_id,
+                released.coordinator_epoch,
+                released.config_revision,
+                released.inventory_revision,
+                released.availability_revision,
+                1,
+                0,
+                30,
+                _resident_provider_descriptors(profile, released.agent_id),
+                resident_profiles=(profile.descriptor,),
+            ),
+            idempotency_key="offer-after-fresh-replay",
+        )
+        supervisor = agent._supervisor  # noqa: SLF001 - continuity assertion
+        assert supervisor is not None
+        queue.put(
+            (
+                "replayed",
+                os.getpid(),
+                blocked_offer,
+                blocked_poll,
+                tuple(item["state"] for item in replayed),
+                supervisor.supervisor_id,
+            )
+        )
+    except Exception as exc:  # pragma: no cover - surfaced by the parent assertion
+        queue.put(("error", os.getpid(), repr(exc)))
+    finally:
+        agent.close()
+
+
 @pytest.fixture(autouse=True)
 def _shutdown_detached_remote_supervisors(
     monkeypatch: pytest.MonkeyPatch,
@@ -245,7 +400,7 @@ def _shutdown_detached_remote_supervisors(
                 client.close()
 
 
-def test_agent_reload_reads_only_trusted_local_config_and_requires_resume(
+def test_agent_reload_rejects_profile_set_addition_and_requires_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _remote_agent_root(tmp_path)
@@ -308,10 +463,11 @@ def test_agent_reload_reads_only_trusted_local_config_and_requires_resume(
         assert client._require_journal().prepare_control(reload_control) is None
         effect = client._apply_agent_control(reload_control)
         client._require_journal().record_control_effect(reload_control, effect)
-        assert effect.code == "applied"
-        assert effect.config_revision != "config-1"
+        assert effect.code == "reload_rejected"
+        assert effect.config_revision == "config-1"
         assert client._drained is True
-        assert client._profiles == {"python": profile}
+        assert client._config is base  # noqa: SLF001 - rejected reload has no swap
+        assert client._profiles == {}  # noqa: SLF001 - no profile can be added live
         acknowledgements: list[Mapping[str, PlainData]] = []
 
         def acknowledge(
@@ -357,7 +513,7 @@ def test_agent_reload_reads_only_trusted_local_config_and_requires_resume(
         client.close()
 
 
-def test_agent_reload_rejects_changed_bindings_under_a_live_profile_identity(
+def test_agent_reload_requires_fresh_root_for_changed_launch_profile_set(
     tmp_path: Path,
 ) -> None:
     root = _fresh_remote_agent_root(tmp_path)
@@ -370,7 +526,9 @@ def test_agent_reload_rejects_changed_bindings_under_a_live_profile_identity(
         python_executable=Path(sys.executable),
         cpu_capacity=1,
     )
-    changed = replace(original, cpu_capacity=2)
+    other_project = tmp_path / "other-project"
+    other_project.mkdir()
+    changed = replace(original, project_root=other_project)
     base = AgentTlsClientConfig(
         "https://localhost",
         tmp_path / "ca.crt",
@@ -382,8 +540,58 @@ def test_agent_reload_rejects_changed_bindings_under_a_live_profile_identity(
     LocalDaemonAgentHttpClient.initialize_agent_root(base)
     client = LocalDaemonAgentHttpClient(base)
     try:
-        with pytest.raises(QueueConflictError, match="reuses a live profile identity"):
+        with pytest.raises(
+            QueueConflictError, match="requires fresh agent-root initialization"
+        ):
             client._validate_reload_config(replace(base, resident_profiles=(changed,)))
+    finally:
+        client.close()
+
+
+def test_agent_reload_canonicalizes_bound_profile_set_without_update_path(
+    tmp_path: Path,
+) -> None:
+    root = _fresh_remote_agent_root(tmp_path)
+    first_descriptor = ResidentProfileDescriptor(
+        "first", "1", "project-1", "environment-1", "executor-1"
+    )
+    second_descriptor = ResidentProfileDescriptor(
+        "second", "1", "project-2", "environment-2", "executor-2"
+    )
+    first = ResidentExecutionProfile(
+        first_descriptor, tmp_path, Path(sys.executable), cpu_capacity=1
+    )
+    second = ResidentExecutionProfile(
+        second_descriptor, tmp_path, Path(sys.executable), cpu_capacity=1
+    )
+    base = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        agent_root=root,
+        resident_profiles=(first, second),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(base)
+    client = LocalDaemonAgentHttpClient(base)
+    try:
+        client._validate_reload_config(  # noqa: SLF001 - reload boundary contract
+            replace(base, resident_profiles=(second, first))
+        )
+        third = replace(
+            second,
+            descriptor=ResidentProfileDescriptor(
+                "third", "1", "project-3", "environment-3", "executor-3"
+            ),
+        )
+        for replacement in (
+            replace(base, resident_profiles=(first,)),
+            replace(base, resident_profiles=(first, second, third)),
+        ):
+            with pytest.raises(
+                QueueConflictError, match="requires fresh agent-root initialization"
+            ):
+                client._validate_reload_config(replacement)  # noqa: SLF001
     finally:
         client.close()
 
@@ -890,6 +1098,300 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             if agent_supervisor is not None:
                 agent_supervisor.shutdown_for_test()
             agent.close()
+        server.stop()
+        daemon.stop()
+
+
+@pytest.mark.parametrize(
+    "restart_barrier",
+    (
+        "before_supervisor_accept",
+        "after_supervisor_accept",
+        "before_result_commit",
+        "before_coordinator_release",
+    ),
+)
+def test_fresh_agent_processes_replay_one_continuous_supervisor_launch(
+    tmp_path: Path, restart_barrier: str
+) -> None:
+    """A/B use spawned interpreters; only their detached supervisor persists."""
+
+    credentials = _credentials(tmp_path / "tls")
+    descriptor = ResidentProfileDescriptor(
+        "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+    )
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-credential",
+                "agent-principal",
+                "agent-a",
+                ("default",),
+                capabilities,
+            ),
+        )
+    )
+    runs = LocalRunStore(tmp_path / "runs")
+    run_uri, authority = _prepare_remote_producer_run(
+        runs, run_name="fresh-restart-run", machine_id="agent-a", value=42
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "coordinator-agent",
+        runs.root,
+        agent_policy=policy,
+        remote_profiles=(descriptor,),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["agent"].with_suffix(".crt")
+                ): "agent-credential"
+            },
+        ),
+    )
+    server.start()
+    profile = ResidentExecutionProfile(
+        descriptor, Path(__file__).resolve().parents[3], Path(sys.executable)
+    )
+    remote_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
+    context = get_context("spawn")
+    events = context.Queue()
+    first = context.Process(
+        target=_crash_remote_agent_application,
+        args=(remote_config, capabilities, restart_barrier, events),
+    )
+    second: object | None = None
+    try:
+        first.start()
+        ready = events.get(timeout=20)
+        assert ready[0] == "ready", ready
+        session = cast(Mapping[str, object], ready[2])
+        coordinator = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+        coordinator.submit(LocalDaemonAdmissionRequest("fresh-restart-item", run_uri))
+        crashed = events.get(timeout=20)
+        assert crashed[0] == "crashed", crashed
+        assert crashed[3] == ready[3]
+        first.join(timeout=20)
+        assert first.exitcode == 0
+
+        second = context.Process(
+            target=_reconcile_remote_agent_application,
+            args=(remote_config, str(session["session_id"]), events),
+        )
+        second.start()
+        replayed = events.get(timeout=20)
+        assert replayed[0] == "replayed", replayed
+        assert replayed[1] != ready[1]
+        assert replayed[2:5] == (True, True, ("RELEASED",))
+        assert replayed[5] == ready[3]
+        second.join(timeout=20)
+        assert second.exitcode == 0
+        agent_root = cast(Path, remote_config.agent_root)
+        with sqlite3.connect(agent_root / "supervisor" / "supervisor.sqlite") as conn:
+            assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 1
+        assert (
+            coordinator.wait("fresh-restart-item", timeout_seconds=10).state
+            is LocalDaemonAdmissionState.SUCCEEDED
+        )
+        assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+    finally:
+        if first.is_alive():
+            first.terminate()
+            first.join(timeout=5)
+        if second is not None and second.is_alive():
+            second.terminate()
+            second.join(timeout=5)
+        cleanup = LocalDaemonAgentHttpClient(remote_config)
+        try:
+            assert cleanup._supervisor is not None  # noqa: SLF001
+            cleanup._supervisor.shutdown_for_test()  # noqa: SLF001
+        finally:
+            cleanup.close()
+        server.stop()
+        daemon.stop()
+
+
+def test_one_supervisor_routes_selected_work_through_two_bound_profiles(
+    tmp_path: Path,
+) -> None:
+    """Each supported advertised profile reaches its exact durable launch."""
+
+    credentials = _credentials(tmp_path / "tls")
+    first_descriptor = ResidentProfileDescriptor(
+        "resident-a", "revision-a", "project-a", "environment-a", "executor-a"
+    )
+    second_descriptor = ResidentProfileDescriptor(
+        "resident-b", "revision-b", "project-b", "environment-b", "executor-b"
+    )
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-credential",
+                "agent-principal",
+                "agent-a",
+                ("default",),
+                capabilities,
+            ),
+        )
+    )
+    runs = LocalRunStore(tmp_path / "runs")
+    first_run, first_authority = _prepare_remote_producer_run(
+        runs, run_name="profile-a-run", machine_id="agent-a", value=1
+    )
+    second_run, second_authority = _prepare_remote_producer_run(
+        runs, run_name="profile-b-run", machine_id="agent-a", value=2
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "coordinator-agent",
+        runs.root,
+        agent_policy=policy,
+        remote_profiles=(first_descriptor, second_descriptor),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["agent"].with_suffix(".crt")
+                ): "agent-credential"
+            },
+        ),
+    )
+    server.start()
+    project_root = Path(__file__).resolve().parents[3]
+    profiles = (
+        ResidentExecutionProfile(first_descriptor, project_root, Path(sys.executable)),
+        ResidentExecutionProfile(second_descriptor, project_root, Path(sys.executable)),
+    )
+    remote_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+        _fresh_remote_agent_root(tmp_path),
+        profiles,
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
+    agent = LocalDaemonAgentHttpClient(remote_config)
+    try:
+        handshake = agent.handshake()
+        session = agent.register(
+            AgentRegistration(
+                "register-two-profiles",
+                str(handshake["coordinator_id"]),
+                str(handshake["coordinator_epoch"]),
+                agent.agent_root_id,
+                "config-1",
+                "inventory-1",
+                "availability-1",
+                ("default",),
+                capabilities,
+            )
+        )
+        coordinator = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+
+        def execute_selected(
+            profile: ResidentExecutionProfile, run_uri: str, suffix: str
+        ) -> None:
+            current = agent._require_journal().session(session.session_id)  # noqa: SLF001
+            agent.publish_offer(
+                AgentOffer(
+                    current.session_id,
+                    current.coordinator_epoch,
+                    current.config_revision,
+                    current.inventory_revision,
+                    current.availability_revision,
+                    1,
+                    0,
+                    30,
+                    _resident_provider_descriptors(profile, current.agent_id),
+                    resident_profiles=(profile.descriptor,),
+                ),
+                idempotency_key=f"offer-{suffix}",
+            )
+            with ThreadPoolExecutor(max_workers=1) as workers:
+                execution = workers.submit(
+                    agent.execute_one,
+                    current.session_id,
+                    current.availability_revision,
+                    poll_id=f"poll-{suffix}",
+                    wait_timeout_ms=5_000,
+                )
+                coordinator.submit(
+                    LocalDaemonAdmissionRequest(f"item-{suffix}", run_uri)
+                )
+                assert execution.result(timeout=20)["state"] == "RELEASED"
+            assert (
+                coordinator.wait(f"item-{suffix}", timeout_seconds=10).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+
+        execute_selected(profiles[0], first_run, "a")
+        execute_selected(profiles[1], second_run, "b")
+        assert first_authority.open_run(first_run).status is RunStatus.SUCCEEDED
+        assert second_authority.open_run(second_run).status is RunStatus.SUCCEEDED
+        agent_root = cast(Path, remote_config.agent_root)
+        with sqlite3.connect(agent_root / "supervisor" / "supervisor.sqlite") as conn:
+            rows = tuple(
+                conn.execute("SELECT launch_json FROM launches ORDER BY operation_id")
+            )
+        launches = tuple(json.loads(str(row[0])) for row in rows)
+        from loom.queue._agent_process_supervisor import _launch_from_value
+
+        routed = {
+            launch.profile.profile_id: launch.profile.fingerprint
+            for launch in map(_launch_from_value, launches)
+        }
+        assert routed == {
+            profile.descriptor.profile_id: profile.launch_profile.fingerprint
+            for profile in profiles
+        }
+    finally:
+        assert agent._supervisor is not None  # noqa: SLF001
+        agent._supervisor.shutdown_for_test()  # noqa: SLF001
+        agent.close()
         server.stop()
         daemon.stop()
 
