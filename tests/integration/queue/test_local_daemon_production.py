@@ -7,6 +7,7 @@ from dataclasses import replace
 import importlib
 from pathlib import Path
 import sqlite3
+import sys
 from threading import Event
 import time
 from typing import Never, cast
@@ -58,8 +59,10 @@ from loom.queue import (
     LocalDaemonSocketClient,
     LocalDaemonSocketServer,
     QueueServiceError,
+    ResidentWorkerLaunchProfile,
     prepare_managed_local_runtime_record,
 )
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.serialization import json_dumps_pretty
 from loom.queue.local_daemon_execution import (
     LocalDaemonExecution,
@@ -110,6 +113,7 @@ def test_production_gpu_projection_preserves_multi_device_fabric_groups(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
         gpu_devices=devices,
     )
     execution = _execution(config)
@@ -234,6 +238,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         coordinator_root=tmp_path / "daemon" / "coordinator",
         agent_root=tmp_path / "daemon" / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -318,6 +323,7 @@ def test_managed_local_hard_cutover_rejects_old_import_and_existing_roots(
         coordinator_root=coordinator,
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
     )
     before = coordinator.read_bytes()
     with pytest.raises(Exception, match="fresh roots"):
@@ -334,6 +340,7 @@ def test_admission_digest_covers_the_resolved_pipeline_snapshot(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     load_managed_local_intent(config, run_uri)
     stages = cast(list[dict[str, object]], pipeline_config["stages"])
@@ -358,6 +365,7 @@ def test_safe_runtime_metadata_cannot_activate_a_run_without_exact_record(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
     )
 
     with pytest.raises(Exception, match="fresh exact runtime record"):
@@ -471,6 +479,7 @@ def test_terminal_authority_truth_wins_a_late_cancellation(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -816,6 +825,7 @@ def test_pending_cancellation_installs_authority_epoch_before_any_stage(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -908,6 +918,7 @@ def test_connected_active_cancellation_withholds_output_commit(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -961,6 +972,7 @@ def test_daemon_overlaps_independent_runs_with_available_capacity(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
         cpu_capacity=2,
     )
     LocalDaemon.initialize(config)
@@ -1005,6 +1017,7 @@ def test_daemon_reconciles_skip_without_creating_an_assignment(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -1041,6 +1054,7 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -1135,7 +1149,18 @@ def _daemon_config(tmp_path: Path, *, cpu_capacity: int = 1) -> LocalDaemonConfi
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
         cpu_capacity=cpu_capacity,
+    )
+
+
+def _launch_profile() -> ResidentWorkerLaunchProfile:
+    return ResidentWorkerLaunchProfile(
+        Path.cwd(),
+        Path(sys.executable),
+        ResidentProfileDescriptor(
+            "test-local", "v1", "test-project", "test-environment", "test-executor"
+        ).to_dict(),
     )
 
 

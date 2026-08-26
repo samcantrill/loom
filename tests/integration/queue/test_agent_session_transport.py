@@ -55,6 +55,7 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    ResidentWorkerLaunchProfile,
     prepare_managed_local_runtime_record,
 )
 from loom.queue._agent_process_supervisor import (
@@ -91,6 +92,16 @@ from loom.queue.agent_sessions import (
 from loom.queue.errors import QueueConflictError, QueueError, QueueServiceError
 from loom.scheduling import ResourceClaim, SchedulingComponentDescriptor
 from loom.serialization import PlainData, json_dumps_pretty
+
+
+def _local_launch_profile() -> ResidentWorkerLaunchProfile:
+    return ResidentWorkerLaunchProfile(
+        Path.cwd(),
+        Path(sys.executable),
+        ResidentProfileDescriptor(
+            "test-local", "v1", "test-project", "test-environment", "test-executor"
+        ).to_dict(),
+    )
 
 
 def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, ...]:
@@ -994,6 +1005,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         tmp_path / "coordinator",
         tmp_path / "coordinator-agent",
         runs.root,
+        _local_launch_profile(),
         agent_policy=policy,
         remote_profiles=(descriptor,),
     )
@@ -1186,6 +1198,7 @@ def test_fresh_agent_processes_replay_one_continuous_supervisor_launch(
         tmp_path / "coordinator",
         tmp_path / "coordinator-agent",
         runs.root,
+        _local_launch_profile(),
         agent_policy=policy,
         remote_profiles=(descriptor,),
     )
@@ -1318,6 +1331,7 @@ def test_one_supervisor_routes_selected_work_through_two_bound_profiles(
         tmp_path / "coordinator",
         tmp_path / "coordinator-agent",
         runs.root,
+        _local_launch_profile(),
         agent_policy=policy,
         remote_profiles=(first_descriptor, second_descriptor),
     )
@@ -1476,6 +1490,7 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
         tmp_path / "coordinator",
         tmp_path / "coordinator-agent",
         run_root,
+        _local_launch_profile(),
         cpu_capacity=2,
         agent_policy=policy,
         remote_profiles=(descriptor,),
@@ -1663,6 +1678,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
         tmp_path / "coordinator",
         tmp_path / "coordinator-agent",
         run_root,
+        _local_launch_profile(),
         machine_id="machine-A",
         gpu_devices=(ConfiguredGpuDevice(local_gpu, local_binding),),
         agent_policy=policy,
@@ -1961,6 +1977,7 @@ def test_gpu_model_fallback_uses_daemon_accepted_time(
         tmp_path / "coordinator",
         tmp_path / "agent",
         run_root,
+        _local_launch_profile(),
         machine_id="machine-A",
         gpu_devices=(ConfiguredGpuDevice(descriptor, binding),),
         poll_interval_seconds=0.01,
@@ -2077,6 +2094,7 @@ def test_loopback_mtls_derives_credential_and_rechecks_live_policy(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent-root",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_local_launch_profile(),
         agent_policy=_policy(),
     )
     LocalDaemon.initialize(config)
@@ -2358,6 +2376,7 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
         tmp_path / "coordinator",
         tmp_path / "coordinator-agent",
         run_root,
+        _local_launch_profile(),
         agent_policy=policy,
         remote_profiles=(descriptor,),
     )
@@ -2664,6 +2683,7 @@ def test_lost_registration_response_replays_into_remote_agent_journal(
         tmp_path / "coordinator",
         tmp_path / "coordinator-agent",
         tmp_path / "runs",
+        _local_launch_profile(),
         agent_policy=_policy(),
     )
     LocalDaemon.initialize(config)
@@ -2908,6 +2928,7 @@ def test_loopback_rejects_unmapped_client_certificate_and_wrong_service_ca(
         tmp_path / "coordinator",
         tmp_path / "agent-root",
         tmp_path / "runs",
+        _local_launch_profile(),
         agent_policy=policy,
     )
     LocalDaemon.initialize(config)
@@ -2989,6 +3010,7 @@ def test_loopback_operator_scope_denial_matches_direct_before_persistence(
         tmp_path / "coordinator",
         tmp_path / "agent-root",
         tmp_path / "runs",
+        _local_launch_profile(),
         agent_policy=policy,
     )
     LocalDaemon.initialize(config)
@@ -3080,6 +3102,7 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         tmp_path / "coordinator",
         tmp_path / "agent-root",
         tmp_path / "runs",
+        _local_launch_profile(),
         agent_policy=policy,
     )
     LocalDaemon.initialize(config)
@@ -3221,6 +3244,7 @@ def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
         tmp_path / "coordinator",
         tmp_path / "agent-root",
         tmp_path / "runs",
+        _local_launch_profile(),
         slurm_profiles=(profile,),
     )
     LocalDaemon.initialize(config)
