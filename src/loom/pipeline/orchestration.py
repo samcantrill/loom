@@ -633,16 +633,22 @@ class RunOrchestrator:
                 if stage is None or not stage.attempts
                 else replace(stage.attempts[-1], status=stage.status)
             )
+            retry = _retry_authorization(stage)
+            intent_attempt = 1 if current_attempt is None else current_attempt.attempt
+            if current_attempt is not None:
+                if current_attempt.status is StageStatus.STALE:
+                    intent_attempt += 1
+                elif current_attempt.status is StageStatus.FAILED and retry is not None:
+                    intent_attempt = retry.next_attempt
             prior_intent = (
                 None
-                if current_attempt is None
+                if intent_attempt is None
                 else self.store.find_intent(
                     admission_id=admission_id,
                     stage_name=stage_plan.stage_name,
-                    next_attempt=current_attempt.attempt,
+                    next_attempt=intent_attempt,
                 )
             )
-            retry = _retry_authorization(stage)
             readiness = evaluate_attempt_readiness(
                 stage_plan,
                 completed_stages=completed,

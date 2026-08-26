@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-import subprocess
 from typing import cast
 
 from loom.pipeline.runtime.placement import ExecutionRouteKind, ResolvedStagePlacement
@@ -65,12 +64,21 @@ class SlurmContainmentHelper:
 
     def __post_init__(self) -> None:
         _safe_text(self.descriptor)
-        if not self.argv or any(not isinstance(value, str) or not value for value in self.argv):
+        if not self.argv or any(
+            not isinstance(value, str) or not value for value in self.argv
+        ):
             raise SlurmPlanningError("SLURM containment helper command is invalid")
-        if not isinstance(self.timeout_seconds, (int, float)) or self.timeout_seconds <= 0:
+        if (
+            not isinstance(self.timeout_seconds, (int, float))
+            or self.timeout_seconds <= 0
+        ):
             raise SlurmPlanningError("SLURM containment helper timeout is invalid")
 
-    def resolve(self, request: Mapping[str, PlainData]) -> Mapping[str, PlainData] | None:
+    def resolve(
+        self, request: Mapping[str, PlainData]
+    ) -> Mapping[str, PlainData] | None:
+        import subprocess
+
         try:
             completed = subprocess.run(
                 self.argv,
@@ -83,8 +91,17 @@ class SlurmContainmentHelper:
             if completed.returncode != 0 or len(completed.stdout) > 16_384:
                 return None
             value = json.loads(completed.stdout.decode("utf-8"))
-            return cast(Mapping[str, PlainData], value) if isinstance(value, Mapping) else None
-        except (OSError, subprocess.SubprocessError, UnicodeDecodeError, json.JSONDecodeError):
+            return (
+                cast(Mapping[str, PlainData], value)
+                if isinstance(value, Mapping)
+                else None
+            )
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
             return None
 
 
@@ -99,7 +116,10 @@ def resolve_slurm_containment(
     try:
         value = helper.resolve(request)
         if not isinstance(value, Mapping) or set(value) != {
-            "state", "evidence_id", "evidence_revision", "echo"
+            "state",
+            "evidence_id",
+            "evidence_revision",
+            "echo",
         }:
             return SlurmContainmentReceipt("UNKNOWN")
         if value["state"] != "CONTAINED":
@@ -117,8 +137,10 @@ def resolve_slurm_containment(
         ):
             return SlurmContainmentReceipt("UNKNOWN")
         return SlurmContainmentReceipt(
-            "CONTAINED", evidence_id=evidence_id,
-            evidence_revision=evidence_revision, echo=cast(Mapping[str, PlainData], echo)
+            "CONTAINED",
+            evidence_id=evidence_id,
+            evidence_revision=evidence_revision,
+            echo=cast(Mapping[str, PlainData], echo),
         )
     except Exception:
         return SlurmContainmentReceipt("UNKNOWN")
@@ -378,10 +400,19 @@ class SlurmReadyStageProfile:
             "capability_descriptor": self.job_private_file_provider.descriptor,
             "capability_path": self.job_private_file_provider.fixed_path,
             "containment_helper_descriptor": (
-                None if self.containment_helper is None else self.containment_helper.descriptor
+                None
+                if self.containment_helper is None
+                else self.containment_helper.descriptor
             ),
             "containment_helper_argv": (
-                None if self.containment_helper is None else list(self.containment_helper.argv)
+                None
+                if self.containment_helper is None
+                else list(self.containment_helper.argv)
+            ),
+            "containment_helper_timeout_seconds": (
+                None
+                if self.containment_helper is None
+                else float(self.containment_helper.timeout_seconds)
             ),
         }
         object.__setattr__(

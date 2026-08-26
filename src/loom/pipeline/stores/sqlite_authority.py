@@ -1342,7 +1342,10 @@ class SQLitePerRunAuthorityStore:
                 ).fetchone()
                 if terminal is not None and terminal["reason_json"] is not None:
                     reason = _json_loads(cast(str, terminal["reason_json"]))
-                    if isinstance(reason, Mapping) and reason.get("code") == "operator.recovery_close":
+                    if (
+                        isinstance(reason, Mapping)
+                        and reason.get("code") == "operator.recovery_close"
+                    ):
                         raise AuthorityStoreError("stale execution fence")
                 return
             _require_no_cancellation_epoch(conn)
@@ -1495,7 +1498,9 @@ class SQLitePerRunAuthorityStore:
             raise AuthorityStoreError("recovery expected state version is invalid")
         status = StageStatus(status)
         if status not in {StageStatus.FAILED, StageStatus.CANCELLED}:
-            raise AuthorityStoreError("recovery close status must be FAILED or CANCELLED")
+            raise AuthorityStoreError(
+                "recovery close status must be FAILED or CANCELLED"
+            )
         if not isinstance(reason, LifecycleReason):
             raise AuthorityStoreError("recovery close reason is required")
         with self._transaction(run_uri) as conn:
@@ -1508,7 +1513,7 @@ class SQLitePerRunAuthorityStore:
                 raise AuthorityStoreError("stale execution fence")
             attempt = _require_row(
                 conn.execute(
-                "SELECT stage_name, status, revision_sequence, reason_json FROM attempts WHERE attempt_id = ?",
+                    "SELECT stage_name, status, revision_sequence, reason_json FROM attempts WHERE attempt_id = ?",
                     (fence.attempt_id,),
                 ).fetchone(),
                 "unknown stage attempt",
@@ -1527,12 +1532,21 @@ class SQLitePerRunAuthorityStore:
                     # replay the recovery rather than misclassifying it as an
                     # ordinary terminal winner.
                     resolved_reason = LifecycleReason.from_dict(prior_reason)
+                    expected_reason = LifecycleReason(
+                        code=reason.code,
+                        message=reason.message,
+                        detail={**reason.detail, "recovery_id": recovery_id},
+                    )
+                    if current is not status or resolved_reason != expected_reason:
+                        raise AuthorityStoreError("recovery close replay conflicts")
                     return StatusTransition(
                         run_uri=run_uri,
                         stage_name=stage_name,
                         previous_status=current,
                         status=current,
-                        revision=BackendRevision(int(attempt["revision_sequence"]), "recovery-replay"),
+                        revision=_revision_for(
+                            conn, cast(int, attempt["revision_sequence"])
+                        ),
                         reason=resolved_reason,
                     )
                 # An ordinary terminal fact is the winner.  We deliberately do
@@ -1564,9 +1578,20 @@ class SQLitePerRunAuthorityStore:
             conn.execute(
                 "UPDATE attempts SET status = ?, revision_sequence = ?, reason_json = ? "
                 "WHERE attempt_id = ?",
-                (status.value, revision.sequence, _json_dumps(terminal_reason.to_dict()), fence.attempt_id),
+                (
+                    status.value,
+                    revision.sequence,
+                    _json_dumps(terminal_reason.to_dict()),
+                    fence.attempt_id,
+                ),
             )
-            _upsert_stage(conn, stage_name=stage_name, status=status, revision=revision, reason=terminal_reason)
+            _upsert_stage(
+                conn,
+                stage_name=stage_name,
+                status=status,
+                revision=revision,
+                reason=terminal_reason,
+            )
             _touch_run(conn, revision)
             return StatusTransition(
                 run_uri=run_uri,
@@ -2823,7 +2848,11 @@ class SQLitePerRunAuthorityStore:
             with self._write_connection(database_path, initialize=False) as conn:
                 _migrate_schema(conn)
         with self._connect(database_path) as conn:
-            yield conn
+            conn.execute("BEGIN")
+            try:
+                yield conn
+            finally:
+                conn.rollback()
 
     @contextmanager
     def _transaction(self, run_uri: str) -> Iterator[sqlite3.Connection]:

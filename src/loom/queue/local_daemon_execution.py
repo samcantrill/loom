@@ -16,8 +16,13 @@ from typing import cast
 from loom.artifacts import ArtifactRef
 from loom.pipeline.execution import StageWorkerRequest, prepare_stage_attempt
 from loom.pipeline.execution.reliability import (
+    record_resolved_reliability_policy_fact,
     record_retry_decision_for_stage_result,
     record_stage_reliability_transition,
+)
+from loom.pipeline.execution.models import (
+    EXECUTION_FAILURE_SCHEMA_VERSION,
+    ExecutionFailure,
 )
 from loom.pipeline.reliability import (
     RetryDecisionRecord,
@@ -45,6 +50,7 @@ from loom.queue._managed_local import (
     AssignmentState,
     GpuResourceProvider,
     ManagedAssignment,
+    ManagedLocalError,
     ManagedOfferSnapshot,
     ObserveRequest,
     SQLiteAgentJournal,
@@ -76,6 +82,7 @@ from loom.pipeline.runtime import (
 from loom.pipeline.specs import PipelineSpec, parse_pipeline_config
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
+    AuthorityStoreError,
     CancellationEpochRequest,
     CoordinatorAdmissionRequest,
     LocalRunStore,
@@ -111,7 +118,12 @@ from loom.scheduling import (
     SchedulingKernel,
     SchedulingPolicy,
 )
-from loom.serialization import PlainData, ensure_plain_data, json_loads
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    freeze_plain_data,
+    json_loads,
+)
 from loom.timestamps import utc_timestamp
 
 from .errors import QueueConflictError, QueueServiceError
@@ -129,13 +141,19 @@ from ._agent_process_supervisor import (
     SupervisorLaunchState,
     SupervisorLaunchConfiguration,
 )
-from .agent_sessions import AgentOffer, _target_remote_delivery
+from .agent_sessions import (
+    AgentAssignmentControl,
+    AgentOffer,
+    _managed_containment_evidence,
+    _target_remote_delivery,
+)
 from .local_daemon import (
     LocalDaemon,
     LocalDaemonAdmission,
     LocalDaemonAdmissionState,
     LocalDaemonConfig,
     LocalDaemonSchedulingComponents,
+    ManagedRecoveryTarget,
     RecoverUnknownAssignment,
     SlurmRecoveryTarget,
     _default_scheduling_components,
@@ -600,11 +618,24 @@ class _ScopedCoordinatorAuthority:
     """
 
     def __init__(
-        self, store: SQLitePerRunAuthorityStore, *, run_uri: str, coordinator_id: str
+        self,
+        store: SQLitePerRunAuthorityStore,
+        *,
+        run_uri: str,
+        coordinator_id: str,
+        ordinary_mutation_frozen: Callable[[str], bool] | None = None,
     ) -> None:
         self._store = store
         self._run_uri = run_uri
         self._coordinator_id = coordinator_id
+        self._ordinary_mutation_frozen = ordinary_mutation_frozen
+
+    def _require_ordinary_mutation(self, assignment_id: str) -> None:
+        frozen = self._ordinary_mutation_frozen
+        if frozen is not None and frozen(assignment_id):
+            raise QueueConflictError(
+                "ordinary terminal mutation is frozen by guarded recovery"
+            )
 
     def _run(self, run_uri: str) -> None:
         if run_uri != self._run_uri:
@@ -685,6 +716,7 @@ class _ScopedCoordinatorAuthority:
         reason: LifecycleReason,
     ) -> StatusTransition:
         self._run(run_uri)
+        self._require_ordinary_mutation(fence.assignment_id)
         return self._store.record_managed_attempt_terminal(
             run_uri, fence=fence, status=status, reason=reason
         )
@@ -706,6 +738,8 @@ class _ScopedCoordinatorAuthority:
         assignment_id: str | None = None,
     ):
         self._run(run_uri)
+        if assignment_id is not None:
+            self._require_ordinary_mutation(assignment_id)
         return self._store.record_output_commit(
             run_uri,
             stage_name,
@@ -864,7 +898,8 @@ def _recovery_retry_policy(
 
     facts = authority.list_reliability_policy_facts(run_uri, stage_name=stage_name)
     selected = [
-        fact for fact in facts
+        fact
+        for fact in facts
         if fact.scope is ReliabilityPolicyScope.ATTEMPT and fact.attempt == attempt
     ]
     if not selected:
@@ -873,43 +908,84 @@ def _recovery_retry_policy(
     return cast(ReliabilityPolicy, policy).retry
 
 
+def _current_attempt_retry_is_authorized(stage: object) -> bool:
+    """Whether authority permits the orchestrator to prepare the next attempt."""
+
+    attempts = getattr(stage, "attempts", ())
+    if not attempts:
+        return False
+    current = attempts[-1]
+    return any(
+        decision.status.attempt == current.attempt
+        and decision.should_retry
+        and decision.next_attempt == current.attempt + 1
+        for decision in getattr(stage, "retry_decisions", ())
+    )
+
+
 class _AuthorityReliabilityStore:
     """Narrow reliability facade that persists every fact in authority."""
 
     def __init__(self, authority: SQLitePerRunAuthorityStore) -> None:
         self._authority = authority
 
-    def write_reliability_policy_fact(self, run_uri: str, fact: ReliabilityPolicyFact) -> None:
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> None:
         self._authority.write_reliability_policy_fact(run_uri, fact)
 
-    def list_reliability_policy_facts(self, run_uri: str, *, stage_name: str | None = None) -> tuple[ReliabilityPolicyFact, ...]:
-        return self._authority.list_reliability_policy_facts(run_uri, stage_name=stage_name)
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]:
+        return self._authority.list_reliability_policy_facts(
+            run_uri, stage_name=stage_name
+        )
 
-    def write_reliability_status_detail(self, run_uri: str, detail: ReliabilityStatusDetail) -> None:
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> None:
         self._authority.write_reliability_status_detail(run_uri, detail)
 
-    def list_reliability_status_details(self, run_uri: str, *, stage_name: str | None = None) -> tuple[ReliabilityStatusDetail, ...]:
-        return self._authority.list_reliability_status_details(run_uri, stage_name=stage_name)
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]:
+        return self._authority.list_reliability_status_details(
+            run_uri, stage_name=stage_name
+        )
 
-    def write_stage_attempt_transaction(self, run_uri: str, transaction: StageAttemptTransaction) -> None:
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> None:
         self._authority.write_stage_attempt_transaction(run_uri, transaction)
 
-    def read_transaction_chain(self, run_uri: str, transaction_id: str) -> tuple[StageAttemptTransaction, ...]:
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]:
         return self._authority.read_transaction_chain(run_uri, transaction_id)
 
-    def list_stage_attempt_transactions(self, run_uri: str, *, stage_name: str | None = None) -> tuple[StageAttemptTransaction, ...]:
-        return self._authority.list_stage_attempt_transactions(run_uri, stage_name=stage_name)
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return self._authority.list_stage_attempt_transactions(
+            run_uri, stage_name=stage_name
+        )
 
     def write_retry_decision(self, run_uri: str, decision: RetryDecisionRecord) -> None:
         self._authority.write_retry_decision(run_uri, decision)
 
-    def list_retry_decisions(self, run_uri: str, *, stage_name: str | None = None) -> tuple[RetryDecisionRecord, ...]:
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]:
         return self._authority.list_retry_decisions(run_uri, stage_name=stage_name)
 
-    def write_timeout_outcome(self, run_uri: str, outcome: TimeoutOutcomeRecord) -> None:
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> None:
         self._authority.write_timeout_outcome(run_uri, outcome)
 
-    def list_timeout_outcomes(self, run_uri: str, *, stage_name: str | None = None) -> tuple[TimeoutOutcomeRecord, ...]:
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]:
         return self._authority.list_timeout_outcomes(run_uri, stage_name=stage_name)
 
 
@@ -1071,9 +1147,13 @@ class LocalDaemonExecution:
     def resume_retained_local_work(self) -> None:
         """Join every local supervisor operation before daemon availability."""
 
+        intentionally_retained: set[str] = set()
         for assignment, decision_receipt in self.coordinator.retained_assignments(
             agent_id=self.config.machine_id
         ):
+            if self._recovery_retains_assignment(assignment.assignment_id):
+                intentionally_retained.add(assignment.assignment_id)
+                continue
             workspace = _ResidentAssignmentWorkspace(
                 self.config.agent_root, assignment.assignment_id
             )
@@ -1110,33 +1190,48 @@ class LocalDaemonExecution:
                 authority_store,
                 run_uri=assignment.run_uri,
                 coordinator_id=self.coordinator_id,
+                ordinary_mutation_frozen=self._ordinary_mutation_frozen,
             )
-            run_managed_local_assignment(
-                coordinator=self.coordinator,
-                authority=scoped_authority,
-                journal=self.journal,
-                assignment=assignment,
-                worker_request=StageWorkerRequest.from_dict(raw_worker_request),
-                claims=request.claims,
-                providers=self.providers,
-                run_store=self.run_store,
-                max_parallel_stages=intent.max_parallel_stages,
-                cancellation_requested=lambda: (
-                    self._install_run_cancellation_if_requested(
-                        assignment.run_uri,
-                        scoped_authority,
-                        intent.plan.stage_order,
-                    )
-                ),
-                decision_receipt=decision_receipt,
-                agent_root=self.config.agent_root,
-                supervisor=self.supervisor,
-                resident_launch_profile=self.config.resident_worker_launch_profile,
-            )
-        if self.journal.retained_claim_commands():
+            try:
+                run_managed_local_assignment(
+                    coordinator=self.coordinator,
+                    authority=scoped_authority,
+                    journal=self.journal,
+                    assignment=assignment,
+                    worker_request=StageWorkerRequest.from_dict(raw_worker_request),
+                    claims=request.claims,
+                    providers=self.providers,
+                    run_store=self.run_store,
+                    max_parallel_stages=intent.max_parallel_stages,
+                    cancellation_requested=lambda: (
+                        self._install_run_cancellation_if_requested(
+                            assignment.run_uri,
+                            scoped_authority,
+                            intent.plan.stage_order,
+                        )
+                    ),
+                    decision_receipt=decision_receipt,
+                    agent_root=self.config.agent_root,
+                    supervisor=self.supervisor,
+                    resident_launch_profile=self.config.resident_worker_launch_profile,
+                )
+            except ManagedLocalError:
+                if not self._is_exact_retained_unknown(assignment.assignment_id):
+                    raise
+                intentionally_retained.add(assignment.assignment_id)
+        retained_commands = self.journal.retained_claim_commands()
+        if any(
+            command.assignment.assignment_id not in intentionally_retained
+            for command in retained_commands
+        ):
             raise QueueConflictError(
                 "retained local assignment reconciliation is incomplete"
             )
+        allowed_claim_ids = {
+            command.assignment.claim_id
+            for command in retained_commands
+            if command.assignment.assignment_id in intentionally_retained
+        }
         for kind, provider in sorted(self.providers.items()):
             observed = provider.observe(
                 ObserveRequest(
@@ -1145,10 +1240,30 @@ class LocalDaemonExecution:
                     f"startup-reconciled:{kind}",
                 )
             )
-            if observed.live_claim_ids:
+            if not set(observed.live_claim_ids).issubset(allowed_claim_ids):
                 raise QueueConflictError(
                     "startup provider observation retains unresolved claims"
                 )
+
+    def _recovery_retains_assignment(self, assignment_id: str) -> bool:
+        daemon = self.daemon
+        return (
+            False
+            if daemon is None
+            else daemon._recovery_retains_assignment(assignment_id)
+        )
+
+    def _is_exact_retained_unknown(self, assignment_id: str) -> bool:
+        try:
+            return self.coordinator.state(
+                assignment_id
+            ) == "unknown" and self.journal.read_state(assignment_id) in {
+                AssignmentState.PREPARE_UNKNOWN,
+                AssignmentState.ACTIVATION_UNKNOWN,
+                AssignmentState.START_UNKNOWN,
+            }
+        except ManagedLocalError:
+            return False
 
     @property
     def scheduling_epoch(self) -> str:
@@ -1264,6 +1379,7 @@ class LocalDaemonExecution:
             authority,
             run_uri=admission.run_uri,
             coordinator_id=self.coordinator_id,
+            ordinary_mutation_frozen=self._ordinary_mutation_frozen,
         )
         if (
             admission.cancellation_operation_id is not None
@@ -1698,51 +1814,282 @@ class LocalDaemonExecution:
         self.slurm_assignments.mark_terminal(record.assignment.assignment_id)
         return True
 
-    def recover_unknown_assignment(
-        self, request: RecoverUnknownAssignment
-    ) -> dict[str, PlainData]:
-        """Close one exactly-contained unknown assignment without releasing it."""
+    def recovery_has_ordinary_winner(self, request: RecoverUnknownAssignment) -> bool:
+        """Recheck complete ordinary truth before containment and before close."""
 
         binding = self._recovery_binding(request)
-        evidence = self._recovery_evidence(request, binding)
-        if evidence is None:
-            return {"recovery_id": request.recovery_id, "state": "unknown", "evidence": "UNKNOWN"}
+        run_uri, stage_name, attempt, attempt_id = binding[1:]
+        authority = SQLitePerRunAuthorityStore(run_uri)
+        snapshot = authority.open_run(run_uri)
+        for stage in snapshot.stages:
+            if stage.stage_name != stage_name:
+                continue
+            for item in stage.attempts:
+                if item.attempt != attempt or item.attempt_id != attempt_id:
+                    continue
+                if item.status in {
+                    StageStatus.SUCCEEDED,
+                    StageStatus.FAILED,
+                    StageStatus.CANCELLED,
+                }:
+                    detail = {} if item.reason is None else item.reason.detail
+                    return detail.get("recovery_id") != request.recovery_id
+                break
+        if isinstance(request.target, SlurmRecoveryTarget):
+            record = cast(SlurmStageRecord, binding[0])
+            if record.report is None or record.fence is None:
+                return False
+            try:
+                self.slurm_assignments.committed_result(
+                    record.assignment.assignment_id,
+                    cast(str, record.bootstrap_incarnation),
+                    record.fence,
+                )
+            except QueueConflictError:
+                return False
+            return True
+        if self._managed_target_is_remote(request.assignment_id):
+            return self._remote_result_is_complete(request.assignment_id)
+        return self.journal.read_result(request.assignment_id) is not None
+
+    def resolve_recovery_evidence(
+        self, request: RecoverUnknownAssignment
+    ) -> tuple[str, Mapping[str, PlainData] | None]:
+        """Return target-owned evidence, a pending remote request, or UNKNOWN."""
+
+        binding = self._recovery_binding(request)
+        if isinstance(request.target, SlurmRecoveryTarget):
+            record = cast(SlurmStageRecord, binding[0])
+            profile = self._slurm_profile(
+                record.assignment.profile_id,
+                record.assignment.profile_configuration_fingerprint,
+            )
+            if profile.containment_helper is None:
+                return "unknown", None
+            proof = self._slurm_recovery_proof(request, record, profile)
+            receipt = resolve_slurm_containment(profile, proof)
+            if not receipt.contained:
+                return "unknown", None
+            evidence = freeze_plain_data(
+                {
+                    "kind": "slurm_helper",
+                    "state": "CONTAINED",
+                    "helper_descriptor": profile.containment_helper.descriptor,
+                    "evidence_id": receipt.evidence_id,
+                    "evidence_revision": receipt.evidence_revision,
+                    "echo": dict(cast(Mapping[str, PlainData], receipt.echo)),
+                },
+                path="SLURM recovery evidence",
+            )
+            assert isinstance(evidence, Mapping)
+            return "contained", evidence
+        if self._managed_target_is_remote(request.assignment_id):
+            return self._remote_managed_recovery_evidence(request)
+        assignment = cast(ManagedAssignment, binding[0])
+        workspace = _ResidentAssignmentWorkspace(
+            self.config.agent_root, assignment.assignment_id
+        )
+        raw = workspace.supervisor_launch_json()
+        if raw is None:
+            return "unknown", None
+        try:
+            from ._managed_local import _launch_from_value
+
+            launch = _launch_from_value(json.loads(raw))
+            if not self._launch_matches_recovery(request, launch):
+                return "unknown", None
+            receipt = self.supervisor.contain(launch)
+            if receipt.state is not SupervisorLaunchState.CONTAINED:
+                return "unknown", None
+            evidence = _managed_containment_evidence(
+                {
+                    "kind": "managed_supervisor",
+                    "state": "CONTAINED",
+                    "supervisor_id": launch.supervisor_id,
+                    "continuity_epoch": launch.continuity_epoch,
+                    "agent_id": assignment.agent_id,
+                    "supervisor_agent_id": launch.agent_id,
+                    "session_id": launch.session_id,
+                    "assignment_id": launch.assignment_id,
+                    "process_execution_id": launch.process_execution_id,
+                    "execution_fence": launch.execution_fence,
+                    "launch_operation_id": launch.launch_operation_id,
+                    "launch_spec_digest": launch.spec_digest,
+                    "supervisor_revision": receipt.supervisor_revision,
+                    "worker_result_digest": receipt.worker_result_digest,
+                }
+            )
+        except (ManagedLocalError, QueueServiceError, ValueError):
+            return "unknown", None
+        return "contained", evidence
+
+    def close_recovered_assignment(
+        self,
+        request: RecoverUnknownAssignment,
+        evidence: Mapping[str, PlainData],
+        *,
+        recorded_at: str,
+    ) -> Mapping[str, PlainData]:
+        """Close from persisted evidence and write one existing-owner decision."""
+
+        binding = self._recovery_binding(request)
+        self._validate_persisted_recovery_evidence(request, binding, evidence)
         run_uri, stage_name, attempt, attempt_id = binding[1:]
         authority_store = SQLitePerRunAuthorityStore(run_uri)
         authority_store.open_run(run_uri)
-        authority = _ScopedCoordinatorAuthority(authority_store, run_uri=run_uri, coordinator_id=self.coordinator_id)
-        status = StageStatus.FAILED if request.requested_outcome == "failed" else StageStatus.CANCELLED
+        authority = _ScopedCoordinatorAuthority(
+            authority_store,
+            run_uri=run_uri,
+            coordinator_id=self.coordinator_id,
+        )
+        status = (
+            StageStatus.FAILED
+            if request.requested_outcome == "failed"
+            else StageStatus.CANCELLED
+        )
         try:
             transition = authority.close_managed_attempt_fence(
                 run_uri,
                 recovery_id=request.recovery_id,
-                fence=ExecutionFence(request.assignment_id, attempt_id, request.execution_fence),
+                fence=ExecutionFence(
+                    request.assignment_id, attempt_id, request.execution_fence
+                ),
                 expected_state_version=request.expected_state_version,
                 status=status,
                 reason=LifecycleReason(
-                    code="operator.recovery_close", message=request.reason,
-                    detail={"assignment_id": request.assignment_id, "evidence": evidence},
+                    code="operator.recovery_close",
+                    message=request.reason,
+                    detail={
+                        "assignment_id": request.assignment_id,
+                        "evidence": dict(evidence),
+                    },
                 ),
             )
-        except Exception as exc:
-            if "supersedes recovery" in str(exc):
-                return {"recovery_id": request.recovery_id, "state": "superseded", "evidence": evidence}
+        except AuthorityStoreError as exc:
+            if "ordinary terminal fact supersedes recovery" in str(exc):
+                return {
+                    "recovery_id": request.recovery_id,
+                    "state": "superseded",
+                    "evidence": "ORDINARY_TERMINAL",
+                }
             raise
+        decision: RetryDecisionRecord | None = None
         if request.consider_retry:
-            # This owner persists a decision only; RunOrchestrator remains the
-            # sole owner that materializes a permitted next attempt.
-            reliability_store: RunReliabilityStore = _AuthorityReliabilityStore(authority_store)
+            decision = self._record_recovery_reliability(
+                authority_store,
+                request=request,
+                stage_name=stage_name,
+                attempt=attempt,
+                status=status,
+                recorded_at=recorded_at,
+            )
+        return {
+            "recovery_id": request.recovery_id,
+            "state": "closed",
+            "evidence": dict(evidence),
+            "revision": transition.revision.sequence,
+            "retry_allowed": None if decision is None else decision.should_retry,
+            "next_attempt": None if decision is None else decision.next_attempt,
+            "physical_ownership": "retained",
+        }
+
+    def _record_recovery_reliability(
+        self,
+        authority: SQLitePerRunAuthorityStore,
+        *,
+        request: RecoverUnknownAssignment,
+        stage_name: str,
+        attempt: int,
+        status: StageStatus,
+        recorded_at: str,
+    ) -> RetryDecisionRecord:
+        store: RunReliabilityStore = _AuthorityReliabilityStore(authority)
+        intent = load_managed_local_intent(
+            self.config,
+            request.run_uri,
+            slurm_profiles=self._scheduling.available_slurm_profiles(),
+        )
+        record_resolved_reliability_policy_fact(
+            store,
+            run_uri=request.run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            resolved_runtime=intent.runtime[stage_name],
+            recorded_at=recorded_at,
+        )
+        terminal_state = (
+            StageAttemptTransactionState.FAILED
+            if status is StageStatus.FAILED
+            else StageAttemptTransactionState.CANCELLED
+        )
+        transactions = tuple(
+            item
+            for item in store.list_stage_attempt_transactions(
+                request.run_uri, stage_name=stage_name
+            )
+            if item.attempt == attempt
+            and item.state
+            in {
+                StageAttemptTransactionState.FAILED,
+                StageAttemptTransactionState.CANCELLED,
+            }
+        )
+        if transactions and any(
+            item.state is not terminal_state for item in transactions
+        ):
+            raise QueueConflictError("recovery reliability transition conflicts")
+        if not transactions:
             record_stage_reliability_transition(
-                reliability_store, run_uri=run_uri, stage_name=stage_name, attempt=attempt,
-                state=(StageAttemptTransactionState.FAILED if status is StageStatus.FAILED else StageAttemptTransactionState.CANCELLED),
-                stage_status=status, recorded_at=utc_timestamp(),
+                store,
+                run_uri=request.run_uri,
+                stage_name=stage_name,
+                attempt=attempt,
+                state=terminal_state,
+                stage_status=status,
+                recorded_at=recorded_at,
             )
-            record_retry_decision_for_stage_result(
-                reliability_store, run_uri=run_uri, stage_name=stage_name, attempt=attempt,
-                stage_status=status, recorded_at=utc_timestamp(),
-                policy=_recovery_retry_policy(authority_store, run_uri, stage_name, attempt), failure=None,
+        decisions = tuple(
+            item
+            for item in store.list_retry_decisions(
+                request.run_uri, stage_name=stage_name
             )
-        return {"recovery_id": request.recovery_id, "state": "closed", "evidence": evidence, "revision": transition.revision.sequence}
+            if item.status.attempt == attempt
+        )
+        if decisions:
+            if len(decisions) != 1:
+                raise QueueConflictError("recovery retry decision conflicts")
+            return decisions[0]
+        failure = (
+            None
+            if status is StageStatus.CANCELLED
+            else ExecutionFailure(
+                schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+                run_uri=request.run_uri,
+                stage_name=stage_name,
+                attempt=attempt,
+                failed_at=recorded_at,
+                executor="guarded-recovery",
+                failure_type="executor_infrastructure",
+                message=request.reason,
+                executor_metadata={"recovery_id": request.recovery_id},
+                details={"assignment_id": request.assignment_id},
+            )
+        )
+        decision = record_retry_decision_for_stage_result(
+            store,
+            run_uri=request.run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            stage_status=status,
+            recorded_at=recorded_at,
+            policy=_recovery_retry_policy(
+                authority, request.run_uri, stage_name, attempt
+            ),
+            failure=failure,
+        )
+        if decision is None:
+            raise QueueServiceError("recovery retry decision was not persisted")
+        return decision
 
     def _recovery_binding(
         self, request: RecoverUnknownAssignment
@@ -1760,48 +2107,301 @@ class LocalDaemonExecution:
                 or record.process_execution_id != request.process_execution_id
             ):
                 raise QueueConflictError("SLURM recovery target identity conflicts")
-            binding = (record, record.assignment.run_uri, record.assignment.stage_name, record.assignment.attempt, record.assignment.attempt_id)
+            binding = (
+                record,
+                record.assignment.run_uri,
+                record.assignment.stage_name,
+                record.assignment.attempt,
+                record.assignment.attempt_id,
+            )
             _validate_recovery_request_identity(request, binding)
             return binding
+        target = cast(ManagedRecoveryTarget, request.target)
+        remote = self._managed_target_is_remote(request.assignment_id)
+        assignment_agent_id = target.agent_id
         matches = [
-            item for item in self.coordinator.retained_assignments(agent_id=request.target.agent_id)
-            if item[0].assignment_id == request.assignment_id and item[0].session_id == request.target.session_id
+            item
+            for item in self.coordinator.retained_assignments(
+                agent_id=assignment_agent_id
+            )
+            if item[0].assignment_id == request.assignment_id
+            and item[0].session_id == target.session_id
         ]
-        if len(matches) != 1 or self.journal.read_grant_fence(request.assignment_id) != request.execution_fence:
+        if len(matches) != 1:
             raise QueueConflictError("managed recovery target identity conflicts")
         assignment = matches[0][0]
-        binding = (assignment, assignment.run_uri, assignment.stage_name, assignment.attempt, assignment.attempt_id)
+        if remote:
+            with sqlite3.connect(self.config.control_database) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT r.*, s.agent_id FROM remote_assignments r "
+                    "JOIN agent_sessions s ON s.session_id = r.session_id "
+                    "WHERE r.assignment_id = ?",
+                    (request.assignment_id,),
+                ).fetchone()
+            if (
+                row is None
+                or str(row["agent_id"]) != target.agent_id
+                or str(row["session_id"]) != target.session_id
+                or row["fence"] != request.execution_fence
+                or str(row["run_uri"]) != request.run_uri
+                or str(row["stage_work_id"]) != request.stage_work_id
+                or str(row["stage_name"]) != request.stage_name
+                or int(row["attempt"]) != request.attempt
+                or str(row["attempt_id"]) != assignment.attempt_id
+                or self._remote_process_execution_id(request.assignment_id)
+                != request.process_execution_id
+            ):
+                raise QueueConflictError("managed recovery target identity conflicts")
+        elif (
+            self.journal.read_grant_fence(request.assignment_id)
+            != request.execution_fence
+        ):
+            raise QueueConflictError("managed recovery target identity conflicts")
+        binding = (
+            assignment,
+            assignment.run_uri,
+            assignment.stage_name,
+            assignment.attempt,
+            assignment.attempt_id,
+        )
         _validate_recovery_request_identity(request, binding)
         return binding
 
-    def _recovery_evidence(
-        self, request: RecoverUnknownAssignment, binding: tuple[object, str, str, int, str]
-    ) -> str | None:
+    def _managed_target_is_remote(self, assignment_id: str) -> bool:
+        with sqlite3.connect(self.config.control_database) as conn:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM remote_assignments WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()
+                is not None
+            )
+
+    def _remote_process_execution_id(self, assignment_id: str) -> str | None:
+        with sqlite3.connect(self.config.execution_database) as conn:
+            row = conn.execute(
+                "SELECT payload_json FROM coordinator_events "
+                "WHERE assignment_id = ? AND sequence = 1",
+                (assignment_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(str(row[0]))
+        value = (
+            payload.get("process_execution_id")
+            if isinstance(payload, Mapping)
+            else None
+        )
+        return value if isinstance(value, str) else None
+
+    def _remote_result_is_complete(self, assignment_id: str) -> bool:
+        with sqlite3.connect(self.config.control_database) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT report_json FROM remote_assignments WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+            if row is None or row["report_json"] is None:
+                return False
+            report = _RemoteExecutionReport.from_dict(
+                json.loads(str(row["report_json"]))
+            )
+            outputs = tuple(
+                conn.execute(
+                    "SELECT finalized FROM remote_transfers WHERE assignment_id = ? "
+                    "AND direction = 'output'",
+                    (assignment_id,),
+                )
+            )
+        return len(outputs) == len(report.outputs) and all(
+            bool(item["finalized"]) for item in outputs
+        )
+
+    def _remote_managed_recovery_evidence(
+        self, request: RecoverUnknownAssignment
+    ) -> tuple[str, Mapping[str, PlainData] | None]:
+        operation_id = (
+            "recover-remote-"
+            + hashlib.sha256(
+                f"{request.recovery_id}\0{request.assignment_id}".encode()
+            ).hexdigest()
+        )
+        control = AgentAssignmentControl(
+            operation_id=operation_id,
+            session_id=cast(ManagedRecoveryTarget, request.target).session_id,
+            assignment_id=request.assignment_id,
+            fence=request.execution_fence,
+            process_execution_id=request.process_execution_id,
+        )
+        encoded = json.dumps(control.value(), sort_keys=True, separators=(",", ":"))
+        with sqlite3.connect(self.config.control_database) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT request_json, state, result_code, evidence_json "
+                "FROM remote_assignment_controls WHERE assignment_id = ?",
+                (request.assignment_id,),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO remote_assignment_controls("
+                    "operation_id, session_id, assignment_id, request_json, state, "
+                    "result_code, evidence_json, acknowledged) "
+                    "VALUES (?, ?, ?, ?, 'pending_delivery', NULL, NULL, 0)",
+                    (
+                        operation_id,
+                        control.session_id,
+                        control.assignment_id,
+                        encoded,
+                    ),
+                )
+                conn.commit()
+                return "pending", None
+            retained = AgentAssignmentControl.from_value(
+                json.loads(str(row["request_json"]))
+            )
+            if (
+                retained.session_id != control.session_id
+                or retained.assignment_id != control.assignment_id
+                or retained.fence != control.fence
+                or retained.process_execution_id != control.process_execution_id
+            ):
+                conn.commit()
+                return "unknown", None
+            code = None if row["result_code"] is None else str(row["result_code"])
+            raw_evidence = row["evidence_json"]
+            conn.commit()
+        if code is None:
+            return "pending", None
+        if code != "contained" or raw_evidence is None:
+            return "unknown", None
+        value = json.loads(str(raw_evidence))
+        if not isinstance(value, Mapping):
+            return "unknown", None
+        try:
+            evidence = _managed_containment_evidence(value)
+        except QueueServiceError:
+            return "unknown", None
+        if not self._managed_evidence_matches(request, evidence):
+            return "unknown", None
+        return "contained", evidence
+
+    def _launch_matches_recovery(
+        self, request: RecoverUnknownAssignment, launch: object
+    ) -> bool:
+        target = cast(ManagedRecoveryTarget, request.target)
+        return (
+            getattr(launch, "assignment_id", None) == request.assignment_id
+            and (
+                self._managed_target_is_remote(request.assignment_id)
+                or getattr(launch, "agent_id", None) == self.agent_id
+            )
+            and getattr(launch, "session_id", None) == target.session_id
+            and getattr(launch, "process_execution_id", None)
+            == request.process_execution_id
+            and getattr(launch, "execution_fence", None) == request.execution_fence
+        )
+
+    @staticmethod
+    def _managed_evidence_matches(
+        request: RecoverUnknownAssignment, evidence: Mapping[str, PlainData]
+    ) -> bool:
+        target = cast(ManagedRecoveryTarget, request.target)
+        return (
+            evidence.get("agent_id") == target.agent_id
+            and evidence.get("session_id") == target.session_id
+            and evidence.get("assignment_id") == request.assignment_id
+            and evidence.get("process_execution_id") == request.process_execution_id
+            and evidence.get("execution_fence") == request.execution_fence
+        )
+
+    @staticmethod
+    def _slurm_recovery_proof(
+        request: RecoverUnknownAssignment,
+        record: SlurmStageRecord,
+        profile: SlurmReadyStageProfile,
+    ) -> dict[str, PlainData]:
+        helper = profile.containment_helper
+        if helper is None:
+            raise QueueServiceError("SLURM containment helper is unavailable")
+        return {
+            "assignment_id": record.assignment.assignment_id,
+            "profile_id": record.assignment.profile_id,
+            "profile_configuration_fingerprint": record.assignment.profile_configuration_fingerprint,
+            "helper_descriptor": helper.descriptor,
+            "submission_operation_id": record.assignment.operation_id,
+            "cluster_id": cast(str, record.cluster),
+            "job_id": cast(str, record.job_id),
+            "bootstrap_incarnation_id": record.bootstrap_incarnation,
+            "process_execution_id": request.process_execution_id,
+            "execution_fence": request.execution_fence,
+        }
+
+    def _validate_persisted_recovery_evidence(
+        self,
+        request: RecoverUnknownAssignment,
+        binding: tuple[object, str, str, int, str],
+        evidence: Mapping[str, PlainData],
+    ) -> None:
         if isinstance(request.target, SlurmRecoveryTarget):
             record = cast(SlurmStageRecord, binding[0])
-            profile = self._slurm_profile(record.assignment.profile_id, record.assignment.profile_configuration_fingerprint)
-            proof: dict[str, PlainData] = {
-                "assignment_id": record.assignment.assignment_id, "profile_id": record.assignment.profile_id,
-                "profile_configuration_fingerprint": record.assignment.profile_configuration_fingerprint,
-                "submission_operation_id": record.assignment.operation_id, "cluster_id": cast(str, record.cluster),
-                "job_id": cast(str, record.job_id), "bootstrap_incarnation_id": record.bootstrap_incarnation,
-                "process_execution_id": request.process_execution_id, "execution_fence": request.execution_fence,
-            }
-            receipt = resolve_slurm_containment(profile, proof)
-            return None if not receipt.contained else f"slurm:{receipt.evidence_id}:{receipt.evidence_revision}"
-        assignment = cast(ManagedAssignment, binding[0])
-        raw = _ResidentAssignmentWorkspace(self.config.agent_root, assignment.assignment_id).supervisor_launch_json()
-        if raw is None:
-            return None
+            profile = self._slurm_profile(
+                record.assignment.profile_id,
+                record.assignment.profile_configuration_fingerprint,
+            )
+            proof = self._slurm_recovery_proof(request, record, profile)
+            helper = profile.containment_helper
+            if (
+                set(evidence)
+                != {
+                    "kind",
+                    "state",
+                    "helper_descriptor",
+                    "evidence_id",
+                    "evidence_revision",
+                    "echo",
+                }
+                or evidence.get("kind") != "slurm_helper"
+                or evidence.get("state") != "CONTAINED"
+                or helper is None
+                or evidence.get("helper_descriptor") != helper.descriptor
+                or evidence.get("echo") != proof
+                or not isinstance(evidence.get("evidence_id"), str)
+                or not isinstance(evidence.get("evidence_revision"), str)
+            ):
+                raise QueueConflictError("persisted SLURM recovery evidence conflicts")
+            return
         try:
+            managed = _managed_containment_evidence(evidence)
+        except QueueServiceError as exc:
+            raise QueueConflictError(
+                "persisted managed recovery evidence conflicts"
+            ) from exc
+        if not self._managed_evidence_matches(request, managed):
+            raise QueueConflictError("persisted managed recovery evidence conflicts")
+        if not self._managed_target_is_remote(request.assignment_id):
             from ._managed_local import _launch_from_value
+
+            raw = _ResidentAssignmentWorkspace(
+                self.config.agent_root, request.assignment_id
+            ).supervisor_launch_json()
+            if raw is None:
+                raise QueueConflictError(
+                    "managed recovery launch evidence is unavailable"
+                )
             launch = _launch_from_value(json.loads(raw))
-            if (launch.assignment_id != assignment.assignment_id or launch.agent_id != request.target.agent_id or launch.session_id != request.target.session_id or launch.process_execution_id != request.process_execution_id or launch.execution_fence != request.execution_fence):
-                return None
-            receipt = self.supervisor.contain(launch)
-        except Exception:
-            return None
-        return f"managed:{receipt.supervisor_revision}" if receipt.state is SupervisorLaunchState.CONTAINED else None
+            if (
+                not self._launch_matches_recovery(request, launch)
+                or managed.get("supervisor_id") != launch.supervisor_id
+                or managed.get("supervisor_agent_id") != launch.agent_id
+                or managed.get("continuity_epoch") != launch.continuity_epoch
+                or managed.get("launch_operation_id") != launch.launch_operation_id
+                or managed.get("launch_spec_digest") != launch.spec_digest
+            ):
+                raise QueueConflictError(
+                    "persisted managed recovery evidence conflicts"
+                )
 
     def _dispatch_slurm_ready(
         self,
@@ -2355,13 +2955,22 @@ class LocalDaemonExecution:
             )
         if snapshot.status is RunStatus.CANCELLED:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
-        facts = {stage.stage_name: stage.status for stage in snapshot.stages}
+        stage_facts = {stage.stage_name: stage for stage in snapshot.stages}
+        facts = {name: stage.status for name, stage in stage_facts.items()}
         run_stages = {
             stage.stage_name
             for stage in plan.stage_plans
             if stage.action is PlanAction.RUN
         }
-        if any(facts.get(name) is StageStatus.FAILED for name in run_stages):
+        terminal_failures = tuple(
+            stage_facts[name]
+            for name in run_stages
+            if name in stage_facts
+            and stage_facts[name].status is StageStatus.FAILED
+            and not _current_attempt_retry_is_authorized(stage_facts[name])
+            and not self._recovery_failure_is_settling(stage_facts[name])
+        )
+        if terminal_failures:
             authority.transition_run(
                 plan.run_uri,
                 from_status=snapshot.status,
@@ -2395,6 +3004,21 @@ class LocalDaemonExecution:
             )
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.SUCCEEDED)
         return None
+
+    def _recovery_failure_is_settling(self, stage: object) -> bool:
+        reason = getattr(stage, "reason", None)
+        if reason is None or getattr(reason, "code", None) != "operator.recovery_close":
+            return False
+        detail = getattr(reason, "detail", {})
+        assignment_id = (
+            detail.get("assignment_id") if isinstance(detail, Mapping) else None
+        )
+        daemon = self.daemon
+        return (
+            isinstance(assignment_id, str)
+            and daemon is not None
+            and daemon._recovery_is_settling(assignment_id)
+        )
 
     def _cancel(
         self,
@@ -2693,8 +3317,8 @@ class LocalDaemonExecution:
                 )
                 prior = conn.execute(
                     "SELECT request_json, state FROM remote_assignment_controls "
-                    "WHERE operation_id = ?",
-                    (operation_id,),
+                    "WHERE assignment_id = ?",
+                    (assignment_id,),
                 ).fetchone()
                 if prior is None:
                     conn.execute(
@@ -2709,8 +3333,24 @@ class LocalDaemonExecution:
                             encoded,
                         ),
                     )
-                elif str(prior["request_json"]) != encoded:
-                    raise QueueConflictError("remote cancellation operation conflicts")
+                else:
+                    retained = AgentAssignmentControl.from_value(
+                        json.loads(str(prior["request_json"]))
+                    )
+                    if (
+                        retained.session_id != control.session_id
+                        or retained.assignment_id != control.assignment_id
+                        or retained.fence != control.fence
+                        or (
+                            retained.process_execution_id is not None
+                            and control.process_execution_id is not None
+                            and retained.process_execution_id
+                            != control.process_execution_id
+                        )
+                    ):
+                        raise QueueConflictError(
+                            "remote cancellation operation conflicts"
+                        )
             conn.commit()
         return settling
 
@@ -3869,6 +4509,15 @@ class LocalDaemonExecution:
             store,
             run_uri=run_uri,
             coordinator_id=self.coordinator_id,
+            ordinary_mutation_frozen=self._ordinary_mutation_frozen,
+        )
+
+    def _ordinary_mutation_frozen(self, assignment_id: str) -> bool:
+        daemon = self.daemon
+        return (
+            False
+            if daemon is None
+            else daemon._recovery_fences_ordinary_terminal(assignment_id)
         )
 
     def _run_cancellation_operation(self, run_uri: str) -> str | None:

@@ -33,6 +33,9 @@ if TYPE_CHECKING:
         LocalDaemonPrincipal,
         LocalDaemonRole,
         LocalDaemonStatus,
+        ManagedRecoveryTarget,
+        RecoverUnknownAssignment,
+        SlurmRecoveryTarget,
     )
     from .local_daemon_transport import (
         LocalDaemonSocketClient,
@@ -210,10 +213,13 @@ __all__ = [
     "LocalDaemonSocketClient",
     "LocalDaemonSocketServer",
     "LocalDaemonStatus",
+    "ManagedRecoveryTarget",
     "MemoryResourceProvider",
     "ObserveRequest",
     "ObserveResult",
+    "RecoverUnknownAssignment",
     "ResidentWorkerLaunchProfile",
+    "SlurmRecoveryTarget",
     "prepare_managed_local_runtime_record",
     "LaunchEnvironmentBindings",
     "NoOpResourceAssignmentProvider",

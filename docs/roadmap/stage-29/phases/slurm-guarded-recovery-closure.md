@@ -19,7 +19,7 @@
 - Workflow path: expanded. Irreversible fence closure, external containment,
   and retry causally interact, so implementation requires one executor and one
   independent review unless manager evidence removes the residual risk.
-- Blocker corrections: 1/3 completed
+- Blocker corrections: 2/3 completed
 
 ## Objective And Context
 
@@ -219,19 +219,23 @@ observable status, and causal crash behavior above remain exact.
 
 - Manager preparation: complete on the post-9D2 branch; maintainer approval
   recorded
-- Implementation: correction 1 completes replay of a durable pending operation,
-  same-recovery authority-close replay, immutable request codecs over direct and
-  authenticated transports, and an exact retained SLURM helper process boundary.
-  Recovery retry facts now use the authority-backed reliability owner and its
-  recorded attempt policy; physical ownership remains untouched.
-- Validation and review: pending
+- Implementation: correction 2 completes the fixed durable saga order for
+  local, remote, and SLURM targets; persists target-owned containment evidence
+  before authority close; permanently rejects the old fence after close; and
+  lets only the existing reliability owner authorize and materialize one retry.
+  The hard cut advances the authenticated agent protocol and root schema to v6,
+  with no compatibility reader. Exact physical ownership remains retained.
+- Validation and review: `make validate-pr` passed after causal corrections for
+  a cheap SLURM import boundary, first-attempt intent replay, and transactionally
+  consistent concurrent SQLite authority snapshots. Independent review is
+  pending.
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and tests | Correction 1 makes `pending` recovery replay through the same request and authority `recovery_id`, returns the previous recovery close after an authority-side crash, carries immutable run/stage/attempt/work identity through direct and authenticated codecs, and replaces the SLURM callable with a bounded retained helper process whose exact echo is required. Authority-backed retry evaluation reads the recorded attempt policy; it does not write recovery truth to the local run store. Added codec, close-replay, and protected-helper exact-echo coverage. |
-| Validated revision and evidence | `PYTHONPATH=src pytest -q tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/unit/loom/queue/test_local_daemon.py tests/integration/queue/test_slurm_ready_stage.py` passed (74 tests). Changed-path Ruff and Pyright passed. |
+| Implementation and tests | Correction 2 composes durable request, freeze, ordinary-terminal recheck, exact target evidence, authority arbitration, existing-policy retry, and joined status across direct, Unix-socket, authenticated remote-agent, and SLURM paths. Restart resumes pending and evidence-confirmed operations; late old-fence results conflict; accepted SLURM work is not resubmitted; closed capacity remains held. Added local cancellation/failure policy, remote mTLS, exact SLURM helper, crash/replay, hard-cut rejection, and concurrent authority snapshot coverage. |
+| Validated revision and evidence | Phase candidate passed the authority/orchestration/SLURM slice (62 tests) and `make validate-pr`: Ruff clean, Pyright 0 errors, default 2,567 passed with 121 deselected, config-extra 141 passed with 3 environment skips and 2,570 deselected, and source/wheel builds succeeded. Phase 9F owns `make test-summary`. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Correction 1 resolves the qualified candidate defects within the existing owners. This bounded pass does not alter physical release, submission ownership, session replacement, or Phase 9F surfaces. |
+| Residual risk and cleanup | No known implementation blocker remains. Independent review is still required for the expanded path. Physical release, different-session replacement, and Phase 9F final surfaces remain deliberately unchanged. |

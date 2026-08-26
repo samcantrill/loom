@@ -58,6 +58,7 @@ from .agent_sessions import (
     PROTOCOL_VERSION,
     ScopedAuthorizer,
     _SESSION_REFERENCE_KINDS,
+    _managed_containment_evidence,
     _session_from_value,
     validate_agent_session_schema,
 )
@@ -77,6 +78,7 @@ from ._agent_process_supervisor import (
     AgentProcessSupervisorService,
     ResidentWorkerLaunch,
     SupervisorLaunchConfiguration,
+    SupervisorReceipt,
     SupervisorLaunchState,
     _launch_from_value,
     _launch_value,
@@ -98,6 +100,32 @@ _MAX_JSON_COLLECTION = 64
 _HTTP_TIMEOUT_SECONDS = 10
 _ASSIGNMENT_RECONCILIATION_SECONDS = 60
 _MAX_TRANSFER_AUTHORIZATION_RENEWALS = 64
+
+
+def _supervisor_containment_evidence(
+    receipt: SupervisorReceipt, *, agent_id: str
+) -> Mapping[str, PlainData]:
+    """Serialize the exact persisted process-owner receipt without paths."""
+
+    launch = receipt.launch
+    return _managed_containment_evidence(
+        {
+            "kind": "managed_supervisor",
+            "state": "CONTAINED",
+            "supervisor_id": launch.supervisor_id,
+            "continuity_epoch": launch.continuity_epoch,
+            "agent_id": agent_id,
+            "supervisor_agent_id": launch.agent_id,
+            "session_id": launch.session_id,
+            "assignment_id": launch.assignment_id,
+            "process_execution_id": launch.process_execution_id,
+            "execution_fence": launch.execution_fence,
+            "launch_operation_id": launch.launch_operation_id,
+            "launch_spec_digest": launch.spec_digest,
+            "supervisor_revision": receipt.supervisor_revision,
+            "worker_result_digest": receipt.worker_result_digest,
+        }
+    )
 
 
 class _IndeterminateAgentProtocolError(QueueServiceError):
@@ -225,7 +253,7 @@ class _RemoteAgentJournal:
             raise QueueServiceError("remote agent control state is unavailable")
         try:
             with self._connection() as conn:
-                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 5:
+                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 6:
                     raise QueueServiceError("remote agent root schema is unsupported")
                 metadata = {
                     str(row[0]): str(row[1])
@@ -635,12 +663,14 @@ class _RemoteAgentJournal:
             raise QueueServiceError("retained agent control evidence is invalid")
         return AgentControl.from_value(request), AgentControlEffect.from_value(effect)
 
-    def prepare_assignment_control(self, control: AgentAssignmentControl) -> str | None:
+    def prepare_assignment_control(
+        self, control: AgentAssignmentControl
+    ) -> tuple[str, Mapping[str, PlainData] | None] | None:
         encoded = _canonical_json(control.value())
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT request_json, result_code FROM "
+                "SELECT request_json, result_code, evidence_json FROM "
                 "remote_assignment_controls_local WHERE operation_id = ?",
                 (control.operation_id,),
             ).fetchone()
@@ -648,23 +678,41 @@ class _RemoteAgentJournal:
                 if str(row["request_json"]) != encoded:
                     raise QueueConflictError("assignment control conflicts")
                 conn.commit()
-                return None if row["result_code"] is None else str(row["result_code"])
+                if row["result_code"] is None:
+                    return None
+                raw_evidence = row["evidence_json"]
+                evidence = (
+                    None
+                    if raw_evidence is None
+                    else freeze_plain_data(
+                        json.loads(str(raw_evidence)),
+                        path="retained assignment control evidence",
+                    )
+                )
+                if evidence is not None and not isinstance(evidence, Mapping):
+                    raise QueueServiceError(
+                        "retained assignment control evidence is invalid"
+                    )
+                return str(row["result_code"]), evidence
             conn.execute(
                 "INSERT INTO remote_assignment_controls_local(operation_id, "
-                "assignment_id, request_json, result_code, acknowledged) "
-                "VALUES (?, ?, ?, NULL, 0)",
+                "assignment_id, request_json, result_code, evidence_json, acknowledged) "
+                "VALUES (?, ?, ?, NULL, NULL, 0)",
                 (control.operation_id, control.assignment_id, encoded),
             )
             conn.commit()
         return None
 
     def record_assignment_control_result(
-        self, control: AgentAssignmentControl, code: str
+        self,
+        control: AgentAssignmentControl,
+        code: str,
+        evidence: Mapping[str, PlainData] | None,
     ) -> None:
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT request_json, result_code FROM "
+                "SELECT request_json, result_code, evidence_json FROM "
                 "remote_assignment_controls_local WHERE operation_id = ?",
                 (control.operation_id,),
             ).fetchone()
@@ -674,10 +722,17 @@ class _RemoteAgentJournal:
                 raise QueueConflictError("assignment control is not durable")
             if row["result_code"] is not None and str(row["result_code"]) != code:
                 raise QueueConflictError("assignment control result conflicts")
+            encoded_evidence = None if evidence is None else _canonical_json(evidence)
+            if (
+                row["evidence_json"] is not None
+                and str(row["evidence_json"]) != encoded_evidence
+            ):
+                raise QueueConflictError("assignment control evidence conflicts")
             conn.execute(
-                "UPDATE remote_assignment_controls_local SET result_code = ? "
+                "UPDATE remote_assignment_controls_local SET result_code = ?, "
+                "evidence_json = ? "
                 "WHERE operation_id = ?",
-                (code, control.operation_id),
+                (code, encoded_evidence, control.operation_id),
             )
             conn.commit()
 
@@ -692,10 +747,10 @@ class _RemoteAgentJournal:
 
     def next_unacknowledged_assignment_control(
         self,
-    ) -> tuple[AgentAssignmentControl, str] | None:
+    ) -> tuple[AgentAssignmentControl, str, Mapping[str, PlainData] | None] | None:
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT request_json, result_code FROM "
+                "SELECT request_json, result_code, evidence_json FROM "
                 "remote_assignment_controls_local WHERE acknowledged = 0 "
                 "AND result_code IS NOT NULL ORDER BY operation_id LIMIT 1"
             ).fetchone()
@@ -704,7 +759,22 @@ class _RemoteAgentJournal:
         request = json.loads(str(row["request_json"]))
         if not isinstance(request, Mapping):
             raise QueueServiceError("retained assignment control evidence is invalid")
-        return AgentAssignmentControl.from_value(request), str(row["result_code"])
+        raw_evidence = row["evidence_json"]
+        evidence = (
+            None
+            if raw_evidence is None
+            else freeze_plain_data(
+                json.loads(str(raw_evidence)),
+                path="retained assignment control evidence",
+            )
+        )
+        if evidence is not None and not isinstance(evidence, Mapping):
+            raise QueueServiceError("retained assignment control evidence is invalid")
+        return (
+            AgentAssignmentControl.from_value(request),
+            str(row["result_code"]),
+            evidence,
+        )
 
     def retain_assignment_reference(self, session_id: str, assignment_id: str) -> None:
         with self._connection() as conn:
@@ -1109,7 +1179,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v5",
+                    "agent-sessions-v6",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -1468,7 +1538,9 @@ class LocalDaemonAgentHttpClient:
             "scheduling_reload", {"request": request.to_dict()}, role="operator"
         )
 
-    def recover_unknown(self, request: RecoverUnknownAssignment) -> Mapping[str, PlainData]:
+    def recover_unknown(
+        self, request: RecoverUnknownAssignment
+    ) -> Mapping[str, PlainData]:
         return self._call(
             "recover_unknown", {"request": request.to_dict()}, role="operator"
         )
@@ -1558,14 +1630,14 @@ class LocalDaemonAgentHttpClient:
         journal = self._require_journal()
         pending = journal.next_unacknowledged_assignment_control()
         if pending is not None:
-            control, code = pending
+            control, code, evidence = pending
             if control.session_id != session_id:
                 raise QueueConflictError(
                     "retained assignment control belongs to another session"
                 )
             if code == "contained":
                 self._cancelled_assignments.add(control.assignment_id)
-            self._acknowledge_assignment_control(session_id, control, code)
+            self._acknowledge_assignment_control(session_id, control, code, evidence)
             return control
         result = self._call("assignment_control", {"session_id": session_id})
         raw = result.get("control")
@@ -1576,15 +1648,20 @@ class LocalDaemonAgentHttpClient:
         control = AgentAssignmentControl.from_value(raw)
         prior = journal.prepare_assignment_control(control)
         if prior is not None:
-            self._acknowledge_assignment_control(session_id, control, prior)
+            code, evidence = prior
+            self._acknowledge_assignment_control(session_id, control, code, evidence)
             return control
-        code = self._apply_assignment_control(control)
-        journal.record_assignment_control_result(control, code)
-        self._acknowledge_assignment_control(session_id, control, code)
+        code, evidence = self._apply_assignment_control(control)
+        journal.record_assignment_control_result(control, code, evidence)
+        self._acknowledge_assignment_control(session_id, control, code, evidence)
         return control
 
     def _acknowledge_assignment_control(
-        self, session_id: str, control: AgentAssignmentControl, code: str
+        self,
+        session_id: str,
+        control: AgentAssignmentControl,
+        code: str,
+        evidence: Mapping[str, PlainData] | None,
     ) -> None:
         self._call(
             "assignment_control_ack",
@@ -1592,22 +1669,25 @@ class LocalDaemonAgentHttpClient:
                 "session_id": session_id,
                 "operation_id": control.operation_id,
                 "code": code,
+                "evidence": None if evidence is None else dict(evidence),
             },
         )
         self._require_journal().acknowledge_assignment_control(control.operation_id)
 
-    def _apply_assignment_control(self, control: AgentAssignmentControl) -> str:
+    def _apply_assignment_control(
+        self, control: AgentAssignmentControl
+    ) -> tuple[str, Mapping[str, PlainData] | None]:
         with self._control_lock:
             journal = self._execution_journal
             if journal is None:
-                return "unknown"
+                return "unknown", None
             try:
                 state = journal.read_state(control.assignment_id)
                 fence = journal.read_grant_fence(control.assignment_id)
             except Exception:
-                return "unknown"
+                return "unknown", None
             if control.fence != fence:
-                return "unknown"
+                return "unknown", None
             workspace = _ResidentAssignmentWorkspace(
                 cast(Path, self._config.agent_root), control.assignment_id
             )
@@ -1619,7 +1699,7 @@ class LocalDaemonAgentHttpClient:
                     AssignmentState.PROVIDERS_RELEASED,
                     AssignmentState.RELEASED,
                 }:
-                    return "terminal"
+                    return "terminal", None
                 if state in {
                     AssignmentState.REQUEST_DURABLE,
                     AssignmentState.PREPARED,
@@ -1627,25 +1707,40 @@ class LocalDaemonAgentHttpClient:
                     AssignmentState.GRANTED,
                     AssignmentState.ACTIVE,
                 }:
-                    return "never_started"
-                return "unknown"
+                    return "never_started", None
+                return "unknown", None
             if control.process_execution_id not in {
                 None,
                 f"{control.assignment_id}:root",
             }:
-                return "unknown"
+                return "unknown", None
             if self._supervisor is None:
-                return "unknown"
+                return "unknown", None
             try:
                 launch = _launch_from_value(json.loads(encoded_launch))
+                if (
+                    launch.assignment_id != control.assignment_id
+                    or launch.session_id != control.session_id
+                    or (
+                        control.process_execution_id is not None
+                        and launch.process_execution_id != control.process_execution_id
+                    )
+                    or launch.execution_fence != control.fence
+                ):
+                    return "unknown", None
                 self._supervisor.request_stop(launch)
                 contained = self._supervisor.contain(launch)
             except (AgentProcessSupervisorError, QueueError, ValueError):
-                return "unknown"
+                return "unknown", None
             if contained.state is not SupervisorLaunchState.CONTAINED:
-                return "unknown"
+                return "unknown", None
             self._record_contained_cancellation(workspace)
-            return "contained"
+            target_agent_id = self._runtime_agent_id
+            if target_agent_id is None:
+                return "unknown", None
+            return "contained", _supervisor_containment_evidence(
+                contained, agent_id=target_agent_id
+            )
 
     def decline_assignment(
         self,
@@ -3219,11 +3314,15 @@ def _dispatch(
         control = view.next_assignment_control(_string(value, "session_id"))
         return {"control": None if control is None else control.value()}
     if operation == "assignment_control_ack":
-        _exact(value, {"session_id", "operation_id", "code"})
+        _exact(value, {"session_id", "operation_id", "code", "evidence"})
+        evidence = value["evidence"]
+        if evidence is not None and not isinstance(evidence, Mapping):
+            raise QueueServiceError("assignment control evidence is invalid")
         return view.acknowledge_assignment_control(
             _string(value, "session_id"),
             _string(value, "operation_id"),
             code=_string(value, "code"),
+            evidence=evidence,
         )
     if operation == "start_permit":
         _exact(value, {"session_id", "assignment_id", "fence"})

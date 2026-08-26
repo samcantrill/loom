@@ -154,6 +154,52 @@ contracts and phase ownership remain in
   degrades and pauses new scheduling, withholds retained offers, and requires
   coherent time/session reconciliation rather than extending stale capacity.
 
+### Guarded-recovery operator procedure
+
+Use guarded recovery only for an assignment whose ordinary result is unknown.
+Copy the complete immutable assignment, attempt, fence, state-version, and
+target identity from current joined status; do not reconstruct missing values.
+The request deliberately contains no containment claim:
+
+```python
+from loom.queue import ManagedRecoveryTarget, RecoverUnknownAssignment
+
+request = RecoverUnknownAssignment(
+    recovery_id="recovery-2026-08-26-1",
+    run_uri=run_uri,
+    stage_name="train",
+    attempt=1,
+    stage_work_id=stage_work_id,
+    assignment_id=assignment_id,
+    process_execution_id=process_execution_id,
+    execution_fence=execution_fence,
+    target=ManagedRecoveryTarget(agent_id, session_id),
+    expected_state_version=state_version,
+    requested_outcome="failed",
+    consider_retry=True,
+    reason="operator incident reference and containment investigation",
+)
+receipt = operator.recover_unknown(request)
+```
+
+Submit the same `recovery_id` and identical request again after a timeout or
+coordinator restart. Never create a new recovery ID merely because a response
+was lost. Interpret the receipt conservatively:
+
+```text
+pending     target-owned containment evidence has not arrived; retry the same request
+unknown     exact positive containment was not proved; no lifecycle close occurred
+superseded  a complete ordinary terminal result won; use that result
+closed      recovery won; the old execution fence stays stale permanently
+```
+
+A `closed` receipt may include one decision from the existing retry policy, but
+it does not release the old agent claim or SLURM profile slot. Keep that
+capacity unavailable until its physical owner supplies its separate exact
+release proof. These recovery tables and protocol fields are a hard cut: point
+the new runtime at freshly initialized coordinator and agent roots rather than
+attempting to open or upgrade an older schema.
+
 ## Design Goals
 
 Reliability behavior should:

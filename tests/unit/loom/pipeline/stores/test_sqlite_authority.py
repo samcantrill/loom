@@ -1,9 +1,12 @@
 """Unit coverage for the private SQLite authority backend."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -308,6 +311,62 @@ def test_revisions_advance_with_each_sqlite_mutation(tmp_path: Path) -> None:
 
     assert [first.sequence, second.sequence, third.sequence] == [1, 2, 3]
     assert store.snapshot(run_uri).revision.sequence == 3
+
+
+def test_open_run_reads_one_consistent_concurrent_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    reader = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    writer = SQLitePerRunAuthorityStore(run_uri, clock=FrozenClock())
+    first = reader.create_run(run_uri)
+    start_writer = Event()
+    writer_done = Event()
+    trace_reached = Event()
+    original_connect = reader._connect
+
+    @contextmanager
+    def traced_connect(path: Path) -> Iterator[sqlite3.Connection]:
+        with original_connect(path) as conn:
+            def trace(statement: str) -> None:
+                if (
+                    not trace_reached.is_set()
+                    and statement.lstrip().startswith("SELECT stage_name FROM stages")
+                ):
+                    trace_reached.set()
+                    start_writer.set()
+                    writer_done.wait(timeout=5)
+
+            conn.set_trace_callback(trace)
+            yield conn
+
+    monkeypatch.setattr(reader, "_connect", traced_connect)
+
+    def advance_authority() -> None:
+        if not start_writer.wait(timeout=5):
+            return
+        writer.transition_stage(
+            run_uri,
+            "train",
+            from_status=None,
+            to_status=StageStatus.PENDING,
+        )
+        writer_done.set()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        write = pool.submit(advance_authority)
+        snapshot = reader.open_run(run_uri)
+        write.result(timeout=5)
+
+    assert trace_reached.is_set()
+    assert writer_done.is_set()
+    assert snapshot.revision == first
+    assert snapshot.stages == ()
+    refreshed = writer.open_run(run_uri)
+    assert refreshed.revision.sequence == first.sequence + 1
+    assert [(stage.stage_name, stage.status) for stage in refreshed.stages] == [
+        ("train", StageStatus.PENDING)
+    ]
 
 
 def test_sqlite_reliability_facts_are_snapshot_backed_and_immutable(
@@ -856,6 +915,16 @@ def test_recovery_close_is_fenced_and_an_ordinary_terminal_winner_supersedes(
         reason=LifecycleReason(code="operator.recovery_close"),
     )
     assert replay.status is StageStatus.FAILED
+    assert replay.revision == close.revision
+    with pytest.raises(AuthorityStoreError, match="replay conflicts"):
+        store.close_managed_attempt_fence(
+            run_uri,
+            recovery_id="recovery-1",
+            fence=fence,
+            expected_state_version=current.stages[0].revision.sequence,
+            status=StageStatus.CANCELLED,
+            reason=LifecycleReason(code="operator.recovery_close"),
+        )
     with pytest.raises(AuthorityStoreError, match="stale execution fence"):
         store.confirm_execution_started(run_uri, fence=fence)
 
@@ -864,16 +933,25 @@ def test_recovery_close_is_fenced_and_an_ordinary_terminal_winner_supersedes(
     prepared = other.ensure_prepared_attempt(
         other_uri, _prepared_request(other.create_run(other_uri))
     )
-    other.bind_prepared_attempt(other_uri, assignment_id="assignment-2", attempt_id=prepared.attempt.attempt_id)
-    other_fence = other.grant_prepared_attempt(other_uri, assignment_id="assignment-2", attempt_id=prepared.attempt.attempt_id)
+    other.bind_prepared_attempt(
+        other_uri, assignment_id="assignment-2", attempt_id=prepared.attempt.attempt_id
+    )
+    other_fence = other.grant_prepared_attempt(
+        other_uri, assignment_id="assignment-2", attempt_id=prepared.attempt.attempt_id
+    )
     other.record_managed_attempt_terminal(
-        other_uri, fence=other_fence, status=StageStatus.FAILED,
+        other_uri,
+        fence=other_fence,
+        status=StageStatus.FAILED,
         reason=LifecycleReason(code="worker.failed"),
     )
     with pytest.raises(AuthorityStoreError, match="supersedes recovery"):
         other.close_managed_attempt_fence(
-            other_uri, recovery_id="recovery-2", fence=other_fence,
-            expected_state_version=1, status=StageStatus.FAILED,
+            other_uri,
+            recovery_id="recovery-2",
+            fence=other_fence,
+            expected_state_version=1,
+            status=StageStatus.FAILED,
             reason=LifecycleReason(code="operator.recovery_close"),
         )
 
