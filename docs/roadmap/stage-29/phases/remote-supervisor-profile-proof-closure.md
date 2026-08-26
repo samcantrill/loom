@@ -184,23 +184,25 @@ owner or test-only production interface.
 
 - Manager preparation: complete on clean current `origin/develop`; dedicated
   branch/worktree and bounded successor plan recorded
-- Implementation: complete at `db8e9e2`. The six named Phase 9C production/test
+- Implementation: complete through correction 1/3 at `db01737`. The six named Phase 9C production/test
   commits were selectively restored; the successor rejects divergent executable
   profile-set reload before swap, uses spawned interpreter A/B processes at all
   four crash barriers, routes two selected profiles through one supervisor, and
-  updates current hard-cut guidance.
-- Validation/review: `db8e9e2` passed manager validation. Required independent
-  review found that a resident-initialized root can be reopened with an empty
-  incoming profile set, bypassing supervisor fingerprint verification and
-  making retained work unreconcilable. Bounded correction 1/3 is in progress;
-  manager revalidation and review closure are pending.
+  updates current hard-cut guidance. Correction `db01737` rejects an empty-
+  profile reopen when supervisor state exists before acquiring the root lock,
+  while preserving a genuine supervisor-free root and valid configured reopen.
+- Validation/review: complete. Required independent review found one empty-set
+  reopen bypass and no optional hardening. Correction `db01737` closes that
+  exact path; manager review verified the rejection precedes root-lock
+  acquisition and a correctly configured reopen remains available. Refreshed
+  focused and full validation passed with no detached supervisor.
 - PR/merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and tests | `db8e9e2`; executable profile-set add/remove/change and empty/non-empty reload transitions reject before configuration swap, canonical reorder remains accepted, the four restart barriers use distinct spawned interpreter PIDs against one continuous supervisor, and two supported selected profiles produce matching durable launch identities and terminal runs. |
-| Validated revision and evidence | `db8e9e2`; focused reload/restart/two-profile integration passed, 8 tests in 27.14s. `make validate-pr` exited 0 on 2026-08-26: repository Ruff passed; full Pyright reported 0 errors; default harness passed 2,548 tests with 121 deselected; config-extra passed 141 tests with 3 expected skips and 2,551 deselected; source and wheel builds passed. No detached Phase 9C2 supervisor remained. |
+| Implementation and tests | `db01737` (`db8e9e2` closure plus correction 1/3); executable profile-set add/remove/change and empty/non-empty reload transitions reject before configuration swap/open, canonical reorder remains accepted, a rejected open does not retain the root lock, the four restart barriers use distinct spawned interpreter PIDs against one continuous supervisor, and two supported selected profiles produce matching durable launch identities and terminal runs. |
+| Validated revision and evidence | `db01737`; focused reload/reopen/restart/two-profile integration passed, 9 tests in 25.32s. Refreshed `make validate-pr` exited 0 on 2026-08-26: repository Ruff passed; full Pyright reported 0 errors; default harness passed 2,549 tests with 121 deselected; config-extra passed 141 tests with 3 expected skips and 2,552 deselected; source and wheel builds passed. No detached Phase 9C2 supervisor remained. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Correction 1/3 must reject an empty-profile reopen whenever the root contains supervisor state, preserve genuine no-profile roots, and release any partially acquired root lock after rejected construction. Revalidation and review closure pending. |
+| Residual risk and cleanup | No known phase blocker. Supervisor HA/adoption, live profile-set migration, embedded/local execution, SLURM recovery, and replacement remain explicitly deferred. Worktree cleanup follows remote merge. |
