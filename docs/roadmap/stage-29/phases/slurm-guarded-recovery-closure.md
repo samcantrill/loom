@@ -8,7 +8,7 @@
 - Branch: `agent/stage-29-p9e-slurm-guarded-recovery-closure`
 - Worktree root: `/home/can134/work/active/loom-worktrees`
 - Worktree path: `/home/can134/work/active/loom-worktrees/stage-29-p9e-slurm-guarded-recovery-closure`
-- Base revision: `bc2e68d1dbc48491a64ee555b8d861a2d3c87ad9`
+- Base revision: `eadeead37099fac834d0c40f32910f4ee9d39bb8`
 - PR target: `develop`
 - PR title: `feat(scheduling): close SLURM guarded recovery`
 - Dependency: Phases 9C2 and 9D2 remotely merged as `b0ed116` and `82b311f`.
@@ -19,7 +19,7 @@
 - Workflow path: expanded. Irreversible fence closure, external containment,
   and retry causally interact, so implementation requires one executor and one
   independent review unless manager evidence removes the residual risk.
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 in progress
 
 ## Objective And Context
 
@@ -219,10 +219,12 @@ observable status, and causal crash behavior above remain exact.
 
 - Manager preparation: complete on the post-9D2 branch; maintainer approval
   recorded
-- Implementation: complete at the phase implementation commit; guarded recovery
-  reuses retained SLURM operation identity/reconciliation, accepts only exact
-  target-owner containment evidence, arbitrates close at the authority fence,
-  and leaves physical ownership retained.
+- Implementation: candidate `024faaf` requires correction 1/3. Its durable
+  operation stops at `pending` after a crash, authority close does not replay as
+  the same recovery, and the SLURM evidence binding is an in-process callable
+  rather than the approved protected helper. The candidate also lacks the
+  causal end-to-end proof that rechecks ordinary terminal facts and feeds the
+  existing retry/orchestrator owners.
 - Validation and review: pending
 - PR and merge: pending
 
@@ -230,7 +232,7 @@ observable status, and causal crash behavior above remain exact.
 
 | Item | Result |
 | --- | --- |
-| Implementation and tests | Added retained-profile SLURM containment proof validation, a closed replay-safe operator recovery request/status surface, and one authority terminal-or-close CAS. The recovery path never submits, releases a profile slot/provider claim, or creates an attempt directly. Authority and SLURM tests cover terminal winner/stale-fence rejection and exact-positive versus weak-evidence containment. |
-| Validated revision and evidence | Focused authority and SLURM suites passed (41 tests), focused local-daemon retention/reload tests passed (11 tests), and changed-path Ruff/Pyright passed. `make validate-pr` then passed repository Ruff and Pyright but was cleanly interrupted during its default test harness because manager audit found a qualified product blocker requiring correction; this partial receipt is stale and is not a phase gate pass. |
+| Implementation and tests | Candidate `024faaf` added the initial operation, authority transition, and evidence shapes. Manager verification found that the supported authenticated recovery path is not yet a replay-safe cross-store saga and its SLURM evidence boundary is not the accepted protected helper. Correction 1/3 is active. |
+| Validated revision and evidence | Candidate focused authority/SLURM suites passed (41 tests), focused local-daemon tests passed (11 tests), and Ruff/Pyright passed. The full gate was intentionally stopped because the qualified blocker made its receipt stale. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | No known phase blocker. Different-session replacement, automatic takeover, and final Stage 29 surface work remain Phase 9F scope. |
+| Residual risk and cleanup | Qualified blocker: a crash can strand `pending`, a post-authority-close replay can be misclassified, uncommitted ordinary terminal evidence can lose, retry is written with no policy to the wrong consumer store, and an in-memory callback can stand in for protected SLURM evidence. Smallest fix: complete the one existing daemon/authority saga with replayable states, target-owned persisted evidence, the fixed retained helper adapter, current-policy retry consumed by `RunOrchestrator`, authenticated transport wiring, and causal tests; retain physical ownership. |
