@@ -269,10 +269,15 @@ def _offer_snapshot(
     )
 
 
+@pytest.mark.parametrize(
+    "release_crash_point",
+    ("availability_published", "final_event_acknowledged"),
+)
 def test_managed_local_assignment_commits_accessible_output_then_releases(
     tmp_path: Path,
     resident_owner: Callable[[Path, str], _ResidentOwner],
     monkeypatch: pytest.MonkeyPatch,
+    release_crash_point: str,
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
@@ -389,22 +394,47 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
         journal.read_state(assignment.assignment_id) is AssignmentState.RESULT_DURABLE
     )
 
-    acknowledge = journal.acknowledge
+    final_event_id = f"{assignment.assignment_id}:provider_released_availability_fresh"
+    if release_crash_point == "availability_published":
+        publish_availability = journal.publish_availability
 
-    def crash_after_final_acknowledgement(assignment_id: str, sequence: int) -> int:
-        acknowledged = acknowledge(assignment_id, sequence)
-        if journal.read_state(assignment_id) is AssignmentState.RELEASED:
-            raise TimeoutError("crash after final event acknowledgement")
-        return acknowledged
+        def crash_after_availability_publication(
+            assignment_id: str, availability_revision: str
+        ) -> AssignmentState:
+            publish_availability(assignment_id, availability_revision)
+            raise TimeoutError("crash after availability publication")
 
-    monkeypatch.setattr(journal, "acknowledge", crash_after_final_acknowledgement)
-    with pytest.raises(TimeoutError, match="final event acknowledgement"):
+        monkeypatch.setattr(
+            journal, "publish_availability", crash_after_availability_publication
+        )
+        crash_message = "availability publication"
+    else:
+        acknowledge = journal.acknowledge
+
+        def crash_after_final_acknowledgement(assignment_id: str, sequence: int) -> int:
+            acknowledged = acknowledge(assignment_id, sequence)
+            if journal.read_state(assignment_id) is AssignmentState.RELEASED:
+                raise TimeoutError("crash after final event acknowledgement")
+            return acknowledged
+
+        monkeypatch.setattr(journal, "acknowledge", crash_after_final_acknowledgement)
+        crash_message = "final event acknowledgement"
+    with pytest.raises(TimeoutError, match=crash_message):
         execute()
     assert coordinator.state(assignment.assignment_id) == "logical_released"
     saved_revision = journal.read_availability_revision(assignment.assignment_id)
     assert saved_revision is not None
+    with sqlite3.connect(agent_root / "journal.sqlite") as conn:
+        final_event_before_restart = conn.execute(
+            "SELECT sequence, acknowledged_sequence FROM events WHERE event_id = ?",
+            (final_event_id,),
+        ).fetchone()
+    if release_crash_point == "availability_published":
+        assert final_event_before_restart is None
+    else:
+        assert final_event_before_restart is not None
+        assert final_event_before_restart[0] == final_event_before_restart[1]
 
-    monkeypatch.setattr(journal, "acknowledge", acknowledge)
     # Application B reconstructs only durable journal/provider truth; it must
     # not invent a new release revision or relaunch the retained worker.
     journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
@@ -426,7 +456,26 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     assert snapshot.stages[0].latest_commit == receipt.output_commit.commit
     assert coordinator.state(assignment.assignment_id) == "released"
     assert journal.read_state(assignment.assignment_id).value == "released"
-    assert journal.read_availability_revision(assignment.assignment_id) == saved_revision
+    assert (
+        journal.read_availability_revision(assignment.assignment_id) == saved_revision
+    )
+    with sqlite3.connect(agent_root / "journal.sqlite") as conn:
+        final_events = tuple(
+            conn.execute(
+                "SELECT sequence, acknowledged_sequence FROM events WHERE event_id = ?",
+                (final_event_id,),
+            )
+        )
+    assert len(final_events) == 1
+    assert final_events[0][0] == final_events[0][1]
+    with sqlite3.connect(coordinator_path) as conn:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM coordinator_events WHERE event_id = ?",
+                (final_event_id,),
+            ).fetchone()[0]
+            == 1
+        )
     assert run_store.read_stage_outputs(run_uri, "build") is None
     observed = provider.observe(
         ObserveRequest("agent-local", "session-1", "observe-after-release")
@@ -579,10 +628,15 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
     assert observed.live_claim_ids == ()
 
 
+@pytest.mark.parametrize(
+    "release_crash_point",
+    ("availability_published", "final_event_acknowledged"),
+)
 def test_definitive_decline_replays_after_unbind_response_is_lost(
     tmp_path: Path,
     resident_owner: Callable[[Path, str], _ResidentOwner],
     monkeypatch: pytest.MonkeyPatch,
+    release_crash_point: str,
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "declined-run")
@@ -693,33 +747,60 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
     assert coordinator.state(assignment.assignment_id) == "bound"
     assert journal.read_state(assignment.assignment_id) is AssignmentState.DECLINED
 
-    acknowledge = journal.acknowledge
+    final_event_id = f"{assignment.assignment_id}:definitive_decline_released"
+    if release_crash_point == "availability_published":
+        release_declined = journal.release_declined
 
-    def crash_after_decline_event_acknowledgement(
-        assignment_id: str, sequence: int
-    ) -> int:
-        acknowledged = acknowledge(assignment_id, sequence)
-        if journal.read_state(assignment_id) is AssignmentState.RELEASED:
-            raise TimeoutError("crash after decline event acknowledgement")
-        return acknowledged
+        def crash_after_availability_publication(
+            assignment_id: str, availability_revision: str
+        ) -> AssignmentState:
+            release_declined(assignment_id, availability_revision)
+            raise TimeoutError("crash after decline availability publication")
 
-    monkeypatch.setattr(
-        journal, "acknowledge", crash_after_decline_event_acknowledgement
-    )
-    with pytest.raises(TimeoutError, match="decline event acknowledgement"):
+        monkeypatch.setattr(
+            journal, "release_declined", crash_after_availability_publication
+        )
+        crash_message = "decline availability publication"
+    else:
+        acknowledge = journal.acknowledge
+
+        def crash_after_decline_event_acknowledgement(
+            assignment_id: str, sequence: int
+        ) -> int:
+            acknowledged = acknowledge(assignment_id, sequence)
+            if journal.read_state(assignment_id) is AssignmentState.RELEASED:
+                raise TimeoutError("crash after decline event acknowledgement")
+            return acknowledged
+
+        monkeypatch.setattr(
+            journal, "acknowledge", crash_after_decline_event_acknowledgement
+        )
+        crash_message = "decline event acknowledgement"
+    with pytest.raises(TimeoutError, match=crash_message):
         execute()
     assert coordinator.state(assignment.assignment_id) == "bound"
     saved_revision = journal.read_availability_revision(assignment.assignment_id)
     assert saved_revision is not None
+    with sqlite3.connect(agent_root / "journal.sqlite") as conn:
+        final_event_before_restart = conn.execute(
+            "SELECT sequence, acknowledged_sequence FROM events WHERE event_id = ?",
+            (final_event_id,),
+        ).fetchone()
+    if release_crash_point == "availability_published":
+        assert final_event_before_restart is None
+    else:
+        assert final_event_before_restart is not None
+        assert final_event_before_restart[0] == final_event_before_restart[1]
 
-    monkeypatch.setattr(journal, "acknowledge", acknowledge)
     journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
     provider = AtomResourceProvider(descriptor, (contract,), ())
     with pytest.raises(ManagedLocalError, match="definitively declined"):
         execute()
     assert coordinator.state(assignment.assignment_id) == "released"
     assert journal.read_state(assignment.assignment_id) is AssignmentState.RELEASED
-    assert journal.read_availability_revision(assignment.assignment_id) == saved_revision
+    assert (
+        journal.read_availability_revision(assignment.assignment_id) == saved_revision
+    )
     reopened = next(
         record
         for record in SQLiteStageWorkStore(coordinator_path).list_stage_work()
@@ -729,6 +810,23 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
     assert reopened.projection_revision == 2
     with pytest.raises(ManagedLocalError, match="definitively declined"):
         execute()
+    with sqlite3.connect(agent_root / "journal.sqlite") as conn:
+        final_events = tuple(
+            conn.execute(
+                "SELECT sequence, acknowledged_sequence FROM events WHERE event_id = ?",
+                (final_event_id,),
+            )
+        )
+    assert len(final_events) == 1
+    assert final_events[0][0] == final_events[0][1]
+    with sqlite3.connect(coordinator_path) as conn:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM coordinator_events WHERE event_id = ?",
+                (final_event_id,),
+            ).fetchone()[0]
+            == 1
+        )
     authority.unbind_prepared_attempt(
         run_uri,
         assignment_id=assignment.assignment_id,
