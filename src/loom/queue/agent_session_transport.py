@@ -19,7 +19,6 @@ import secrets
 import sqlite3
 import ssl
 import stat
-import subprocess
 from threading import RLock, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import monotonic, sleep
@@ -71,6 +70,16 @@ from ._remote_stage_execution import (
     _RemoteExecutionReport,
     _decode_chunk,
     _encode_chunk,
+)
+from ._agent_process_supervisor import (
+    AgentProcessSupervisorClient,
+    AgentProcessSupervisorError,
+    AgentProcessSupervisorService,
+    ResidentWorkerLaunch,
+    SupervisorLaunchConfiguration,
+    SupervisorLaunchState,
+    _launch_from_value,
+    _launch_value,
 )
 from .errors import QueueConflictError, QueueError, QueueServiceError
 from .local_daemon import (
@@ -728,6 +737,32 @@ class _RemoteAgentJournal:
             ).fetchone()
         return row is not None or pending_poll is not None
 
+    def unresolved_assignment_references(self) -> tuple[tuple[str, str], ...]:
+        """Return the exact durable deliveries that startup must reconcile."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT session_id, reference_id FROM agent_session_references "
+                    "WHERE reference_kind = 'delivery' AND resolved = 0 "
+                    "ORDER BY session_id, reference_id"
+                )
+            )
+        return tuple((str(row["session_id"]), str(row["reference_id"])) for row in rows)
+
+    def contained_assignment_ids(self) -> tuple[str, ...]:
+        """Return assignments with a durable positive cancellation proof."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT DISTINCT assignment_id FROM "
+                    "remote_assignment_controls_local WHERE result_code = 'contained' "
+                    "ORDER BY assignment_id"
+                )
+            )
+        return tuple(str(row["assignment_id"]) for row in rows)
+
     def fence_and_prove_empty(self, session_id: str) -> AgentRetirementProof:
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -952,6 +987,9 @@ class LocalDaemonAgentHttpClient:
         self._config = config
         self._trusted_config_loader = trusted_config_loader
         self._connection: http.client.HTTPSConnection | None = None
+        # Validate the durable supervisor binding before acquiring the exclusive
+        # root lock.  A rejected opening must not strand that lock.
+        self._supervisor = self._open_supervisor(config)
         self._journal = (
             _RemoteAgentJournal(config.agent_root) if config.agent_root else None
         )
@@ -981,8 +1019,11 @@ class LocalDaemonAgentHttpClient:
         self._runtime_agent_id: str | None = None
         self._runtime_provider_key: str | None = None
         self._providers: dict[str, AtomResourceProvider] = {}
-        self._processes: dict[str, subprocess.Popen[bytes]] = {}
-        self._cancelled_assignments: set[str] = set()
+        self._cancelled_assignments: set[str] = set(
+            self._journal.contained_assignment_ids()
+            if self._journal is not None
+            else ()
+        )
         self._drained = False
         self._control_lock = RLock()
 
@@ -990,12 +1031,62 @@ class LocalDaemonAgentHttpClient:
     def agent_root_id(self) -> str:
         return self._require_journal().root_id
 
+    @classmethod
+    def initialize_agent_root(cls, config: AgentTlsClientConfig) -> None:
+        """Create the complete remote root and its continuous private owner.
+
+        Remote configuration is trusted application configuration, so this is
+        the one place where the full resident profile set becomes durable.
+        Opening an existing root never fills in or upgrades that identity.
+        """
+        if config.agent_root is None or not config.resident_profiles:
+            raise QueueServiceError(
+                "remote agent initialization requires resident profiles"
+            )
+        LocalDaemon.initialize_agent_root(config.agent_root)
+        journal = _RemoteAgentJournal(config.agent_root)
+        try:
+            profiles = tuple(item.launch_profile for item in config.resident_profiles)
+            configuration = SupervisorLaunchConfiguration(journal.root_id, profiles)
+            AgentProcessSupervisorService.initialize(
+                config.agent_root, configuration=configuration
+            )
+        except AgentProcessSupervisorError as exc:
+            raise QueueServiceError(str(exc)) from exc
+        finally:
+            journal.close()
+
+    @staticmethod
+    def _open_supervisor(
+        config: AgentTlsClientConfig,
+    ) -> AgentProcessSupervisorClient | None:
+        if not config.resident_profiles:
+            if (
+                config.agent_root is not None
+                and (Path(config.agent_root).resolve() / "supervisor").exists()
+            ):
+                raise QueueServiceError(
+                    "managed_supervisor_state_requires_reinitialization"
+                )
+            return None
+        if config.agent_root is None:
+            raise QueueServiceError("remote resident execution requires an agent root")
+        # The journal verifies the root and serializes agent application use;
+        # its stable ID is the configuration's hard-bound agent identity.
+        root_id = _read_remote_agent_root_id(config.agent_root)
+        try:
+            return AgentProcessSupervisorClient(
+                config.agent_root,
+                SupervisorLaunchConfiguration(
+                    root_id,
+                    tuple(item.launch_profile for item in config.resident_profiles),
+                ),
+            )
+        except AgentProcessSupervisorError as exc:
+            raise QueueServiceError(str(exc)) from exc
+
     def close(self) -> None:
         self._close_connection()
-        if any(process.poll() is None for process in self._processes.values()):
-            raise QueueConflictError(
-                "remote agent cannot close while an assignment process is live"
-            )
         if self._journal is not None:
             self._journal.close()
             self._journal = None
@@ -1283,6 +1374,13 @@ class LocalDaemonAgentHttpClient:
             raise QueueServiceError(
                 "agent reload cannot replace its live transport or owner root"
             )
+        if _resident_launch_profile_set(replacement) != _resident_launch_profile_set(
+            self._config
+        ):
+            raise QueueConflictError(
+                "agent reload requires fresh agent-root initialization for "
+                "resident profile set"
+            )
         existing = (*self._profiles.values(), *self._retained_profiles.values())
         for candidate in replacement.resident_profiles:
             for retained in existing:
@@ -1296,18 +1394,14 @@ class LocalDaemonAgentHttpClient:
                     )
 
     def _has_retained_agent_work(self) -> bool:
-        return (
-            any(process.poll() is None for process in self._processes.values())
-            or bool(
-                self._execution_journal.retained_claim_commands()
-                if self._execution_journal is not None
-                else ()
-            )
-            or bool(
-                self._journal.has_unresolved_assignment_references()
-                if self._journal is not None
-                else False
-            )
+        return bool(
+            self._execution_journal.retained_claim_commands()
+            if self._execution_journal is not None
+            else ()
+        ) or bool(
+            self._journal.has_unresolved_assignment_references()
+            if self._journal is not None
+            else False
         )
 
     def _reset_runtime_providers(self) -> None:
@@ -1316,13 +1410,49 @@ class LocalDaemonAgentHttpClient:
         self._providers = {}
 
     def _cancel_active_assignments(self) -> bool:
-        contained = True
-        for assignment_id, process in tuple(self._processes.items()):
-            current = _terminate_owned_process(process)
-            if current:
-                self._cancelled_assignments.add(assignment_id)
-            contained = current and contained
-        return contained
+        journal = self._journal
+        supervisor = self._supervisor
+        if journal is None or supervisor is None:
+            return True
+        all_contained = True
+        for _, assignment_id in journal.unresolved_assignment_references():
+            workspace = _RemoteAssignmentWorkspace(
+                cast(Path, self._config.agent_root), assignment_id
+            )
+            encoded_launch = workspace.supervisor_launch_json()
+            if encoded_launch is None:
+                continue
+            try:
+                launch = _launch_from_value(json.loads(encoded_launch))
+                supervisor.request_stop(launch)
+                receipt = supervisor.contain(launch)
+            except (AgentProcessSupervisorError, QueueError, ValueError):
+                all_contained = False
+                continue
+            if receipt.state is not SupervisorLaunchState.CONTAINED:
+                all_contained = False
+                continue
+            self._record_contained_cancellation(workspace)
+        return all_contained
+
+    def _record_contained_cancellation(
+        self, workspace: _RemoteAssignmentWorkspace
+    ) -> None:
+        """Make a positive supervisor containment result restart-durable."""
+
+        result_path = workspace.root / "worker-result.json"
+        if not result_path.is_file():
+            result = _cancelled_worker_result(workspace.worker_request())
+            atomic_write_bytes(
+                result_path,
+                json.dumps(
+                    result.to_dict(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode(),
+            )
+        self._cancelled_assignments.add(workspace.assignment_id)
 
     def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
         """Issue the same typed operator command over authenticated HTTP."""
@@ -1427,6 +1557,8 @@ class LocalDaemonAgentHttpClient:
                 raise QueueConflictError(
                     "retained assignment control belongs to another session"
                 )
+            if code == "contained":
+                self._cancelled_assignments.add(control.assignment_id)
             self._acknowledge_assignment_control(session_id, control, code)
             return control
         result = self._call("assignment_control", {"session_id": session_id})
@@ -1470,8 +1602,11 @@ class LocalDaemonAgentHttpClient:
                 return "unknown"
             if control.fence != fence:
                 return "unknown"
-            process = self._processes.get(control.assignment_id)
-            if process is None:
+            workspace = _RemoteAssignmentWorkspace(
+                cast(Path, self._config.agent_root), control.assignment_id
+            )
+            encoded_launch = workspace.supervisor_launch_json()
+            if encoded_launch is None:
                 if state in {
                     AssignmentState.RESULT_DURABLE,
                     AssignmentState.TERMINAL_ACKNOWLEDGED,
@@ -1493,9 +1628,17 @@ class LocalDaemonAgentHttpClient:
                 f"{control.assignment_id}:root",
             }:
                 return "unknown"
-            if not _terminate_owned_process(process):
+            if self._supervisor is None:
                 return "unknown"
-            self._cancelled_assignments.add(control.assignment_id)
+            try:
+                launch = _launch_from_value(json.loads(encoded_launch))
+                self._supervisor.request_stop(launch)
+                contained = self._supervisor.contain(launch)
+            except (AgentProcessSupervisorError, QueueError, ValueError):
+                return "unknown"
+            if contained.state is not SupervisorLaunchState.CONTAINED:
+                return "unknown"
+            self._record_contained_cancellation(workspace)
             return "contained"
 
     def decline_assignment(
@@ -1851,17 +1994,17 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("remote physical activation is indeterminate")
 
         execution_id = f"{request.assignment_id}:root"
-        process = self._processes.get(request.assignment_id)
+        supervisor = self._supervisor
+        if supervisor is None:
+            raise QueueConflictError("remote resident execution has no supervisor")
+        launch: ResidentWorkerLaunch | None = None
         result_path = workspace.root / "worker-result.json"
         cancelled_before_start = False
         if execution_journal.read_state(assignment.assignment_id) in {
             AssignmentState.ACTIVE,
         }:
 
-            def launch() -> str:
-                gate = workspace.root / "run.grant"
-                if gate.exists():
-                    raise QueueConflictError("remote run gate already exists")
+            def start_supervisor_launch() -> str:
                 environment = {
                     key: value
                     for key, value in os.environ.items()
@@ -1880,22 +2023,38 @@ class LocalDaemonAgentHttpClient:
                     provider = providers[command.claim.resource_kind]
                     if isinstance(provider, GpuResourceProvider):
                         environment.update(provider.worker_environment(command))
-                child = subprocess.Popen(
-                    [
-                        str(profile.python_executable),
-                        "-m",
-                        "loom.queue._resident_stage_worker",
-                        "--workspace",
-                        str(workspace.root),
-                    ],
-                    cwd=profile.project_root,
-                    env=environment,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                nonlocal launch
+                launch = ResidentWorkerLaunch(
+                    supervisor_id=supervisor.supervisor_id,
+                    continuity_epoch=supervisor.continuity_epoch,
+                    agent_id=supervisor.agent_id,
+                    session_id=session.session_id,
+                    assignment_id=request.assignment_id,
+                    process_execution_id=execution_id,
+                    execution_fence=fence,
+                    launch_operation_id=f"{request.assignment_id}:launch:{fence}",
+                    workspace_root=workspace.root,
+                    profile=profile.launch_profile,
+                    environment=environment,
                 )
-                self._processes[request.assignment_id] = child
-                workspace.mark_process_started(execution_id, child.pid)
+                workspace.persist_supervisor_launch(
+                    json.dumps(
+                        _launch_value(launch), sort_keys=True, separators=(",", ":")
+                    )
+                )
+                receipt = supervisor.launch(launch)
+                if (
+                    receipt.state
+                    not in {
+                        SupervisorLaunchState.STARTING,
+                        SupervisorLaunchState.RUNNING,
+                    }
+                    or receipt.process_id is None
+                ):
+                    raise QueueConflictError(
+                        "remote supervisor did not create a process root"
+                    )
+                workspace.mark_process_started(execution_id, receipt.process_id)
                 return execution_id
 
             with self._control_lock:
@@ -1927,10 +2086,8 @@ class LocalDaemonAgentHttpClient:
                     cancelled_before_start = True
                 else:
                     execution_journal.start_once(
-                        assignment.assignment_id, execution_id, launch
+                        assignment.assignment_id, execution_id, start_supervisor_launch
                     )
-                    process = self._processes[request.assignment_id]
-                    atomic_write_bytes(workspace.root / "run.grant", b"granted\n")
                     workspace.append_event(
                         f"{request.assignment_id}:agent-process-started",
                         {"kind": "process_started"},
@@ -1946,8 +2103,20 @@ class LocalDaemonAgentHttpClient:
                         ),
                     )
         self._flush_workspace_events(session_id, workspace)
-        if process is not None:
-            while process.poll() is None:
+        if launch is None:
+            retained_launch = workspace.supervisor_launch_json()
+            if retained_launch is not None:
+                launch = _launch_from_value(json.loads(retained_launch))
+        if launch is not None:
+            while True:
+                receipt = supervisor.query(launch)
+                if receipt.state in {
+                    SupervisorLaunchState.EXITED,
+                    SupervisorLaunchState.CONTAINED,
+                }:
+                    break
+                if receipt.state is SupervisorLaunchState.UNKNOWN:
+                    raise QueueConflictError("remote supervisor continuity is unknown")
                 self.poll_assignment_control(session_id)
                 sleep(0.05)
         elif not result_path.is_file():
@@ -1972,8 +2141,200 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError(
                 "remote process exited without a durable worker result"
             )
+        if launch is not None:
+            contained = supervisor.contain(launch)
+            if contained.state is not SupervisorLaunchState.CONTAINED:
+                raise QueueConflictError("remote process group containment is unknown")
+            if (
+                contained.worker_result_digest
+                != hashlib.sha256(result_path.read_bytes()).hexdigest()
+            ):
+                raise QueueConflictError(
+                    "remote supervisor result evidence does not match the workspace"
+                )
+        return self._complete_remote_result_and_release(
+            session,
+            request,
+            workspace,
+            assignment,
+            commands,
+            providers,
+            execution_journal,
+            fence=fence,
+            authorization_revision=authorization_revision,
+            persist_result=not cancelled_before_start,
+            result_path_label="remote execution completion",
+        )
+
+    def resume_retained_work(self) -> tuple[Mapping[str, PlainData], ...]:
+        """Join continuous supervisor receipts before releasing startup capacity.
+
+        This is deliberately an explicit application-start step: no offer or
+        poll can bypass it, and an unknown receipt leaves its reference and
+        provider claim unavailable.
+        """
+
+        journal = self._require_journal()
+        execution_journal = self._execution_journal
+        supervisor = self._supervisor
+        if execution_journal is None or supervisor is None:
+            raise QueueConflictError("remote restart has no supervisor journal")
+        completed: list[Mapping[str, PlainData]] = []
+        for session_id, assignment_id in journal.unresolved_assignment_references():
+            session = journal.session(session_id)
+            workspace = _RemoteAssignmentWorkspace(
+                cast(Path, self._config.agent_root), assignment_id
+            )
+            request = workspace.request()
+            profile = self._profile_for_descriptor(request.profile)
+            if profile is None:
+                raise QueueConflictError("retained assignment has no resident profile")
+            assignment = ManagedAssignment(
+                assignment_id=request.assignment_id,
+                run_uri=f"loom-agent:{request.assignment_id}",
+                stage_work_id=request.stage_work_id,
+                stage_name=request.stage_name,
+                attempt=request.attempt,
+                attempt_id=request.attempt_id,
+                agent_id=session.agent_id,
+                session_id=session.session_id,
+                offer_id=request.offer_id,
+                claim_id=request.claim_id,
+            )
+            providers, _ = self._runtime_owners(session, profile)
+            commands = execution_journal.assignment_claim_commands(assignment_id)
+            launch_json = workspace.supervisor_launch_json()
+            if launch_json is None:
+                # A pre-launch operation has no evidence allowing a new start
+                # after application restart; keep it unavailable for the owner.
+                continue
+            launch = _launch_from_value(json.loads(launch_json))
+            receipt = supervisor.query(launch)
+            if receipt.state is SupervisorLaunchState.NOT_ACCEPTED:
+                # The complete exact operation was journaled before the service
+                # call. Submitting that operation is replay, never relaunch.
+                receipt = supervisor.launch(launch)
+            if receipt.state is SupervisorLaunchState.UNKNOWN:
+                continue
+            needs_start_join = execution_journal.read_state(assignment_id) in {
+                AssignmentState.START_INTENT,
+                AssignmentState.START_UNKNOWN,
+                AssignmentState.PROCESS_STARTED,
+            }
+            if needs_start_join and receipt.process_id is not None:
+                self._join_retained_supervised_start(
+                    session,
+                    request,
+                    workspace,
+                    execution_journal,
+                    launch,
+                    receipt.process_id,
+                )
+                needs_start_join = False
+            while receipt.state in {
+                SupervisorLaunchState.STARTING,
+                SupervisorLaunchState.RUNNING,
+            }:
+                self.poll_assignment_control(session_id)
+                sleep(0.05)
+                receipt = supervisor.query(launch)
+                if needs_start_join and receipt.process_id is not None:
+                    self._join_retained_supervised_start(
+                        session,
+                        request,
+                        workspace,
+                        execution_journal,
+                        launch,
+                        receipt.process_id,
+                    )
+                    needs_start_join = False
+                if receipt.state is SupervisorLaunchState.UNKNOWN:
+                    break
+            if receipt.state is SupervisorLaunchState.UNKNOWN:
+                continue
+            result_path = workspace.root / "worker-result.json"
+            if (
+                not result_path.is_file()
+                and assignment_id in self._cancelled_assignments
+            ):
+                self._record_contained_cancellation(workspace)
+            contained = supervisor.contain(launch)
+            if contained.state is not SupervisorLaunchState.CONTAINED:
+                continue
+            if not result_path.is_file():
+                continue
+            digest = hashlib.sha256(result_path.read_bytes()).hexdigest()
+            if contained.worker_result_digest != digest:
+                continue
+            completed.append(
+                self._complete_remote_result_and_release(
+                    session,
+                    request,
+                    workspace,
+                    assignment,
+                    commands,
+                    providers,
+                    execution_journal,
+                    fence=launch.execution_fence,
+                    authorization_revision=0,
+                    persist_result=True,
+                    result_path_label="remote restart completion",
+                )
+            )
+        self._restart_with_retained_work = self._has_retained_agent_work()
+        return tuple(completed)
+
+    def _join_retained_supervised_start(
+        self,
+        session: AgentSession,
+        request: _DeliveredExecutionRequest,
+        workspace: _RemoteAssignmentWorkspace,
+        execution_journal: SQLiteAgentJournal,
+        launch: ResidentWorkerLaunch,
+        process_id: int,
+    ) -> None:
+        """Join one exact accepted launch across the application crash barrier."""
+
+        workspace.mark_process_started(launch.process_execution_id, process_id)
+        execution_journal.confirm_supervised_start(
+            request.assignment_id, launch.process_execution_id
+        )
+        workspace.append_event(
+            f"{request.assignment_id}:agent-process-started",
+            {"kind": "process_started"},
+        )
+        self._assignment_call(
+            session.session_id,
+            request.assignment_id,
+            lambda: self.confirm_started(
+                session.session_id,
+                request.assignment_id,
+                fence=launch.execution_fence,
+                process_execution_id=launch.process_execution_id,
+            ),
+        )
+        self._flush_workspace_events(session.session_id, workspace)
+
+    def _complete_remote_result_and_release(
+        self,
+        session: AgentSession,
+        request: _DeliveredExecutionRequest,
+        workspace: _RemoteAssignmentWorkspace,
+        assignment: ManagedAssignment,
+        commands: tuple[ClaimCommand, ...],
+        providers: Mapping[str, AtomResourceProvider],
+        execution_journal: SQLiteAgentJournal,
+        *,
+        fence: str,
+        authorization_revision: int,
+        persist_result: bool,
+        result_path_label: str,
+    ) -> Mapping[str, PlainData]:
+        """Own normal and restart result/output/outbox completion ordering."""
+
+        result_path = workspace.root / "worker-result.json"
         result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
-        if not cancelled_before_start:
+        if persist_result:
             workspace.persist_worker_result(result)
             execution_journal.record_result(assignment.assignment_id, result.to_dict())
         report = workspace.retain_outputs()
@@ -1981,22 +2342,21 @@ class LocalDaemonAgentHttpClient:
             f"{request.assignment_id}:result-output-durable",
             {"kind": "result_and_output_durable", "status": report.status.value},
         )
-        self._flush_workspace_events(session_id, workspace)
-
+        self._flush_workspace_events(session.session_id, workspace)
         authorization = self._fresh_transfer_authorization(
-            session_id=session_id,
+            session_id=session.session_id,
             assignment_id=request.assignment_id,
             expected_revision=authorization_revision,
         )
         authorization_id = cast(str, authorization["authorization_id"])
         authorization_revision = cast(int, authorization["revision"])
         _, authorization_id, authorization_revision = self._authorized_transfer_call(
-            session_id=session_id,
+            session_id=session.session_id,
             assignment_id=request.assignment_id,
             authorization_id=authorization_id,
             authorization_revision=authorization_revision,
             operation=lambda current_id, current_revision: self.declare_outputs(
-                session_id,
+                session.session_id,
                 request.assignment_id,
                 fence=fence,
                 authorization_id=current_id,
@@ -2008,15 +2368,15 @@ class LocalDaemonAgentHttpClient:
             offset = 0
             while True:
                 data, final = workspace.output_chunk(item.transfer_id, offset)
-                raw_response, authorization_id, authorization_revision = (
+                response, authorization_id, authorization_revision = (
                     self._authorized_transfer_call(
-                        session_id=session_id,
+                        session_id=session.session_id,
                         assignment_id=request.assignment_id,
                         authorization_id=authorization_id,
                         authorization_revision=authorization_revision,
                         operation=lambda current_id, current_revision: (
                             self.upload_output_chunk(
-                                session_id,
+                                session.session_id,
                                 request.assignment_id,
                                 item.transfer_id,
                                 offset=offset,
@@ -2028,47 +2388,65 @@ class LocalDaemonAgentHttpClient:
                         ),
                     )
                 )
-                response = cast(Mapping[str, PlainData], raw_response)
-                offset = cast(int, response["received_bytes"])
+                offset = cast(
+                    int, cast(Mapping[str, PlainData], response)["received_bytes"]
+                )
                 if final:
                     break
         self._assignment_call(
-            session_id,
+            session.session_id,
             request.assignment_id,
-            lambda: self.commit_result(session_id, request.assignment_id, fence=fence),
+            lambda: self.commit_result(
+                session.session_id, request.assignment_id, fence=fence
+            ),
         )
-        execution_journal.acknowledge_terminal(assignment.assignment_id)
-        for command in commands:
-            provider = providers[command.claim.resource_kind]
-            released = provider.release(
-                ClaimCommand(
-                    assignment,
-                    f"{command.operation_id}:release",
-                    command.claim,
-                    command.provider_descriptor,
-                )
+        local_state = execution_journal.acknowledge_terminal(assignment.assignment_id)
+        if local_state is AssignmentState.RELEASED:
+            # Re-observe the fully reconstructed provider set, then replay the
+            # exact revision already committed before the application crash.
+            self._availability_revision(session, request.assignment_id, providers)
+            next_revision = execution_journal.read_availability_revision(
+                assignment.assignment_id
             )
-            if released.outcome is not ClaimOutcome.RELEASED:
-                raise QueueConflictError("remote provider release is indeterminate")
-        execution_journal.mark_providers_released(assignment.assignment_id)
-        next_revision = self._availability_revision(
-            session, request.assignment_id, providers
-        )
-        execution_journal.publish_availability(assignment.assignment_id, next_revision)
+            if next_revision is None:
+                raise QueueConflictError(
+                    "released remote availability evidence is unavailable"
+                )
+        else:
+            if local_state is not AssignmentState.PROVIDERS_RELEASED:
+                for command in commands:
+                    released = providers[command.claim.resource_kind].release(
+                        ClaimCommand(
+                            assignment,
+                            f"{command.operation_id}:release",
+                            command.claim,
+                            command.provider_descriptor,
+                        )
+                    )
+                    if released.outcome is not ClaimOutcome.RELEASED:
+                        raise QueueConflictError(
+                            "remote provider release is indeterminate"
+                        )
+                execution_journal.mark_providers_released(assignment.assignment_id)
+            next_revision = self._availability_revision(
+                session, request.assignment_id, providers
+            )
+            execution_journal.publish_availability(
+                assignment.assignment_id, next_revision
+            )
         released_session = cast(
             AgentSession,
             self._assignment_call(
-                session_id,
+                session.session_id,
                 request.assignment_id,
                 lambda: self.release_assignment(
-                    session_id,
+                    session.session_id,
                     request.assignment_id,
                     fence=fence,
                     availability_revision=next_revision,
                 ),
             ),
         )
-        self._processes.pop(request.assignment_id, None)
         self._cancelled_assignments.discard(request.assignment_id)
         return freeze_plain_data(
             {
@@ -2077,7 +2455,7 @@ class LocalDaemonAgentHttpClient:
                 "state": "RELEASED",
                 "session": released_session.value(),
             },
-            path="remote execution completion",
+            path=result_path_label,
         )
 
     def _cancel_pregrant_if_requested(
@@ -3237,6 +3615,26 @@ def _resident_profile_key(profile: ResidentExecutionProfile) -> str:
     )
 
 
+def _resident_launch_profile_set(
+    config: AgentTlsClientConfig,
+) -> tuple[tuple[str, str], ...]:
+    """Canonical executable bindings held by the initialized supervisor.
+
+    Capacity is intentionally absent: it contributes to provider inventory, not
+    the protected worker executable, descriptor, or project binding.
+    """
+
+    return tuple(
+        sorted(
+            (
+                profile.descriptor.profile_id,
+                profile.launch_profile.fingerprint,
+            )
+            for profile in config.resident_profiles
+        )
+    )
+
+
 def _resident_provider_key(profile: ResidentExecutionProfile) -> str:
     return _agent_revision(
         "resident-provider",
@@ -3291,23 +3689,19 @@ def _agent_revision(prefix: str, value: Mapping[str, object]) -> str:
     return f"{prefix}-{hashlib.sha256(encoded).hexdigest()}"
 
 
-def _terminate_owned_process(process: subprocess.Popen[bytes]) -> bool:
-    """Contain only the exact in-memory child handle owned by this agent."""
-
-    if process.poll() is not None:
-        return True
+def _read_remote_agent_root_id(root: Path) -> str:
+    """Read only the stable identity after protected-root validation."""
+    path = Path(root).resolve() / "control.sqlite"
     try:
-        process.terminate()
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        try:
-            process.kill()
-            process.wait(timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-    except OSError:
-        return process.poll() is not None
-    return process.poll() is not None
+        with sqlite3.connect(path) as conn:
+            row = conn.execute(
+                "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise QueueServiceError("remote agent control state is unavailable") from exc
+    if row is None or not isinstance(row[0], str) or not row[0]:
+        raise QueueServiceError("remote agent root identity is invalid")
+    return row[0]
 
 
 __all__ = [

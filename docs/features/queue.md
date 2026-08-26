@@ -242,6 +242,24 @@ an offer or poll is allowed. A missing, replaced, locked, permission-unsafe, or
 incomplete agent root therefore fails closed; loss of that root requires the
 later guarded-recovery phase rather than coordinator-side reconstruction.
 
+For resident remote execution, initialization receives the complete current
+resident profile set and starts a separately locked, locally authenticated
+supervisor under that root. The supervisor records the fully materialized
+selected-profile launch before creating a fresh process group; the outbound
+agent retains no process handles. Opening an agent root verifies the exact
+profile-set fingerprint and the service continuity identity, so absent, copied,
+corrupt, old, or changed-profile state requires fresh initialization rather
+than migration or adoption. Trusted reload compares its complete canonical
+executable profile set before swapping local configuration: reordering is
+harmless, while adding, removing, or changing a descriptor, project root, or
+Python executable is rejected before an offer, grant, or provider claim. A root
+process exit, result file, stop response, or endpoint loss is not descendant
+containment. Only the continuous supervisor may report containment after bounded
+group-level termination proves that no member can continue. On an agent
+application restart, retained work remains unavailable until its durable
+workspace/journal references are reconciled with the same supervisor receipts
+and a fresh provider observation is published.
+
 Offers use exact bounded CPU and memory capacity atoms, one shared availability
 revision across every authorized pool, and coordinator-accepted time for TTL.
 The held poll is digest-bound and renews current policy while waiting. A lost
@@ -841,6 +859,19 @@ under that ID conflicts. This is a hard cut-over: initialize fresh daemon/agent
 roots and use the v3 CLI result shape (agent protocol and journal schema v5);
 Loom does not upgrade or dual-read the
 previous control schema.
+
+For a resident remote agent, initialize its protected root and detached
+supervisor before starting the agent application.  On an application restart,
+open that same root, run retained-work reconciliation, and only then publish a
+fresh provider observation or poll for more work.  The application joins the
+continuous supervisor's exact receipts; it never starts a replacement root.
+Any receipt whose continuity is `UNKNOWN` keeps its claim unavailable and
+requires operator recovery rather than relaunch.
+
+Reloading a resident remote agent cannot change its executable profile set. To
+add, remove, or alter a resident executable binding, drain the old root and
+initialize a fresh one; a trusted reload that differs only in profile ordering
+is accepted.
 
 ## Preflight And Status Output
 

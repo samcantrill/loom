@@ -691,7 +691,6 @@ class LocalDaemon:
             raise QueueServiceError("remote agent requires a fresh root")
         _initialize_root(path, role="local-agent")
         from loom.pipeline.execution.managed_local import SQLiteAgentJournal
-
         SQLiteAgentJournal(path / "journal.sqlite")._initialize()
         (path / "journal.sqlite").chmod(0o600)
 

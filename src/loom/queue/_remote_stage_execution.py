@@ -43,6 +43,7 @@ from loom.serialization import (
     thaw_plain_data,
 )
 
+from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 from .errors import QueueConflictError, QueueServiceError
 
 
@@ -406,6 +407,15 @@ class ResidentExecutionProfile:
             for device in self.gpu_devices
         )
         return tuple(atoms)
+
+    @property
+    def launch_profile(self) -> ResidentWorkerLaunchProfile:
+        """The immutable process-launch binding, separate from capacity."""
+        return ResidentWorkerLaunchProfile(
+            project_root=self.project_root,
+            python_executable=self.python_executable,
+            descriptor=self.descriptor.to_dict(),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1139,6 +1149,7 @@ class _RemoteAssignmentWorkspace:
                     fence TEXT,
                     process_execution_id TEXT,
                     process_id INTEGER,
+                    supervisor_launch_json TEXT,
                     result_json TEXT
                 );
                 CREATE TABLE IF NOT EXISTS transfers (
@@ -1361,6 +1372,34 @@ class _RemoteAssignmentWorkspace:
                 "process_id = ? WHERE singleton = 1",
                 (execution_id, process_id),
             )
+
+    def persist_supervisor_launch(self, launch_json: str) -> None:
+        """Retain the exact supervisor operation used for restart joining."""
+        try:
+            decoded = json.loads(launch_json)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise QueueServiceError("supervisor launch state is invalid") from exc
+        canonical = _canonical_json(decoded)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT state, supervisor_launch_json FROM request WHERE singleton = 1"
+            ).fetchone()
+            if row is None or str(row["state"]) not in {"GRANTED", "STARTED"}:
+                raise QueueConflictError("supervisor launch requires a durable grant")
+            existing = row["supervisor_launch_json"]
+            if existing is not None and str(existing) != canonical:
+                raise QueueConflictError("supervisor launch identity conflicts")
+            conn.execute(
+                "UPDATE request SET supervisor_launch_json = ? WHERE singleton = 1",
+                (canonical,),
+            )
+
+    def supervisor_launch_json(self) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT supervisor_launch_json FROM request WHERE singleton = 1"
+            ).fetchone()
+        return None if row is None or row["supervisor_launch_json"] is None else str(row["supervisor_launch_json"])
 
     def worker_request(self) -> StageWorkerRequest:
         request = self.request()
