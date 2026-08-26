@@ -2687,7 +2687,7 @@ def test_lost_registration_response_replays_into_remote_agent_journal(
         agent_policy=_policy(),
     )
     LocalDaemon.initialize(config)
-    daemon = LocalDaemon(config)
+    daemon = LocalDaemon(config, clock=lambda: "2020-01-01T00:00:00Z")
     daemon.start()
     server = LocalDaemonAgentHttpServer(
         daemon,
