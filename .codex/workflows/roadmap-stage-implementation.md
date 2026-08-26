@@ -12,7 +12,7 @@ cleanup.
 - .codex/prompts/subagent-lifecycle.md
 - .codex/prompts/phase-loop-management.md
 - the selected manifest and current phase execution plan
-- current source, tests, diff, PR, and CI evidence
+- current source, tests, diff, PR, and local validation evidence
 
 Do not load planning.md, unrelated phase plans, completed lifecycle detail, or
 superseded discussion unless a current blocker cites it.

@@ -16,7 +16,7 @@
 ## Automated Merge Evidence
 
 - Automated PR review:
-- Validation or CI:
+- Local validation:
 - PR target confirmed:
 - Successor stack state checked:
 - Scope limited to assigned phase:

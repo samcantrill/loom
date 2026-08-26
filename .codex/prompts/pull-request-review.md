@@ -3,7 +3,7 @@
 Optional prompt for loom_phase_reviewer. Fast-path review is manager-local.
 
 Read the manifest shared constraints, selected phase plan, PR body, diff, and
-current validation/CI evidence.
+current local validation evidence.
 
 Review scope, acceptance, fixed contracts, tests, target develop, domain
 neutrality, source boundaries, runtime/durable behavior, proportionality,
