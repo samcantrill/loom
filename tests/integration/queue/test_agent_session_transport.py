@@ -56,6 +56,10 @@ from loom.queue import (
     LocalDaemonRole,
     prepare_managed_local_runtime_record,
 )
+from loom.queue._agent_process_supervisor import (
+    ResidentWorkerLaunch,
+    SupervisorReceipt,
+)
 from loom.queue._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
@@ -698,10 +702,19 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
         restarted.close()
 
 
+@pytest.mark.parametrize(
+    "restart_barrier",
+    (
+        "before_supervisor_accept",
+        "after_supervisor_accept",
+        "before_result_commit",
+        "before_coordinator_release",
+    ),
+)
 def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restart_barrier: str
 ) -> None:
-    """A fresh application joins, rather than replaces, its live root."""
+    """A fresh application joins one exact operation across every crash barrier."""
 
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
@@ -795,14 +808,33 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             resident_profiles=(descriptor,),
         )
         agent.publish_offer(offer, idempotency_key="offer-restart")
-        original_commit = agent.commit_result
+        supervisor = agent._supervisor  # noqa: SLF001 - causal service boundary
+        assert supervisor is not None
+        if restart_barrier in {
+            "before_supervisor_accept",
+            "after_supervisor_accept",
+        }:
+            original_launch = supervisor.launch
 
-        def interrupt_after_durable_result(
-            *args: object, **kwargs: object
-        ) -> Mapping[str, PlainData]:
-            raise RuntimeError("simulated agent application restart")
+            def interrupt_launch(value: ResidentWorkerLaunch) -> SupervisorReceipt:
+                if restart_barrier == "before_supervisor_accept":
+                    raise RuntimeError("simulated agent application restart")
+                original_launch(value)
+                raise RuntimeError("simulated agent application restart")
 
-        monkeypatch.setattr(agent, "commit_result", interrupt_after_durable_result)
+            monkeypatch.setattr(supervisor, "launch", interrupt_launch)
+        elif restart_barrier == "before_result_commit":
+
+            def interrupt_result(*args: object, **kwargs: object) -> object:
+                raise RuntimeError("simulated agent application restart")
+
+            monkeypatch.setattr(agent, "commit_result", interrupt_result)
+        else:
+
+            def interrupt_release(*args: object, **kwargs: object) -> object:
+                raise RuntimeError("simulated agent application restart")
+
+            monkeypatch.setattr(agent, "release_assignment", interrupt_release)
         coordinator = daemon.client_view(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
         )
@@ -823,9 +855,23 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         assert replacement._supervisor.supervisor_id == supervisor_id  # noqa: SLF001
         with pytest.raises(QueueConflictError, match="cannot advertise"):
             replacement.publish_offer(offer, idempotency_key="offer-before-replay")
-        monkeypatch.setattr(replacement, "commit_result", original_commit)
         (replayed,) = replacement.resume_retained_work()
         assert replayed["state"] == "RELEASED"
+        released = cast(Mapping[str, object], replayed["session"])
+        replacement.publish_offer(
+            replace(
+                offer,
+                coordinator_epoch=str(released["coordinator_epoch"]),
+                config_revision=str(released["config_revision"]),
+                inventory_revision=str(released["inventory_revision"]),
+                availability_revision=str(released["availability_revision"]),
+            ),
+            idempotency_key=f"offer-after-replay:{restart_barrier}",
+        )
+        with sqlite3.connect(
+            cast(Path, remote_config.agent_root) / "supervisor" / "supervisor.sqlite"
+        ) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 1
         assert (
             coordinator.wait("restart-item", timeout_seconds=10).state
             is LocalDaemonAdmissionState.SUCCEEDED

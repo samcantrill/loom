@@ -237,6 +237,7 @@ def test_journal_requires_grant_and_durable_start_intent_before_one_launch(
         )
         is AssignmentState.ACTIVE
     )
+    assert journal.assignment_claim_commands(assignment.assignment_id) == (command,)
 
     calls = 0
 
@@ -268,6 +269,10 @@ def test_journal_requires_grant_and_durable_start_intent_before_one_launch(
         journal.publish_availability(assignment.assignment_id, "availability-1")
         is AssignmentState.RELEASED
     )
+    assert (
+        journal.read_availability_revision(assignment.assignment_id) == "availability-1"
+    )
+    assert journal.assignment_claim_commands(assignment.assignment_id) == (command,)
 
 
 def test_pregrant_cancellation_releases_exact_claim_before_decline(
@@ -633,6 +638,14 @@ def test_start_outcome_unknown_never_invokes_launcher_again(tmp_path) -> None:
     assert journal.read_state(assignment.assignment_id) is AssignmentState.START_UNKNOWN
     with pytest.raises(ManagedLocalError, match="cannot be invoked again"):
         journal.start_once(assignment.assignment_id, "process-1", ambiguous_launch)
+    assert (
+        journal.confirm_supervised_start(assignment.assignment_id, "process-1")
+        is AssignmentState.PROCESS_STARTED
+    )
+    assert (
+        journal.start_once(assignment.assignment_id, "process-1", ambiguous_launch)
+        == "process-1"
+    )
     assert calls == 1
 
 

@@ -750,6 +750,19 @@ class _RemoteAgentJournal:
             )
         return tuple((str(row["session_id"]), str(row["reference_id"])) for row in rows)
 
+    def contained_assignment_ids(self) -> tuple[str, ...]:
+        """Return assignments with a durable positive cancellation proof."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT DISTINCT assignment_id FROM "
+                    "remote_assignment_controls_local WHERE result_code = 'contained' "
+                    "ORDER BY assignment_id"
+                )
+            )
+        return tuple(str(row["assignment_id"]) for row in rows)
+
     def fence_and_prove_empty(self, session_id: str) -> AgentRetirementProof:
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -1004,7 +1017,11 @@ class LocalDaemonAgentHttpClient:
         self._runtime_agent_id: str | None = None
         self._runtime_provider_key: str | None = None
         self._providers: dict[str, AtomResourceProvider] = {}
-        self._cancelled_assignments: set[str] = set()
+        self._cancelled_assignments: set[str] = set(
+            self._journal.contained_assignment_ids()
+            if self._journal is not None
+            else ()
+        )
         self._drained = False
         self._control_lock = RLock()
 
@@ -1377,9 +1394,49 @@ class LocalDaemonAgentHttpClient:
         self._providers = {}
 
     def _cancel_active_assignments(self) -> bool:
-        # The remote application has no live process handles.  Assignment
-        # controls route through exact durable supervisor launch receipts.
-        return True
+        journal = self._journal
+        supervisor = self._supervisor
+        if journal is None or supervisor is None:
+            return True
+        all_contained = True
+        for _, assignment_id in journal.unresolved_assignment_references():
+            workspace = _RemoteAssignmentWorkspace(
+                cast(Path, self._config.agent_root), assignment_id
+            )
+            encoded_launch = workspace.supervisor_launch_json()
+            if encoded_launch is None:
+                continue
+            try:
+                launch = _launch_from_value(json.loads(encoded_launch))
+                supervisor.request_stop(launch)
+                receipt = supervisor.contain(launch)
+            except (AgentProcessSupervisorError, QueueError, ValueError):
+                all_contained = False
+                continue
+            if receipt.state is not SupervisorLaunchState.CONTAINED:
+                all_contained = False
+                continue
+            self._record_contained_cancellation(workspace)
+        return all_contained
+
+    def _record_contained_cancellation(
+        self, workspace: _RemoteAssignmentWorkspace
+    ) -> None:
+        """Make a positive supervisor containment result restart-durable."""
+
+        result_path = workspace.root / "worker-result.json"
+        if not result_path.is_file():
+            result = _cancelled_worker_result(workspace.worker_request())
+            atomic_write_bytes(
+                result_path,
+                json.dumps(
+                    result.to_dict(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode(),
+            )
+        self._cancelled_assignments.add(workspace.assignment_id)
 
     def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
         """Issue the same typed operator command over authenticated HTTP."""
@@ -1484,6 +1541,8 @@ class LocalDaemonAgentHttpClient:
                 raise QueueConflictError(
                     "retained assignment control belongs to another session"
                 )
+            if code == "contained":
+                self._cancelled_assignments.add(control.assignment_id)
             self._acknowledge_assignment_control(session_id, control, code)
             return control
         result = self._call("assignment_control", {"session_id": session_id})
@@ -1563,7 +1622,7 @@ class LocalDaemonAgentHttpClient:
                 return "unknown"
             if contained.state is not SupervisorLaunchState.CONTAINED:
                 return "unknown"
-            self._cancelled_assignments.add(control.assignment_id)
+            self._record_contained_cancellation(workspace)
             return "contained"
 
     def decline_assignment(
@@ -2070,111 +2129,25 @@ class LocalDaemonAgentHttpClient:
             contained = supervisor.contain(launch)
             if contained.state is not SupervisorLaunchState.CONTAINED:
                 raise QueueConflictError("remote process group containment is unknown")
-        result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
-        if not cancelled_before_start:
-            workspace.persist_worker_result(result)
-            execution_journal.record_result(assignment.assignment_id, result.to_dict())
-        report = workspace.retain_outputs()
-        workspace.append_event(
-            f"{request.assignment_id}:result-output-durable",
-            {"kind": "result_and_output_durable", "status": report.status.value},
-        )
-        self._flush_workspace_events(session_id, workspace)
-
-        authorization = self._fresh_transfer_authorization(
-            session_id=session_id,
-            assignment_id=request.assignment_id,
-            expected_revision=authorization_revision,
-        )
-        authorization_id = cast(str, authorization["authorization_id"])
-        authorization_revision = cast(int, authorization["revision"])
-        _, authorization_id, authorization_revision = self._authorized_transfer_call(
-            session_id=session_id,
-            assignment_id=request.assignment_id,
-            authorization_id=authorization_id,
+            if (
+                contained.worker_result_digest
+                != hashlib.sha256(result_path.read_bytes()).hexdigest()
+            ):
+                raise QueueConflictError(
+                    "remote supervisor result evidence does not match the workspace"
+                )
+        return self._complete_remote_result_and_release(
+            session,
+            request,
+            workspace,
+            assignment,
+            commands,
+            providers,
+            execution_journal,
+            fence=fence,
             authorization_revision=authorization_revision,
-            operation=lambda current_id, current_revision: self.declare_outputs(
-                session_id,
-                request.assignment_id,
-                fence=fence,
-                authorization_id=current_id,
-                authorization_revision=current_revision,
-                report=report,
-            ),
-        )
-        for item in report.outputs:
-            offset = 0
-            while True:
-                data, final = workspace.output_chunk(item.transfer_id, offset)
-                raw_response, authorization_id, authorization_revision = (
-                    self._authorized_transfer_call(
-                        session_id=session_id,
-                        assignment_id=request.assignment_id,
-                        authorization_id=authorization_id,
-                        authorization_revision=authorization_revision,
-                        operation=lambda current_id, current_revision: (
-                            self.upload_output_chunk(
-                                session_id,
-                                request.assignment_id,
-                                item.transfer_id,
-                                offset=offset,
-                                data=data,
-                                final=final,
-                                authorization_id=current_id,
-                                authorization_revision=current_revision,
-                            )
-                        ),
-                    )
-                )
-                response = cast(Mapping[str, PlainData], raw_response)
-                offset = cast(int, response["received_bytes"])
-                if final:
-                    break
-        self._assignment_call(
-            session_id,
-            request.assignment_id,
-            lambda: self.commit_result(session_id, request.assignment_id, fence=fence),
-        )
-        execution_journal.acknowledge_terminal(assignment.assignment_id)
-        for command in commands:
-            provider = providers[command.claim.resource_kind]
-            released = provider.release(
-                ClaimCommand(
-                    assignment,
-                    f"{command.operation_id}:release",
-                    command.claim,
-                    command.provider_descriptor,
-                )
-            )
-            if released.outcome is not ClaimOutcome.RELEASED:
-                raise QueueConflictError("remote provider release is indeterminate")
-        execution_journal.mark_providers_released(assignment.assignment_id)
-        next_revision = self._availability_revision(
-            session, request.assignment_id, providers
-        )
-        execution_journal.publish_availability(assignment.assignment_id, next_revision)
-        released_session = cast(
-            AgentSession,
-            self._assignment_call(
-                session_id,
-                request.assignment_id,
-                lambda: self.release_assignment(
-                    session_id,
-                    request.assignment_id,
-                    fence=fence,
-                    availability_revision=next_revision,
-                ),
-            ),
-        )
-        self._cancelled_assignments.discard(request.assignment_id)
-        return freeze_plain_data(
-            {
-                "result": "assignment",
-                "assignment_id": request.assignment_id,
-                "state": "RELEASED",
-                "session": released_session.value(),
-            },
-            path="remote execution completion",
+            persist_result=not cancelled_before_start,
+            result_path_label="remote execution completion",
         )
 
     def resume_retained_work(self) -> tuple[Mapping[str, PlainData], ...]:
@@ -2213,15 +2186,7 @@ class LocalDaemonAgentHttpClient:
                 claim_id=request.claim_id,
             )
             providers, _ = self._runtime_owners(session, profile)
-            commands = tuple(
-                command
-                for command in execution_journal.retained_claim_commands()
-                if command.assignment.assignment_id == assignment_id
-            )
-            if not commands:
-                raise QueueConflictError(
-                    "retained remote claim evidence is unavailable"
-                )
+            commands = execution_journal.assignment_claim_commands(assignment_id)
             launch_json = workspace.supervisor_launch_json()
             if launch_json is None:
                 # A pre-launch operation has no evidence allowing a new start
@@ -2229,36 +2194,64 @@ class LocalDaemonAgentHttpClient:
                 continue
             launch = _launch_from_value(json.loads(launch_json))
             receipt = supervisor.query(launch)
+            if receipt.state is SupervisorLaunchState.NOT_ACCEPTED:
+                # The complete exact operation was journaled before the service
+                # call. Submitting that operation is replay, never relaunch.
+                receipt = supervisor.launch(launch)
             if receipt.state is SupervisorLaunchState.UNKNOWN:
                 continue
+            needs_start_join = execution_journal.read_state(assignment_id) in {
+                AssignmentState.START_INTENT,
+                AssignmentState.START_UNKNOWN,
+                AssignmentState.PROCESS_STARTED,
+            }
+            if needs_start_join and receipt.process_id is not None:
+                self._join_retained_supervised_start(
+                    session,
+                    request,
+                    workspace,
+                    execution_journal,
+                    launch,
+                    receipt.process_id,
+                )
+                needs_start_join = False
             while receipt.state in {
                 SupervisorLaunchState.STARTING,
                 SupervisorLaunchState.RUNNING,
             }:
+                self.poll_assignment_control(session_id)
                 sleep(0.05)
                 receipt = supervisor.query(launch)
+                if needs_start_join and receipt.process_id is not None:
+                    self._join_retained_supervised_start(
+                        session,
+                        request,
+                        workspace,
+                        execution_journal,
+                        launch,
+                        receipt.process_id,
+                    )
+                    needs_start_join = False
                 if receipt.state is SupervisorLaunchState.UNKNOWN:
                     break
             if receipt.state is SupervisorLaunchState.UNKNOWN:
                 continue
+            result_path = workspace.root / "worker-result.json"
+            if (
+                not result_path.is_file()
+                and assignment_id in self._cancelled_assignments
+            ):
+                self._record_contained_cancellation(workspace)
             contained = supervisor.contain(launch)
             if contained.state is not SupervisorLaunchState.CONTAINED:
                 continue
-            result_path = workspace.root / "worker-result.json"
             if not result_path.is_file():
                 continue
             digest = hashlib.sha256(result_path.read_bytes()).hexdigest()
-            if receipt.worker_result_digest != digest:
+            if contained.worker_result_digest != digest:
                 continue
-            result = workspace.worker_result()
-            if result is None:
-                result = StageWorkerResult.from_dict(
-                    json.loads(result_path.read_text())
-                )
-                workspace.persist_worker_result(result)
-            execution_journal.record_result(assignment_id, result.to_dict())
             completed.append(
-                self._replay_result_and_release(
+                self._complete_remote_result_and_release(
                     session,
                     request,
                     workspace,
@@ -2266,12 +2259,47 @@ class LocalDaemonAgentHttpClient:
                     commands,
                     providers,
                     execution_journal,
+                    fence=launch.execution_fence,
+                    authorization_revision=0,
+                    persist_result=True,
+                    result_path_label="remote restart completion",
                 )
             )
         self._restart_with_retained_work = self._has_retained_agent_work()
         return tuple(completed)
 
-    def _replay_result_and_release(
+    def _join_retained_supervised_start(
+        self,
+        session: AgentSession,
+        request: _DeliveredExecutionRequest,
+        workspace: _RemoteAssignmentWorkspace,
+        execution_journal: SQLiteAgentJournal,
+        launch: ResidentWorkerLaunch,
+        process_id: int,
+    ) -> None:
+        """Join one exact accepted launch across the application crash barrier."""
+
+        workspace.mark_process_started(launch.process_execution_id, process_id)
+        execution_journal.confirm_supervised_start(
+            request.assignment_id, launch.process_execution_id
+        )
+        workspace.append_event(
+            f"{request.assignment_id}:agent-process-started",
+            {"kind": "process_started"},
+        )
+        self._assignment_call(
+            session.session_id,
+            request.assignment_id,
+            lambda: self.confirm_started(
+                session.session_id,
+                request.assignment_id,
+                fence=launch.execution_fence,
+                process_execution_id=launch.process_execution_id,
+            ),
+        )
+        self._flush_workspace_events(session.session_id, workspace)
+
+    def _complete_remote_result_and_release(
         self,
         session: AgentSession,
         request: _DeliveredExecutionRequest,
@@ -2280,12 +2308,19 @@ class LocalDaemonAgentHttpClient:
         commands: tuple[ClaimCommand, ...],
         providers: Mapping[str, AtomResourceProvider],
         execution_journal: SQLiteAgentJournal,
+        *,
+        fence: str,
+        authorization_revision: int,
+        persist_result: bool,
+        result_path_label: str,
     ) -> Mapping[str, PlainData]:
-        """Replay durable result/output/transfer/outbox work to ordered release."""
+        """Own normal and restart result/output/outbox completion ordering."""
 
-        fence = execution_journal.read_grant_fence(assignment.assignment_id)
-        if fence is None:
-            raise QueueConflictError("retained remote grant fence is unavailable")
+        result_path = workspace.root / "worker-result.json"
+        result = StageWorkerResult.from_dict(json.loads(result_path.read_text()))
+        if persist_result:
+            workspace.persist_worker_result(result)
+            execution_journal.record_result(assignment.assignment_id, result.to_dict())
         report = workspace.retain_outputs()
         workspace.append_event(
             f"{request.assignment_id}:result-output-durable",
@@ -2295,7 +2330,7 @@ class LocalDaemonAgentHttpClient:
         authorization = self._fresh_transfer_authorization(
             session_id=session.session_id,
             assignment_id=request.assignment_id,
-            expected_revision=0,
+            expected_revision=authorization_revision,
         )
         authorization_id = cast(str, authorization["authorization_id"])
         authorization_revision = cast(int, authorization["revision"])
@@ -2349,23 +2384,40 @@ class LocalDaemonAgentHttpClient:
                 session.session_id, request.assignment_id, fence=fence
             ),
         )
-        execution_journal.acknowledge_terminal(assignment.assignment_id)
-        for command in commands:
-            released = providers[command.claim.resource_kind].release(
-                ClaimCommand(
-                    assignment,
-                    f"{command.operation_id}:release",
-                    command.claim,
-                    command.provider_descriptor,
-                )
+        local_state = execution_journal.acknowledge_terminal(assignment.assignment_id)
+        if local_state is AssignmentState.RELEASED:
+            # Re-observe the fully reconstructed provider set, then replay the
+            # exact revision already committed before the application crash.
+            self._availability_revision(session, request.assignment_id, providers)
+            next_revision = execution_journal.read_availability_revision(
+                assignment.assignment_id
             )
-            if released.outcome is not ClaimOutcome.RELEASED:
-                raise QueueConflictError("remote provider release is indeterminate")
-        execution_journal.mark_providers_released(assignment.assignment_id)
-        next_revision = self._availability_revision(
-            session, request.assignment_id, providers
-        )
-        execution_journal.publish_availability(assignment.assignment_id, next_revision)
+            if next_revision is None:
+                raise QueueConflictError(
+                    "released remote availability evidence is unavailable"
+                )
+        else:
+            if local_state is not AssignmentState.PROVIDERS_RELEASED:
+                for command in commands:
+                    released = providers[command.claim.resource_kind].release(
+                        ClaimCommand(
+                            assignment,
+                            f"{command.operation_id}:release",
+                            command.claim,
+                            command.provider_descriptor,
+                        )
+                    )
+                    if released.outcome is not ClaimOutcome.RELEASED:
+                        raise QueueConflictError(
+                            "remote provider release is indeterminate"
+                        )
+                execution_journal.mark_providers_released(assignment.assignment_id)
+            next_revision = self._availability_revision(
+                session, request.assignment_id, providers
+            )
+            execution_journal.publish_availability(
+                assignment.assignment_id, next_revision
+            )
         released_session = cast(
             AgentSession,
             self._assignment_call(
@@ -2387,7 +2439,7 @@ class LocalDaemonAgentHttpClient:
                 "state": "RELEASED",
                 "session": released_session.value(),
             },
-            path="remote restart completion",
+            path=result_path_label,
         )
 
     def _cancel_pregrant_if_requested(

@@ -990,6 +990,34 @@ class SQLiteAgentJournal:
             )
         return process_id
 
+    def confirm_supervised_start(
+        self, assignment_id: str, process_execution_id: str
+    ) -> AssignmentState:
+        """Join an exact durable supervisor receipt after application restart."""
+
+        if not isinstance(process_execution_id, str) or not process_execution_id:
+            raise ManagedLocalError("process_execution_id is required")
+        with self._transaction() as conn:
+            row = self._assignment(conn, assignment_id)
+            state = AssignmentState(row["state"])
+            current = row["process_execution_id"]
+            if current is None or str(current) != process_execution_id:
+                raise ManagedLocalError("process execution identity conflicts")
+            if _agent_at_or_after(state, AssignmentState.PROCESS_STARTED):
+                return state
+            if state not in {
+                AssignmentState.START_INTENT,
+                AssignmentState.START_UNKNOWN,
+            }:
+                raise ManagedLocalError(
+                    "assignment has no supervised start intent to confirm"
+                )
+            conn.execute(
+                "UPDATE assignments SET state = ? WHERE assignment_id = ?",
+                (AssignmentState.PROCESS_STARTED.value, assignment_id),
+            )
+        return AssignmentState.PROCESS_STARTED
+
     def attach_process_handle(
         self, assignment_id: str, handle: _ManagedWorkerHandle
     ) -> None:
@@ -1246,6 +1274,13 @@ class SQLiteAgentJournal:
             value = self._assignment(conn, assignment_id)["grant_fence"]
         return None if value is None else str(value)
 
+    def read_availability_revision(self, assignment_id: str) -> str | None:
+        """Return the already-published release revision for outbox replay."""
+
+        with self._transaction() as conn:
+            value = self._assignment(conn, assignment_id)["availability_revision"]
+        return None if value is None else str(value)
+
     def read_result(self, assignment_id: str) -> StageWorkerResult | None:
         with self._transaction() as conn:
             row = self._assignment(conn, assignment_id)
@@ -1283,27 +1318,17 @@ class SQLiteAgentJournal:
         for row in rows:
             if cast(str, row["state"]) in released:
                 continue
-            identity = json.loads(cast(str, row["identity_json"]))
-            assignment = ManagedAssignment(
-                assignment_id=cast(str, identity["assignment_id"]),
-                run_uri=cast(str, identity["run_uri"]),
-                stage_work_id=cast(str, identity["stage_work_id"]),
-                stage_name=cast(str, identity["stage_name"]),
-                attempt=cast(int, identity["attempt"]),
-                attempt_id=cast(str, identity["attempt_id"]),
-                agent_id=cast(str, identity["agent_id"]),
-                session_id=cast(str, identity["session_id"]),
-                offer_id=cast(str, identity["offer_id"]),
-                claim_id=cast(str, identity["claim_id"]),
-            )
-            commands = json.loads(cast(str, row["claims_json"]))
-            values = commands.get("commands") if isinstance(commands, dict) else None
-            if not isinstance(values, list):
-                raise ManagedLocalError("retained agent claims are corrupt")
-            retained.extend(
-                _claim_command_from_dict(assignment, value) for value in values
-            )
+            retained.extend(_claim_commands_from_row(row))
         return tuple(retained)
+
+    def assignment_claim_commands(self, assignment_id: str) -> tuple[ClaimCommand, ...]:
+        """Return an assignment's exact commands, including after release."""
+
+        with self._transaction() as conn:
+            row = self._assignment(conn, assignment_id)
+            if row["claims_json"] is None:
+                raise ManagedLocalError("assignment claim evidence is unavailable")
+            return _claim_commands_from_row(row)
 
     @contextmanager
     def _transaction(self):
@@ -1426,6 +1451,30 @@ class SQLiteAgentJournal:
         if row is None:
             raise ManagedLocalError("assignment is not durable")
         return row
+
+
+def _claim_commands_from_row(row: sqlite3.Row) -> tuple[ClaimCommand, ...]:
+    try:
+        identity = json.loads(cast(str, row["identity_json"]))
+        assignment = ManagedAssignment(
+            assignment_id=cast(str, identity["assignment_id"]),
+            run_uri=cast(str, identity["run_uri"]),
+            stage_work_id=cast(str, identity["stage_work_id"]),
+            stage_name=cast(str, identity["stage_name"]),
+            attempt=cast(int, identity["attempt"]),
+            attempt_id=cast(str, identity["attempt_id"]),
+            agent_id=cast(str, identity["agent_id"]),
+            session_id=cast(str, identity["session_id"]),
+            offer_id=cast(str, identity["offer_id"]),
+            claim_id=cast(str, identity["claim_id"]),
+        )
+        commands = json.loads(cast(str, row["claims_json"]))
+        values = commands.get("commands") if isinstance(commands, dict) else None
+        if not isinstance(values, list):
+            raise ManagedLocalError("retained agent claims are corrupt")
+        return tuple(_claim_command_from_dict(assignment, value) for value in values)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ManagedLocalError("retained agent claims are corrupt") from exc
 
 
 class SQLiteCoordinatorAssignments:
