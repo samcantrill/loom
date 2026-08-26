@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -83,10 +84,47 @@ def test_reopened_supervisor_does_not_adopt_nonterminal_pid(tmp_path: Path) -> N
     assert reopened.query(launch).state is SupervisorLaunchState.UNKNOWN
 
 
+def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _profile()
+    (tmp_path / "agent").mkdir()
+    supervisor = AgentProcessSupervisor.initialize(
+        tmp_path / "agent", agent_id="agent-A", profiles=(profile,)
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    launch = _launch(supervisor, workspace)
+    original_popen = subprocess.Popen
+
+    def start_root(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        return original_popen(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import signal, subprocess, sys, time; "
+                    "subprocess.Popen([sys.executable, '-c', "
+                    "'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)']); "
+                    "time.sleep(30)"
+                ),
+            ],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        "loom.queue._agent_process_supervisor.subprocess.Popen", start_root
+    )
+    supervisor.launch(launch)
+
+    assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+
+
 def test_separate_service_is_profile_set_bound_and_continuous(tmp_path: Path) -> None:
     profile = _profile()
     second = ResidentWorkerLaunchProfile(
-        project_root=Path.cwd(), python_executable=Path(sys.executable),
+        project_root=Path.cwd(),
+        python_executable=Path(sys.executable),
         descriptor={"profile_id": "other", "kind": "test-resident", "version": 2},
     )
     agent = tmp_path / "agent"
@@ -94,7 +132,9 @@ def test_separate_service_is_profile_set_bound_and_continuous(tmp_path: Path) ->
     from loom.queue._agent_process_supervisor import SupervisorLaunchConfiguration
 
     configuration = SupervisorLaunchConfiguration("agent-A", (second, profile))
-    client = AgentProcessSupervisorService.initialize(agent, configuration=configuration)
+    client = AgentProcessSupervisorService.initialize(
+        agent, configuration=configuration
+    )
     try:
         reopened = AgentProcessSupervisorClient(agent, configuration)
         assert reopened.supervisor_id == client.supervisor_id

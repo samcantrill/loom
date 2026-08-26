@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import hashlib
 import json
 import os
@@ -82,7 +83,7 @@ from loom.queue.agent_sessions import (
     AgentTransferAuthorizationStaleError,
     TransportPrincipalPolicy,
 )
-from loom.queue.errors import QueueConflictError, QueueServiceError
+from loom.queue.errors import QueueConflictError, QueueError, QueueServiceError
 from loom.scheduling import ResourceClaim, SchedulingComponentDescriptor
 from loom.serialization import PlainData, json_dumps_pretty
 
@@ -209,6 +210,35 @@ def _fresh_remote_agent_root(tmp_path: Path, name: str = "remote-owner") -> Path
     root = tmp_path / name / "agent"
     root.parent.mkdir(parents=True, exist_ok=True)
     return root
+
+
+@pytest.fixture(autouse=True)
+def _shutdown_detached_remote_supervisors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> object:
+    """Every integration test that initializes a detached owner also stops it."""
+
+    initialized: list[AgentTlsClientConfig] = []
+    original = LocalDaemonAgentHttpClient.initialize_agent_root.__func__
+
+    def initialize(
+        cls: type[LocalDaemonAgentHttpClient], config: AgentTlsClientConfig
+    ) -> None:
+        original(cls, config)
+        initialized.append(config)
+
+    monkeypatch.setattr(
+        LocalDaemonAgentHttpClient, "initialize_agent_root", classmethod(initialize)
+    )
+    yield
+    for config in initialized:
+        with suppress(QueueError):
+            client = LocalDaemonAgentHttpClient(config)
+            try:
+                assert client._supervisor is not None  # noqa: SLF001
+                client._supervisor.shutdown_for_test()  # noqa: SLF001
+            finally:
+                client.close()
 
 
 def test_agent_reload_reads_only_trusted_local_config_and_requires_resume(
@@ -666,6 +696,150 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
             )
     finally:
         restarted.close()
+
+
+def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh application joins, rather than replaces, its live root."""
+
+    credentials = _credentials(tmp_path / "tls")
+    descriptor = ResidentProfileDescriptor(
+        "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+    )
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-credential",
+                "agent-principal",
+                "agent-a",
+                ("default",),
+                capabilities,
+            ),
+        )
+    )
+    runs = LocalRunStore(tmp_path / "runs")
+    run_uri, authority = _prepare_remote_producer_run(
+        runs, run_name="restart-run", machine_id="agent-a", value=42
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "coordinator-agent",
+        runs.root,
+        agent_policy=policy,
+        remote_profiles=(descriptor,),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["agent"].with_suffix(".crt")
+                ): "agent-credential"
+            },
+        ),
+    )
+    server.start()
+    profile = ResidentExecutionProfile(
+        descriptor, Path(__file__).resolve().parents[3], Path(sys.executable)
+    )
+    remote_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
+    agent = LocalDaemonAgentHttpClient(remote_config)
+    replacement: LocalDaemonAgentHttpClient | None = None
+    try:
+        handshake = agent.handshake()
+        session = agent.register(
+            AgentRegistration(
+                "register-restart",
+                str(handshake["coordinator_id"]),
+                str(handshake["coordinator_epoch"]),
+                agent.agent_root_id,
+                "config-1",
+                "inventory-1",
+                "availability-1",
+                ("default",),
+                capabilities,
+            )
+        )
+        offer = AgentOffer(
+            session.session_id,
+            session.coordinator_epoch,
+            session.config_revision,
+            session.inventory_revision,
+            session.availability_revision,
+            1,
+            0,
+            30,
+            _resident_provider_descriptors(profile, session.agent_id),
+            resident_profiles=(descriptor,),
+        )
+        agent.publish_offer(offer, idempotency_key="offer-restart")
+        original_commit = agent.commit_result
+
+        def interrupt_after_durable_result(
+            *args: object, **kwargs: object
+        ) -> Mapping[str, PlainData]:
+            raise RuntimeError("simulated agent application restart")
+
+        monkeypatch.setattr(agent, "commit_result", interrupt_after_durable_result)
+        coordinator = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+        with ThreadPoolExecutor(max_workers=1) as workers:
+            execution = workers.submit(
+                agent.execute_one,
+                session.session_id,
+                session.availability_revision,
+                poll_id="restart-poll",
+                wait_timeout_ms=5_000,
+            )
+            coordinator.submit(LocalDaemonAdmissionRequest("restart-item", run_uri))
+            with pytest.raises(RuntimeError, match="application restart"):
+                execution.result(timeout=20)
+        supervisor_id = agent._supervisor.supervisor_id  # noqa: SLF001 - causal service receipt
+        agent.close()
+        replacement = LocalDaemonAgentHttpClient(remote_config)
+        assert replacement._supervisor.supervisor_id == supervisor_id  # noqa: SLF001
+        with pytest.raises(QueueConflictError, match="cannot advertise"):
+            replacement.publish_offer(offer, idempotency_key="offer-before-replay")
+        monkeypatch.setattr(replacement, "commit_result", original_commit)
+        (replayed,) = replacement.resume_retained_work()
+        assert replayed["state"] == "RELEASED"
+        assert (
+            coordinator.wait("restart-item", timeout_seconds=10).state
+            is LocalDaemonAdmissionState.SUCCEEDED
+        )
+        assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+    finally:
+        if replacement is not None:
+            replacement._supervisor.shutdown_for_test()  # noqa: SLF001
+            replacement.close()
+        else:
+            agent._supervisor.shutdown_for_test()  # noqa: SLF001
+            agent.close()
+        server.stop()
+        daemon.stop()
 
 
 def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) -> None:

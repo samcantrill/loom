@@ -434,9 +434,9 @@ class AgentProcessSupervisor:
                 SupervisorLaunchState.UNKNOWN, launch, receipt.supervisor_revision
             )
         deadline = monotonic() + 2
-        while _process_group_exists(child.pid) and monotonic() < deadline:
+        while _process_group_alive(child) and monotonic() < deadline:
             sleep(0.02)
-        if _process_group_exists(child.pid):
+        if _process_group_alive(child):
             try:
                 os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -446,9 +446,9 @@ class AgentProcessSupervisor:
                     SupervisorLaunchState.UNKNOWN, launch, receipt.supervisor_revision
                 )
             deadline = monotonic() + 2
-            while _process_group_exists(child.pid) and monotonic() < deadline:
+            while _process_group_alive(child) and monotonic() < deadline:
                 sleep(0.02)
-        if _process_group_exists(child.pid):
+        if _process_group_alive(child):
             return SupervisorReceipt(
                 SupervisorLaunchState.UNKNOWN, launch, receipt.supervisor_revision
             )
@@ -621,6 +621,19 @@ def _process_group_exists(process_group: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _process_group_alive(child: subprocess.Popen[bytes]) -> bool:
+    """Reap our leader before using the group as descendant evidence.
+
+    A killed leader remains a zombie until its owning service reaps it, and a
+    zombie still makes ``killpg(..., 0)`` report a group.  Reaping first does
+    not weaken containment: any living descendant remains in the original
+    group and keeps the group observable.
+    """
+
+    child.poll()
+    return _process_group_exists(child.pid)
 
 
 class AgentProcessSupervisorClient:

@@ -856,6 +856,14 @@ roots and use the v3 CLI result shape (agent protocol and journal schema v5);
 Loom does not upgrade or dual-read the
 previous control schema.
 
+For a resident remote agent, initialize its protected root and detached
+supervisor before starting the agent application.  On an application restart,
+open that same root, run retained-work reconciliation, and only then publish a
+fresh provider observation or poll for more work.  The application joins the
+continuous supervisor's exact receipts; it never starts a replacement root.
+Any receipt whose continuity is `UNKNOWN` keeps its claim unavailable and
+requires operator recovery rather than relaunch.
+
 ## Preflight And Status Output
 
 `loom queue preflight` checks:

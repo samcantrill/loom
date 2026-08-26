@@ -737,6 +737,19 @@ class _RemoteAgentJournal:
             ).fetchone()
         return row is not None or pending_poll is not None
 
+    def unresolved_assignment_references(self) -> tuple[tuple[str, str], ...]:
+        """Return the exact durable deliveries that startup must reconcile."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT session_id, reference_id FROM agent_session_references "
+                    "WHERE reference_kind = 'delivery' AND resolved = 0 "
+                    "ORDER BY session_id, reference_id"
+                )
+            )
+        return tuple((str(row["session_id"]), str(row["reference_id"])) for row in rows)
+
     def fence_and_prove_empty(self, session_id: str) -> AgentRetirementProof:
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -2162,6 +2175,219 @@ class LocalDaemonAgentHttpClient:
                 "session": released_session.value(),
             },
             path="remote execution completion",
+        )
+
+    def resume_retained_work(self) -> tuple[Mapping[str, PlainData], ...]:
+        """Join continuous supervisor receipts before releasing startup capacity.
+
+        This is deliberately an explicit application-start step: no offer or
+        poll can bypass it, and an unknown receipt leaves its reference and
+        provider claim unavailable.
+        """
+
+        journal = self._require_journal()
+        execution_journal = self._execution_journal
+        supervisor = self._supervisor
+        if execution_journal is None or supervisor is None:
+            raise QueueConflictError("remote restart has no supervisor journal")
+        completed: list[Mapping[str, PlainData]] = []
+        for session_id, assignment_id in journal.unresolved_assignment_references():
+            session = journal.session(session_id)
+            workspace = _RemoteAssignmentWorkspace(
+                cast(Path, self._config.agent_root), assignment_id
+            )
+            request = workspace.request()
+            profile = self._profile_for_descriptor(request.profile)
+            if profile is None:
+                raise QueueConflictError("retained assignment has no resident profile")
+            assignment = ManagedAssignment(
+                assignment_id=request.assignment_id,
+                run_uri=f"loom-agent:{request.assignment_id}",
+                stage_work_id=request.stage_work_id,
+                stage_name=request.stage_name,
+                attempt=request.attempt,
+                attempt_id=request.attempt_id,
+                agent_id=session.agent_id,
+                session_id=session.session_id,
+                offer_id=request.offer_id,
+                claim_id=request.claim_id,
+            )
+            providers, _ = self._runtime_owners(session, profile)
+            commands = tuple(
+                command
+                for command in execution_journal.retained_claim_commands()
+                if command.assignment.assignment_id == assignment_id
+            )
+            if not commands:
+                raise QueueConflictError(
+                    "retained remote claim evidence is unavailable"
+                )
+            launch_json = workspace.supervisor_launch_json()
+            if launch_json is None:
+                # A pre-launch operation has no evidence allowing a new start
+                # after application restart; keep it unavailable for the owner.
+                continue
+            launch = _launch_from_value(json.loads(launch_json))
+            receipt = supervisor.query(launch)
+            if receipt.state is SupervisorLaunchState.UNKNOWN:
+                continue
+            while receipt.state in {
+                SupervisorLaunchState.STARTING,
+                SupervisorLaunchState.RUNNING,
+            }:
+                sleep(0.05)
+                receipt = supervisor.query(launch)
+                if receipt.state is SupervisorLaunchState.UNKNOWN:
+                    break
+            if receipt.state is SupervisorLaunchState.UNKNOWN:
+                continue
+            contained = supervisor.contain(launch)
+            if contained.state is not SupervisorLaunchState.CONTAINED:
+                continue
+            result_path = workspace.root / "worker-result.json"
+            if not result_path.is_file():
+                continue
+            digest = hashlib.sha256(result_path.read_bytes()).hexdigest()
+            if receipt.worker_result_digest != digest:
+                continue
+            result = workspace.worker_result()
+            if result is None:
+                result = StageWorkerResult.from_dict(
+                    json.loads(result_path.read_text())
+                )
+                workspace.persist_worker_result(result)
+            execution_journal.record_result(assignment_id, result.to_dict())
+            completed.append(
+                self._replay_result_and_release(
+                    session,
+                    request,
+                    workspace,
+                    assignment,
+                    commands,
+                    providers,
+                    execution_journal,
+                )
+            )
+        self._restart_with_retained_work = self._has_retained_agent_work()
+        return tuple(completed)
+
+    def _replay_result_and_release(
+        self,
+        session: AgentSession,
+        request: _DeliveredExecutionRequest,
+        workspace: _RemoteAssignmentWorkspace,
+        assignment: ManagedAssignment,
+        commands: tuple[ClaimCommand, ...],
+        providers: Mapping[str, AtomResourceProvider],
+        execution_journal: SQLiteAgentJournal,
+    ) -> Mapping[str, PlainData]:
+        """Replay durable result/output/transfer/outbox work to ordered release."""
+
+        fence = execution_journal.read_grant_fence(assignment.assignment_id)
+        if fence is None:
+            raise QueueConflictError("retained remote grant fence is unavailable")
+        report = workspace.retain_outputs()
+        workspace.append_event(
+            f"{request.assignment_id}:result-output-durable",
+            {"kind": "result_and_output_durable", "status": report.status.value},
+        )
+        self._flush_workspace_events(session.session_id, workspace)
+        authorization = self._fresh_transfer_authorization(
+            session_id=session.session_id,
+            assignment_id=request.assignment_id,
+            expected_revision=0,
+        )
+        authorization_id = cast(str, authorization["authorization_id"])
+        authorization_revision = cast(int, authorization["revision"])
+        _, authorization_id, authorization_revision = self._authorized_transfer_call(
+            session_id=session.session_id,
+            assignment_id=request.assignment_id,
+            authorization_id=authorization_id,
+            authorization_revision=authorization_revision,
+            operation=lambda current_id, current_revision: self.declare_outputs(
+                session.session_id,
+                request.assignment_id,
+                fence=fence,
+                authorization_id=current_id,
+                authorization_revision=current_revision,
+                report=report,
+            ),
+        )
+        for item in report.outputs:
+            offset = 0
+            while True:
+                data, final = workspace.output_chunk(item.transfer_id, offset)
+                response, authorization_id, authorization_revision = (
+                    self._authorized_transfer_call(
+                        session_id=session.session_id,
+                        assignment_id=request.assignment_id,
+                        authorization_id=authorization_id,
+                        authorization_revision=authorization_revision,
+                        operation=lambda current_id, current_revision: (
+                            self.upload_output_chunk(
+                                session.session_id,
+                                request.assignment_id,
+                                item.transfer_id,
+                                offset=offset,
+                                data=data,
+                                final=final,
+                                authorization_id=current_id,
+                                authorization_revision=current_revision,
+                            )
+                        ),
+                    )
+                )
+                offset = cast(
+                    int, cast(Mapping[str, PlainData], response)["received_bytes"]
+                )
+                if final:
+                    break
+        self._assignment_call(
+            session.session_id,
+            request.assignment_id,
+            lambda: self.commit_result(
+                session.session_id, request.assignment_id, fence=fence
+            ),
+        )
+        execution_journal.acknowledge_terminal(assignment.assignment_id)
+        for command in commands:
+            released = providers[command.claim.resource_kind].release(
+                ClaimCommand(
+                    assignment,
+                    f"{command.operation_id}:release",
+                    command.claim,
+                    command.provider_descriptor,
+                )
+            )
+            if released.outcome is not ClaimOutcome.RELEASED:
+                raise QueueConflictError("remote provider release is indeterminate")
+        execution_journal.mark_providers_released(assignment.assignment_id)
+        next_revision = self._availability_revision(
+            session, request.assignment_id, providers
+        )
+        execution_journal.publish_availability(assignment.assignment_id, next_revision)
+        released_session = cast(
+            AgentSession,
+            self._assignment_call(
+                session.session_id,
+                request.assignment_id,
+                lambda: self.release_assignment(
+                    session.session_id,
+                    request.assignment_id,
+                    fence=fence,
+                    availability_revision=next_revision,
+                ),
+            ),
+        )
+        self._cancelled_assignments.discard(request.assignment_id)
+        return freeze_plain_data(
+            {
+                "result": "assignment",
+                "assignment_id": request.assignment_id,
+                "state": "RELEASED",
+                "session": released_session.value(),
+            },
+            path="remote restart completion",
         )
 
     def _cancel_pregrant_if_requested(
