@@ -20,6 +20,7 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    ResidentWorkerLaunchProfile,
 )
 from loom.queue.agent_sessions import (
     AgentOffer,
@@ -452,6 +453,13 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
         tmp_path / "coordinator",
         tmp_path / "agent",
         tmp_path / "runs",
+        ResidentWorkerLaunchProfile(
+            Path.cwd(),
+            Path(sys.executable),
+            ResidentProfileDescriptor(
+                "test-local", "v1", "test-project", "test-environment", "test-executor"
+            ).to_dict(),
+        ),
         agent_policy=policy,
     )
     LocalDaemon.initialize(config)

@@ -41,7 +41,7 @@ QUEUE_PREFLIGHT_SCHEMA_VERSION = "loom.cli.queue.preflight.v1"
 QUEUE_STATUS_SCHEMA_VERSION = "loom.cli.queue.status.v1"
 QUEUE_CANCEL_SCHEMA_VERSION = "loom.cli.queue.cancel.v1"
 QUEUE_DRAIN_SCHEMA_VERSION = "loom.cli.queue.drain.v1"
-LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v3"
+LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v4"
 
 
 def register_subparser(
@@ -633,12 +633,26 @@ def _explicit_authority_config_from_namespace(
 
 
 def _daemon_config(namespace: argparse.Namespace):  # type: ignore[no-untyped-def]
-    from loom.queue import LocalDaemonConfig
+    from loom.queue import LocalDaemonConfig, ResidentWorkerLaunchProfile
+    from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+
+    descriptor = ResidentProfileDescriptor(
+        profile_id=namespace.resident_profile_id,
+        revision=namespace.resident_profile_revision,
+        project_fingerprint=namespace.resident_project_fingerprint,
+        environment_fingerprint=namespace.resident_environment_fingerprint,
+        executor_fingerprint=namespace.resident_executor_fingerprint,
+    )
 
     return LocalDaemonConfig(
         coordinator_root=namespace.coordinator_root,
         agent_root=namespace.agent_root,
         run_store_root=namespace.run_store_root,
+        resident_worker_launch_profile=ResidentWorkerLaunchProfile(
+            project_root=namespace.resident_project_root,
+            python_executable=namespace.resident_python_executable,
+            descriptor=descriptor.to_dict(),
+        ),
         machine_id=namespace.machine_id,
         cpu_capacity=namespace.cpu_capacity,
     )
@@ -680,6 +694,13 @@ def _add_daemon_root_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-store-root", required=True, type=Path)
     parser.add_argument("--machine-id", default="machine-A")
     parser.add_argument("--cpu-capacity", type=int, default=1)
+    parser.add_argument("--resident-project-root", required=True, type=Path)
+    parser.add_argument("--resident-python-executable", required=True, type=Path)
+    parser.add_argument("--resident-profile-id", required=True)
+    parser.add_argument("--resident-profile-revision", required=True)
+    parser.add_argument("--resident-project-fingerprint", required=True)
+    parser.add_argument("--resident-environment-fingerprint", required=True)
+    parser.add_argument("--resident-executor-fingerprint", required=True)
 
 
 def _add_output_options(parser: argparse.ArgumentParser) -> None:

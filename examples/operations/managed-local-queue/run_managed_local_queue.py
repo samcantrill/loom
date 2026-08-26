@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import os
 from pathlib import Path
+import sys
 import tempfile
 
 from loom.artifacts import ArtifactRef
@@ -20,8 +21,10 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    ResidentWorkerLaunchProfile,
     prepare_managed_local_runtime_record,
 )
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.serialization import json_dumps_pretty
 
 
@@ -129,6 +132,17 @@ def main() -> None:
         coordinator_root=example_root / "coordinator",
         agent_root=example_root / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=ResidentWorkerLaunchProfile(
+            project_root=Path.cwd(),
+            python_executable=Path(sys.executable),
+            descriptor=ResidentProfileDescriptor(
+                "local-default",
+                "v1",
+                "managed-local-example",
+                "managed-local-example",
+                "local",
+            ).to_dict(),
+        ),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)

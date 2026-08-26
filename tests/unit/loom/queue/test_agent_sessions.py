@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import hashlib
@@ -18,10 +19,12 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    ResidentWorkerLaunchProfile,
 )
 from loom.queue._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
+    ResidentProfileDescriptor,
 )
 from loom.queue.agent_sessions import (
     AgentOffer,
@@ -96,7 +99,18 @@ def _config(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
         agent_policy=_policy() if policy is None else policy,
+    )
+
+
+def _launch_profile() -> ResidentWorkerLaunchProfile:
+    return ResidentWorkerLaunchProfile(
+        project_root=Path.cwd(),
+        python_executable=Path(sys.executable),
+        descriptor=ResidentProfileDescriptor(
+            "test-local", "v1", "test-project", "test-environment", "test-executor"
+        ).to_dict(),
     )
 
 

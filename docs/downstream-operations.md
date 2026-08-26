@@ -128,3 +128,16 @@ policy, notification delivery, runtime profiles, or new validation gates.
 Those concerns remain with their owning roadmap stages: queue selection (Stage
 25), GPU/resource setup (Stage 27), extension mechanics (Stage 28), and daemon
 or agent work (Stage 29). The [roadmap](roadmap.md) is the cross-stage index.
+
+## Local Daemon Resident Profile
+
+`loom queue daemon-init` and `loom queue daemon-serve` require one explicit
+resident worker launch profile. Supply the same seven values to both commands:
+the project root, Python executable, profile ID and revision, and the project,
+environment, and executor fingerprints. Loom does not infer these values from
+the current directory, environment, or interpreter.
+
+Fresh initialization creates the matching one-profile supervisor service. A
+later daemon start verifies that exact protected profile before making the local
+agent available. If a profile value or root no longer matches, initialize fresh
+roots; existing local daemon roots are deliberately not migrated.

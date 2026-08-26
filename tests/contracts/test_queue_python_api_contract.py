@@ -6,10 +6,12 @@ import loom.queue as queue
 import pytest
 
 from pathlib import Path
+import sys
 
 from loom.queue import (
     LocalDaemonAdmissionRequest,
     LocalDaemonConfig,
+    ResidentWorkerLaunchProfile,
     QueueClient,
     QueueController,
     QueueCycleResult,
@@ -28,6 +30,7 @@ from loom.queue import (
     SQLiteQueueRepository,
     normalize_queue_spec,
 )
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 
 
 def test_queue_python_api_contract(tmp_path: Path) -> None:
@@ -88,6 +91,13 @@ def test_local_daemon_public_request_has_no_executable_or_privileged_fields(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=ResidentWorkerLaunchProfile(
+            project_root=Path.cwd(),
+            python_executable=Path(sys.executable),
+            descriptor=ResidentProfileDescriptor(
+                "test-local", "v1", "test-project", "test-environment", "test-executor"
+            ).to_dict(),
+        ),
     )
 
     assert request.to_dict() == {
@@ -99,6 +109,7 @@ def test_local_daemon_public_request_has_no_executable_or_privileged_fields(
         "LocalDaemon",
         "LocalDaemonAdmissionRequest",
         "LocalDaemonSocketClient",
+        "ResidentWorkerLaunchProfile",
     }.issubset(queue.__all__)
 
 
