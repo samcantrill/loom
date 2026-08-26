@@ -987,13 +987,15 @@ class LocalDaemonAgentHttpClient:
         self._config = config
         self._trusted_config_loader = trusted_config_loader
         self._connection: http.client.HTTPSConnection | None = None
+        # Validate the durable supervisor binding before acquiring the exclusive
+        # root lock.  A rejected opening must not strand that lock.
+        self._supervisor = self._open_supervisor(config)
         self._journal = (
             _RemoteAgentJournal(config.agent_root) if config.agent_root else None
         )
         self._profiles = {
             item.descriptor.profile_id: item for item in config.resident_profiles
         }
-        self._supervisor = self._open_supervisor(config)
         self._retained_profiles: dict[str, ResidentExecutionProfile] = {}
         self._execution_journal = (
             SQLiteAgentJournal(
@@ -1059,6 +1061,13 @@ class LocalDaemonAgentHttpClient:
         config: AgentTlsClientConfig,
     ) -> AgentProcessSupervisorClient | None:
         if not config.resident_profiles:
+            if (
+                config.agent_root is not None
+                and (Path(config.agent_root).resolve() / "supervisor").exists()
+            ):
+                raise QueueServiceError(
+                    "managed_supervisor_state_requires_reinitialization"
+                )
             return None
         if config.agent_root is None:
             raise QueueServiceError("remote resident execution requires an agent root")

@@ -548,6 +548,48 @@ def test_agent_reload_requires_fresh_root_for_changed_launch_profile_set(
         client.close()
 
 
+def test_agent_open_rejects_durable_supervisor_without_profiles_without_locking_root(
+    tmp_path: Path,
+) -> None:
+    root = _fresh_remote_agent_root(tmp_path)
+    profile = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "python", "1", "project-1", "environment-1", "executor-1"
+        ),
+        tmp_path,
+        Path(sys.executable),
+        cpu_capacity=1,
+    )
+    configured = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        agent_root=root,
+        resident_profiles=(profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(configured)
+    with pytest.raises(
+        QueueServiceError, match="managed_supervisor_state_requires_reinitialization"
+    ):
+        LocalDaemonAgentHttpClient(replace(configured, resident_profiles=()))
+
+    reopened = LocalDaemonAgentHttpClient(configured)
+    try:
+        supervisor = reopened._supervisor  # noqa: SLF001 - root reopening proof
+        assert supervisor is not None
+        supervisor.shutdown_for_test()
+    finally:
+        reopened.close()
+
+    no_profile_root = tmp_path / "no-profile-agent"
+    LocalDaemon.initialize_agent_root(no_profile_root)
+    no_profile = LocalDaemonAgentHttpClient(
+        replace(configured, agent_root=no_profile_root, resident_profiles=())
+    )
+    no_profile.close()
+
+
 def test_agent_reload_canonicalizes_bound_profile_set_without_update_path(
     tmp_path: Path,
 ) -> None:
