@@ -43,14 +43,17 @@ from loom.scheduling import (
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import utc_timestamp
 
-from .models import (
+from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
     STAGE_WORKER_RESULT_SCHEMA_VERSION,
     ExecutionFailure,
     StageWorkerRequest,
     StageWorkerResult,
 )
-from .stage_worker import ArtifactStoreFactory, execute_stage_worker_request
+from loom.pipeline.execution.stage_worker import (
+    ArtifactStoreFactory,
+    execute_stage_worker_request,
+)
 
 
 class ManagedLocalError(ValueError):

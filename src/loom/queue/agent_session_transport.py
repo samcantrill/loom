@@ -26,7 +26,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
-from loom.pipeline.execution.managed_local import (
+from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
     ClaimCommand,

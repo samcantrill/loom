@@ -6,7 +6,7 @@ from threading import Barrier
 
 import pytest
 
-from loom.pipeline.execution.managed_local import (
+from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
     ClaimCommand,

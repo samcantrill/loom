@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from loom.pipeline.execution.managed_local import (
+from loom.queue._managed_local import (
     ClaimCommand,
     ClaimOutcome,
     GpuResourceProvider,
     ManagedAssignment,
 )
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
-from loom.pipeline.execution.managed_local import ManagedLocalError
+from loom.queue._managed_local import ManagedLocalError
 from loom.scheduling import CapacityAtom, ExactQuantity, ResourceClaim
 
 

@@ -14,7 +14,7 @@ from loom.pipeline.execution import (
     MemoryResourceProvider,
     ObserveRequest,
 )
-from loom.pipeline.execution.managed_local import ManagedAssignment
+from loom.queue._managed_local import ManagedAssignment
 from loom.scheduling import CapacityAtom, ExactQuantity, ResourceClaim
 
 

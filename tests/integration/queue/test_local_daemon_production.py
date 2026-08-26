@@ -15,7 +15,7 @@ from typing import Never, cast
 import pytest
 
 from loom.pipeline import PipelineSpec, parse_resource_request
-from loom.pipeline.execution.managed_local import (
+from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
     ClaimCommand,

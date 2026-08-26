@@ -22,7 +22,7 @@ import pytest
 
 import loom.queue.local_daemon_execution as local_daemon_execution
 from loom.pipeline import PipelineSpec
-from loom.pipeline.execution.managed_local import (
+from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
     ClaimCommand,

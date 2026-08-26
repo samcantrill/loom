@@ -13,7 +13,7 @@ import pytest
 from loom.artifacts import ArtifactRef
 from loom.pipeline import OutputSpec, PipelineSpec, StageFactorySpec, StageSpec
 from loom.pipeline.execution import prepare_stage_attempt
-from loom.pipeline.execution.managed_local import (
+from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
     ClaimCommand,

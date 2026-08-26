@@ -28,7 +28,7 @@ from loom.pipeline.executors.slurm.errors import (
     SlurmResourceMappingError,
 )
 from loom.pipeline.execution.lifecycle import bind_stage_inputs
-from loom.pipeline.execution.managed_local import (
+from loom.queue._managed_local import (
     AtomResourceProvider,
     AssignmentState,
     ClaimCommand,
