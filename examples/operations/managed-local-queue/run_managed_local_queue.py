@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import os
 from pathlib import Path
+import sys
 import tempfile
 
 from loom.artifacts import ArtifactRef
@@ -20,6 +21,7 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    ResidentWorkerLaunchProfile,
     prepare_managed_local_runtime_record,
 )
 from loom.serialization import json_dumps_pretty
@@ -58,9 +60,7 @@ class ConsumeStage:
 
 def main() -> None:
     here = Path(__file__).resolve().parent
-    output_root = Path(
-        os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", here / "output")
-    )
+    output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", here / "output"))
     output_root.mkdir(parents=True, exist_ok=True)
     example_root = Path(tempfile.mkdtemp(prefix="run-", dir=output_root))
     run_root = example_root / "runs"
@@ -72,7 +72,7 @@ def main() -> None:
         "stages": [
             {
                 "name": "produce",
-                "factory": {"_target_": "__main__.ProduceStage"},
+                "factory": {"_target_": "run_managed_local_queue.ProduceStage"},
                 "resources": _cpu_resource(),
                 "outputs": {
                     "data": {
@@ -83,7 +83,7 @@ def main() -> None:
             },
             {
                 "name": "consume",
-                "factory": {"_target_": "__main__.ConsumeStage"},
+                "factory": {"_target_": "run_managed_local_queue.ConsumeStage"},
                 "depends_on": ["produce"],
                 "inputs": {"data": "produce.data"},
                 "resources": _cpu_resource(),
@@ -109,8 +109,7 @@ def main() -> None:
         {
             "executor": "local",
             "stages": {
-                stage_name: {"executor": "local"}
-                for stage_name in spec.stage_names
+                stage_name: {"executor": "local"} for stage_name in spec.stage_names
             },
         },
     )
@@ -129,6 +128,17 @@ def main() -> None:
         coordinator_root=example_root / "coordinator",
         agent_root=example_root / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=ResidentWorkerLaunchProfile(
+            project_root=here,
+            python_executable=Path(sys.executable),
+            descriptor={
+                "profile_id": "local-default",
+                "revision": "v1",
+                "project_fingerprint": "managed-local-example",
+                "environment_fingerprint": "managed-local-example",
+                "executor_fingerprint": "local",
+            },
+        ),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -151,11 +161,7 @@ def main() -> None:
 
 
 def _cpu_resource() -> dict[str, object]:
-    return {
-        "entries": {
-            "cpu": {"kind": "cpu", "amount": 1, "unit": "count"}
-        }
-    }
+    return {"entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}}
 
 
 if __name__ == "__main__":

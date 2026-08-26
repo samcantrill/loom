@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -13,10 +14,12 @@ from loom.queue import (
     LocalDaemon,
     LocalDaemonConfig,
     LocalDaemonSocketServer,
+    ResidentWorkerLaunchProfile,
     QueueEnqueueRequest,
     QueueService,
     load_queue_spec,
 )
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 
 
 pytestmark = pytest.mark.unit
@@ -137,6 +140,20 @@ def test_queue_daemon_init_creates_fresh_role_roots(tmp_path: Path) -> None:
             str(agent),
             "--run-store-root",
             str(tmp_path / "runs"),
+            "--resident-project-root",
+            str(Path.cwd()),
+            "--resident-python-executable",
+            sys.executable,
+            "--resident-profile-id",
+            "test-local",
+            "--resident-profile-revision",
+            "v1",
+            "--resident-project-fingerprint",
+            "test-project",
+            "--resident-environment-fingerprint",
+            "test-environment",
+            "--resident-executor-fingerprint",
+            "test-executor",
             "--format",
             "json",
         ],
@@ -150,11 +167,31 @@ def test_queue_daemon_init_creates_fresh_role_roots(tmp_path: Path) -> None:
     assert (agent / "control.sqlite").is_file()
 
 
+def test_queue_daemon_profile_flags_are_a_complete_hard_cut(tmp_path: Path) -> None:
+    result = main(
+        [
+            "queue",
+            "daemon-init",
+            "--coordinator-root",
+            str(tmp_path / "coordinator"),
+            "--agent-root",
+            str(tmp_path / "agent"),
+            "--run-store-root",
+            str(tmp_path / "runs"),
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert result == 2
+
+
 def test_queue_daemon_status_uses_owner_only_socket_client(tmp_path: Path) -> None:
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -181,8 +218,18 @@ def test_queue_daemon_status_uses_owner_only_socket_client(tmp_path: Path) -> No
 
     payload = json.loads(stdout.getvalue())
     assert exit_code == 0
-    assert payload["schema_version"] == "loom.cli.queue.local-daemon.v3"
+    assert payload["schema_version"] == "loom.cli.queue.local-daemon.v4"
     assert payload["result"]["service_health"] == "healthy"
+
+
+def _launch_profile() -> ResidentWorkerLaunchProfile:
+    return ResidentWorkerLaunchProfile(
+        project_root=Path.cwd(),
+        python_executable=Path(sys.executable),
+        descriptor=ResidentProfileDescriptor(
+            "test-local", "v1", "test-project", "test-environment", "test-executor"
+        ).to_dict(),
+    )
 
 
 def _queue_config(tmp_path: Path) -> Path:

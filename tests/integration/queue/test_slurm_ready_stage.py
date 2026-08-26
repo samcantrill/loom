@@ -33,9 +33,11 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    ResidentWorkerLaunchProfile,
     prepare_managed_local_runtime_record,
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace, SlurmStageDelivery
 from loom.serialization import json_dumps_pretty
 
@@ -46,6 +48,16 @@ _TEST_HELPER = (
     sys.executable,
     str(Path(__file__).parents[2] / "support" / "slurm_job_private_helper.py"),
 )
+
+
+def _launch_profile() -> ResidentWorkerLaunchProfile:
+    return ResidentWorkerLaunchProfile(
+        Path.cwd(),
+        Path(sys.executable),
+        ResidentProfileDescriptor(
+            "test-local", "v1", "test-project", "test-environment", "test-executor"
+        ).to_dict(),
+    )
 
 
 def _profile(
@@ -170,6 +182,7 @@ def _exercise_mixed_route_run(
         coordinator_root=tmp_path / "daemon" / "coordinator",
         agent_root=tmp_path / "daemon" / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
         slurm_profiles=(profile,),
     )
     LocalDaemon.initialize(config)
@@ -232,6 +245,7 @@ def _exercise_mixed_route_run(
             coordinator_root=tmp_path / "daemon" / "coordinator",
             agent_root=tmp_path / "daemon" / "agent",
             run_store_root=run_root,
+            resident_worker_launch_profile=_launch_profile(),
             slurm_profiles=(profile,),
         )
         daemon = LocalDaemon(reopened_config)
@@ -633,6 +647,7 @@ def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
         coordinator_root=tmp_path / "daemon" / "coordinator",
         agent_root=tmp_path / "daemon" / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
         slurm_profiles=(profile,),
     )
     LocalDaemon.initialize(config)
@@ -744,6 +759,7 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
         coordinator_root=tmp_path / "daemon" / "coordinator",
         agent_root=tmp_path / "daemon" / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
         slurm_profiles=(profile,),
     )
     LocalDaemon.initialize(config)

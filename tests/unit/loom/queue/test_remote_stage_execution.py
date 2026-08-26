@@ -20,6 +20,7 @@ from loom.queue import (
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    ResidentWorkerLaunchProfile,
 )
 from loom.queue.agent_sessions import (
     AgentOffer,
@@ -37,9 +38,9 @@ from loom.queue._remote_stage_execution import (
     TRANSFER_CHUNK_BYTES,
     ResidentExecutionProfile,
     ResidentProfileDescriptor,
-    _DeliveredExecutionRequest,
+    _ResidentAssignmentBundle,
     _RemoteArtifact,
-    _RemoteAssignmentWorkspace,
+    _ResidentAssignmentWorkspace,
     _RemoteExecutionReport,
     _RemoteOutputArtifact,
 )
@@ -75,7 +76,7 @@ def _profile(tmp_path: Path) -> ResidentExecutionProfile:
     )
 
 
-def _request(profile: ResidentExecutionProfile) -> _DeliveredExecutionRequest:
+def _request(profile: ResidentExecutionProfile) -> _ResidentAssignmentBundle:
     worker = StageWorkerRequest(
         1,
         "run-opaque-1",
@@ -129,7 +130,7 @@ def _request(profile: ResidentExecutionProfile) -> _DeliveredExecutionRequest:
         (atom,),
         1,
     )
-    return _DeliveredExecutionRequest.from_worker_request(
+    return _ResidentAssignmentBundle.from_worker_request(
         assignment_id="assignment-1",
         stage_work_id="stage-work-1",
         attempt_id="attempt-1",
@@ -161,7 +162,7 @@ def test_remote_request_excludes_coordinator_paths_and_derives_agent_paths(
     payload = request.to_dict()
     assert "/coordinator" not in str(payload)
     assert str(profile.project_root) not in str(payload)
-    workspace = _RemoteAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
     workspace.persist_request(request, profile)
     workspace.stage_input("input-1", b"input")
     workspace.accept()
@@ -173,7 +174,7 @@ def test_remote_request_excludes_coordinator_paths_and_derives_agent_paths(
 
 def test_remote_workspace_rejects_parent_directory_identity(tmp_path: Path) -> None:
     with pytest.raises(QueueServiceError, match="assignment_id is invalid"):
-        _RemoteAssignmentWorkspace(tmp_path, "..")
+        _ResidentAssignmentWorkspace(tmp_path, "..")
 
 
 def test_delivered_poll_atomically_retains_an_unresolved_assignment(
@@ -271,7 +272,7 @@ def test_remote_request_rejects_the_old_wire_schema(tmp_path: Path) -> None:
     encoded["schema_version"] = 2
 
     with pytest.raises(QueueServiceError, match="schema is unsupported"):
-        _DeliveredExecutionRequest.from_dict(encoded)
+        _ResidentAssignmentBundle.from_dict(encoded)
 
 
 def test_launch_is_unreachable_until_inputs_and_grant_are_durable(
@@ -279,7 +280,7 @@ def test_launch_is_unreachable_until_inputs_and_grant_are_durable(
 ) -> None:
     profile = _profile(tmp_path)
     request = _request(profile)
-    workspace = _RemoteAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
     workspace.persist_request(request, profile)
     with pytest.raises(QueueConflictError, match="durable grant"):
         workspace.mark_process_started("execution-1", 101)
@@ -299,7 +300,7 @@ def test_launch_is_unreachable_until_inputs_and_grant_are_durable(
 def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -> None:
     profile = _profile(tmp_path)
     request = _request(profile)
-    workspace = _RemoteAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
     workspace.persist_request(request, profile)
     crash_window_part = workspace.root / "input-staging" / "input-1.part"
     crash_window_part.parent.mkdir(parents=True)
@@ -387,7 +388,7 @@ def test_input_publish_before_commit_replay_adopts_only_exact_target(
             ),
         ),
     )
-    workspace = _RemoteAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
     workspace.persist_request(request, profile)
     first = data[:TRANSFER_CHUNK_BYTES]
     final = data[TRANSFER_CHUNK_BYTES:]
@@ -408,9 +409,8 @@ def test_input_publish_before_commit_replay_adopts_only_exact_target(
         remote_stage_execution, "_publish_staged_file", original_publish
     )
 
-    assert (
-        workspace.stage_input_chunk("input-1", len(first), final, final=True)
-        == len(data)
+    assert workspace.stage_input_chunk("input-1", len(first), final, final=True) == len(
+        data
     )
     with sqlite3.connect(workspace._db) as conn:
         assert conn.execute(
@@ -452,6 +452,13 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
         tmp_path / "coordinator",
         tmp_path / "agent",
         tmp_path / "runs",
+        ResidentWorkerLaunchProfile(
+            Path.cwd(),
+            Path(sys.executable),
+            ResidentProfileDescriptor(
+                "test-local", "v1", "test-project", "test-environment", "test-executor"
+            ).to_dict(),
+        ),
         agent_policy=policy,
     )
     LocalDaemon.initialize(config)
@@ -617,9 +624,7 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
             original_publish(staging, target)
             raise RuntimeError("simulated crash after output publication")
 
-        monkeypatch.setattr(
-            agent_sessions, "_publish_staged_file", crash_after_publish
-        )
+        monkeypatch.setattr(agent_sessions, "_publish_staged_file", crash_after_publish)
         with pytest.raises(RuntimeError, match="after output publication"):
             view.upload_output_chunk(
                 session.session_id,

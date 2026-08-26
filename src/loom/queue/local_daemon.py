@@ -43,6 +43,7 @@ from .agent_sessions import (
     initialize_agent_session_schema,
     validate_agent_session_schema,
 )
+from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
@@ -295,6 +296,7 @@ class LocalDaemonConfig:
     coordinator_root: Path
     agent_root: Path
     run_store_root: Path
+    resident_worker_launch_profile: ResidentWorkerLaunchProfile
     machine_id: str = "machine-A"
     cpu_capacity: int = 1
     memory_capacity_bytes: int = 0
@@ -311,6 +313,17 @@ class LocalDaemonConfig:
         coordinator = Path(self.coordinator_root)
         agent = Path(self.agent_root)
         run_store = Path(self.run_store_root)
+        profile = self.resident_worker_launch_profile
+        if not isinstance(profile, ResidentWorkerLaunchProfile):
+            raise QueueServiceError("resident worker launch profile is required")
+        try:
+            descriptor = ResidentProfileDescriptor.from_dict(profile.descriptor)
+        except (QueueServiceError, ValueError, TypeError) as exc:
+            raise QueueServiceError(
+                "resident worker launch profile is invalid"
+            ) from exc
+        if descriptor.to_dict() != profile.descriptor:
+            raise QueueServiceError("resident worker launch descriptor must be exact")
         if coordinator == agent:
             raise QueueServiceError(
                 "coordinator and local-agent roots must be distinct"
@@ -385,6 +398,7 @@ class LocalDaemonConfig:
         object.__setattr__(self, "coordinator_root", coordinator)
         object.__setattr__(self, "agent_root", agent)
         object.__setattr__(self, "run_store_root", run_store)
+        object.__setattr__(self, "resident_worker_launch_profile", profile)
         object.__setattr__(self, "remote_profiles", profiles)
         object.__setattr__(self, "slurm_profiles", slurm_profiles)
         object.__setattr__(
@@ -673,12 +687,24 @@ class LocalDaemon:
                 )
                 conn.commit()
             cls.initialize_agent_root(config.agent_root)
+            from ._agent_process_supervisor import (
+                AgentProcessSupervisorService,
+                SupervisorLaunchConfiguration,
+            )
+
+            agent_id = _open_root(config.agent_root, role="local-agent")
+            AgentProcessSupervisorService.initialize(
+                config.agent_root,
+                configuration=SupervisorLaunchConfiguration(
+                    agent_id, (config.resident_worker_launch_profile,)
+                ),
+            )
             from .local_daemon_execution import initialize_local_daemon_owner_stores
 
             initialize_local_daemon_owner_stores(
                 config,
                 coordinator_id=_open_root(config.coordinator_root, role="coordinator"),
-                agent_id=_open_root(config.agent_root, role="local-agent"),
+                agent_id=agent_id,
             )
         except Exception:
             raise
@@ -690,7 +716,8 @@ class LocalDaemon:
         if path.exists():
             raise QueueServiceError("remote agent requires a fresh root")
         _initialize_root(path, role="local-agent")
-        from loom.pipeline.execution.managed_local import SQLiteAgentJournal
+        from loom.queue._managed_local import SQLiteAgentJournal
+
         SQLiteAgentJournal(path / "journal.sqlite")._initialize()
         (path / "journal.sqlite").chmod(0o600)
 
@@ -709,6 +736,17 @@ class LocalDaemon:
                 self.config.coordinator_root, role="coordinator"
             )
             agent_id = _open_root(self.config.agent_root, role="local-agent")
+            from ._agent_process_supervisor import (
+                AgentProcessSupervisorClient,
+                SupervisorLaunchConfiguration,
+            )
+
+            AgentProcessSupervisorClient(
+                self.config.agent_root,
+                SupervisorLaunchConfiguration(
+                    agent_id, (self.config.resident_worker_launch_profile,)
+                ),
+            )
             self._coordinator_id = coordinator_id
             self._agent_id = agent_id
             epoch = f"coordinator-epoch-{uuid4()}"
@@ -758,6 +796,10 @@ class LocalDaemon:
                 admission_activated=self._activate_admission,
                 daemon=self,
             )
+            # The daemon is not observable or schedulable until every retained
+            # local launch has joined the continuous supervisor and completed
+            # ordinary result/output/provider replay.
+            execution.resume_retained_local_work()
         except Exception:
             assignment_workers.shutdown(wait=True)
             agent_lock.close()
@@ -2081,6 +2123,13 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
             for item in config.gpu_devices
         ],
         "agent_policy": repr(config.agent_policy),
+        "resident_worker_launch_profile": {
+            "project_root": str(config.resident_worker_launch_profile.project_root),
+            "python_executable": str(
+                config.resident_worker_launch_profile.python_executable
+            ),
+            "descriptor": config.resident_worker_launch_profile.descriptor,
+        },
         "remote_profiles": [item.to_dict() for item in config.remote_profiles],
         "slurm_profiles": [
             {

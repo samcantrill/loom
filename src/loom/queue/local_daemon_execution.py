@@ -28,10 +28,9 @@ from loom.pipeline.executors.slurm.errors import (
     SlurmResourceMappingError,
 )
 from loom.pipeline.execution.lifecycle import bind_stage_inputs
-from loom.pipeline.execution.managed_local import (
+from loom.queue._managed_local import (
     AtomResourceProvider,
     AssignmentState,
-    ClaimCommand,
     GpuResourceProvider,
     ManagedAssignment,
     ManagedOfferSnapshot,
@@ -103,10 +102,15 @@ from .errors import QueueConflictError, QueueServiceError
 from ._remote_stage_execution import (
     MAX_TRANSFER_BYTES,
     ResidentProfileDescriptor,
-    _DeliveredExecutionRequest,
+    _ResidentAssignmentBundle,
     _RemoteArtifact,
+    _ResidentAssignmentWorkspace,
     _RemoteExecutionReport,
     _validate_remote_semantic_data,
+)
+from ._agent_process_supervisor import (
+    AgentProcessSupervisorClient,
+    SupervisorLaunchConfiguration,
 )
 from .agent_sessions import AgentOffer, _target_remote_delivery
 from .local_daemon import (
@@ -893,6 +897,12 @@ class LocalDaemonExecution:
         self.slurm_submissions._open_existing()
         self.slurm_assignments._open_existing()
         self.journal._open_existing()
+        self.supervisor = AgentProcessSupervisorClient(
+            config.agent_root,
+            SupervisorLaunchConfiguration(
+                self.agent_id, (config.resident_worker_launch_profile,)
+            ),
+        )
         if not local_daemon_owner_stores_available(
             self.config,
             coordinator_id=self.coordinator_id,
@@ -946,9 +956,14 @@ class LocalDaemonExecution:
         missing = (
             self._capacity_holding_coordinator_assignments() - retained_assignment_ids
         )
-        if missing:
+        if missing and any(
+            not _ResidentAssignmentWorkspace(
+                self.config.agent_root, assignment_id
+            ).has_request()
+            for assignment_id in missing
+        ):
             raise QueueServiceError(
-                "coordinator retained assignment lacks an exact agent claim"
+                "coordinator retained assignment lacks an exact resident bundle"
             )
         for command in retained:
             provider = self.providers.get(command.claim.resource_kind)
@@ -959,6 +974,88 @@ class LocalDaemonExecution:
             provider.restore_capacity_holding(command)
         self._launch_lock = Lock()
         self._slurm_observed_operations: set[str] = set()
+
+    def resume_retained_local_work(self) -> None:
+        """Join every local supervisor operation before daemon availability."""
+
+        for assignment, decision_receipt in self.coordinator.retained_assignments(
+            agent_id=self.config.machine_id
+        ):
+            workspace = _ResidentAssignmentWorkspace(
+                self.config.agent_root, assignment.assignment_id
+            )
+            request = workspace.request()
+            if (
+                request.assignment_id != assignment.assignment_id
+                or request.stage_work_id != assignment.stage_work_id
+                or request.stage_name != assignment.stage_name
+                or request.attempt != assignment.attempt
+                or request.attempt_id != assignment.attempt_id
+                or request.offer_id != assignment.offer_id
+                or request.claim_id != assignment.claim_id
+            ):
+                raise QueueConflictError(
+                    "retained resident bundle conflicts with coordinator identity"
+                )
+            raw_worker_request = self.run_store.read_stage_worker_request(
+                assignment.run_uri,
+                assignment.stage_name,
+                attempt=assignment.attempt,
+            )
+            if raw_worker_request is None:
+                raise QueueConflictError(
+                    "retained local assignment has no prepared worker request"
+                )
+            authority_store = SQLitePerRunAuthorityStore(assignment.run_uri)
+            authority_store.open_run(assignment.run_uri)
+            intent = load_managed_local_intent(
+                self.config,
+                assignment.run_uri,
+                slurm_profiles=self._scheduling.available_slurm_profiles(),
+            )
+            scoped_authority = _ScopedCoordinatorAuthority(
+                authority_store,
+                run_uri=assignment.run_uri,
+                coordinator_id=self.coordinator_id,
+            )
+            run_managed_local_assignment(
+                coordinator=self.coordinator,
+                authority=scoped_authority,
+                journal=self.journal,
+                assignment=assignment,
+                worker_request=StageWorkerRequest.from_dict(raw_worker_request),
+                claims=request.claims,
+                providers=self.providers,
+                run_store=self.run_store,
+                max_parallel_stages=intent.max_parallel_stages,
+                cancellation_requested=lambda: (
+                    self._install_run_cancellation_if_requested(
+                        assignment.run_uri,
+                        scoped_authority,
+                        intent.plan.stage_order,
+                    )
+                ),
+                decision_receipt=decision_receipt,
+                agent_root=self.config.agent_root,
+                supervisor=self.supervisor,
+                resident_launch_profile=self.config.resident_worker_launch_profile,
+            )
+        if self.journal.retained_claim_commands():
+            raise QueueConflictError(
+                "retained local assignment reconciliation is incomplete"
+            )
+        for kind, provider in sorted(self.providers.items()):
+            observed = provider.observe(
+                ObserveRequest(
+                    self.config.machine_id,
+                    self.coordinator_epoch,
+                    f"startup-reconciled:{kind}",
+                )
+            )
+            if observed.live_claim_ids:
+                raise QueueConflictError(
+                    "startup provider observation retains unresolved claims"
+                )
 
     @property
     def scheduling_epoch(self) -> str:
@@ -2209,11 +2306,6 @@ class LocalDaemonExecution:
                 self.coordinator.cancellation_release_unstarted(assignment_id)
                 continue
             if coordinator_state not in {"bound", "accepted"}:
-                # A process-local handle is useful only for a pre-run gate; an
-                # absent/finished handle is never containment evidence.
-                handle = self.journal.process_handle(assignment_id)
-                if handle is not None and journal_state is AssignmentState.START_INTENT:
-                    handle.cancel_before_run()
                 settling = True
                 continue
             if journal_state is None:
@@ -2798,15 +2890,6 @@ class LocalDaemonExecution:
                 reflected_claim_ids=remote_target.offer.reflected_claim_ids,
             )
         self.coordinator.publish_offer(offer_snapshot)
-        commands = tuple(
-            ClaimCommand(
-                assignment,
-                f"{assignment_id}:prepare:{index}",
-                claim,
-                provider_descriptors[claim.resource_kind],
-            )
-            for index, claim in enumerate(claims)
-        )
         stage = intent.pipeline.get_stage(record.stage_name)
         stage_plan = next(
             item
@@ -2903,7 +2986,7 @@ class LocalDaemonExecution:
                     )
                 remote_inputs.append(descriptor)
                 input_paths[transfer_id] = path
-            delivered = _DeliveredExecutionRequest.from_worker_request(
+            delivered = _ResidentAssignmentBundle.from_worker_request(
                 assignment_id=assignment.assignment_id,
                 stage_work_id=assignment.stage_work_id,
                 attempt_id=assignment.attempt_id,
@@ -2966,13 +3049,18 @@ class LocalDaemonExecution:
             assignment=assignment,
             worker_request=worker_request,
             claims=claims,
-            commands=commands,
             providers=self.providers,
             run_store=self.run_store,
             max_parallel_stages=intent.max_parallel_stages,
             decision_receipt=decision_receipt,
+            agent_root=self.config.agent_root,
+            supervisor=self.supervisor,
+            resident_launch_profile=self.config.resident_worker_launch_profile,
             cancellation_requested=lambda: self._install_cancellation_if_requested(
                 admission, authority, intent.plan.stage_order
+            ),
+            suspend_requested=(
+                None if self.daemon is None else self.daemon._stop.is_set
             ),
             execution_started=execution_started,
         )
@@ -3003,15 +3091,25 @@ class LocalDaemonExecution:
         authority: _ScopedCoordinatorAuthority,
         stage_names: Sequence[str],
     ) -> bool:
-        operation_id = self.cancellation_operation(admission.admission_id)
+        return self._install_run_cancellation_if_requested(
+            admission.run_uri, authority, stage_names
+        )
+
+    def _install_run_cancellation_if_requested(
+        self,
+        run_uri: str,
+        authority: _ScopedCoordinatorAuthority,
+        stage_names: Sequence[str],
+    ) -> bool:
+        operation_id = self._run_cancellation_operation(run_uri)
         if operation_id is None:
             return False
         authority.install_cancellation_epoch(
-            admission.run_uri,
+            run_uri,
             CancellationEpochRequest(
                 operation_id=operation_id,
                 coordinator_id=self.coordinator_id,
-                run_uri=admission.run_uri,
+                run_uri=run_uri,
                 stage_names=tuple(stage_names),
             ),
         )

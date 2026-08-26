@@ -37,7 +37,7 @@ from ._remote_stage_execution import (
     TRANSFER_CHUNK_BYTES,
     GpuDeviceDescriptor,
     ResidentProfileDescriptor,
-    _DeliveredExecutionRequest,
+    _ResidentAssignmentBundle,
     _RemoteExecutionReport,
     _RemoteOutputArtifact,
     _append_exact_chunk,
@@ -350,7 +350,9 @@ class TransportPrincipalPolicy:
                 "scheduling_reload",
             }
             if not set(actions).issubset(allowed):
-                raise QueueServiceError("operator actions must be an explicit finite set")
+                raise QueueServiceError(
+                    "operator actions must be an explicit finite set"
+                )
             _identifiers(actions, "operator actions")
             _identifiers(agent_ids, "operator agent targets")
             _identifiers(pools, "operator pool targets")
@@ -923,14 +925,22 @@ class ScopedAuthorizer:
             )
         ]
         if len(matches) != 1:
-            raise QueueServiceError("daemon principal is not authorized for this operation")
+            raise QueueServiceError(
+                "daemon principal is not authorized for this operation"
+            )
         rule = matches[0]
         if action not in rule.actions:
-            raise QueueServiceError("daemon principal is not authorized for this operation")
+            raise QueueServiceError(
+                "daemon principal is not authorized for this operation"
+            )
         if agent_id is not None and agent_id not in rule.agent_ids:
-            raise QueueServiceError("daemon principal is not authorized for this operation")
+            raise QueueServiceError(
+                "daemon principal is not authorized for this operation"
+            )
         if pool is not None and pool not in rule.pools:
-            raise QueueServiceError("daemon principal is not authorized for this operation")
+            raise QueueServiceError(
+                "daemon principal is not authorized for this operation"
+            )
 
 
 class AgentSessionView:
@@ -2418,7 +2428,7 @@ class AgentSessionService:
             ).fetchone()
             if delivery is None:
                 raise QueueConflictError("remote delivered request is unavailable")
-            request = _DeliveredExecutionRequest.from_dict(
+            request = _ResidentAssignmentBundle.from_dict(
                 json.loads(str(delivery["request_json"]))
             )
             output_mismatch = (
@@ -3026,14 +3036,14 @@ def _target_remote_delivery(
     *,
     session_id: str,
     availability_revision: str,
-    request: _DeliveredExecutionRequest,
+    request: _ResidentAssignmentBundle,
     run_uri: str,
     input_paths: Mapping[str, Path],
 ) -> None:
     """Coordinator-private CAS target creation; delivery remains poll-owned."""
     _identifier(session_id, "session_id")
     _identifier(availability_revision, "availability_revision")
-    if not isinstance(request, _DeliveredExecutionRequest):
+    if not isinstance(request, _ResidentAssignmentBundle):
         raise QueueServiceError("targeted delivery request is invalid")
     _identifier(request.assignment_id, "assignment_id")
     if not isinstance(run_uri, str) or not run_uri:

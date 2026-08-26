@@ -47,7 +47,7 @@ from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 from .errors import QueueConflictError, QueueServiceError
 
 
-REMOTE_EXECUTION_SCHEMA_VERSION = 3
+RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION = 3
 REMOTE_EXECUTION_CAPABILITY = "remote-stage-execution-v3"
 REGULAR_FILE_RELAY_CAPABILITY = "regular-file-relay-v1"
 MAX_TRANSFER_BYTES = 64 * 1024 * 1024
@@ -622,7 +622,7 @@ def _claim_from_dict(value: object) -> ResourceClaim:
 
 
 @dataclass(frozen=True, slots=True)
-class _DeliveredExecutionRequest:
+class _ResidentAssignmentBundle:
     """Hard-cutover semantic request with no run URI, host path, or URL."""
 
     assignment_id: str
@@ -642,11 +642,11 @@ class _DeliveredExecutionRequest:
     declared_outputs: tuple[str, ...]
     claims: tuple[ResourceClaim, ...]
     provider_descriptors: tuple[SchedulingComponentDescriptor, ...]
-    schema_version: int = REMOTE_EXECUTION_SCHEMA_VERSION
+    schema_version: int = RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != REMOTE_EXECUTION_SCHEMA_VERSION:
-            raise QueueServiceError("remote execution request schema is unsupported")
+        if self.schema_version != RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
+            raise QueueServiceError("resident assignment bundle schema is unsupported")
         for name in (
             "assignment_id",
             "stage_work_id",
@@ -665,7 +665,7 @@ class _DeliveredExecutionRequest:
         ):
             raise QueueServiceError("attempt is invalid")
         if not isinstance(self.profile, ResidentProfileDescriptor):
-            raise QueueServiceError("remote resident profile is invalid")
+            raise QueueServiceError("resident assignment profile is invalid")
         fingerprint = freeze_plain_data(self.fingerprint, path="remote fingerprint")
         runtime = freeze_plain_data(self.resolved_runtime, path="remote runtime")
         metadata = freeze_plain_data(
@@ -677,7 +677,7 @@ class _DeliveredExecutionRequest:
             or not isinstance(metadata, Mapping)
             or runtime.get("stage_id") != self.stage_name
         ):
-            raise QueueServiceError("remote semantic request is invalid")
+            raise QueueServiceError("resident assignment semantics are invalid")
         _validate_remote_semantic_data(
             fingerprint=fingerprint,
             resolved_runtime=runtime,
@@ -686,10 +686,10 @@ class _DeliveredExecutionRequest:
         try:
             fingerprint_record = StageFingerprintRecord.from_dict(fingerprint)
         except Exception as exc:
-            raise QueueServiceError("remote stage fingerprint is invalid") from exc
+            raise QueueServiceError("resident stage fingerprint is invalid") from exc
         if fingerprint_record.payload.stage_name != self.stage_name:
             raise QueueConflictError(
-                "remote stage fingerprint identity conflicts with its request"
+                "resident stage fingerprint conflicts with its assignment"
             )
         object.__setattr__(self, "fingerprint", fingerprint)
         object.__setattr__(self, "resolved_runtime", runtime)
@@ -704,16 +704,18 @@ class _DeliveredExecutionRequest:
             or len(inputs) > 32
             or len({item.logical_name for item in inputs}) != len(inputs)
         ):
-            raise QueueServiceError("remote input logical names must be unique")
+            raise QueueServiceError("resident input logical names must be unique")
         if sum(item.size_bytes for item in inputs) > MAX_TRANSFER_BYTES:
-            raise QueueServiceError("remote request inputs exceed the configured bound")
+            raise QueueServiceError(
+                "resident assignment inputs exceed the configured bound"
+            )
         if len(outputs) > 32 or len(set(outputs)) != len(outputs):
-            raise QueueServiceError("remote output names must be unique")
+            raise QueueServiceError("resident output names must be unique")
         if set(item.logical_name for item in inputs) != set(
             fingerprint_record.payload.declared_inputs
         ) or set(outputs) != set(fingerprint_record.payload.declared_outputs):
             raise QueueConflictError(
-                "remote stage interface conflicts with its fingerprint"
+                "resident stage interface conflicts with its fingerprint"
             )
         if (
             any(not isinstance(item, ResourceClaim) for item in claims)
@@ -721,7 +723,9 @@ class _DeliveredExecutionRequest:
             or len(claims) > 8
             or len({item.resource_kind for item in claims}) != len(claims)
         ):
-            raise QueueServiceError("remote request requires exact resource claims")
+            raise QueueServiceError(
+                "resident assignment requires exact resource claims"
+            )
         provider_descriptors = tuple(self.provider_descriptors)
         if any(
             not isinstance(item, SchedulingComponentDescriptor)
@@ -729,12 +733,12 @@ class _DeliveredExecutionRequest:
         ) or len({item.kind for item in provider_descriptors}) != len(
             provider_descriptors
         ):
-            raise QueueServiceError("remote provider descriptors are invalid")
+            raise QueueServiceError("resident provider descriptors are invalid")
         if {item.kind for item in provider_descriptors} != {
             claim.resource_kind for claim in claims
         }:
             raise QueueServiceError(
-                "remote provider descriptors do not match resource claims"
+                "resident provider descriptors do not match resource claims"
             )
         object.__setattr__(self, "inputs", inputs)
         object.__setattr__(self, "declared_outputs", outputs)
@@ -760,10 +764,10 @@ class _DeliveredExecutionRequest:
         declared_outputs: tuple[str, ...],
         claims: tuple[ResourceClaim, ...],
         provider_descriptors: tuple[SchedulingComponentDescriptor, ...],
-    ) -> "_DeliveredExecutionRequest":
+    ) -> "_ResidentAssignmentBundle":
         if not isinstance(worker_request, StageWorkerRequest):
             raise QueueServiceError(
-                "delivered work must start from a prepared worker request"
+                "resident work must start from a prepared worker request"
             )
         safe_metadata: dict[str, PlainData] = {}
         if "stage_resources" in worker_request.metadata:
@@ -821,7 +825,7 @@ class _DeliveredExecutionRequest:
         }
 
     @classmethod
-    def from_dict(cls, value: object) -> "_DeliveredExecutionRequest":
+    def from_dict(cls, value: object) -> "_ResidentAssignmentBundle":
         expected = {
             "schema_version",
             "assignment_id",
@@ -843,7 +847,7 @@ class _DeliveredExecutionRequest:
             "provider_descriptors",
         }
         if not isinstance(value, Mapping) or set(value) != expected:
-            raise QueueServiceError("remote execution request is invalid")
+            raise QueueServiceError("resident assignment bundle is invalid")
         for field_name in (
             "inputs",
             "declared_outputs",
@@ -854,7 +858,7 @@ class _DeliveredExecutionRequest:
             if not isinstance(field_value, Sequence) or isinstance(
                 field_value, (str, bytes)
             ):
-                raise QueueServiceError("remote execution request is invalid")
+                raise QueueServiceError("resident assignment bundle is invalid")
         return cls(
             assignment_id=cast(str, value["assignment_id"]),
             stage_work_id=cast(str, value["stage_work_id"]),
@@ -1129,7 +1133,7 @@ class _RemoteExecutionReport:
         )
 
 
-class _RemoteAssignmentWorkspace:
+class _ResidentAssignmentWorkspace:
     """Agent-owned durable request, byte, start, result, and outbox gate."""
 
     def __init__(self, agent_root: Path, assignment_id: str) -> None:
@@ -1138,7 +1142,7 @@ class _RemoteAssignmentWorkspace:
         self.root = root / "assignments" / assignment_id
         self.root.mkdir(parents=True, exist_ok=True)
         self.root.chmod(0o700)
-        self._db = self.root / "remote.sqlite"
+        self._db = self.root / "resident.sqlite"
         with self._connect() as conn:
             conn.executescript(
                 """
@@ -1181,16 +1185,30 @@ class _RemoteAssignmentWorkspace:
     def assignment_id(self) -> str:
         return self.root.name
 
+    def has_request(self) -> bool:
+        with self._connect() as conn:
+            return (
+                conn.execute("SELECT 1 FROM request WHERE singleton = 1").fetchone()
+                is not None
+            )
+
     def persist_request(
         self,
-        request: _DeliveredExecutionRequest,
-        profile: ResidentExecutionProfile,
+        request: _ResidentAssignmentBundle,
+        profile: ResidentExecutionProfile | ResidentWorkerLaunchProfile,
     ) -> None:
         if request.assignment_id != self.assignment_id:
-            raise QueueConflictError("delivered request targets another workspace")
-        if request.profile != profile.descriptor:
             raise QueueConflictError(
-                "delivered request does not match the resident profile"
+                "resident assignment bundle targets another workspace"
+            )
+        descriptor = (
+            profile.descriptor
+            if isinstance(profile, ResidentExecutionProfile)
+            else ResidentProfileDescriptor.from_dict(profile.descriptor)
+        )
+        if request.profile != descriptor:
+            raise QueueConflictError(
+                "resident assignment bundle does not match the resident profile"
             )
         encoded = _canonical_json(request.to_dict())
         with self._connect() as conn:
@@ -1200,7 +1218,7 @@ class _RemoteAssignmentWorkspace:
             if row is not None:
                 if str(row[0]) != encoded:
                     raise QueueConflictError(
-                        "delivered request conflicts with durable request"
+                        "resident assignment bundle conflicts with durable state"
                     )
                 return
             conn.execute(
@@ -1321,15 +1339,15 @@ class _RemoteAssignmentWorkspace:
                 "SELECT state FROM request WHERE singleton = 1"
             ).fetchone()
             if row is None:
-                raise QueueConflictError("remote request is not durable")
+                raise QueueConflictError("resident assignment is not durable")
             missing = conn.execute(
                 "SELECT COUNT(*) FROM transfers "
                 "WHERE direction = 'input' AND finalized = 0"
             ).fetchone()
             if int(missing[0]):
-                raise QueueConflictError("remote inputs are not durable")
+                raise QueueConflictError("resident inputs are not durable")
             if str(row[0]) not in {"DELIVERED", "ACCEPTED"}:
-                raise QueueConflictError("remote request cannot be accepted")
+                raise QueueConflictError("resident assignment cannot be accepted")
             conn.execute("UPDATE request SET state = 'ACCEPTED' WHERE singleton = 1")
 
     def grant(self, fence: str) -> None:
@@ -1339,7 +1357,7 @@ class _RemoteAssignmentWorkspace:
                 "SELECT state, fence FROM request WHERE singleton = 1"
             ).fetchone()
             if row is None or str(row["state"]) not in {"ACCEPTED", "GRANTED"}:
-                raise QueueConflictError("remote request is not accepted")
+                raise QueueConflictError("resident assignment is not accepted")
             if row["fence"] is not None and str(row["fence"]) != fence:
                 raise QueueConflictError("remote grant fence conflicts")
             conn.execute(
@@ -1399,7 +1417,11 @@ class _RemoteAssignmentWorkspace:
             row = conn.execute(
                 "SELECT supervisor_launch_json FROM request WHERE singleton = 1"
             ).fetchone()
-        return None if row is None or row["supervisor_launch_json"] is None else str(row["supervisor_launch_json"])
+        return (
+            None
+            if row is None or row["supervisor_launch_json"] is None
+            else str(row["supervisor_launch_json"])
+        )
 
     def worker_request(self) -> StageWorkerRequest:
         request = self.request()
@@ -1698,14 +1720,14 @@ class _RemoteAssignmentWorkspace:
             for row in rows
         )
 
-    def request(self) -> _DeliveredExecutionRequest:
+    def request(self) -> _ResidentAssignmentBundle:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT value_json FROM request WHERE singleton = 1"
             ).fetchone()
         if row is None:
-            raise QueueConflictError("remote request is not durable")
-        return _DeliveredExecutionRequest.from_dict(json.loads(str(row[0])))
+            raise QueueConflictError("resident assignment is not durable")
+        return _ResidentAssignmentBundle.from_dict(json.loads(str(row[0])))
 
     def state(self) -> str:
         with self._connect() as conn:
@@ -1932,7 +1954,7 @@ __all__ = [
     "MAX_TRANSFER_BYTES",
     "REGULAR_FILE_RELAY_CAPABILITY",
     "REMOTE_EXECUTION_CAPABILITY",
-    "REMOTE_EXECUTION_SCHEMA_VERSION",
+    "RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION",
     "GpuDeviceDescriptor",
     "ResidentExecutionProfile",
     "ResidentGpuDevice",

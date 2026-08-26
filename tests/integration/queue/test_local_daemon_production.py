@@ -7,14 +7,15 @@ from dataclasses import replace
 import importlib
 from pathlib import Path
 import sqlite3
-from threading import Event
+import sys
+from threading import Event, Thread
 import time
 from typing import Never, cast
 
 import pytest
 
 from loom.pipeline import PipelineSpec, parse_resource_request
-from loom.pipeline.execution.managed_local import (
+from loom.queue._managed_local import (
     AssignmentState,
     AtomResourceProvider,
     ClaimCommand,
@@ -22,6 +23,11 @@ from loom.pipeline.execution.managed_local import (
     ObserveRequest,
     SQLiteAgentJournal,
     _configured_provider_descriptor,
+)
+from loom.queue._agent_process_supervisor import (
+    AgentProcessSupervisorClient,
+    AgentProcessSupervisorService,
+    SupervisorLaunchConfiguration,
 )
 from loom.pipeline.planning import PlanSelectors, plan_pipeline
 from loom.pipeline.planning import ExecutionPlan
@@ -58,8 +64,10 @@ from loom.queue import (
     LocalDaemonSocketClient,
     LocalDaemonSocketServer,
     QueueServiceError,
+    ResidentWorkerLaunchProfile,
     prepare_managed_local_runtime_record,
 )
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.serialization import json_dumps_pretty
 from loom.queue.local_daemon_execution import (
     LocalDaemonExecution,
@@ -73,6 +81,35 @@ from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
 
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def _shutdown_test_supervisors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> object:
+    """Stop the independent supervisor processes created by each test."""
+
+    clients: list[AgentProcessSupervisorClient] = []
+    initialize = AgentProcessSupervisorService.initialize
+
+    def tracked_initialize(
+        agent_root: Path, *, configuration: SupervisorLaunchConfiguration
+    ) -> AgentProcessSupervisorClient:
+        client = initialize(agent_root, configuration=configuration)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        AgentProcessSupervisorService,
+        "initialize",
+        staticmethod(tracked_initialize),
+    )
+    yield
+    for client in reversed(clients):
+        try:
+            client.shutdown_for_test()
+        except Exception:
+            pass
 
 
 class _ConfiguredCpuPlanner(CpuResourcePlanner):
@@ -110,6 +147,7 @@ def test_production_gpu_projection_preserves_multi_device_fabric_groups(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
         gpu_devices=devices,
     )
     execution = _execution(config)
@@ -234,6 +272,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         coordinator_root=tmp_path / "daemon" / "coordinator",
         agent_root=tmp_path / "daemon" / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -318,6 +357,7 @@ def test_managed_local_hard_cutover_rejects_old_import_and_existing_roots(
         coordinator_root=coordinator,
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
     )
     before = coordinator.read_bytes()
     with pytest.raises(Exception, match="fresh roots"):
@@ -334,6 +374,7 @@ def test_admission_digest_covers_the_resolved_pipeline_snapshot(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     load_managed_local_intent(config, run_uri)
     stages = cast(list[dict[str, object]], pipeline_config["stages"])
@@ -358,6 +399,7 @@ def test_safe_runtime_metadata_cannot_activate_a_run_without_exact_record(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
     )
 
     with pytest.raises(Exception, match="fresh exact runtime record"):
@@ -471,6 +513,7 @@ def test_terminal_authority_truth_wins_a_late_cancellation(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -816,6 +859,7 @@ def test_pending_cancellation_installs_authority_epoch_before_any_stage(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -860,7 +904,6 @@ def test_connected_active_cancellation_withholds_output_commit(
     run_store = LocalRunStore(run_root)
     run_uri = path_to_run_uri(run_root / "active-cancel")
     run_store.create_run(run_uri)
-    started_marker = tmp_path / "worker-started"
     pipeline_config = {
         "name": "daemon-active-cancel",
         "stages": [
@@ -870,8 +913,7 @@ def test_connected_active_cancellation_withholds_output_commit(
                     "_target_": "tests.support.pipeline_execution_stages.SleepStage"
                 },
                 "config": {
-                    "seconds": 0.4,
-                    "started_marker": str(started_marker),
+                    "seconds": 2.0,
                 },
                 "outputs": {
                     "data": {
@@ -908,6 +950,7 @@ def test_connected_active_cancellation_withholds_output_commit(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -917,10 +960,7 @@ def test_connected_active_cancellation_withholds_output_commit(
     try:
         client = LocalDaemonSocketClient(config.endpoint)
         client.submit(LocalDaemonAdmissionRequest("cancel-active", run_uri))
-        deadline = time.monotonic() + 5
-        while not started_marker.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert started_marker.exists()
+        _wait_for_supervisor_launch_count(config, expected=1)
         active = next(
             admission
             for admission in client.status().admissions
@@ -944,23 +984,21 @@ def test_daemon_overlaps_independent_runs_with_available_capacity(
     tmp_path: Path,
 ) -> None:
     run_root = tmp_path / "runs"
-    marker_dir = tmp_path / "overlap-markers"
-    first_uri = _persist_coordinated_run(
+    first_uri = _persist_sleep_run(
         run_root,
         run_name="first-run",
         stage_name="first",
-        marker_dir=marker_dir,
     )
-    second_uri = _persist_coordinated_run(
+    second_uri = _persist_sleep_run(
         run_root,
         run_name="second-run",
         stage_name="second",
-        marker_dir=marker_dir,
     )
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
         cpu_capacity=2,
     )
     LocalDaemon.initialize(config)
@@ -972,16 +1010,13 @@ def test_daemon_overlaps_independent_runs_with_available_capacity(
         )
         client.submit(LocalDaemonAdmissionRequest("first-item", first_uri))
         client.submit(LocalDaemonAdmissionRequest("second-item", second_uri))
+        _wait_for_supervisor_launch_count(config, expected=2)
 
         first = client.wait("first-item", timeout_seconds=10)
         second = client.wait("second-item", timeout_seconds=10)
 
         assert first.state is LocalDaemonAdmissionState.SUCCEEDED
         assert second.state is LocalDaemonAdmissionState.SUCCEEDED
-        assert {path.name for path in marker_dir.glob("*.started")} == {
-            "first.started",
-            "second.started",
-        }
         assert (
             SQLitePerRunAuthorityStore(first_uri).open_run(first_uri).status
             is RunStatus.SUCCEEDED
@@ -992,6 +1027,108 @@ def test_daemon_overlaps_independent_runs_with_available_capacity(
         )
     finally:
         daemon.stop()
+
+
+def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "runs"
+    run_uri = _persist_sleep_run(
+        run_root,
+        run_name="restart-run",
+        stage_name="slow",
+        seconds=3.0,
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+    )
+    LocalDaemon.initialize(config)
+    first_daemon = LocalDaemon(config)
+    first_daemon.start()
+    client = first_daemon.client_view(
+        LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+    )
+    client.submit(LocalDaemonAdmissionRequest("restart-item", run_uri))
+    _wait_for_supervisor_launch_count(config, expected=1)
+    supervisor_id, process_id = _running_supervisor_identity(config)
+
+    first_daemon.stop()
+
+    retained = SQLiteAgentJournal(
+        config.agent_journal, _allow_initialize=False
+    ).retained_claim_commands()
+    assert len(retained) == 1
+    assert retained[0].assignment.run_uri == run_uri
+    assert _running_supervisor_identity(config) == (supervisor_id, process_id)
+
+    replacement = LocalDaemon(config)
+    start_finished = Event()
+    start_failures: list[BaseException] = []
+
+    def start_replacement() -> None:
+        try:
+            replacement.start()
+        except BaseException as exc:  # pragma: no cover - asserted below.
+            start_failures.append(exc)
+        finally:
+            start_finished.set()
+
+    starter = Thread(target=start_replacement, name="replacement-local-daemon")
+    starter.start()
+    try:
+        assert not start_finished.wait(0.2)
+        with pytest.raises(QueueServiceError, match="not started"):
+            replacement.client_view(
+                LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+            ).status()
+        assert _running_supervisor_identity(config) == (supervisor_id, process_id)
+        _wait_for_thread(starter, timeout_seconds=10)
+        assert start_failures == []
+
+        replacement_client = replacement.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        completed = replacement_client.wait("restart-item", timeout_seconds=10)
+
+        assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
+        assert _supervisor_launch_count(config) == 1
+        assert (
+            SQLiteAgentJournal(
+                config.agent_journal, _allow_initialize=False
+            ).retained_claim_commands()
+            == ()
+        )
+        snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
+        assert snapshot.status is RunStatus.SUCCEEDED
+        assert snapshot.stages[0].latest_commit is not None
+        output = snapshot.stages[0].artifact_facts[0].artifact
+        assert LocalArtifactStore(
+            LocalRunStore(run_root).local_artifact_root(run_uri)
+        ).load(output) == {"slept": 3.0}
+        with sqlite3.connect(config.agent_journal) as conn:
+            assert (
+                int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM events "
+                        "WHERE acknowledged_sequence IS NULL"
+                    ).fetchone()[0]
+                )
+                == 0
+            )
+        execution = replacement._execution
+        assert execution is not None
+        observed = execution.provider.observe(
+            ObserveRequest(config.machine_id, "post-restart", "fresh")
+        )
+        assert observed.live_claim_ids == ()
+        assert [atom.amount.numerator for atom in observed.atoms] == [1]
+    finally:
+        if starter.is_alive():
+            starter.join(timeout=10)
+        replacement.stop()
 
 
 def test_daemon_reconciles_skip_without_creating_an_assignment(
@@ -1005,6 +1142,7 @@ def test_daemon_reconciles_skip_without_creating_an_assignment(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -1041,6 +1179,7 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -1102,7 +1241,7 @@ def test_startup_fails_closed_when_live_coordinator_state_lacks_exact_claim(
     config = _daemon_config(tmp_path)
     _coordinator_assignment(config, "unknown-assignment", "unknown")
 
-    with pytest.raises(Exception, match="lacks an exact agent claim"):
+    with pytest.raises(Exception, match="lacks an exact resident bundle"):
         _execution(config)
 
 
@@ -1135,7 +1274,18 @@ def _daemon_config(tmp_path: Path, *, cpu_capacity: int = 1) -> LocalDaemonConfi
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
         cpu_capacity=cpu_capacity,
+    )
+
+
+def _launch_profile() -> ResidentWorkerLaunchProfile:
+    return ResidentWorkerLaunchProfile(
+        Path.cwd(),
+        Path(sys.executable),
+        ResidentProfileDescriptor(
+            "test-local", "v1", "test-project", "test-environment", "test-executor"
+        ).to_dict(),
     )
 
 
@@ -1157,6 +1307,12 @@ def _owner_ids(config: LocalDaemonConfig) -> tuple[str, str]:
 
 def _execution(config: LocalDaemonConfig) -> LocalDaemonExecution:
     initialize_local_daemon_owner_stores(config)
+    AgentProcessSupervisorService.initialize(
+        config.agent_root,
+        configuration=SupervisorLaunchConfiguration(
+            "agent", (config.resident_worker_launch_profile,)
+        ),
+    )
     return LocalDaemonExecution(
         config=config,
         coordinator_id="coordinator",
@@ -1286,12 +1442,12 @@ def _persist_single_stage_run(
     return run_store, run_uri, pipeline_config
 
 
-def _persist_coordinated_run(
+def _persist_sleep_run(
     run_root: Path,
     *,
     run_name: str,
     stage_name: str,
-    marker_dir: Path,
+    seconds: float = 0.5,
 ) -> str:
     run_store = LocalRunStore(run_root)
     run_uri = path_to_run_uri(run_root / run_name)
@@ -1302,14 +1458,10 @@ def _persist_coordinated_run(
             {
                 "name": stage_name,
                 "factory": {
-                    "_target_": (
-                        "tests.support.pipeline_execution_stages.CoordinatedStage"
-                    )
+                    "_target_": "tests.support.pipeline_execution_stages.SleepStage"
                 },
                 "config": {
-                    "marker_dir": str(marker_dir),
-                    "wait_for": 2,
-                    "timeout_seconds": 5,
+                    "seconds": seconds,
                 },
                 "resources": {
                     "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
@@ -1340,3 +1492,55 @@ def _persist_coordinated_run(
     )
     SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=RunStatus.RUNNING)
     return run_uri
+
+
+def _wait_for_supervisor_launch_count(
+    config: LocalDaemonConfig, *, expected: int
+) -> None:
+    deadline = time.monotonic() + 5
+    database = config.agent_root / "supervisor" / "supervisor.sqlite"
+    observed = 0
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database) as conn:
+            observed = int(conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0])
+        if observed >= expected:
+            return
+        time.sleep(0.01)
+    raise AssertionError(
+        f"expected {expected} supervisor launches, observed {observed}"
+    )
+
+
+def _supervisor_launch_count(config: LocalDaemonConfig) -> int:
+    with sqlite3.connect(
+        config.agent_root / "supervisor" / "supervisor.sqlite"
+    ) as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0])
+
+
+def _running_supervisor_identity(config: LocalDaemonConfig) -> tuple[str, int]:
+    deadline = time.monotonic() + 5
+    database = config.agent_root / "supervisor" / "supervisor.sqlite"
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database) as conn:
+            metadata = conn.execute(
+                "SELECT value FROM metadata WHERE key = 'supervisor_id'"
+            ).fetchone()
+            launch = conn.execute(
+                "SELECT state, pid FROM launches ORDER BY operation_id"
+            ).fetchone()
+        if (
+            metadata is not None
+            and launch is not None
+            and str(launch[0]) == "running"
+            and launch[1] is not None
+        ):
+            return str(metadata[0]), int(launch[1])
+        time.sleep(0.01)
+    raise AssertionError("supervisor launch did not remain running")
+
+
+def _wait_for_thread(thread: Thread, *, timeout_seconds: float) -> None:
+    thread.join(timeout=timeout_seconds)
+    if thread.is_alive():
+        raise AssertionError("replacement local daemon did not finish starting")

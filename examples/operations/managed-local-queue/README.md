@@ -23,6 +23,17 @@ config = LocalDaemonConfig(
     coordinator_root=Path(".loom/coordinator"),
     agent_root=Path(".loom/agent"),
     run_store_root=Path("runs"),
+    resident_worker_launch_profile=ResidentWorkerLaunchProfile(
+        project_root=Path.cwd(),
+        python_executable=Path(sys.executable),
+        descriptor={
+            "profile_id": "local-default",
+            "revision": "v1",
+            "project_fingerprint": "my-project",
+            "environment_fingerprint": "my-environment",
+            "executor_fingerprint": "local",
+        },
+    ),
 )
 LocalDaemon.initialize(config)  # fresh roots only
 daemon = LocalDaemon(config)
@@ -36,12 +47,17 @@ result = client.wait("queue-1", timeout_seconds=120)
 ```
 
 Initialization creates the coordinator execution store and local-agent journal
-alongside the private control roots. They are retained owner truth: a missing or
-unreadable expected store makes start fail closed, and a live loss degrades
-status and prevents new scheduling work. Status joins owner snapshots rather
-than inferring health from empty collections; each scheduling, assignment, and
-agent axis reports its owner, aggregate state, revision, observation time, and
-freshness.
+alongside the private control roots and independent worker supervisor. Use the
+same roots and exact resident profile after stopping and restarting the daemon.
+If a worker is still running, `daemon.start()` waits for that same supervised
+process and replays its result before the daemon becomes available; it never
+starts a replacement worker or advertises that capacity early.
+
+These stores are retained owner truth: a missing or unreadable expected store
+makes start fail closed, and a live loss degrades status and prevents new
+scheduling work. Status joins owner snapshots rather than inferring health from
+empty collections; each scheduling, assignment, and agent axis reports its
+owner, aggregate state, revision, observation time, and freshness.
 
 There is no compatibility adapter for `loom.queue.managed_local`, its
 whole-run requests, or its old roots. Existing state is rejected without being

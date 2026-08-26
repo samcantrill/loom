@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from shutil import copyfile
 import sqlite3
+import sys
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -28,7 +29,9 @@ from loom.queue import (
     QueueConflictError,
     QueueServiceError,
     QueueStorageError,
+    ResidentWorkerLaunchProfile,
 )
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.agent_sessions import (
     AgentControlKind,
     AgentPolicyConfig,
@@ -129,6 +132,7 @@ def _config(tmp_path: Path) -> LocalDaemonConfig:
         coordinator_root=tmp_path / "coordinator",
         agent_root=tmp_path / "agent",
         run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=_launch_profile(),
         agent_policy=AgentPolicyConfig(
             principals=(
                 TransportPrincipalPolicy(
@@ -139,6 +143,16 @@ def _config(tmp_path: Path) -> LocalDaemonConfig:
                 ),
             )
         ),
+    )
+
+
+def _launch_profile() -> ResidentWorkerLaunchProfile:
+    return ResidentWorkerLaunchProfile(
+        project_root=Path.cwd(),
+        python_executable=Path(sys.executable),
+        descriptor=ResidentProfileDescriptor(
+            "test-local", "v1", "test-project", "test-environment", "test-executor"
+        ).to_dict(),
     )
 
 
@@ -309,6 +323,7 @@ def test_component_reload_collision_rejects_before_epoch_or_config_swap(
             tmp_path / "unused-coordinator",
             tmp_path / "unused-agent",
             tmp_path / "unused-runs",
+            _launch_profile(),
         ).scheduling_components,
     )
     LocalDaemon.initialize(config)

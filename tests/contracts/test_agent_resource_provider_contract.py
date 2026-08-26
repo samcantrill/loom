@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 import pytest
 
-from loom.pipeline.execution import (
+from loom.queue import (
     AgentResourceProvider,
     ClaimCommand,
     ClaimOutcome,
@@ -14,7 +14,7 @@ from loom.pipeline.execution import (
     MemoryResourceProvider,
     ObserveRequest,
 )
-from loom.pipeline.execution.managed_local import ManagedAssignment
+from loom.queue._managed_local import ManagedAssignment
 from loom.scheduling import CapacityAtom, ExactQuantity, ResourceClaim
 
 

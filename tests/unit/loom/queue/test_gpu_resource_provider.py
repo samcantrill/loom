@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from loom.pipeline.execution.managed_local import (
+from loom.queue._managed_local import (
     ClaimCommand,
     ClaimOutcome,
     GpuResourceProvider,
     ManagedAssignment,
 )
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
-from loom.pipeline.execution.managed_local import ManagedLocalError
+from loom.queue._managed_local import ManagedLocalError
 from loom.scheduling import CapacityAtom, ExactQuantity, ResourceClaim
 
 
@@ -106,9 +106,7 @@ def test_gpu_provider_rejects_retained_claim_after_private_mapping_drift() -> No
         "offer-1",
         "claim-1",
     )
-    retained = ClaimCommand(
-        assignment, "prepare-1", claim, previous.descriptor
-    )
+    retained = ClaimCommand(assignment, "prepare-1", claim, previous.descriptor)
 
     assert previous.descriptor != replacement.descriptor
     with pytest.raises(ManagedLocalError, match="provider descriptor conflicts"):
