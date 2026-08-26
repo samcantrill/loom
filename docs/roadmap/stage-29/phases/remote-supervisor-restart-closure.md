@@ -219,14 +219,15 @@ ordinary result/output import. `UNKNOWN` withholds claims and never relaunches.
   exact `NOT_ACCEPTED` submission, accepted-start journal/coordinator joining,
   durable cancellation routing, provider-release/availability outbox replay, and
   one shared normal/restart result-output-release owner.
-- Validation/review: pending
+- Validation/review: manager validation complete at `d9cc0ae`; independent
+  expanded-path review pending
 - PR/merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and tests | Complete through `8eb99d3`. Changed-path Ruff and formatting passed; changed-source Pyright reported 0 errors; the affected supervisor, remote-session, and managed-journal suite passed, 38 tests. Its causal restart matrix covers crash before/after supervisor acceptance, before result commit, and after local availability publication but before coordinator release; every case retains one supervisor launch, replays release, and enables a fresh offer only afterward. Test teardown leaves no detached supervisor. |
-| Validated revision and evidence | pending |
+| Implementation and tests | Complete through `d9cc0ae` (`8eb99d3` behavior closure plus validation-fixture typing/runtime repairs). Changed-path Ruff and formatting passed; changed-source Pyright reported 0 errors; the affected supervisor, remote-session, and managed-journal suite passed, 38 tests. Its causal restart matrix covers crash before/after supervisor acceptance, before result commit, and after local availability publication but before coordinator release; every case retains one supervisor launch, replays release, and enables a fresh offer only afterward. Test teardown leaves no detached supervisor. |
+| Validated revision and evidence | `d9cc0ae`; `make validate-pr` exited 0 on 2026-08-26. Repository Ruff and formatting, full Pyright (0 errors), the default test harness, the config-extra harness (141 passed, 3 skipped), and source/wheel builds passed. No detached Phase 9C supervisor process remained afterward. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
