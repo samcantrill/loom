@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Stage/phase: Stage 29, Phase 9F
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p9f-session-replacement-recovery-operations`
@@ -172,7 +172,8 @@ conditions above; do not solve incompleteness with a ledger or second machine.
 ## Workflow State
 
 - Manager preparation and expanded refinement: complete at base `2412862`
-- Implementation and pre-submit gate: pending
+- Implementation: in_progress
+- Pre-submit gate: pending
 - Independent review: required for complete-reference and stale-fact safety
 - Refiner: only for a qualified blocker; corrections 0/3
 - PR and merge: pending
