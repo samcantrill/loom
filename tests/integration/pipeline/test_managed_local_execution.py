@@ -272,6 +272,7 @@ def _offer_snapshot(
 def test_managed_local_assignment_commits_accessible_output_then_releases(
     tmp_path: Path,
     resident_owner: Callable[[Path, str], _ResidentOwner],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
@@ -388,6 +389,26 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
         journal.read_state(assignment.assignment_id) is AssignmentState.RESULT_DURABLE
     )
 
+    acknowledge = journal.acknowledge
+
+    def crash_after_final_acknowledgement(assignment_id: str, sequence: int) -> int:
+        acknowledged = acknowledge(assignment_id, sequence)
+        if journal.read_state(assignment_id) is AssignmentState.RELEASED:
+            raise TimeoutError("crash after final event acknowledgement")
+        return acknowledged
+
+    monkeypatch.setattr(journal, "acknowledge", crash_after_final_acknowledgement)
+    with pytest.raises(TimeoutError, match="final event acknowledgement"):
+        execute()
+    assert coordinator.state(assignment.assignment_id) == "logical_released"
+    saved_revision = journal.read_availability_revision(assignment.assignment_id)
+    assert saved_revision is not None
+
+    monkeypatch.setattr(journal, "acknowledge", acknowledge)
+    # Application B reconstructs only durable journal/provider truth; it must
+    # not invent a new release revision or relaunch the retained worker.
+    journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+    provider = AtomResourceProvider(descriptor, (contract,), (atom,))
     receipt = execute()
     replay = execute()
 
@@ -405,6 +426,7 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     assert snapshot.stages[0].latest_commit == receipt.output_commit.commit
     assert coordinator.state(assignment.assignment_id) == "released"
     assert journal.read_state(assignment.assignment_id).value == "released"
+    assert journal.read_availability_revision(assignment.assignment_id) == saved_revision
     assert run_store.read_stage_outputs(run_uri, "build") is None
     observed = provider.observe(
         ObserveRequest("agent-local", "session-1", "observe-after-release")
@@ -560,6 +582,7 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
 def test_definitive_decline_replays_after_unbind_response_is_lost(
     tmp_path: Path,
     resident_owner: Callable[[Path, str], _ResidentOwner],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "declined-run")
@@ -670,10 +693,33 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
     assert coordinator.state(assignment.assignment_id) == "bound"
     assert journal.read_state(assignment.assignment_id) is AssignmentState.DECLINED
 
+    acknowledge = journal.acknowledge
+
+    def crash_after_decline_event_acknowledgement(
+        assignment_id: str, sequence: int
+    ) -> int:
+        acknowledged = acknowledge(assignment_id, sequence)
+        if journal.read_state(assignment_id) is AssignmentState.RELEASED:
+            raise TimeoutError("crash after decline event acknowledgement")
+        return acknowledged
+
+    monkeypatch.setattr(
+        journal, "acknowledge", crash_after_decline_event_acknowledgement
+    )
+    with pytest.raises(TimeoutError, match="decline event acknowledgement"):
+        execute()
+    assert coordinator.state(assignment.assignment_id) == "bound"
+    saved_revision = journal.read_availability_revision(assignment.assignment_id)
+    assert saved_revision is not None
+
+    monkeypatch.setattr(journal, "acknowledge", acknowledge)
+    journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+    provider = AtomResourceProvider(descriptor, (contract,), ())
     with pytest.raises(ManagedLocalError, match="definitively declined"):
         execute()
     assert coordinator.state(assignment.assignment_id) == "released"
     assert journal.read_state(assignment.assignment_id) is AssignmentState.RELEASED
+    assert journal.read_availability_revision(assignment.assignment_id) == saved_revision
     reopened = next(
         record
         for record in SQLiteStageWorkStore(coordinator_path).list_stage_work()

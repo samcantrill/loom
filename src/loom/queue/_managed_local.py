@@ -2644,6 +2644,16 @@ def run_managed_local_assignment(
         worker_result: StageWorkerResult, *, coordinator_expected: str
     ) -> ManagedExecutionReceipt:
         if journal.read_state(assignment.assignment_id) is AssignmentState.RELEASED:
+            output_commit: OutputCommit | None = None
+            if worker_result.status is StageStatus.SUCCEEDED:
+                output_commit = authority.record_output_commit(
+                    assignment.run_uri,
+                    assignment.stage_name,
+                    attempt_id=assignment.attempt_id,
+                    fencing_token=fence.fencing_token,
+                    outputs=worker_result.outputs,
+                    assignment_id=assignment.assignment_id,
+                )
             availability_revision = _release_revision(
                 journal=journal,
                 assignment=assignment,
@@ -2668,7 +2678,7 @@ def run_managed_local_assignment(
                 assignment=assignment,
                 fence=fence,
                 worker_result=worker_result,
-                output_commit=None,
+                output_commit=output_commit,
                 availability_revision=availability_revision,
             )
         journal.record_result(assignment.assignment_id, worker_result.to_dict())

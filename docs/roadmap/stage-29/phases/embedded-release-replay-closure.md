@@ -184,20 +184,22 @@ Phase 9F continues to own `make test-summary` and the final Stage 29 summary.
   verified, and maintainer approval is recorded.
 - Expanded planning: not needed because the independent-review finding, remote
   precedent, required ordering, and stop conditions are exact.
-- Implementation: pending one `loom_phase_executor`.
-- Refiner: not needed unless a qualified blocker is returned.
+- Implementation: executor ordering closure at `3457cc0`; correction 1/3 adds
+  causal terminal and definitive-decline crash-after-final-acknowledgement
+  replay proof, and restores the replayed successful output receipt.
+- Refiner: correction 1/3 complete pending validation gate.
 - Pre-submit gate: pending.
 - Independent review: required after manager validation.
-- Blocker corrections: 0/3.
+- Blocker corrections: 1/3.
 - PR and merge: pending.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
+| Implementation and changed paths | Correction 1/3 preserves the committed successful output receipt while replaying an already released assignment; no release ordering or durable schema changed. |
+| Tests added or updated | The managed-local integration now crashes after final-event acknowledgement for both terminal success and definitive decline, reconstructs journal/provider state, replays the saved availability revision, proves coordinator release, and retains one supervisor launch. |
+| Validated revision/tree state and evidence | Focused terminal/decline crash matrix passed: 2 tests in 1.33s; affected managed-local/local-daemon matrix passed: 51 tests in 24.13s. `make validate-pr` passed on the stable correction tree: Ruff, Pyright, default and config-extra harnesses, and source/wheel builds. |
 | Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
