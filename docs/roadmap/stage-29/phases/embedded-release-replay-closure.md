@@ -190,8 +190,10 @@ Phase 9F continues to own `make test-summary` and the final Stage 29 summary.
   correction 2/3 adds the missing earlier crash cut where availability is
   durable but the final event does not yet exist, for both release callers.
 - Refiner: correction 1/3 complete at `b9727ca`.
-- Pre-submit gate: focused four-case causal matrix passed; refreshed affected
-  matrix and `make validate-pr` pending on the stable correction 2 tree.
+- Pre-submit gate: complete at `731b3c4`. The four-case causal matrix and
+  102-test affected matrix passed. Refreshed `make validate-pr` passed Ruff,
+  zero-finding Pyright, 2,553 default tests, 141 config-extra tests with three
+  expected skips, and source/wheel builds.
 - Independent review: required after manager validation.
 - Blocker corrections: 2/3.
 - PR and merge: pending.
@@ -200,9 +202,9 @@ Phase 9F continues to own `make test-summary` and the final Stage 29 summary.
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Correction 1/3 preserves the committed successful output receipt while replaying an already released assignment; no release ordering or durable schema changed. |
+| Implementation and changed paths | Complete selective Phase 9D source/test/example/guidance reuse plus replay-safe terminal and definitive-decline release in `src/loom/queue/_managed_local.py`: reconstructed providers are freshly observed, an existing journal revision is reused, the stable final event is acknowledged before coordinator release, and successful output receipts replay idempotently. No durable schema or compatibility path was added. |
 | Tests added or updated | The managed-local integration now crashes both after availability publication with no final event and after final-event acknowledgement, for terminal success and definitive decline. Each case reconstructs journal/provider state, replays the saved revision, proves one acknowledged event at both stores, completes coordinator release, and retains one supervisor launch where applicable. |
-| Validated revision/tree state and evidence | Correction 1 focused 2 tests and affected 51 tests passed, followed by `make validate-pr`. Correction 2 focused four-case causal matrix passed in 2.76s; refreshed affected and full gates pending. |
-| Validation-relevant changes after evidence | Correction 2 expanded the causal test matrix after the correction 1 gate; refreshed validation pending. |
+| Validated revision/tree state and evidence | Source/test revision `731b3c4`: focused four-case causal matrix passed in 2.76s; affected Phase 9D2 matrix passed 102 tests in 47.42s; `make validate-pr` passed Ruff, zero-finding Pyright, 2,553 default tests (121 deselected), 141 config-extra tests (3 expected skips), and source/wheel builds. |
+| Validation-relevant changes after evidence | none; this roadmap evidence update is non-validation metadata |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
