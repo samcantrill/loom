@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Stage/phase: Stage 29, Phase 9F
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p9f-session-replacement-recovery-operations`
@@ -180,7 +180,9 @@ conditions above; do not solve incompleteness with a ledger or second machine.
   builds. `make test-summary` passed 2,720 tests with no failures or errors.
 - Independent review: required for complete-reference and stale-fact safety
 - Refiner: no further pass planned; corrections 1/3
-- PR and merge: pending
+- PR: [#249](https://github.com/samcantrill/loom/pull/249) open against
+  `develop`; target, head, title, non-draft state, and mergeability verified.
+- Merge: pending independent review
 
 ## Completion Record
 
@@ -188,4 +190,4 @@ conditions above; do not solve incompleteness with a ledger or second machine.
 | --- | --- |
 | Implementation/tests/validation | Complete at `efdeabf`. Targeted evidence: 102 unit/CLI/package/E2E tests, 46 production/SLURM integration tests, and 31 agent-transport integration tests passed. Full gates passed as recorded above. |
 | Validation-relevant later changes | None. This concise workflow metadata update does not change source, tests, dependencies, build inputs, or validation configuration. |
-| PR/review/merge/cleanup | pending |
+| PR/review/merge/cleanup | PR [#249](https://github.com/samcantrill/loom/pull/249) open and mergeable; independent review, merge, metadata, and cleanup pending. |

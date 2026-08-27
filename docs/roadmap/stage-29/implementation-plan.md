@@ -6,7 +6,7 @@ Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 9F `in_progress`
+Current phase: Phase 9F `pr_open`
 Blockers: none at the stage level. Phase 9 correction budget 3/3 was exhausted
 after candidate `ef3be2f` implemented only the validated resident-worker service
 hard cut. Fresh Phase 9A selectively reused that source change and attempted the
@@ -694,7 +694,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 9D | `embedded-supervisor-restart-closure` | blocked | `docs/roadmap/stage-29/phases/embedded-supervisor-restart-closure.md` | `agent/stage-29-p9d-embedded-supervisor-restart-closure` | No PR opened | Validated local profile/CLI hard cut, shared resident bundle, supervisor-only embedded execution, and same-session replay candidate; required review found final local release is not replay-safe across availability publication, coordinator release, and final-event acknowledgement | Preserve validated implementation `c516f63` as read-only evidence; correction 3/3 is exhausted. |
 | 9D2 | `embedded-release-replay-closure` | merged | `docs/roadmap/stage-29/phases/embedded-release-replay-closure.md` | `agent/stage-29-p9d2-embedded-release-replay-closure` | [#247](https://github.com/samcantrill/loom/pull/247) merged | Selective Phase 9D reuse; saved availability-revision replay after fresh observation; final event acknowledgement before coordinator release; identical definitive-decline ordering; causal crash-cut proof | Local gates, required independent review, and exact PR CI passed; squash-merged as `82b311f`. |
 | 9E | `slurm-guarded-recovery-closure` | merged | `docs/roadmap/stage-29/phases/slurm-guarded-recovery-closure.md` | `agent/stage-29-p9e-slurm-guarded-recovery-closure` | [#248](https://github.com/samcantrill/loom/pull/248) merged | Coordinator and SLURM restart; no-resubmit reconciliation; exact unknown-only managed/SLURM containment evidence; privileged recovery close; authority terminal-or-close CAS; existing-policy retry | Required expanded review blocker corrected; fresh local gate passed; squash-merged as `0dab7a9` without compatibility or a second retry policy. |
-| 9F | `session-replacement-recovery-operations` | in_progress | `docs/roadmap/stage-29/phases/session-replacement-recovery-operations.md` | `agent/stage-29-p9f-session-replacement-recovery-operations` | pending | Complete different-session replacement; stale old-session fact rejection; remaining joined status and authenticated operations; operational guidance; final Stage 29 E2E/validation/summary | Complete the accepted recovery surface and close Stage 29 with fresh-process evidence and all gates. |
+| 9F | `session-replacement-recovery-operations` | pr_open | `docs/roadmap/stage-29/phases/session-replacement-recovery-operations.md` | `agent/stage-29-p9f-session-replacement-recovery-operations` | [#249](https://github.com/samcantrill/loom/pull/249) | Complete different-session replacement; stale old-session fact rejection; remaining joined status and authenticated operations; operational guidance; final Stage 29 E2E/validation/summary | Complete the accepted recovery surface and close Stage 29 with fresh-process evidence and all gates. |
 
 Phase 1 is the pure-kernel/preparation/projection architectural gate: its only
 new authoritative lifecycle operation is idempotent creation of an unassigned
