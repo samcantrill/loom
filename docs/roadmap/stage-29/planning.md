@@ -27,8 +27,8 @@ fresh 2,720-pass summary, and squash merge `a6cd482`
 Planning route: the original expanded Stage 29 design remains authoritative.
 The maintainer approved the hard cut-over and selected a Slurm prolog/container-
 provisioned allocation-private capability file for the ready-stage recovery.
-Current gate: Stage 29 implementation and final validation are complete on
-`develop` at `a6cd482`; only Phase 9F workflow cleanup remains.
+Current gate: Stage 29 implementation, final validation, merged metadata, and
+Phase 9F workflow cleanup are complete on `develop`.
 Blockers: none. The accepted target-specific containment, terminal-or-close
 arbitration, existing-policy retry, and different-session replacement contracts
 are implemented; blocked Phase 9 predecessors remain read-only evidence.
@@ -65,8 +65,8 @@ different resources and useful placements.
 | Phase 9D2 recovery agreement | Re-observe reconstructed providers but reuse an already-durable availability revision; acknowledge the stable final event while the coordinator assignment remains retained; mark coordinator release last; apply the same rule to definitive decline. | None. Existing private states and the remote precedent are sufficient; no compatibility, migration, public API, or schema is needed. | Preserve the merged closure as the Phase 9E dependency. |
 | Phase 9D2 execution evidence | Source/test `731b3c4` closes both final release callers and both causal crash cuts while retaining the complete Phase 9D hard cut. Focused and full local gates, required independent review, and exact PR CI passed. | None. PR #247 squash-merged as `82b311f`. | Prepare Phase 9E from current `develop`; retain Phase 9D only as blocked evidence. |
 | Phase 9E execution evidence | Source/test `cc2f82a` completes no-resubmit SLURM restart, exact unknown-only managed/SLURM recovery admission, target-owned containment, authority arbitration, existing-policy retry, and retained physical ownership. Focused tests and the fresh full local gate passed; the required review blocker was corrected. | None. PR #248 squash-merged as `0dab7a9`; the repository exposed no PR check run. | Prepare Phase 9F from current `develop`; retain earlier blocked Phase 9 candidates only as read-only evidence. |
-| Phase 9F execution evidence | Corrected source/test `eb0537d` completes guarded different-session replacement, complete owner classification, fresh successor readiness, old-root provider-release proof before capacity restoration, fresh coordinator offer identities after withholding changes, bounded status, and all adapters/guidance. The 179-test phase matrix, `make validate-pr`, and a fresh 2,720-pass summary succeeded; required review findings closed at correction 2/3. | None. PR #249 squash-merged as `a6cd482`; hosted CI is intentionally disabled. | Preserve the hard-cut version 7 replacement and cleanup contracts; finish workflow cleanup. |
-| Approval | The maintainer approved the Stage 29 hard cut-over, explicitly rejected candidate-schema compatibility or migration, approved the Slurm job-private capability contract and recovery closures, and approved Phase 9F implementation after each blocker explanation. | None. | Treat Stage 29 implementation as complete after Phase 9F cleanup. |
+| Phase 9F execution evidence | Corrected source/test `eb0537d` completes guarded different-session replacement, complete owner classification, fresh successor readiness, old-root provider-release proof before capacity restoration, fresh coordinator offer identities after withholding changes, bounded status, and all adapters/guidance. The 179-test phase matrix, `make validate-pr`, and a fresh 2,720-pass summary succeeded; required review findings closed at correction 2/3. | None. PR #249 squash-merged as `a6cd482`; hosted CI is intentionally disabled. | Preserve the hard-cut version 7 replacement and cleanup contracts; no Phase 9F workflow action remains. |
+| Approval | The maintainer approved the Stage 29 hard cut-over, explicitly rejected candidate-schema compatibility or migration, approved the Slurm job-private capability contract and recovery closures, and approved Phase 9F implementation after each blocker explanation. | None. | Stage 29 implementation is complete. |
 
 ## Evidence And Scope
 

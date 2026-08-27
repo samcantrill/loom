@@ -200,4 +200,4 @@ conditions above; do not solve incompleteness with a ledger or second machine.
 | --- | --- |
 | Implementation/tests/validation | Corrected source complete at `eb0537d`. The full 179-test phase matrix passed: 102 unit/CLI/package/E2E, 46 production/SLURM integration, and 31 agent-transport integration tests. Fresh full gates passed as recorded above. |
 | Validation-relevant later changes | None. This concise workflow metadata update does not change source, tests, dependencies, build inputs, or validation configuration. |
-| PR/review/merge/cleanup | Independent review findings are closed; final manager review approved PR [#249](https://github.com/samcantrill/loom/pull/249), squash-merged as `a6cd482`. Merged metadata is being recorded on `develop`; dedicated worktree and branch cleanup follows this commit. |
+| PR/review/merge/cleanup | Independent review findings are closed; final manager review approved PR [#249](https://github.com/samcantrill/loom/pull/249), squash-merged as `a6cd482`. Merged metadata is recorded on `develop`; the dedicated worktree and local/remote phase branches were removed after the verified merge. |
