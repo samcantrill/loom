@@ -2,13 +2,15 @@
 
 ## Metadata
 
-- Status: approved
+- Status: merged
 - Stage/phase: Stage 29, Phase 9F
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p9f-session-replacement-recovery-operations`
 - Worktree: `/home/can134/work/active/loom-worktrees/stage-29-p9f-session-replacement-recovery-operations`
 - Base: `241286265f066548374ce44df23ccf4ed4700a7f`
-- PR: target `develop`; title `feat(scheduling): close recovery operations and replacement`
+- PR: [#249](https://github.com/samcantrill/loom/pull/249), squash-merged
+  to `develop` as `a6cd482`; title
+  `feat(scheduling): close recovery operations and replacement`
 - Dependencies: merged Phase 9C2 `b0ed116`, 9D2 `82b311f`, and Phase 9E
   `0dab7a9`; blocked Phase 9 is read-only replacement-contract evidence.
 - Workflow: expanded because replacement joins coordinator, agent journal,
@@ -187,10 +189,10 @@ conditions above; do not solve incompleteness with a ledger or second machine.
   and stale-status findings are closed by correction 2/3 and the causal
   transport regression.
 - Refiner: no further pass planned; corrections 2/3
-- PR: [#249](https://github.com/samcantrill/loom/pull/249) open against
+- PR: [#249](https://github.com/samcantrill/loom/pull/249) merged into
   `develop`; corrected scope, body, target, title, non-draft state, and clean
-  mergeability passed final manager review.
-- Merge: approved for automatic squash merge after the final remote-head check
+  mergeability passed final manager review before merge.
+- Merge: complete as `a6cd482` at 2026-08-27T04:36:30Z
 
 ## Completion Record
 
@@ -198,4 +200,4 @@ conditions above; do not solve incompleteness with a ledger or second machine.
 | --- | --- |
 | Implementation/tests/validation | Corrected source complete at `eb0537d`. The full 179-test phase matrix passed: 102 unit/CLI/package/E2E, 46 production/SLURM integration, and 31 agent-transport integration tests. Fresh full gates passed as recorded above. |
 | Validation-relevant later changes | None. This concise workflow metadata update does not change source, tests, dependencies, build inputs, or validation configuration. |
-| PR/review/merge/cleanup | Independent review findings are closed and final manager review approved PR [#249](https://github.com/samcantrill/loom/pull/249). Automatic squash merge, merged metadata, and cleanup remain. |
+| PR/review/merge/cleanup | Independent review findings are closed; final manager review approved PR [#249](https://github.com/samcantrill/loom/pull/249), squash-merged as `a6cd482`. Merged metadata is being recorded on `develop`; dedicated worktree and branch cleanup follows this commit. |
