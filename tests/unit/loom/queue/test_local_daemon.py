@@ -891,6 +891,7 @@ def test_slurm_dispatch_resolves_the_exact_retained_profile() -> None:
             intent=cast(Any, SimpleNamespace()),
             authority=cast(Any, SimpleNamespace()),
             snapshot=cast(Any, SimpleNamespace()),
+            stage_work_id="stage-work-1",
         )
 
     assert resolved == [("training", "profile-fingerprint-v1")]

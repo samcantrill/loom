@@ -479,6 +479,7 @@ def test_concurrent_reservations_cannot_consume_the_final_run_slot(tmp_path) -> 
 
     assert outcomes.count("reserved") == 1
     assert sum("limit" in outcome for outcome in outcomes) == 1
+    assert coordinator.run_active_assignment_count(command.assignment.run_uri) == 1
 
 
 def test_offer_revision_is_one_use_until_fresh_net_availability(tmp_path) -> None:

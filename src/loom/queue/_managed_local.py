@@ -1695,20 +1695,11 @@ class SQLiteCoordinatorAssignments:
             )
             if work is not None or slurm_work is not None:
                 raise ManagedLocalError("stage work already has a live assignment")
-            active = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri = ? AND state IN ('reserved','bound','accepted','granted','running','unknown')",
-                    (assignment.run_uri,),
-                ).fetchone()[0]
+            active = _run_active_assignment_count(
+                conn,
+                assignment.run_uri,
+                has_slurm_assignments=has_slurm_assignments,
             )
-            if has_slurm_assignments:
-                active += int(
-                    conn.execute(
-                        "SELECT COUNT(*) FROM slurm_stage_assignments WHERE run_uri = ? "
-                        "AND state NOT IN ('rejected','released')",
-                        (assignment.run_uri,),
-                    ).fetchone()[0]
-                )
             if active >= max_parallel_stages:
                 raise ManagedLocalError("run active-assignment limit reached")
             offer_row = conn.execute(
@@ -2062,6 +2053,25 @@ class SQLiteCoordinatorAssignments:
                     "WHERE run_uri = ? AND state != 'released' ORDER BY assignment_id",
                     (run_uri,),
                 )
+            )
+
+    def run_active_assignment_count(self, run_uri: str) -> int:
+        """Return the exact assignment set counted by the reservation CAS."""
+
+        if not isinstance(run_uri, str) or not run_uri:
+            raise ManagedLocalError("run URI is required")
+        with self._transaction() as conn:
+            has_slurm_assignments = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE type = 'table' "
+                    "AND name = 'slurm_stage_assignments'"
+                ).fetchone()
+                is not None
+            )
+            return _run_active_assignment_count(
+                conn,
+                run_uri,
+                has_slurm_assignments=has_slurm_assignments,
             )
 
     def retained_scheduling_descriptors(
@@ -2521,6 +2531,30 @@ def _require_agent_journal_schema(conn: sqlite3.Connection) -> None:
         },
         "agent journal",
     )
+
+
+def _run_active_assignment_count(
+    conn: sqlite3.Connection,
+    run_uri: str,
+    *,
+    has_slurm_assignments: bool,
+) -> int:
+    active = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri = ? "
+            "AND state IN ('reserved','bound','accepted','granted','running','unknown')",
+            (run_uri,),
+        ).fetchone()[0]
+    )
+    if has_slurm_assignments:
+        active += int(
+            conn.execute(
+                "SELECT COUNT(*) FROM slurm_stage_assignments WHERE run_uri = ? "
+                "AND state NOT IN ('rejected','released')",
+                (run_uri,),
+            ).fetchone()[0]
+        )
+    return active
 
 
 def _require_coordinator_assignment_schema(conn: sqlite3.Connection) -> None:

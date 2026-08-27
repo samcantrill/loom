@@ -733,10 +733,11 @@ def test_remote_start_permit_serializes_with_cancellation_request(
             conn.execute(
                 "INSERT INTO managed_admissions(admission_id, queue_item_id, "
                 "coordinator_id, run_uri, intent_digest, execution_owner, state, "
-                "accepted_at, authority_operation_id, cancellation_operation_id) "
+                "accepted_at, authority_operation_id, run_priority, "
+                "enqueue_sequence, cancellation_operation_id) "
                 "VALUES ('admission-cancelled', 'item-cancelled', ?, "
                 "'run://cancelled', 'digest', 'managed-stage', 'CANCELLED', ?, "
-                "'authority-op', 'cancel-op')",
+                "'authority-op', 0, 1, 'cancel-op')",
                 (str(handshake["coordinator_id"]), "2020-01-01T00:00:00Z"),
             )
             conn.commit()

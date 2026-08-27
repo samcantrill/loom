@@ -795,7 +795,7 @@ def test_sqlite_store_rejects_unsupported_schema_on_reopen(tmp_path: Path) -> No
         SQLiteStageWorkStore(path).list_stage_work()
 
 
-def test_sqlite_ready_window_is_ordered_bounded_and_does_not_reject_large_plans(
+def test_257_stage_pipeline_drains_across_bounded_ready_windows(
     tmp_path: Path,
 ) -> None:
     run_uri = "file:///ready-window"
@@ -825,6 +825,48 @@ def test_sqlite_ready_window_is_ordered_bounded_and_does_not_reject_large_plans(
         store.ready_window(limit=1)[0].to_work_item().order_key.negative_priority == -9
     )
     assert store.ready_window(limit=256)[-1].enqueue_sequence == 3
+    for record in window:
+        store.create_or_refresh(
+            replace(record, scheduling_state=SchedulingProjectionState.DECIDED)
+        )
+    final_window = store.ready_window()
+    assert [record.stage_name for record in final_window] == ["stage-256"]
+    store.create_or_refresh(
+        replace(final_window[0], scheduling_state=SchedulingProjectionState.DECIDED)
+    )
+    assert store.ready_window() == ()
+
+
+def test_ready_window_preserves_fifo_admission_order_after_restart(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "coordinator.sqlite"
+    store = SQLiteStageWorkStore(path)
+    for suffix, enqueue_sequence, ready_at in (
+        ("older", 1, 20),
+        ("newer", 2, 10),
+    ):
+        run_uri = f"file:///{suffix}"
+        authority = _authority(run_uri)
+        RunOrchestrator(
+            authority=authority,
+            store=store,
+            owner_id="coordinator",
+        ).reconcile(
+            admission_id=f"admission-{suffix}",
+            plan=_plan(run_uri, _stage(suffix)),
+            authority_snapshot=authority.open_run(run_uri),
+            placements={suffix: _placement()},
+            ready_at=ready_at,
+            run_priority=4,
+            enqueue_sequence=enqueue_sequence,
+        )
+
+    reopened = SQLiteStageWorkStore(path, _allow_initialize=False)
+    assert [record.stage_name for record in reopened.ready_window()] == [
+        "older",
+        "newer",
+    ]
 
 
 def test_stage_work_hard_cut_requires_durable_global_order_fields() -> None:

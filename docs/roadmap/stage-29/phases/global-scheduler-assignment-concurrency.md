@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 10
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p10-global-scheduler-assignment-concurrency`
-- Worktree root and path: `/home/can134/work/active/loom-worktrees`; phase path is `<root>/stage-29-p10-global-scheduler-assignment-concurrency`
-- Base revision: current `origin/develop` when the worktree is created
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`; phase path is `/home/can134/work/active/loom-worktrees/stage-29-p10-global-scheduler-assignment-concurrency`
+- Base revision: `e5ad16d9a056420bcd2a9317ecb945628da9e36b`
 - PR target: `develop`
 - PR title: `feat(scheduling): run the global assignment scheduler`
 - Dependencies: merged Phase 9F baseline `a6cd482` and current `develop`
@@ -191,22 +191,26 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning draft complete; exact base/worktree pending setup
+- Manager preparation: complete; manifest links/status, approved production-correction quality gate, current `origin/develop`, exact branch/worktree, historical predecessor merge, source seams, and one expanded plan-review correction verified at `e5ad16d`
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: pending
-- Refiner: not needed
-- Pre-submit gate: pending
-- Independent review: not needed unless a material residual risk remains
-- Blocker corrections: 0/3
+- Implementation: complete after one executor pass, one qualified refiner pass,
+  and one manager-local bounded correction that closed the remaining global-cycle
+  blocker
+- Refiner: completed one qualified blocker correction; stale incomplete-tree
+  gate was terminated after ceasing progress and is not pass evidence
+- Pre-submit gate: passed on the completed tree
+- Independent review: not needed; manager review found no material residual risk
+  beyond the explicitly deferred Phase 11 and Phase 12 contracts
+- Blocker corrections: 2/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
+| Implementation and changed paths | Durable global order/window and hard-cut stage-work/admission schemas in `orchestration.py` and `local_daemon.py`; all-admission projection plus global managed/SLURM selection in `local_daemon_execution.py`; assignment-keyed local observers; exact advisory/final run-limit count in `_managed_local.py`; current remote-agent hard-cut reader in `agent_session_transport.py`. |
+| Tests added or updated | 257-stage bounded-window drain and restart FIFO; atomic run-slot count; global cross-run priority; exhausted-run bypass; same-run local/local and local/remote overlap; admission-local failure isolation; updated hard-cut fixtures. |
+| Validated revision/tree state and evidence | `make validate-pr` passed: Ruff and Pyright clean; 2,586 default tests passed with 122 deselected; 142 config-extra tests passed with 3 environment skips and 2,589 deselected; source and wheel builds succeeded. `make test-summary` passed: package 118, unit 1,836, contract 296, integration 278, e2e 58, and config-extra 142 passed. |
+| Validation-relevant changes after evidence | Only this phase evidence/status documentation; no source, test, dependency, build, or validation-configuration change. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Mandatory execution-profile identity, environment/provider composition, bounded public status/polls, accepted-time recovery, atomic deployment initialization, and supported service commands remain explicitly owned by Phases 11-12. The terminated stale incomplete-tree gate remains a validation anomaly, not evidence. |

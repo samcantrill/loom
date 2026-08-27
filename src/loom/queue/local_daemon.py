@@ -8,7 +8,6 @@ saga. Clients provide only a queue identity and run URI.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -884,9 +883,7 @@ class LocalDaemon:
         self._stop = Event()
         self._wake = Event()
         self._thread: Thread | None = None
-        self._assignment_workers: ThreadPoolExecutor | None = None
         self._execution: LocalDaemonExecution | None = None
-        self._assignment_futures: dict[str, Future[LocalDaemonExecutionOutcome]] = {}
         self._cycle_lock = RLock()
         self._service_error: str | None = None
         self._agent_policy = config.agent_policy
@@ -1007,10 +1004,6 @@ class LocalDaemon:
             self._agent_id = None
             self._scheduling_epoch = None
             raise
-        assignment_workers = ThreadPoolExecutor(
-            max_workers=self.config.cpu_capacity,
-            thread_name_prefix="loom-local-assignment",
-        )
         from .local_daemon_execution import LocalDaemonExecution
 
         try:
@@ -1033,7 +1026,6 @@ class LocalDaemon:
             # ordinary result/output/provider replay.
             execution.resume_retained_local_work()
         except Exception:
-            assignment_workers.shutdown(wait=True)
             agent_lock.close()
             coordinator_lock.close()
             self._coordinator_id = None
@@ -1055,7 +1047,6 @@ class LocalDaemon:
         self._service_error = None
         self._stop.clear()
         self._wake.set()
-        self._assignment_workers = assignment_workers
         self._execution = execution
         self._thread = thread
         try:
@@ -1072,11 +1063,8 @@ class LocalDaemon:
         self._thread = None
         if thread is not None:
             thread.join()
-        assignment_workers = self._assignment_workers
-        self._assignment_workers = None
-        if assignment_workers is not None:
-            assignment_workers.shutdown(wait=True)
-        self._assignment_futures.clear()
+        if self._execution is not None:
+            self._execution.close()
         self._execution = None
         for lock in (self._agent_lock, self._coordinator_lock):
             if lock is not None:
@@ -1356,17 +1344,16 @@ class LocalDaemon:
         )
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
-        """Drive each admission through authority, orchestration, and execution."""
+        """Project every admission, then schedule one global bounded window."""
 
         self._require_started()
         with self._cycle_lock:
             execution = self._execution
-            assignment_workers = self._assignment_workers
-            if execution is None or assignment_workers is None:
-                raise QueueServiceError("local daemon assignment supervisor is absent")
+            if execution is None:
+                raise QueueServiceError("local daemon execution is absent")
             execution.open_owner_stores()
-            self._harvest_assignment_futures()
             self._resume_pending_recoveries(execution)
+            execution.begin_cycle()
             with self._connection() as conn:
                 admissions = tuple(
                     _admission_from_row(row)
@@ -1382,38 +1369,57 @@ class LocalDaemon:
                         ),
                     )
                 )
+            schedulable: dict[str, LocalDaemonAdmission] = {}
+            waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
             for admission in admissions:
-                if admission.admission_id in self._assignment_futures:
-                    continue
-                future = assignment_workers.submit(execution.advance, admission)
-                future.add_done_callback(lambda _future: self._wake.set())
-                self._assignment_futures[admission.admission_id] = future
-            self._harvest_assignment_futures()
-            return self.status().admissions
+                try:
+                    outcome = execution.reconcile_admission(admission)
+                except QueueConflictError:
+                    self._record_admission_health(admission.admission_id, "failed")
+                    self._set_state(
+                        admission.admission_id,
+                        LocalDaemonAdmissionState.BLOCKED,
+                        reason="authority_or_intent_conflict",
+                    )
+                except Exception:  # one unhealthy run cannot stop other admissions
+                    self._record_admission_health(admission.admission_id, "unavailable")
+                else:
+                    self._record_admission_health(admission.admission_id, "healthy")
+                    if outcome.state is LocalDaemonAdmissionState.WAITING:
+                        waiting_outcomes[admission.admission_id] = outcome
+                    else:
+                        self._set_state(
+                            admission.admission_id,
+                            outcome.state,
+                            reason=outcome.reason,
+                        )
+                    if outcome.state in {
+                        LocalDaemonAdmissionState.ACTIVE,
+                        LocalDaemonAdmissionState.WAITING,
+                    }:
+                        schedulable[admission.admission_id] = admission
 
-    def _harvest_assignment_futures(self) -> None:
-        for admission_id, future in tuple(self._assignment_futures.items()):
-            if not future.done():
-                continue
-            del self._assignment_futures[admission_id]
-            try:
-                outcome = future.result()
-            except QueueConflictError:
-                self._record_admission_health(admission_id, "failed")
-                self._set_state(
-                    admission_id,
-                    LocalDaemonAdmissionState.BLOCKED,
-                    reason="authority_or_intent_conflict",
-                )
-            except Exception:  # outages stay replayable and admission-scoped
-                self._record_admission_health(admission_id, "unavailable")
-            else:
+            # The durable ready query owns the 256-item window.  A cycle may
+            # launch at most that many assignments, but a larger pipeline is
+            # never rejected merely for having more stages.
+            started_admissions: set[str] = set()
+            for _ in range(256):
+                scheduled = execution.schedule_once(schedulable)
+                if scheduled is None:
+                    break
+                admission_id, outcome = scheduled
+                started_admissions.add(admission_id)
                 self._record_admission_health(admission_id, "healthy")
+                self._set_state(admission_id, outcome.state, reason=outcome.reason)
+            for admission_id, outcome in waiting_outcomes.items():
+                if admission_id in started_admissions:
+                    continue
                 self._set_state(
                     admission_id,
-                    outcome.state,
+                    LocalDaemonAdmissionState.WAITING,
                     reason=outcome.reason,
                 )
+            return self.status().admissions
 
     def _serve(self) -> None:
         while not self._stop.is_set():

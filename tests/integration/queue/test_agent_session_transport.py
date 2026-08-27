@@ -710,6 +710,71 @@ def _prepare_remote_producer_run(
     return run_uri, authority
 
 
+def _prepare_mixed_local_remote_sleep_run(
+    store: LocalRunStore,
+) -> tuple[str, SQLitePerRunAuthorityStore]:
+    run_uri = path_to_run_uri(store.root / "mixed-local-remote")
+    store.create_run(run_uri)
+    pipeline_config = {
+        "name": "mixed-local-remote",
+        "stages": [
+            {
+                "name": stage_name,
+                "factory": {
+                    "_target_": "tests.support.pipeline_execution_stages.SleepStage"
+                },
+                "config": {"seconds": 2},
+                "resources": {
+                    "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
+                },
+                "placement": {"target": target},
+                "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
+            }
+            for stage_name, target in (
+                ("local", "machine-A"),
+                ("remote", "agent-a"),
+            )
+        ],
+    }
+    spec = PipelineSpec.from_config(pipeline_config)
+    plan = plan_pipeline(
+        spec,
+        run_uri=run_uri,
+        run_store=store,
+        artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
+        persist=True,
+    )
+    store.write_runtime_metadata(
+        run_uri,
+        {
+            "executor": "local",
+            "stages": {
+                "local": {"executor": "local"},
+                "remote": {"executor": "local"},
+            },
+        },
+    )
+    store.write_config_snapshot(
+        run_uri,
+        "resolved",
+        json_dumps_pretty({"pipeline": pipeline_config}),
+    )
+    prepare_managed_local_runtime_record(
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=spec,
+        options={
+            "run_uri": run_uri,
+            "executor": "local",
+            "execution": {"settings": {"max_parallel_stages": 2}},
+        },
+    )
+    authority = SQLitePerRunAuthorityStore(run_uri)
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
+    return run_uri, authority
+
+
 def _prepare_remote_sleep_run(
     store: LocalRunStore, *, run_name: str, machine_id: str
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
@@ -2138,6 +2203,142 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
     finally:
         agent_a.close()
         agent_b.close()
+        server.stop()
+        daemon.stop()
+
+
+def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    descriptor = ResidentProfileDescriptor(
+        "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+    )
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-credential",
+                "agent-principal",
+                "agent-a",
+                ("default",),
+                capabilities,
+            ),
+        )
+    )
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri, authority = _prepare_mixed_local_remote_sleep_run(store)
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "coordinator-agent",
+        store.root,
+        _local_launch_profile(),
+        cpu_capacity=1,
+        agent_policy=policy,
+        remote_profiles=(descriptor,),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(credentials["agent"].with_suffix(".crt")): (
+                    "agent-credential"
+                )
+            },
+        ),
+    )
+    server.start()
+    profile = ResidentExecutionProfile(
+        descriptor,
+        Path(__file__).resolve().parents[3],
+        Path(sys.executable),
+    )
+    remote_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
+    agent = LocalDaemonAgentHttpClient(remote_config)
+    try:
+        handshake = agent.handshake()
+        session = agent.register(
+            AgentRegistration(
+                "register-mixed-run",
+                str(handshake["coordinator_id"]),
+                str(handshake["coordinator_epoch"]),
+                agent.agent_root_id,
+                "config-1",
+                "inventory-1",
+                "availability-1",
+                ("default",),
+                capabilities,
+            )
+        )
+        agent.publish_offer(
+            AgentOffer(
+                session.session_id,
+                session.coordinator_epoch,
+                session.config_revision,
+                session.inventory_revision,
+                session.availability_revision,
+                1,
+                0,
+                30,
+                _resident_provider_descriptors(profile, session.agent_id),
+                resident_profiles=(descriptor,),
+            ),
+            idempotency_key="offer-mixed-run",
+        )
+        coordinator = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        with ThreadPoolExecutor(max_workers=1) as workers:
+            remote = workers.submit(
+                agent.execute_one,
+                session.session_id,
+                session.availability_revision,
+                poll_id="poll-mixed-run",
+                wait_timeout_ms=5_000,
+            )
+            coordinator.submit(LocalDaemonAdmissionRequest("mixed-item", run_uri))
+            deadline = monotonic() + 2
+            active_agent_ids: set[str] = set()
+            while monotonic() < deadline:
+                with sqlite3.connect(config.execution_database) as conn:
+                    active_agent_ids = {
+                        str(row[0])
+                        for row in conn.execute(
+                            "SELECT agent_id FROM coordinator_assignments "
+                            "WHERE run_uri = ? AND state IN "
+                            "('reserved','bound','accepted','granted','running','unknown')",
+                            (run_uri,),
+                        )
+                    }
+                if active_agent_ids == {"machine-A", "agent-a"}:
+                    break
+                sleep(0.01)
+            assert active_agent_ids == {"machine-A", "agent-a"}
+            assert remote.result(timeout=20)["state"] == "RELEASED"
+        assert coordinator.wait("mixed-item", timeout_seconds=10).state is (
+            LocalDaemonAdmissionState.SUCCEEDED
+        )
+        assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+    finally:
+        agent.close()
         server.stop()
         daemon.stop()
 
