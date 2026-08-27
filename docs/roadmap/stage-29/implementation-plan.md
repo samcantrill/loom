@@ -1,12 +1,12 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: implementation complete; Phases 1-3D, 4A, 5A, 6, 7B, 8A, 9C2, 9D2, 9E, and 9F merged;
-Phases 3A-3C, 4, 5, 7, 7A, 8, 9, 9A, 9B, 9C, and 9D retained as blocked evidence
+Status: production correction approved; Phases 10-12 pending after the merged
+Stage 29 baseline; historical blocked evidence remains read-only
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 9F `merged`
+Current phase: Phase 10 `pending`
 Blockers: none at the stage level. Phase 9 correction budget 3/3 was exhausted
 after candidate `ef3be2f` implemented only the validated resident-worker service
 hard cut. Fresh Phase 9A selectively reused that source change and attempted the
@@ -22,7 +22,13 @@ that final local release was not replay-safe after correction 3/3. Maintainer-
 approved Phase 9D2 closed only that release-replay finding and squash-merged as
 `82b311f`. Phase 9E closed SLURM restart plus guarded recovery/retry;
 Phase 9F closed session replacement, operations, and final validation as
-`a6cd482`. Every phase uses fresh schema identities.
+`a6cd482`. The maintainer subsequently approved a three-phase production
+correction: Phase 10 replaces per-admission scheduling with one global bounded
+window and assignment-scoped background execution; Phase 11 closes resident
+identity, environment, and provider composition; Phase 12 bounds status/polls,
+adds per-admission/time health, makes root initialization atomic, and supplies
+the supported coordinator/agent deployment commands. Every new phase uses fresh
+schema identities and provides no migration or dual read.
 
 ## Summary
 
@@ -695,6 +701,9 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 9D2 | `embedded-release-replay-closure` | merged | `docs/roadmap/stage-29/phases/embedded-release-replay-closure.md` | `agent/stage-29-p9d2-embedded-release-replay-closure` | [#247](https://github.com/samcantrill/loom/pull/247) merged | Selective Phase 9D reuse; saved availability-revision replay after fresh observation; final event acknowledgement before coordinator release; identical definitive-decline ordering; causal crash-cut proof | Local gates, required independent review, and exact PR CI passed; squash-merged as `82b311f`. |
 | 9E | `slurm-guarded-recovery-closure` | merged | `docs/roadmap/stage-29/phases/slurm-guarded-recovery-closure.md` | `agent/stage-29-p9e-slurm-guarded-recovery-closure` | [#248](https://github.com/samcantrill/loom/pull/248) merged | Coordinator and SLURM restart; no-resubmit reconciliation; exact unknown-only managed/SLURM containment evidence; privileged recovery close; authority terminal-or-close CAS; existing-policy retry | Required expanded review blocker corrected; fresh local gate passed; squash-merged as `0dab7a9` without compatibility or a second retry policy. |
 | 9F | `session-replacement-recovery-operations` | merged | `docs/roadmap/stage-29/phases/session-replacement-recovery-operations.md` | `agent/stage-29-p9f-session-replacement-recovery-operations` | [#249](https://github.com/samcantrill/loom/pull/249) merged | Complete different-session replacement; old-root provider-release proof before capacity restoration; fresh coordinator identities for changed withholding; stale old-session fact rejection; joined status and authenticated operations; operational guidance; final Stage 29 validation | Required review findings closed by correction 2/3; 179 phase tests, the fresh local gate, and 2,720 categorized tests passed; squash-merged as `a6cd482`. |
+| 10 | `global-scheduler-assignment-concurrency` | pending | `docs/roadmap/stage-29/phases/global-scheduler-assignment-concurrency.md` | `agent/stage-29-p10-global-scheduler-assignment-concurrency` | not opened | Protected-policy run priority; durable enqueue sequence; globally ordered 256-item ready window; all-admission projection; assignment-keyed asynchronous local/remote/SLURM launch and reconciliation; same-run concurrency; per-admission reconciliation health | Select and durably start independent assignments across all admitted runs without waiting for stage completion, while preserving atomic per-run and physical-capacity safety. |
+| 11 | `resident-agent-correctness-security` | pending | `docs/roadmap/stage-29/phases/resident-agent-correctness-security.md` | `agent/stage-29-p11-resident-agent-correctness-security` | not opened | Mandatory managed execution requirement; one candidate per agent resident profile; exact pinned profile target; allowlisted worker environment; explicit agent provider composition; planner/provider contract startup validation; public provider conformance check | Ensure every managed assignment targets exactly one compatible resident environment and receives only explicitly constructed environment/provider bindings. |
+| 12 | `operational-bounds-deployment` | pending | `docs/roadmap/stage-29/phases/operational-bounds-deployment.md` | `agent/stage-29-p12-operational-bounds-deployment` | not opened | Constant-shape summary status; ordered bounded/cursored admission list; targeted revision-aware detail/wait; one sequenced replay state per session; fenced accepted-time health/recovery; atomic local deployment-bundle and remote-agent-root publication; supported protected coordinator config and agent service command; final hard-cut docs | Make internal and public operations bounded, keep failures correctly scoped, fail closed on time anomalies, and expose a complete supported coordinator/agent deployment path. |
 
 Phase 1 is the pure-kernel/preparation/projection architectural gate: its only
 new authoritative lifecycle operation is idempotent creation of an unassigned
@@ -727,10 +736,24 @@ ordering was not replay-safe after correction 3/3. Fresh Phase 9D2 selectively
 reused that candidate, closed only the release-replay finding, and merged as
 `82b311f`. Phase 9E owns
 SLURM restart and guarded recovery/retry; Phase 9F completed replacement,
-operations, and final validation.
+operations, and the original final validation. Phases 10-12 are the approved
+production correction and proceed strictly in order. Phase 10 owns the global
+scheduler and assignment execution unit, Phase 11 owns executable resident-agent
+identity/security, and Phase 12 owns bounded operations and deployment. Old
+Stage 29 roots and managed runtime/session records are deliberately unsupported.
 
 ## Quality Gate
 
+- Production-correction gate: the maintainer supplied and approved the ten
+  numbered correction requirements, essential causal tests, three-phase order,
+  and fresh-only hard cut. Manager evidence at `8ff3894` confirms each named
+  production divergence. The one expanded plan review found four concrete
+  readiness blockers and three consistency concerns. One bounded correction
+  defined single-directory atomic publication units, fenced/replayable accepted-
+  time recovery with epoch rotation, Phase 10 as the sole per-admission-health
+  owner, exact same-resource planner/provider coverage, stable keyset admission
+  order and wait outcomes, allowed phase statuses, and this review disposition.
+  No plan blocker remains; Phases 10-12 are approved and dependency-ordered.
 - Planning gate: per-stage behavior, dependency ownership, resource semantics,
   fixed-kernel/downstream extension authority, threat model, security/lifecycle,
   data accessibility, deprecation map, and the approved nine-phase exception

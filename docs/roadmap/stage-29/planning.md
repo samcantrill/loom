@@ -1,7 +1,7 @@
 # Roadmap Stage 29 Planning: Durable Dependency-Aware Stage Scheduling
 
-Status: Stage 29 implementation complete; Phases 1-3D, 4A, 5A, 6, 7B, 8A,
-9C2, 9D2, 9E, and 9F merged; blocked predecessors remain read-only evidence
+Status: production correction approved; Phases 10-12 pending after the merged
+Phases 1-3D, 4A, 5A, 6, 7B, 8A, 9C2, 9D2, 9E, and 9F baseline
 Roadmap stage: 29
 Evidence baseline: repository source at
 `b045f45c763568d8d8cd3e2fbb1e5a8bf80ddf43` plus isolated blocked Phase 3A
@@ -27,17 +27,95 @@ fresh 2,720-pass summary, and squash merge `a6cd482`
 Planning route: the original expanded Stage 29 design remains authoritative.
 The maintainer approved the hard cut-over and selected a Slurm prolog/container-
 provisioned allocation-private capability file for the ready-stage recovery.
-Current gate: Stage 29 implementation, final validation, merged metadata, and
-Phase 9F workflow cleanup are complete on `develop`.
-Blockers: none. The accepted target-specific containment, terminal-or-close
-arbitration, existing-policy retry, and different-session replacement contracts
-are implemented; blocked Phase 9 predecessors remain read-only evidence.
+Current gate: the maintainer-requested production correction is behavior- and
+design-approved. Three linked execution plans own the hard cut in dependency
+order; Phase 10 is next.
+Blockers: none. The merged Stage 29 safety kernel and lifecycle machinery remain
+the base, but the daemon composition, resident-agent boundary, and operational
+surfaces do not satisfy the production correction until Phases 10-12 merge.
 
 This file is the current Stage 29 authority. It supersedes the earlier Stage 29
 whole-run placement design. A user still submits, observes, and cancels a run,
 but Loom schedules each runnable `PlanAction.RUN` stage attempt independently.
 This is necessary because `preprocess`, `train`, and `evaluate` can have very
 different resources and useful placements.
+
+## Production Correction Agreement
+
+Evidence at `8ff3894` shows a material divergence between the accepted Stage 29
+contracts and the production composition. `LocalDaemon.reconcile_once()` starts
+one future per admission, `LocalDaemonExecution.advance()` schedules only that
+admission and runs a local assignment synchronously, and a run-wide remote guard
+prevents another remote assignment for the same run. `StageWorkRecord` drops the
+run priority/enqueue identity already supported by `WorkItem`; the SQLite
+stage-work store has no ordered ready-window query; the kernel's 256-item safety
+bound therefore becomes a whole-input rejection instead of a window. The daemon
+status path joins every admission, control, and run, each poll creates a retained
+row, a successful admission can clear another admission's reconciliation error,
+and accepted time rejects only regression while permitting an arbitrary forward
+jump to become the new high-water. Agent candidates collapse several resident
+profiles to the first sorted match, the durable runtime record has no mandatory
+execution requirement, and worker launch starts from a filtered copy of the
+daemon environment.
+
+The minimum useful correction is one coordinator-wide scheduling cycle over all
+dependency-ready work, followed by assignment-scoped background execution and
+separate reconciliation. Durable admissions own a protected-policy-resolved
+integer priority and a coordinator-allocated monotonic enqueue sequence.
+Stage-work ordering is exactly priority descending, enqueue sequence, ready time,
+topological order, stage name, attempt, and stable work identity. The store
+returns at most 256 ready records in that order; the total pipeline size is not a
+scheduling error. Projection/reconciliation for all active admissions happens
+before placement, and the daemon repeats selection/reservation/launch while
+capacity remains. The existing atomic per-run reservation limit remains the
+authoritative race guard. Local, remote, and explicit SLURM work may therefore
+overlap within one run when dependency readiness, capacity, and
+`max_parallel_stages` permit it.
+
+Every managed stage carries one exact protected execution requirement:
+project, environment, and executor fingerprints. Every resident profile in an
+agent offer is an independent candidate identified by agent/session/profile;
+compatibility is an exact mandatory check before resource feasibility, and the
+assignment pins profile ID and fingerprint. Agent physical capacity comes from
+an explicit provider composition. Every advertised provider must match the
+active planner for the same resource kind and share at least one exact claim-
+contract descriptor; unrelated kinds are never Cartesian-checked. Worker launch constructs a new
+small allowlisted environment from the selected profile, workspace, and explicit
+provider claim contributions. It never begins with `os.environ` and intentionally
+breaks ambient credential/config inheritance.
+
+Operational reads are separated by cost and ownership: summary status is
+constant-shape, admission listing is bounded/cursored, one admission detail is
+an explicit owner join, and wait observes only one admission/revision. Internal
+reconciliation uses nonterminal owner queries and never calls the public status
+projector. Agent polling stores one replayable sequenced state per session;
+exact sequence replay returns the same result, the next sequence advances, and
+stale or gapped sequences fail closed. Reconciliation health is durable per
+admission, so one success cannot erase another failure; only shared owner/store
+failure degrades the service globally. Accepted time has explicit healthy or
+degraded state, rejects regression and a configured maximum forward step before
+changing the high-water, pauses new scheduling, and needs an explicit recovery
+fenced by expected time revision and coordinator epoch. Recovery samples server
+time, rotates the epoch, and requires fresh offers. Fresh local coordinator plus
+embedded-agent state is published as one atomically renamed deployment bundle;
+a remote agent root is independently staged and atomically published. Deployment
+exposes one protected coordinator configuration plus a distinct agent service
+command.
+
+This is an intentional hard cut. Daemon-root, managed-runtime, stage-work, and
+agent-session/poll identities are bumped wherever the old representation could
+otherwise be accepted. There is no migration, dual read, compatibility adapter,
+or silent defaulting of old records. Operators finish or abandon active managed
+runs, archive old roots read-only, initialize fresh coordinator and agent roots,
+prepare fresh runtime records, re-register profiles/providers, and submit new
+admissions.
+
+The three vertical phases are required because their failure domains are
+causally ordered: Phase 10 establishes global/assignment execution semantics;
+Phase 11 makes every resulting placement executable by the exact safe agent
+identity; Phase 12 bounds and exposes the corrected service. No module split is
+accepted merely to reduce file size; split only around one of these implemented
+owner seams.
 
 ## Current State
 
@@ -66,7 +144,8 @@ different resources and useful placements.
 | Phase 9D2 execution evidence | Source/test `731b3c4` closes both final release callers and both causal crash cuts while retaining the complete Phase 9D hard cut. Focused and full local gates, required independent review, and exact PR CI passed. | None. PR #247 squash-merged as `82b311f`. | Prepare Phase 9E from current `develop`; retain Phase 9D only as blocked evidence. |
 | Phase 9E execution evidence | Source/test `cc2f82a` completes no-resubmit SLURM restart, exact unknown-only managed/SLURM recovery admission, target-owned containment, authority arbitration, existing-policy retry, and retained physical ownership. Focused tests and the fresh full local gate passed; the required review blocker was corrected. | None. PR #248 squash-merged as `0dab7a9`; the repository exposed no PR check run. | Prepare Phase 9F from current `develop`; retain earlier blocked Phase 9 candidates only as read-only evidence. |
 | Phase 9F execution evidence | Corrected source/test `eb0537d` completes guarded different-session replacement, complete owner classification, fresh successor readiness, old-root provider-release proof before capacity restoration, fresh coordinator offer identities after withholding changes, bounded status, and all adapters/guidance. The 179-test phase matrix, `make validate-pr`, and a fresh 2,720-pass summary succeeded; required review findings closed at correction 2/3. | None. PR #249 squash-merged as `a6cd482`; hosted CI is intentionally disabled. | Preserve the hard-cut version 7 replacement and cleanup contracts; no Phase 9F workflow action remains. |
-| Approval | The maintainer approved the Stage 29 hard cut-over, explicitly rejected candidate-schema compatibility or migration, approved the Slurm job-private capability contract and recovery closures, and approved Phase 9F implementation after each blocker explanation. | None. | Stage 29 implementation is complete. |
+| Approval | The maintainer approved the original Stage 29 hard cut-over, explicitly rejected candidate-schema compatibility or migration, approved the Slurm job-private capability contract and recovery closures, and approved Phase 9F implementation after each blocker explanation. | None. | Preserve the merged baseline and historical evidence. |
+| Production correction | The maintainer supplied and approved the global-scheduling, assignment-execution, resident-agent, bounded-operations, time-health, initialization, deployment, and three-phase hard-cut requirements recorded above. | None; compatibility is explicitly unnecessary. | Execute Phases 10-12 in order, starting with Phase 10. |
 
 ## Evidence And Scope
 
