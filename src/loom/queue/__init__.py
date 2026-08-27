@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         LocalDaemonStatus,
         ManagedRecoveryTarget,
         RecoverUnknownAssignment,
+        SessionReplacementRequest,
         SlurmRecoveryTarget,
     )
     from .local_daemon_transport import (
@@ -138,6 +139,7 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
         "LocalDaemonStatus",
         "ManagedRecoveryTarget",
         "RecoverUnknownAssignment",
+        "SessionReplacementRequest",
         "ResidentWorkerLaunchProfile",
         "SlurmRecoveryTarget",
     }
@@ -219,6 +221,7 @@ __all__ = [
     "ObserveResult",
     "RecoverUnknownAssignment",
     "ResidentWorkerLaunchProfile",
+    "SessionReplacementRequest",
     "SlurmRecoveryTarget",
     "prepare_managed_local_runtime_record",
     "LaunchEnvironmentBindings",

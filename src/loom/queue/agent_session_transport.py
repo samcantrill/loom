@@ -33,6 +33,7 @@ from loom.queue._managed_local import (
     ClaimOutcome,
     ManagedAssignment,
     ObserveRequest,
+    ProviderReleaseEvidence,
     SQLiteAgentJournal,
     GpuResourceProvider,
     _cancelled_worker_result,
@@ -47,6 +48,7 @@ from loom.scheduling import SchedulingComponentDescriptor
 from .agent_sessions import (
     AgentAssignmentControl,
     AgentOffer,
+    AgentProviderReleaseProof,
     AgentControl,
     AgentControlEffect,
     AgentPollActiveError,
@@ -54,6 +56,7 @@ from .agent_sessions import (
     AgentRetirementProof,
     AgentSession,
     AgentSessionState,
+    SessionReplacementRequest,
     AgentTransferAuthorizationStaleError,
     PROTOCOL_VERSION,
     ScopedAuthorizer,
@@ -253,7 +256,7 @@ class _RemoteAgentJournal:
             raise QueueServiceError("remote agent control state is unavailable")
         try:
             with self._connection() as conn:
-                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 6:
+                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 7:
                     raise QueueServiceError("remote agent root schema is unsupported")
                 metadata = {
                     str(row[0]): str(row[1])
@@ -834,6 +837,104 @@ class _RemoteAgentJournal:
             )
         return tuple(str(row["assignment_id"]) for row in rows)
 
+    def contained_assignment_control(
+        self, session_id: str, assignment_id: str, fence: str
+    ) -> str:
+        """Return the one acknowledged old-root containment operation."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT operation_id, request_json FROM "
+                    "remote_assignment_controls_local WHERE assignment_id = ? "
+                    "AND result_code = 'contained' AND acknowledged = 1 "
+                    "ORDER BY operation_id",
+                    (assignment_id,),
+                )
+            )
+        if len(rows) != 1:
+            raise QueueConflictError(
+                "contained assignment has no exact acknowledged control"
+            )
+        raw = json.loads(str(rows[0]["request_json"]))
+        if not isinstance(raw, Mapping):
+            raise QueueServiceError("retained assignment control is invalid")
+        control = AgentAssignmentControl.from_value(raw)
+        if (
+            control.session_id != session_id
+            or control.assignment_id != assignment_id
+            or control.fence != fence
+        ):
+            raise QueueConflictError("contained assignment control is stale")
+        return str(rows[0]["operation_id"])
+
+    def provider_release_proof(
+        self,
+        session_id: str,
+        assignment_id: str,
+        execution_journal: SQLiteAgentJournal,
+    ) -> AgentProviderReleaseProof:
+        """Join old-root possession to immutable provider-release evidence."""
+
+        evidence: ProviderReleaseEvidence = execution_journal.provider_release_evidence(
+            assignment_id
+        )
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT value_json, retirement_secret, state FROM "
+                "agent_sessions_local WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            controls = tuple(
+                conn.execute(
+                    "SELECT operation_id FROM remote_assignment_controls_local "
+                    "WHERE assignment_id = ? AND result_code = 'contained' "
+                    "AND acknowledged = 1 ORDER BY operation_id",
+                    (assignment_id,),
+                )
+            )
+        if row is None or str(row["state"]) != AgentSessionState.ACTIVE.value:
+            raise QueueServiceError("remote agent session evidence is unavailable")
+        value = json.loads(str(row["value_json"]))
+        if not isinstance(value, Mapping):
+            raise QueueServiceError("remote agent session evidence is invalid")
+        session = _session_from_value(cast(Mapping[str, PlainData], value))
+        secret = row["retirement_secret"]
+        assignment = evidence.assignment
+        if (
+            session.agent_root_id != self.root_id
+            or assignment.session_id != session.session_id
+            or assignment.agent_id != session.agent_id
+        ):
+            raise QueueConflictError(
+                "provider release evidence does not match the old agent root"
+            )
+        if not isinstance(secret, str) or len(secret) != 64:
+            raise QueueServiceError("remote agent retirement secret is unavailable")
+        if len(controls) > 1:
+            raise QueueConflictError(
+                "provider release has conflicting containment controls"
+            )
+        recovery_control_operation_id = (
+            None if not controls else str(controls[0]["operation_id"])
+        )
+        return AgentProviderReleaseProof(
+            session_id=session.session_id,
+            coordinator_id=session.coordinator_id,
+            coordinator_epoch=session.coordinator_epoch,
+            agent_id=session.agent_id,
+            agent_root_id=session.agent_root_id,
+            policy_revision=session.policy_revision,
+            config_revision=session.config_revision,
+            inventory_revision=session.inventory_revision,
+            assignment_id=assignment.assignment_id,
+            claim_id=assignment.claim_id,
+            execution_fence=evidence.execution_fence,
+            released_availability_revision=evidence.availability_revision,
+            recovery_control_operation_id=recovery_control_operation_id,
+            retirement_secret=secret,
+        )
+
     def fence_and_prove_empty(self, session_id: str) -> AgentRetirementProof:
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -1179,7 +1280,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v6",
+                    "agent-sessions-v7",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -1545,6 +1646,13 @@ class LocalDaemonAgentHttpClient:
             "recover_unknown", {"request": request.to_dict()}, role="operator"
         )
 
+    def replace_agent_session(
+        self, request: SessionReplacementRequest
+    ) -> Mapping[str, PlainData]:
+        return self._call(
+            "replace_agent_session", {"request": request.to_dict()}, role="operator"
+        )
+
     def authorize_transfers(
         self,
         session_id: str,
@@ -1870,6 +1978,18 @@ class LocalDaemonAgentHttpClient:
         fence: str,
         availability_revision: str,
     ) -> AgentSession:
+        journal = self._require_journal()
+        execution_journal = self._execution_journal
+        if execution_journal is None:
+            raise QueueServiceError("remote execution journal is required")
+        proof = journal.provider_release_proof(
+            session_id, assignment_id, execution_journal
+        )
+        if (
+            proof.execution_fence != fence
+            or proof.released_availability_revision != availability_revision
+        ):
+            raise QueueConflictError("remote provider release proof is stale")
         session = _session_from_value(
             self._call(
                 "release",
@@ -1878,13 +1998,75 @@ class LocalDaemonAgentHttpClient:
                     "assignment_id": assignment_id,
                     "fence": fence,
                     "availability_revision": availability_revision,
+                    "provider_release_proof": proof.value(),
                 },
             )
         )
-        journal = self._require_journal()
-        journal.persist_reconciled_session(session)
+        if session.state is AgentSessionState.ACTIVE:
+            journal.persist_reconciled_session(session)
+        elif session.state is not AgentSessionState.REPLACED:
+            raise QueueConflictError("remote release returned an invalid session state")
         journal.resolve_assignment_reference(session_id, assignment_id)
         return session
+
+    def release_contained_assignment(
+        self, session_id: str, assignment_id: str, *, fence: str
+    ) -> AgentSession:
+        """Release providers from the old root after guarded containment closes."""
+
+        journal = self._require_journal()
+        session = journal.session(session_id)
+        journal.contained_assignment_control(session_id, assignment_id, fence)
+        workspace = _ResidentAssignmentWorkspace(
+            cast(Path, self._config.agent_root), assignment_id
+        )
+        request = workspace.request()
+        profile = self._profile_for_descriptor(request.profile)
+        if profile is None:
+            raise QueueConflictError(
+                "contained assignment has no exact resident profile"
+            )
+        providers, execution_journal = self._runtime_owners(session, profile)
+        commands = execution_journal.assignment_claim_commands(assignment_id)
+        if not commands:
+            raise QueueConflictError("contained assignment claim is unavailable")
+        assignment = commands[0].assignment
+        if (
+            assignment.assignment_id != assignment_id
+            or assignment.session_id != session_id
+            or any(command.assignment != assignment for command in commands)
+        ):
+            raise QueueConflictError("contained assignment claim is stale")
+        state = execution_journal.read_state(assignment_id)
+        if state is AssignmentState.PROCESS_STARTED:
+            result_path = workspace.root / "worker-result.json"
+            if not result_path.is_file():
+                raise QueueConflictError("contained assignment result is unavailable")
+            result = StageWorkerResult.from_dict(
+                json.loads(result_path.read_text(encoding="utf-8"))
+            )
+            workspace.persist_worker_result(result)
+            execution_journal.record_result(assignment_id, result.to_dict())
+        elif state not in {
+            AssignmentState.RESULT_DURABLE,
+            AssignmentState.TERMINAL_ACKNOWLEDGED,
+            AssignmentState.PROVIDERS_RELEASED,
+            AssignmentState.RELEASED,
+        }:
+            raise QueueConflictError("contained assignment is not provider-releasable")
+        availability_revision = self._release_provider_claims(
+            session,
+            assignment,
+            commands,
+            providers,
+            execution_journal,
+        )
+        return self.release_assignment(
+            session_id,
+            assignment_id,
+            fence=fence,
+            availability_revision=availability_revision,
+        )
 
     def execute_one(
         self,
@@ -2504,40 +2686,13 @@ class LocalDaemonAgentHttpClient:
                 session.session_id, request.assignment_id, fence=fence
             ),
         )
-        local_state = execution_journal.acknowledge_terminal(assignment.assignment_id)
-        if local_state is AssignmentState.RELEASED:
-            # Re-observe the fully reconstructed provider set, then replay the
-            # exact revision already committed before the application crash.
-            self._availability_revision(session, request.assignment_id, providers)
-            next_revision = execution_journal.read_availability_revision(
-                assignment.assignment_id
-            )
-            if next_revision is None:
-                raise QueueConflictError(
-                    "released remote availability evidence is unavailable"
-                )
-        else:
-            if local_state is not AssignmentState.PROVIDERS_RELEASED:
-                for command in commands:
-                    released = providers[command.claim.resource_kind].release(
-                        ClaimCommand(
-                            assignment,
-                            f"{command.operation_id}:release",
-                            command.claim,
-                            command.provider_descriptor,
-                        )
-                    )
-                    if released.outcome is not ClaimOutcome.RELEASED:
-                        raise QueueConflictError(
-                            "remote provider release is indeterminate"
-                        )
-                execution_journal.mark_providers_released(assignment.assignment_id)
-            next_revision = self._availability_revision(
-                session, request.assignment_id, providers
-            )
-            execution_journal.publish_availability(
-                assignment.assignment_id, next_revision
-            )
+        next_revision = self._release_provider_claims(
+            session,
+            assignment,
+            commands,
+            providers,
+            execution_journal,
+        )
         released_session = cast(
             AgentSession,
             self._assignment_call(
@@ -2603,6 +2758,53 @@ class LocalDaemonAgentHttpClient:
                 path="remote pre-grant cancellation",
             )
         raise QueueConflictError("assignment control delivery exceeds its bound")
+
+    def _release_provider_claims(
+        self,
+        session: AgentSession,
+        assignment: ManagedAssignment,
+        commands: tuple[ClaimCommand, ...],
+        providers: Mapping[str, AtomResourceProvider],
+        execution_journal: SQLiteAgentJournal,
+    ) -> str:
+        """Release the exact composite and persist fresh capacity before RPC."""
+
+        local_state = execution_journal.acknowledge_terminal(assignment.assignment_id)
+        if local_state is AssignmentState.RELEASED:
+            # Re-observe the reconstructed providers, then replay only the
+            # availability revision already committed by this old root.
+            self._availability_revision(session, assignment.assignment_id, providers)
+            retained_revision = execution_journal.read_availability_revision(
+                assignment.assignment_id
+            )
+            if retained_revision is None:
+                raise QueueConflictError(
+                    "released remote availability evidence is unavailable"
+                )
+            return retained_revision
+        if local_state is not AssignmentState.PROVIDERS_RELEASED:
+            for command in commands:
+                provider = providers.get(command.claim.resource_kind)
+                if provider is None:
+                    raise QueueConflictError(
+                        "remote provider release owner is unavailable"
+                    )
+                released = provider.release(
+                    ClaimCommand(
+                        assignment,
+                        f"{command.operation_id}:release",
+                        command.claim,
+                        command.provider_descriptor,
+                    )
+                )
+                if released.outcome is not ClaimOutcome.RELEASED:
+                    raise QueueConflictError("remote provider release is indeterminate")
+            execution_journal.mark_providers_released(assignment.assignment_id)
+        next_revision = self._availability_revision(
+            session, assignment.assignment_id, providers
+        )
+        execution_journal.publish_availability(assignment.assignment_id, next_revision)
+        return next_revision
 
     @staticmethod
     def _availability_revision(
@@ -3289,13 +3491,23 @@ def _dispatch(
     if operation == "release":
         _exact(
             value,
-            {"session_id", "assignment_id", "fence", "availability_revision"},
+            {
+                "session_id",
+                "assignment_id",
+                "fence",
+                "availability_revision",
+                "provider_release_proof",
+            },
         )
+        raw_proof = value["provider_release_proof"]
+        if not isinstance(raw_proof, Mapping):
+            raise QueueServiceError("agent provider release proof is invalid")
         return view.release_assignment(
             _string(value, "session_id"),
             _string(value, "assignment_id"),
             fence=_string(value, "fence"),
             availability_revision=_string(value, "availability_revision"),
+            provider_release_proof=_provider_release_proof(raw_proof),
         ).value()
     if operation == "control":
         _exact(value, {"session_id"})
@@ -3410,6 +3622,14 @@ def _dispatch_application(
             if not isinstance(request, Mapping):
                 raise QueueServiceError("recovery request is invalid")
             return view.recover_unknown(RecoverUnknownAssignment.from_dict(request))
+        if operation == "replace_agent_session":
+            _exact(value, {"request"})
+            request = value["request"]
+            if not isinstance(request, Mapping):
+                raise QueueServiceError("session replacement request is invalid")
+            return view.replace_agent_session(
+                SessionReplacementRequest.from_dict(request)
+            )
     elif role == LocalDaemonRole.SLURM_BOOTSTRAP.value:
         view = daemon.slurm_bootstrap_view(principal)
         if operation == "register":
@@ -3641,6 +3861,49 @@ def _retirement_proof(value: Mapping[str, object]) -> AgentRetirementProof:
         availability_revision=_string(value, "availability_revision"),
         reference_revision=_integer(value, "reference_revision"),
         reference_digest=_string(value, "reference_digest"),
+        retirement_secret=_string(value, "retirement_secret"),
+    )
+
+
+def _provider_release_proof(
+    value: Mapping[str, object],
+) -> AgentProviderReleaseProof:
+    _exact(
+        value,
+        {
+            "session_id",
+            "coordinator_id",
+            "coordinator_epoch",
+            "agent_id",
+            "agent_root_id",
+            "policy_revision",
+            "config_revision",
+            "inventory_revision",
+            "assignment_id",
+            "claim_id",
+            "execution_fence",
+            "released_availability_revision",
+            "recovery_control_operation_id",
+            "retirement_secret",
+        },
+    )
+    raw_control = value["recovery_control_operation_id"]
+    if raw_control is not None and not isinstance(raw_control, str):
+        raise QueueServiceError("agent recovery control proof is invalid")
+    return AgentProviderReleaseProof(
+        session_id=_string(value, "session_id"),
+        coordinator_id=_string(value, "coordinator_id"),
+        coordinator_epoch=_string(value, "coordinator_epoch"),
+        agent_id=_string(value, "agent_id"),
+        agent_root_id=_string(value, "agent_root_id"),
+        policy_revision=_string(value, "policy_revision"),
+        config_revision=_string(value, "config_revision"),
+        inventory_revision=_string(value, "inventory_revision"),
+        assignment_id=_string(value, "assignment_id"),
+        claim_id=_string(value, "claim_id"),
+        execution_fence=_string(value, "execution_fence"),
+        released_availability_revision=_string(value, "released_availability_revision"),
+        recovery_control_operation_id=raw_control,
         retirement_secret=_string(value, "retirement_secret"),
     )
 

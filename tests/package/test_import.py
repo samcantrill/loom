@@ -61,6 +61,7 @@ def test_import_loom_diagnostics_public_api() -> None:
 
 def test_import_loom_queue_public_api() -> None:
     import loom.queue
+    from loom.queue import SessionReplacementRequest
 
     assert "QueueItem" in loom.queue.__all__
     assert "QueueService" in loom.queue.__all__
@@ -78,6 +79,13 @@ def test_import_loom_queue_public_api() -> None:
     assert "load_queue_spec" in loom.queue.__all__
     assert "SQLiteQueueRepository" in loom.queue.__all__
     assert "validate_one_queue_per_pool" in loom.queue.__all__
+    assert "SessionReplacementRequest" in loom.queue.__all__
+    assert (
+        SessionReplacementRequest(
+            "replace-agent", "agent-a", "lost agent root"
+        ).agent_id
+        == "agent-a"
+    )
 
 
 def test_import_managed_local_queue_runtime_is_removed() -> None:

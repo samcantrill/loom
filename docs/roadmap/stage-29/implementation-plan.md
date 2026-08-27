@@ -6,7 +6,7 @@ Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 9E `in_progress`
+Current phase: Phase 9F `approved`
 Blockers: none at the stage level. Phase 9 correction budget 3/3 was exhausted
 after candidate `ef3be2f` implemented only the validated resident-worker service
 hard cut. Fresh Phase 9A selectively reused that source change and attempted the
@@ -20,7 +20,7 @@ reload mismatch and missing fresh-process/two-profile proof after correction
 implemented and validated the embedded/local cut-over, but required review found
 that final local release was not replay-safe after correction 3/3. Maintainer-
 approved Phase 9D2 closed only that release-replay finding and squash-merged as
-`82b311f`. Phase 9E now closes SLURM restart plus guarded recovery/retry;
+`82b311f`. Phase 9E closed SLURM restart plus guarded recovery/retry;
 Phase 9F closes session replacement, operations, and final validation. Every
 phase uses fresh schema identities.
 
@@ -694,7 +694,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 9D | `embedded-supervisor-restart-closure` | blocked | `docs/roadmap/stage-29/phases/embedded-supervisor-restart-closure.md` | `agent/stage-29-p9d-embedded-supervisor-restart-closure` | No PR opened | Validated local profile/CLI hard cut, shared resident bundle, supervisor-only embedded execution, and same-session replay candidate; required review found final local release is not replay-safe across availability publication, coordinator release, and final-event acknowledgement | Preserve validated implementation `c516f63` as read-only evidence; correction 3/3 is exhausted. |
 | 9D2 | `embedded-release-replay-closure` | merged | `docs/roadmap/stage-29/phases/embedded-release-replay-closure.md` | `agent/stage-29-p9d2-embedded-release-replay-closure` | [#247](https://github.com/samcantrill/loom/pull/247) merged | Selective Phase 9D reuse; saved availability-revision replay after fresh observation; final event acknowledgement before coordinator release; identical definitive-decline ordering; causal crash-cut proof | Local gates, required independent review, and exact PR CI passed; squash-merged as `82b311f`. |
 | 9E | `slurm-guarded-recovery-closure` | merged | `docs/roadmap/stage-29/phases/slurm-guarded-recovery-closure.md` | `agent/stage-29-p9e-slurm-guarded-recovery-closure` | [#248](https://github.com/samcantrill/loom/pull/248) merged | Coordinator and SLURM restart; no-resubmit reconciliation; exact unknown-only managed/SLURM containment evidence; privileged recovery close; authority terminal-or-close CAS; existing-policy retry | Required expanded review blocker corrected; fresh local gate passed; squash-merged as `0dab7a9` without compatibility or a second retry policy. |
-| 9F | `session-replacement-recovery-operations` | pending | `docs/roadmap/stage-29/phases/session-replacement-recovery-operations.md` | `agent/stage-29-p9f-session-replacement-recovery-operations` | pending | Complete different-session replacement; stale old-session fact rejection; remaining joined status and authenticated operations; operational guidance; final Stage 29 E2E/validation/summary | Complete the accepted recovery surface and close Stage 29 with fresh-process evidence and all gates. |
+| 9F | `session-replacement-recovery-operations` | pr_open | `docs/roadmap/stage-29/phases/session-replacement-recovery-operations.md` | `agent/stage-29-p9f-session-replacement-recovery-operations` | [#249](https://github.com/samcantrill/loom/pull/249) | Complete different-session replacement; stale old-session fact rejection; remaining joined status and authenticated operations; operational guidance; final Stage 29 E2E/validation/summary | Complete the accepted recovery surface and close Stage 29 with fresh-process evidence and all gates. |
 
 Phase 1 is the pure-kernel/preparation/projection architectural gate: its only
 new authoritative lifecycle operation is idempotent creation of an unassigned
@@ -970,4 +970,4 @@ and final validation.
 | 9D | No PR opened; blocked branch head `a7f3014` | Validated implementation `c516f63`; focused Phase 9D matrix passed 177 tests and `make validate-pr` passed; required independent review blocked submission | Restart after durable availability publication can conflict with a recomputed revision; restart after coordinator release can omit the final release event | Correction 3/3 exhausted; dedicated branch/worktree retained read-only |
 | 9D2 | [#247](https://github.com/samcantrill/loom/pull/247), squash-merged as `82b311f` | Source/test revision `731b3c4`; four causal crash cases, 102 affected tests, refreshed `make validate-pr`, required independent review, and exact PR CI passed | No known phase blocker; Phase 9E/F scope remains explicit | Correction 2/3; remote/local phase branches and dedicated worktree removed after exact merge-tree verification |
 | 9E | [#248](https://github.com/samcantrill/loom/pull/248), squash-merged as `0dab7a9` | Source/test `cc2f82a`; 11 focused recovery/containment tests and refreshed `make validate-pr` passed with 2,568 default plus 141 configuration-extra tests and 3 expected skips; required review blocker was corrected | No known phase blocker; Phase 9F owns different-session replacement and final Stage 29 summary | Correction 3/3; dedicated worktree and local/remote phase branches removed after verified merge |
-| 9F | pending after Phase 9E merge | pending | Replacement must not accept stale old-session facts or advertise capacity before the complete reference set is resolved | Worktree and branch not yet created |
+| 9F | pending | Manager preparation complete at base `2412862`; expanded plan refinement pending | Replacement must not accept stale old-session facts or advertise capacity before the complete reference set is resolved | Dedicated worktree and branch created |
