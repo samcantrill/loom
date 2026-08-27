@@ -68,8 +68,8 @@ model should stay shared.
 ## Stage 29 Managed And Explicit-SLURM Recovery Direction
 
 Stage 29 makes reliability assignment- and stage-aware for the managed local/
-multi-agent path and its explicit ready-stage SLURM target. This section records planned behavior; the authoritative
-contracts and phase ownership remain in
+multi-agent path and its explicit ready-stage SLURM target. This section records
+the supported behavior; the authoritative contracts and phase ownership remain in
 [Stage 29 planning](../roadmap/stage-29/planning.md).
 
 - A granted assignment receives an authority-owned execution fence that does
@@ -208,6 +208,87 @@ capacity unavailable until its physical owner supplies its separate exact
 release proof. These recovery tables and protocol fields are a hard cut: point
 the new runtime at freshly initialized coordinator and agent roots rather than
 attempting to open or upgrade an older schema.
+
+### Lost-session replacement operator procedure
+
+Replacement is for a permanently unavailable agent root. It is not a shortcut
+for normal maintenance. If the old agent can still cooperate and has no work,
+use clean retirement instead.
+
+The coordinator makes the safety decision. The operator supplies only a stable
+operation ID, the stable agent ID, and a reason:
+
+```python
+from loom.queue import SessionReplacementRequest
+
+request = SessionReplacementRequest(
+    operation_id="replace-machine-b-2026-08-27",
+    agent_id="machine-b",
+    reason="encrypted agent disk was lost; incident INC-1234",
+)
+receipt = operator.replace_agent_session(request)
+```
+
+The operator does not supply the old session ID, claim IDs, or a containment
+claim. Loom derives the old session and joins its assignments, claims,
+deliveries, controls, transfers, results, events, recovery receipts, and
+authority state. Replacement fails without changing the session when that
+inventory is incomplete or any retained assignment lacks exact release or a
+closed guarded-recovery receipt.
+
+For a retained unknown assignment, finish guarded recovery first by writing the
+exact request copied from joined status to a protected JSON file and submitting
+it with the same recovery ID on every retry:
+
+```bash
+loom queue daemon-recover-unknown \
+  --endpoint COORDINATOR_SOCKET \
+  --request recovery.json \
+  --format json
+```
+
+After every affected assignment is released or positively contained, request
+the fence:
+
+```bash
+loom queue daemon-replace-agent-session \
+  --endpoint COORDINATOR_SOCKET \
+  --operation-id replace-machine-b-2026-08-27 \
+  --agent-id machine-b \
+  --reason "encrypted agent disk was lost; incident INC-1234" \
+  --format json
+```
+
+A successful first receipt has `state: decision` and `readiness: withheld`.
+That means the old session is permanently fenced; it does not mean capacity is
+available. Retry response-loss cases with the identical operation ID and
+arguments. Reusing the ID with changed content conflicts.
+
+Create a genuinely fresh agent root, then register it through the ordinary
+agent startup path with fresh configuration, inventory, availability, and
+retirement identities. The coordinator mints a different session ID. The new
+session inherits no old claim, token, process, transfer, event, or outbox state:
+
+```python
+from pathlib import Path
+
+from loom.queue import LocalDaemon
+
+LocalDaemon.initialize_agent_root(Path("/new/protected/agent-root"))
+
+# Ordinary agent registration happens next. Its first full provider offer is
+# observed at zero usable old capacity while retained old claims are withheld.
+```
+
+Polling is rejected until that fresh full provider offer and a post-fence
+old-reference recheck both succeed. Status then reports `state: ready` and
+`readiness: ready` with bounded owner counts. It never exposes claim IDs,
+credentials, private paths, or recovery evidence payloads.
+
+This is a hard cut-over. Protocol and coordinator/agent state are version 7;
+there is no migration, compatibility reader, or adoption of an old root. Keep
+old roots for incident evidence if needed, initialize new roots separately, and
+do not copy their SQLite files into the new runtime.
 
 ## Design Goals
 

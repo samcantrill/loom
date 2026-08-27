@@ -40,7 +40,9 @@ from .agent_sessions import (
     AgentControlEffect,
     AgentPolicyConfig,
     AgentSessionView,
+    SessionReplacementRequest,
     initialize_agent_session_schema,
+    replace_agent_session,
     validate_agent_session_schema,
 )
 from ._agent_process_supervisor import ResidentWorkerLaunchProfile
@@ -54,7 +56,7 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 6
+_LOCAL_DAEMON_SCHEMA_VERSION = 7
 
 
 class LocalDaemonAdmissionState(StrEnum):
@@ -1233,6 +1235,37 @@ class LocalDaemon:
                     )
                 )
             for row in conn.execute(
+                "SELECT principal_id, request_json, old_session_id, "
+                "successor_session_id, state, readiness, withholding_reason, "
+                "result_json FROM session_replacements "
+                "ORDER BY operation_id"
+            ):
+                request = SessionReplacementRequest.from_dict(
+                    json.loads(str(row["request_json"]))
+                )
+                result = json.loads(str(row["result_json"]))
+                if not isinstance(result, Mapping) or not isinstance(
+                    result.get("owner_counts"), Mapping
+                ):
+                    raise QueueStorageError("session replacement result is invalid")
+                controls.append(
+                    freeze_plain_data(
+                        {
+                            "owner": "session-replacement",
+                            "operation_id": request.operation_id,
+                            "principal": str(row["principal_id"]),
+                            "agent_id": request.agent_id,
+                            "state": str(row["state"]),
+                            "old_session_id": str(row["old_session_id"]),
+                            "successor_session_id": row["successor_session_id"],
+                            "readiness": str(row["readiness"]),
+                            "withholding_reason": row["withholding_reason"],
+                            "owner_counts": result["owner_counts"],
+                        },
+                        path="session replacement status",
+                    )
+                )
+            for row in conn.execute(
                 "SELECT request_json, state, result_code, acknowledged "
                 "FROM remote_assignment_controls ORDER BY operation_id"
             ):
@@ -1800,6 +1833,20 @@ class LocalDaemon:
         self._wake.set()
         return freeze_plain_data(result, path="recovery receipt")
 
+    def _replace_agent_session(
+        self, principal: LocalDaemonPrincipal, request: SessionReplacementRequest
+    ) -> Mapping[str, PlainData]:
+        """Fence one completely classified old session before successor bind."""
+
+        execution = self._execution
+        if execution is None:
+            raise QueueServiceError("replacement coordinator execution is unavailable")
+        with self._cycle_lock:
+            with execution.scheduling_reload_guard():
+                result = replace_agent_session(self, principal, request)
+        self._wake.set()
+        return result
+
     def _advance_recovery(
         self,
         execution: "LocalDaemonExecution",
@@ -2247,7 +2294,8 @@ class LocalDaemonOperatorView:
         return self._daemon.reconcile_once()
 
     def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
-        return self._daemon._control_agent(self._principal, control)
+        with self._daemon._cycle_lock:
+            return self._daemon._control_agent(self._principal, control)
 
     def reload_scheduling(
         self, request: CoordinatorSchedulingReload
@@ -2259,6 +2307,12 @@ class LocalDaemonOperatorView:
     ) -> Mapping[str, PlainData]:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon._recover_unknown(self._principal, request)
+
+    def replace_agent_session(
+        self, request: SessionReplacementRequest
+    ) -> Mapping[str, PlainData]:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return self._daemon._replace_agent_session(self._principal, request)
 
 
 @dataclass(frozen=True, slots=True)

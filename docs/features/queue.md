@@ -794,8 +794,8 @@ loom queue drain-foreground queue.yaml --max-items 1
 ```
 
 `loom queue start` validates and starts the in-process service for that command.
-It does not leave a background supervisor running. A later queue daemon roadmap
-can add process supervision or socket transport.
+It does not leave a background supervisor running. The managed local daemon is
+a separate persistent service with an owner-only socket transport.
 
 `loom queue drain-foreground` includes the fake adapter by default and can enable
 the built-in delegated SLURM adapter with `--slurm`. Managed local production
@@ -844,6 +844,32 @@ loom queue daemon-scheduling-reload \
   --reason trusted-site-config-updated
 ```
 
+Unknown-assignment recovery and permanently lost-session replacement are
+separate privileged operations. Recovery must close each exact retained unknown
+assignment before replacement can use its containment evidence:
+
+```bash
+loom queue daemon-recover-unknown \
+  --endpoint COORDINATOR_SOCKET \
+  --request recovery.json \
+  --format json
+
+loom queue daemon-replace-agent-session \
+  --endpoint COORDINATOR_SOCKET \
+  --operation-id replace-machine-B-1 \
+  --agent-id machine-B \
+  --reason "old protected agent root is permanently unavailable" \
+  --format json
+```
+
+Replacement derives the old session and containment facts from protected
+state. Callers cannot choose the old session, claim that work is contained, or
+make the successor ready. A successful decision fences the old session and
+keeps successor capacity at zero until a fresh root registers, publishes a full
+provider observation, and passes the post-fence reference recheck. See the
+[lost-session replacement procedure](reliability.md#lost-session-replacement-operator-procedure)
+for the complete sequence.
+
 Cancellation commits the coordinator request before returning. Inspection may
 therefore show `requested`, then `effective` or `settling`, before terminal
 `CANCELLED`:
@@ -856,9 +882,8 @@ loom queue daemon-wait --endpoint COORDINATOR_SOCKET QUEUE_ITEM
 
 Reuse the same operation ID when retrying a response-loss case. Changed content
 under that ID conflicts. This is a hard cut-over: initialize fresh daemon/agent
-roots and use the v3 CLI result shape (agent protocol and journal schema v5);
-Loom does not upgrade or dual-read the
-previous control schema.
+roots and use the v4 CLI result shape with agent protocol and coordinator/agent
+state version 7. Loom does not upgrade or dual-read a previous control schema.
 
 For a resident remote agent, initialize its protected root and detached
 supervisor before starting the agent application.  On an application restart,

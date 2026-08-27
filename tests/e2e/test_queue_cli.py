@@ -12,6 +12,21 @@ import sys
 import pytest
 
 from loom.cli.main import main
+from loom.queue import (
+    LocalDaemon,
+    LocalDaemonConfig,
+    LocalDaemonPrincipal,
+    LocalDaemonRole,
+    LocalDaemonSocketServer,
+    ResidentWorkerLaunchProfile,
+)
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+from loom.queue.agent_sessions import (
+    AgentPolicyConfig,
+    AgentPrincipalPolicy,
+    AgentRegistration,
+    TransportPrincipalPolicy,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -110,6 +125,109 @@ def test_queue_cli_pool_status_uses_existing_v1_envelope(tmp_path: Path) -> None
         "counts",
         "active_attempts",
     }
+
+
+def test_session_replacement_cli_uses_the_owner_socket_and_safe_result(
+    tmp_path: Path,
+) -> None:
+    owner = f"uid:{os.getuid()}"
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-credential",
+                "agent-principal",
+                "agent-a",
+                ("default",),
+                ("python",),
+            ),
+        ),
+        principals=(
+            TransportPrincipalPolicy(
+                "operator-credential",
+                owner,
+                "operator",
+                actions=("replace_session",),
+                agent_ids=("agent-a",),
+            ),
+        ),
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=ResidentWorkerLaunchProfile(
+            Path.cwd(),
+            Path(sys.executable),
+            ResidentProfileDescriptor(
+                "test-local",
+                "v1",
+                "test-project",
+                "test-environment",
+                "test-executor",
+            ).to_dict(),
+        ),
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    agent = daemon.agent_view(
+        LocalDaemonPrincipal(
+            "agent-principal", LocalDaemonRole.AGENT, "agent-credential"
+        )
+    )
+    handshake = agent.handshake()
+    session = agent.register(
+        AgentRegistration(
+            idempotency_key="register-lost-agent",
+            coordinator_id=str(handshake["coordinator_id"]),
+            coordinator_epoch=str(handshake["coordinator_epoch"]),
+            agent_root_id="lost-agent-root",
+            config_revision="config-1",
+            inventory_revision="inventory-1",
+            availability_revision="availability-1",
+            declared_pools=("default",),
+            declared_capabilities=("python",),
+            retirement_verifier="01" * 32,
+        )
+    )
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server.start()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    try:
+        assert (
+            main(
+                [
+                    "queue",
+                    "daemon-replace-agent-session",
+                    "--endpoint",
+                    str(config.endpoint),
+                    "--operation-id",
+                    "replace-from-cli",
+                    "--agent-id",
+                    session.agent_id,
+                    "--reason",
+                    "old agent root is permanently unavailable",
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
+        )
+    finally:
+        server.stop()
+        daemon.stop()
+
+    assert stderr.getvalue() == ""
+    envelope = json.loads(stdout.getvalue())
+    assert envelope["result"]["state"] == "decision"
+    assert envelope["result"]["readiness"] == "withheld"
+    assert envelope["result"]["old_session_id"] == session.session_id
+    assert envelope["result"]["successor_session_id"] is None
+    assert "request_digest" not in envelope["result"]
 
 
 def test_managed_local_queue_example_is_rerunnable(tmp_path: Path) -> None:

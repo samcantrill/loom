@@ -386,6 +386,7 @@ class _RemoteCandidateTarget:
     offer: AgentOffer
     profile: ResidentProfileDescriptor
     availability_atoms: tuple[CapacityAtom, ...]
+    reflected_claim_ids: tuple[str, ...]
 
 
 def _connect_existing_sqlite(path: Path) -> sqlite3.Connection:
@@ -1874,9 +1875,7 @@ class LocalDaemonExecution:
         ):
             raise QueueConflictError("recovery expected state conflicts")
         if not self._recovery_binding_is_unknown(request, binding):
-            raise QueueConflictError(
-                "recovery target is not in an exact unknown state"
-            )
+            raise QueueConflictError("recovery target is not in an exact unknown state")
 
     def recovery_target_is_still_unknown(
         self, request: RecoverUnknownAssignment
@@ -1899,9 +1898,7 @@ class LocalDaemonExecution:
                 return True
             if record.state != "running":
                 return False
-            submission = self.slurm_submissions.find(
-                record.assignment.operation_id
-            )
+            submission = self.slurm_submissions.find(record.assignment.operation_id)
             return submission is not None and (
                 submission.scheduler_source == "unavailable"
                 or submission.scheduler_state == "UNKNOWN"
@@ -1919,10 +1916,9 @@ class LocalDaemonExecution:
                 coordinator_state = self.coordinator.state(request.assignment_id)
                 if coordinator_state == "unknown":
                     return str(row["state"]) in {"GRANTED", "RUNNING", "UNKNOWN"}
-                if (
-                    coordinator_state not in {"granted", "running"}
-                    or str(row["state"]) not in {"GRANTED", "RUNNING"}
-                ):
+                if coordinator_state not in {"granted", "running"} or str(
+                    row["state"]
+                ) not in {"GRANTED", "RUNNING"}:
                     return False
                 offer = conn.execute(
                     "SELECT expires_at FROM agent_offers "
@@ -2746,6 +2742,87 @@ class LocalDaemonExecution:
         finally:
             self._launch_lock.release()
 
+    def session_replacement_assignment_facts(
+        self, session_id: str
+    ) -> tuple[Mapping[str, PlainData], ...]:
+        """Enumerate the complete coordinator assignment set for a session."""
+
+        try:
+            return self.coordinator.session_assignment_facts(session_id=session_id)
+        except ManagedLocalError as exc:
+            raise QueueConflictError(
+                "old session coordinator inventory is unavailable"
+            ) from exc
+
+    def session_replacement_withheld_atoms(
+        self,
+        *,
+        agent_id: str,
+        atoms: Sequence[CapacityAtom],
+        claim_ids: Sequence[str],
+    ) -> tuple[CapacityAtom, ...]:
+        """Project a fresh offer after exact old claims are withheld."""
+
+        try:
+            return self.coordinator.withhold_claims(
+                agent_id=agent_id, atoms=atoms, claim_ids=claim_ids
+            )
+        except ManagedLocalError as exc:
+            raise QueueConflictError(
+                "replacement claim withholding is unavailable"
+            ) from exc
+
+    def validate_session_replacement_recovery(
+        self, request: RecoverUnknownAssignment
+    ) -> Mapping[str, PlainData]:
+        """Recheck the exact Phase 9E containment and authority-close winner."""
+
+        if not isinstance(request.target, ManagedRecoveryTarget):
+            raise QueueConflictError(
+                "session replacement requires managed recovery evidence"
+            )
+        binding = self._recovery_binding(request)
+        _record, run_uri, stage_name, attempt, attempt_id = binding
+        snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
+        matches = [
+            item
+            for stage in snapshot.stages
+            if stage.stage_name == stage_name
+            for item in stage.attempts
+            if item.attempt == attempt and item.attempt_id == attempt_id
+        ]
+        if len(matches) != 1:
+            raise QueueConflictError(
+                "replacement authority assignment identity conflicts"
+            )
+        current = matches[0]
+        expected_status = (
+            StageStatus.FAILED
+            if request.requested_outcome == "failed"
+            else StageStatus.CANCELLED
+        )
+        detail = {} if current.reason is None else current.reason.detail
+        if (
+            current.status is not expected_status
+            or current.reason is None
+            or current.reason.code != "operator.recovery_close"
+            or detail.get("recovery_id") != request.recovery_id
+            or detail.get("assignment_id") != request.assignment_id
+        ):
+            raise QueueConflictError(
+                "replacement recovery did not win the authority close"
+            )
+        return freeze_plain_data(
+            {
+                "recovery_id": request.recovery_id,
+                "assignment_id": request.assignment_id,
+                "attempt_id": attempt_id,
+                "authority_revision": current.revision.sequence,
+                "status": current.status.value,
+            },
+            path="session replacement authority fact",
+        )
+
     def prepare_scheduling_reload(
         self,
         replacement: LocalDaemonConfig,
@@ -3503,8 +3580,12 @@ class LocalDaemonExecution:
             rows = tuple(
                 conn.execute(
                     "SELECT o.offer_id, o.offer_json, o.expires_at, "
-                    "s.agent_id, s.session_id FROM agent_offers o "
+                    "s.agent_id, s.session_id, r.observed_claim_ids_json "
+                    "FROM agent_offers o "
                     "JOIN agent_sessions s ON s.session_id = o.session_id "
+                    "LEFT JOIN session_replacements r "
+                    "ON r.successor_session_id = s.session_id "
+                    "AND r.readiness = 'ready' "
                     "WHERE o.current = 1 AND o.coordinator_epoch = ? "
                     "AND s.state = 'ACTIVE' AND s.coordinator_epoch = ?",
                     (self.coordinator_epoch, self.coordinator_epoch),
@@ -3564,6 +3645,30 @@ class LocalDaemonExecution:
                 )
                 for atom in offer.gpu_atoms
             )
+            raw_withheld_claim_ids = row["observed_claim_ids_json"]
+            if raw_withheld_claim_ids is None:
+                withheld_claim_ids: tuple[str, ...] = ()
+            else:
+                try:
+                    decoded_claim_ids = json.loads(str(raw_withheld_claim_ids))
+                except json.JSONDecodeError as exc:
+                    raise QueueConflictError(
+                        "replacement claim inventory is invalid"
+                    ) from exc
+                if (
+                    not isinstance(decoded_claim_ids, list)
+                    or any(not isinstance(item, str) for item in decoded_claim_ids)
+                    or len(set(decoded_claim_ids)) != len(decoded_claim_ids)
+                ):
+                    raise QueueConflictError("replacement claim inventory is invalid")
+                withheld_claim_ids = tuple(sorted(decoded_claim_ids))
+                availability_atoms = list(
+                    self.session_replacement_withheld_atoms(
+                        agent_id=agent_id,
+                        atoms=availability_atoms,
+                        claim_ids=withheld_claim_ids,
+                    )
+                )
             inventory: dict[str, ResourceInventoryEnvelope] = {}
             availability: dict[str, ResourceAvailabilityEnvelope] = {}
             for kind in {atom.owner_resource_kind for atom in inventory_atoms}:
@@ -3627,6 +3732,9 @@ class LocalDaemonExecution:
                 offer=offer,
                 profile=profile,
                 availability_atoms=tuple(availability_atoms),
+                reflected_claim_ids=tuple(
+                    sorted(set(offer.reflected_claim_ids) | set(withheld_claim_ids))
+                ),
             )
             targets[agent_id] = (candidate, target)
         return targets
@@ -3810,7 +3918,7 @@ class LocalDaemonExecution:
                     provider_descriptors[kind] for kind in sorted(provider_descriptors)
                 ),
                 atoms=remote_target.availability_atoms,
-                reflected_claim_ids=remote_target.offer.reflected_claim_ids,
+                reflected_claim_ids=remote_target.reflected_claim_ids,
             )
         self.coordinator.publish_offer(offer_snapshot)
         stage = intent.pipeline.get_stage(record.stage_name)
@@ -4216,6 +4324,19 @@ class LocalDaemonExecution:
             )
         elif state != "released":
             raise QueueConflictError("remote assignment is not logically released")
+
+    def remote_release_recovered(self, request: RecoverUnknownAssignment) -> None:
+        """Release only the exact claim covered by a guarded recovery close."""
+
+        if self.coordinator.state(request.assignment_id) == "released":
+            return
+        self.validate_session_replacement_recovery(request)
+        try:
+            self.coordinator.release_contained(request.assignment_id)
+        except ManagedLocalError as exc:
+            raise QueueConflictError(
+                "contained remote assignment is not releasable"
+            ) from exc
 
     def slurm_register(
         self,

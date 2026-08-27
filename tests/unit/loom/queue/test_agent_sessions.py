@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import hashlib
@@ -35,8 +36,13 @@ from loom.queue.agent_sessions import (
     AgentPrincipalPolicy,
     AgentRegistration,
     AgentRetirementProof,
+    AgentSession,
     AgentSessionState,
+    SessionReplacementRequest,
     TransportPrincipalPolicy,
+    _REPLACEMENT_ASSIGNMENT_REFERENCE_CLASSES,
+    _build_replacement_projection,
+    initialize_agent_session_schema,
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError, QueueStorageError
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
@@ -48,6 +54,133 @@ _TEST_RETIREMENT_SECRET = "01" * 32
 _TEST_RETIREMENT_VERIFIER = hashlib.sha256(
     bytes.fromhex(_TEST_RETIREMENT_SECRET)
 ).hexdigest()
+
+
+def _replacement_projection_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    initialize_agent_session_schema(conn, coordinator=True)
+    conn.execute(
+        "CREATE TABLE recovery_operations (recovery_id TEXT PRIMARY KEY, "
+        "principal_id TEXT NOT NULL, request_json TEXT NOT NULL, "
+        "request_digest TEXT NOT NULL, recorded_at TEXT NOT NULL, "
+        "state TEXT NOT NULL, evidence_json TEXT, result_json TEXT NOT NULL)"
+    )
+    return conn
+
+
+def _replacement_projection_session() -> AgentSession:
+    return AgentSession(
+        session_id="session-old",
+        coordinator_id="coordinator",
+        coordinator_epoch="epoch",
+        agent_id="agent-a",
+        agent_root_id="root-old",
+        policy_revision="policy",
+        config_revision="config",
+        inventory_revision="inventory",
+        availability_revision="availability",
+        capabilities=("python",),
+        pools=("default",),
+        state=AgentSessionState.ACTIVE,
+    )
+
+
+def _replacement_execution_fact(
+    assignment_id: str, *, state: str = "released"
+) -> dict[str, PlainData]:
+    return {
+        "assignment_id": assignment_id,
+        "run_uri": "file:///run",
+        "stage_work_id": f"work-{assignment_id}",
+        "stage_name": "stage",
+        "attempt": 1,
+        "attempt_id": f"attempt-{assignment_id}",
+        "agent_id": "agent-a",
+        "session_id": "session-old",
+        "offer_id": "offer-old",
+        "claim_id": f"claim-{assignment_id}",
+        "state": state,
+        "receipt_digest": "a" * 64,
+        "atom_count": 1,
+        "atoms_digest": "b" * 64,
+        "event_count": 0,
+        "events_digest": "c" * 64,
+    }
+
+
+def _released_projection_assignment(
+    conn: sqlite3.Connection, assignment_id: str
+) -> None:
+    conn.execute(
+        "INSERT INTO remote_assignments(assignment_id, session_id, "
+        "availability_revision, issuer_epoch, run_uri, stage_work_id, stage_name, "
+        "attempt, attempt_id, profile_json, state) VALUES (?, 'session-old', "
+        "'availability', 'epoch', 'file:///run', ?, 'stage', 1, ?, '{}', "
+        "'RELEASED')",
+        (assignment_id, f"work-{assignment_id}", f"attempt-{assignment_id}"),
+    )
+    conn.execute(
+        "INSERT INTO agent_deliveries(assignment_id, session_id, "
+        "availability_revision, coordinator_epoch, request_json, state) "
+        "VALUES (?, 'session-old', 'availability', 'epoch', '{}', 'DELIVERED')",
+        (assignment_id,),
+    )
+    conn.execute(
+        "INSERT INTO agent_coordinator_references(session_id, reference_kind, "
+        "reference_id, resolved) VALUES ('session-old', 'delivery', ?, 1)",
+        (assignment_id,),
+    )
+    conn.executemany(
+        "INSERT INTO agent_replacement_coverage(session_id, assignment_id, "
+        "reference_class) VALUES ('session-old', ?, ?)",
+        [
+            (assignment_id, reference_class)
+            for reference_class in _REPLACEMENT_ASSIGNMENT_REFERENCE_CLASSES
+        ],
+    )
+
+
+def test_replacement_projection_requires_every_lost_agent_owner_class() -> None:
+    conn = _replacement_projection_connection()
+    _released_projection_assignment(conn, "assignment-one")
+    fact = _replacement_execution_fact("assignment-one")
+    projection = _build_replacement_projection(
+        conn,
+        session=_replacement_projection_session(),
+        execution_facts=(fact,),
+        observed_at="2026-01-01T00:00:00Z",
+    )
+    assert projection.required_claim_ids == ()
+    counts = projection.value["owner_counts"]
+    assert isinstance(counts, Mapping)
+    assert counts["released"] == 1
+
+    conn.execute(
+        "DELETE FROM agent_replacement_coverage WHERE assignment_id = ? "
+        "AND reference_class = 'outbox'",
+        ("assignment-one",),
+    )
+    with pytest.raises(QueueConflictError, match="coverage is incomplete"):
+        _build_replacement_projection(
+            conn,
+            session=_replacement_projection_session(),
+            execution_facts=(fact,),
+            observed_at="2026-01-01T00:00:00Z",
+        )
+
+
+def test_replacement_projection_rejects_execution_assignment_without_target() -> None:
+    conn = _replacement_projection_connection()
+    with pytest.raises(QueueConflictError, match="target inventory is incomplete"):
+        _build_replacement_projection(
+            conn,
+            session=_replacement_projection_session(),
+            execution_facts=(
+                _replacement_execution_fact("assignment-new", state="bound"),
+            ),
+            observed_at="2026-01-01T00:00:00Z",
+        )
 
 
 def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, ...]:
@@ -84,6 +217,7 @@ def _policy(
                     "reload",
                     "cancel_active",
                     "scheduling_reload",
+                    "replace_session",
                 ),
                 agent_ids=("agent-a",),
                 pools=("default",),
@@ -152,6 +286,168 @@ def _offer(
         ttl_seconds=30,
         provider_descriptors=_provider_descriptors("cpu", "memory"),
     )
+
+
+def test_session_replacement_hard_cut_binds_fresh_successor_and_readiness(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        old = _register(daemon)
+        operator = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        )
+        pending = AgentControl(
+            operation_id="replacement-pending-control",
+            kind=AgentControlKind.DRAIN,
+            agent_id=old.agent_id,
+            expected_session_id=old.session_id,
+            expected_config_revision=old.config_revision,
+            pool="default",
+            cancel_active=False,
+            reason="lost agent",
+        )
+        operator.control_agent(pending)
+        request = SessionReplacementRequest(
+            "replace-agent-a", "agent-a", "lost agent root"
+        )
+
+        decision = operator.replace_agent_session(request)
+        assert decision["state"] == "decision"
+        assert decision["readiness"] == "withheld"
+        assert decision["successor_session_id"] is None
+        assert operator.replace_agent_session(request) == decision
+        with pytest.raises(QueueConflictError, match="operation conflicts"):
+            operator.replace_agent_session(replace(request, reason="changed"))
+        with daemon._connection() as conn:
+            assert (
+                conn.execute(
+                    "SELECT state FROM agent_sessions WHERE session_id = ?",
+                    (old.session_id,),
+                ).fetchone()[0]
+                == AgentSessionState.REPLACED.value
+            )
+            assert (
+                conn.execute(
+                    "SELECT state FROM agent_controls WHERE operation_id = ?",
+                    (pending.operation_id,),
+                ).fetchone()[0]
+                == "superseded"
+            )
+
+        with pytest.raises(QueueServiceError, match="not authorized"):
+            _view(daemon).publish_offer(
+                _offer(old.session_id, old.coordinator_epoch),
+                idempotency_key="stale-old-offer",
+            )
+        handshake = _view(daemon).handshake()
+        with pytest.raises(QueueConflictError, match="fresh root and revisions"):
+            _view(daemon).register(
+                AgentRegistration(
+                    idempotency_key="replacement-stale-registration",
+                    coordinator_id=str(handshake["coordinator_id"]),
+                    coordinator_epoch=str(handshake["coordinator_epoch"]),
+                    agent_root_id=old.agent_root_id,
+                    config_revision=old.config_revision,
+                    inventory_revision=old.inventory_revision,
+                    availability_revision=old.availability_revision,
+                    declared_pools=("default",),
+                    declared_capabilities=("python",),
+                    retirement_verifier=_TEST_RETIREMENT_VERIFIER,
+                )
+            )
+        successor = _view(daemon).register(
+            AgentRegistration(
+                idempotency_key="replacement-fresh-registration",
+                coordinator_id=str(handshake["coordinator_id"]),
+                coordinator_epoch=str(handshake["coordinator_epoch"]),
+                agent_root_id="agent-root-b",
+                config_revision="config-2",
+                inventory_revision="inventory-2",
+                availability_revision="availability-2",
+                declared_pools=("default",),
+                declared_capabilities=("python",),
+                retirement_verifier=hashlib.sha256(
+                    bytes.fromhex("02" * 32)
+                ).hexdigest(),
+            )
+        )
+        assert successor.session_id != old.session_id
+        with pytest.raises(QueueConflictError, match="readiness is still withheld"):
+            _view(daemon).wait_for_work(
+                successor.session_id,
+                successor.availability_revision,
+                poll_id="replacement-early-poll",
+                wait_timeout_ms=10,
+            )
+        offer = replace(
+            _offer(
+                successor.session_id,
+                successor.coordinator_epoch,
+                availability="availability-2",
+            ),
+            config_revision="config-2",
+            inventory_revision="inventory-2",
+        )
+        _view(daemon).publish_offer(
+            offer, idempotency_key="replacement-first-observation"
+        )
+        status = next(
+            item
+            for item in daemon.status().controls
+            if item.get("owner") == "session-replacement"
+        )
+        assert status["state"] == "ready"
+        assert status["readiness"] == "ready"
+        assert status["withholding_reason"] is None
+        owner_counts = status["owner_counts"]
+        assert isinstance(owner_counts, Mapping)
+        assert owner_counts["assignments"] == 0
+        assert (
+            _view(daemon).wait_for_work(
+                successor.session_id,
+                successor.availability_revision,
+                poll_id="replacement-ready-poll",
+                wait_timeout_ms=10,
+            )["result"]
+            == "wait"
+        )
+    finally:
+        daemon.stop()
+
+
+def test_session_replacement_rejects_empty_reachable_session(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        session = _register(daemon)
+        _view(daemon).publish_offer(
+            _offer(session.session_id, session.coordinator_epoch),
+            idempotency_key="reachable-offer",
+        )
+        with pytest.raises(QueueConflictError, match="clean retirement"):
+            daemon.operator_view(
+                LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+            ).replace_agent_session(
+                SessionReplacementRequest(
+                    "replace-reachable", session.agent_id, "not actually lost"
+                )
+            )
+        with daemon._connection() as conn:
+            assert (
+                conn.execute(
+                    "SELECT state FROM agent_sessions WHERE session_id = ?",
+                    (session.session_id,),
+                ).fetchone()[0]
+                == AgentSessionState.ACTIVE.value
+            )
+    finally:
+        daemon.stop()
 
 
 @pytest.mark.parametrize(
@@ -1186,7 +1482,7 @@ def test_reconciliation_and_offer_preserve_the_durable_effective_scope(
         daemon.stop()
 
 
-@pytest.mark.parametrize("old_version", [1, 2, 3, 4])
+@pytest.mark.parametrize("old_version", [1, 2, 3, 4, 5, 6])
 def test_old_roots_are_rejected_by_the_hard_cutover(
     tmp_path: Path, old_version: int
 ) -> None:

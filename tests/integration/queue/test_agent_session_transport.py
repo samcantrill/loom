@@ -59,6 +59,7 @@ from loom.queue import (
     ManagedRecoveryTarget,
     RecoverUnknownAssignment,
     ResidentWorkerLaunchProfile,
+    SessionReplacementRequest,
     prepare_managed_local_runtime_record,
 )
 from loom.queue._agent_process_supervisor import (
@@ -785,7 +786,8 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
                 "operator-credential",
                 "operator",
                 "operator",
-                actions=("recover_unknown",),
+                actions=("recover_unknown", "replace_session"),
+                agent_ids=("agent-a",),
             ),
         ),
     )
@@ -850,6 +852,7 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
     acknowledgement_failures: list[BaseException] = []
     worker = None
     workers: ThreadPoolExecutor | None = None
+    successor_agent: LocalDaemonAgentHttpClient | None = None
     try:
         handshake = agent.handshake()
         session = agent.register(
@@ -955,15 +958,11 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
             recovery_id="remote-active-recovery",
             reason="must not close a currently observed remote process",
         )
-        with pytest.raises(
-            QueueConflictError, match="agent protocol conflict"
-        ):
+        with pytest.raises(QueueConflictError, match="agent protocol conflict"):
             operator.recover_unknown(active_request)
         with sqlite3.connect(config.control_database) as conn:
             assert (
-                conn.execute(
-                    "SELECT COUNT(*) FROM recovery_operations"
-                ).fetchone()[0]
+                conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[0]
                 == 0
             )
             assert (
@@ -1020,6 +1019,87 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
             )
             == 1
         )
+        replacement = operator.replace_agent_session(
+            SessionReplacementRequest(
+                "replace-remote-agent", session.agent_id, "old agent root was lost"
+            )
+        )
+        assert replacement["state"] == "decision"
+        assert replacement["readiness"] == "withheld"
+        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+            agent.publish_offer(
+                AgentOffer(
+                    session.session_id,
+                    session.coordinator_epoch,
+                    session.config_revision,
+                    session.inventory_revision,
+                    session.availability_revision,
+                    1,
+                    0,
+                    30,
+                    _resident_provider_descriptors(profile, session.agent_id),
+                    resident_profiles=(descriptor,),
+                ),
+                idempotency_key="stale-old-observation",
+            )
+
+        successor_config = replace(
+            remote_config,
+            agent_root=_fresh_remote_agent_root(tmp_path, "replacement-owner"),
+        )
+        LocalDaemonAgentHttpClient.initialize_agent_root(successor_config)
+        successor_agent = LocalDaemonAgentHttpClient(successor_config)
+        successor_handshake = successor_agent.handshake()
+        successor = successor_agent.register(
+            AgentRegistration(
+                "register-replacement-successor",
+                str(successor_handshake["coordinator_id"]),
+                str(successor_handshake["coordinator_epoch"]),
+                successor_agent.agent_root_id,
+                "config-2",
+                "inventory-2",
+                "availability-2",
+                ("default",),
+                capabilities,
+            )
+        )
+        assert successor.session_id != session.session_id
+        successor_agent.publish_offer(
+            AgentOffer(
+                successor.session_id,
+                successor.coordinator_epoch,
+                successor.config_revision,
+                successor.inventory_revision,
+                successor.availability_revision,
+                1,
+                0,
+                30,
+                _resident_provider_descriptors(profile, successor.agent_id),
+                resident_profiles=(descriptor,),
+            ),
+            idempotency_key="replacement-successor-observation",
+        )
+        candidates = daemon._execution._remote_candidates()  # type: ignore[union-attr]  # noqa: SLF001
+        successor_target = candidates[successor.agent_id][1]
+        assert successor_target.session_id == successor.session_id
+        assert successor_target.availability_atoms == ()
+        replacement_status = next(
+            item
+            for item in daemon.status().controls
+            if item.get("owner") == "session-replacement"
+        )
+        assert replacement_status["readiness"] == "ready"
+        released_old = agent.release_assignment(
+            session.session_id,
+            assignment_id,
+            fence=fence,
+            availability_revision="availability-old-cleanup",
+        )
+        assert released_old.state is AgentSessionState.REPLACED
+        candidates = daemon._execution._remote_candidates()  # type: ignore[union-attr]  # noqa: SLF001
+        successor_target = candidates[successor.agent_id][1]
+        assert len(successor_target.availability_atoms) == 1
+        assert successor_target.availability_atoms[0].amount.fraction == 1
     finally:
         release_agent.set()
         if worker is not None and not worker.done():
@@ -1030,6 +1110,11 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
         supervisor = agent._supervisor  # noqa: SLF001
         if supervisor is not None:
             supervisor.shutdown_for_test()
+        if successor_agent is not None:
+            successor_supervisor = successor_agent._supervisor  # noqa: SLF001
+            if successor_supervisor is not None:
+                successor_supervisor.shutdown_for_test()
+            successor_agent.close()
         operator.close()
         agent.close()
         server.stop()
@@ -2385,8 +2470,9 @@ def test_protocol_codec_rejects_duplicate_nonfinite_deep_and_oversized_json() ->
         _decode(b"{" + b" " * 65_536 + b"}")
 
 
-def test_agent_client_rejects_the_pre_containment_evidence_protocol(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("old_version", ["5", "6"])
+def test_agent_client_rejects_an_old_protocol_without_compatibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, old_version: str
 ) -> None:
     client = LocalDaemonAgentHttpClient(
         AgentTlsClientConfig(
@@ -2405,8 +2491,8 @@ def test_agent_client_rejects_the_pre_containment_evidence_protocol(
     ) -> Mapping[str, PlainData]:
         _ = operation, value, role
         return {
-            "protocol_version": "5",
-            "capabilities": ["agent-sessions-v5"],
+            "protocol_version": old_version,
+            "capabilities": [f"agent-sessions-v{old_version}"],
             "coordinator_id": "coordinator-1",
             "coordinator_epoch": "epoch-1",
             "role": "agent",
@@ -2417,13 +2503,14 @@ def test_agent_client_rejects_the_pre_containment_evidence_protocol(
         client.handshake()
 
 
-def test_agent_open_rejects_the_version_five_root_without_migration(
-    tmp_path: Path,
+@pytest.mark.parametrize("old_version", [5, 6])
+def test_agent_open_rejects_an_old_root_without_migration(
+    tmp_path: Path, old_version: int
 ) -> None:
-    root = tmp_path / "version-five-agent"
+    root = tmp_path / f"version-{old_version}-agent"
     LocalDaemon.initialize_agent_root(root)
     with sqlite3.connect(root / "control.sqlite") as conn:
-        conn.execute("PRAGMA user_version = 5")
+        conn.execute(f"PRAGMA user_version = {old_version}")
 
     with pytest.raises(QueueServiceError, match="schema is unsupported"):
         LocalDaemonAgentHttpClient(

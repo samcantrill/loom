@@ -1747,17 +1747,24 @@ class SQLiteCoordinatorAssignments:
                     "a.denominator, x.claim_id, x.state "
                     "FROM coordinator_atoms a JOIN coordinator_assignments x "
                     "ON x.assignment_id = a.assignment_id "
-                    "WHERE x.agent_id = ? AND x.session_id = ? "
+                    "WHERE x.agent_id = ? "
                     "AND x.state IN ('reserved','bound','accepted','granted',"
                     "'running','unknown','terminal','logical_released')",
-                    (assignment.agent_id, assignment.session_id),
+                    (assignment.agent_id,),
                 )
             )
             reflectable_claim_ids = {
                 cast(str, row["claim_id"])
                 for row in capacity_rows
                 if row["state"]
-                in {"accepted", "granted", "running", "terminal", "logical_released"}
+                in {
+                    "accepted",
+                    "granted",
+                    "running",
+                    "unknown",
+                    "terminal",
+                    "logical_released",
+                }
             }
             if not reflected_claim_ids.issubset(reflectable_claim_ids):
                 raise ManagedLocalError(
@@ -1935,6 +1942,28 @@ class SQLiteCoordinatorAssignments:
                     "AND is_current = 1",
                     (row["agent_id"], row["session_id"], row["offer_id"]),
                 )
+            return "released"
+
+    def release_contained(self, assignment_id: str) -> str:
+        """Release one claim after an accepted guarded-containment close."""
+
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT state FROM coordinator_assignments WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+            if row is None:
+                raise ManagedLocalError("assignment is not reserved")
+            state = cast(str, row["state"])
+            if state == "released":
+                return state
+            if state not in self._CAPACITY_HOLDING:
+                raise ManagedLocalError("contained assignment is not releasable")
+            conn.execute(
+                "UPDATE coordinator_assignments SET state = 'released' "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
+            )
             return "released"
 
     def cancellation_release_unstarted(self, assignment_id: str) -> str:
@@ -2136,6 +2165,174 @@ class SQLiteCoordinatorAssignments:
                 raise ManagedLocalError("retained decision receipt is invalid")
             retained.append((assignment, raw_receipt))
         return tuple(retained)
+
+    def session_assignment_facts(
+        self, *, session_id: str
+    ) -> tuple[Mapping[str, PlainData], ...]:
+        """Return a bounded, identity-checked inventory for one session.
+
+        Replacement cannot infer that a missing agent journal is empty. This
+        coordinator-owned view therefore includes released rows as well as
+        capacity-holding rows and binds each assignment to its atom, event,
+        decision, and offer identities without copying their payloads.
+        """
+
+        if not isinstance(session_id, str) or not session_id:
+            raise ManagedLocalError("session assignment inventory requires an ID")
+        with self._transaction() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT assignment_id, identity_json, run_uri, stage_work_id, "
+                    "state, receipt_json, agent_id, session_id, offer_id, claim_id "
+                    "FROM coordinator_assignments WHERE session_id = ? "
+                    "ORDER BY assignment_id",
+                    (session_id,),
+                )
+            )
+            facts: list[Mapping[str, PlainData]] = []
+            for row in rows:
+                assignment = _assignment_from_dict(
+                    json.loads(cast(str, row["identity_json"]))
+                )
+                if (
+                    assignment.assignment_id != row["assignment_id"]
+                    or assignment.run_uri != row["run_uri"]
+                    or assignment.stage_work_id != row["stage_work_id"]
+                    or assignment.agent_id != row["agent_id"]
+                    or assignment.session_id != row["session_id"]
+                    or assignment.offer_id != row["offer_id"]
+                    or assignment.claim_id != row["claim_id"]
+                ):
+                    raise ManagedLocalError(
+                        "coordinator assignment inventory identity conflicts"
+                    )
+                state = cast(str, row["state"])
+                if state not in self._CAPACITY_HOLDING | {"released"}:
+                    raise ManagedLocalError(
+                        "coordinator assignment inventory state is invalid"
+                    )
+                offer = conn.execute(
+                    "SELECT 1 FROM coordinator_offers WHERE agent_id = ? "
+                    "AND session_id = ? AND offer_revision = ?",
+                    (
+                        assignment.agent_id,
+                        assignment.session_id,
+                        assignment.offer_id,
+                    ),
+                ).fetchone()
+                if offer is None:
+                    raise ManagedLocalError(
+                        "coordinator assignment inventory offer is missing"
+                    )
+                atoms = [
+                    [
+                        cast(str, atom["resource_kind"]),
+                        cast(str, atom["capacity_key"]),
+                        cast(int, atom["numerator"]),
+                        cast(int, atom["denominator"]),
+                    ]
+                    for atom in conn.execute(
+                        "SELECT resource_kind, capacity_key, numerator, denominator "
+                        "FROM coordinator_atoms WHERE assignment_id = ? "
+                        "ORDER BY resource_kind, capacity_key",
+                        (assignment.assignment_id,),
+                    )
+                ]
+                events = [
+                    [
+                        cast(int, event["sequence"]),
+                        cast(str, event["event_id"]),
+                        hashlib.sha256(
+                            cast(str, event["payload_json"]).encode("utf-8")
+                        ).hexdigest(),
+                    ]
+                    for event in conn.execute(
+                        "SELECT sequence, event_id, payload_json "
+                        "FROM coordinator_events WHERE assignment_id = ? "
+                        "ORDER BY sequence",
+                        (assignment.assignment_id,),
+                    )
+                ]
+                facts.append(
+                    {
+                        **_assignment_dict(assignment),
+                        "state": state,
+                        "receipt_digest": hashlib.sha256(
+                            cast(str, row["receipt_json"]).encode("utf-8")
+                        ).hexdigest(),
+                        "atom_count": len(atoms),
+                        "atoms_digest": hashlib.sha256(
+                            json.dumps(atoms, separators=(",", ":")).encode("utf-8")
+                        ).hexdigest(),
+                        "event_count": len(events),
+                        "events_digest": hashlib.sha256(
+                            json.dumps(events, separators=(",", ":")).encode("utf-8")
+                        ).hexdigest(),
+                    }
+                )
+        return tuple(facts)
+
+    def withhold_claims(
+        self,
+        *,
+        agent_id: str,
+        atoms: Sequence[CapacityAtom],
+        claim_ids: Sequence[str],
+    ) -> tuple[CapacityAtom, ...]:
+        """Subtract exact retained claims from a successor observation."""
+
+        required = tuple(sorted(claim_ids))
+        if (
+            not isinstance(agent_id, str)
+            or not agent_id
+            or any(not isinstance(value, str) or not value for value in required)
+            or len(set(required)) != len(required)
+        ):
+            raise ManagedLocalError("withheld claim identity is invalid")
+        offered = {atom.key: atom for atom in atoms}
+        if len(offered) != len(tuple(atoms)):
+            raise ManagedLocalError("withheld offer atoms must be unique")
+        if not required:
+            return tuple(sorted(atoms, key=lambda item: item.key))
+        placeholders = ",".join("?" for _ in required)
+        with self._transaction() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT a.resource_kind, a.capacity_key, a.numerator, "
+                    "a.denominator, x.claim_id FROM coordinator_atoms a "
+                    "JOIN coordinator_assignments x "
+                    "ON x.assignment_id = a.assignment_id "
+                    f"WHERE x.agent_id = ? AND x.claim_id IN ({placeholders}) "
+                    "AND x.state IN ('accepted','granted','running','unknown',"
+                    "'terminal','logical_released')",
+                    (agent_id, *required),
+                )
+            )
+        if {cast(str, row["claim_id"]) for row in rows} != set(required):
+            raise ManagedLocalError(
+                "replacement references a claim that is not retained and live"
+            )
+        held: dict[tuple[str, str], Fraction] = {}
+        for row in rows:
+            key = (cast(str, row["resource_kind"]), cast(str, row["capacity_key"]))
+            held[key] = held.get(key, Fraction(0)) + Fraction(
+                cast(int, row["numerator"]), cast(int, row["denominator"])
+            )
+        result: list[CapacityAtom] = []
+        for key, atom in offered.items():
+            remaining = atom.amount.fraction - held.get(key, Fraction(0))
+            if remaining <= 0:
+                continue
+            result.append(
+                CapacityAtom(
+                    atom.owner_resource_kind,
+                    atom.local_capacity_key,
+                    ExactQuantity(remaining.numerator, remaining.denominator),
+                    atom.unit,
+                    atom.granularity,
+                )
+            )
+        return tuple(sorted(result, key=lambda item: item.key))
 
     def confirm_supervised_running(self, assignment_id: str) -> str:
         """Record positive supervisor start proof, including unknown recovery."""

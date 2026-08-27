@@ -563,6 +563,78 @@ def test_offer_revision_is_one_use_until_fresh_net_availability(tmp_path) -> Non
     )
 
 
+def test_replacement_offer_withholds_old_session_claim_without_inheriting_it(
+    tmp_path,
+) -> None:
+    _provider_value, command = _provider()
+    capacity = command.claim.atoms[0]
+    claim = replace(
+        command.claim,
+        atoms=(replace(capacity, amount=ExactQuantity(1)),),
+    )
+    old = command.assignment
+    successor = replace(
+        old,
+        assignment_id="assignment-successor",
+        stage_work_id=stage_work_identity(
+            "admission-1", "evaluate", "evaluate-1", "ready-1"
+        ),
+        stage_name="evaluate",
+        attempt_id="evaluate-1",
+        session_id="session-successor",
+        offer_id="offer-successor",
+        claim_id="claim-successor",
+    )
+    path = tmp_path / "coordinator.sqlite"
+    _seed_stage_work(path, old)
+    _seed_stage_work(path, successor)
+    coordinator = SQLiteCoordinatorAssignments(path, (capacity,))
+    coordinator.publish_offer(_offer(old, (capacity,)))
+    coordinator.reserve(
+        old,
+        (claim,),
+        max_parallel_stages=2,
+        decision_receipt=_decision_receipt(old, claim),
+    )
+    coordinator.advance(old.assignment_id, expected="reserved", next_state="bound")
+    coordinator.advance(old.assignment_id, expected="bound", next_state="accepted")
+
+    withheld = coordinator.withhold_claims(
+        agent_id=old.agent_id,
+        atoms=(capacity,),
+        claim_ids=(old.claim_id,),
+    )
+    assert len(withheld) == 1
+    assert withheld[0].amount == ExactQuantity(1)
+    coordinator.publish_offer(
+        _offer(successor, withheld, reflected_claim_ids=(old.claim_id,))
+    )
+    assert (
+        coordinator.reserve(
+            successor,
+            (claim,),
+            max_parallel_stages=2,
+            decision_receipt=_decision_receipt(successor, claim),
+        )
+        == "reserved"
+    )
+    facts = coordinator.session_assignment_facts(session_id=old.session_id)
+    assert len(facts) == 1
+    assert facts[0]["assignment_id"] == old.assignment_id
+    assert facts[0]["state"] == "accepted"
+    coordinator.release_contained(old.assignment_id)
+    assert (
+        coordinator.session_assignment_facts(session_id=old.session_id)[0]["state"]
+        == "released"
+    )
+    with pytest.raises(ManagedLocalError, match="not retained and live"):
+        coordinator.withhold_claims(
+            agent_id=old.agent_id,
+            atoms=(capacity,),
+            claim_ids=("missing-claim",),
+        )
+
+
 def test_unaccepted_release_can_reopen_the_same_availability_offer(tmp_path) -> None:
     _provider_value, command = _provider()
     capacity = command.claim.atoms[0]

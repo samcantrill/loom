@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -204,6 +205,26 @@ def register_subparser(
     scheduling_reload.add_argument("--reason", default="cli-scheduling-reload")
     scheduling_reload.set_defaults(handler=handle_daemon_scheduling_reload)
     _add_output_options(scheduling_reload)
+
+    replacement = queue_subparsers.add_parser(
+        "daemon-replace-agent-session",
+        help="fence one fully released agent session before ordinary re-registration",
+    )
+    replacement.add_argument("--endpoint", required=True, type=Path)
+    replacement.add_argument("--operation-id", required=True)
+    replacement.add_argument("--agent-id", required=True)
+    replacement.add_argument("--reason", default="cli-session-replacement")
+    replacement.set_defaults(handler=handle_daemon_replace_agent_session)
+    _add_output_options(replacement)
+
+    recovery = queue_subparsers.add_parser(
+        "daemon-recover-unknown",
+        help="close one exact unknown assignment from a guarded request",
+    )
+    recovery.add_argument("--endpoint", required=True, type=Path)
+    recovery.add_argument("--request", required=True, type=Path)
+    recovery.set_defaults(handler=handle_daemon_recover_unknown)
+    _add_output_options(recovery)
 
 
 def handle_preflight(namespace: argparse.Namespace) -> int:
@@ -431,6 +452,48 @@ def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
                 expected_scheduling_epoch=namespace.expected_scheduling_epoch,
                 reason=namespace.reason,
             )
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
+
+
+def handle_daemon_replace_agent_session(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient, SessionReplacementRequest
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).replace_agent_session(
+            SessionReplacementRequest(
+                operation_id=namespace.operation_id,
+                agent_id=namespace.agent_id,
+                reason=namespace.reason,
+            )
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
+
+
+def handle_daemon_recover_unknown(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient, RecoverUnknownAssignment
+
+    try:
+        raw = json.loads(namespace.request.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CliError(
+            "guarded recovery request is unreadable",
+            code="cli.queue.recovery_request_invalid",
+            exit_code=ExitCode.USAGE,
+        ) from exc
+    if not isinstance(raw, dict):
+        raise CliError(
+            "guarded recovery request must be a JSON object",
+            code="cli.queue.recovery_request_invalid",
+            exit_code=ExitCode.USAGE,
+        )
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).recover_unknown(
+            RecoverUnknownAssignment.from_dict(raw)
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
@@ -737,6 +800,8 @@ __all__ = [
     "handle_daemon_serve",
     "handle_daemon_status",
     "handle_daemon_scheduling_reload",
+    "handle_daemon_replace_agent_session",
+    "handle_daemon_recover_unknown",
     "handle_daemon_submit",
     "handle_daemon_wait",
     "handle_preflight",

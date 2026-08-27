@@ -54,6 +54,7 @@ from .agent_sessions import (
     AgentRetirementProof,
     AgentSession,
     AgentSessionState,
+    SessionReplacementRequest,
     AgentTransferAuthorizationStaleError,
     PROTOCOL_VERSION,
     ScopedAuthorizer,
@@ -253,7 +254,7 @@ class _RemoteAgentJournal:
             raise QueueServiceError("remote agent control state is unavailable")
         try:
             with self._connection() as conn:
-                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 6:
+                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 7:
                     raise QueueServiceError("remote agent root schema is unsupported")
                 metadata = {
                     str(row[0]): str(row[1])
@@ -1179,7 +1180,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v6",
+                    "agent-sessions-v7",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -1545,6 +1546,13 @@ class LocalDaemonAgentHttpClient:
             "recover_unknown", {"request": request.to_dict()}, role="operator"
         )
 
+    def replace_agent_session(
+        self, request: SessionReplacementRequest
+    ) -> Mapping[str, PlainData]:
+        return self._call(
+            "replace_agent_session", {"request": request.to_dict()}, role="operator"
+        )
+
     def authorize_transfers(
         self,
         session_id: str,
@@ -1882,7 +1890,10 @@ class LocalDaemonAgentHttpClient:
             )
         )
         journal = self._require_journal()
-        journal.persist_reconciled_session(session)
+        if session.state is AgentSessionState.ACTIVE:
+            journal.persist_reconciled_session(session)
+        elif session.state is not AgentSessionState.REPLACED:
+            raise QueueConflictError("remote release returned an invalid session state")
         journal.resolve_assignment_reference(session_id, assignment_id)
         return session
 
@@ -3410,6 +3421,14 @@ def _dispatch_application(
             if not isinstance(request, Mapping):
                 raise QueueServiceError("recovery request is invalid")
             return view.recover_unknown(RecoverUnknownAssignment.from_dict(request))
+        if operation == "replace_agent_session":
+            _exact(value, {"request"})
+            request = value["request"]
+            if not isinstance(request, Mapping):
+                raise QueueServiceError("session replacement request is invalid")
+            return view.replace_agent_session(
+                SessionReplacementRequest.from_dict(request)
+            )
     elif role == LocalDaemonRole.SLURM_BOOTSTRAP.value:
         view = daemon.slurm_bootstrap_view(principal)
         if operation == "register":

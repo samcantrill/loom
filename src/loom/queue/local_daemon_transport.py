@@ -32,6 +32,7 @@ from .local_daemon import (
     LocalDaemonRole,
     LocalDaemonStatus,
     RecoverUnknownAssignment,
+    SessionReplacementRequest,
 )
 
 
@@ -154,6 +155,17 @@ class LocalDaemonSocketServer:
                         RecoverUnknownAssignment.from_dict(request)
                     )
                 )
+            elif operation == "replace_agent_session":
+                request = payload.get("request")
+                if not isinstance(request, Mapping):
+                    raise QueueServiceError(
+                        "session replacement request must be a mapping"
+                    )
+                result = dict(
+                    operator.replace_agent_session(
+                        SessionReplacementRequest.from_dict(request)
+                    )
+                )
             else:
                 raise QueueServiceError("local daemon operation is unsupported")
             response: PlainData = {"ok": True, "result": result}
@@ -235,6 +247,16 @@ class LocalDaemonSocketClient:
         return cast(
             Mapping[str, PlainData],
             self._call({"operation": "recover_unknown", "request": request.to_dict()}),
+        )
+
+    def replace_agent_session(
+        self, request: SessionReplacementRequest
+    ) -> Mapping[str, PlainData]:
+        return cast(
+            Mapping[str, PlainData],
+            self._call(
+                {"operation": "replace_agent_session", "request": request.to_dict()}
+            ),
         )
 
     def _call(self, request: Mapping[str, PlainData]) -> Mapping[str, object]:
