@@ -14,7 +14,7 @@
 - Workflow: expanded because replacement joins coordinator, agent journal,
   provider/supervisor, authority/recovery, and transport owners. One omitted
   reference can expose capacity beside old live work.
-- Blocker corrections: 1/3
+- Blocker corrections: 2/3
 
 ## Objective And Scope
 
@@ -174,20 +174,28 @@ conditions above; do not solve incompleteness with a ledger or second machine.
 - Manager preparation and expanded refinement: complete at base `2412862`
 - Implementation: complete at `efdeabf`; the bounded manager-local correction
   closed the executor's complete-inventory blocker after the optional refiner
-  became unavailable.
-- Pre-submit gate: passed. `make validate-pr` passed Ruff, Pyright, 2,578
+  became unavailable. Independent review then found two reachable late-cleanup
+  blockers and one status inconsistency. Bounded correction 2/3 at `eb0537d`
+  now requires old-root/provider release proof before restoring capacity,
+  derives fresh coordinator offer identities when withholding changes, and
+  updates current owner counts in the same cleanup transaction.
+- Pre-submit gate: passed again on corrected source. `make validate-pr` passed
+  Ruff, Pyright, 2,578
   default tests, 142 config-extra tests with 3 expected skips, and both package
   builds. `make test-summary` passed 2,720 tests with no failures or errors.
-- Independent review: required for complete-reference and stale-fact safety
-- Refiner: no further pass planned; corrections 1/3
+- Independent review: complete. Its provider-release, immutable-offer-replay,
+  and stale-status findings are closed by correction 2/3 and the causal
+  transport regression.
+- Refiner: no further pass planned; corrections 2/3
 - PR: [#249](https://github.com/samcantrill/loom/pull/249) open against
-  `develop`; target, head, title, non-draft state, and mergeability verified.
-- Merge: pending independent review
+  `develop`; target, title, non-draft state, and mergeability were verified
+  before correction and must be reverified after push.
+- Merge: pending corrected-head push and final manager verification
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation/tests/validation | Complete at `efdeabf`. Targeted evidence: 102 unit/CLI/package/E2E tests, 46 production/SLURM integration tests, and 31 agent-transport integration tests passed. Full gates passed as recorded above. |
+| Implementation/tests/validation | Corrected source complete at `eb0537d`. The full 179-test phase matrix passed: 102 unit/CLI/package/E2E, 46 production/SLURM integration, and 31 agent-transport integration tests. Fresh full gates passed as recorded above. |
 | Validation-relevant later changes | None. This concise workflow metadata update does not change source, tests, dependencies, build inputs, or validation configuration. |
-| PR/review/merge/cleanup | PR [#249](https://github.com/samcantrill/loom/pull/249) open and mergeable; independent review, merge, metadata, and cleanup pending. |
+| PR/review/merge/cleanup | Independent review complete and its concrete findings are closed. PR [#249](https://github.com/samcantrill/loom/pull/249), final merge verification, merge, manifest metadata, and cleanup remain. |
