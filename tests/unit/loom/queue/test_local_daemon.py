@@ -658,8 +658,8 @@ def test_reload_retains_exact_components_from_an_accepted_runtime_intent(
             "INSERT INTO managed_admissions("
             "admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, "
             "execution_owner, state, accepted_at, authority_operation_id, "
-            "cancellation_operation_id, blocked_reason) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+            "run_priority, enqueue_sequence, cancellation_operation_id, "
+            "blocked_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
             (
                 "admission-accepted",
                 "queue-accepted",
@@ -670,6 +670,8 @@ def test_reload_retains_exact_components_from_an_accepted_runtime_intent(
                 LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
                 "2020-01-01T00:00:00Z",
                 "authority-bind-accepted",
+                0,
+                1,
             ),
         )
         conn.commit()

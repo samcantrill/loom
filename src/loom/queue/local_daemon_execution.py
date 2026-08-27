@@ -1455,17 +1455,14 @@ class LocalDaemonExecution:
                             or "SLURM release remains durably in flight",
                         )
                     return terminal
-                if self._remote_run_in_flight(admission.run_uri):
-                    return LocalDaemonExecutionOutcome(
-                        LocalDaemonAdmissionState.ACTIVE,
-                        "remote assignment remains durably in flight",
-                    )
                 orchestrator.reconcile(
                     admission_id=admission.admission_id,
                     plan=intent.plan,
                     authority_snapshot=snapshot,
                     placements=placements,
                     ready_at=snapshot_time,
+                    run_priority=admission.run_priority,
+                    enqueue_sequence=admission.enqueue_sequence,
                     controller_action=lambda stage_plan, readiness: (
                         self._apply_controller_action(
                             scoped_authority,
@@ -4132,15 +4129,6 @@ class LocalDaemonExecution:
             execution_started=execution_started,
         )
         return False
-
-    def _remote_run_in_flight(self, run_uri: str) -> bool:
-        with sqlite3.connect(self.config.control_database) as conn:
-            row = conn.execute(
-                "SELECT 1 FROM remote_assignments WHERE run_uri = ? "
-                "AND state != 'RELEASED' LIMIT 1",
-                (run_uri,),
-            ).fetchone()
-        return row is not None
 
     def _remote_delivery_retained(self, assignment_id: str) -> bool:
         with sqlite3.connect(self.config.control_database) as conn:

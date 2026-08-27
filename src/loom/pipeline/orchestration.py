@@ -42,7 +42,10 @@ from loom.scheduling import (
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 
-COORDINATOR_STAGE_WORK_SCHEMA_VERSION = 1
+COORDINATOR_STAGE_WORK_SCHEMA_VERSION = 2
+READY_WINDOW_LIMIT = 256
+_MIN_RUN_PRIORITY = -1_000_000
+_MAX_RUN_PRIORITY = 1_000_000
 
 
 class CoordinatorStoreError(ValueError):
@@ -104,6 +107,8 @@ class StageWorkRecord:
     scheduling_diagnostics: Mapping[str, PlainData] = field(default_factory=dict)
     projection_revision: int = 1
     schema_version: int = COORDINATOR_STAGE_WORK_SCHEMA_VERSION
+    run_priority: int = 0
+    enqueue_sequence: int = 0
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -119,6 +124,13 @@ class StageWorkRecord:
         _integer(self.attempt, "attempt", minimum=1)
         _integer(self.ready_at, "ready_at", minimum=0)
         _integer(self.ready_order, "ready_order", minimum=0)
+        if (
+            not isinstance(self.run_priority, int)
+            or isinstance(self.run_priority, bool)
+            or not _MIN_RUN_PRIORITY <= self.run_priority <= _MAX_RUN_PRIORITY
+        ):
+            raise CoordinatorStoreError("run_priority is outside the supported range")
+        _integer(self.enqueue_sequence, "enqueue_sequence", minimum=0)
         _integer(self.projection_revision, "projection_revision", minimum=1)
         if self.schema_version != COORDINATOR_STAGE_WORK_SCHEMA_VERSION:
             raise CoordinatorStoreError("unsupported stage-work schema version")
@@ -167,7 +179,8 @@ class StageWorkRecord:
             requests=self.placement.scheduling_requests,
             hard_constraints=self.placement.hard_constraints,
             preferences=self.placement.preferences,
-            enqueue_order=self.ready_order,
+            run_priority=self.run_priority,
+            enqueue_order=self.enqueue_sequence,
             topological_order=self.ready_order,
             stage_name=self.stage_name,
             attempt=self.attempt,
@@ -197,6 +210,8 @@ class StageWorkRecord:
                 self.scheduling_diagnostics, path="scheduling_diagnostics"
             ),
             "projection_revision": self.projection_revision,
+            "run_priority": self.run_priority,
+            "enqueue_sequence": self.enqueue_sequence,
         }
 
     @classmethod
@@ -221,6 +236,8 @@ class StageWorkRecord:
             "scheduling_state",
             "scheduling_diagnostics",
             "projection_revision",
+            "run_priority",
+            "enqueue_sequence",
         }
         _exact_fields(mapping, allowed, "StageWorkRecord")
         return cls(
@@ -262,6 +279,12 @@ class StageWorkRecord:
                 "projection_revision",
                 minimum=1,
             ),
+            run_priority=_integer(
+                mapping["run_priority"], "run_priority", minimum=_MIN_RUN_PRIORITY
+            ),
+            enqueue_sequence=_integer(
+                mapping["enqueue_sequence"], "enqueue_sequence", minimum=0
+            ),
         )
 
 
@@ -277,6 +300,10 @@ class CoordinatorStageWorkStore(Protocol):
     def create_or_refresh(self, record: StageWorkRecord) -> StageWorkRecord: ...
 
     def list_stage_work(self) -> tuple[StageWorkRecord, ...]: ...
+
+    def ready_window(
+        self, *, limit: int = READY_WINDOW_LIMIT
+    ) -> tuple[StageWorkRecord, ...]: ...
 
 
 class InMemoryStageWorkStore:
@@ -341,6 +368,21 @@ class InMemoryStageWorkStore:
 
     def list_stage_work(self) -> tuple[StageWorkRecord, ...]:
         return tuple(self._work[key] for key in sorted(self._work))
+
+    def ready_window(
+        self, *, limit: int = READY_WINDOW_LIMIT
+    ) -> tuple[StageWorkRecord, ...]:
+        _validate_ready_window_limit(limit)
+        return tuple(
+            sorted(
+                (
+                    record
+                    for record in self._work.values()
+                    if record.scheduling_state is SchedulingProjectionState.READY
+                ),
+                key=_ready_window_key,
+            )[:limit]
+        )
 
 
 class SQLiteStageWorkStore:
@@ -476,8 +518,10 @@ class SQLiteStageWorkStore:
                     """
                     INSERT INTO stage_work (
                         stage_work_id, admission_id, run_uri, stage_name,
-                        attempt_id, readiness_generation, record_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        attempt_id, readiness_generation, run_priority,
+                        enqueue_sequence, ready_at, ready_order, attempt,
+                        scheduling_state, record_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.stage_work_id,
@@ -486,6 +530,12 @@ class SQLiteStageWorkStore:
                         record.stage_name,
                         record.attempt_id,
                         record.readiness_generation,
+                        record.run_priority,
+                        record.enqueue_sequence,
+                        record.ready_at,
+                        record.ready_order,
+                        record.attempt,
+                        record.scheduling_state.value,
                         _json_dumps(record.to_dict()),
                     ),
                 )
@@ -509,8 +559,19 @@ class SQLiteStageWorkStore:
                 record, projection_revision=existing.projection_revision + 1
             )
             conn.execute(
-                "UPDATE stage_work SET record_json = ? WHERE stage_work_id = ?",
-                (_json_dumps(refreshed.to_dict()), refreshed.stage_work_id),
+                "UPDATE stage_work SET run_priority = ?, enqueue_sequence = ?, "
+                "ready_at = ?, ready_order = ?, attempt = ?, scheduling_state = ?, "
+                "record_json = ? WHERE stage_work_id = ?",
+                (
+                    refreshed.run_priority,
+                    refreshed.enqueue_sequence,
+                    refreshed.ready_at,
+                    refreshed.ready_order,
+                    refreshed.attempt,
+                    refreshed.scheduling_state.value,
+                    _json_dumps(refreshed.to_dict()),
+                    refreshed.stage_work_id,
+                ),
             )
             return refreshed
 
@@ -522,6 +583,26 @@ class SQLiteStageWorkStore:
         with self._read_connection() as conn:
             rows = conn.execute(
                 "SELECT record_json FROM stage_work ORDER BY stage_work_id"
+            ).fetchall()
+        return tuple(
+            StageWorkRecord.from_dict(_json_loads(cast(str, row["record_json"])))
+            for row in rows
+        )
+
+    def ready_window(
+        self, *, limit: int = READY_WINDOW_LIMIT
+    ) -> tuple[StageWorkRecord, ...]:
+        _validate_ready_window_limit(limit)
+        if not self.path.exists():
+            if not self._allow_initialize:
+                raise CoordinatorStoreError("coordinator store is missing")
+            return ()
+        with self._read_connection() as conn:
+            rows = conn.execute(
+                "SELECT record_json FROM stage_work WHERE scheduling_state = ? "
+                "ORDER BY run_priority DESC, enqueue_sequence, ready_at, ready_order, "
+                "stage_name, attempt, stage_work_id LIMIT ?",
+                (SchedulingProjectionState.READY.value, limit),
             ).fetchall()
         return tuple(
             StageWorkRecord.from_dict(_json_loads(cast(str, row["record_json"])))
@@ -587,17 +668,18 @@ class RunOrchestrator:
         authority_snapshot: AuthoritativeRunSnapshot,
         placements: Mapping[str, ResolvedStagePlacement],
         ready_at: int,
+        run_priority: int = 0,
+        enqueue_sequence: int = 0,
         max_work_items: int = 256,
         controller_action: ControllerActionHandler | None = None,
     ) -> tuple[StageWorkRecord, ...]:
         admission_id = _non_empty(admission_id, "admission_id")
         _integer(ready_at, "ready_at", minimum=0)
         _integer(max_work_items, "max_work_items", minimum=1)
+        _validate_run_priority(run_priority)
+        _integer(enqueue_sequence, "enqueue_sequence", minimum=0)
         if plan.run_uri != authority_snapshot.run_uri:
             raise CoordinatorStoreError("plan and authority snapshot run differ")
-        if len(plan.stage_plans) > max_work_items:
-            raise CoordinatorStoreError("reconciliation work-item bound exceeded")
-
         stage_facts = {stage.stage_name: stage for stage in authority_snapshot.stages}
         completed = {
             name
@@ -690,6 +772,8 @@ class RunOrchestrator:
                 ready_order=ready_order,
                 expected_revision=current_revision,
                 prior_intent=prior_intent,
+                run_priority=run_priority,
+                enqueue_sequence=enqueue_sequence,
             )
             projected.append(record)
             current_revision = _advance_revision_cursor(
@@ -709,7 +793,7 @@ class RunOrchestrator:
 
         work = tuple(
             record.to_work_item()
-            for record in self.store.list_stage_work()
+            for record in self.store.ready_window()
             if admission_id is None or record.admission_id == admission_id
             if record.scheduling_state is SchedulingProjectionState.READY
             if record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
@@ -816,6 +900,8 @@ class RunOrchestrator:
         ready_order: int,
         expected_revision: BackendRevision,
         prior_intent: PreparationIntent | None,
+        run_priority: int,
+        enqueue_sequence: int,
     ) -> tuple[StageWorkRecord, PreparedAttemptReceipt]:
         if readiness.next_attempt is None:
             raise CoordinatorStoreError("RUN readiness omitted next attempt")
@@ -859,6 +945,8 @@ class RunOrchestrator:
             bound_inputs=intent.request.bound_inputs,
             upstream_commits=intent.request.upstream_commits,
             placement=placement,
+            run_priority=run_priority,
+            enqueue_sequence=enqueue_sequence,
         )
         return self.store.create_or_refresh(record), receipt
 
@@ -979,6 +1067,8 @@ def _require_same_projection_identity(
         existing.authority_revision,
         existing.bound_inputs,
         existing.upstream_commits,
+        existing.run_priority,
+        existing.enqueue_sequence,
     )
     incoming_identity = (
         incoming.stage_work_id,
@@ -994,6 +1084,8 @@ def _require_same_projection_identity(
         incoming.authority_revision,
         incoming.bound_inputs,
         incoming.upstream_commits,
+        incoming.run_priority,
+        incoming.enqueue_sequence,
     )
     if existing_identity != incoming_identity:
         raise CoordinatorStoreError(
@@ -1024,8 +1116,18 @@ def _initialize_store(conn: sqlite3.Connection) -> None:
             stage_name TEXT NOT NULL,
             attempt_id TEXT NOT NULL,
             readiness_generation TEXT NOT NULL,
+            run_priority INTEGER NOT NULL,
+            enqueue_sequence INTEGER NOT NULL,
+            ready_at INTEGER NOT NULL,
+            ready_order INTEGER NOT NULL,
+            attempt INTEGER NOT NULL,
+            scheduling_state TEXT NOT NULL,
             record_json TEXT NOT NULL,
             UNIQUE(admission_id, stage_name, attempt_id, readiness_generation)
+        );
+        CREATE INDEX stage_work_ready_window ON stage_work (
+            scheduling_state, run_priority DESC, enqueue_sequence, ready_at,
+            ready_order, stage_name, attempt, stage_work_id
         );
         """
     )
@@ -1063,6 +1165,52 @@ def _raise_for_store_schema(conn: sqlite3.Connection) -> None:
     }
     if not required.issubset(tables):
         raise CoordinatorStoreError("coordinator store schema is incomplete")
+    columns = {
+        cast(str, row["name"]) for row in conn.execute("PRAGMA table_info(stage_work)")
+    }
+    if not {
+        "run_priority",
+        "enqueue_sequence",
+        "ready_at",
+        "ready_order",
+        "attempt",
+        "scheduling_state",
+    }.issubset(columns):
+        raise CoordinatorStoreError("coordinator store schema is incomplete")
+
+
+def _validate_run_priority(value: int) -> None:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not _MIN_RUN_PRIORITY <= value <= _MAX_RUN_PRIORITY
+    ):
+        raise CoordinatorStoreError("run_priority is outside the supported range")
+
+
+def _validate_ready_window_limit(limit: int) -> None:
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or not 1 <= limit <= READY_WINDOW_LIMIT
+    ):
+        raise CoordinatorStoreError(
+            f"ready window limit must be between 1 and {READY_WINDOW_LIMIT}"
+        )
+
+
+def _ready_window_key(
+    record: StageWorkRecord,
+) -> tuple[int, int, int, int, str, int, str]:
+    return (
+        -record.run_priority,
+        record.enqueue_sequence,
+        record.ready_at,
+        record.ready_order,
+        record.stage_name,
+        record.attempt,
+        record.stage_work_id,
+    )
 
 
 @contextmanager
