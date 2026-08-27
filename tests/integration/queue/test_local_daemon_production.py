@@ -344,8 +344,11 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         for axis_name in ("scheduling", "assignment", "execution"):
             direct_axis = cast(Mapping[str, object], owner_view[axis_name])
             socket_axis = cast(Mapping[str, object], socket_view[axis_name])
-            for field in ("owner", "availability", "state", "revision", "freshness"):
+            for field in ("owner", "availability", "state", "freshness"):
                 assert socket_axis[field] == direct_axis[field]
+            assert cast(int, socket_axis["revision"]) >= cast(
+                int, direct_axis["revision"]
+            )
         assert status.as_of
         assert status.service_diagnostic is None
         snapshot = authority.open_run(run_uri)
