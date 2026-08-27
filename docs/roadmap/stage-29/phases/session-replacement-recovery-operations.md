@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: approved
 - Stage/phase: Stage 29, Phase 9F
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p9f-session-replacement-recovery-operations`
@@ -188,9 +188,9 @@ conditions above; do not solve incompleteness with a ledger or second machine.
   transport regression.
 - Refiner: no further pass planned; corrections 2/3
 - PR: [#249](https://github.com/samcantrill/loom/pull/249) open against
-  `develop`; target, title, non-draft state, and mergeability were verified
-  before correction and must be reverified after push.
-- Merge: pending corrected-head push and final manager verification
+  `develop`; corrected scope, body, target, title, non-draft state, and clean
+  mergeability passed final manager review.
+- Merge: approved for automatic squash merge after the final remote-head check
 
 ## Completion Record
 
@@ -198,4 +198,4 @@ conditions above; do not solve incompleteness with a ledger or second machine.
 | --- | --- |
 | Implementation/tests/validation | Corrected source complete at `eb0537d`. The full 179-test phase matrix passed: 102 unit/CLI/package/E2E, 46 production/SLURM integration, and 31 agent-transport integration tests. Fresh full gates passed as recorded above. |
 | Validation-relevant later changes | None. This concise workflow metadata update does not change source, tests, dependencies, build inputs, or validation configuration. |
-| PR/review/merge/cleanup | Independent review complete and its concrete findings are closed. PR [#249](https://github.com/samcantrill/loom/pull/249), final merge verification, merge, manifest metadata, and cleanup remain. |
+| PR/review/merge/cleanup | Independent review findings are closed and final manager review approved PR [#249](https://github.com/samcantrill/loom/pull/249). Automatic squash merge, merged metadata, and cleanup remain. |
