@@ -130,7 +130,12 @@ the supported behavior; the authoritative contracts and phase ownership remain i
   capacity remains unavailable until exact provider release/reconciliation or a
   positively contained replacement session publishes fresh fully observed
   inventory. Exact late cleanup may close only the old claim and cannot mutate a
-  new attempt.
+  new attempt. Late cleanup must come from the protected old agent root: it
+  releases every exact provider claim locally, commits a fresh availability
+  revision in the old journal, and presents an old-root proof bound to the
+  assignment, claim, fence, and recovery control. The coordinator durably
+  records the redacted proof before restoring capacity; the successor cannot
+  manufacture it.
   For SLURM work, authority close likewise does not release a profile admission
   slot until exact external/bootstrap containment and result disposition are
   recorded. Queue/accounting absence, timeout, retention expiry, operator text,
@@ -284,6 +289,13 @@ Polling is rejected until that fresh full provider offer and a post-fence
 old-reference recheck both succeed. Status then reports `state: ready` and
 `readiness: ready` with bounded owner counts. It never exposes claim IDs,
 credentials, private paths, or recovery evidence payloads.
+
+If the protected old root later returns, use its ordinary contained-assignment
+cleanup path. The old root releases its provider claim first; only then does the
+coordinator remove that claim from the successor's withholding set. Changing
+that set creates a new coordinator-only offer/availability identity, so newly
+usable capacity is published as a fresh immutable snapshot rather than a
+rewrite of the successor's raw observation.
 
 This is a hard cut-over. Protocol and coordinator/agent state are version 7;
 there is no migration, compatibility reader, or adoption of an old root. Keep

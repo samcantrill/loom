@@ -208,7 +208,7 @@ def register_subparser(
 
     replacement = queue_subparsers.add_parser(
         "daemon-replace-agent-session",
-        help="fence one fully released agent session before ordinary re-registration",
+        help="fence one completely classified lost agent session before re-registration",
     )
     replacement.add_argument("--endpoint", required=True, type=Path)
     replacement.add_argument("--operation-id", required=True)

@@ -179,6 +179,21 @@ class ManagedAssignment:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderReleaseEvidence:
+    """Agent-journal proof that one exact composite claim is fully released."""
+
+    assignment: ManagedAssignment
+    execution_fence: str
+    availability_revision: str
+
+    def __post_init__(self) -> None:
+        if not self.execution_fence:
+            raise ManagedLocalError("provider release fence is required")
+        if not self.availability_revision:
+            raise ManagedLocalError("provider release availability is required")
+
+
+@dataclass(frozen=True, slots=True)
 class ManagedExecutionReceipt:
     assignment: ManagedAssignment
     fence: ExecutionFence
@@ -1235,6 +1250,36 @@ class SQLiteAgentJournal:
             return StageWorkerResult.from_dict(
                 json.loads(cast(str, row["result_json"]))
             )
+
+    def provider_release_evidence(self, assignment_id: str) -> ProviderReleaseEvidence:
+        """Read the exact immutable fact created after every provider released."""
+
+        with self._transaction() as conn:
+            row = self._assignment(conn, assignment_id)
+            state = AssignmentState(row["state"])
+            if state is not AssignmentState.RELEASED:
+                raise ManagedLocalError(
+                    "assignment has no durable provider release evidence"
+                )
+            if row["claims_json"] is None:
+                raise ManagedLocalError("assignment claim evidence is unavailable")
+            fence = row["grant_fence"]
+            availability_revision = row["availability_revision"]
+            if not isinstance(fence, str) or not isinstance(availability_revision, str):
+                raise ManagedLocalError(
+                    "assignment provider release evidence is incomplete"
+                )
+            assignment = _assignment_from_dict(
+                json.loads(cast(str, row["identity_json"]))
+            )
+            commands = _claim_commands_from_row(row)
+            if not commands or any(
+                command.assignment != assignment for command in commands
+            ):
+                raise ManagedLocalError(
+                    "assignment provider release evidence is incomplete"
+                )
+            return ProviderReleaseEvidence(assignment, fence, availability_revision)
 
     def retained_claim_commands(self) -> tuple[ClaimCommand, ...]:
         """Return exact claims still lacking durable provider-release proof."""

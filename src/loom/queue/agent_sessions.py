@@ -892,6 +892,73 @@ class AgentRetirementProof:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentProviderReleaseProof:
+    """Old-root proof that every provider for one exact claim released."""
+
+    session_id: str
+    coordinator_id: str
+    coordinator_epoch: str
+    agent_id: str
+    agent_root_id: str
+    policy_revision: str
+    config_revision: str
+    inventory_revision: str
+    assignment_id: str
+    claim_id: str
+    execution_fence: str
+    released_availability_revision: str
+    recovery_control_operation_id: str | None
+    retirement_secret: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "session_id",
+            "coordinator_id",
+            "coordinator_epoch",
+            "agent_id",
+            "agent_root_id",
+            "policy_revision",
+            "config_revision",
+            "inventory_revision",
+            "assignment_id",
+            "claim_id",
+            "execution_fence",
+            "released_availability_revision",
+            "retirement_secret",
+        ):
+            _identifier(getattr(self, name), name)
+        if self.recovery_control_operation_id is not None:
+            _identifier(
+                self.recovery_control_operation_id,
+                "recovery_control_operation_id",
+            )
+        _secret_digest(self.retirement_secret, "agent retirement secret")
+
+    def value(self) -> dict[str, PlainData]:
+        return {
+            "session_id": self.session_id,
+            "coordinator_id": self.coordinator_id,
+            "coordinator_epoch": self.coordinator_epoch,
+            "agent_id": self.agent_id,
+            "agent_root_id": self.agent_root_id,
+            "policy_revision": self.policy_revision,
+            "config_revision": self.config_revision,
+            "inventory_revision": self.inventory_revision,
+            "assignment_id": self.assignment_id,
+            "claim_id": self.claim_id,
+            "execution_fence": self.execution_fence,
+            "released_availability_revision": (self.released_availability_revision),
+            "recovery_control_operation_id": self.recovery_control_operation_id,
+            "retirement_secret": self.retirement_secret,
+        }
+
+    def redacted_value(self) -> dict[str, PlainData]:
+        value = self.value()
+        del value["retirement_secret"]
+        return value
+
+
+@dataclass(frozen=True, slots=True)
 class SessionReplacementRequest:
     """Privileged request to fence one derived, unreachable old session.
 
@@ -1312,12 +1379,14 @@ class AgentSessionView:
         *,
         fence: str,
         availability_revision: str,
+        provider_release_proof: AgentProviderReleaseProof,
     ) -> AgentSession:
         return AgentSessionService(self._daemon, self._principal).release_assignment(
             session_id,
             assignment_id,
             fence=fence,
             availability_revision=availability_revision,
+            provider_release_proof=provider_release_proof,
         )
 
     def retire_clean(
@@ -3032,14 +3101,19 @@ class AgentSessionService:
         *,
         fence: str,
         availability_revision: str,
+        provider_release_proof: AgentProviderReleaseProof,
     ) -> AgentSession:
         rule, policy_revision = self._authorize("release")
         _identifier(fence, "fence")
         _identifier(availability_revision, "availability_revision")
+        if not isinstance(provider_release_proof, AgentProviderReleaseProof):
+            raise QueueServiceError("agent provider release proof is invalid")
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
         recovery: RecoverUnknownAssignment | None = None
         released_claim_id: str | None = None
+        proof_json = _canonical_json(provider_release_proof.redacted_value())
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
             session = self._require_remote_cleanup_session(
                 conn, rule, policy_revision, session_id, epoch
             )
@@ -3047,9 +3121,26 @@ class AgentSessionService:
             replaced = session.state is AgentSessionState.REPLACED
             if row["fence"] != fence:
                 raise QueueConflictError("remote release fence is stale")
+            _require_matching_provider_release_proof(
+                session,
+                provider_release_proof,
+                assignment_id=assignment_id,
+                fence=fence,
+                availability_revision=availability_revision,
+            )
+            _verify_retirement_secret(
+                conn, session.session_id, provider_release_proof.retirement_secret
+            )
+            retained_proof = row["provider_release_proof_json"]
+            if retained_proof is not None and str(retained_proof) != proof_json:
+                raise QueueConflictError("remote provider release proof conflicts")
             if str(row["state"]) == "RELEASED":
-                if row["next_availability_revision"] != availability_revision:
+                if (
+                    row["next_availability_revision"] != availability_revision
+                    or retained_proof is None
+                ):
                     raise QueueConflictError("remote release replay conflicts")
+                conn.commit()
                 return AgentSession(
                     session.session_id,
                     session.coordinator_id,
@@ -3071,8 +3162,29 @@ class AgentSessionService:
                     assignment_id=assignment_id,
                     fence=fence,
                 )
+                control = conn.execute(
+                    "SELECT operation_id FROM remote_assignment_controls "
+                    "WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()
+                if (
+                    control is None
+                    or provider_release_proof.recovery_control_operation_id
+                    != str(control["operation_id"])
+                    or provider_release_proof.claim_id != released_claim_id
+                ):
+                    raise QueueConflictError(
+                        "replacement provider release proof is stale"
+                    )
             elif str(row["state"]) != "TERMINAL":
                 raise QueueConflictError("remote release fence is stale")
+            if retained_proof is None:
+                conn.execute(
+                    "UPDATE remote_assignments SET provider_release_proof_json = ? "
+                    "WHERE assignment_id = ?",
+                    (proof_json, assignment_id),
+                )
+            conn.commit()
         if recovery is None:
             self._remote_execution().remote_release(assignment_id)
         else:
@@ -3093,11 +3205,14 @@ class AgentSessionService:
         )
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
+            updated = conn.execute(
                 "UPDATE remote_assignments SET state = 'RELEASED', "
-                "next_availability_revision = ? WHERE assignment_id = ?",
-                (availability_revision, assignment_id),
-            )
+                "next_availability_revision = ? WHERE assignment_id = ? "
+                "AND provider_release_proof_json = ?",
+                (availability_revision, assignment_id, proof_json),
+            ).rowcount
+            if updated != 1:
+                raise QueueConflictError("remote provider release proof is unavailable")
             conn.execute(
                 "UPDATE agent_sessions SET availability_revision = ? "
                 "WHERE session_id = ?",
@@ -3120,7 +3235,7 @@ class AgentSessionService:
             )
             if released_claim_id is not None:
                 replacement = conn.execute(
-                    "SELECT readiness, observed_claim_ids_json "
+                    "SELECT readiness, observed_claim_ids_json, result_json "
                     "FROM session_replacements WHERE old_session_id = ?",
                     (session_id,),
                 ).fetchone()
@@ -3149,14 +3264,17 @@ class AgentSessionService:
                     raise QueueConflictError(
                         "replacement cleanup claim is not currently withheld"
                     )
+                result = _replacement_cleanup_result(replacement["result_json"])
                 conn.execute(
-                    "UPDATE session_replacements SET observed_claim_ids_json = ? "
+                    "UPDATE session_replacements SET observed_claim_ids_json = ?, "
+                    "result_json = ? "
                     "WHERE old_session_id = ?",
                     (
                         json.dumps(
                             [item for item in observed if item != released_claim_id],
                             separators=(",", ":"),
                         ),
+                        _canonical_json(result),
                         session_id,
                     ),
                 )
@@ -4389,6 +4507,35 @@ def _replacement_result(
     }
 
 
+def _replacement_cleanup_result(value: object) -> dict[str, PlainData]:
+    """Advance only the current bounded counts after one exact late cleanup."""
+
+    try:
+        result = json.loads(str(value))
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise QueueStorageError("session replacement result is invalid") from exc
+    if not isinstance(result, dict) or not isinstance(result.get("owner_counts"), dict):
+        raise QueueStorageError("session replacement result is invalid")
+    counts = cast(dict[str, object], result["owner_counts"])
+    contained = counts.get("contained")
+    released = counts.get("released")
+    if (
+        isinstance(contained, bool)
+        or not isinstance(contained, int)
+        or contained < 1
+        or isinstance(released, bool)
+        or not isinstance(released, int)
+        or released < 0
+    ):
+        raise QueueStorageError("session replacement result is invalid")
+    counts["contained"] = contained - 1
+    counts["released"] = released + 1
+    frozen = freeze_plain_data(result, path="session replacement cleanup result")
+    if not isinstance(frozen, Mapping):
+        raise QueueStorageError("session replacement result is invalid")
+    return dict(frozen)
+
+
 def _projection_string(value: Mapping[str, object], name: str) -> str:
     item = value.get(name)
     if not isinstance(item, str) or not item:
@@ -4413,7 +4560,7 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS session_replacements (operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, request_json TEXT NOT NULL, request_digest TEXT NOT NULL, agent_id TEXT NOT NULL, old_session_id TEXT NOT NULL UNIQUE, successor_session_id TEXT UNIQUE, state TEXT NOT NULL, readiness TEXT NOT NULL, withholding_reason TEXT, decision_projection_json TEXT NOT NULL, decision_projection_digest TEXT NOT NULL, required_claim_ids_json TEXT NOT NULL, observed_claim_ids_json TEXT NOT NULL, successor_observation_digest TEXT, readiness_projection_digest TEXT, result_json TEXT NOT NULL, decided_at TEXT NOT NULL, ready_at TEXT);
         CREATE TABLE IF NOT EXISTS agent_replacement_coverage (session_id TEXT NOT NULL, assignment_id TEXT NOT NULL, reference_class TEXT NOT NULL, PRIMARY KEY(session_id, assignment_id, reference_class));
         CREATE TABLE IF NOT EXISTS agent_deliveries (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, poll_id TEXT);
-        CREATE TABLE IF NOT EXISTS remote_assignments (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, issuer_epoch TEXT NOT NULL, run_uri TEXT NOT NULL, stage_work_id TEXT NOT NULL, stage_name TEXT NOT NULL, attempt INTEGER NOT NULL, attempt_id TEXT NOT NULL, profile_json TEXT NOT NULL, state TEXT NOT NULL, fence TEXT, start_permitted INTEGER NOT NULL DEFAULT 0, report_json TEXT, report_digest TEXT, next_availability_revision TEXT);
+        CREATE TABLE IF NOT EXISTS remote_assignments (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, issuer_epoch TEXT NOT NULL, run_uri TEXT NOT NULL, stage_work_id TEXT NOT NULL, stage_name TEXT NOT NULL, attempt INTEGER NOT NULL, attempt_id TEXT NOT NULL, profile_json TEXT NOT NULL, state TEXT NOT NULL, fence TEXT, start_permitted INTEGER NOT NULL DEFAULT 0, report_json TEXT, report_digest TEXT, next_availability_revision TEXT, provider_release_proof_json TEXT);
         CREATE TABLE IF NOT EXISTS remote_transfers (assignment_id TEXT NOT NULL, direction TEXT NOT NULL, transfer_id TEXT NOT NULL, logical_name TEXT NOT NULL, digest TEXT NOT NULL, size_bytes INTEGER NOT NULL, private_path TEXT NOT NULL, received_bytes INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, descriptor_json TEXT, PRIMARY KEY(assignment_id, direction, transfer_id));
         CREATE TABLE IF NOT EXISTS remote_transfer_authorizations (assignment_id TEXT NOT NULL, authorization_id TEXT NOT NULL, revision INTEGER NOT NULL, coordinator_epoch TEXT NOT NULL, operation_id TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, PRIMARY KEY(assignment_id, revision));
         CREATE TABLE IF NOT EXISTS agent_controls (operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, effect_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
@@ -4783,6 +4930,7 @@ def validate_agent_session_schema(
                 "report_json",
                 "report_digest",
                 "next_availability_revision",
+                "provider_release_proof_json",
             },
             "remote_transfers": {
                 "assignment_id",
@@ -5088,6 +5236,30 @@ def _require_matching_retirement_proof(
         or proof.availability_revision != session.availability_revision
     ):
         raise QueueConflictError("agent retirement proof is stale")
+
+
+def _require_matching_provider_release_proof(
+    session: AgentSession,
+    proof: AgentProviderReleaseProof,
+    *,
+    assignment_id: str,
+    fence: str,
+    availability_revision: str,
+) -> None:
+    if (
+        proof.session_id != session.session_id
+        or proof.coordinator_id != session.coordinator_id
+        or proof.coordinator_epoch != session.coordinator_epoch
+        or proof.agent_id != session.agent_id
+        or proof.agent_root_id != session.agent_root_id
+        or proof.policy_revision != session.policy_revision
+        or proof.config_revision != session.config_revision
+        or proof.inventory_revision != session.inventory_revision
+        or proof.assignment_id != assignment_id
+        or proof.execution_fence != fence
+        or proof.released_availability_revision != availability_revision
+    ):
+        raise QueueConflictError("agent provider release proof is stale")
 
 
 def _plain_identifier(value: Mapping[str, PlainData], key: str) -> str:

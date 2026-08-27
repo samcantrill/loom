@@ -382,11 +382,36 @@ class _RemoteCandidateTarget:
     session_id: str
     offer_id: str
     availability_revision: str
+    scheduling_availability_revision: str
     inventory_revision: str
     offer: AgentOffer
     profile: ResidentProfileDescriptor
     availability_atoms: tuple[CapacityAtom, ...]
     reflected_claim_ids: tuple[str, ...]
+
+
+def _replacement_scheduling_identities(
+    *,
+    offer_id: str,
+    availability_revision: str,
+    withheld_claim_ids: tuple[str, ...],
+) -> tuple[str, str]:
+    """Give each coordinator-owned net-capacity projection a fresh identity."""
+
+    withheld = json.dumps(withheld_claim_ids, sort_keys=True, separators=(",", ":"))
+    scheduling_offer_id = (
+        "replacement-offer-"
+        + hashlib.sha256(
+            f"{offer_id}\0{availability_revision}\0{withheld}".encode("utf-8")
+        ).hexdigest()
+    )
+    scheduling_availability_revision = (
+        "replacement-availability-"
+        + hashlib.sha256(
+            f"{availability_revision}\0{withheld}".encode("utf-8")
+        ).hexdigest()
+    )
+    return scheduling_offer_id, scheduling_availability_revision
 
 
 def _connect_existing_sqlite(path: Path) -> sqlite3.Connection:
@@ -3648,6 +3673,8 @@ class LocalDaemonExecution:
             raw_withheld_claim_ids = row["observed_claim_ids_json"]
             if raw_withheld_claim_ids is None:
                 withheld_claim_ids: tuple[str, ...] = ()
+                scheduling_offer_id = str(row["offer_id"])
+                scheduling_availability_revision = offer.availability_revision
             else:
                 try:
                     decoded_claim_ids = json.loads(str(raw_withheld_claim_ids))
@@ -3668,6 +3695,14 @@ class LocalDaemonExecution:
                         atoms=availability_atoms,
                         claim_ids=withheld_claim_ids,
                     )
+                )
+                (
+                    scheduling_offer_id,
+                    scheduling_availability_revision,
+                ) = _replacement_scheduling_identities(
+                    offer_id=str(row["offer_id"]),
+                    availability_revision=offer.availability_revision,
+                    withheld_claim_ids=withheld_claim_ids,
                 )
             inventory: dict[str, ResourceInventoryEnvelope] = {}
             availability: dict[str, ResourceAvailabilityEnvelope] = {}
@@ -3703,7 +3738,7 @@ class LocalDaemonExecution:
                 availability[kind] = ResourceAvailabilityEnvelope(
                     agent_id,
                     kind,
-                    offer.availability_revision,
+                    scheduling_availability_revision,
                     data=data,
                     atoms=kind_availability_atoms,
                 )
@@ -3726,8 +3761,9 @@ class LocalDaemonExecution:
             target = _RemoteCandidateTarget(
                 agent_id=agent_id,
                 session_id=str(row["session_id"]),
-                offer_id=str(row["offer_id"]),
+                offer_id=scheduling_offer_id,
                 availability_revision=offer.availability_revision,
+                scheduling_availability_revision=(scheduling_availability_revision),
                 inventory_revision=offer.inventory_revision,
                 offer=offer,
                 profile=profile,
@@ -3907,9 +3943,9 @@ class LocalDaemonExecution:
                 agent_id=remote_target.agent_id,
                 session_id=remote_target.session_id,
                 offer_revision=remote_target.offer_id,
-                snapshot_revision=remote_target.availability_revision,
+                snapshot_revision=(remote_target.scheduling_availability_revision),
                 inventory_revision=remote_target.inventory_revision,
-                availability_revision=remote_target.availability_revision,
+                availability_revision=(remote_target.scheduling_availability_revision),
                 component_descriptors=tuple(
                     decision_planners[kind].descriptor
                     for kind in sorted(provider_descriptors)
@@ -3956,7 +3992,7 @@ class LocalDaemonExecution:
                 "managed worker preparation identity differs from authority attempt"
             )
         snapshot_revision = (
-            remote_target.availability_revision
+            remote_target.scheduling_availability_revision
             if remote_target is not None
             else self.coordinator_epoch
         )

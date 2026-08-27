@@ -870,6 +870,13 @@ provider observation, and passes the post-fence reference recheck. See the
 [lost-session replacement procedure](reliability.md#lost-session-replacement-operator-procedure)
 for the complete sequence.
 
+An exact late release is accepted only after the protected old root releases
+its providers and supplies durable proof bound to the old assignment, claim,
+fence, and recovery control. The proof is recorded before capacity is restored.
+Whenever that release changes the coordinator-owned withholding set, Loom
+derives a fresh internal offer and availability identity while preserving the
+raw successor observation.
+
 Cancellation commits the coordinator request before returning. Inspection may
 therefore show `requested`, then `effective` or `settling`, before terminal
 `CANCELLED`:

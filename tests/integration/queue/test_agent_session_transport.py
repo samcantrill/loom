@@ -31,6 +31,7 @@ from loom.queue._managed_local import (
     ClaimResult,
     GpuResourceProvider,
     ManagedAssignment,
+    ManagedOfferSnapshot,
     SQLiteAgentJournal,
 )
 from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
@@ -1083,23 +1084,117 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
         successor_target = candidates[successor.agent_id][1]
         assert successor_target.session_id == successor.session_id
         assert successor_target.availability_atoms == ()
+        withheld_snapshot = ManagedOfferSnapshot(
+            agent_id=successor_target.agent_id,
+            session_id=successor_target.session_id,
+            offer_revision=successor_target.offer_id,
+            snapshot_revision=(successor_target.scheduling_availability_revision),
+            inventory_revision=successor_target.inventory_revision,
+            availability_revision=(successor_target.scheduling_availability_revision),
+            component_descriptors=(CpuResourcePlanner().descriptor,),
+            provider_descriptors=successor_target.offer.provider_descriptors,
+            atoms=successor_target.availability_atoms,
+            reflected_claim_ids=successor_target.reflected_claim_ids,
+        )
+        daemon._execution.coordinator.publish_offer(withheld_snapshot)  # type: ignore[union-attr]  # noqa: SLF001
         replacement_status = next(
             item
             for item in daemon.status().controls
             if item.get("owner") == "session-replacement"
         )
         assert replacement_status["readiness"] == "ready"
-        released_old = agent.release_assignment(
+        with pytest.raises(
+            QueueServiceError, match="remote agent session evidence is unavailable"
+        ):
+            successor_agent.release_contained_assignment(
+                session.session_id, assignment_id, fence=fence
+            )
+        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+            agent._call(  # noqa: SLF001 - hard-cut wire rejection proof
+                "release",
+                {
+                    "session_id": session.session_id,
+                    "assignment_id": assignment_id,
+                    "fence": fence,
+                    "availability_revision": "unsafe-unproven-release",
+                },
+            )
+        proof_seen_before_capacity_release: list[str] = []
+        original_recovered_release = (
+            daemon._execution.remote_release_recovered  # type: ignore[union-attr]
+        )
+
+        def release_only_after_durable_proof(
+            recovery_request: RecoverUnknownAssignment,
+        ) -> None:
+            with sqlite3.connect(config.control_database) as conn:
+                proof_row = conn.execute(
+                    "SELECT provider_release_proof_json FROM remote_assignments "
+                    "WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()
+            assert proof_row is not None and proof_row[0] is not None
+            assert "retirement_secret" not in str(proof_row[0])
+            proof_seen_before_capacity_release.append(str(proof_row[0]))
+            original_recovered_release(recovery_request)
+
+        monkeypatch.setattr(
+            daemon._execution,  # type: ignore[union-attr]
+            "remote_release_recovered",
+            release_only_after_durable_proof,
+        )
+        released_old = agent.release_contained_assignment(
             session.session_id,
             assignment_id,
             fence=fence,
-            availability_revision="availability-old-cleanup",
         )
         assert released_old.state is AgentSessionState.REPLACED
+        assert len(proof_seen_before_capacity_release) == 1
+        old_execution_journal = SQLiteAgentJournal(
+            cast(Path, remote_config.agent_root) / "journal.sqlite",
+            _allow_initialize=False,
+        )
+        assert old_execution_journal.retained_claim_commands() == ()
+        with sqlite3.connect(config.control_database) as conn:
+            retained_proof = conn.execute(
+                "SELECT provider_release_proof_json FROM remote_assignments "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+        assert retained_proof is not None
+        assert retained_proof[0] is not None
+        assert "retirement_secret" not in str(retained_proof[0])
         candidates = daemon._execution._remote_candidates()  # type: ignore[union-attr]  # noqa: SLF001
-        successor_target = candidates[successor.agent_id][1]
-        assert len(successor_target.availability_atoms) == 1
-        assert successor_target.availability_atoms[0].amount.fraction == 1
+        released_target = candidates[successor.agent_id][1]
+        assert released_target.availability_revision == (
+            successor_target.availability_revision
+        )
+        assert released_target.offer_id != successor_target.offer_id
+        assert released_target.scheduling_availability_revision != (
+            successor_target.scheduling_availability_revision
+        )
+        assert len(released_target.availability_atoms) == 1
+        assert released_target.availability_atoms[0].amount.fraction == 1
+        released_snapshot = ManagedOfferSnapshot(
+            agent_id=released_target.agent_id,
+            session_id=released_target.session_id,
+            offer_revision=released_target.offer_id,
+            snapshot_revision=released_target.scheduling_availability_revision,
+            inventory_revision=released_target.inventory_revision,
+            availability_revision=released_target.scheduling_availability_revision,
+            component_descriptors=(CpuResourcePlanner().descriptor,),
+            provider_descriptors=released_target.offer.provider_descriptors,
+            atoms=released_target.availability_atoms,
+            reflected_claim_ids=released_target.reflected_claim_ids,
+        )
+        daemon._execution.coordinator.publish_offer(released_snapshot)  # type: ignore[union-attr]  # noqa: SLF001
+        replacement_status = next(
+            item
+            for item in daemon.status().controls
+            if item.get("owner") == "session-replacement"
+        )
+        assert replacement_status["owner_counts"]["contained"] == 0  # type: ignore[index]
+        assert replacement_status["owner_counts"]["released"] == 1  # type: ignore[index]
     finally:
         release_agent.set()
         if worker is not None and not worker.done():
