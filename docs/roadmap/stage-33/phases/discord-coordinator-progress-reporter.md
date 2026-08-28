@@ -229,11 +229,12 @@ Final commands:
   coordinator status through a shared sanitized webhook sender and installs the
   one-shot/continuous reporter command without changing Loom core or Stage 32.
 - Refiner: not needed.
-- Pre-submit gate: pending a fresh full run after the manager correction;
-  corrected targeted tests (13 passed), lint, type check, lazy-import check,
-  nested build, and wheel metadata inspection pass.
-- Independent review: not needed unless implementation creates a material
-  residual lifecycle-truth, credential, or compatibility risk.
+- Pre-submit gate: passed on `46383e9`; corrected targeted tests (13 passed),
+  Ruff, Pyright, lazy-import check, nested build/wheel metadata,
+  `make validate-pr`, and `make test-summary` all pass.
+- Independent review: not needed; manager fast-path review found no remaining
+  lifecycle-truth, credential, import-cost, cadence, compatibility, scope, or
+  fake/live-evidence blocker.
 - Blocker corrections: 1/3 — manager review found that alphabetical truncation
   could hide currently running work behind waiting admissions and that a
   progress report immediately before a heartbeat could be followed by a noisy
@@ -248,7 +249,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added the downstream coordinator projection, CLI, shared bounded sender, package script, operator documentation/catalog wording, and Stage 33 implementation state; `src/loom`, root dependencies, schemas, and Stage 32 remain unchanged. |
 | Tests added or updated | Extended `tests/integration/examples/test_discord_webhook.py` for safe allowlisted projection, timestamp suppression, heartbeat, bounded active-run omission, sanitized failures, one-shot CLI, continuous recovery, and package script metadata. |
-| Validated revision/tree state and evidence | Corrected targeted pytest (13 passed), Ruff, Pyright, lazy-import check, nested `uv build`, and wheel console metadata passed; fresh full gates pending. |
-| Validation-relevant changes after evidence | Manager correction changed projection ordering, heartbeat timing, and lazy import behavior after the executor's full-gate receipt; a fresh full run is required. |
+| Validated revision/tree state and evidence | `46383e9`: targeted pytest 13 passed; Ruff, Pyright, lazy-import check, nested build/wheel metadata passed; `make validate-pr` passed 2,578 default and 154 config-extra tests with 3 expected skips plus root builds; fresh summary passed 2,732 tests with 0 failures/errors and 3 skips. |
+| Validation-relevant changes after evidence | None; this evidence update is phase metadata only. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
