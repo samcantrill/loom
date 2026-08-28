@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 31, Phase 1
 - Manifest: `docs/roadmap/stage-31/implementation-plan.md`
 - Branch: `agent/stage-31-p1-discord-webhook-event-sink`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; `/home/can134/work/active/loom-worktrees/stage-31-p1-discord-webhook-event-sink`
-- Base revision: to be recorded from current `origin/develop` at implementation startup
+- Base revision: `f602ac5` (current `origin/develop` after approved Stage 31 planning)
 - PR target: develop
 - PR title: `Stage 31 phase 1: add Discord webhook event sink`
 - Dependencies: approved Stage 31 planning; existing Stage 20 event-sink dispatch, Stage 28 explicit filtered activation, and Stage 30 extension-example harness
@@ -198,8 +198,9 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning gate passed; exact implementation base will be
-  recorded after the planning commit and isolated worktree are created.
+- Manager preparation: passed; approved manifest and phase plan are consistent,
+  `origin/develop` is `f602ac5`, and the dedicated branch/worktree are clean and
+  isolated at the recorded paths.
 - Expanded planning: not needed; fixed Stage 20/28 contracts remove novel
   public or durable decisions.
 - Implementation: pending.
