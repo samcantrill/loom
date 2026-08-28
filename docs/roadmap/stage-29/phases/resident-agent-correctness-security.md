@@ -12,8 +12,8 @@
 - PR title: `feat(agent): require exact resident execution profiles`
 - Dependencies: Phase 10 remotely merged as `c2dab20`
 - Workflow path: fast; the identity and environment contracts are fixed
-- Blockers: maintainer decision required for the authoritative public input that
-  supplies each prepared stage's three execution-requirement fingerprints
+- Blockers: none; the maintainer approved the mandatory exact per-stage
+  preparation mapping on 2026-08-29
 
 ## Objective And Context
 
@@ -49,8 +49,12 @@ In scope:
 - Add immutable `ExecutionRequirement(project_fingerprint,
   environment_fingerprint, executor_fingerprint)` and persist it in the
   protected managed runtime/stage placement record for every managed stage.
-  Missing or malformed requirements reject before admission; bump the runtime
-  record and dependent wire/durable identities with no compatibility.
+  `prepare_managed_local_runtime_record` requires an explicit mapping keyed by
+  every prepared stage name; its keys must exactly cover the plan and no
+  authored-field, run-wide, daemon-profile, agent-profile, or other default is
+  inferred. Missing, extra, or malformed requirements reject before admission;
+  bump the runtime record and dependent wire/durable identities with no
+  compatibility.
 - Materialize one scheduling candidate per `(agent_id, session_id, profile_id)`.
   Candidate identity is stable and profile-qualified; capacity/resource atoms
   remain correctly namespaced and cannot be double-counted between profiles.
@@ -101,6 +105,7 @@ Assumptions:
   a custom provider executes end-to-end.
 - Public or durable shapes: new execution requirement, profile-qualified
   candidate/assignment target, agent provider composition, and testing helper.
+  The preparation API accepts one mandatory exact per-stage requirement mapping.
   Managed-runtime and agent-session/assignment schema identities hard-cut.
 - Trust and failure boundaries: coordinator compares inert exact fingerprints;
   agent verifies the pinned live profile and owns provider/environment effects;
@@ -190,8 +195,9 @@ Final commands:
 - Read section range: this complete phase plan, especially Scope through Risks.
 - Safe implementation slices: the five numbered slices in order.
 - Decisions not to revisit: exact identity equality; one profile per candidate;
-  selected profile pinned; new allowlisted environment; providers are agent-owned;
-  old formats unsupported.
+  mandatory exact per-stage preparation mapping with complete plan coverage and
+  no inference/default; selected profile pinned; new allowlisted environment;
+  providers are agent-owned; old formats unsupported.
 - Conditions requiring manager action: any ambiguity in durable/public shape not
   resolved by this plan, capacity duplication across profiles, or qualified
   lifecycle/security blocker.
@@ -202,10 +208,9 @@ Final commands:
   `origin/develop` base, branch/worktree, source seams, fast-path risk decision,
   and validation commands verified at `860c518`
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: the executor stopped before edits because neither the accepted
-  plan nor current preparation/runtime APIs assign authoritative ownership of the
-  required project, environment, and executor fingerprints; no default may be
-  inferred from coordinator or agent deployment profiles
+- Implementation: the first executor turn stopped before edits at the public
+  input boundary; the maintainer approved a required exact per-stage mapping on
+  2026-08-29, so the same executor may resume the directly related task
 - Refiner: not needed
 - Pre-submit gate: pending
 - Independent review: not needed unless a material residual risk remains
@@ -216,9 +221,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | No source or test changes. The executor stopped before edits at the unresolved `ExecutionRequirement` authoring/API boundary. |
+| Implementation and changed paths | The initial executor turn made no source or test changes. The maintainer then approved the required exact per-stage preparation mapping; implementation resumed. |
 | Tests added or updated | pending |
 | Validated revision/tree state and evidence | pending |
 | Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Awaiting one maintainer choice between a required protected preparation input and a new authored/runtime field. The phase branch/worktree remain dedicated and clean. |
+| Residual risk and cleanup | No unresolved product decision. The phase branch/worktree remain dedicated and clean while implementation resumes. |
