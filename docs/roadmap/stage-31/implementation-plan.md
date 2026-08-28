@@ -72,4 +72,4 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | [#251](https://github.com/samcantrill/loom/pull/251) squash-merged as `6380e17` | Targeted provider tests, nested package build, `make validate-pr`, manager review, and fresh `make test-summary` receipt passed. | Best-effort external delivery; live Discord is opt-in. | Phase worktree/local branch cleanup pending immediately after merge metadata push. |
+| 1 | [#251](https://github.com/samcantrill/loom/pull/251) squash-merged as `6380e17` | Targeted provider tests, nested package build, `make validate-pr`, manager review, and fresh `make test-summary` receipt passed. | Best-effort external delivery; live Discord is opt-in. | Remote phase branch deleted during merge; local worktree and branch removed. |
