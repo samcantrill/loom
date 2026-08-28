@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 33, Phase 1
 - Manifest: `docs/roadmap/stage-33/implementation-plan.md`
 - Branch: `agent/stage-33-p1-discord-coordinator-progress-reporter`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; `/home/can134/work/active/loom-worktrees/stage-33-p1-discord-coordinator-progress-reporter`
-- Base revision: `4ba8265d2ba7da1f5eabb23802a72b71a3fe9bca`
+- Base revision: `c55892f5bd04691938da1a5a8ba76a4f4a0fabc9`
 - PR target: develop
 - PR title: `Stage 33 phase 1: add Discord coordinator progress reporter`
 - Dependencies: merged Stage 29 joined status/socket behavior and merged Stage
@@ -221,8 +221,8 @@ Final commands:
 ## Workflow State
 
 - Manager preparation: passed; approved manifest and phase plan are consistent,
-  `origin/develop` is `4ba8265`, and user-owned Stage 32 paths remain isolated in
-  the control checkout.
+  the isolated branch/worktree starts from `c55892f`, and user-owned Stage 32
+  paths remain isolated in the control checkout.
 - Expanded planning: not needed; existing Stage 29 and Stage 31 contracts fix
   the public, durable, trust, and delivery boundaries.
 - Implementation: pending.
