@@ -12,7 +12,8 @@
 - PR title: `feat(agent): require exact resident execution profiles`
 - Dependencies: Phase 10 remotely merged as `c2dab20`
 - Workflow path: fast; the identity and environment contracts are fixed
-- Blockers: none
+- Blockers: maintainer decision required for the authoritative public input that
+  supplies each prepared stage's three execution-requirement fingerprints
 
 ## Objective And Context
 
@@ -201,7 +202,10 @@ Final commands:
   `origin/develop` base, branch/worktree, source seams, fast-path risk decision,
   and validation commands verified at `860c518`
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: pending one executor pass
+- Implementation: the executor stopped before edits because neither the accepted
+  plan nor current preparation/runtime APIs assign authoritative ownership of the
+  required project, environment, and executor fingerprints; no default may be
+  inferred from coordinator or agent deployment profiles
 - Refiner: not needed
 - Pre-submit gate: pending
 - Independent review: not needed unless a material residual risk remains
@@ -212,9 +216,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
+| Implementation and changed paths | No source or test changes. The executor stopped before edits at the unresolved `ExecutionRequirement` authoring/API boundary. |
 | Tests added or updated | pending |
 | Validated revision/tree state and evidence | pending |
 | Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Awaiting one maintainer choice between a required protected preparation input and a new authored/runtime field. The phase branch/worktree remain dedicated and clean. |
