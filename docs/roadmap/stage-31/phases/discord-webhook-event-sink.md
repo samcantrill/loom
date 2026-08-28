@@ -208,9 +208,15 @@ Final commands:
   the downstream package, live example, catalogs, and fake HTTP/lifecycle tests
   are present, and all targeted commands plus the nested wheel build pass.
 - Refiner: not needed.
-- Pre-submit gate: pending.
-- Independent review: not needed unless implementation leaves a material secret
-  or external-boundary risk.
+- Pre-submit gate: passed on implementation revision `0246e3c`; targeted Discord
+  and catalog tests passed 7 tests, focused Ruff and Pyright passed, the nested
+  package built both distributions with the expected entry point,
+  `make validate-pr` passed lint/typecheck, 2,578 default tests, 148 config-extra
+  tests with 3 expected skips, and root package builds, and `make test-summary`
+  produced a fresh all-pass receipt.
+- Independent review: not needed; manager fast-path review found no remaining
+  credential, dependency-direction, provider-projection, observer-isolation,
+  fake/live truthfulness, scope, or proportionality blocker.
 - Blocker corrections: 1/3 — after three full event waits the executor was no
   longer addressable and had left changes uncommitted. The manager preserved
   that work, suppressed raw HTTP exception chains, made the live wrapper report
@@ -222,9 +228,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Commit `0246e3c` adds the downstream `examples/extensions/discord-webhook/` distribution and live runner, routes extension/roadmap docs, and leaves `src/loom` plus root runtime dependencies unchanged. |
+| Tests added or updated | Added fake provider request/failure/lifecycle coverage in `tests/integration/examples/test_discord_webhook.py` and cataloged the manual Python example. |
+| Validated revision/tree state and evidence | `0246e3c`: targeted 7 passed; focused Ruff/Pyright passed; nested sdist/wheel built; `make validate-pr` passed 2,578 default and 148 config-extra tests with 3 expected skips plus builds; fresh summary passed package 118, unit 1,833, contract 296, integration 273, E2E 58, and config-extra 148. |
+| Validation-relevant changes after evidence | None; this evidence record is phase metadata only. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Delivery remains synchronous and best effort; real Discord availability is intentionally manual. Worktree/branch cleanup follows remote merge. |
