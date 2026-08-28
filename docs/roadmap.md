@@ -2997,9 +2997,10 @@ future roadmap candidates, not as implicit scope for the versions above.
   from a config frontend or launcher adapter, but any bridge must preserve
   authored-source provenance, fingerprints, and path-aware error behavior well
   enough for Loom resume decisions to stay trustworthy.
-- OpenTelemetry, W&B, JSONL audit, webhook, or notification event sinks. These
-  should be service-specific plugins over the v20 event sink model. Core Loom
-  should provide the event contract and failure policy, not service delivery.
+- OpenTelemetry, W&B, JSONL audit, or notification event sinks beyond the
+  downstream Discord webhook example accepted in Stage 31. These should be
+  service-specific plugins over the v20 event sink model. Core Loom should
+  provide the event contract and failure policy, not service delivery.
 - No `MetricExtractor` layer. Loom may track a metrics file as an ordinary
   artifact reference because project code produced it, but core Loom should not
   parse metrics, define metric names, optimize metrics, query metrics, or infer

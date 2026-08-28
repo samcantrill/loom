@@ -5,7 +5,7 @@ Roadmap stage: 31
 Planning document: docs/roadmap/stage-31/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 1 pending
+Current phase: Phase 1 PR open
 Blockers: none
 
 ## Summary
@@ -48,7 +48,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | discord-webhook-event-sink | pending | docs/roadmap/stage-31/phases/discord-webhook-event-sink.md | agent/stage-31-p1-discord-webhook-event-sink | pending | downstream example package, extension catalog/docs, focused tests | Deliver copyable remote Discord reporting without changing Loom core. |
+| 1 | discord-webhook-event-sink | pr_open | docs/roadmap/stage-31/phases/discord-webhook-event-sink.md | agent/stage-31-p1-discord-webhook-event-sink | [#251](https://github.com/samcantrill/loom/pull/251) | downstream example package, extension catalog/docs, focused tests | Deliver copyable remote Discord reporting without changing Loom core. |
 
 ## Quality Gate
 

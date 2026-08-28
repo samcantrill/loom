@@ -1,0 +1,28 @@
+id: extensions.discord-webhook
+title: Discord Webhook Event Sink
+summary: Install a downstream Discord webhook event sink for bounded terminal run notifications.
+capability: extensions
+level: intermediate
+introduced_in: v31
+status: illustrative
+validation: manual
+surface: python_api
+public_surfaces:
+  - python_api
+owner_docs:
+  - examples/extensions/README.md
+owner_stages:
+  - v31
+validation_path: tests/integration/examples/test_discord_webhook.py
+entrypoints:
+  - path: run_discord_webhook.py
+    kind: python
+    description: Run a pipeline with the Discord sink after supplying a webhook secret.
+tags:
+  - extensions
+  - event-sink
+  - discord
+  - webhook
+prerequisites:
+  - An installed local loom-discord package and LOOM_DISCORD_WEBHOOK_URL in the lifecycle-owning process environment.
+manual_rationale: The example sends a real Discord webhook request and therefore requires a user-managed credential and external service.

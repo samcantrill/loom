@@ -16,7 +16,7 @@ provider concepts.
 | --- | --- |
 | [Execution](execution/README.md) | Runtime-profile runs, subprocess execution, Docker container execution, offline-first import, and SLURM dry-run/live command flows. |
 | [Experiments](experiments/README.md) | Deterministic manual sweep planning, execution, status, and collection. |
-| [Extensions](extensions/README.md) | Observe-only event sinks registered directly through the public Python API. |
+| [Extensions](extensions/README.md) | Observe-only event sinks, including direct registration and an opt-in Discord webhook package. |
 | [Operations](operations/README.md) | Authority lifecycle, diagnostics, run catalog comparison, bundle portability, candidate-only cleanup, and live SLURM job commands. |
 | [Storage](storage/README.md) | Fake backend capability/operation evidence and explicit checksum-verified local materialization. |
 

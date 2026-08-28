@@ -1,0 +1,17 @@
+[project]
+name = "loom-discord"
+version = "0.1.0"
+description = "Discord webhook event sink example for Loom."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28,<1",
+    "loom",
+]
+
+[project.entry-points."loom.event_sinks"]
+"notifications.discord" = "loom_discord:discord_event_sink"
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
