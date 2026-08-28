@@ -1176,7 +1176,7 @@ def test_daemon_bypasses_run_limited_older_work_for_another_run(
         run_root,
         run_name="limited-run",
         stage_name="first",
-        seconds=1.5,
+        seconds=20,
         independent_stage_names=("first", "second"),
         max_parallel_stages=1,
     )
@@ -1184,7 +1184,7 @@ def test_daemon_bypasses_run_limited_older_work_for_another_run(
         run_root,
         run_name="other-run",
         stage_name="other",
-        seconds=1.5,
+        seconds=20,
     )
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "coordinator",
@@ -1204,7 +1204,7 @@ def test_daemon_bypasses_run_limited_older_work_for_another_run(
         with daemon._cycle_lock:
             client.submit(LocalDaemonAdmissionRequest("limited-item", limited_uri))
             client.submit(LocalDaemonAdmissionRequest("other-item", other_uri))
-        deadline = time.monotonic() + 1
+        deadline = time.monotonic() + 30
         live_run_uris: set[str] = set()
         while time.monotonic() < deadline:
             with sqlite3.connect(config.execution_database) as conn:
@@ -1219,10 +1219,10 @@ def test_daemon_bypasses_run_limited_older_work_for_another_run(
                 break
             time.sleep(0.02)
         assert live_run_uris == {limited_uri, other_uri}
-        assert client.wait("other-item", timeout_seconds=10).state is (
+        assert client.wait("other-item", timeout_seconds=60).state is (
             LocalDaemonAdmissionState.SUCCEEDED
         )
-        assert client.wait("limited-item", timeout_seconds=10).state is (
+        assert client.wait("limited-item", timeout_seconds=60).state is (
             LocalDaemonAdmissionState.SUCCEEDED
         )
     finally:

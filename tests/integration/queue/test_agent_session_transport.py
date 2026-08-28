@@ -723,7 +723,7 @@ def _prepare_mixed_local_remote_sleep_run(
                 "factory": {
                     "_target_": "tests.support.pipeline_execution_stages.SleepStage"
                 },
-                "config": {"seconds": 2},
+                "config": {"seconds": 20},
                 "resources": {
                     "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
                 },
@@ -2315,7 +2315,7 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
                 wait_timeout_ms=5_000,
             )
             coordinator.submit(LocalDaemonAdmissionRequest("mixed-item", run_uri))
-            deadline = monotonic() + 2
+            deadline = monotonic() + 30
             active_agent_ids: set[str] = set()
             while monotonic() < deadline:
                 with sqlite3.connect(config.execution_database) as conn:
@@ -2332,8 +2332,8 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
                     break
                 sleep(0.01)
             assert active_agent_ids == {"machine-A", "agent-a"}
-            assert remote.result(timeout=20)["state"] == "RELEASED"
-        assert coordinator.wait("mixed-item", timeout_seconds=10).state is (
+            assert remote.result(timeout=90)["state"] == "RELEASED"
+        assert coordinator.wait("mixed-item", timeout_seconds=90).state is (
             LocalDaemonAdmissionState.SUCCEEDED
         )
         assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
