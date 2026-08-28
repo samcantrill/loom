@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import tomllib
 from collections.abc import Mapping
+from io import StringIO
 from importlib import import_module
 from pathlib import Path
 from typing import cast
@@ -19,6 +20,7 @@ from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import RunStatus
 from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.queue import LocalDaemonAdmission, LocalDaemonAdmissionState, LocalDaemonStatus
 from loom.serialization import PlainData
 from tests.support.pipeline_execution_configs import local_execution_config
 
@@ -35,9 +37,11 @@ loom_discord = import_module("loom_discord")
 sink_module = import_module("loom_discord.sink")
 DiscordWebhookError = sink_module.DiscordWebhookError
 DiscordWebhookSink = loom_discord.DiscordWebhookSink
+DiscordCoordinatorReporter = loom_discord.DiscordCoordinatorReporter
 TERMINAL_RUN_EVENT_TYPES = sink_module.TERMINAL_RUN_EVENT_TYPES
 WEBHOOK_URL_ENVIRONMENT_VARIABLE = sink_module.WEBHOOK_URL_ENVIRONMENT_VARIABLE
 discord_event_sink = loom_discord.discord_event_sink
+cli_module = import_module("loom_discord.cli")
 
 
 def test_metadata_factory_and_terminal_filter_are_exact(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,6 +50,9 @@ def test_metadata_factory_and_terminal_filter_are_exact(monkeypatch: pytest.Monk
     assert metadata["project"]["dependencies"] == ["httpx>=0.28,<1", "loom"]
     assert metadata["project"]["entry-points"]["loom.event_sinks"] == {
         "notifications.discord": "loom_discord:discord_event_sink"
+    }
+    assert metadata["project"]["scripts"] == {
+        "loom-discord-coordinator": "loom_discord.cli:main"
     }
 
     monkeypatch.delenv(WEBHOOK_URL_ENVIRONMENT_VARIABLE, raising=False)
@@ -176,6 +183,249 @@ def test_transport_failure_is_sanitized_and_does_not_change_run_status(
     assert failure.failure_type == DiscordWebhookError.__name__
     assert failure.failure_message == "Discord webhook transport failed"
     assert secret_url not in str(failure.to_dict())
+
+
+def test_coordinator_reporter_projects_authority_progress_and_suppresses_noise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages: list[dict[str, object]] = []
+
+    def fake_post(url: str, **kwargs: object) -> httpx.Response:
+        assert url == "https://discord.invalid/webhook-token"
+        messages.append(cast(dict[str, object], kwargs["json"]))
+        return httpx.Response(204)
+
+    monkeypatch.setattr("loom_discord.sink.httpx.post", fake_post)
+    reporter = DiscordCoordinatorReporter("https://discord.invalid/webhook-token")
+    first = _daemon_status()
+
+    assert reporter.report(first) is True
+    assert reporter.report(_daemon_status(as_of="2026-08-28T00:01:00Z")) is False
+    assert reporter.report(_daemon_status(stage_state="SUCCEEDED")) is True
+    assert reporter.report(_daemon_status(stage_state="SUCCEEDED"), force=True) is True
+
+    assert len(messages) == 3
+    payload = messages[0]
+    assert payload["allowed_mentions"] == {"parse": []}
+    content = cast(str, payload["content"])
+    assert "Loom coordinator report (non-atomic status)" in content
+    assert "Admissions: ACTIVE=1, WAITING=1" in content
+    assert "Authority runs: RUNNING=1, SUBMITTED=1" in content
+    assert "Authority stages: PENDING=1, RUNNING=1, SUBMITTED=1, SUCCEEDED=1" in content
+    assert "item=item-active admission=ACTIVE authority=RUNNING/available progress=1/3" in content
+    assert "Stages: build (RUNNING), publish (SUBMITTED)" in content
+    for excluded in (
+        "file:///private/run",
+        "assignment-secret",
+        "scheduler-secret",
+        "agent-secret",
+        "payload-secret",
+        "revision-secret",
+    ):
+        assert excluded not in content
+
+
+def test_coordinator_report_is_bounded_and_provider_failures_are_secret_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_post(url: str, **kwargs: object) -> httpx.Response:
+        captured["url"] = url
+        captured.update(kwargs)
+        return httpx.Response(204)
+
+    monkeypatch.setattr("loom_discord.sink.httpx.post", fake_post)
+    reporter = DiscordCoordinatorReporter("https://discord.invalid/secret-token")
+    assert reporter.report(_daemon_status(many_active_runs=20)) is True
+    content = cast(str, cast(dict[str, object], captured["json"])["content"])
+    assert len(content) <= 2_000
+    assert "Active runs omitted: 14" in content
+    assert cast(dict[str, object], captured["json"])["allowed_mentions"] == {"parse": []}
+
+    def failing_post(url: str, **kwargs: object) -> httpx.Response:
+        _ = url, kwargs
+        raise httpx.ConnectError(
+            "secret-token", request=httpx.Request("POST", "https://discord.invalid/secret-token")
+        )
+
+    monkeypatch.setattr("loom_discord.sink.httpx.post", failing_post)
+    with pytest.raises(DiscordWebhookError, match="Discord webhook transport failed") as exc_info:
+        reporter = DiscordCoordinatorReporter("https://discord.invalid/secret-token")
+        reporter.report(_daemon_status())
+    assert "secret-token" not in str(exc_info.value)
+    assert reporter.report(_daemon_status()) is False
+
+
+def test_coordinator_cli_one_shot_is_injectable_and_sanitizes_status_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(WEBHOOK_URL_ENVIRONMENT_VARIABLE, "https://discord.invalid/token")
+    calls: list[bool] = []
+
+    class FakeReporter:
+        def report(self, status: LocalDaemonStatus, *, force: bool = False) -> bool:
+            assert status is _CLI_STATUS
+            calls.append(force)
+            return True
+
+    class FakeClient:
+        def status(self) -> LocalDaemonStatus:
+            return _CLI_STATUS
+
+    stderr = StringIO()
+    result = cli_module.main(
+        ["--endpoint", "/protected/daemon.sock", "--once"],
+        client_factory=lambda endpoint: FakeClient(),
+        reporter_factory=lambda url, timeout: FakeReporter(),
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert calls == [True]
+    assert stderr.getvalue() == ""
+
+    class FailingClient:
+        def status(self) -> LocalDaemonStatus:
+            raise RuntimeError("https://discord.invalid/token")
+
+    stderr = StringIO()
+    result = cli_module.main(
+        ["--endpoint", "/protected/daemon.sock", "--once"],
+        client_factory=lambda endpoint: FailingClient(),
+        reporter_factory=lambda url, timeout: FakeReporter(),
+        stderr=stderr,
+    )
+    assert result == 1
+    assert stderr.getvalue() == "Discord coordinator status read failed\n"
+    assert "token" not in stderr.getvalue()
+
+
+def test_coordinator_cli_continues_after_a_sanitized_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(WEBHOOK_URL_ENVIRONMENT_VARIABLE, "https://discord.invalid/token")
+    statuses: list[LocalDaemonStatus | Exception] = [
+        RuntimeError("https://discord.invalid/token"),
+        _CLI_STATUS,
+    ]
+    reports: list[bool] = []
+    sleeps = 0
+
+    class FakeClient:
+        def status(self) -> LocalDaemonStatus:
+            result = statuses.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+    class FakeReporter:
+        def report(self, status: LocalDaemonStatus, *, force: bool = False) -> bool:
+            assert status is _CLI_STATUS
+            reports.append(force)
+            return True
+
+    def fake_sleep(seconds: float) -> None:
+        nonlocal sleeps
+        assert seconds == 2.0
+        sleeps += 1
+        if sleeps == 2:
+            raise KeyboardInterrupt
+
+    stderr = StringIO()
+    result = cli_module.main(
+        ["--endpoint", "/protected/daemon.sock", "--interval", "2"],
+        client_factory=lambda endpoint: FakeClient(),
+        reporter_factory=lambda url, timeout: FakeReporter(),
+        sleep=fake_sleep,
+        monotonic=lambda: 0.0,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert reports == [False]
+    assert stderr.getvalue() == "Discord coordinator status read failed\n"
+
+
+def _daemon_status(
+    *,
+    as_of: str = "2026-08-28T00:00:00Z",
+    stage_state: str = "RUNNING",
+    many_active_runs: int = 0,
+) -> LocalDaemonStatus:
+    admissions = [_admission("item-active", LocalDaemonAdmissionState.ACTIVE)]
+    views: list[Mapping[str, PlainData]] = [
+        {
+            "queue_item_id": "item-active",
+            "run_uri": "file:///private/run",
+            "admission": {"state": "ACTIVE", "revision": "revision-secret"},
+            "authority": {
+                "availability": "available",
+                "state": "RUNNING",
+                "stages": {
+                    "build": stage_state,
+                    "publish": "SUBMITTED",
+                    "prepare": "SUCCEEDED",
+                },
+            },
+            "assignment": {"assignment_id": "assignment-secret"},
+            "scheduling": {"job": "scheduler-secret"},
+            "execution": {"agent": "agent-secret"},
+            "payload": "payload-secret",
+        }
+    ]
+    admissions.append(_admission("item-waiting", LocalDaemonAdmissionState.WAITING))
+    views.append(
+        {
+            "queue_item_id": "item-waiting",
+            "authority": {
+                "availability": "available",
+                "state": "SUBMITTED",
+                "stages": {"prepare": "PENDING"},
+            },
+        }
+    )
+    for index in range(many_active_runs):
+        queue_item_id = f"item-{index:02d}-" + "x" * 180
+        admissions.append(_admission(queue_item_id, LocalDaemonAdmissionState.ACTIVE))
+        views.append(
+            {
+                "queue_item_id": queue_item_id,
+                "authority": {
+                    "availability": "available",
+                    "state": "RUNNING",
+                    "stages": {f"stage-{index}-" + "y" * 180: "RUNNING"},
+                },
+            }
+        )
+    return LocalDaemonStatus(
+        coordinator_id="coordinator-secret",
+        coordinator_epoch="epoch-secret",
+        as_of=as_of,
+        accepted_time="2026-08-28T00:00:00Z",
+        service_health="healthy",
+        service_diagnostic=None,
+        admissions=tuple(admissions),
+        scheduling_epoch="scheduling-secret",
+        runs=tuple(views),
+    )
+
+
+def _admission(queue_item_id: str, state: LocalDaemonAdmissionState) -> LocalDaemonAdmission:
+    return LocalDaemonAdmission(
+        admission_id=f"admission-{queue_item_id}",
+        queue_item_id=queue_item_id,
+        coordinator_id="coordinator-secret",
+        run_uri=f"file:///private/{queue_item_id}",
+        intent_digest="intent-secret",
+        execution_owner="owner-secret",
+        state=state,
+        accepted_at="2026-08-28T00:00:00Z",
+        authority_operation_id="operation-secret",
+    )
+
+
+_CLI_STATUS = _daemon_status()
 
 
 def _event(

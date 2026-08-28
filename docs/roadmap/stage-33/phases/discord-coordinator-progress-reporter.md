@@ -225,9 +225,12 @@ Final commands:
   paths remain isolated in the control checkout.
 - Expanded planning: not needed; existing Stage 29 and Stage 31 contracts fix
   the public, durable, trust, and delivery boundaries.
-- Implementation: pending.
+- Implementation: complete; the downstream package now projects typed
+  coordinator status through a shared sanitized webhook sender and installs the
+  one-shot/continuous reporter command without changing Loom core or Stage 32.
 - Refiner: not needed.
-- Pre-submit gate: pending.
+- Pre-submit gate: passed; focused tests, lint, type check, nested wheel
+  inspection, `make validate-pr`, and `make test-summary` passed.
 - Independent review: not needed unless implementation creates a material
   residual lifecycle-truth, credential, or compatibility risk.
 - Blocker corrections: 0/3.
@@ -237,9 +240,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Added the downstream coordinator projection, CLI, shared bounded sender, package script, operator documentation/catalog wording, and Stage 33 implementation state; `src/loom`, root dependencies, schemas, and Stage 32 remain unchanged. |
+| Tests added or updated | Extended `tests/integration/examples/test_discord_webhook.py` for safe allowlisted projection, timestamp suppression, heartbeat, bounded active-run omission, sanitized failures, one-shot CLI, continuous recovery, and package script metadata. |
+| Validated revision/tree state and evidence | Targeted pytest (11 passed), Ruff, Pyright, nested `uv build` and wheel console metadata passed; `make validate-pr` passed; `make test-summary` passed (2,730 passed, 0 failed, 3 skipped). |
+| Validation-relevant changes after evidence | None. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

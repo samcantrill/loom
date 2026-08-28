@@ -1,6 +1,6 @@
 id: extensions.discord-webhook
-title: Discord Webhook Event Sink
-summary: Install a downstream Discord webhook event sink for bounded terminal run notifications.
+title: Discord Webhook Event Sink and Coordinator Reporter
+summary: Install a downstream Discord webhook package for bounded terminal and coordinator progress reports.
 capability: extensions
 level: intermediate
 introduced_in: v31
@@ -13,6 +13,7 @@ owner_docs:
   - examples/extensions/README.md
 owner_stages:
   - v31
+  - v33
 validation_path: tests/integration/examples/test_discord_webhook.py
 entrypoints:
   - path: run_discord_webhook.py
@@ -24,5 +25,6 @@ tags:
   - discord
   - webhook
 prerequisites:
-  - An installed local loom-discord package and LOOM_DISCORD_WEBHOOK_URL in the lifecycle-owning process environment.
-manual_rationale: The example sends a real Discord webhook request and therefore requires a user-managed credential and external service.
+  - An installed local loom-discord package and LOOM_DISCORD_WEBHOOK_URL in the lifecycle-owning or reporter process environment.
+  - For coordinator reporting, access to the local daemon socket as its owning OS user.
+manual_rationale: The example sends a real Discord webhook request and therefore requires a user-managed credential and external service; the coordinator reporter additionally needs same-user local socket access.
