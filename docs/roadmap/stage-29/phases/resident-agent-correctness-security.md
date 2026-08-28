@@ -2,17 +2,17 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 11
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p11-resident-agent-correctness-security`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; phase path is `<root>/stage-29-p11-resident-agent-correctness-security`
-- Base revision: current `origin/develop` after Phase 10 is remotely merged
+- Base revision: `860c5182ceacbb8e7145dd1fe52849699b404152`
 - PR target: `develop`
 - PR title: `feat(agent): require exact resident execution profiles`
-- Dependencies: remotely merged Phase 10
+- Dependencies: Phase 10 remotely merged as `c2dab20`
 - Workflow path: fast; the identity and environment contracts are fixed
-- Blockers: predecessor must be remotely merged
+- Blockers: none
 
 ## Objective And Context
 
@@ -197,9 +197,11 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning draft complete; exact base/worktree pending predecessor merge
+- Manager preparation: complete; manifest status, merged predecessor, exact
+  `origin/develop` base, branch/worktree, source seams, fast-path risk decision,
+  and validation commands verified at `860c518`
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: pending
+- Implementation: pending one executor pass
 - Refiner: not needed
 - Pre-submit gate: pending
 - Independent review: not needed unless a material residual risk remains
