@@ -1,11 +1,11 @@
 # Roadmap Stage 31 Implementation Plan
 
-Status: approved
+Status: complete
 Roadmap stage: 31
 Planning document: docs/roadmap/stage-31/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 1 PR open
+Current phase: all phases merged
 Blockers: none
 
 ## Summary
@@ -48,7 +48,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | discord-webhook-event-sink | pr_open | docs/roadmap/stage-31/phases/discord-webhook-event-sink.md | agent/stage-31-p1-discord-webhook-event-sink | [#251](https://github.com/samcantrill/loom/pull/251) | downstream example package, extension catalog/docs, focused tests | Deliver copyable remote Discord reporting without changing Loom core. |
+| 1 | discord-webhook-event-sink | merged | docs/roadmap/stage-31/phases/discord-webhook-event-sink.md | agent/stage-31-p1-discord-webhook-event-sink | [#251](https://github.com/samcantrill/loom/pull/251) | downstream example package, extension catalog/docs, focused tests | Deliver copyable remote Discord reporting without changing Loom core. |
 
 ## Quality Gate
 
@@ -58,7 +58,9 @@ Blockers: none
   and adds only the provider-specific current consumer.
 - Optional independent review: not needed on the lean downstream-example path;
   Stage 20/28 already fixed the public and failure contracts.
-- Correction: not needed.
+- Correction: one bounded manager correction preserved an executor's
+  uncommitted work after a lifecycle anomaly, suppressed raw HTTP exception
+  chains, made live delivery reporting truthful, and added failure-branch tests.
 - Ready for implementation: yes.
 - Accepted risks: fake HTTP tests prove adapter behavior rather than Discord
   availability; synchronous best-effort delivery can lose notifications during
@@ -70,4 +72,4 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | Best-effort external delivery; live Discord is opt-in. | pending |
+| 1 | [#251](https://github.com/samcantrill/loom/pull/251) squash-merged as `6380e17` | Targeted provider tests, nested package build, `make validate-pr`, manager review, and fresh `make test-summary` receipt passed. | Best-effort external delivery; live Discord is opt-in. | Phase worktree/local branch cleanup pending immediately after merge metadata push. |
