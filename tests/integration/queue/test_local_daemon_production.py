@@ -1238,7 +1238,8 @@ def test_daemon_overlaps_independent_local_stages_in_one_run(
         run_name="one-run",
         stage_name="first",
         independent_stage_names=("first", "second"),
-        seconds=0.5,
+        seconds=20,
+        max_parallel_stages=2,
     )
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "coordinator",
@@ -1255,8 +1256,22 @@ def test_daemon_overlaps_independent_local_stages_in_one_run(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
         client.submit(LocalDaemonAdmissionRequest("one-run-item", run_uri))
-        _wait_for_supervisor_launch_count(config, expected=2)
-        assert client.wait("one-run-item", timeout_seconds=10).state is (
+        deadline = time.monotonic() + 30
+        active_assignments = 0
+        while time.monotonic() < deadline:
+            with sqlite3.connect(config.execution_database) as conn:
+                active_assignments = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM coordinator_assignments "
+                        "WHERE run_uri = ? AND state != 'released'",
+                        (run_uri,),
+                    ).fetchone()[0]
+                )
+            if active_assignments == 2:
+                break
+            time.sleep(0.02)
+        assert active_assignments == 2
+        assert client.wait("one-run-item", timeout_seconds=60).state is (
             LocalDaemonAdmissionState.SUCCEEDED
         )
     finally:
