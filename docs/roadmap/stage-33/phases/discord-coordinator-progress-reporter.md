@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 33, Phase 1
 - Manifest: `docs/roadmap/stage-33/implementation-plan.md`
 - Branch: `agent/stage-33-p1-discord-coordinator-progress-reporter`
@@ -241,9 +241,10 @@ Final commands:
   duplicate. Active detail now prioritizes running/submitted stages, heartbeat
   time resets after each report attempt, and the existing event-sink import
   remains lazy with respect to coordinator code.
-- PR and merge: [#252](https://github.com/samcantrill/loom/pull/252) targets
-  `develop` from the exact phase branch, is non-draft and mergeable, and passed
-  manager fast-path scope/body/evidence review; squash merge pending.
+- PR and merge: [#252](https://github.com/samcantrill/loom/pull/252) passed the
+  final base/head/title/draft/mergeability/scope/body/evidence recheck and was
+  squash-merged to `develop` as `8868f48`; the worktree plus local and remote
+  phase branches are removed.
 
 ## Completion Record
 
@@ -253,5 +254,5 @@ Final commands:
 | Tests added or updated | Extended `tests/integration/examples/test_discord_webhook.py` for safe allowlisted projection, timestamp suppression, heartbeat, bounded active-run omission, sanitized failures, one-shot CLI, continuous recovery, and package script metadata. |
 | Validated revision/tree state and evidence | `46383e9`: targeted pytest 13 passed; Ruff, Pyright, lazy-import check, nested build/wheel metadata passed; `make validate-pr` passed 2,578 default and 154 config-extra tests with 3 expected skips plus root builds; fresh summary passed 2,732 tests with 0 failures/errors and 3 skips. |
 | Validation-relevant changes after evidence | None; this evidence update is phase metadata only. |
-| PR, review, and merge | [#252](https://github.com/samcantrill/loom/pull/252) is correctly targeted and manager review passed; merge pending. |
-| Residual risk and cleanup | pending |
+| PR, review, and merge | Manager fast-path review passed; [#252](https://github.com/samcantrill/loom/pull/252) was correctly targeted and squash-merged as `8868f48`. |
+| Residual risk and cleanup | Reporting remains same-host, process-local, and best effort; the phase worktree plus local and remote branches were removed. |

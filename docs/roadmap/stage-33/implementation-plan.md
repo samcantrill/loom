@@ -1,11 +1,11 @@
 # Roadmap Stage 33 Implementation Plan
 
-Status: in_progress
+Status: complete
 Roadmap stage: 33
 Planning document: docs/roadmap/stage-33/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 1 PR open
+Current phase: all phases merged
 Blockers: none
 
 ## Summary
@@ -47,7 +47,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | discord-coordinator-progress-reporter | pr_open | docs/roadmap/stage-33/phases/discord-coordinator-progress-reporter.md | agent/stage-33-p1-discord-coordinator-progress-reporter | [#252](https://github.com/samcantrill/loom/pull/252) | downstream Discord package, command, docs, and focused tests | Implementation, fresh validation, and manager review pass; merge pending. |
+| 1 | discord-coordinator-progress-reporter | merged | docs/roadmap/stage-33/phases/discord-coordinator-progress-reporter.md | agent/stage-33-p1-discord-coordinator-progress-reporter | [#252](https://github.com/samcantrill/loom/pull/252), `8868f48` | downstream Discord package, command, docs, and focused tests | Complete. |
 
 ## Quality Gate
 
@@ -68,4 +68,4 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | [#252](https://github.com/samcantrill/loom/pull/252) open and mergeable | Implementation complete; targeted checks, `make validate-pr`, and `make test-summary` pass on `46383e9`; manager review passed. | Reporter restart sends a fresh summary; delivery remains best effort. | pending |
+| 1 | [#252](https://github.com/samcantrill/loom/pull/252) squash-merged as `8868f48` | Implementation complete; targeted checks, `make validate-pr`, and `make test-summary` pass on `46383e9`; manager review passed. | Reporter restart sends a fresh summary; delivery remains best effort. | Worktree plus local and remote phase branches removed. |
