@@ -128,7 +128,7 @@ def _project_status(status: LocalDaemonStatus) -> _CoordinatorProjection:
                     ),
                 )
             )
-    active_runs.sort(key=lambda item: item.queue_item_id)
+    active_runs.sort(key=_active_run_sort_key)
     displayed_active_runs = tuple(active_runs[:MAX_ACTIVE_RUNS])
     return _CoordinatorProjection(
         service_health=status.service_health,
@@ -196,6 +196,12 @@ def _bound_lines(lines: list[str]) -> str:
 
 def _format_counts(counts: tuple[tuple[str, int], ...]) -> str:
     return ", ".join(f"{state}={count}" for state, count in counts) or "none"
+
+
+def _active_run_sort_key(item: _ActiveRun) -> tuple[int, str]:
+    states = {state for _, state in item.active_stages}
+    priority = 0 if "RUNNING" in states else 1 if "SUBMITTED" in states else 2
+    return priority, item.queue_item_id
 
 
 def _mapping(value: PlainData | None) -> Mapping[str, PlainData]:

@@ -229,11 +229,17 @@ Final commands:
   coordinator status through a shared sanitized webhook sender and installs the
   one-shot/continuous reporter command without changing Loom core or Stage 32.
 - Refiner: not needed.
-- Pre-submit gate: passed; focused tests, lint, type check, nested wheel
-  inspection, `make validate-pr`, and `make test-summary` passed.
+- Pre-submit gate: pending a fresh full run after the manager correction;
+  corrected targeted tests (13 passed), lint, type check, lazy-import check,
+  nested build, and wheel metadata inspection pass.
 - Independent review: not needed unless implementation creates a material
   residual lifecycle-truth, credential, or compatibility risk.
-- Blocker corrections: 0/3.
+- Blocker corrections: 1/3 — manager review found that alphabetical truncation
+  could hide currently running work behind waiting admissions and that a
+  progress report immediately before a heartbeat could be followed by a noisy
+  duplicate. Active detail now prioritizes running/submitted stages, heartbeat
+  time resets after each report attempt, and the existing event-sink import
+  remains lazy with respect to coordinator code.
 - PR and merge: pending.
 
 ## Completion Record
@@ -242,7 +248,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added the downstream coordinator projection, CLI, shared bounded sender, package script, operator documentation/catalog wording, and Stage 33 implementation state; `src/loom`, root dependencies, schemas, and Stage 32 remain unchanged. |
 | Tests added or updated | Extended `tests/integration/examples/test_discord_webhook.py` for safe allowlisted projection, timestamp suppression, heartbeat, bounded active-run omission, sanitized failures, one-shot CLI, continuous recovery, and package script metadata. |
-| Validated revision/tree state and evidence | Targeted pytest (11 passed), Ruff, Pyright, nested `uv build` and wheel console metadata passed; `make validate-pr` passed; `make test-summary` passed (2,730 passed, 0 failed, 3 skipped). |
-| Validation-relevant changes after evidence | None. |
+| Validated revision/tree state and evidence | Corrected targeted pytest (13 passed), Ruff, Pyright, lazy-import check, nested `uv build`, and wheel console metadata passed; fresh full gates pending. |
+| Validation-relevant changes after evidence | Manager correction changed projection ordering, heartbeat timing, and lazy import behavior after the executor's full-gate receipt; a fresh full run is required. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

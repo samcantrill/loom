@@ -257,6 +257,27 @@ def test_coordinator_report_is_bounded_and_provider_failures_are_secret_safe(
     assert reporter.report(_daemon_status()) is False
 
 
+def test_coordinator_report_prioritizes_running_work_over_waiting_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_post(url: str, **kwargs: object) -> httpx.Response:
+        _ = url
+        captured.update(kwargs)
+        return httpx.Response(204)
+
+    monkeypatch.setattr("loom_discord.sink.httpx.post", fake_post)
+    reporter = DiscordCoordinatorReporter("https://discord.invalid/webhook-token")
+
+    reporter.report(_daemon_status(many_waiting_runs=12))
+
+    content = cast(str, cast(dict[str, object], captured["json"])["content"])
+    assert "item=item-active" in content
+    assert "Stages: build (RUNNING), publish (SUBMITTED)" in content
+    assert "Active runs omitted: 6" in content
+
+
 def test_coordinator_cli_one_shot_is_injectable_and_sanitizes_status_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -347,11 +368,62 @@ def test_coordinator_cli_continues_after_a_sanitized_failure(
     assert stderr.getvalue() == "Discord coordinator status read failed\n"
 
 
+def test_coordinator_cli_heartbeat_restarts_after_a_changed_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(WEBHOOK_URL_ENVIRONMENT_VARIABLE, "https://discord.invalid/token")
+    report_results = iter((True, True, False, False, True))
+    forces: list[bool] = []
+    current_time = 0.0
+    sleeps = 0
+
+    class FakeClient:
+        def status(self) -> LocalDaemonStatus:
+            return _CLI_STATUS
+
+    class FakeReporter:
+        def report(self, status: LocalDaemonStatus, *, force: bool = False) -> bool:
+            assert status is _CLI_STATUS
+            forces.append(force)
+            return next(report_results)
+
+    def fake_monotonic() -> float:
+        return current_time
+
+    def fake_sleep(seconds: float) -> None:
+        nonlocal current_time, sleeps
+        assert seconds == 4.0
+        current_time += seconds
+        sleeps += 1
+        if sleeps == 5:
+            raise KeyboardInterrupt
+
+    result = cli_module.main(
+        [
+            "--endpoint",
+            "/protected/daemon.sock",
+            "--interval",
+            "4",
+            "--heartbeat",
+            "10",
+        ],
+        client_factory=lambda endpoint: FakeClient(),
+        reporter_factory=lambda url, timeout: FakeReporter(),
+        sleep=fake_sleep,
+        monotonic=fake_monotonic,
+        stderr=StringIO(),
+    )
+
+    assert result == 0
+    assert forces == [False, False, False, False, True]
+
+
 def _daemon_status(
     *,
     as_of: str = "2026-08-28T00:00:00Z",
     stage_state: str = "RUNNING",
     many_active_runs: int = 0,
+    many_waiting_runs: int = 0,
 ) -> LocalDaemonStatus:
     admissions = [_admission("item-active", LocalDaemonAdmissionState.ACTIVE)]
     views: list[Mapping[str, PlainData]] = [
@@ -395,6 +467,19 @@ def _daemon_status(
                     "availability": "available",
                     "state": "RUNNING",
                     "stages": {f"stage-{index}-" + "y" * 180: "RUNNING"},
+                },
+            }
+        )
+    for index in range(many_waiting_runs):
+        queue_item_id = f"item-{index:02d}-waiting"
+        admissions.append(_admission(queue_item_id, LocalDaemonAdmissionState.WAITING))
+        views.append(
+            {
+                "queue_item_id": queue_item_id,
+                "authority": {
+                    "availability": "available",
+                    "state": "SUBMITTED",
+                    "stages": {"prepare": "PENDING"},
                 },
             }
         )

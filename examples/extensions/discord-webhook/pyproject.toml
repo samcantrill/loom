@@ -1,7 +1,7 @@
 [project]
 name = "loom-discord"
 version = "0.1.0"
-description = "Discord webhook event sink example for Loom."
+description = "Discord webhook event sink and coordinator reporter example for Loom."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

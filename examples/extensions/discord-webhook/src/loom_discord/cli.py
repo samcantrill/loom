@@ -48,14 +48,17 @@ def main(
         print("Discord coordinator reporter configuration is invalid", file=stderr)
         return 2
     if namespace.once:
-        return _report_once(client, reporter, force=True, stderr=stderr)
+        result, _attempted = _report_once(client, reporter, force=True, stderr=stderr)
+        return result
 
-    last_heartbeat = monotonic()
+    last_attempt = monotonic()
     while True:
-        force = monotonic() - last_heartbeat >= namespace.heartbeat_seconds
-        _report_once(client, reporter, force=force, stderr=stderr)
-        if force:
-            last_heartbeat = monotonic()
+        force = monotonic() - last_attempt >= namespace.heartbeat_seconds
+        _result, attempted = _report_once(
+            client, reporter, force=force, stderr=stderr
+        )
+        if attempted:
+            last_attempt = monotonic()
         try:
             sleep(namespace.interval_seconds)
         except KeyboardInterrupt:
@@ -68,21 +71,21 @@ def _report_once(
     *,
     force: bool,
     stderr: TextIO,
-) -> int:
+) -> tuple[int, bool]:
     try:
         status: LocalDaemonStatus = client.status()
     except Exception:
         print("Discord coordinator status read failed", file=stderr)
-        return 1
+        return 1, False
     try:
-        reporter.report(status, force=force)
+        attempted = reporter.report(status, force=force)
     except DiscordWebhookError as exc:
         print(f"Discord coordinator report delivery failed: {exc}", file=stderr)
-        return 1
+        return 1, True
     except Exception:
         print("Discord coordinator report delivery failed", file=stderr)
-        return 1
-    return 0
+        return 1, True
+    return 0, attempted
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -46,7 +46,8 @@ loom-discord-coordinator \
 
 The initial status sends once. Later polls send only after a meaningful health,
 admission, authority run, or authority stage change; `--heartbeat` forces the
-current summary periodically. The report labels its non-atomic `as_of`, service
+current summary after that interval passes without another report attempt. The
+report labels its non-atomic `as_of`, service
 health/diagnostic, exact admission and authority counts, plus bounded active
 queue-item details: admission and authority state, successful stages over total,
 and running/submitted stage names. It never includes a run URI, raw owner view,
@@ -58,6 +59,21 @@ In continuous mode the sidecar prints a sanitized local diagnostic and keeps
 polling. There is no durable cursor, retry queue, outbox, delivery receipt, or
 guarantee; restart intentionally sends a fresh initial summary. Automated tests
 fake both the socket and Discord, so live availability remains a manual check.
+
+For example, a service manager should run both processes as the socket-owning
+account and inject the webhook URL from a protected environment file:
+
+```ini
+[Service]
+User=loom
+EnvironmentFile=/etc/loom/discord.env
+ExecStart=/opt/loom/bin/loom-discord-coordinator --endpoint /srv/loom/coordinator/daemon.sock --interval 60 --heartbeat 900
+Restart=on-failure
+```
+
+Keep the environment file owner-readable only and adapt the user, executable,
+and socket paths to the deployment. The reporter is independent of the
+coordinator service's success and restart policy.
 
 ## Public Python Surface
 

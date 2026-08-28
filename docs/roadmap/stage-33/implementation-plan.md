@@ -47,7 +47,7 @@ Blockers: none
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | discord-coordinator-progress-reporter | in_progress | docs/roadmap/stage-33/phases/discord-coordinator-progress-reporter.md | agent/stage-33-p1-discord-coordinator-progress-reporter | pending | downstream Discord package, command, docs, and focused tests | Implementation and local validation complete; await PR preparation, review, and merge. |
+| 1 | discord-coordinator-progress-reporter | in_progress | docs/roadmap/stage-33/phases/discord-coordinator-progress-reporter.md | agent/stage-33-p1-discord-coordinator-progress-reporter | pending | downstream Discord package, command, docs, and focused tests | Implementation and targeted correction validation complete; fresh full gates and PR remain. |
 
 ## Quality Gate
 
@@ -68,4 +68,4 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | Implementation and local validation complete; `make validate-pr` and `make test-summary` passed. | Reporter restart sends a fresh summary; delivery remains best effort. | pending |
+| 1 | pending | Implementation and targeted correction validation complete; fresh full gates pending. | Reporter restart sends a fresh summary; delivery remains best effort. | pending |
