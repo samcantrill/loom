@@ -62,24 +62,11 @@ class DiscordWebhookSink:
             if isinstance(event, PipelineEventRecord)
             else event
         )
-        try:
-            response = httpx.post(
-                self._webhook_url,
-                params={"wait": "true"},
-                json={
-                    "content": _message_content(event, reference),
-                    "allowed_mentions": {"parse": []},
-                },
-                timeout=self._timeout_seconds,
-            )
-        except httpx.InvalidURL:
-            raise DiscordWebhookError("Discord webhook URL is invalid") from None
-        except httpx.HTTPError:
-            raise DiscordWebhookError("Discord webhook transport failed") from None
-        if not 200 <= response.status_code < 300:
-            raise DiscordWebhookError(
-                f"Discord webhook rejected request with status {response.status_code}"
-            )
+        _send_webhook_content(
+            self._webhook_url,
+            _message_content(event, reference),
+            timeout_seconds=self._timeout_seconds,
+        )
 
 
 def discord_event_sink() -> EventSinkRegistration:
@@ -108,6 +95,34 @@ def _message_content(
         if isinstance(stage_name, str):
             lines.append(f"Stage: {_clip(stage_name, MAX_STAGE_NAME_LENGTH)}")
     return "\n".join(lines)[:MAX_CONTENT_LENGTH]
+
+
+def _send_webhook_content(
+    webhook_url: str,
+    content: str,
+    *,
+    timeout_seconds: float,
+) -> None:
+    """Send one bounded message without exposing provider details on failure."""
+
+    try:
+        response = httpx.post(
+            webhook_url,
+            params={"wait": "true"},
+            json={
+                "content": content[:MAX_CONTENT_LENGTH],
+                "allowed_mentions": {"parse": []},
+            },
+            timeout=timeout_seconds,
+        )
+    except httpx.InvalidURL:
+        raise DiscordWebhookError("Discord webhook URL is invalid") from None
+    except httpx.HTTPError:
+        raise DiscordWebhookError("Discord webhook transport failed") from None
+    if not 200 <= response.status_code < 300:
+        raise DiscordWebhookError(
+            f"Discord webhook rejected request with status {response.status_code}"
+        )
 
 
 def _clip(value: str, limit: int) -> str:

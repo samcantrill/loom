@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: planned
+- Status: pr_open
 - Roadmap stage and phase: Stage 33, Phase 1
 - Manifest: `docs/roadmap/stage-33/implementation-plan.md`
 - Branch: `agent/stage-33-p1-discord-coordinator-progress-reporter`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; `/home/can134/work/active/loom-worktrees/stage-33-p1-discord-coordinator-progress-reporter`
-- Base revision: `4ba8265d2ba7da1f5eabb23802a72b71a3fe9bca`
+- Base revision: `c55892f5bd04691938da1a5a8ba76a4f4a0fabc9`
 - PR target: develop
 - PR title: `Stage 33 phase 1: add Discord coordinator progress reporter`
 - Dependencies: merged Stage 29 joined status/socket behavior and merged Stage
@@ -221,25 +221,37 @@ Final commands:
 ## Workflow State
 
 - Manager preparation: passed; approved manifest and phase plan are consistent,
-  `origin/develop` is `4ba8265`, and user-owned Stage 32 paths remain isolated in
-  the control checkout.
+  the isolated branch/worktree starts from `c55892f`, and user-owned Stage 32
+  paths remain isolated in the control checkout.
 - Expanded planning: not needed; existing Stage 29 and Stage 31 contracts fix
   the public, durable, trust, and delivery boundaries.
-- Implementation: pending.
+- Implementation: complete; the downstream package now projects typed
+  coordinator status through a shared sanitized webhook sender and installs the
+  one-shot/continuous reporter command without changing Loom core or Stage 32.
 - Refiner: not needed.
-- Pre-submit gate: pending.
-- Independent review: not needed unless implementation creates a material
-  residual lifecycle-truth, credential, or compatibility risk.
-- Blocker corrections: 0/3.
-- PR and merge: pending.
+- Pre-submit gate: passed on `46383e9`; corrected targeted tests (13 passed),
+  Ruff, Pyright, lazy-import check, nested build/wheel metadata,
+  `make validate-pr`, and `make test-summary` all pass.
+- Independent review: not needed; manager fast-path review found no remaining
+  lifecycle-truth, credential, import-cost, cadence, compatibility, scope, or
+  fake/live-evidence blocker.
+- Blocker corrections: 1/3 — manager review found that alphabetical truncation
+  could hide currently running work behind waiting admissions and that a
+  progress report immediately before a heartbeat could be followed by a noisy
+  duplicate. Active detail now prioritizes running/submitted stages, heartbeat
+  time resets after each report attempt, and the existing event-sink import
+  remains lazy with respect to coordinator code.
+- PR and merge: [#252](https://github.com/samcantrill/loom/pull/252) targets
+  `develop` from the exact phase branch, is non-draft and mergeable, and passed
+  manager fast-path scope/body/evidence review; squash merge pending.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
+| Implementation and changed paths | Added the downstream coordinator projection, CLI, shared bounded sender, package script, operator documentation/catalog wording, and Stage 33 implementation state; `src/loom`, root dependencies, schemas, and Stage 32 remain unchanged. |
+| Tests added or updated | Extended `tests/integration/examples/test_discord_webhook.py` for safe allowlisted projection, timestamp suppression, heartbeat, bounded active-run omission, sanitized failures, one-shot CLI, continuous recovery, and package script metadata. |
+| Validated revision/tree state and evidence | `46383e9`: targeted pytest 13 passed; Ruff, Pyright, lazy-import check, nested build/wheel metadata passed; `make validate-pr` passed 2,578 default and 154 config-extra tests with 3 expected skips plus root builds; fresh summary passed 2,732 tests with 0 failures/errors and 3 skips. |
+| Validation-relevant changes after evidence | None; this evidence update is phase metadata only. |
+| PR, review, and merge | [#252](https://github.com/samcantrill/loom/pull/252) is correctly targeted and manager review passed; merge pending. |
 | Residual risk and cleanup | pending |
