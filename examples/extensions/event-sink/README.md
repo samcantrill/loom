@@ -35,21 +35,13 @@ does not construct sinks because its parent owns those commits.
 | `stage.started`, `stage.completed`, `stage.failed`, `stage.cancelled` | `PipelineRunner`; `stage-job` owns the equivalent events when it commits that stage attempt. |
 | `cleanup.report.recorded`, `cleanup.result.recorded` | Cleanup operation owner, after its report/result fact is recorded. |
 
-## Slack Or Discord Sink Recipe
+## Discord Webhook Package
 
-Slack and Discord are ordinary downstream sink integrations, not Loom
-notification APIs. A project factory can return an `EventSinkRegistration` with
-an exact subscription, then map the received event reference to a small message
-using its own HTTP client, timeout, credential source, response handling, and
-provider format. Slack accepts a JSON `text` payload; Discord accepts `content`
-and projects should disable unintended mentions with `allowed_mentions`.
-
-Keep webhook URLs in the lifecycle-owning process environment or a deployment
-secret provider. Do not place them in pipeline config, plugin activation
-records, metadata, provenance, exceptions, or fixtures. Callback failures and
-optional observer links are best-effort evidence, not delivery receipts;
-retries, buffering, rate limits, and guaranteed delivery need a later outbox or
-external relay design.
+The [Discord webhook event sink](../discord-webhook/README.md) is a concrete
+downstream package with an installed `loom.event_sinks:notifications.discord`
+entry point. It uses an exact terminal-run subscription, a process-local
+webhook secret, bounded content, mention suppression, and sanitized best-effort
+failures. It is not a Loom notification API or delivery receipt.
 
 ## Why Hooks Are Separate
 

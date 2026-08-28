@@ -61,6 +61,7 @@ PYTHON_API_EXAMPLES = {
     "operations.managed-local-queue",
     "operations.resource-leases",
     "extensions.event-sink",
+    "extensions.discord-webhook",
     "storage.fake-backend-materialization",
 }
 USER_FACING_V10_EXAMPLES = {
