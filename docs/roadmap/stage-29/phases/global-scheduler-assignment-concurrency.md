@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 29, Phase 10
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p10-global-scheduler-assignment-concurrency`
@@ -203,8 +203,8 @@ Final commands:
 - Independent review: not needed; manager review found no material residual risk
   beyond the explicitly deferred Phase 11 and Phase 12 contracts
 - Blocker corrections: 2/3
-- PR and merge: [#250](https://github.com/samcantrill/loom/pull/250) open;
-  merge pending
+- PR and merge: [#250](https://github.com/samcantrill/loom/pull/250)
+  squash-merged as `c2dab20`
 
 ## Completion Record
 
@@ -214,5 +214,5 @@ Final commands:
 | Tests added or updated | 257-stage bounded-window drain and restart FIFO; atomic run-slot count; global cross-run priority; exhausted-run bypass; same-run local/local and local/remote overlap; admission-local failure isolation; updated hard-cut fixtures. |
 | Validated revision/tree state and evidence | Source/test revision `23dec2d`. `make validate-pr` passed: Ruff and Pyright clean; 2,586 default tests passed with 122 deselected; 142 config-extra tests passed with 3 environment skips and 2,589 deselected; source and wheel builds succeeded. `make test-summary` passed: package 118, unit 1,836, contract 296, integration 278, e2e 58, and config-extra 142 passed, for 2,728 total passes and 3 expected skips. The earlier status-snapshot and timing/setup failures were corrected in test evidence without a further product-source change. |
 | Validation-relevant changes after evidence | Only this phase evidence/status documentation; no source, test, dependency, build, or validation-configuration change. |
-| PR, review, and merge | [#250](https://github.com/samcantrill/loom/pull/250) open. Manager-local fast-path review passed with no blocker; merge pending. |
-| Residual risk and cleanup | Mandatory execution-profile identity, environment/provider composition, bounded public status/polls, accepted-time recovery, atomic deployment initialization, and supported service commands remain explicitly owned by Phases 11-12. The terminated stale incomplete-tree gate remains a validation anomaly, not evidence. |
+| PR, review, and merge | Manager-local fast-path review passed with no blocker. [#250](https://github.com/samcantrill/loom/pull/250) squash-merged as `c2dab20`. |
+| Residual risk and cleanup | Mandatory execution-profile identity, environment/provider composition, bounded public status/polls, accepted-time recovery, atomic deployment initialization, and supported service commands remain explicitly owned by Phases 11-12. The terminated stale incomplete-tree gate remains a validation anomaly, not evidence. The dedicated worktree and local/remote phase branches were removed; unrelated Phase 12/Stage 32 planning edits kept the control checkout dirty, so it was intentionally left untouched and this metadata landed from a clean manager worktree. |
