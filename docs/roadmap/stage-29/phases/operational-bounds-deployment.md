@@ -16,10 +16,11 @@
 
 ## Objective And Context
 
-- Vertical outcome: the corrected scheduler runs behind bounded internal/public
-  queries, constant-size poll replay, scoped reconciliation and clock health,
-  all-or-nothing fresh initialization, and supported coordinator plus agent
-  service commands constructed from protected configuration.
+- Vertical outcome: where a site permits persistent role processes, the
+  corrected scheduler runs behind bounded internal/public queries, constant-size
+  poll replay, scoped reconciliation and clock health, all-or-nothing fresh
+  initialization, and supported coordinator plus agent service commands
+  constructed from protected configuration.
 - Earlier dependency: Phase 10 provides global assignment scheduling and
   per-admission reconciliation facts; Phase 11 provides exact coordinator/agent
   composition and profile/provider identity.
@@ -101,9 +102,15 @@ In scope:
   coordinator service command. Add a distinct outbound agent service command
   using its protected root, profiles, providers, endpoint/trust policy, and
   reconnect loop. Both compose the Phase 11 exact identities/providers and the
-  same application protocol; no second embedded-only behavior path.
+  same application protocol; no second embedded-only behavior path. These are
+  foreground role applications, not a requirement to daemonize on an HPC login
+  node or an assertion that every site permits such a host.
 - Update feature, CLI, testing, deployment/recovery guidance and final examples
-  for the new schemas, upgrade procedure, endpoints, and service commands.
+  for the new schemas, upgrade procedure, endpoints, and service commands. The
+  deployment matrix must distinguish this persistent managed mode from the
+  historical service-less whole-run SLURM queue/single-job/`afterok` modes and
+  state that Stage 29 ready-stage SLURM requires the coordinator endpoint while
+  its bootstrap is active.
 
 Out of scope:
 
@@ -111,11 +118,18 @@ Out of scope:
   streaming frameworks, coordinator HA, migrations, or automatic time healing.
 - New hosted services/dependencies, generic secret management, daemonization
   frameworks, systemd packaging, or production PKI automation.
+- Service-less many-run admission, whole-run SLURM driving/reconciliation,
+  dynamic intermittent coordination, remote query gateways, artifact/log
+  relay, or compute-originated reporting; Stage 32 owns the accepted first two
+  items and defers the rest.
 
 Assumptions:
 
 - Local Unix transport remains a supported protected coordinator transport;
   existing authenticated agent transport supplies the remote service boundary.
+- A site using these managed role commands provides a permitted stable service
+  host. A site that forbids one uses the separate whole-run delegated SLURM path;
+  Phase 12 does not place a coordinator on a prohibited login node.
 - Configuration is trusted site code/data and may reference private key/cert
   paths; public status must never expose those paths or values.
 
@@ -126,7 +140,8 @@ Assumptions:
   remains constant; one failed admission stays degraded despite another success;
   a forward clock jump pauses scheduling without advancing high-water; failed
   initialization leaves no partial requested roots; coordinator and remote agent
-  start from supported commands/configuration.
+  start from supported commands/configuration on a deployment that permits
+  persistent role processes.
 - Public or durable shapes: summary/list/detail/wait request/results and their
   exact order/revision outcomes; sequenced poll request/state/errors; time state/
   recovery request/receipt; protected deployment bundle/config; and CLI commands.
@@ -154,7 +169,8 @@ Assumptions:
   commands close demonstrated unbounded storage/read, hidden failure, time, and
   unsupported deployment paths.
 - Optional hardening and future capability deferred: UI, general query language,
-  remote coordinator HA, packaging/service managers, and migrations.
+  remote coordinator HA, packaging/service managers, migrations, and adapting
+  the managed ready-stage bootstrap into an intermittent service-less protocol.
 
 ## Invariant Ownership
 
@@ -180,7 +196,9 @@ Assumptions:
    and remote agent role root, with crash-cut tests and no overwrite behavior.
 5. Add protected deployment config plus coordinator and outbound-agent service
    commands using the same application composition.
-6. Update docs/examples and run the final causal and full validation matrices.
+6. Update docs/examples, including the persistent-managed versus service-less
+   whole-run SLURM deployment matrix, and run the final causal and full
+   validation matrices.
 
 ## Test And Validation Plan
 
@@ -224,6 +242,8 @@ Final commands:
 - Decisions not to revisit: summary/list/detail/wait split; monotonic one-row poll
   state; explicit time degradation/recovery; staged fresh-only roots; one
   coordinator config/command and one outbound agent command; no compatibility.
+  The commands are optional foreground role applications for permitted service
+  hosts, not a universal HPC login-node deployment requirement.
 - Conditions requiring manager action: a public request/response ambiguity not
   resolved here, inability to prove atomic initialization, or qualified security/
   lifecycle blocker.
