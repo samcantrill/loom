@@ -9,7 +9,8 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
-from threading import Lock
+from concurrent.futures import Future, ThreadPoolExecutor
+from threading import Event, Lock
 from types import MappingProxyType
 from typing import cast
 
@@ -1169,6 +1170,32 @@ class LocalDaemonExecution:
             provider.restore_capacity_holding(command)
         self._launch_lock = Lock()
         self._slurm_observed_operations: set[str] = set()
+        # A run reconciliation cycle may only project and reserve work.  The
+        # existing managed-local saga remains the durable result owner, but it
+        # must not hold that run's scheduling turn while a resident worker is
+        # executing.  These tasks are deliberately keyed by assignment ID:
+        # assignment identity, rather than admission identity, is the durable
+        # launch/result boundary.
+        self._local_assignment_workers = ThreadPoolExecutor(
+            max_workers=max(2, config.cpu_capacity),
+            thread_name_prefix="loom-local-assignment",
+        )
+        self._local_assignment_futures: dict[str, Future[None]] = {}
+        self._cycle_contexts: dict[
+            str, tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]
+        ] = {}
+
+    def close(self) -> None:
+        """Stop only assignment observers after their durable owners settle."""
+
+        self._local_assignment_workers.shutdown(wait=True)
+        self._local_assignment_futures.clear()
+        self._cycle_contexts.clear()
+
+    def begin_cycle(self) -> None:
+        """Discard the prior cycle's admission projection contexts."""
+
+        self._cycle_contexts.clear()
 
     def resume_retained_local_work(self) -> None:
         """Join every local supervisor operation before daemon availability."""
@@ -1375,7 +1402,11 @@ class LocalDaemonExecution:
                 "retained daemon owner state is unavailable"
             ) from None
 
-    def advance(self, admission: LocalDaemonAdmission) -> LocalDaemonExecutionOutcome:
+    def _admission_context(
+        self, admission: LocalDaemonAdmission
+    ) -> tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]:
+        """Open and bind the exact retained execution context for one admission."""
+
         self.open_owner_stores()
         intent = load_managed_local_intent(
             self.config,
@@ -1407,6 +1438,15 @@ class LocalDaemonExecution:
             coordinator_id=self.coordinator_id,
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
         )
+        return intent, scoped_authority
+
+    def reconcile_admission(
+        self, admission: LocalDaemonAdmission
+    ) -> LocalDaemonExecutionOutcome:
+        """Reconcile one run into durable ready work without selecting capacity."""
+
+        intent, scoped_authority = self._admission_context(admission)
+        self._cycle_contexts[admission.admission_id] = (intent, scoped_authority)
         if (
             admission.cancellation_operation_id is not None
             or self.cancellation_operation(admission.admission_id) is not None
@@ -1420,178 +1460,219 @@ class LocalDaemonExecution:
             store=self.stage_work_store,
             owner_id=self.coordinator_id,
         )
-        max_cycles = max(2, len(intent.plan.stage_plans) * 2 + 2)
-        for _ in range(max_cycles):
-            self._launch_lock.acquire()
-            launch_released = False
-
-            def release_launch() -> None:
-                nonlocal launch_released
-                if not launch_released:
-                    launch_released = True
-                    self._launch_lock.release()
-
-            try:
-                if self.cancellation_operation(admission.admission_id) is not None:
-                    return self._cancel(
-                        admission, scoped_authority, intent.plan.stage_order
-                    )
-                decision_as_of, snapshot_time = (
-                    self._daemon_owner()._accepted_snapshot()
+        if self.cancellation_operation(admission.admission_id) is not None:
+            return self._cancel(admission, scoped_authority, intent.plan.stage_order)
+        _decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
+        snapshot = scoped_authority.open_run(admission.run_uri)
+        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+            admission.run_uri, scoped_authority
+        )
+        snapshot = scoped_authority.open_run(admission.run_uri)
+        terminal = self._terminal_outcome(intent.plan, snapshot, scoped_authority)
+        if terminal is not None:
+            if slurm_in_flight:
+                return LocalDaemonExecutionOutcome(
+                    LocalDaemonAdmissionState.ACTIVE,
+                    slurm_diagnostic or "SLURM release remains durably in flight",
                 )
-                snapshot = scoped_authority.open_run(admission.run_uri)
-                slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-                    admission.run_uri, scoped_authority
+            return terminal
+        orchestrator.reconcile(
+            admission_id=admission.admission_id,
+            plan=intent.plan,
+            authority_snapshot=snapshot,
+            placements=placements,
+            ready_at=snapshot_time,
+            run_priority=admission.run_priority,
+            enqueue_sequence=admission.enqueue_sequence,
+            controller_action=lambda stage_plan, readiness: (
+                self._apply_controller_action(
+                    scoped_authority,
+                    admission.run_uri,
+                    stage_plan,
+                    readiness,
                 )
-                snapshot = scoped_authority.open_run(admission.run_uri)
-                terminal = self._terminal_outcome(
-                    intent.plan, snapshot, scoped_authority
+            ),
+        )
+        snapshot = scoped_authority.open_run(admission.run_uri)
+        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+            admission.run_uri, scoped_authority
+        )
+        snapshot = scoped_authority.open_run(admission.run_uri)
+        terminal = self._terminal_outcome(intent.plan, snapshot, scoped_authority)
+        if terminal is not None:
+            if slurm_in_flight:
+                return LocalDaemonExecutionOutcome(
+                    LocalDaemonAdmissionState.ACTIVE,
+                    slurm_diagnostic or "SLURM release remains durably in flight",
                 )
-                if terminal is not None:
-                    if slurm_in_flight:
-                        return LocalDaemonExecutionOutcome(
-                            LocalDaemonAdmissionState.ACTIVE,
-                            slurm_diagnostic
-                            or "SLURM release remains durably in flight",
-                        )
-                    return terminal
-                if self._remote_run_in_flight(admission.run_uri):
-                    return LocalDaemonExecutionOutcome(
-                        LocalDaemonAdmissionState.ACTIVE,
-                        "remote assignment remains durably in flight",
-                    )
-                orchestrator.reconcile(
-                    admission_id=admission.admission_id,
-                    plan=intent.plan,
-                    authority_snapshot=snapshot,
-                    placements=placements,
-                    ready_at=snapshot_time,
-                    controller_action=lambda stage_plan, readiness: (
-                        self._apply_controller_action(
-                            scoped_authority,
-                            admission.run_uri,
-                            stage_plan,
-                            readiness,
-                        )
-                    ),
-                )
-                snapshot = scoped_authority.open_run(admission.run_uri)
-                slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-                    admission.run_uri, scoped_authority
-                )
-                snapshot = scoped_authority.open_run(admission.run_uri)
-                terminal = self._terminal_outcome(
-                    intent.plan, snapshot, scoped_authority
-                )
-                if terminal is not None:
-                    if slurm_in_flight:
-                        return LocalDaemonExecutionOutcome(
-                            LocalDaemonAdmissionState.ACTIVE,
-                            slurm_diagnostic
-                            or "SLURM release remains durably in flight",
-                        )
-                    return terminal
-                slurm_dispatch = self._dispatch_slurm_ready(
-                    admission=admission,
-                    intent=intent,
-                    authority=scoped_authority,
-                    snapshot=snapshot,
-                )
-                if slurm_dispatch is not None:
-                    # A pinned route may be unavailable without becoming a
-                    # global scheduling barrier.  Keep its diagnostic, but
-                    # allow the ordinary managed decision below to advance
-                    # independent ready work in this same cycle.
-                    if slurm_dispatch.state is LocalDaemonAdmissionState.WAITING:
-                        slurm_diagnostic = slurm_dispatch.reason
-                    else:
-                        return slurm_dispatch
-                remote_targets = self._remote_candidates()
-                local_candidate = self._candidate()
-                remote_rejected = False
-                while True:
-                    candidates = tuple(
-                        [
-                            local_candidate
-                            for _ in (0,)
-                            if local_candidate.candidate_id not in remote_targets
-                        ]
-                        + [target[0] for _, target in sorted(remote_targets.items())]
-                    )
-                    ready_records = tuple(
-                        record
-                        for record in self.stage_work_store.list_stage_work()
-                        if record.admission_id == admission.admission_id
-                        if record.scheduling_state is SchedulingProjectionState.READY
-                        if record.placement.route.kind
-                        is ExecutionRouteKind.MANAGED_AGENT
-                    )
-                    decision = orchestrator.decide(
-                        kernel=self._scheduling.kernel(ready_records),
-                        candidates=candidates,
-                        as_of=snapshot_time,
-                        admission_id=admission.admission_id,
-                    )
-                    if decision.state is not PolicyDecisionState.SELECT:
-                        if slurm_in_flight:
-                            return LocalDaemonExecutionOutcome(
-                                LocalDaemonAdmissionState.ACTIVE,
-                                slurm_diagnostic
-                                or "explicit SLURM assignment remains durably in flight",
-                            )
-                        if slurm_diagnostic is not None:
-                            return LocalDaemonExecutionOutcome(
-                                LocalDaemonAdmissionState.WAITING,
-                                slurm_diagnostic,
-                            )
-                        reason = (
-                            "selected remote capacity does not support path-free "
-                            "regular-file execution"
-                            if remote_rejected
-                            else "no dependency-ready stage currently has managed "
-                            "capacity"
-                        )
-                        return LocalDaemonExecutionOutcome(
-                            LocalDaemonAdmissionState.WAITING,
-                            reason,
-                        )
-                    assert decision.stage_work_id is not None
-                    assert decision.selected is not None
-                    record = _stage_work(self.stage_work_store, decision.stage_work_id)
-                    candidate_id = cast(str, decision.candidate_id)
-                    if candidate_id in remote_targets and not self._remote_eligible(
-                        intent=intent,
-                        snapshot=snapshot,
-                        record=record,
-                    ):
-                        del remote_targets[candidate_id]
-                        remote_rejected = True
-                        continue
-                    break
-                remote_started = self._execute(
-                    admission=admission,
-                    intent=intent,
-                    authority=scoped_authority,
-                    snapshot=snapshot,
-                    record=record,
-                    decision=decision,
-                    remote_targets={
-                        key: value[1] for key, value in remote_targets.items()
-                    },
-                    decision_as_of=decision_as_of,
-                    execution_started=release_launch,
-                )
-                if remote_started:
-                    return LocalDaemonExecutionOutcome(
-                        LocalDaemonAdmissionState.ACTIVE,
-                        "remote assignment was durably targeted",
-                    )
-            finally:
-                release_launch()
+            return terminal
+        if slurm_in_flight or any(
+            stage.status in {StageStatus.SUBMITTED, StageStatus.RUNNING}
+            for stage in snapshot.stages
+        ):
+            return LocalDaemonExecutionOutcome(
+                LocalDaemonAdmissionState.ACTIVE,
+                slurm_diagnostic or "assignment execution remains in flight",
+            )
         return LocalDaemonExecutionOutcome(
             LocalDaemonAdmissionState.WAITING,
-            "bounded reconciliation window exhausted",
+            slurm_diagnostic
+            or "no dependency-ready stage currently has managed capacity",
         )
+
+    def schedule_once(
+        self, admissions: Mapping[str, LocalDaemonAdmission]
+    ) -> tuple[str, LocalDaemonExecutionOutcome] | None:
+        """Select and durably start one assignment from the global ready window."""
+
+        if not admissions:
+            return None
+        with self._launch_lock:
+            decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
+            window = self.stage_work_store.ready_window()
+            if not window:
+                return None
+            contexts = self._cycle_contexts
+            exhausted_admissions: set[str] = set()
+            for record in window:
+                admission = admissions.get(record.admission_id)
+                if admission is None or record.placement.route.kind not in {
+                    ExecutionRouteKind.MANAGED_AGENT,
+                    ExecutionRouteKind.SLURM,
+                }:
+                    continue
+                context = contexts.get(record.admission_id)
+                if context is None:
+                    continue
+                if (
+                    self.coordinator.run_active_assignment_count(admission.run_uri)
+                    >= context[0].max_parallel_stages
+                ):
+                    exhausted_admissions.add(record.admission_id)
+            remote_targets = self._remote_candidates()
+            local_candidate = self._candidate()
+            excluded_work: set[str] = set()
+            attempted_slurm: set[str] = set()
+            while True:
+                managed_records = tuple(
+                    record
+                    for record in window
+                    if record.stage_work_id not in excluded_work
+                    and record.admission_id in admissions
+                    and record.admission_id in contexts
+                    and record.admission_id not in exhausted_admissions
+                    and record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
+                )
+                candidates = tuple(
+                    [
+                        local_candidate
+                        for _ in (0,)
+                        if local_candidate.candidate_id not in remote_targets
+                    ]
+                    + [target[0] for _, target in sorted(remote_targets.items())]
+                )
+                decision = self._scheduling.kernel(managed_records).decide(
+                    work=tuple(record.to_work_item() for record in managed_records),
+                    candidates=candidates,
+                    as_of=snapshot_time,
+                )
+                selected_id = (
+                    decision.stage_work_id
+                    if decision.state is PolicyDecisionState.SELECT
+                    else None
+                )
+                selected_index = next(
+                    (
+                        index
+                        for index, record in enumerate(window)
+                        if record.stage_work_id == selected_id
+                    ),
+                    len(window),
+                )
+                for record in window[: selected_index + 1]:
+                    if (
+                        record.stage_work_id in attempted_slurm
+                        or record.admission_id not in admissions
+                        or record.admission_id not in contexts
+                        or record.admission_id in exhausted_admissions
+                        or record.placement.route.kind is not ExecutionRouteKind.SLURM
+                    ):
+                        continue
+                    attempted_slurm.add(record.stage_work_id)
+                    admission = admissions[record.admission_id]
+                    intent, authority = contexts[record.admission_id]
+                    snapshot = authority.open_run(admission.run_uri)
+                    outcome = self._dispatch_slurm_ready(
+                        admission=admission,
+                        intent=intent,
+                        authority=authority,
+                        snapshot=snapshot,
+                        stage_work_id=record.stage_work_id,
+                    )
+                    if (
+                        outcome is not None
+                        and outcome.state is LocalDaemonAdmissionState.ACTIVE
+                    ):
+                        return admission.admission_id, outcome
+                if selected_id is None:
+                    return None
+                record = _stage_work(self.stage_work_store, selected_id)
+                admission = admissions.get(record.admission_id)
+                if admission is None:
+                    excluded_work.add(record.stage_work_id)
+                    continue
+                intent, authority = contexts[record.admission_id]
+                snapshot = authority.open_run(admission.run_uri)
+                candidate_id = cast(str, decision.candidate_id)
+                if candidate_id in remote_targets and not self._remote_eligible(
+                    intent=intent,
+                    snapshot=snapshot,
+                    record=record,
+                ):
+                    del remote_targets[candidate_id]
+                    continue
+                try:
+                    started = self._execute(
+                        admission=admission,
+                        intent=intent,
+                        authority=authority,
+                        snapshot=snapshot,
+                        record=record,
+                        decision=decision,
+                        remote_targets={
+                            key: value[1] for key, value in remote_targets.items()
+                        },
+                        decision_as_of=decision_as_of,
+                        execution_started=lambda: None,
+                    )
+                except ManagedLocalError as exc:
+                    # The reserve operation is the final capacity and
+                    # max-parallel CAS.  A concurrent run-limit loser is
+                    # bypassed, while other offer/reservation failures end this
+                    # turn so an unresolved offer cannot be reinterpreted.
+                    if str(exc) == "run active-assignment limit reached":
+                        exhausted_admissions.add(record.admission_id)
+                        continue
+                    return None
+                if not started:
+                    excluded_work.add(record.stage_work_id)
+                    continue
+                return admission.admission_id, LocalDaemonExecutionOutcome(
+                    LocalDaemonAdmissionState.ACTIVE,
+                    "assignment was durably accepted",
+                )
+
+    def advance(self, admission: LocalDaemonAdmission) -> LocalDaemonExecutionOutcome:
+        """Compatibility wrapper for one-admission embedded callers."""
+
+        outcome = self.reconcile_admission(admission)
+        if outcome.state not in {
+            LocalDaemonAdmissionState.ACTIVE,
+            LocalDaemonAdmissionState.WAITING,
+        }:
+            return outcome
+        scheduled = self.schedule_once({admission.admission_id: admission})
+        return outcome if scheduled is None else scheduled[1]
 
     def _publish_slurm_verifier(
         self,
@@ -2516,6 +2597,7 @@ class LocalDaemonExecution:
         intent: ManagedLocalIntent,
         authority: _ScopedCoordinatorAuthority,
         snapshot: AuthoritativeRunSnapshot,
+        stage_work_id: str,
     ) -> LocalDaemonExecutionOutcome | None:
         records = tuple(
             sorted(
@@ -2523,6 +2605,7 @@ class LocalDaemonExecution:
                     record
                     for record in self.stage_work_store.list_stage_work()
                     if record.admission_id == admission.admission_id
+                    and record.stage_work_id == stage_work_id
                     and record.scheduling_state is SchedulingProjectionState.READY
                     and record.placement.route.kind is ExecutionRouteKind.SLURM
                 ),
@@ -4109,38 +4192,54 @@ class LocalDaemonExecution:
                 return False
             execution_started()
             return True
-        run_managed_local_assignment(
-            coordinator=self.coordinator,
-            authority=authority,
-            journal=self.journal,
-            assignment=assignment,
-            worker_request=worker_request,
-            claims=claims,
-            providers=self.providers,
-            run_store=self.run_store,
-            max_parallel_stages=intent.max_parallel_stages,
-            decision_receipt=decision_receipt,
-            agent_root=self.config.agent_root,
-            supervisor=self.supervisor,
-            resident_launch_profile=self.config.resident_worker_launch_profile,
-            cancellation_requested=lambda: self._install_cancellation_if_requested(
-                admission, authority, intent.plan.stage_order
-            ),
-            suspend_requested=(
-                None if self.daemon is None else self.daemon._stop.is_set
-            ),
-            execution_started=execution_started,
-        )
-        return False
+        accepted = Event()
 
-    def _remote_run_in_flight(self, run_uri: str) -> bool:
-        with sqlite3.connect(self.config.control_database) as conn:
-            row = conn.execute(
-                "SELECT 1 FROM remote_assignments WHERE run_uri = ? "
-                "AND state != 'RELEASED' LIMIT 1",
-                (run_uri,),
-            ).fetchone()
-        return row is not None
+        def started() -> None:
+            execution_started()
+            accepted.set()
+
+        def observe_and_finalize() -> None:
+            run_managed_local_assignment(
+                coordinator=self.coordinator,
+                authority=authority,
+                journal=self.journal,
+                assignment=assignment,
+                worker_request=worker_request,
+                claims=claims,
+                providers=self.providers,
+                run_store=self.run_store,
+                max_parallel_stages=intent.max_parallel_stages,
+                decision_receipt=decision_receipt,
+                agent_root=self.config.agent_root,
+                supervisor=self.supervisor,
+                resident_launch_profile=self.config.resident_worker_launch_profile,
+                cancellation_requested=lambda: self._install_cancellation_if_requested(
+                    admission, authority, intent.plan.stage_order
+                ),
+                suspend_requested=(
+                    None if self.daemon is None else self.daemon._stop.is_set
+                ),
+                execution_started=started,
+            )
+
+        prior = self._local_assignment_futures.get(assignment.assignment_id)
+        if prior is None:
+            prior = self._local_assignment_workers.submit(observe_and_finalize)
+            daemon = self.daemon
+            if daemon is not None:
+                prior.add_done_callback(lambda _future: daemon._wake.set())
+            self._local_assignment_futures[assignment.assignment_id] = prior
+        while not accepted.wait(timeout=0.01):
+            if prior.done():
+                # Preserve the existing saga failure semantics; an unaccepted
+                # launch is never reported as a background start.
+                prior.result()
+        self._local_assignment_futures = {
+            key: future
+            for key, future in self._local_assignment_futures.items()
+            if not future.done()
+        }
+        return True
 
     def _remote_delivery_retained(self, assignment_id: str) -> bool:
         with sqlite3.connect(self.config.control_database) as conn:

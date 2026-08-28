@@ -340,7 +340,11 @@ def test_intent_replays_before_first_attempt_after_authority_advances(
     )
 
     assert [record.stage_name for record in result] == ["left"]
-    left = next(stage for stage in authority.open_run(run_uri).stages if stage.stage_name == "left")
+    left = next(
+        stage
+        for stage in authority.open_run(run_uri).stages
+        if stage.stage_name == "left"
+    )
     assert [attempt.attempt for attempt in left.attempts] == [1]
     assert len(store.list_stage_work()) == 1
 
@@ -789,3 +793,99 @@ def test_sqlite_store_rejects_unsupported_schema_on_reopen(tmp_path: Path) -> No
         )
     with pytest.raises(CoordinatorStoreError, match="unsupported"):
         SQLiteStageWorkStore(path).list_stage_work()
+
+
+def test_257_stage_pipeline_drains_across_bounded_ready_windows(
+    tmp_path: Path,
+) -> None:
+    run_uri = "file:///ready-window"
+    authority = _authority(run_uri)
+    store = SQLiteStageWorkStore(tmp_path / "coordinator.sqlite")
+    stages = tuple(_stage(f"stage-{index:03d}") for index in range(257))
+    plan = _plan(run_uri, *stages)
+    records = RunOrchestrator(
+        authority=authority, store=store, owner_id="coordinator"
+    ).reconcile(
+        admission_id="admission-1",
+        plan=plan,
+        authority_snapshot=authority.open_run(run_uri),
+        placements={stage.stage_name: _placement() for stage in stages},
+        ready_at=10,
+        run_priority=9,
+        enqueue_sequence=3,
+    )
+
+    assert len(records) == 257
+    window = store.ready_window()
+    assert len(window) == 256
+    assert [record.stage_name for record in window] == [
+        f"stage-{index:03d}" for index in range(256)
+    ]
+    assert (
+        store.ready_window(limit=1)[0].to_work_item().order_key.negative_priority == -9
+    )
+    assert store.ready_window(limit=256)[-1].enqueue_sequence == 3
+    for record in window:
+        store.create_or_refresh(
+            replace(record, scheduling_state=SchedulingProjectionState.DECIDED)
+        )
+    final_window = store.ready_window()
+    assert [record.stage_name for record in final_window] == ["stage-256"]
+    store.create_or_refresh(
+        replace(final_window[0], scheduling_state=SchedulingProjectionState.DECIDED)
+    )
+    assert store.ready_window() == ()
+
+
+def test_ready_window_preserves_fifo_admission_order_after_restart(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "coordinator.sqlite"
+    store = SQLiteStageWorkStore(path)
+    for suffix, enqueue_sequence, ready_at in (
+        ("older", 1, 20),
+        ("newer", 2, 10),
+    ):
+        run_uri = f"file:///{suffix}"
+        authority = _authority(run_uri)
+        RunOrchestrator(
+            authority=authority,
+            store=store,
+            owner_id="coordinator",
+        ).reconcile(
+            admission_id=f"admission-{suffix}",
+            plan=_plan(run_uri, _stage(suffix)),
+            authority_snapshot=authority.open_run(run_uri),
+            placements={suffix: _placement()},
+            ready_at=ready_at,
+            run_priority=4,
+            enqueue_sequence=enqueue_sequence,
+        )
+
+    reopened = SQLiteStageWorkStore(path, _allow_initialize=False)
+    assert [record.stage_name for record in reopened.ready_window()] == [
+        "older",
+        "newer",
+    ]
+
+
+def test_stage_work_hard_cut_requires_durable_global_order_fields() -> None:
+    run_uri = "file:///order-fields"
+    authority = _authority(run_uri)
+    store = InMemoryStageWorkStore()
+    record = RunOrchestrator(
+        authority=authority, store=store, owner_id="coordinator"
+    ).reconcile(
+        admission_id="admission-1",
+        plan=_plan(run_uri, _stage("train")),
+        authority_snapshot=authority.open_run(run_uri),
+        placements={"train": _placement()},
+        ready_at=10,
+        run_priority=5,
+        enqueue_sequence=7,
+    )[0]
+    payload = record.to_dict()
+    del payload["run_priority"]
+
+    with pytest.raises(CoordinatorStoreError, match="fields are invalid"):
+        type(record).from_dict(payload)

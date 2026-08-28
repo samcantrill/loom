@@ -344,8 +344,11 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         for axis_name in ("scheduling", "assignment", "execution"):
             direct_axis = cast(Mapping[str, object], owner_view[axis_name])
             socket_axis = cast(Mapping[str, object], socket_view[axis_name])
-            for field in ("owner", "availability", "state", "revision", "freshness"):
+            for field in ("owner", "availability", "state", "freshness"):
                 assert socket_axis[field] == direct_axis[field]
+            assert cast(int, socket_axis["revision"]) >= cast(
+                int, direct_axis["revision"]
+            )
         assert status.as_of
         assert status.service_diagnostic is None
         snapshot = authority.open_run(run_uri)
@@ -712,7 +715,7 @@ def test_daemon_reconciles_cancelling_and_wait_does_not_treat_it_as_terminal(
     second_reconcile = Event()
     saw_cancelling = Event()
 
-    def advance(
+    def reconcile_admission(
         _self: LocalDaemonExecution,
         admission: LocalDaemonAdmission,
     ) -> LocalDaemonExecutionOutcome:
@@ -724,7 +727,9 @@ def test_daemon_reconciles_cancelling_and_wait_does_not_treat_it_as_terminal(
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLING)
         return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING)
 
-    monkeypatch.setattr(LocalDaemonExecution, "advance", advance)
+    monkeypatch.setattr(
+        LocalDaemonExecution, "reconcile_admission", reconcile_admission
+    )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
     daemon.start()
@@ -1040,6 +1045,234 @@ def test_daemon_overlaps_independent_runs_with_available_capacity(
         assert (
             SQLitePerRunAuthorityStore(second_uri).open_run(second_uri).status
             is RunStatus.SUCCEEDED
+        )
+    finally:
+        daemon.stop()
+
+
+def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "runs"
+    low_uri = _persist_sleep_run(
+        run_root,
+        run_name="low-run",
+        stage_name="low",
+        seconds=1.0,
+    )
+    high_uri = _persist_sleep_run(
+        run_root,
+        run_name="high-run",
+        stage_name="high",
+        seconds=1.0,
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+        admission_priority_resolver=lambda run_uri: 10 if run_uri == high_uri else 0,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        # Admit both runs before the daemon can project or place either one.
+        with daemon._cycle_lock:
+            client.submit(LocalDaemonAdmissionRequest("low-item", low_uri))
+            client.submit(LocalDaemonAdmissionRequest("high-item", high_uri))
+        _wait_for_supervisor_launch_count(config, expected=1)
+
+        with sqlite3.connect(config.execution_database) as conn:
+            live_run_uris = tuple(
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT run_uri FROM coordinator_assignments "
+                    "WHERE state != 'released' ORDER BY assignment_id"
+                )
+            )
+        assert live_run_uris == (high_uri,)
+        assert client.wait("high-item", timeout_seconds=10).state is (
+            LocalDaemonAdmissionState.SUCCEEDED
+        )
+        assert client.wait("low-item", timeout_seconds=10).state is (
+            LocalDaemonAdmissionState.SUCCEEDED
+        )
+    finally:
+        daemon.stop()
+
+
+def test_admission_reconciliation_failure_does_not_stop_other_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_root = tmp_path / "runs"
+    unhealthy_uri = _persist_sleep_run(
+        run_root,
+        run_name="unhealthy-run",
+        stage_name="unhealthy",
+    )
+    healthy_uri = _persist_sleep_run(
+        run_root,
+        run_name="healthy-run",
+        stage_name="healthy",
+    )
+    original = LocalDaemonExecution.reconcile_admission
+
+    def reconcile_admission(
+        execution: LocalDaemonExecution,
+        admission: LocalDaemonAdmission,
+    ) -> LocalDaemonExecutionOutcome:
+        if admission.run_uri == unhealthy_uri:
+            raise QueueServiceError("simulated admission-local outage")
+        return original(execution, admission)
+
+    monkeypatch.setattr(
+        LocalDaemonExecution, "reconcile_admission", reconcile_admission
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        unhealthy = client.submit(
+            LocalDaemonAdmissionRequest("unhealthy-item", unhealthy_uri)
+        )
+        healthy = client.submit(
+            LocalDaemonAdmissionRequest("healthy-item", healthy_uri)
+        )
+        assert client.wait("healthy-item", timeout_seconds=10).state is (
+            LocalDaemonAdmissionState.SUCCEEDED
+        )
+        with sqlite3.connect(config.control_database) as conn:
+            health = dict(
+                conn.execute(
+                    "SELECT admission_id, health FROM admission_reconciliation_health"
+                )
+            )
+        assert health[unhealthy.admission_id] == "unavailable"
+        assert health[healthy.admission_id] == "healthy"
+        assert daemon._service_error is None
+    finally:
+        daemon.stop()
+
+
+def test_daemon_bypasses_run_limited_older_work_for_another_run(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "runs"
+    limited_uri = _persist_sleep_run(
+        run_root,
+        run_name="limited-run",
+        stage_name="first",
+        seconds=20,
+        independent_stage_names=("first", "second"),
+        max_parallel_stages=1,
+    )
+    other_uri = _persist_sleep_run(
+        run_root,
+        run_name="other-run",
+        stage_name="other",
+        seconds=20,
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+        cpu_capacity=2,
+        admission_priority_resolver=lambda run_uri: 10 if run_uri == limited_uri else 0,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        with daemon._cycle_lock:
+            client.submit(LocalDaemonAdmissionRequest("limited-item", limited_uri))
+            client.submit(LocalDaemonAdmissionRequest("other-item", other_uri))
+        deadline = time.monotonic() + 30
+        live_run_uris: set[str] = set()
+        while time.monotonic() < deadline:
+            with sqlite3.connect(config.execution_database) as conn:
+                live_run_uris = {
+                    str(row[0])
+                    for row in conn.execute(
+                        "SELECT run_uri FROM coordinator_assignments "
+                        "WHERE state != 'released'"
+                    )
+                }
+            if live_run_uris == {limited_uri, other_uri}:
+                break
+            time.sleep(0.02)
+        assert live_run_uris == {limited_uri, other_uri}
+        assert client.wait("other-item", timeout_seconds=60).state is (
+            LocalDaemonAdmissionState.SUCCEEDED
+        )
+        assert client.wait("limited-item", timeout_seconds=60).state is (
+            LocalDaemonAdmissionState.SUCCEEDED
+        )
+    finally:
+        daemon.stop()
+
+
+def test_daemon_overlaps_independent_local_stages_in_one_run(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "runs"
+    run_uri = _persist_sleep_run(
+        run_root,
+        run_name="one-run",
+        stage_name="first",
+        independent_stage_names=("first", "second"),
+        seconds=20,
+        max_parallel_stages=2,
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+        cpu_capacity=2,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(
+            LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+        )
+        client.submit(LocalDaemonAdmissionRequest("one-run-item", run_uri))
+        deadline = time.monotonic() + 30
+        active_assignments = 0
+        while time.monotonic() < deadline:
+            with sqlite3.connect(config.execution_database) as conn:
+                active_assignments = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM coordinator_assignments "
+                        "WHERE run_uri = ? AND state != 'released'",
+                        (run_uri,),
+                    ).fetchone()[0]
+                )
+            if active_assignments == 2:
+                break
+            time.sleep(0.02)
+        assert active_assignments == 2
+        assert client.wait("one-run-item", timeout_seconds=60).state is (
+            LocalDaemonAdmissionState.SUCCEEDED
         )
     finally:
         daemon.stop()
@@ -1794,15 +2027,18 @@ def _persist_sleep_run(
     stage_name: str,
     seconds: float = 0.5,
     retry_max_attempts: int | None = None,
+    independent_stage_names: tuple[str, ...] | None = None,
+    max_parallel_stages: int | None = None,
 ) -> str:
     run_store = LocalRunStore(run_root)
     run_uri = path_to_run_uri(run_root / run_name)
     run_store.create_run(run_uri)
+    stage_names = independent_stage_names or (stage_name,)
     pipeline_config = {
         "name": run_name,
         "stages": [
             {
-                "name": stage_name,
+                "name": current_stage_name,
                 "factory": {
                     "_target_": "tests.support.pipeline_execution_stages.SleepStage"
                 },
@@ -1814,6 +2050,7 @@ def _persist_sleep_run(
                 },
                 "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
             }
+            for current_stage_name in stage_names
         ],
     }
     spec = PipelineSpec.from_config(pipeline_config)
@@ -1826,7 +2063,10 @@ def _persist_sleep_run(
     )
     runtime_metadata: dict[str, PlainData] = {
         "executor": "local",
-        "stages": {stage_name: {"executor": "local"}},
+        "stages": {
+            current_stage_name: {"executor": "local"}
+            for current_stage_name in stage_names
+        },
     }
     if retry_max_attempts is not None:
         runtime_metadata["reliability"] = {
@@ -1838,6 +2078,18 @@ def _persist_sleep_run(
         "resolved",
         json_dumps_pretty({"pipeline": pipeline_config}),
     )
+    options: dict[str, PlainData] = {"run_uri": run_uri, "executor": "local"}
+    if retry_max_attempts is not None:
+        options["reliability"] = {
+            "retry": {
+                "enabled": True,
+                "max_attempts": retry_max_attempts,
+            }
+        }
+    if max_parallel_stages is not None:
+        options["execution"] = {
+            "settings": {"max_parallel_stages": max_parallel_stages}
+        }
     prepare_managed_local_runtime_record(
         store=run_store,
         run_uri=run_uri,
@@ -1845,17 +2097,8 @@ def _persist_sleep_run(
         pipeline=spec,
         options=(
             None
-            if retry_max_attempts is None
-            else {
-                "run_uri": run_uri,
-                "executor": "local",
-                "reliability": {
-                    "retry": {
-                        "enabled": True,
-                        "max_attempts": retry_max_attempts,
-                    }
-                },
-            }
+            if retry_max_attempts is None and max_parallel_stages is None
+            else options
         ),
     )
     SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=RunStatus.RUNNING)

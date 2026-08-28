@@ -8,7 +8,6 @@ saga. Clients provide only a queue identity and run URI.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -56,7 +55,15 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 7
+_LOCAL_DAEMON_SCHEMA_VERSION = 8
+_MIN_RUN_PRIORITY = -1_000_000
+_MAX_RUN_PRIORITY = 1_000_000
+
+
+def _default_admission_priority(_run_uri: str) -> int:
+    """The protected default policy grants no client-selected preference."""
+
+    return 0
 
 
 class LocalDaemonAdmissionState(StrEnum):
@@ -515,6 +522,7 @@ class LocalDaemonConfig:
     scheduling_components: LocalDaemonSchedulingComponents = field(
         default_factory=_default_scheduling_components
     )
+    admission_priority_resolver: Callable[[str], int] = _default_admission_priority
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
@@ -569,6 +577,10 @@ class LocalDaemonConfig:
         if not isinstance(self.scheduling_components, LocalDaemonSchedulingComponents):
             raise QueueServiceError(
                 "scheduling_components must be a complete trusted composition"
+            )
+        if not callable(self.admission_priority_resolver):
+            raise QueueServiceError(
+                "admission priority resolver must be protected code"
             )
         if any(rule.agent_id == self.machine_id for rule in self.agent_policy.agents):
             raise QueueServiceError(
@@ -680,6 +692,8 @@ class LocalDaemonAdmission:
     state: LocalDaemonAdmissionState
     accepted_at: str
     authority_operation_id: str
+    run_priority: int = 0
+    enqueue_sequence: int = 0
     cancellation_operation_id: str | None = None
     cancellation_principal_id: str | None = None
     blocked_reason: str | None = None
@@ -695,6 +709,8 @@ class LocalDaemonAdmission:
             "state": self.state.value,
             "accepted_at": self.accepted_at,
             "authority_operation_id": self.authority_operation_id,
+            "run_priority": self.run_priority,
+            "enqueue_sequence": self.enqueue_sequence,
             "cancellation_operation_id": self.cancellation_operation_id,
             "cancellation_principal_id": self.cancellation_principal_id,
             "blocked_reason": self.blocked_reason,
@@ -714,6 +730,8 @@ class LocalDaemonAdmission:
                 "state",
                 "accepted_at",
                 "authority_operation_id",
+                "run_priority",
+                "enqueue_sequence",
                 "cancellation_operation_id",
                 "cancellation_principal_id",
                 "blocked_reason",
@@ -730,6 +748,8 @@ class LocalDaemonAdmission:
             state=LocalDaemonAdmissionState(_required_string(data, "state")),
             accepted_at=_required_string(data, "accepted_at"),
             authority_operation_id=_required_string(data, "authority_operation_id"),
+            run_priority=_run_priority(_required_int(data, "run_priority")),
+            enqueue_sequence=_required_int(data, "enqueue_sequence"),
             cancellation_operation_id=_optional_string(
                 data, "cancellation_operation_id"
             ),
@@ -863,9 +883,7 @@ class LocalDaemon:
         self._stop = Event()
         self._wake = Event()
         self._thread: Thread | None = None
-        self._assignment_workers: ThreadPoolExecutor | None = None
         self._execution: LocalDaemonExecution | None = None
-        self._assignment_futures: dict[str, Future[LocalDaemonExecutionOutcome]] = {}
         self._cycle_lock = RLock()
         self._service_error: str | None = None
         self._agent_policy = config.agent_policy
@@ -986,10 +1004,6 @@ class LocalDaemon:
             self._agent_id = None
             self._scheduling_epoch = None
             raise
-        assignment_workers = ThreadPoolExecutor(
-            max_workers=self.config.cpu_capacity,
-            thread_name_prefix="loom-local-assignment",
-        )
         from .local_daemon_execution import LocalDaemonExecution
 
         try:
@@ -1012,7 +1026,6 @@ class LocalDaemon:
             # ordinary result/output/provider replay.
             execution.resume_retained_local_work()
         except Exception:
-            assignment_workers.shutdown(wait=True)
             agent_lock.close()
             coordinator_lock.close()
             self._coordinator_id = None
@@ -1034,7 +1047,6 @@ class LocalDaemon:
         self._service_error = None
         self._stop.clear()
         self._wake.set()
-        self._assignment_workers = assignment_workers
         self._execution = execution
         self._thread = thread
         try:
@@ -1051,11 +1063,8 @@ class LocalDaemon:
         self._thread = None
         if thread is not None:
             thread.join()
-        assignment_workers = self._assignment_workers
-        self._assignment_workers = None
-        if assignment_workers is not None:
-            assignment_workers.shutdown(wait=True)
-        self._assignment_futures.clear()
+        if self._execution is not None:
+            self._execution.close()
         self._execution = None
         for lock in (self._agent_lock, self._coordinator_lock):
             if lock is not None:
@@ -1335,24 +1344,23 @@ class LocalDaemon:
         )
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
-        """Drive each admission through authority, orchestration, and execution."""
+        """Project every admission, then schedule one global bounded window."""
 
         self._require_started()
         with self._cycle_lock:
             execution = self._execution
-            assignment_workers = self._assignment_workers
-            if execution is None or assignment_workers is None:
-                raise QueueServiceError("local daemon assignment supervisor is absent")
+            if execution is None:
+                raise QueueServiceError("local daemon execution is absent")
             execution.open_owner_stores()
-            self._harvest_assignment_futures()
             self._resume_pending_recoveries(execution)
+            execution.begin_cycle()
             with self._connection() as conn:
                 admissions = tuple(
                     _admission_from_row(row)
                     for row in conn.execute(
                         "SELECT * FROM managed_admissions "
                         "WHERE state NOT IN (?, ?, ?, ?) "
-                        "ORDER BY accepted_at, admission_id",
+                        "ORDER BY run_priority DESC, enqueue_sequence, admission_id",
                         (
                             LocalDaemonAdmissionState.SUCCEEDED.value,
                             LocalDaemonAdmissionState.FAILED.value,
@@ -1361,37 +1369,57 @@ class LocalDaemon:
                         ),
                     )
                 )
+            schedulable: dict[str, LocalDaemonAdmission] = {}
+            waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
             for admission in admissions:
-                if admission.admission_id in self._assignment_futures:
-                    continue
-                future = assignment_workers.submit(execution.advance, admission)
-                future.add_done_callback(lambda _future: self._wake.set())
-                self._assignment_futures[admission.admission_id] = future
-            self._harvest_assignment_futures()
-            return self.status().admissions
+                try:
+                    outcome = execution.reconcile_admission(admission)
+                except QueueConflictError:
+                    self._record_admission_health(admission.admission_id, "failed")
+                    self._set_state(
+                        admission.admission_id,
+                        LocalDaemonAdmissionState.BLOCKED,
+                        reason="authority_or_intent_conflict",
+                    )
+                except Exception:  # one unhealthy run cannot stop other admissions
+                    self._record_admission_health(admission.admission_id, "unavailable")
+                else:
+                    self._record_admission_health(admission.admission_id, "healthy")
+                    if outcome.state is LocalDaemonAdmissionState.WAITING:
+                        waiting_outcomes[admission.admission_id] = outcome
+                    else:
+                        self._set_state(
+                            admission.admission_id,
+                            outcome.state,
+                            reason=outcome.reason,
+                        )
+                    if outcome.state in {
+                        LocalDaemonAdmissionState.ACTIVE,
+                        LocalDaemonAdmissionState.WAITING,
+                    }:
+                        schedulable[admission.admission_id] = admission
 
-    def _harvest_assignment_futures(self) -> None:
-        for admission_id, future in tuple(self._assignment_futures.items()):
-            if not future.done():
-                continue
-            del self._assignment_futures[admission_id]
-            try:
-                outcome = future.result()
-            except QueueConflictError:
+            # The durable ready query owns the 256-item window.  A cycle may
+            # launch at most that many assignments, but a larger pipeline is
+            # never rejected merely for having more stages.
+            started_admissions: set[str] = set()
+            for _ in range(256):
+                scheduled = execution.schedule_once(schedulable)
+                if scheduled is None:
+                    break
+                admission_id, outcome = scheduled
+                started_admissions.add(admission_id)
+                self._record_admission_health(admission_id, "healthy")
+                self._set_state(admission_id, outcome.state, reason=outcome.reason)
+            for admission_id, outcome in waiting_outcomes.items():
+                if admission_id in started_admissions:
+                    continue
                 self._set_state(
                     admission_id,
-                    LocalDaemonAdmissionState.BLOCKED,
-                    reason="authority_or_intent_conflict",
-                )
-            except Exception:  # outages stay replayable and visible
-                self._service_error = "reconciliation_unavailable"
-            else:
-                self._service_error = None
-                self._set_state(
-                    admission_id,
-                    outcome.state,
+                    LocalDaemonAdmissionState.WAITING,
                     reason=outcome.reason,
                 )
+            return self.status().admissions
 
     def _serve(self) -> None:
         while not self._stop.is_set():
@@ -1440,6 +1468,7 @@ class LocalDaemon:
 
             intent = load_managed_local_intent(self.config, request.run_uri)
             execution.validate_fresh_intent(intent)
+            run_priority = self._resolve_admission_priority(request.run_uri)
             admission_id = f"admission-{uuid4()}"
             operation_id = f"authority-bind-{uuid4()}"
             with self._connection() as conn:
@@ -1450,9 +1479,10 @@ class LocalDaemon:
                     INSERT INTO managed_admissions (
                         admission_id, queue_item_id, coordinator_id, run_uri,
                         intent_digest, execution_owner, state, accepted_at,
-                        authority_operation_id, cancellation_operation_id,
+                        authority_operation_id, run_priority, enqueue_sequence,
+                        cancellation_operation_id,
                         blocked_reason
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                     """,
                     (
                         admission_id,
@@ -1464,6 +1494,8 @@ class LocalDaemon:
                         LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
                         accepted_at,
                         operation_id,
+                        run_priority,
+                        self._next_enqueue_sequence(conn),
                     ),
                 )
                 conn.commit()
@@ -2111,6 +2143,36 @@ class LocalDaemon:
     def _cancellation_operation_id(self, admission_id: str) -> str | None:
         return self._admission(admission_id).cancellation_operation_id
 
+    def _resolve_admission_priority(self, run_uri: str) -> int:
+        """Resolve site policy before entering the durable admission transaction."""
+
+        try:
+            return _run_priority(self.config.admission_priority_resolver(run_uri))
+        except Exception as exc:
+            if isinstance(exc, QueueServiceError):
+                raise
+            raise QueueServiceError(
+                "protected admission priority policy failed"
+            ) from exc
+
+    def _next_enqueue_sequence(self, conn: sqlite3.Connection) -> int:
+        row = conn.execute(
+            "SELECT value FROM daemon_metadata WHERE key = 'admission_enqueue_sequence'"
+        ).fetchone()
+        try:
+            previous = 0 if row is None else int(cast(str, row["value"]))
+        except (TypeError, ValueError) as exc:
+            raise QueueStorageError("admission enqueue sequence is invalid") from exc
+        if previous < 0:
+            raise QueueStorageError("admission enqueue sequence is invalid")
+        sequence = previous + 1
+        conn.execute(
+            "INSERT OR REPLACE INTO daemon_metadata(key, value) VALUES "
+            "('admission_enqueue_sequence', ?)",
+            (str(sequence),),
+        )
+        return sequence
+
     def _activate_admission(self, admission_id: str) -> None:
         with self._connection() as conn:
             conn.execute(
@@ -2159,6 +2221,19 @@ class LocalDaemon:
                 "UPDATE managed_admissions SET state = ?, blocked_reason = ? "
                 "WHERE admission_id = ?",
                 (state.value, reason, admission_id),
+            )
+            conn.commit()
+
+    def _record_admission_health(self, admission_id: str, health: str) -> None:
+        if health not in {"healthy", "failed", "unavailable"}:
+            raise QueueServiceError("admission reconciliation health is invalid")
+        with self._connection() as conn:
+            conn.execute(
+                "INSERT INTO admission_reconciliation_health("
+                "admission_id, health, observed_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(admission_id) DO UPDATE SET health = excluded.health, "
+                "observed_at = excluded.observed_at",
+                (admission_id, health, self._accepted_time(conn)),
             )
             conn.commit()
 
@@ -2551,12 +2626,23 @@ def _initialize_root(path: Path, *, role: str) -> None:
                     state TEXT NOT NULL,
                     accepted_at TEXT NOT NULL,
                     authority_operation_id TEXT NOT NULL,
+                    run_priority INTEGER NOT NULL,
+                    enqueue_sequence INTEGER NOT NULL UNIQUE,
                     cancellation_operation_id TEXT,
                     cancellation_principal_id TEXT,
                     blocked_reason TEXT,
                     UNIQUE(coordinator_id, run_uri)
                 )
                 """
+            )
+            conn.execute(
+                "INSERT INTO daemon_metadata(key, value) VALUES "
+                "('admission_enqueue_sequence', '0')"
+            )
+            conn.execute(
+                "CREATE TABLE admission_reconciliation_health ("
+                "admission_id TEXT PRIMARY KEY REFERENCES managed_admissions(admission_id), "
+                "health TEXT NOT NULL, observed_at TEXT NOT NULL)"
             )
             conn.execute(
                 "CREATE TABLE scheduling_reloads ("
@@ -2653,6 +2739,10 @@ def _admission_from_row(row: sqlite3.Row) -> LocalDaemonAdmission:
         state=LocalDaemonAdmissionState(str(row["state"])),
         accepted_at=str(row["accepted_at"]),
         authority_operation_id=str(row["authority_operation_id"]),
+        run_priority=_run_priority(int(row["run_priority"])),
+        enqueue_sequence=_non_negative_int(
+            int(row["enqueue_sequence"]), "enqueue_sequence"
+        ),
         cancellation_operation_id=(
             None
             if row["cancellation_operation_id"] is None
@@ -2680,6 +2770,22 @@ def _required_int(data: Mapping[str, object], field: str) -> int:
     value = data.get(field)
     if isinstance(value, bool) or not isinstance(value, int):
         raise QueueServiceError(f"{field} must be an integer")
+    return value
+
+
+def _non_negative_int(value: int, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise QueueServiceError(f"{field} must be a non-negative integer")
+    return value
+
+
+def _run_priority(value: int) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not _MIN_RUN_PRIORITY <= value <= _MAX_RUN_PRIORITY
+    ):
+        raise QueueServiceError("run_priority is outside the protected range")
     return value
 
 
