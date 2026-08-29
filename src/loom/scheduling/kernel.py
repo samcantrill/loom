@@ -224,7 +224,8 @@ class SchedulingKernel:
     ) -> _CandidateResult:
         if work.pool_name not in candidate.pool_names:
             return _CandidateResult(WorkSearchState.COMPLETE)
-        if work.target is not None and work.target != candidate.candidate_id:
+        candidate_target = candidate.attributes.get("agent_id", candidate.candidate_id)
+        if work.target is not None and work.target != candidate_target:
             return _CandidateResult(WorkSearchState.COMPLETE)
         for check in candidate.mandatory_eligibility:
             if check.state is EligibilityState.INDETERMINATE:

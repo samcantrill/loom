@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -60,6 +60,7 @@ from loom.queue._managed_local import (
     run_managed_local_assignment,
 )
 from loom.pipeline.orchestration import (
+    ExecutionRequirement,
     RunOrchestrator,
     SchedulingProjectionState,
     SQLiteStageWorkStore,
@@ -173,6 +174,7 @@ class ManagedLocalIntent:
     plan: ExecutionPlan
     runtime: Mapping[str, ResolvedStageRuntimeOptions]
     placements: Mapping[str, ResolvedStagePlacement]
+    execution_requirements: Mapping[str, ExecutionRequirement]
     pipeline: PipelineSpec
     digest: str
     max_parallel_stages: int
@@ -389,6 +391,18 @@ class _RemoteCandidateTarget:
     profile: ResidentProfileDescriptor
     availability_atoms: tuple[CapacityAtom, ...]
     reflected_claim_ids: tuple[str, ...]
+
+
+def _profile_satisfies_requirement(
+    profile: ResidentProfileDescriptor, requirement: ExecutionRequirement
+) -> bool:
+    """Compare inert identities before any reservation or delivery."""
+
+    return (
+        profile.project_fingerprint == requirement.project_fingerprint
+        and profile.environment_fingerprint == requirement.environment_fingerprint
+        and profile.executor_fingerprint == requirement.executor_fingerprint
+    )
 
 
 def _replacement_scheduling_identities(
@@ -852,6 +866,24 @@ def load_managed_local_intent(
         name: ResolvedStagePlacement.from_dict(payload)
         for name, payload in placements_payload.items()
     }
+    requirements_payload = record["execution_requirements"]
+    if not isinstance(requirements_payload, Mapping):
+        raise QueueServiceError(
+            "exact runtime record execution requirements are invalid"
+        )
+    try:
+        execution_requirements = {
+            name: ExecutionRequirement.from_dict(payload)
+            for name, payload in requirements_payload.items()
+        }
+    except Exception as exc:
+        raise QueueServiceError(
+            "exact runtime record execution requirements are invalid"
+        ) from exc
+    if set(execution_requirements) != set(pipeline.stage_names):
+        raise QueueServiceError(
+            "exact runtime record execution requirements conflict with pipeline"
+        )
     allowed_targets = {config.machine_id} | {
         rule.agent_id for rule in config.agent_policy.agents
     }
@@ -898,6 +930,7 @@ def load_managed_local_intent(
         plan,
         runtime,
         placements,
+        execution_requirements,
         pipeline,
         str(record["digest"]),
         cast(int, record["max_parallel_stages"]),
@@ -1481,6 +1514,7 @@ class LocalDaemonExecution:
             plan=intent.plan,
             authority_snapshot=snapshot,
             placements=placements,
+            execution_requirements=intent.execution_requirements,
             ready_at=snapshot_time,
             run_priority=admission.run_priority,
             enqueue_sequence=admission.enqueue_sequence,
@@ -1563,13 +1597,31 @@ class LocalDaemonExecution:
                     and record.admission_id not in exhausted_admissions
                     and record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
                 )
+                local_profile = ResidentProfileDescriptor.from_dict(
+                    self.config.resident_worker_launch_profile.descriptor
+                )
                 candidates = tuple(
                     [
                         local_candidate
                         for _ in (0,)
                         if local_candidate.candidate_id not in remote_targets
+                        and any(
+                            _profile_satisfies_requirement(
+                                local_profile, record.execution_requirement
+                            )
+                            for record in managed_records
+                        )
                     ]
-                    + [target[0] for _, target in sorted(remote_targets.items())]
+                    + [
+                        target[0]
+                        for _, target in sorted(remote_targets.items())
+                        if any(
+                            _profile_satisfies_requirement(
+                                target[1].profile, record.execution_requirement
+                            )
+                            for record in managed_records
+                        )
+                    ]
                 )
                 decision = self._scheduling.kernel(managed_records).decide(
                     work=tuple(record.to_work_item() for record in managed_records),
@@ -1624,10 +1676,23 @@ class LocalDaemonExecution:
                 intent, authority = contexts[record.admission_id]
                 snapshot = authority.open_run(admission.run_uri)
                 candidate_id = cast(str, decision.candidate_id)
-                if candidate_id in remote_targets and not self._remote_eligible(
-                    intent=intent,
-                    snapshot=snapshot,
-                    record=record,
+                remote_target = remote_targets.get(candidate_id)
+                local_profile = ResidentProfileDescriptor.from_dict(
+                    self.config.resident_worker_launch_profile.descriptor
+                )
+                selected_profile = (
+                    local_profile if remote_target is None else remote_target[1].profile
+                )
+                if not _profile_satisfies_requirement(
+                    selected_profile, record.execution_requirement
+                ):
+                    if remote_target is not None:
+                        del remote_targets[candidate_id]
+                    else:
+                        excluded_work.add(record.stage_work_id)
+                    continue
+                if remote_target is not None and not self._remote_eligible(
+                    intent=intent, snapshot=snapshot, record=record
                 ):
                     del remote_targets[candidate_id]
                     continue
@@ -3715,7 +3780,6 @@ class LocalDaemonExecution:
             )
             if not matching:
                 continue
-            profile = sorted(matching, key=lambda item: item.profile_id)[0]
             agent_id = str(row["agent_id"])
             availability_atoms: list[CapacityAtom] = []
             inventory_atoms: list[CapacityAtom] = []
@@ -3825,37 +3889,52 @@ class LocalDaemonExecution:
                     data=data,
                     atoms=kind_availability_atoms,
                 )
-            candidate = Candidate(
-                agent_id,
-                inventory,
-                availability,
-                attributes={
-                    "resident_profile_id": profile.profile_id,
-                    "resident_profile_revision": profile.revision,
-                    "resident_project_fingerprint": profile.project_fingerprint,
-                    "resident_environment_fingerprint": (
-                        profile.environment_fingerprint
+            for profile in sorted(matching, key=lambda item: item.profile_id):
+                candidate_id = ":".join(
+                    (agent_id, str(row["session_id"]), profile.profile_id)
+                )
+                candidate = Candidate(
+                    candidate_id,
+                    {
+                        kind: replace(envelope, candidate_id=candidate_id)
+                        for kind, envelope in inventory.items()
+                    },
+                    {
+                        kind: replace(envelope, candidate_id=candidate_id)
+                        for kind, envelope in availability.items()
+                    },
+                    attributes={
+                        "agent_id": agent_id,
+                        "target": agent_id,
+                        "resident_profile_id": profile.profile_id,
+                        "resident_profile_revision": profile.revision,
+                        "resident_profile_fingerprint": profile.fingerprint,
+                        "resident_project_fingerprint": profile.project_fingerprint,
+                        "resident_environment_fingerprint": profile.environment_fingerprint,
+                        "resident_executor_fingerprint": profile.executor_fingerprint,
+                        "artifact_capability": "regular-file-relay-v1",
+                    },
+                    pool_names=offer.pools,
+                )
+                targets[candidate_id] = (
+                    candidate,
+                    _RemoteCandidateTarget(
+                        agent_id=agent_id,
+                        session_id=str(row["session_id"]),
+                        offer_id=scheduling_offer_id,
+                        availability_revision=offer.availability_revision,
+                        scheduling_availability_revision=scheduling_availability_revision,
+                        inventory_revision=offer.inventory_revision,
+                        offer=offer,
+                        profile=profile,
+                        availability_atoms=tuple(availability_atoms),
+                        reflected_claim_ids=tuple(
+                            sorted(
+                                set(offer.reflected_claim_ids) | set(withheld_claim_ids)
+                            )
+                        ),
                     ),
-                    "resident_executor_fingerprint": profile.executor_fingerprint,
-                    "artifact_capability": "regular-file-relay-v1",
-                },
-                pool_names=offer.pools,
-            )
-            target = _RemoteCandidateTarget(
-                agent_id=agent_id,
-                session_id=str(row["session_id"]),
-                offer_id=scheduling_offer_id,
-                availability_revision=offer.availability_revision,
-                scheduling_availability_revision=(scheduling_availability_revision),
-                inventory_revision=offer.inventory_revision,
-                offer=offer,
-                profile=profile,
-                availability_atoms=tuple(availability_atoms),
-                reflected_claim_ids=tuple(
-                    sorted(set(offer.reflected_claim_ids) | set(withheld_claim_ids))
-                ),
-            )
-            targets[agent_id] = (candidate, target)
+                )
         return targets
 
     @staticmethod

@@ -8,7 +8,7 @@ private queue application infrastructure; pipeline execution never imports it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 import fcntl
 import hashlib
@@ -49,6 +49,7 @@ class ResidentWorkerLaunchProfile:
     project_root: Path
     python_executable: Path
     descriptor: Mapping[str, PlainData]
+    environment: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).resolve()
@@ -66,6 +67,13 @@ class ResidentWorkerLaunchProfile:
         object.__setattr__(
             self, "descriptor", thaw_plain_data(descriptor, path="resident profile")
         )
+        environment = dict(self.environment)
+        if any(
+            not isinstance(key, str) or not key or not isinstance(value, str)
+            for key, value in environment.items()
+        ):
+            raise AgentProcessSupervisorError("resident profile environment is invalid")
+        object.__setattr__(self, "environment", environment)
 
     @property
     def fingerprint(self) -> str:
@@ -74,6 +82,7 @@ class ResidentWorkerLaunchProfile:
                 "project_root": str(self.project_root),
                 "python_executable": str(self.python_executable),
                 "descriptor": self.descriptor,
+                "environment": self.environment,
             }
         )
 
@@ -151,9 +160,8 @@ class ResidentWorkerLaunch:
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise AgentProcessSupervisorError(f"{name} must be a non-empty string")
-        if (
-            len(self.bundle_digest) != 64
-            or any(character not in "0123456789abcdef" for character in self.bundle_digest)
+        if len(self.bundle_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in self.bundle_digest
         ):
             raise AgentProcessSupervisorError("bundle_digest must be a SHA-256 digest")
         workspace = Path(self.workspace_root).resolve()
@@ -521,6 +529,7 @@ def _profile_value(profile: ResidentWorkerLaunchProfile) -> dict[str, object]:
         "project_root": str(profile.project_root),
         "python_executable": str(profile.python_executable),
         "descriptor": profile.descriptor,
+        "environment": dict(profile.environment),
     }
 
 
@@ -529,12 +538,14 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
         "project_root",
         "python_executable",
         "descriptor",
+        "environment",
     }:
         raise AgentProcessSupervisorError("supervisor profile state is invalid")
     return ResidentWorkerLaunchProfile(
         project_root=Path(cast(str, value["project_root"])),
         python_executable=Path(cast(str, value["python_executable"])),
         descriptor=cast(Mapping[str, PlainData], value["descriptor"]),
+        environment=cast(Mapping[str, str], value["environment"]),
     )
 
 

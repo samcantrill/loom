@@ -20,6 +20,7 @@ from loom.queue._managed_local import (
     ObserveRequest,
 )
 from loom.pipeline.orchestration import (
+    ExecutionRequirement,
     SchedulingProjectionState,
     SQLiteStageWorkStore,
     StageWorkRecord,
@@ -89,6 +90,9 @@ def _seed_stage_work(path, assignment: ManagedAssignment) -> None:
                 runtime=None,
                 policy=StagePlacementPolicy(),
                 planners={},
+            ),
+            execution_requirement=ExecutionRequirement(
+                "test-project", "test-environment", "test-executor"
             ),
         )
     )

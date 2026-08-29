@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
@@ -21,7 +20,7 @@ from fractions import Fraction
 from pathlib import Path
 from threading import RLock
 from time import sleep
-from typing import Protocol, cast
+from typing import Protocol, cast, runtime_checkable
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.orchestration import SchedulingProjectionState, StageWorkRecord
@@ -386,6 +385,7 @@ class ManagedOfferSnapshot:
         }
 
 
+@runtime_checkable
 class AgentResourceProvider(Protocol):
     """Versioned physical-resource lifecycle; outcomes never imply OS isolation."""
 
@@ -398,6 +398,8 @@ class AgentResourceProvider(Protocol):
     def activate(self, command: ClaimCommand) -> ClaimResult: ...
     def abort(self, command: ClaimCommand) -> ClaimResult: ...
     def release(self, command: ClaimCommand) -> ClaimResult: ...
+
+    def worker_environment(self, command: ClaimCommand) -> Mapping[str, str]: ...
 
 
 class AtomResourceProvider:
@@ -425,6 +427,11 @@ class AtomResourceProvider:
     def observe(self, request: ObserveRequest) -> ObserveResult:
         with self._lock:
             return self._observe(request)
+
+    def worker_environment(self, command: ClaimCommand) -> dict[str, str]:
+        """CPU and memory accounting have no worker-visible contribution."""
+        self._require_provider_identity(command)
+        return {}
 
     def restore_capacity_holding(self, command: ClaimCommand) -> None:
         """Restore one durable non-released claim before any fresh offer."""
@@ -3066,21 +3073,9 @@ def run_managed_local_assignment(
         return finalize_result(worker_result, coordinator_expected="granted")
 
     process_id = f"{assignment.assignment_id}:root"
-    environment: dict[str, str] = {}
-    environment.update(
-        {
-            key: value
-            for key, value in os.environ.items()
-            if not any(
-                marker in key.upper()
-                for marker in ("TOKEN", "SECRET", "CREDENTIAL", "PASSWORD", "KEY")
-            )
-        }
+    environment = _worker_environment(
+        resident_launch_profile, workspace.root, commands, providers
     )
-    for command in commands:
-        provider = providers[command.claim.resource_kind]
-        if isinstance(provider, GpuResourceProvider):
-            environment.update(provider.worker_environment(command))
     expected_launch = ResidentWorkerLaunch(
         supervisor_id=supervisor.supervisor_id,
         continuity_epoch=supervisor.continuity_epoch,
@@ -3505,6 +3500,35 @@ class GpuResourceProvider(AtomResourceProvider):
     def worker_environment(self, command: ClaimCommand) -> dict[str, str]:
         """Return the sole GPU environment value derived from an active claim."""
         return {"CUDA_VISIBLE_DEVICES": ",".join(self.binding_for_claim(command))}
+
+
+def _worker_environment(
+    profile: ResidentWorkerLaunchProfile,
+    workspace: Path,
+    commands: Sequence[ClaimCommand],
+    providers: Mapping[str, AgentResourceProvider],
+) -> dict[str, str]:
+    """Construct the complete worker environment without ambient inheritance."""
+
+    environment = {
+        "PATH": str(profile.python_executable.parent),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONNOUSERSITE": "1",
+        "TMPDIR": str(workspace),
+        **dict(profile.environment),
+    }
+    for command in commands:
+        contribution = dict(
+            providers[command.claim.resource_kind].worker_environment(command)
+        )
+        if any(
+            not isinstance(key, str) or not key or not isinstance(value, str)
+            for key, value in contribution.items()
+        ):
+            raise ManagedLocalError("provider worker environment is invalid")
+        environment.update(contribution)
+    return environment
 
 
 def _claim_command_dict(command: ClaimCommand) -> dict[str, PlainData]:

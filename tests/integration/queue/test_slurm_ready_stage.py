@@ -32,6 +32,7 @@ from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.queue import (
     LocalDaemon,
+    ExecutionRequirement,
     LocalDaemonAdmissionRequest,
     LocalDaemonAdmissionState,
     LocalDaemonConfig,
@@ -50,6 +51,16 @@ from loom.serialization import json_dumps_pretty
 
 
 pytestmark = pytest.mark.integration
+
+
+def _execution_requirements(pipeline: PipelineSpec) -> dict[str, ExecutionRequirement]:
+    return {
+        stage_name: ExecutionRequirement(
+            "test-project", "test-environment", "test-executor"
+        )
+        for stage_name in pipeline.stage_names
+    }
+
 
 _TEST_HELPER = (
     sys.executable,
@@ -250,6 +261,7 @@ def _exercise_mixed_route_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=pipeline,
+        execution_requirements=_execution_requirements(pipeline),
         slurm_profiles=(profile,),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
@@ -555,9 +567,9 @@ def _exercise_mixed_route_run(
                 )
             with sqlite3.connect(config.control_database) as conn:
                 assert (
-                    conn.execute(
-                        "SELECT COUNT(*) FROM recovery_operations"
-                    ).fetchone()[0]
+                    conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[
+                        0
+                    ]
                     == 0
                 )
             assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
@@ -839,6 +851,7 @@ def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
         run_uri=run_uri,
         plan=plan,
         pipeline=pipeline,
+        execution_requirements=_execution_requirements(pipeline),
         slurm_profiles=(profile,),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
@@ -950,6 +963,7 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
         run_uri=run_uri,
         plan=plan,
         pipeline=pipeline,
+        execution_requirements=_execution_requirements(pipeline),
         options={"execution": {"settings": {"max_parallel_stages": 2}}},
         slurm_profiles=(profile,),
     )

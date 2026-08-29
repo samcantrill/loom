@@ -50,6 +50,7 @@ from loom.pipeline.stores import (
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.queue import (
     ConfiguredGpuDevice,
+    ExecutionRequirement,
     GpuDeviceDescriptor,
     LocalDaemon,
     LocalDaemonAdmissionRequest,
@@ -107,6 +108,15 @@ def _local_launch_profile() -> ResidentWorkerLaunchProfile:
             "test-local", "v1", "test-project", "test-environment", "test-executor"
         ).to_dict(),
     )
+
+
+def _execution_requirements(pipeline: PipelineSpec) -> dict[str, ExecutionRequirement]:
+    return {
+        stage_name: ExecutionRequirement(
+            "test-project", "test-environment", "test-executor"
+        )
+        for stage_name in pipeline.stage_names
+    }
 
 
 def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, ...]:
@@ -660,6 +670,7 @@ def _prepare_remote_producer_run(
     run_name: str,
     machine_id: str,
     value: int,
+    requirement: ExecutionRequirement | None = None,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -704,6 +715,15 @@ def _prepare_remote_producer_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements={
+            stage_name: (
+                requirement
+                or ExecutionRequirement(
+                    "test-project", "test-environment", "test-executor"
+                )
+            )
+            for stage_name in spec.stage_names
+        },
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -764,6 +784,10 @@ def _prepare_mixed_local_remote_sleep_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements={
+            stage_name: ExecutionRequirement("project-1", "environment-1", "executor-1")
+            for stage_name in spec.stage_names
+        },
         options={
             "run_uri": run_uri,
             "executor": "local",
@@ -819,6 +843,10 @@ def _prepare_remote_sleep_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements={
+            stage_name: ExecutionRequirement("project-1", "environment-1", "executor-1")
+            for stage_name in spec.stage_names
+        },
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -1146,7 +1174,11 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
             idempotency_key="replacement-successor-observation",
         )
         candidates = daemon._execution._remote_candidates()  # type: ignore[union-attr]  # noqa: SLF001
-        successor_target = candidates[successor.agent_id][1]
+        successor_target = next(
+            target
+            for _candidate, target in candidates.values()
+            if target.agent_id == successor.agent_id
+        )
         assert successor_target.session_id == successor.session_id
         assert successor_target.availability_atoms == ()
         withheld_snapshot = ManagedOfferSnapshot(
@@ -1230,7 +1262,11 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
         assert retained_proof[0] is not None
         assert "retirement_secret" not in str(retained_proof[0])
         candidates = daemon._execution._remote_candidates()  # type: ignore[union-attr]  # noqa: SLF001
-        released_target = candidates[successor.agent_id][1]
+        released_target = next(
+            target
+            for _candidate, target in candidates.values()
+            if target.agent_id == successor.agent_id
+        )
         assert released_target.availability_revision == (
             successor_target.availability_revision
         )
@@ -1373,6 +1409,7 @@ def _prepare_gpu_environment_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -1575,7 +1612,11 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
     )
     runs = LocalRunStore(tmp_path / "runs")
     run_uri, authority = _prepare_remote_producer_run(
-        runs, run_name="restart-run", machine_id="agent-a", value=42
+        runs,
+        run_name="restart-run",
+        machine_id="agent-a",
+        value=42,
+        requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -1768,7 +1809,11 @@ def test_fresh_agent_processes_replay_one_continuous_supervisor_launch(
     )
     runs = LocalRunStore(tmp_path / "runs")
     run_uri, authority = _prepare_remote_producer_run(
-        runs, run_name="fresh-restart-run", machine_id="agent-a", value=42
+        runs,
+        run_name="fresh-restart-run",
+        machine_id="agent-a",
+        value=42,
+        requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -1898,10 +1943,18 @@ def test_one_supervisor_routes_selected_work_through_two_bound_profiles(
     )
     runs = LocalRunStore(tmp_path / "runs")
     first_run, first_authority = _prepare_remote_producer_run(
-        runs, run_name="profile-a-run", machine_id="agent-a", value=1
+        runs,
+        run_name="profile-a-run",
+        machine_id="agent-a",
+        value=1,
+        requirement=ExecutionRequirement("project-a", "environment-a", "executor-a"),
     )
     second_run, second_authority = _prepare_remote_producer_run(
-        runs, run_name="profile-b-run", machine_id="agent-a", value=2
+        runs,
+        run_name="profile-b-run",
+        machine_id="agent-a",
+        value=2,
+        requirement=ExecutionRequirement("project-b", "environment-b", "executor-b"),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -2055,12 +2108,14 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
         run_name="remote-a",
         machine_id="agent-a",
         value=1,
+        requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
     )
     run_b, authority_b = _prepare_remote_producer_run(
         store,
         run_name="remote-b",
         machine_id="agent-b",
         value=2,
+        requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -3102,6 +3157,7 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)

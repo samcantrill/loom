@@ -38,6 +38,7 @@ from loom.queue._managed_local import (
     GpuResourceProvider,
     _cancelled_worker_result,
     _configured_provider_descriptor,
+    _worker_environment,
 )
 from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
@@ -2288,24 +2289,9 @@ class LocalDaemonAgentHttpClient:
         }:
 
             def start_supervisor_launch() -> str:
-                environment = {
-                    key: value
-                    for key, value in os.environ.items()
-                    if not any(
-                        marker in key.upper()
-                        for marker in (
-                            "TOKEN",
-                            "SECRET",
-                            "CREDENTIAL",
-                            "PASSWORD",
-                            "KEY",
-                        )
-                    )
-                }
-                for command in commands:
-                    provider = providers[command.claim.resource_kind]
-                    if isinstance(provider, GpuResourceProvider):
-                        environment.update(provider.worker_environment(command))
+                environment = _worker_environment(
+                    profile.launch_profile, workspace.root, commands, providers
+                )
                 nonlocal launch
                 launch = ResidentWorkerLaunch(
                     supervisor_id=supervisor.supervisor_id,

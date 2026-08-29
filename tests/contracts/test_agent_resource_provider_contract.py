@@ -16,6 +16,7 @@ from loom.queue import (
 )
 from loom.queue._managed_local import ManagedAssignment
 from loom.scheduling import CapacityAtom, ExactQuantity, ResourceClaim
+from loom.testing import check_agent_resource_provider_contract
 
 
 pytestmark = pytest.mark.contract
@@ -109,3 +110,39 @@ def test_provider_declines_known_overcommit_without_claiming_os_enforcement() ->
     assert result.outcome is ClaimOutcome.DECLINED
     assert "configured capacity" in (result.detail or "")
     assert "enforcement" not in provider.descriptor.to_dict()
+
+
+def test_public_provider_check_exercises_a_complete_lifecycle() -> None:
+    capacity = CapacityAtom("cpu", "cpu-0", ExactQuantity(1), "count", ExactQuantity(1))
+    provider = CpuResourceProvider((capacity,))
+    assignment = ManagedAssignment(
+        "assignment-check",
+        "file:///run",
+        "work-check",
+        "build",
+        1,
+        "build-1",
+        "agent-1",
+        "session-1",
+        "offer-1",
+        "claim-check",
+    )
+    claim = ResourceClaim(
+        "cpu",
+        provider.claim_contracts[0],
+        (CapacityAtom("cpu", "cpu-0", ExactQuantity(1), "count", ExactQuantity(1)),),
+        1,
+    )
+    report = check_agent_resource_provider_contract(
+        provider,
+        sample_claim=ClaimCommand(
+            assignment, "check-prepare", claim, provider.descriptor
+        ),
+    )
+
+    assert report.ok
+    assert {finding.code for finding in report.findings} >= {
+        "agent_resource_provider.prepare",
+        "agent_resource_provider.activate",
+        "agent_resource_provider.release",
+    }

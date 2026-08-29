@@ -55,6 +55,7 @@ from loom.scheduling import (
 )
 from loom.queue import (
     ConfiguredGpuDevice,
+    ExecutionRequirement,
     GpuDeviceDescriptor,
     LocalDaemon,
     LocalDaemonAdmission,
@@ -94,6 +95,15 @@ from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
 
 
 pytestmark = pytest.mark.integration
+
+
+def _execution_requirements(pipeline: PipelineSpec) -> dict[str, ExecutionRequirement]:
+    return {
+        stage_name: ExecutionRequirement(
+            "test-project", "test-environment", "test-executor"
+        )
+        for stage_name in pipeline.stage_names
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -280,6 +290,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -436,6 +447,7 @@ def test_exact_runtime_record_keeps_attributes_settings_and_run_concurrency(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
         options={
             "run_uri": run_uri,
             "execution": {"settings": {"max_parallel_stages": 2}},
@@ -502,6 +514,7 @@ def test_fresh_runtime_placement_uses_the_trusted_active_planner(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
         scheduling_components=components,
     )
 
@@ -963,7 +976,11 @@ def test_connected_active_cancellation_withholds_output_commit(
         json_dumps_pretty({"pipeline": pipeline_config}),
     )
     prepare_managed_local_runtime_record(
-        store=run_store, run_uri=run_uri, plan=plan, pipeline=spec
+        store=run_store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -1520,9 +1537,7 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
             operator.recover_unknown(stale)
         with sqlite3.connect(config.control_database) as conn:
             assert (
-                conn.execute(
-                    "SELECT COUNT(*) FROM recovery_operations"
-                ).fetchone()[0]
+                conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[0]
                 == 0
             )
         assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
@@ -1658,7 +1673,7 @@ def test_guarded_recovery_rejects_active_managed_work_without_freezing_it(
         assert snapshot.stages[0].status is StageStatus.RUNNING
         execution = daemon._execution
         assert execution is not None
-        (assignment, _receipt), = execution.coordinator.retained_assignments(
+        ((assignment, _receipt),) = execution.coordinator.retained_assignments(
             agent_id=config.machine_id
         )
         workspace = _ResidentAssignmentWorkspace(
@@ -1688,17 +1703,13 @@ def test_guarded_recovery_rejects_active_managed_work_without_freezing_it(
             reason="must not close active work",
         )
 
-        with pytest.raises(
-            QueueConflictError, match="not in an exact unknown state"
-        ):
+        with pytest.raises(QueueConflictError, match="not in an exact unknown state"):
             daemon.operator_view(
                 LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
             ).recover_unknown(request)
         with sqlite3.connect(config.control_database) as conn:
             assert (
-                conn.execute(
-                    "SELECT COUNT(*) FROM recovery_operations"
-                ).fetchone()[0]
+                conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[0]
                 == 0
             )
         assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
@@ -2015,7 +2026,11 @@ def _persist_single_stage_run(
         json_dumps_pretty({"pipeline": pipeline_config}),
     )
     prepare_managed_local_runtime_record(
-        store=run_store, run_uri=run_uri, plan=plan, pipeline=spec
+        store=run_store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
     )
     return run_store, run_uri, pipeline_config
 
@@ -2095,6 +2110,7 @@ def _persist_sleep_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
         options=(
             None
             if retry_max_attempts is None and max_parallel_stages is None
