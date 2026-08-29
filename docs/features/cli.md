@@ -25,6 +25,14 @@ V23 adds `loom queue status CONFIG --pool POOL`, which renders a safe selected
 pool summary through the existing queue-status envelope. CLI formatting does
 not inspect dispatch evidence or make scheduling decisions.
 
+V29 adds the protected persistent-role surface. `loom queue daemon-init CONFIG`
+and `daemon-serve CONFIG` own one coordinator/embedded-agent deployment bundle;
+`loom queue agent-init CONFIG` and `agent-serve CONFIG` own one outbound-agent
+root. The same explicit owner-protected versioned YAML is required for init and
+serve, with no discovery or environment override. Former daemon root/profile
+setup flags are a hard cut. Existing client and operator commands retain their
+endpoint-based surface, including the guarded `daemon-time-recover` operation.
+
 V12 adds portable run exchange commands under the existing `loom runs` group:
 `loom runs export`, `loom runs inspect`, and `loom runs import`. These commands
 are thin wrappers over public `loom.runs` bundle APIs. They do not parse archive
@@ -1914,6 +1922,54 @@ loom sweep plan
 loom sweep run
 loom sweep status
 ```
+
+### 26.10 Stage 29 Persistent And Explicit Ready-Stage Operations
+
+Stage 29 keeps CLI commands thin over separately scoped coordinator client,
+operator, agent, and internal bootstrap application views. Exact command names
+are finalized with their implementation phase; the required conceptual surface
+is:
+
+```text
+initialize/open/start coordinator role state
+initialize/open/start an agent role and connect it outbound
+submit, inspect, wait for, and cancel a run through the coordinator
+drain/resume/reload an agent
+reload protected coordinator scheduling and SLURM-profile configuration
+inspect owner-labelled stage assignment/SLURM/bootstrap/result axes
+perform separately authorized positive-containment recovery
+```
+
+Stage routing belongs to exact-stage configuration, not an opportunistic CLI
+fallback flag:
+
+```yaml
+runtime:
+  stages:
+    train:
+      placement:
+        execution_route:
+          kind: slurm
+          profile: training
+```
+
+The user still submits the run once. Loom sends `train` to only the named
+profile after its dependencies commit. There is no `--use-slurm-if-agents-busy`
+behavior, and status/cancel use the run identity rather than requiring users to
+control raw scheduler job IDs. Machine-readable status retains admission,
+authority lifecycle, scheduling route, assignment/execution, SLURM dispatch/
+observation, bootstrap, transfer/result, cancellation, and health axes.
+
+The scheduler-started Loom bootstrap command is an internal generated worker
+entry point. Users do not invoke it to choose an assignment, and its arguments
+contain only safe opaque identities/references. Profile and service secrets do
+not appear in CLI examples, generated command output, or status.
+
+After explicit first initialization, no correctness-required service start
+order exists. Authority then coordinator then agents is the quiet operational
+order; other orders produce typed pending/degraded state and reconnect. An
+unavailable SLURM profile leaves its explicitly routed stages waiting without
+changing route.
 
 ---
 

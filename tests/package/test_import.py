@@ -61,6 +61,7 @@ def test_import_loom_diagnostics_public_api() -> None:
 
 def test_import_loom_queue_public_api() -> None:
     import loom.queue
+    from loom.queue import SessionReplacementRequest
 
     assert "QueueItem" in loom.queue.__all__
     assert "QueueService" in loom.queue.__all__
@@ -68,19 +69,48 @@ def test_import_loom_queue_public_api() -> None:
     assert "QueueController" in loom.queue.__all__
     assert "QueueCycleResult" in loom.queue.__all__
     assert "QueueDispatchDisposition" in loom.queue.__all__
+    assert "QueueSelectionCandidate" in loom.queue.__all__
+    assert "QueueSelectionContext" in loom.queue.__all__
+    assert "QueueSelectionDisposition" in loom.queue.__all__
+    assert "QueueSelectionDecision" in loom.queue.__all__
+    assert "QueueSelectionPolicy" in loom.queue.__all__
     assert "ResourceAssignmentProvider" in loom.queue.__all__
     assert "StaticSlotAssignmentProvider" in loom.queue.__all__
     assert "load_queue_spec" in loom.queue.__all__
     assert "SQLiteQueueRepository" in loom.queue.__all__
     assert "validate_one_queue_per_pool" in loom.queue.__all__
+    assert "SessionReplacementRequest" in loom.queue.__all__
+    assert (
+        SessionReplacementRequest(
+            "replace-agent", "agent-a", "lost agent root"
+        ).agent_id
+        == "agent-a"
+    )
 
 
-def test_import_managed_local_queue_runtime_is_explicit() -> None:
+def test_import_managed_local_queue_runtime_is_removed() -> None:
+    import importlib
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("loom.queue.managed_local")
+
+
+def test_import_local_gpu_planning_is_explicit_and_does_not_probe_hardware() -> None:
     import loom.queue
-    from loom.queue.managed_local import ManagedLocalQueueRuntime
+    from loom.queue.gpu import (
+        LocalGpuDevice,
+        LocalGpuLink,
+        LocalGpuPoolLayout,
+        LocalGpuPoolPlan,
+        plan_local_gpu_pool,
+    )
 
-    assert ManagedLocalQueueRuntime
-    assert "ManagedLocalQueueRuntime" not in loom.queue.__all__
+    assert LocalGpuDevice
+    assert LocalGpuLink
+    assert LocalGpuPoolLayout.grouped
+    assert LocalGpuPoolPlan
+    assert plan_local_gpu_pool
+    assert "LocalGpuDevice" not in loom.queue.__all__
 
 
 def test_package_includes_typing_marker() -> None:

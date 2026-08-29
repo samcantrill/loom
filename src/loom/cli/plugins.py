@@ -10,17 +10,19 @@ from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_json_envelope
 from loom.cli.options import OutputFormat, output_format_from_namespace
 from loom.plugins import (
+    KNOWN_PLUGIN_GROUPS,
     PluginDiagnosticResult,
     PluginRecord,
     PluginSelection,
     check_plugin_records,
     list_entry_points,
+    plugin_group_readiness,
     summarize_plugin_records,
 )
 from loom.plugins.entrypoints import EntryPointProvider
 
-PLUGINS_LIST_SCHEMA_VERSION = "loom.cli.plugins.list.v1"
-PLUGINS_CHECK_SCHEMA_VERSION = "loom.cli.plugins.check.v1"
+PLUGINS_LIST_SCHEMA_VERSION = "loom.cli.plugins.list.v2"
+PLUGINS_CHECK_SCHEMA_VERSION = "loom.cli.plugins.check.v2"
 
 _entry_point_provider: EntryPointProvider | None = None
 
@@ -76,7 +78,7 @@ def handle_list(namespace: argparse.Namespace) -> int:
                 ok=result.ok,
                 warnings=[],
                 payload_name="result",
-                payload=result.to_summary(),
+                payload=_diagnostic_summary(result),
             )
         )
     else:
@@ -106,7 +108,7 @@ def handle_check(namespace: argparse.Namespace) -> int:
                 ok=result.ok,
                 warnings=[],
                 payload_name="result",
-                payload=result.to_summary(),
+                payload=_diagnostic_summary(result),
             )
         )
     else:
@@ -208,8 +210,30 @@ def _record_lines(result: PluginDiagnosticResult) -> list[str]:
     return lines
 
 
+def _diagnostic_summary(result: PluginDiagnosticResult) -> dict[str, object]:
+    """Return the v2 CLI payload while keeping Python result summaries compatible."""
+
+    return {
+        **result.to_summary(),
+        "group_readiness": [
+            plugin_group_readiness(group).to_summary() for group in KNOWN_PLUGIN_GROUPS
+        ],
+    }
+
+
 def _diagnostic_lines(result: PluginDiagnosticResult) -> list[str]:
     lines: list[str] = []
+    for name in KNOWN_PLUGIN_GROUPS:
+        facets = plugin_group_readiness(name).to_summary()["facets"]
+        if not isinstance(facets, dict):
+            continue
+        for facet, detail in facets.items():
+            if not isinstance(detail, dict):
+                continue
+            lines.append(
+                f"readiness {name} {facet}: {detail.get('status')} "
+                f"{detail.get('evidence')}"
+            )
     for missing in result.missing:
         lines.append(f"missing {missing.field}: {missing.value}")
     for group in result.unsupported_groups:

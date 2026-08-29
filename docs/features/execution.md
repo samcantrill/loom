@@ -30,6 +30,20 @@ The queue dispatches whole runs through configured adapters and records
 queue-local scheduling evidence, while authority remains lifecycle truth for
 executed runs. See [queue.md](queue.md) for the queue service contract.
 
+An authority-backed runner holds one exclusive controller lease for the whole
+run and renews it privately while work is active. A renewal failure is surfaced
+before another attempt allocation, output commit, or successful run
+finalization. Stage output becomes reusable only after the authority accepts
+the fenced output commit; writing a local payload or `outputs.json` is not
+success and does not update the active artifact index.
+
+Hard-loss recovery is explicit rather than PID-based. A replacement controller
+can proceed only after authority reports expired ownership for both the old
+controller and every incomplete active attempt. Recovery records
+`INTERRUPTED`/`STALE` lifecycle evidence and events before executing attempt 2.
+The earlier incomplete attempt remains diagnostic history, while only the new
+successful attempt may publish reusable output and release downstream work.
+
 ### 1.1 Alignment With `loom.md`
 
 This document refines stage execution goals from [loom.md](../loom.md). It keeps
@@ -459,6 +473,12 @@ selector and resume summaries, resource entry summaries, execution setting
 keys, environment counts, and adapter namespace names/counts. It does not
 record environment variable names or values, raw adapter payloads, or semantic
 fingerprint inputs.
+
+The managed-local daemon has a separate private exact runtime record, written
+only during trusted managed-local preparation. It carries validated execution
+options, resolved placement evidence, run concurrency, plan identity, and a
+normalized digest. It is not a replacement for `runtime.json`; safe metadata
+cannot be decoded as executable daemon input.
 
 Examples:
 
@@ -1297,12 +1317,17 @@ run.planned
 run.started
 run.completed
 run.failed
+run.cancelled
+run.interrupted
+run.preparation_failed
 stage.planned
 stage.started
 stage.completed
 stage.failed
+stage.cancelled
 stage.skipped
 stage.reused
+stage.stale
 stage.blocked
 ```
 
@@ -1314,9 +1339,10 @@ when one exists. For example, `stage.started` follows persisted `RUNNING`,
 `stage.completed` follows output commit and persisted `SUCCEEDED`, and
 `stage.failed` follows failure metadata and persisted `FAILED`.
 
-Callbacks and plugin-discovered event sinks remain deferred. Future sinks are
+Explicit event sinks observe persisted records best-effort. They are
 observe-only and must not mutate plans, artifacts, stage results, status
-transitions, or run-store state.
+transitions, or run-store state. Generic event filtering and activation remain
+future extension work.
 
 ---
 
@@ -2057,6 +2083,333 @@ finalize run state
 
 SLURM afterok may not need a long-running controller, while controller mode
 does. That distinction belongs in the SLURM design document.
+
+### 18.4 Stage 29 Managed Stage Scheduling
+
+Stage 29 changes managed execution from whole-run dispatch to durable scheduling
+of individual ready stage attempts. This is a planned evolution of the current
+runner contract, not a description of behavior available before Stage 29 lands.
+Historical whole-run delegated SLURM remains separate because its existing
+controller owns that run. Stage 29 also permits one exact ready attempt inside a
+managed-stage run to target an explicitly selected SLURM profile; the
+coordinator retains run/readiness/lifecycle orchestration while SLURM owns node
+placement and external job state.
+
+The run remains what a user submits, monitors, and cancels. The unit offered to
+the managed scheduler is narrower:
+
+```python
+@dataclass(frozen=True)
+class StageWork:
+    stage_work_id: str
+    admission_id: str
+    run_uri: str
+    stage_name: str
+    attempt: int
+    readiness_generation: str
+    upstream_commit_ids: tuple[str, ...]
+    placement: ResolvedStagePlacement
+```
+
+`StageWork` is illustrative internal data, not a new public API. It identifies
+one already planned attempt that authority has idempotently prepared in
+`PENDING` for an exact readiness generation. That authority transaction records
+bound-input/readiness evidence but creates no worker request, workspace,
+assignment, execution lease, or process. It carries the resolved resource,
+preference, and immutable execution route/profile for that exact stage; it does
+not carry arbitrary command text, invent a new attempt, or reinterpret the
+pipeline graph.
+
+For new managed work, `(coordinator_id, run_uri)` has one digest-bound
+admission and one execution owner. Exact submit replay returns that admission;
+changed intent/owner conflicts, resume addresses it, and rerun needs a new
+`run_uri`. Admission first commits as `PENDING_AUTHORITY` with a durable
+authority-operation intent. It becomes `ACTIVE` and may expose stage work only
+after per-run authority returns or reconciliation proves the exact owner,
+normalized intent digest, and operation receipt. An outage leaves a visible
+accepted-but-not-runnable admission; a conflict blocks rather than creating a
+second execution owner. The stage-work semantic key includes admission, stage,
+attempt, and readiness generation and therefore rebuilds to the same
+`stage_work_id` even if its projection revision or diagnostics change.
+
+The execution flow becomes:
+
+```text
+client submits run
+        |
+        v
+coordinator reconciles authoritative plan and statuses
+        |
+        +-- resolve REUSE / SKIP / BLOCKED without agent capacity
+        |
+        +-- authority prepares exact ready PENDING RUN attempt
+        |
+        +-- expose its rebuildable StageWork projection
+                         |
+                         v
+              resolve exact tagged target
+                         |
+             +-----------+-----------+
+             |                       |
+             v                       v
+     managed-agent kernel       explicit SLURM profile
+     + exact resource claim     + durable submit operation
+             |                       |
+             v                       v
+        managed agent          restricted bootstrap
+             +-----------+-----------+
+                         |
+                         v
+              authority grant/fence
+                         |
+                         v
+             one execution-only stage worker
+                         |
+                         v
+          result retention -> authority output commit
+                         |
+                         v
+            reconcile newly ready downstream work
+```
+
+The assignment target is a closed tagged value. A managed target retains exact
+agent/session/offer/resource-claim identities. A SLURM target retains exactly
+one named profile, request fingerprint, and stable submission operation while
+holding no agent claim. Both consume the run's atomic stage-concurrency slot and
+bind the same authority-owned `PENDING` attempt. A missing agent offer never
+changes an explicit SLURM route, and an unavailable profile never falls back to
+an agent or another profile.
+
+The SLURM route persists immutable request/script evidence and `SUBMITTING`
+before invoking `sbatch` at most once. Its only submission outcomes are accepted
+with an exact job ID, definitely rejected with positive non-acceptance evidence,
+or unknown. Crash, timeout, malformed output, or lost response after
+`SUBMITTING` stays unknown and reconciles by a stable scheduler-visible
+operation ID; it never invokes `sbatch` again automatically.
+
+The submitted script runs a fixed assignment-scoped Loom bootstrap rather than
+authored code directly. It authenticates the exact assignment/submission/job/
+incarnation, stages inputs, and requests the authority grant. Only after the
+grant creates the current fence may it consume one start permit and call the
+same execution-only stage worker. A duplicate or scheduler-requeued bootstrap
+cannot receive a second permit. The bootstrap is not an agent, owns no offer or
+agent session, and has no direct authority credential.
+
+The flow can place successive or independent pipeline stages on different
+agents or explicit targets, but one managed-agent stage attempt remains wholly
+on one agent. A SLURM job choosing one node is still a single delegated attempt,
+not Loom gang scheduling. A multi-node training
+attempt is a distributed stage and would require gang admission: all required
+agents reserved together, one rendezvous/rank plan, coordinated launch and
+cancellation, and group failure/retry semantics. Stage 29 introduces none of
+those multi-agent execution states.
+
+For either target, authority success requires an exact current-fence Loom result
+and coordinator/backend-accessible output refs. Agent process exit and SLURM
+`COMPLETED` are observations, not lifecycle commits. `scancel` success is only a
+control request. Unknown external work stays bound until exact reconciliation,
+authoritative terminal truth, or Phase 9 positive containment; it is not
+automatically retried or assigned elsewhere.
+
+Managed execution is also non-preemptive. Run priority and placement
+preferences affect only which unstarted work is selected next. They never
+checkpoint, stop, or release a granted lower-priority assignment. Fair-share
+would be a separate durable user/project usage and entitlement policy; it is not
+another placement score. A general solver would normally select a snapshot-
+bound batch across several jobs and agents, while the Stage 29 policy chooses
+one already validated `(stage_work_id, candidate_id)` or waits. Those features
+need new lifecycle/accounting/batch-reservation owners rather than broader
+executor behavior.
+
+One import-light readiness function interprets the persisted plan, current
+stage/attempt statuses, and committed upstream outputs. The coordinator uses it
+both when exposing work and again during the expected-state assignment
+mutation. This prevents a queue loop, runner, and worker from each maintaining a
+slightly different DAG interpreter. Only an authoritative output commit makes a
+dependent stage ready; an agent process exit, local output file, or retained
+result is not enough.
+
+The current `PipelineRunner` remains the synchronous public facade, but managed
+calls no longer own an in-memory ready loop or a full-run execution lock. It
+composes or connects to the same coordinator and agent services used by a
+persistent daemon, submits the run, waits for authoritative terminal state, and
+returns the existing `RunResult` shape:
+
+```python
+class PipelineRunner:
+    def run(self, request: RunRequest) -> RunResult:
+        admitted = self._managed_runtime.submit(request)
+        terminal = self._managed_runtime.wait_for_run(admitted.run_uri)
+        return self._results.from_authority(terminal)
+```
+
+The sketch fixes delegation, not private member names. A one-command local run,
+a local daemon accepting many runs, and an authenticated multi-machine pool all
+therefore use the same stage scheduler. Their differences are composition and
+transport rather than scheduling semantics.
+
+Command lifetime is not state lifetime. A production embedded command opens
+retained explicitly initialized coordinator/agent roots and leaves safety state
+after return. If a compatible daemon owns those roots, the facade uses its
+client view when configured/reachable; a held but unreachable/conflicting owner
+fails closed. Temporary or in-memory role state is test-only and cannot be used
+to mint a different coordinator identity for a production run.
+
+The kernel is fixed, pure, and mutation-free. Trusted downstream code may be
+explicitly composed behind narrow subsystem protocols to plan one resource
+kind from a validated opportunity through a complete claim result, add a hard
+rejection to a complete placement, add bounded utility/quality-band preference
+evidence, or select one existing grouped work/candidate pair. The kernel owns
+search completeness, site-tier aggregation, durable-time fallback, and result
+validation. A separate agent resource provider owns
+physical prepare/reconcile/activate/release. None of these protocols can inspect
+the DAG, write coordinator/authority state, launch a process, or commit a result;
+invalid/exceptional output fails before assignment mutation. Implementation
+identity/version is durable plain data, while live objects remain local. Exact
+descriptor bindings remain retained while nonterminal work or live claims name
+them; a configuration epoch cannot silently reinterpret those records.
+
+Configuration reload is intentionally not distributed. The coordinator swaps
+its planners, rules, scorers, and policy in one owner-local transaction while
+retaining referenced descriptors. Each agent separately swaps its pools,
+providers, manageable inventory, and resident capabilities under the same
+retained-reference rule. A temporary claim-contract mismatch makes that
+opportunity ineligible; neither service rolls back the other.
+
+Ready-work projection does not consume `max_parallel_stages`. When a pure
+decision becomes an assignment, one coordinator transaction revalidates the
+work/snapshot/offer, atomically checks the run's active assignment count,
+reserves every namespaced capacity atom, and stores bounded policy-epoch,
+score/fallback, and reason evidence. This is the final concurrency and audit
+boundary; two scheduling cycles cannot both consume the same last run slot.
+
+The adapted worker accepts one exact assigned attempt. Its request is closer to:
+
+```python
+@dataclass(frozen=True)
+class AssignedStageRequest:
+    assignment_id: str
+    stage_work_id: str
+    run_uri: str
+    stage_name: str
+    attempt: int
+    execution_fence: str
+    input_manifest: Mapping[str, ArtifactRef]
+    resolved_runtime: ResolvedStageRuntimeOptions
+```
+
+Before launch, the agent verifies that this assignment has the current grant,
+that the grant has not been fenced, that its exact inputs are durably staged,
+and that the claimed physical resources are bound. The worker then executes
+only the named attempt. The managed worker path is extracted from the current
+stage-worker pieces and does not take the legacy whole-run execution lock or
+write authority directly:
+
+```python
+def execute_assigned_stage(request: AssignedStageRequest) -> StageWorkerResult:
+    context = build_context_from_assigned_request(request)
+    return selected_executor(request).execute(context)
+```
+
+The worker must not:
+
+```text
+allocate or advance an attempt
+decide whether upstream stages are complete
+schedule a downstream stage
+reacquire resources already bound by the agent
+commit authoritative stage or run success
+release an assignment it does not own
+```
+
+These restrictions give each correctness decision one owner. Pipeline planning
+owns graph meaning. The coordinator owns readiness orchestration and logical
+placement. Per-run authority owns attempt/lifecycle/output truth. The agent owns
+physical admission, process containment, retained results, and resource
+release. The executor only invokes project stage code.
+
+Result handling preserves that split. The agent durably records the worker
+result and, for remote execution, transfers outputs into coordinator- or
+backend-accessible artifact references. The coordinator presents the exact
+assignment and execution fence to per-run authority. Authority validates and
+commits outputs before it marks success. Repeated delivery is idempotent, and a
+coordinator outage leaves the agent free to finish and retain the result for
+later replay. Authority terminal commit permits coordinator logical release;
+the agent's physical provider release is a later exact idempotent operation
+after containment and retained-result acknowledgement. Capacity becomes
+schedulable only through a fresh availability revision, so terminal lifecycle
+never masquerades as physical release.
+
+Critical agent facts are journalled with stable event IDs and monotonic per-
+assignment sequence. Coordinator acknowledgements cover only durably persisted
+contiguous evidence; a gap stays pending. Stable coordinator identity survives
+restart while its process epoch rotates and the assignment retains its issuer
+epoch. A new epoch may reconcile exact old-issuer facts for that assignment but
+old connections cannot create new work/control. Transport timeout or disconnect
+after send is indeterminate and retries the same operation identity/digest.
+
+`SUBMITTED` means the accepted assignment has a durable execution grant, not
+that a process is known to be running. The agent records grant/start intent
+before its one root launcher invocation and then records `PROCESS_STARTED`,
+`START_FAILED`, or `START_UNKNOWN`. Only exact current-fence confirmed process
+evidence may advance authority to `RUNNING`; unknown start remains `SUBMITTED`
+and cannot be launched again. `START_FAILED` is definitive only when the
+launcher proves no managed process was created or can later run; every timeout,
+lost response, or uncertain spawn is `START_UNKNOWN`. A fenced terminal result
+can commit from either `SUBMITTED` or `RUNNING`.
+
+Per-run authority remains a distinct service/API owner. The coordinator calls a
+narrow least-privilege authority view after authenticating the service and
+verifying workspace/generation/schema/capability identity. Persistent HTTP,
+including loopback, uses mutual TLS; owner-contained local IPC may use verified
+peer identity. Agents and workers receive neither authority credentials nor
+direct database access. If authority is unavailable, the coordinator pauses
+preparation, binding, grant/delivery, and terminal commit while already-granted
+agents continue and retain results. A restarted authority generation becomes
+current only after receipt-aware continuity over one consistent authority-
+relevant cut. Before each coordinator-originated authority mutation, the
+coordinator durably records its operation ID, canonical intent digest,
+principal, and expected state/revision; authority stores the matching receipt
+atomically with its mutation. Each retained admission/tombstone must either
+match the last acknowledged checkpoint or advance through an ordered chain of
+those receipts. This accepts a committed request whose response was lost before
+both services restarted, while regression, missing receipts, unexplained
+mutation, owner/intent mismatch, or torn per-run reads fail closed. The
+checkpoint is comparison evidence, not lifecycle truth. A pristine empty
+authority is valid only when the coordinator has no authority-relevant retained
+admission/tombstone; missing or divergent expected truth remains degraded.
+
+Cancellation follows the same ownership split: coordinator durably records the
+client request, authority installs the canonical cancellation epoch, and only
+that effective epoch blocks readiness, bind, grant, descendants, and retry.
+Assignment controls are fan-out, not cancellation truth. Joined status preserves
+owner-labelled lifecycle, scheduling, execution, transfer, cancellation, and
+health axes with owner revisions, coordinator-accepted receipt times, and freshness
+rather than flattening them into one lifecycle enum. It is not a globally atomic
+snapshot; top-level `as_of` is the coordinator join boundary, and remote clocks
+are never used for ordering, expiry, or freshness. A detected coordinator clock
+regression/out-of-policy jump pauses scheduling and reports degraded time health
+rather than extending stale capacity or resetting deadline semantics.
+
+The first remote artifact relay accepts immutable regular-file payloads only.
+Directory/tree, special-file, or ambiguous payload forms make that remote
+candidate ineligible without blocking an otherwise eligible local execution.
+One stable transfer identity retains exact byte/finalize progress while a
+separate short-lived authorization ID/revision may expire and be renewed.
+Authorization expiry blocks only the next transfer operation: it does not erase
+bytes, release the assignment, or change lifecycle. Exact offset/content replay
+is idempotent and conflicting overlap fails closed. No implicit archive format
+is invented; a later explicit tree or direct-backend contract may extend the
+data boundary.
+
+Managed whole-run `LaunchContract.resources`, synthetic whole-run command
+snapshots, and `claim_next -> dispatch(item)` cease to be execution inputs for
+new managed runs. Delegated adapters remain supported. `ManagedLocalQueueRuntime`
+and its old managed-local request/root formats are removed; `PipelineRunner` is
+not a second managed execution owner. Fresh daemon roots and persisted-plan
+admission are the only supported local managed path. The detailed state transitions
+are authoritative in [Stage 29 planning](../roadmap/stage-29/planning.md) and
+its linked phase execution plans.
 
 ---
 

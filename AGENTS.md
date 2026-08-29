@@ -165,7 +165,7 @@ Normal phase path:
 5. Manager-local validation evidence, pre-submit gate, and PR preparation.
 6. Manager-local review on the fast path; optional independent
    loom_phase_reviewer on the expanded path or for a material residual risk.
-7. CI-gated automatic squash merge to develop.
+7. Local-validation-gated automatic squash merge to develop.
 8. Concise manifest/phase metadata update and cleanup.
 
 Do not create new assignment, implementation handoff, PR-body, PR-review,
@@ -202,13 +202,14 @@ Merge automatically when:
 - base is exactly develop;
 - the PR is not draft and is mergeable;
 - scope matches the phase;
-- required validation and CI pass or unavailable evidence is justified;
+- required local validation passes with a fresh receipt;
 - manager review or the required expanded review has no blocker; and
 - the PR body matches the diff and tests.
 
-Do not wait for human GitHub approval. Use admin merge only for a review-only
-protection rule after all automated gates pass. Never bypass failing CI, a wrong
-target, conflicts, or known blockers.
+Hosted CI is intentionally disabled; do not wait for or require GitHub-hosted
+checks. Do not wait for human GitHub approval. Use admin merge only for a
+review-only protection rule after local validation and review pass. Never bypass
+failing local validation, a wrong target, conflicts, or known blockers.
 
 After merge, safely update the control checkout, record concise status and
 evidence, commit the metadata directly to develop when permitted, and remove the

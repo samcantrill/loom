@@ -41,7 +41,35 @@ The core rule is:
 Test loom as a generic workflow runtime, not as a domain application.
 ```
 
-### 1.1 Alignment With `loom.md`
+### 1.1 Operational lifecycle acceptance
+
+Lifecycle behavior needs a small number of real-process integration tests in
+addition to unit and store-contract coverage. These tests use only
+fixture-owned processes and deterministic authority time. They prove the
+observable sequence, not private helper calls:
+
+```text
+hard loss:
+  start a real controller and worker -> wait for authoritative RUNNING state
+  -> kill both without cleanup -> refuse resume while ownership is live
+  -> expire authority time -> resume as attempt 2 -> run downstream
+
+authority loss:
+  stop the real local authority while a stage is active -> let the stage finish
+  -> reject output commit -> exit nonzero -> publish no artifact index or dependent
+
+artifact corruption:
+  complete a branched run -> corrupt one checksummed payload -> public resume
+  -> rerun only producer and consumers -> reuse the independent branch
+```
+
+Each test should assert several independent oracles together: process exit,
+authority status and attempts, event order, output commits, payload bytes,
+artifact index, and downstream start. Timing belongs behind markers, lease
+expiry controls, or process identity checks; fixed sleeps are not an ownership
+or lifecycle oracle.
+
+### 1.2 Alignment With `loom.md`
 
 [loom.md](../loom.md) requires `loom` to remain useful and testable on its own. This
 document turns that into a test layout and strategy built around synthetic
@@ -77,6 +105,20 @@ tests/package
   boundaries
 ```
 
+### 2.2 Opt-in NVIDIA acceptance
+
+Default validation uses a fake `nvidia-smi` runner and does not require a GPU,
+driver, CUDA toolkit, or benchmark. A host operator may run the narrow hardware
+acceptance profile explicitly:
+
+```sh
+LOOM_TEST_NVIDIA_GPU=1 uv run pytest -m gpu tests/gpu_acceptance
+```
+
+It observes local inventory, prepares a temporary authority and queue, and runs
+an environment-only subprocess. It verifies assignment cleanup but makes no
+claim about compute, memory, driver policy, health, or performance.
+
 Tests should reinforce the architecture:
 
 ```text
@@ -87,6 +129,153 @@ core primitives do not import pipeline
 status commands do not import project stage code
 plugins do not load automatically on import
 ```
+
+### 2.1 Downstream conformance support
+
+`loom.testing` is an opt-in package for downstream test suites. It provides
+immutable `ContractFinding` and `ContractReport` values plus four bounded
+checks: `check_codec_contract`, `check_resource_validator_contract`,
+`check_executor_contract`, and `check_event_sink_contract`. Callers supply
+the samples, requests, events, and contexts that make a claim meaningful.
+
+The package has no `pytest`, plugin discovery, CLI, configuration-composition,
+or optional-runtime dependency, and runtime/package roots must not import it.
+It catches ordinary supplied-object exceptions into deterministic findings but
+does not construct, discover, isolate, retry, time out, or otherwise admit an
+extension. A passing report is evidence only for its supplied cases.
+
+Stage 29 plans bounded checks for its explicitly composed scheduling seams:
+
+```text
+resource planner          validator separation, opportunity canonicalization,
+                          complete claim search/validation, contract/versioning,
+                          namespaced exact capacity atoms, conservation, bounds
+hard constraint evaluator spec resolution, additive rejection, immutability
+preference scorer         spec resolution, bounded utility/quality band,
+                          feasibility neutrality, tier/fallback evidence
+scheduling policy         grouped existing-work/candidate-only selection,
+                          typed wait, determinism
+agent resource provider   idempotent closed prepare/activate/abort/reconcile/
+                          release and partial-composite cases
+```
+
+Exact exported check names are fixed during Phase 1 with package tests. These
+checks accept caller semantic samples and fake provider observations; they do
+not access hardware, stores, networks, discover plugins, enforce termination,
+or certify safety. The scheduling kernel separately validates every extension
+result before mutation even when conformance has previously passed.
+
+`loom.testing.check_agent_resource_provider_contract` accepts one provider and
+one caller-supplied `ClaimCommand`; it exercises prepare, activation,
+observation, and release without discovering providers or touching hardware.
+
+Kernel tests separately require complete per-resource/composite search before
+assignment, checked lexicographic site tiers, stable ties, durable-ready-time
+fallback across restart, typed work-conserving bypass of exhausted older work,
+and rejection of malformed/unknown work-candidate output. Coordinator tests use
+barriers to prove that the assignment CAS, not ready-work projection, enforces
+`max_parallel_stages` and records a bounded reconstructable policy-decision
+receipt. Configuration tests retain exact component descriptors for pending
+work/live claims or reject reload before swap. They also prove that coordinator
+scheduling reload and agent pool/provider reload are independent owner-local
+transactions and that temporary claim-contract skew makes an opportunity
+ineligible rather than partially applying either configuration.
+
+Stage 29 transport and lifecycle integration tests separately prove the
+coordinator-authority trust boundary: direct/owner-only IPC/HTTP adapters have
+the same scoped semantics, the wrong authority service/workspace/generation or
+principal/owner binding fails before mutation, a rotated generation resumes
+only after one authority-owned consistent authority-relevant cut agrees or
+advances through ordered receipts for coordinator intents persisted before
+send. The dual-restart committed-response-lost case succeeds through that
+receipt; regression, missing receipt, unexplained mutation, owner/intent
+mismatch, and torn per-run reads are rejected. Pristine-empty bootstrap is
+accepted only when the coordinator has no authority-relevant retained
+admission/tombstone, and agent/worker environments contain neither authority
+credentials nor direct database access.
+Real loopback TLS fixtures are Stage 29 test assets; they are not assumed to
+exist in the current source.
+
+Ready-stage SLURM validation reuses the fake `SlurmCommandRunner`, script/
+resource mapping fixtures, Phase 2 launcher sentinel, and Phase 5 relay harness.
+Default CI must prove the full lifecycle without a cluster:
+
+```text
+route/profile    default versus explicit, authorization, retained fingerprint,
+                 unavailable/full/unmappable, and no agent/profile fallback
+submission       intent and SUBMITTING durability crossed with accepted,
+                 definite rejection, timeout, malformed/lost response, handle-
+                 commit failure, restart, and one-sbatch sentinel
+discovery        zero unproven, one exact, multiple/conflicting operation matches
+bootstrap        registration before/after handle, input before grant, grant-
+                 response loss, duplicate/requeue incarnation, one-root sentinel
+result/status    SLURM terminal versus absent/stale/current-fence Loom result and
+                 accessible/missing output refs
+control/recovery effective authority cancel at every submit/bootstrap/start edge,
+                 scancel-request semantics, weak/strong containment, late result
+compatibility    existing whole-run queue, single-job, and afterok flows unchanged
+```
+
+The required simulated E2E is a mixed route such as
+`preprocess(agent) -> train(SLURM) -> evaluate(agent)`: only dependency/output
+commit exposes the next stage, the run has one owner, the SLURM stage causes at
+most one submit/root, and descendants wait for the fenced Loom output commit.
+The existing real-SLURM suite remains opt-in and may add a bounded profile/
+bootstrap receipt; it cannot be the only evidence for any correctness edge.
+
+The remaining Stage 29 correctness matrix is causal rather than Cartesian:
+
+```text
+admission       PENDING_AUTHORITY outage/replay/promotion, lost response, changed
+                digest or execution owner, pending cancellation before ACTIVE,
+                embedded/daemon/delegated conflict
+identity        stable coordinator ID versus process epoch; stable stage-work
+                ID across rebuild; old issuer replay versus stale new operation
+events          duplicate, gap, contiguous durable ack, timeout after commit
+sessions        coordinator-issued ID replay/persist-before-offer, same-session
+                registration intent persisted before send, reconnect,
+                cooperative complete-empty rollover, unresolved or lost-journal
+                refusal, late old-session tombstone
+deployment      protected same-config initialize/serve; one-rename coordinator
+                bundle and outbound-root publication; injected failure leaves no
+                requested target; duplicate-owner locks; authority/coordinator/
+                agent start-order matrix; early agent zero-availability reconnect;
+                no inbound agent listener; fresh current-epoch offer after restart
+security        current credential-policy recheck on ordinary and long-poll
+                requests; revoked connection cannot mutate or imply retirement
+cancellation    request before authority outage; effective epoch versus
+                readiness/bind/grant/terminal/retry races; SLURM intent/
+                submitting/bootstrap/start/result and scancel-observation races
+status          non-atomic join boundary, owner revisions, coordinator-accepted receipt
+                times/freshness, skewed remote clocks, unavailable-owner stale
+                evidence, fixed summary precedence without lifecycle overwrite
+time            accepted-time high-water, restart, local rollback/out-of-policy
+                jump, retained-offer withdrawal, fallback and recovery
+transfer        stable transfer versus renewable authorization, expiry/restart,
+                exact offset/content/finalize replay and conflicting overlap
+resources       configured manageable capacity, external occupancy withdrawal,
+                exclusive-device versus enforced-share semantics, honest OOM limit
+recovery        success/failure/cancellation before close, positive containment,
+                lifecycle close versus physical provider/profile-slot release,
+                SLURM zero/one/multiple handle reconciliation, complete claim/
+                control/transfer/event/outbox session set
+durability      commit-before-success/ack, distinct local SQLite roots, alias/
+                permission/lock/schema/high-water failures, missing/corrupt/
+                identity-mismatched expected roots, explicit first-init versus
+                open-only restart, no empty/memory fallback
+composition     bounded command exit/reopen/resume, retained tombstones, active-
+                daemon routing, unreachable/conflicting role-lock refusal
+boundaries      one stage claim cannot combine agents; priority/preferences do
+                not preempt; no fair-share ledger or batch-solver mutation;
+                explicit ready-stage SLURM remains an external target,
+                historical whole-run delegation remains separate, and
+                unallocated nodes never appear as Loom offers
+```
+
+Use controlled SQLite/process/network barriers at the named edge. A 2xx/5xx or
+connection close alone is never asserted as lifecycle truth; tests inspect the
+owning durable record and replay the same idempotency identity after an
+indeterminate outcome.
 
 ---
 

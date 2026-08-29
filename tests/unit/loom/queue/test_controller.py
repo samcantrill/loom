@@ -2,44 +2,62 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 from loom.serialization import PlainData
+import loom.queue.controller as queue_controller
 from loom.queue import (
     FakeQueueDispatchAdapter,
     QueueController,
     QueueDispatchCancellation,
     QueueDispatchDisposition,
     QueueDispatchInspection,
+    QueueDispatchNonStartCause,
     QueueDispatchResult,
     QueueEnqueueRequest,
     QueueItemStatus,
+    QueueSelectionContext,
+    QueueSelectionDecision,
+    QueueSelectionDisposition,
     QueueService,
     QueueServiceError,
     QueueServiceSpec,
+    QueuePreStartCleanupStatus,
     SQLiteQueueRepository,
     normalize_queue_spec,
 )
 
 
-def test_dispatch_result_normalizes_legacy_and_explicit_dispositions() -> None:
-    completed = QueueDispatchResult(handle_id="completed")
+def test_dispatch_result_requires_explicit_factual_dispositions() -> None:
+    completed = QueueDispatchResult(
+        disposition="completed",
+        reason_code="test.completed",
+        handle_id="completed",
+        status=QueueItemStatus.SUCCEEDED,
+    )
     started = QueueDispatchResult(
+        disposition="started",
+        reason_code="test.started",
         handle_id="started",
         status=QueueItemStatus.DISPATCHED,
-        complete=False,
     )
-    deferred = QueueDispatchResult(
-        disposition="deferred",
-        status=QueueItemStatus.UNKNOWN,
-        reason="capacity",
+    not_started = QueueDispatchResult(
+        disposition="not_started",
+        reason_code="capacity",
+        non_start_cause="capacity",
+        cleanup_status="confirmed",
     )
 
     assert completed.disposition is QueueDispatchDisposition.COMPLETED
     assert started.disposition is QueueDispatchDisposition.STARTED
-    assert deferred.disposition is QueueDispatchDisposition.DEFERRED
-    assert deferred.handle_id is None
+    assert not_started.disposition is QueueDispatchDisposition.NOT_STARTED
+    assert not_started.is_safe_capacity_non_start is True
+    assert not hasattr(not_started, "reason")
+    assert not hasattr(not_started, "pre_start_cleanup_status")
+    with pytest.raises(TypeError):
+        QueueDispatchResult()  # type: ignore[call-arg]
 
 
 @pytest.mark.parametrize(
@@ -47,9 +65,9 @@ def test_dispatch_result_normalizes_legacy_and_explicit_dispositions() -> None:
     [
         (
             {
-                "handle_id": "deferred",
-                "status": QueueItemStatus.UNKNOWN,
-                "disposition": "deferred",
+                "disposition": "not_started",
+                "reason_code": "test.not_started",
+                "handle_id": "not-started",
             },
             "cannot have a handle_id",
         ),
@@ -57,18 +75,31 @@ def test_dispatch_result_normalizes_legacy_and_explicit_dispositions() -> None:
             {
                 "handle_id": "started",
                 "status": QueueItemStatus.SUCCEEDED,
-                "complete": False,
                 "disposition": "started",
+                "reason_code": "test.started",
             },
-            "active dispatch result status must be DISPATCHED",
+            "started dispatch result status must be DISPATCHED",
         ),
         (
             {
                 "handle_id": "completed",
                 "status": QueueItemStatus.DISPATCHED,
                 "disposition": "completed",
+                "reason_code": "test.completed",
             },
             "completed dispatch result status",
+        ),
+        (
+            {
+                "disposition": "start_uncertain",
+                "reason_code": "test.start_uncertain",
+                "non_start_cause": "internal",
+            },
+            "without non-start facts",
+        ),
+        (
+            {"disposition": "start_uncertain", "reason_code": "not safe"},
+            "safe ASCII code",
         ),
     ],
 )
@@ -104,6 +135,291 @@ def test_controller_run_once_dispatches_one_fake_item(tmp_path: Path) -> None:
     assert step.dispatch_handle is not None
     assert step.dispatch_handle.adapter == "fake"
     assert service.scan_recovery() == ()
+
+
+def test_managed_selection_uses_oldest_eligible_candidate_and_audits_default(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(10)])
+    service = _resource_service(tmp_path, clock=clock, capacity=1)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="b-needs-two",
+            queue_name="gpu",
+            run_uri="file:///runs/b-needs-two",
+            resources={"gpu": 2},
+        )
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="a-needs-one",
+            queue_name="gpu",
+            run_uri="file:///runs/a-needs-one",
+            resources={"gpu": 1},
+        )
+    )
+
+    step = QueueController(service, clock=clock).run_once(pool_name="gpu-pool")
+
+    assert step.item is not None
+    assert step.item.queue_item_id == "a-needs-one"
+    waiting = service.read_item("b-needs-two")
+    assert waiting is not None and waiting.status is QueueItemStatus.QUEUED
+    claimed = service.list_audit_events("a-needs-one")[1]
+    assert claimed.detail["selection"] == {
+        "preference_id": "queue_selection.default",
+        "reason_code": "queue_selection.default_oldest_eligible",
+    }
+
+
+def test_managed_selection_policy_is_shared_by_run_once_and_run_cycle(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(30)])
+    once_service = _resource_service(tmp_path / "once", clock=clock, capacity=1)
+    cycle_service = _resource_service(tmp_path / "cycle", clock=clock, capacity=1)
+    for service in (once_service, cycle_service):
+        for item_id in ("older", "younger"):
+            service.enqueue(
+                QueueEnqueueRequest(
+                    queue_item_id=item_id,
+                    queue_name="gpu",
+                    run_uri=f"file:///runs/{item_id}",
+                    resources={"gpu": 1},
+                )
+            )
+    once_policy = _NewestPolicy()
+    cycle_policy = _NewestPolicy()
+
+    once = QueueController(
+        once_service,
+        selection_policies={"gpu-pool": once_policy},
+        clock=clock,
+    ).run_once(pool_name="gpu-pool")
+    cycle = QueueController(
+        cycle_service,
+        selection_policies={"gpu-pool": cycle_policy},
+        clock=clock,
+    ).run_cycle(pool_name="gpu-pool")
+
+    assert once.item is not None and once.item.queue_item_id == "younger"
+    assert [step.item.queue_item_id for step in cycle.dispatch_steps if step.item] == [
+        "younger"
+    ]
+    assert once_policy.calls == cycle_policy.calls == 1
+
+
+@pytest.mark.parametrize("policy", ["invalid", "raises"])
+def test_invalid_or_failing_selection_policy_does_not_claim_item(
+    tmp_path: Path, policy: str
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(10)])
+    service = _resource_service(tmp_path, clock=clock, capacity=1)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+    selection_policy = (
+        _InvalidSelectionPolicy() if policy == "invalid" else _FailingSelectionPolicy()
+    )
+
+    step = QueueController(
+        service,
+        selection_policies={"gpu-pool": selection_policy},
+        clock=clock,
+    ).run_once(pool_name="gpu-pool")
+
+    assert step.outcome == "idle"
+    item = service.read_item("item-1")
+    assert item is not None and item.status is QueueItemStatus.QUEUED
+    assert [event.event_type for event in service.list_audit_events("item-1")] == [
+        "queue.item.enqueued"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("policy", "category"),
+    [
+        ("wrong_result", "wrong_result_type"),
+        ("selected_unknown", "selected_unknown_candidate"),
+        ("invalid_reason", "invalid_reason_code"),
+        ("missing_selected", "missing_selected_id"),
+    ],
+)
+def test_controller_logs_safe_invalid_selection_categories(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    policy: str,
+    category: str,
+) -> None:
+    service = _resource_service(
+        tmp_path,
+        clock=_clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)]),
+        capacity=1,
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+    caplog.set_level("WARNING", logger="loom.queue.selection")
+
+    selection_policy = {
+        "wrong_result": _WrongResultPolicy,
+        "selected_unknown": _InvalidSelectionPolicy,
+        "invalid_reason": _InvalidReasonCodePolicy,
+        "missing_selected": _MissingSelectedIdPolicy,
+    }[policy]()
+    step = QueueController(
+        service, selection_policies={"gpu-pool": selection_policy}
+    ).run_once(pool_name="gpu-pool")
+
+    assert step.outcome == "idle"
+    record = caplog.records[-1]
+    assert getattr(record, "queue_pool_name") == "gpu-pool"
+    assert getattr(record, "queue_policy_id") == selection_policy.policy_id
+    assert getattr(record, "queue_selection_invalid_category") == category
+    assert [event.event_type for event in service.list_audit_events("item-1")] == [
+        "queue.item.enqueued"
+    ]
+
+
+def test_controller_logs_policy_exception_without_raw_exception(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    service = _resource_service(
+        tmp_path,
+        clock=_clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)]),
+        capacity=1,
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+    caplog.set_level("WARNING", logger="loom.queue.selection")
+
+    QueueController(
+        service, selection_policies={"gpu-pool": _FailingSelectionPolicy()}
+    ).run_once(pool_name="gpu-pool")
+
+    record = caplog.records[-1]
+    assert record.message == "queue selection policy exception"
+    assert getattr(record, "queue_pool_name") == "gpu-pool"
+    assert getattr(record, "queue_policy_id") == "test.failing"
+    assert "private selection exception" not in caplog.text
+
+
+def test_selection_policy_mapping_rejects_unknown_pool(tmp_path: Path) -> None:
+    service = _started_service(tmp_path, clock=_clock("2020-01-01T00:00:00Z"))
+
+    with pytest.raises(QueueServiceError, match="unknown selection policy pool"):
+        QueueController(service, selection_policies={"missing": _NewestPolicy()})
+
+    with pytest.raises(QueueServiceError, match="invalid selection policy"):
+        QueueController(service, selection_policies={"gpu-pool": _UnsafePolicy()})
+
+
+def test_selection_policy_mapping_rejects_delegated_pool(tmp_path: Path) -> None:
+    spec = normalize_queue_spec(
+        {
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [{"pool_name": "delegated", "mode": "delegated"}],
+            "queues": [{"queue_name": "delegated", "pool_name": "delegated"}],
+        }
+    )
+    service = QueueService(
+        spec,
+        SQLiteQueueRepository(tmp_path / "queue.sqlite"),
+    )
+    service.start()
+
+    with pytest.raises(QueueServiceError, match="not managed"):
+        QueueController(service, selection_policies={"delegated": _NewestPolicy()})
+
+
+def test_controller_rejects_repository_without_private_selection_capabilities(
+    tmp_path: Path,
+) -> None:
+    service = QueueService(_spec(tmp_path), object())  # type: ignore[arg-type]
+
+    with pytest.raises(
+        QueueServiceError, match="bounded selection and exact ownership"
+    ):
+        QueueController(service)
+
+
+def test_controller_freezes_policy_identity_but_not_trusted_behavior(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)])
+    service = _resource_service(tmp_path, clock=clock, capacity=1)
+    policy = _MutablePolicy()
+    controller = QueueController(
+        service,
+        selection_policies={"gpu-pool": policy},
+        clock=clock,
+    )
+    policy.policy_id = "test.mutated"
+    policy.reason_code = "test.mutated_selected"
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+
+    step = controller.run_once(pool_name="gpu-pool")
+
+    assert step.item is not None and step.item.status is QueueItemStatus.SUCCEEDED
+    assert service.list_audit_events("item-1")[1].detail["selection"] == {
+        "preference_id": "test.original",
+        "reason_code": "test.mutated_selected",
+    }
+
+
+def test_delegated_selection_uses_shared_fifo_operation_without_resource_filtering(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)])
+    spec = normalize_queue_spec(
+        {
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [{"pool_name": "delegated", "mode": "delegated"}],
+            "queues": [{"queue_name": "delegated", "pool_name": "delegated"}],
+        }
+    )
+    service = QueueService(
+        spec,
+        SQLiteQueueRepository(tmp_path / "queue.sqlite", clock=clock),
+        clock=clock,
+    )
+    service.start()
+    for item_id in ("older", "younger"):
+        service.enqueue(
+            QueueEnqueueRequest(
+                queue_item_id=item_id,
+                queue_name="delegated",
+                run_uri=f"file:///runs/{item_id}",
+                resources={"gpu": 99},
+            )
+        )
+
+    step = QueueController(service, clock=clock).run_once(pool_name="delegated")
+
+    assert step.item is not None and step.item.queue_item_id == "older"
 
 
 def test_foreground_drain_completes_fake_work_without_orphaned_claims(
@@ -146,7 +462,9 @@ def test_foreground_drain_completes_fake_work_without_orphaned_claims(
     assert result.recovery_records == ()
 
 
-def test_controller_marks_missing_fake_adapter_unknown(tmp_path: Path) -> None:
+def test_controller_fails_missing_adapter_as_invalid_unsupported(
+    tmp_path: Path,
+) -> None:
     clock = _clock(
         "2020-01-01T00:00:00Z",
         "2020-01-01T00:00:01Z",
@@ -166,7 +484,16 @@ def test_controller_marks_missing_fake_adapter_unknown(tmp_path: Path) -> None:
     step = QueueController(service, adapters={}, clock=clock).run_once()
 
     assert step.item is not None
-    assert step.item.status is QueueItemStatus.UNKNOWN
+    assert step.outcome == "failed"
+    assert step.item.status is QueueItemStatus.FAILED
+    completed = service.list_audit_events("item-1")[-1]
+    evidence = completed.detail["evidence"]
+    assert isinstance(evidence, Mapping)
+    assert evidence["queue_dispatch"] == {
+        "disposition": "not_started",
+        "non_start_cause": "invalid_or_unsupported",
+        "cleanup_status": "not_required",
+    }
     assert service.scan_recovery() == ()
 
 
@@ -379,11 +706,11 @@ def test_cycle_defers_fifo_head_once_and_returns_serializable_capacity_result(
                 queue_item_id=item_id,
                 queue_name="gpu",
                 run_uri=f"file:///runs/{item_id}",
-                adapter="deferred",
+                adapter="capacity",
             )
         )
     controller = QueueController(
-        service, adapters={"deferred": _DeferredAdapter()}, clock=clock
+        service, adapters={"capacity": _CapacityAdapter()}, clock=clock
     )
 
     result = controller.run_cycle(pool_name="gpu-pool")
@@ -398,6 +725,233 @@ def test_cycle_defers_fifo_head_once_and_returns_serializable_capacity_result(
     assert first_item.status is QueueItemStatus.QUEUED
     assert second_item.status is QueueItemStatus.QUEUED
     assert result.to_dict()["next_maintenance_at"] is None
+
+
+def test_cycle_bypasses_one_compensated_deferred_item_without_reselecting_it(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(12)])
+    service = _started_service(
+        tmp_path,
+        clock=clock,
+        max_active_items=3,
+        max_dispatches_per_cycle=3,
+    )
+    for item_id in ("deferred-head", "next-item"):
+        service.enqueue(
+            QueueEnqueueRequest(
+                queue_item_id=item_id,
+                queue_name="gpu",
+                run_uri=f"file:///runs/{item_id}",
+                adapter="defer-first",
+            )
+        )
+    adapter = _DeferFirstAdapter()
+
+    result = QueueController(
+        service, adapters={adapter.adapter_name: adapter}, clock=clock
+    ).run_cycle(pool_name="gpu-pool")
+
+    assert [step.outcome for step in result.dispatch_steps] == [
+        "deferred",
+        "dispatched",
+    ]
+    assert adapter.dispatched == ["deferred-head", "next-item"]
+    deferred = service.read_item("deferred-head")
+    started = service.read_item("next-item")
+    assert deferred is not None
+    assert deferred.status is QueueItemStatus.QUEUED
+    assert deferred.dispatch_attempt == 1
+    assert deferred.claim is None and deferred.dispatch_handle is None
+    assert started is not None and started.status is QueueItemStatus.SUCCEEDED
+    assert result.capacity_blocked is True
+    assert result.selection_stop_reason is None
+
+
+@pytest.mark.parametrize(
+    ("result", "outcome", "status", "continues"),
+    [
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason_code="test.invalid",
+                non_start_cause="invalid_or_unsupported",
+                cleanup_status="confirmed",
+            ),
+            "failed",
+            QueueItemStatus.FAILED,
+            True,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason_code="test.invalid_cleanup_uncertain",
+                non_start_cause="invalid_or_unsupported",
+                cleanup_status="uncertain",
+            ),
+            "unknown",
+            QueueItemStatus.FAILED,
+            False,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason_code="test.authority",
+                non_start_cause="authority_unavailable",
+                cleanup_status="not_required",
+            ),
+            "unknown",
+            QueueItemStatus.UNKNOWN,
+            False,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason_code="test.ownership",
+                non_start_cause="ownership_lost",
+                cleanup_status="confirmed",
+            ),
+            "unknown",
+            QueueItemStatus.UNKNOWN,
+            False,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason_code="test.internal",
+                non_start_cause="internal",
+                cleanup_status="confirmed",
+            ),
+            "unknown",
+            QueueItemStatus.UNKNOWN,
+            False,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="not_started",
+                reason_code="test.capacity_cleanup_uncertain",
+                non_start_cause="capacity",
+                cleanup_status="uncertain",
+            ),
+            "unknown",
+            QueueItemStatus.UNKNOWN,
+            False,
+        ),
+        (
+            QueueDispatchResult(
+                disposition="start_uncertain", reason_code="test.start_uncertain"
+            ),
+            "unknown",
+            QueueItemStatus.UNKNOWN,
+            False,
+        ),
+    ],
+)
+def test_controller_transitions_factual_non_start_outcomes(
+    tmp_path: Path,
+    result: QueueDispatchResult,
+    outcome: str,
+    status: QueueItemStatus,
+    continues: bool,
+) -> None:
+    service = _started_service(
+        tmp_path,
+        clock=_clock(*[f"2020-01-01T00:00:{n:02d}Z" for n in range(12)]),
+        max_active_items=2,
+        max_dispatches_per_cycle=2,
+    )
+    for item_id in ("first", "second"):
+        service.enqueue(
+            QueueEnqueueRequest(
+                queue_item_id=item_id,
+                queue_name="gpu",
+                run_uri=f"file:///runs/{item_id}",
+                adapter="factual",
+            )
+        )
+    controller = QueueController(
+        service,
+        adapters={"factual": _FactualAdapter(result)},
+    )
+
+    cycle = controller.run_cycle(pool_name="gpu-pool")
+
+    assert cycle.dispatch_steps[0].outcome == outcome
+    first = service.read_item("first")
+    assert first is not None and first.status is status
+    assert len(cycle.dispatch_steps) == (2 if continues else 1)
+
+
+@pytest.mark.parametrize(
+    ("policy_name", "expected_reason"),
+    [
+        ("stopping", "queue_selection.policy_stopped"),
+        ("failing", "queue_selection.policy_error"),
+        ("invalid", "queue_selection.invalid_decision"),
+    ],
+)
+def test_cycle_exposes_only_allowlisted_selection_stop_reasons(
+    tmp_path: Path,
+    policy_name: str,
+    expected_reason: str,
+) -> None:
+    service = _resource_service(
+        tmp_path,
+        clock=_clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)]),
+        capacity=1,
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+
+    policy = {
+        "stopping": _StoppingSelectionPolicy(),
+        "failing": _FailingSelectionPolicy(),
+        "invalid": _InvalidSelectionPolicy(),
+    }[policy_name]
+    result = QueueController(
+        service,
+        selection_policies={"gpu-pool": policy},
+    ).run_cycle(pool_name="gpu-pool")
+
+    assert result.dispatch_steps == ()
+    assert result.selection_stop_reason == expected_reason
+    assert result.to_dict()["selection_stop_reason"] == expected_reason
+    assert "private selection exception" not in str(result.to_dict())
+    assert "test.policy_requested_stop" not in str(result.to_dict())
+
+
+def test_cycle_records_selection_limit_exhaustion_after_lost_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _resource_service(
+        tmp_path,
+        clock=_clock(*[f"2020-01-01T00:00:{index:02d}Z" for index in range(8)]),
+        capacity=1,
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            resources={"gpu": 1},
+        )
+    )
+    monkeypatch.setattr(queue_controller, "_SELECTION_LIMIT", 2)
+    controller = QueueController(service)
+    monkeypatch.setattr(controller, "_selection_claimer", lambda *args, **kwargs: None)
+
+    result = controller.run_cycle(pool_name="gpu-pool")
+
+    assert result.dispatch_steps == ()
+    assert result.selection_stop_reason == "queue_selection.selection_limit_exhausted"
+    item = service.read_item("item-1")
+    assert item is not None and item.status is QueueItemStatus.QUEUED
 
 
 def test_cycle_bounds_synchronous_completions_by_dispatch_budget(
@@ -581,7 +1135,9 @@ def test_controller_current_session_reconciliation_does_not_fill(
             run_uri="file:///runs/queued",
         )
     )
-    controller = QueueController(service, adapters={"async": _AsyncAdapter()}, clock=clock)
+    controller = QueueController(
+        service, adapters={"async": _AsyncAdapter()}, clock=clock
+    )
     controller.run_once(pool_name="gpu-pool")
 
     result = controller.reconcile_current_session(pool_name="gpu-pool")
@@ -629,11 +1185,11 @@ class _AsyncAdapter:
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"async:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="async-dispatched",
+            reason_code="test.async_dispatched",
             evidence={"queue_item_id": item.queue_item_id},
-            complete=False,
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -667,11 +1223,11 @@ class _DelegatedHandoffAdapter:
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"delegated:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="delegated-dispatched",
+            reason_code="test.delegated_dispatched",
             evidence={"queue_item_id": item.queue_item_id},
-            complete=False,
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -683,14 +1239,48 @@ class _DelegatedHandoffAdapter:
         )
 
 
-class _DeferredAdapter:
-    adapter_name = "deferred"
+class _CapacityAdapter:
+    adapter_name = "capacity"
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
-            disposition="deferred",
-            status=QueueItemStatus.UNKNOWN,
-            reason="resource_admission.capacity_unavailable",
+            disposition="not_started",
+            reason_code="resource_admission.capacity_unavailable",
+            non_start_cause=QueueDispatchNonStartCause.CAPACITY,
+            cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+        )
+
+
+class _FactualAdapter:
+    adapter_name = "factual"
+
+    def __init__(self, result: QueueDispatchResult) -> None:
+        self.result = result
+
+    def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
+        return self.result
+
+
+class _DeferFirstAdapter:
+    adapter_name = "defer-first"
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
+        self.dispatched.append(item.queue_item_id)
+        if item.queue_item_id == "deferred-head":
+            return QueueDispatchResult(
+                disposition="not_started",
+                reason_code="resource_admission.capacity_unavailable",
+                non_start_cause=QueueDispatchNonStartCause.CAPACITY,
+                cleanup_status=QueuePreStartCleanupStatus.NOT_REQUIRED,
+            )
+        return QueueDispatchResult(
+            disposition="completed",
+            handle_id=f"defer-first:{item.queue_item_id}",
+            status=QueueItemStatus.SUCCEEDED,
+            reason_code="test.completed",
         )
 
 
@@ -699,10 +1289,10 @@ class _DegradingAdapter:
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"degrading:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="started",
-            complete=False,
+            reason_code="test.started",
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -721,10 +1311,10 @@ class _ItemLocalFailureAdapter:
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"item-local-failure:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="started",
-            complete=False,
+            reason_code="test.started",
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -753,11 +1343,11 @@ class _CountingAdapter:
             else {"managed_local": {"session_id": self.session_id}}
         )
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"counting:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="started",
+            reason_code="test.started",
             evidence=evidence,
-            complete=False,
         )
 
     def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
@@ -775,15 +1365,110 @@ class _CancellableStartedAdapter:
 
     def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
         return QueueDispatchResult(
+            disposition="started",
             handle_id=f"cancellable:{item.queue_item_id}",
             status=QueueItemStatus.DISPATCHED,
-            reason="started",
-            complete=False,
+            reason_code="test.started",
         )
 
     def cancel(self, item, *, requested_by, reason) -> QueueDispatchCancellation:  # noqa: ANN001
         self.cancelled = True
         return QueueDispatchCancellation(reason=reason)
+
+
+class _NewestPolicy:
+    policy_id = "test.newest"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        self.calls += 1
+        return QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED,
+            "test.newest_selected",
+            context.candidates[-1].queue_item_id,
+        )
+
+
+class _MutablePolicy:
+    policy_id = "test.original"
+    reason_code = "test.original_selected"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        return QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED,
+            self.reason_code,
+            context.candidates[0].queue_item_id,
+        )
+
+
+class _InvalidSelectionPolicy:
+    policy_id = "test.invalid"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        return QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED,
+            "test.invalid_selected",
+            "not-in-context",
+        )
+
+
+class _WrongResultPolicy:
+    policy_id = "test.wrong_result"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        return "not-a-decision"  # type: ignore[return-value]
+
+
+class _InvalidReasonCodePolicy:
+    policy_id = "test.invalid_reason"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        decision = QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED,
+            "test.valid",
+            context.candidates[0].queue_item_id,
+        )
+        object.__setattr__(decision, "reason_code", "invalid reason")
+        return decision
+
+
+class _MissingSelectedIdPolicy:
+    policy_id = "test.missing_selected"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        decision = QueueSelectionDecision(
+            QueueSelectionDisposition.SELECTED,
+            "test.valid",
+            context.candidates[0].queue_item_id,
+        )
+        object.__setattr__(decision, "queue_item_id", None)
+        return decision
+
+
+class _FailingSelectionPolicy:
+    policy_id = "test.failing"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        raise RuntimeError("private selection exception")
+
+
+class _StoppingSelectionPolicy:
+    policy_id = "test.stopping"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        return QueueSelectionDecision(
+            QueueSelectionDisposition.STOPPED,
+            "test.policy_requested_stop",
+        )
+
+
+class _UnsafePolicy:
+    policy_id = "not safe"
+
+    def select_next(self, context: QueueSelectionContext) -> QueueSelectionDecision:
+        return QueueSelectionDecision(QueueSelectionDisposition.STOPPED, "test.stop")
 
 
 def _started_service(
@@ -820,6 +1505,31 @@ def _two_pool_service(tmp_path: Path, *, clock) -> QueueService:
     )
     repository = SQLiteQueueRepository(tmp_path / "queue.sqlite", clock=clock)
     service = QueueService(spec, repository, clock=clock)
+    service.start()
+    return service
+
+
+def _resource_service(tmp_path: Path, *, clock, capacity: int) -> QueueService:
+    spec = normalize_queue_spec(
+        {
+            "schema_version": 2,
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {
+                    "pool_name": "gpu-pool",
+                    "mode": "managed",
+                    "resources": {"gpu": capacity},
+                }
+            ],
+            "queues": [{"queue_name": "gpu", "pool_name": "gpu-pool"}],
+            "controller": {"max_active_items": 1},
+        }
+    )
+    service = QueueService(
+        spec,
+        SQLiteQueueRepository(tmp_path / "queue.sqlite", clock=clock),
+        clock=clock,
+    )
     service.start()
     return service
 

@@ -267,6 +267,7 @@ def test_apptainer_executor_reads_successful_worker_result(tmp_path: Path) -> No
         run_store=store,
         apptainer_command_runner=runner,
         python_executable="/usr/bin/python",
+        plugin_selectors=("loom.resource_validators:stage28.device",),
     ).execute(request)
 
     assert result.status == StageStatus.SUCCEEDED
@@ -283,6 +284,12 @@ def test_apptainer_executor_reads_successful_worker_result(tmp_path: Path) -> No
         "run",
         "--run-uri",
         run_uri,
+    )
+    assert runner.calls[0].argv[-4:] == (
+        "--plugin",
+        "loom.resource_validators:stage28.device",
+        "--format",
+        "json",
     )
 
 

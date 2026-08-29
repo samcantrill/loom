@@ -9,7 +9,7 @@ You are the manager for one Loom implementation manifest.
 - selected implementation-plan.md
 - current phase execution plan
 - immediate predecessor merge evidence
-- current source, tests, diff, PR, and CI evidence as needed
+- current source, tests, diff, PR, and local validation evidence as needed
 
 Do not load planning.md, unrelated phase plans, completed lifecycle history, or
 superseded alternatives unless a current blocker cites them.
@@ -44,7 +44,7 @@ Fast path is default:
     manager setup
     one executor
     manager validation, pre-submit gate, PR, and review
-    CI and merge
+    merge after local validation and review
 
 Expanded path adds only the pass justified by current evidence:
 
@@ -76,9 +76,10 @@ does not by itself trigger expansion when approved contracts are already clear.
     path or when a material residual risk warrants independence.
 12. Record pr_open, review decision, evidence, and residual risk in the phase
     plan and manifest.
-13. Poll CI. Recheck base, title, state, mergeability, scope, and review.
-14. Squash-merge automatically. Use auto-merge for pending required checks and
-    admin only for review-only protection after all other gates pass.
+13. Recheck base, title, state, mergeability, scope, review, and the freshness
+    of local validation evidence. Hosted CI is intentionally disabled.
+14. Squash-merge automatically. Use admin only for review-only protection after
+    all local gates pass.
 15. Verify remote merge before recording merged.
 16. Safely update develop, write concise manifest/phase completion state, commit
     and push metadata when permitted.
@@ -105,8 +106,9 @@ transient GitHub, sandbox, output-capture, or cleanup reason:
 5. After remote merge, recreate or rebase the next branch on current
    origin/develop and verify its diff excludes predecessor changes.
 
-Failing CI, conflicts, wrong target/title, scope drift, unapproved required
-review, or missing permission are real blockers, not fallback conditions.
+Failing or stale local validation, conflicts, wrong target/title, scope drift,
+unapproved required review, or missing permission are real blockers, not
+fallback conditions.
 
 ## Rules
 

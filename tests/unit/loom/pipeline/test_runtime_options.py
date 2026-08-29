@@ -252,14 +252,14 @@ def test_stage_runtime_options_use_entry_based_resources_only() -> None:
     options = StageRuntimeOptions(
         resources={
             "entries": {
-                "gpu": {"kind": "gpu", "amount": 0},
+                "gpu": {"kind": "gpu", "amount": 1},
             }
         }
     )
 
     assert cast(ResourceRequest, options.resources).entries["gpu"] == ResourceEntry(
         kind="gpu",
-        amount=0,
+        amount=1,
     )
     with pytest.raises(RuntimeResourceError):
         StageRuntimeOptions(resources={"cpus": 2})

@@ -737,8 +737,9 @@ everything else -> string
 
 ### 9.1 Project CLI Argv Shorthand
 
-Stage 24 adds Python helpers for project-specific CLIs that want Hydra-like
-config shorthand without making `weave` own a command-line executable:
+The config-composition surface adds Python helpers for project-specific CLIs
+that want Hydra-like config shorthand without making `weave` own a command-line
+executable:
 
 ```python
 from weave import compose_config_from_argv
@@ -1321,11 +1322,11 @@ Reason:
 
 ## 17. CLI Integration Boundary
 
-Stage 24 ships Python helper APIs for project-specific CLIs, not a first-party
-`weave` executable and not Loom CLI behavior. Project CLIs may pass their argv
-fragments to `compose_config_from_argv(...)` or `inspect_config_from_argv(...)`,
-format returned warnings and structured errors however they prefer, and keep
-command-specific flags in `unparsed_args`.
+This contract ships Python helper APIs for project-specific CLIs, not a first-
+party `weave` executable and not Loom CLI behavior. Project CLIs may pass their
+argv fragments to `compose_config_from_argv(...)` or
+`inspect_config_from_argv(...)`, format returned warnings and structured errors
+however they prefer, and keep command-specific flags in `unparsed_args`.
 
 Future Loom CLI commands should wrap the same public APIs without adding
 separate config semantics. For example, a future `loom run` adapter may compose

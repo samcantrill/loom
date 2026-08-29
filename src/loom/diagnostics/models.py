@@ -318,6 +318,8 @@ class PreflightRequest:
     plugin_groups: tuple[str, ...] = ()
     plugin_names: tuple[str, ...] = ()
     plugin_packages: tuple[str, ...] = ()
+    resource_validator_registry: object | None = None
+    executor_descriptor_registry: object | None = None
     artifact_backend_targets: tuple[ArtifactBackendPreflightTarget, ...] = ()
     artifact_backend_registry: object | None = None
     artifact_backend_handlers: Mapping[str, object] = field(default_factory=dict)

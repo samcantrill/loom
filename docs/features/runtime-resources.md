@@ -19,6 +19,13 @@ The queue pool-status active limit is controller-local, not a distributed
 semaphore; authority-backed scalar and static-slot leases remain the safety
 boundary for managed-local work.
 
+An explicit local NVIDIA inventory can instead be composed in Python through
+`loom.queue.gpu.nvidia.NvidiaSmiGpuInventoryProvider`. It supplies normalized
+UUID-backed devices to the existing GPU plan and managed-local lifecycle; it
+does not add an authored resource schema, runtime profile, automatic hardware
+selection, or an import-time command. Integer GPU shares express queue capacity
+only and do not claim memory or compute isolation.
+
 ## Scope
 
 Current alignment:
@@ -197,6 +204,436 @@ default queue
 Executor adapters may choose defaults, but those defaults should be documented
 by the executor and included in submission metadata when relevant.
 
+## Stage 29 Per-Stage Placement
+
+Stage 29 keeps `ResourceRequest` as the resource declaration for one stage and
+makes a prepared stage attempt—not a whole run—the managed scheduling unit. It
+never sums `preprocess`, `train`, and `evaluate` resources: dependency state,
+reuse, and parallel branches make such a total both ambiguous and wasteful.
+
+`StageSpec.resource_request` is the authored semantic minimum. Exact-stage
+runtime resources may refine it. The resource implementation for each kind must
+merge without weakening the authored minimum or reject an ambiguous duplicate.
+Run policy supplies pool, maximum parallel stages, defaults, and an optional
+hard agent target; stage placement supplies stage-specific constraints,
+preferences, and fallback. Pool/site hard rules remain non-overridable.
+
+The placement model distinguishes four kinds of scheduling information:
+
+| Kind | Examples | Meaning during placement |
+| --- | --- | --- |
+| Exact consumable scalar | Integer CPU count, RAM bytes | Reserve a normalized quantity from one agent. |
+| Discrete instance | GPU or accelerator device | Select and later bind particular safe instance identities. |
+| Attribute | Architecture, machine label, GPU model | Filter or rank; not consumed. |
+| Relationship | Same agent, same advertised device fabric | Filter or rank a complete candidate claim. |
+
+One Stage 29 managed-agent placement candidate fits wholly on one agent. Different pipeline
+stages may use different agents, but a distributed stage that combines several
+agents requires gang/all-or-none reservation, rank/rendezvous and network
+configuration, coordinated launch, and group failure/retry semantics. No
+resource planner may hide cross-agent consumption inside provider data.
+
+The resolved placement reuses the existing versioned `ResourceRequest` rather
+than creating a second durable request codec:
+
+```python
+@dataclass(frozen=True)
+class ResolvedStagePlacement:
+    schema_version: int
+    resources: ResourceRequest
+    execution_route: ResolvedExecutionRoute
+    hard_constraints: tuple[ResolvedHardConstraintSpec, ...] = ()
+    preferences: tuple[ResolvedPreferenceSpec, ...] = ()
+    fallback: PreferenceFallbackSpec = field(
+        default_factory=PreferenceFallbackSpec.immediate
+    )
+    component_manifest: SchedulingComponentManifest = field(
+        default_factory=SchedulingComponentManifest.defaults
+    )
+    fingerprint: str = ""
+```
+
+The route is a closed value:
+
+```python
+@dataclass(frozen=True)
+class ResolvedExecutionRoute:
+    kind: Literal["managed_agent", "slurm"] = "managed_agent"
+    profile_id: str | None = None
+    profile_descriptor: ComponentDescriptor | None = None
+    profile_configuration_fingerprint: str | None = None
+```
+
+The SLURM variant requires one authorized site profile and all profile identity
+fields; the managed variant forbids them. Route/profile identity participates
+in the placement fingerprint. A scheduler cannot infer or change it from agent
+capacity, preferences, wait expiry, profile outage, or submission results.
+
+Managed-agent resources are matched against exact versioned offers and become
+coordinator/agent claims. A SLURM-routed request is instead translated by its
+profile to scheduler directives. That mapper must account for every applicable
+hard semantic or reject the route; mapped CPU/memory/GPU values do not imply
+that a node is currently free, and managed-agent preferences do not implicitly
+influence SLURM node selection. The SLURM assignment holds a profile admission
+slot, not an agent capacity claim.
+
+Coordinator identities such as `stage_work_id` do not belong in this runtime
+value. The coordinator associates the placement fingerprint with its rebuildable
+stage-work projection. Versioned inventory and claim envelopes are separate
+because they cross the agent transport boundary.
+
+Per-kind `ResolvedResourceRequest` values fold their canonical `ResourceEntry`
+back into this existing `ResourceRequest` and record validator/planner identity
+and resolution fingerprints in `component_manifest`. They are resolution
+evidence, not another authored resource schema. Reconstruction must reproduce
+the same canonical entries/fingerprint before scheduling.
+
+Resource-specific implementations are trusted code composed explicitly by the
+deployment:
+
+```python
+@dataclass(frozen=True)
+class ResourceClaimContractDescriptor:
+    resource_kind: str
+    contract_id: str
+    contract_version: int
+    inventory_data_versions: tuple[int, ...]
+    claim_data_versions: tuple[int, ...]
+
+
+class ResourcePlanner(Protocol):
+    descriptor: SchedulingComponentDescriptor
+    resource_kind: str
+    claim_contracts: tuple[ResourceClaimContractDescriptor, ...]
+
+    def resolve_request(
+        self,
+        authored: ValidatedResourceEntryView | None,
+        runtime: ValidatedResourceEntryView | None,
+    ) -> ResourceRequestResolution: ...
+    def validate_opportunity(
+        self,
+        inventory: ResourceInventoryEnvelope,
+        availability: ResourceAvailabilityEnvelope,
+    ) -> OpportunityValidationResult: ...
+    def propose_claims(
+        self,
+        request: ResolvedResourceRequest,
+        opportunity: ValidatedResourceOpportunity,
+        budget: ClaimSearchBudget,
+    ) -> ClaimSearchResult: ...
+    def validate_claim(
+        self,
+        request: ResolvedResourceRequest,
+        claim: ResourceClaim,
+    ) -> ClaimValidationResult: ...
+```
+
+The existing resource validator remains authoritative for authored/runtime
+entry shape and canonicalization. `ValidatedResourceEntryView` is an immutable
+scheduling input, not another authored or durable format.
+`loom.pipeline.runtime` converts accepted `ResourceEntry` values into this view,
+calls `resolve_request`, and rebuilds the canonical existing `ResourceRequest`.
+The planner therefore owns scheduling-specific non-weakening merge and
+normalization without importing `loom.pipeline` or creating a second schema-
+validation path. Custom resolved resources retain validator activation identity
+separately from planner/provider and resource-claim-contract identity so fresh
+processes can reconstruct the exact accepted boundary.
+
+`OpportunityValidationResult` is the closed pure result
+`VALID(canonical_opportunity)` or `INVALID(reason)`. Generic codec/capacity-map
+bounds run first; the planner then validates and canonicalizes its versioned
+inventory/availability payload once per offer revision before search.
+
+`ClaimSearchResult` carries bounded claims and an explicit `COMPLETE` or
+`EXHAUSTED` state. A complete empty result proves that resource infeasible; an
+exhausted result is indeterminate. Every per-resource search and the composite
+claim product must be complete before assignment. Stage 29 accepts no
+resource-supplied winner proof: partial claims are never assignable, although
+the default work-conserving policy may run later complete feasible work while
+leaving the older work explicitly exhausted.
+`ClaimValidationResult` is the closed pure result `VALID` or `INVALID(reason)`;
+an exception is a component failure, not another validation outcome.
+`ResourceRequestResolution` is `ABSENT`,
+`RESOLVED(resolved_request)`, or `INVALID(reason)` so omission and
+an ambiguous/invalid merge cannot be conflated.
+
+Each `ResourceClaim` separates generic accounting from provider semantics. Its
+bounded envelope carries descriptor and agent/session/revision identity, a
+deterministic claim ID, exact capacity atoms, and versioned provider data. A
+capacity atom consumes an exact quantity from one namespaced key
+`(owner_resource_kind, local_capacity_key)` with an exact unit and granularity.
+A planner may consume only its own resource namespace. The fixed kernel and
+coordinator can therefore validate granularity,
+identity, conservation, and atomic overlap without decoding provider data;
+the trusted planner/provider pair owns resource-specific meaning and final
+admission. Provider data is contractually forbidden from declaring or acquiring
+hidden consumption; the kernel does not sandbox a dishonest trusted provider.
+
+This boundary supports agent-local scalar and discrete resources whose
+consumption can be expressed as capacity atoms. Attributes/locality remain
+constraints or preferences. A globally consumed licence, quota, or bandwidth
+resource still needs a clear transactional owner and is not made safe merely by
+registering a planner.
+
+Component identity is not used as a wire-compatibility shortcut. A planner and
+provider keep separate implementation descriptors and negotiate a shared
+`ResourceClaimContractDescriptor`; the assignment persists both component
+identities and the selected contract/data versions. This allows independent
+implementations to interoperate while preventing a compatible replacement from
+silently adopting an old provider's live state.
+
+The resource registry is instance-local, duplicate-safe, and immutable for one
+service/configuration epoch. It separates active bindings used for fresh
+resolution from exact descriptor-keyed retained bindings required by
+nonterminal work or live claims; reload either preserves those bindings or
+fails before swap. Remote and durable
+values may name an allowed supported kind/contract/data version and descriptor
+fingerprint but never load a callable, constructor, or plugin. The protocol
+lives in import-light `loom.scheduling` rather than root `loom.protocols`,
+because placement is its only accepted current consumer.
+
+The reload owner is important. A coordinator transaction swaps only its
+planners, rules, scorers, and scheduling policy. Each agent independently swaps
+only its pools, providers, manageable inventory, and resident capabilities.
+Both retain exact descriptors referenced by their own durable nonterminal
+records. There is no distributed swap or rollback; temporary planner/provider
+claim-contract skew makes an opportunity ineligible until compatibility is
+restored.
+
+Component descriptors keep implementation and non-secret canonical
+configuration fingerprints distinct. A planner/rule/scorer/provider parameter
+change is a new configured identity even when its package implementation is
+unchanged; credentials are never part of that fingerprint. Stage placement
+pins those resource/rule/scorer identities. The global cross-work
+`SchedulingPolicy` instead belongs to a coordinator scheduling epoch, and its
+descriptor plus bounded decision evidence is committed with each assignment.
+
+The same subsystem publishes three other narrow pure protocols:
+
+```text
+HardConstraintEvaluator  reject one complete placement after mandatory checks
+PreferenceScorer         contribute bounded utility and a declared quality band
+SchedulingPolicy         select one existing grouped work/candidate pair or wait
+```
+
+A fixed concrete `SchedulingKernel` owns mandatory compatibility, pool/target,
+capacity, completeness and data-access checks; search budgets; ordering of
+additive checks; checked site-owned preference aggregation; durable-time
+fallback gating; grouped work evaluation; and validation of every extension
+result before mutation. Intrinsic resource quantity, unit, mode, per-instance,
+and same-resource topology semantics belong only to the planner; additive hard
+rules own whole-placement/cross-resource/agent/site predicates. The kernel is
+not a replaceable lifecycle scheduler. Custom hard constraints cannot make a
+candidate feasible, preferences cannot alter feasibility, and a policy cannot
+create resource claims or select exhausted work. Direct trusted Python
+composition and bounded conformance checks are supported; automatic loading
+and payload-selected implementations are not.
+
+The policy chooses one exact existing validated work/candidate pair or waits.
+It is not a global constraint solver: a solver would introduce placement
+variables and an objective over several work items and agents, plus timeout
+versus infeasibility, batch explanation, stale-snapshot validation, and atomic
+multi-assignment commit semantics. Likewise, fair-share needs durable user/
+project usage and entitlement accounting, while preemption needs a lifecycle-
+owned checkpoint/stop/contain/release path for an already-granted assignment.
+Those concerns cannot be implemented by returning a larger resource claim or
+preference score and remain deferred.
+
+Preference resolution assigns each contribution an immutable ID, a
+site-configured ordered tier and bounded weight, an allowed integer utility
+range, and an optional `PREFERRED`/`FALLBACK`/`NEUTRAL` quality-band schema. The
+kernel uses checked integer multiplication/addition to form one total per tier,
+compares tier vectors lexicographically, and finally uses stable candidate
+identity. Registration order and a large lower-tier score cannot override a
+higher tier. These vectors compare candidates for the same stage work; policy
+receives bounded grouped `WorkEvaluation` values rather than one flat list of
+unrelated scores.
+
+An optional wait/fallback gate names one guarded preference. Its deadline is
+derived from durable stage-work `ready_at`, and the immutable scheduling
+snapshot supplies explicit `as_of`. Before the deadline only the guarded
+`PREFERRED` band is selectable; afterward declared `FALLBACK` candidates
+re-enter. Restart cannot reset the wait, and neither a custom policy nor client-
+supplied numbers can bypass site-owned tiers, bounds, or fallback eligibility.
+
+Physical acquisition uses the separate agent-side `AgentResourceProvider`
+lifecycle. A planner describes safe exact claims; a compatible provider
+observes, prepares, reconciles, activates, aborts, and releases them locally.
+Every mutation is an assignment/claim-scoped idempotent command with an expected
+state and a closed typed result; an indeterminate result must be reconciled and
+cannot imply success or released capacity. Provider private tokens never enter
+inventory, claims, assignments, or status; only bounded safe reconstruction
+records may be journalled.
+
+Quantity arithmetic is exact and owned by the resource contract:
+
+```text
+8 CPU    -> 8 integer CPU units
+10 GiB   -> 10,737,418,240 bytes
+0.25 GPU -> invalid unless a named fractional provider defines its semantics
+```
+
+CPU is a positive integer in Stage 29; fractional CPU is rejected. Memory and
+VRAM normalize to integer bytes. A later scalar resource may accept exact
+decimal/rational quantities only when its resource implementation defines the
+unit and granularity. Binary floating point never owns availability, reservation,
+or release. Unsupported contract version, unit, mode, or granularity rejects the
+request before mutation.
+
+This is a hard cut-over. The resource boundary rejects zero-GPU entries instead
+of preserving the old “zero means absent” exception: omit the GPU entry when a
+stage does not request a GPU. Managed resolution also rejects float-valued
+memory; express it in an exact smaller integer unit (for example `1536 MiB`
+instead of `1.5 GiB`). There is no legacy managed/delegated interpretation.
+
+The agent-session protocol is likewise a hard v3 cut-over. A v2 agent or
+coordinator is rejected during handshake; Loom does not translate the earlier
+flat GPU offer into the exact descriptor-and-capacity-atom schema.
+
+The Phase 6 provider-defined GPU fraction has one exact encoding that preserves
+the current numeric `ResourceEntry` field: `amount` is a positive integer
+numerator, `unit` is `share`, and validated attributes contain a bounded
+positive integer `share_denominator` plus the named provider. The GPU planner
+reduces and checks this rational against advertised granularity. It rejects
+floats, missing providers, zero/negative values, and off-granularity forms
+before admission; reducible values persist in canonical reduced form. This is
+not a generic fraction DSL and does not make CPU fractional.
+Here and in authored configuration, a provider name is only a site-allowlisted
+semantic capability alias. It cannot name an import target or activate code;
+trusted deployment composition resolves it to an already registered provider.
+
+The accepted authored shape remains `resources.entries`; Stage 29 extends the
+GPU entry's validated attributes instead of adding a shorthand parser:
+
+```yaml
+resources:
+  entries:
+    cpu: {kind: cpu, amount: 4, unit: count, attributes: {}}
+    gpu:
+      kind: gpu
+      amount: 1
+      unit: count
+      attributes:
+        allocation_mode: exclusive
+        minimum_vram: {amount: 64, unit: GiB}
+placement:
+  preferences:
+    - kind: resource_attribute_order
+      resource: gpu
+      attribute: model
+      values: [h200, h100, a100]
+```
+
+GPU placement has three explicit meanings:
+
+```text
+exclusive       choose whole GPU instances; each chosen device must satisfy
+                requirements such as minimum VRAM and model attributes
+vram-share      reserve an exact amount of VRAM on a compatible provider that
+                can enforce and release that meaning
+fractional      use a named provider-defined share unit and granularity
+```
+
+These modes are not interchangeable. Requesting 10 GiB VRAM does not silently
+mean one whole GPU, and requesting 0.5 GPU is not accepted merely because the
+number is fractional. A provider must advertise compatible inventory,
+availability, claim, admission, binding, accounting, and release semantics.
+
+The built-in production agent currently composes only the exclusive adapter.
+The exact share/fraction request and descriptor contracts are available for a
+real provider adapter, but naming an alias alone does not enable sharing:
+managed local and resident-agent configuration rejects those modes until an
+adapter can enforce their preparation, isolation, observation, and release.
+
+For example, one half of a named enforceable provider share is explicit:
+
+```yaml
+resources:
+  entries:
+    gpu:
+      kind: gpu
+      amount: 1
+      unit: share
+      attributes:
+        allocation_mode: provider_fraction
+        share_denominator: 2
+        provider: configured-fraction-provider
+```
+
+Each agent publishes configured inventory separately from current availability:
+
+```python
+AgentOffer(
+    agent_id="machine-A",
+    inventory_revision=7,
+    availability_revision=19,
+    inventory={...},      # trusted manageable resources and attributes
+    availability={...},   # exact resources assignable for the next claim
+    reflected_claims=(...),  # live claims already subtracted from availability
+)
+```
+
+This inventory is configured manageable capacity, not a promise derived from
+best-effort host telemetry. A provider may conservatively withdraw externally
+occupied resources from availability. When competing use cannot be accounted
+for or fenced, site configuration must not offer that capacity to Loom. The
+scheduler can reject a request known not to fit the reported contract, but it
+cannot verify that authored peak usage is correct or guarantee that application
+code will not OOM. An exclusive GPU claim grants a whole device; it is not an
+enforced VRAM ceiling. VRAM-share or fractional placement is valid only when the
+named provider actually enforces and accounts for that mode.
+
+The coordinator retains logical ownership records for reflected claims but does
+not subtract them twice. It subtracts only an unreflected reservation created
+against the current revision, permits one unresolved admission for that
+revision, and requires accepted/declined reconciliation plus a fresh revision
+before another admission against that snapshot. This does not serialize process
+execution: after an accepted claim is reflected in fresh net availability, a
+new disjoint claim may use remaining atoms while the earlier process continues.
+A fresh offer inconsistent with a still-live claim contributes no capacity.
+
+The scheduler works only with safe projections and proposes a versioned
+`ResourceClaim`. The selected agent remains authoritative for physical binding:
+
+```text
+resource planner  resolves requests, tests feasibility, and proposes safe claims
+scheduler         validates complete claims and ranks grouped ready-stage work
+coordinator CAS   rechecks run concurrency and reserves exact work/offer revisions
+authority CAS     binds the exact still-ready prepared stage attempt
+agent provider    revalidates reality, binds, accounts, and releases locally
+```
+
+This split is intentional. A coordinator snapshot can become stale between
+selection and delivery, so its durable reservation prevents competing Loom
+assignments while agent admission prevents launching against hardware that no
+longer matches. The pre-grant authority binding leaves the prepared attempt
+`PENDING`; a definitive local decline uses an exact CAS to clear only that
+binding, then publishes a new availability revision. Only accepted grant
+promotion writes `SUBMITTED` and the execution fence. A decline is not stage
+execution failure, while ambiguous acceptance remains bound and unknown.
+`SUBMITTED` means granted, not proven running: only an exact current-fence
+confirmed process-start fact advances authority to `RUNNING`; failed or
+ambiguous start remains `SUBMITTED` and cannot license another launch.
+
+The placement engine does not interpret dependencies. One authority-side
+planning predicate exposes only ready `PlanAction.RUN` attempts and revalidates
+them at assignment CAS. Every dependency-ready unassigned `PENDING` attempt in
+the bounded window may have a rebuildable stage-work projection; projection
+does not consume `max_parallel_stages`. The coordinator assignment transaction
+atomically counts reserved, bound, accepted, granted, running, and unknown work
+for the run and rejects a new reservation at the limit. GPU preferences
+therefore score a GPU-claiming `train`
+stage but have no effect on a CPU-only `preprocess` stage. Hard artifact/project/
+executor accessibility also filters remote candidates before resource ranking.
+
+Initial built-ins cover integer CPU counts, memory bytes, Boolean/categorical
+whole-placement attributes, discrete GPUs with planner-owned per-device VRAM/
+model requirements, and deterministic machine/GPU preferences. More resource
+kinds can be registered later, but a
+globally consumed licence, quota, or bandwidth resource first needs one clear
+transaction owner across coordinator and agent failures.
+
 ## Runtime Options
 
 `RunOptions` captures invocation-level choices for one run.
@@ -317,6 +754,15 @@ class StageRuntimeOptions:
     reliability: ReliabilityPolicy | None = None
     adapter_options: Mapping[str, object] = field(default_factory=dict)
 ```
+
+Stage 29 plans one typed `placement` field on this exact-stage surface for an
+explicit execution route, versioned hard constraints, soft preferences, and
+fallback. Run-level managed policy supplies pool/defaults and optional hard
+pinning; separate orchestrator policy supplies concurrency. Neither turns
+resources into one run-wide claim.
+`max_parallel_stages` is not part of a stage placement fingerprint.
+The resolved stage placement and its fingerprint are persisted scheduling
+inputs independently of semantic stage fingerprints.
 
 Stage option keys are exact stage identifiers. Runtime models validate basic
 identifier shape and expose a helper that checks supplied known-stage sets, but
@@ -709,7 +1155,11 @@ Tests should avoid requiring SLURM, Docker, or Apptainer.
 Deferred runtime/resource features:
 
 ```text
-rich accelerator descriptions
+resource/topology kinds beyond Stage 29's explicit CPU, memory, GPU, attribute,
+and single-agent placement consumers
+multi-agent distributed/gang stage claims and atomic batch reservation
+preemption/checkpointing and fair-share usage/entitlement accounting
+global/batch constraint solving and arbitrary topology optimization
 per-stage container images
 executor-specific schema plugins
 queue time estimates

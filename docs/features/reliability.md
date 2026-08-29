@@ -17,6 +17,25 @@ explicit.
 This document collects retry, timeout, failure metadata, cleanup, garbage
 collection, event hook, and artifact retention behavior into one design surface.
 
+## Current Support
+
+Loom persists failure, retry, cleanup, and event facts through its run stores.
+Event sinks are explicit observe-only callbacks; a sink failure is recorded
+without changing a successfully committed runtime fact.
+
+## Quick Start
+
+Run the direct event-sink example:
+
+```sh
+uv run python examples/extensions/event-sink/run_event_sink.py
+```
+
+## Deferred
+
+Remote notification delivery, cluster-preemption recovery details, and dashboard
+delivery are not provided by the core runtime.
+
 ## Scope
 
 This component owns:
@@ -45,6 +64,243 @@ dashboard delivery
 
 Executor and store implementations enforce parts of the policy, but the policy
 model should stay shared.
+
+## Stage 29 Managed And Explicit-SLURM Recovery Direction
+
+Stage 29 makes reliability assignment- and stage-aware for the managed local/
+multi-agent path and its explicit ready-stage SLURM target. This section records
+the supported behavior; the authoritative contracts and phase ownership remain in
+[Stage 29 planning](../roadmap/stage-29/planning.md).
+
+- A granted assignment receives an authority-owned execution fence that does
+  not expire merely because coordinator connectivity is lost. The agent may
+  finish and durably retain its result while coordinator or authority is down.
+- `SUBMITTED` means granted. Only a confirmed exact-current-fence process fact
+  advances to `RUNNING`. A lost or ambiguous launcher outcome is
+  `START_UNKNOWN`, remains bound, and never licenses relaunch or retry.
+- Disconnect, timeout, missing PID, expired offer, or credential change does not
+  prove failure or containment. Accepted unknown work is not automatically
+  reassigned and does not consume retry budget.
+- A SLURM submission operation commits `SUBMITTING` before one automatic
+  `sbatch` invocation. Accepted returns an exact job handle; positive non-
+  acceptance may be definitely rejected; every timeout, crash, interruption,
+  malformed success, or lost handle commit is unknown. Restart reconciles the
+  stable operation ID and never submits it again. Zero unproven scheduler
+  matches stay unknown and multiple matches conflict.
+- The fixed SLURM bootstrap obtains the same authority grant/fence before one
+  authored root launch. Duplicate/requeued incarnations cannot receive another
+  start permit. SLURM `COMPLETED` without a current-fence Loom result and
+  accessible outputs is not success, and `scancel` acknowledgement is not
+  containment.
+- Coordinator/authority restart reconciles durable state before new work.
+  Every coordinator-originated authority mutation has a durable local intent
+  before send and an authority receipt committed with the domain mutation.
+  Authority generation change uses one authority-owned consistent cut: each
+  authority-relevant retained admission/tombstone must exactly match its
+  checkpoint or advance through an ordered chain of matching receipts.
+  Regression, missing receipt, unexplained mutation, owner/intent mismatch, and
+  torn reads fail closed; checkpoints remain evidence rather than authority
+  truth. A pristine empty authority is valid only when the coordinator has no
+  authority-relevant retained admission/tombstone. Agent restart begins at zero
+  availability and preserves unknown claims until exact reconciliation.
+- After explicit first initialization, service order is not a recovery proof or
+  safety dependency. An agent may start before the coordinator and reconnect at
+  zero availability; a coordinator without authority may admit only
+  `PENDING_AUTHORITY`; a coordinator without agents retains no-capacity waiting
+  work. A new connection never resumes work or capacity until session/event/
+  claim reconciliation and a fresh current-epoch offer/work request complete.
+- Manual recovery requires an authenticated expected-state operation and
+  positive containment tied to the exact target boundary: agent/session/process
+  for managed work, or profile/submission/job/bootstrap/process fence for SLURM.
+  Recovery intent freezes ordinary mutation but still durably retains terminal
+  facts for the current execution fence. Immediately before close, every
+  reachable complete verified terminal fact follows its normal authority path
+  or blocks recovery. Success supersedes recovery; definitive failure/
+  cancellation supplies its own outcome rather than being overwritten. Any
+  terminal commit and recovery close compete on the same expected fence; close
+  winning makes only later execution facts stale.
+- Only after definitive close may the existing reliability policy consider a
+  fresh attempt, with newly resolved placement and no copied claim, device,
+  offer, session, provider token, submission operation, scheduler handle, or
+  bootstrap identity. Its authored explicit route/profile alias remains fixed;
+  retry never switches target type automatically. Loom does not claim exactly-once authored
+  external effects; an explicit requeue after proven containment may repeat
+  effects that occurred before observation was lost.
+- Authority execution close and agent physical release are separate. Old
+  capacity remains unavailable until exact provider release/reconciliation or a
+  positively contained replacement session publishes fresh fully observed
+  inventory. Exact late cleanup may close only the old claim and cannot mutate a
+  new attempt. Late cleanup must come from the protected old agent root: it
+  releases every exact provider claim locally, commits a fresh availability
+  revision in the old journal, and presents an old-root proof bound to the
+  assignment, claim, fence, and recovery control. The coordinator durably
+  records the redacted proof before restoring capacity; the successor cannot
+  manufacture it.
+  For SLURM work, authority close likewise does not release a profile admission
+  slot until exact external/bootstrap containment and result disposition are
+  recorded. Queue/accounting absence, timeout, retention expiry, operator text,
+  and `scancel` success are insufficient containment evidence.
+- Clean session rollover requires cooperative empty-set retirement. Privileged
+  replacement enumerates assignments, provider claims/preparations, delivery,
+  controls, transfers, results/outputs, sequenced events, and outbox facts; every
+  member must be terminal/released or positively contained before a new zero-
+  availability session starts.
+- Required state mutations and event acknowledgements become successful only
+  after their SQLite transactions meet the configured crash-durability
+  contract. Explicit initialization is the only operation that may create a
+  verified absent/empty role root. Ordinary open/start against an expected root
+  that is missing, corrupt, or bound to another role identity is lost-state
+  recovery and blocks; it never becomes an empty restart.
+- Transfer authorization expiry stops only later byte operations. Stable
+  transfer identity and exact progress survive renewal, coordinator restart,
+  and replay; neither expiry nor reconnect releases work or deletes staged data.
+- Coordinator offer/fallback/status time is accepted through one persisted
+  nondecreasing high-water. A local clock regression or out-of-policy jump
+  degrades and pauses new scheduling, withholds retained offers, and requires
+  coherent time/session reconciliation rather than extending stale capacity.
+
+### Guarded-recovery operator procedure
+
+Use guarded recovery only for an assignment whose ordinary result is unknown.
+For a new request, Loom first revalidates the complete identity and requires a
+target-owned unknown observation: an exact local supervisor start uncertainty,
+an expired observation for the exact retained remote-agent process, or an
+unavailable/explicitly `UNKNOWN` scheduler observation for the exact retained
+SLURM job. A locally running process, a remotely observed live process, or a
+SLURM job observed as active is not eligible. Loom rejects active, terminal,
+version-stale, or identity-mismatched requests before writing recovery intent,
+so rejection does not freeze ordinary work.
+
+Copy the complete immutable assignment, attempt, fence, state-version, and
+target identity from current joined status; do not reconstruct missing values.
+The request deliberately contains no containment claim:
+
+```python
+from loom.queue import ManagedRecoveryTarget, RecoverUnknownAssignment
+
+request = RecoverUnknownAssignment(
+    recovery_id="recovery-2026-08-26-1",
+    run_uri=run_uri,
+    stage_name="train",
+    attempt=1,
+    stage_work_id=stage_work_id,
+    assignment_id=assignment_id,
+    process_execution_id=process_execution_id,
+    execution_fence=execution_fence,
+    target=ManagedRecoveryTarget(agent_id, session_id),
+    expected_state_version=state_version,
+    requested_outcome="failed",
+    consider_retry=True,
+    reason="operator incident reference and containment investigation",
+)
+receipt = operator.recover_unknown(request)
+```
+
+Submit the same `recovery_id` and identical request again after a timeout or
+coordinator restart. Never create a new recovery ID merely because a response
+was lost. Interpret the receipt conservatively:
+
+```text
+pending     target-owned containment evidence has not arrived; retry the same request
+unknown     exact positive containment was not proved; no lifecycle close occurred
+superseded  a complete ordinary terminal result won; use that result
+closed      recovery won; the old execution fence stays stale permanently
+```
+
+A `closed` receipt may include one decision from the existing retry policy, but
+it does not release the old agent claim or SLURM profile slot. Keep that
+capacity unavailable until its physical owner supplies its separate exact
+release proof. These recovery tables and protocol fields are a hard cut: point
+the new runtime at freshly initialized coordinator and agent roots rather than
+attempting to open or upgrade an older schema.
+
+### Lost-session replacement operator procedure
+
+Replacement is for a permanently unavailable agent root. It is not a shortcut
+for normal maintenance. If the old agent can still cooperate and has no work,
+use clean retirement instead.
+
+The coordinator makes the safety decision. The operator supplies only a stable
+operation ID, the stable agent ID, and a reason:
+
+```python
+from loom.queue import SessionReplacementRequest
+
+request = SessionReplacementRequest(
+    operation_id="replace-machine-b-2026-08-27",
+    agent_id="machine-b",
+    reason="encrypted agent disk was lost; incident INC-1234",
+)
+receipt = operator.replace_agent_session(request)
+```
+
+The operator does not supply the old session ID, claim IDs, or a containment
+claim. Loom derives the old session and joins its assignments, claims,
+deliveries, controls, transfers, results, events, recovery receipts, and
+authority state. Replacement fails without changing the session when that
+inventory is incomplete or any retained assignment lacks exact release or a
+closed guarded-recovery receipt.
+
+For a retained unknown assignment, finish guarded recovery first by writing the
+exact request copied from joined status to a protected JSON file and submitting
+it with the same recovery ID on every retry:
+
+```bash
+loom queue daemon-recover-unknown \
+  --endpoint COORDINATOR_SOCKET \
+  --request recovery.json \
+  --format json
+```
+
+After every affected assignment is released or positively contained, request
+the fence:
+
+```bash
+loom queue daemon-replace-agent-session \
+  --endpoint COORDINATOR_SOCKET \
+  --operation-id replace-machine-b-2026-08-27 \
+  --agent-id machine-b \
+  --reason "encrypted agent disk was lost; incident INC-1234" \
+  --format json
+```
+
+A successful first receipt has `state: decision` and `readiness: withheld`.
+That means the old session is permanently fenced; it does not mean capacity is
+available. Retry response-loss cases with the identical operation ID and
+arguments. Reusing the ID with changed content conflicts.
+
+Create a genuinely fresh agent root, then register it through the ordinary
+agent startup path with fresh configuration, inventory, availability, and
+retirement identities. The coordinator mints a different session ID. The new
+session inherits no old claim, token, process, transfer, event, or outbox state:
+
+```python
+from pathlib import Path
+
+from loom.queue import LocalDaemon
+
+LocalDaemon.initialize_agent_root(Path("/new/protected/agent-root"))
+
+# Ordinary agent registration happens next. Its first full provider offer is
+# observed at zero usable old capacity while retained old claims are withheld.
+```
+
+Polling is rejected until that fresh full provider offer and a post-fence
+old-reference recheck both succeed. Status then reports `state: ready` and
+`readiness: ready` with bounded owner counts. It never exposes claim IDs,
+credentials, private paths, or recovery evidence payloads.
+
+If the protected old root later returns, use its ordinary contained-assignment
+cleanup path. The old root releases its provider claim first; only then does the
+coordinator remove that claim from the successor's withholding set. Changing
+that set creates a new coordinator-only offer/availability identity, so newly
+usable capacity is published as a fresh immutable snapshot rather than a
+rewrite of the successor's raw observation.
+
+This is a hard cut-over. Protocol and coordinator/agent state are version 7;
+there is no migration, compatibility reader, or adoption of an old root. Keep
+old roots for incident evidence if needed, initialize new roots separately, and
+do not copy their SQLite files into the new runtime.
 
 ## Design Goals
 
@@ -409,12 +665,17 @@ run.planned
 run.started
 run.completed
 run.failed
+run.cancelled
+run.interrupted
+run.preparation_failed
 stage.planned
 stage.started
 stage.completed
 stage.failed
+stage.cancelled
 stage.skipped
 stage.reused
+stage.stale
 stage.blocked
 ```
 

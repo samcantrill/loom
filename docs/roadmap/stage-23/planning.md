@@ -12,13 +12,13 @@ Blockers: none
 
 V23 builds on the completed FIFO queue without reopening historical records. It
 lets one managed-local controller run several items against concrete static
-resources, without implementing v25's generic scheduler.
+resources, without implementing v26's generic scheduler.
 
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
-| Evidence | Current queue, coordination, config, status, tests, completed v11, and roadmap v25 were inspected at the stated baseline. | None. | Preserve the existing end-to-end path and import direction. |
+| Evidence | Current queue, coordination, config, status, tests, completed v11, and roadmap v26 were inspected at the stated baseline. | None. | Preserve the existing end-to-end path and import direction. |
 | Functionality | A selected managed pool reconciles all active items, fills to a positive configured limit, defers ordinary pre-start capacity shortage, renews live leases, and exposes redacted assignment/log evidence. Existing behavior defaults to one active item. | None. | Hold the behavior boundary. |
 | Design safety | Removal-first review removed recovery/provider machinery without a consumer, per-renewal queue writes, a resource-instance schema, configurable log paths, and premature scheduler reuse claims. | None. | Keep private names and representations open. |
 | Validation and phases | Three accepted vertical phases cover safe cycling, managed-local assignment/lifecycle, and operator proof. | None. | Review the manifest and linked phase plans. |
@@ -28,7 +28,7 @@ resources, without implementing v25's generic scheduler.
 
 | Source or area | Current finding | Used for | Related IDs |
 | --- | --- | --- | --- |
-| `docs/roadmap.md`, completed v11 artifacts, and v25 | V11 owns a narrow whole-run FIFO queue; v25 must decide generic scheduling and explicitly defers new scheduler policy until its design stage. | Placement and non-goals. | FR-1, FR-12 |
+| `docs/roadmap.md`, completed v11 artifacts, and v26 | V11 owns a narrow whole-run FIFO queue; v26 must decide generic scheduling and explicitly defers new scheduler policy until its design stage. | Placement and non-goals. | FR-1, FR-12 |
 | Queue feature docs and `src/loom/queue/` | `run_once()` changes at most one item; dispatch is complete-or-active; the local adapter holds process and admission state in memory; status serializes broad handle evidence. | Compatibility, lifecycle, and redaction boundaries. | FR-1 through FR-10 |
 | Queue repository and SQLite implementation | FIFO columns exist, but claim is a read followed by an unguarded update and later mutations check too little identity. The serialized item can hold safe assignment evidence without new tables. | Atomic claim, CAS, and schema choice. | FR-4, FR-5, FR-10 |
 | Resource admission and coordination stores | Scalar acquisition compensates partial success, but retryability is partly inferred from exception text; leases can renew and are authority-owned. | Typed outcomes, static slots, and renewal. | FR-3, FR-6 through FR-9 |
@@ -84,7 +84,7 @@ resources, without implementing v25's generic scheduler.
 | FR-9 | A live managed owner renews scalar and assignment leases before a tested safety deadline. Definitive ownership loss or an unresolved outage at the deadline stops new fill and terminates the process group; resources are released only after exit is observed. | No guarantee after controller death, unkillable process, or missed scheduling deadline; no reattachment. | Fake-clock renew/loss/kill tests. | locked with accepted risk |
 | FR-10 | Each attempt writes distinct deterministic stdout/stderr files under queue state. Persisted/status evidence is allowlisted: safe provider/slot labels, owner/session, PID/PGID, resource/lease IDs and expiry, and queue-relative log paths; it excludes fencing tokens, command/cwd, environment names and values, and provider-private payloads. | No configurable external paths or log-follow command. Existing broad evidence remains readable but is never emitted raw by the new summary. | Collision, legacy-record, redaction, and JSON/text parity tests. | locked |
 | FR-11 | Preflight validates new config shape, positive limits, unique/non-colliding slot keys, binding conflicts within static inventory, and required authority capabilities/limits. Item-specific requests remain validated at enqueue/provider boundaries. | Queue never provisions authority limits; avoid duplicate future-work validation. | Focused negative config and runtime boundary tests. | locked |
-| FR-12 | Delegated SLURM, fake/custom/synchronous adapters, CPU-only managed pools, queue identity, and scheduler-neutral records remain compatible. This stage adds no general scheduling vocabulary on v25's behalf. | No SLURM mapping change. | Existing suites and import/public-surface tests. | locked |
+| FR-12 | Delegated SLURM, fake/custom/synchronous adapters, CPU-only managed pools, queue identity, and scheduler-neutral records remain compatible. This stage adds no general scheduling vocabulary on v26's behalf. | No SLURM mapping change. | Existing suites and import/public-surface tests. | locked |
 
 ## Functionality And Design Agreement
 
@@ -96,7 +96,7 @@ resources, without implementing v25's generic scheduler.
 | A-4 | FR-6, FR-7, FR-10 | Keep logical requests portable and assignment local to execution. Persist one schema-tagged, allowlisted assignment subdocument in existing handle evidence rather than a public resource-instance record/table. | Provider-private recovery data is not durable. | repo-resolved |
 | A-5 | FR-2, FR-11, FR-12 | Accept schema-v1 queue config unchanged; new declarative settings use schema v2 and normalize legacy defaults. Constructor injection stays first-class. Do not add a separate plugin registry, configurable log schema, or independently versioned status envelope. | Writers using new settings must opt into v2. | repo-resolved |
 | A-6 | FR-9 | Guarantee timely renewal and fail-closed action only while the controller/session is alive and cycling. A generated session distinguishes a restarted adapter from its previous in-memory work; foreign sessions count as active but require existing explicit recovery. | Controller crash can leave a process alive past lease expiry. | accepted limitation |
-| A-7 | FR-12 | Keep assignment an adapter mechanism, not a scheduler decision. V25 may reuse concepts only after reviewing queue, stage, authority, and executor contracts together. | No promised future scheduler reuse. | repo-resolved |
+| A-7 | FR-12 | Keep assignment an adapter mechanism, not a scheduler decision. V26 may reuse concepts only after reviewing queue, stage, authority, and executor contracts together. | No promised future scheduler reuse. | repo-resolved |
 
 ## Minimum Design
 
@@ -215,7 +215,7 @@ Accepted risks and revisit triggers:
   a current environment or two downstream providers duplicate bootstrap code.
 - Revisit queue DDL when measured query/CAS behavior requires an index, revision,
   or first-class safe evidence column.
-- Revisit generic scheduling only in v25's cross-contract design review.
+- Revisit generic scheduling only in v26's cross-contract design review.
 
 ## Decisions And Deferrals
 
@@ -225,5 +225,5 @@ Accepted risks and revisit triggers:
 | Persistence | Reuse QueueItem/SQLite schema v1 and schema-tagged safe handle evidence; config advances compatibly to v2. | Proven query, migration, or recovery consumer. |
 | Multi-controller behavior | Atomic claims and authority leases are hard safety; `max_active_items` is not a distributed semaphore. | Exact cross-controller quota requirement. |
 | Crash behavior | Live timely owners renew and fail closed; controller death is recovery-needed, not fail-stop. | Unattended crash guarantee becomes accepted scope. |
-| Scheduler compatibility | Preserve scheduler-neutral queue/resource records without defining v25 policy. | Reviewed v25 scheduling design. |
+| Scheduler compatibility | Preserve scheduler-neutral queue/resource records without defining v26 policy. | Reviewed v26 scheduling design. |
 | Implementation authorization | Plan quality passed; Phase 1 may be selected only through its phase workflow. | A phase is selected. |

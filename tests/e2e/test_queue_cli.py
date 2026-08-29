@@ -12,6 +12,21 @@ import sys
 import pytest
 
 from loom.cli.main import main
+from loom.queue import (
+    LocalDaemon,
+    LocalDaemonConfig,
+    LocalDaemonPrincipal,
+    LocalDaemonRole,
+    LocalDaemonSocketServer,
+    ResidentWorkerLaunchProfile,
+)
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+from loom.queue.agent_sessions import (
+    AgentPolicyConfig,
+    AgentPrincipalPolicy,
+    AgentRegistration,
+    TransportPrincipalPolicy,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -112,6 +127,109 @@ def test_queue_cli_pool_status_uses_existing_v1_envelope(tmp_path: Path) -> None
     }
 
 
+def test_session_replacement_cli_uses_the_owner_socket_and_safe_result(
+    tmp_path: Path,
+) -> None:
+    owner = f"uid:{os.getuid()}"
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-credential",
+                "agent-principal",
+                "agent-a",
+                ("default",),
+                ("python",),
+            ),
+        ),
+        principals=(
+            TransportPrincipalPolicy(
+                "operator-credential",
+                owner,
+                "operator",
+                actions=("replace_session",),
+                agent_ids=("agent-a",),
+            ),
+        ),
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=tmp_path / "runs",
+        resident_worker_launch_profile=ResidentWorkerLaunchProfile(
+            Path.cwd(),
+            Path(sys.executable),
+            ResidentProfileDescriptor(
+                "test-local",
+                "v1",
+                "test-project",
+                "test-environment",
+                "test-executor",
+            ).to_dict(),
+        ),
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    agent = daemon.agent_view(
+        LocalDaemonPrincipal(
+            "agent-principal", LocalDaemonRole.AGENT, "agent-credential"
+        )
+    )
+    handshake = agent.handshake()
+    session = agent.register(
+        AgentRegistration(
+            idempotency_key="register-lost-agent",
+            coordinator_id=str(handshake["coordinator_id"]),
+            coordinator_epoch=str(handshake["coordinator_epoch"]),
+            agent_root_id="lost-agent-root",
+            config_revision="config-1",
+            inventory_revision="inventory-1",
+            availability_revision="availability-1",
+            declared_pools=("default",),
+            declared_capabilities=("python",),
+            retirement_verifier="01" * 32,
+        )
+    )
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server.start()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    try:
+        assert (
+            main(
+                [
+                    "queue",
+                    "daemon-replace-agent-session",
+                    "--endpoint",
+                    str(config.endpoint),
+                    "--operation-id",
+                    "replace-from-cli",
+                    "--agent-id",
+                    session.agent_id,
+                    "--reason",
+                    "old agent root is permanently unavailable",
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
+        )
+    finally:
+        server.stop()
+        daemon.stop()
+
+    assert stderr.getvalue() == ""
+    envelope = json.loads(stdout.getvalue())
+    assert envelope["result"]["state"] == "decision"
+    assert envelope["result"]["readiness"] == "withheld"
+    assert envelope["result"]["old_session_id"] == session.session_id
+    assert envelope["result"]["successor_session_id"] is None
+    assert "request_digest" not in envelope["result"]
+
+
 def test_managed_local_queue_example_is_rerunnable(tmp_path: Path) -> None:
     script = (
         REPO_ROOT
@@ -138,22 +256,15 @@ def test_managed_local_queue_example_is_rerunnable(tmp_path: Path) -> None:
                 f"managed-local example failed with exit {result.returncode}\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
-        assert "owner: example-runtime" in result.stdout
-        assert "item-1: slots=['slot-a', 'slot-b']" in result.stdout
-        assert "source=same_session_live" in result.stdout
-        assert "succeeded: 3" in result.stdout
-        assert "active: 0" in result.stdout
-        assert "queued: 0" in result.stdout
+        assert "coordinator: coordinator-" in result.stdout
+        assert "status: SUCCEEDED" in result.stdout
+        assert "stages: produce,consume" in result.stdout
+        assert "admissions: 1" in result.stdout
 
     run_roots = sorted(output_root.glob("run-*"))
     assert len(run_roots) == 2
     for run_root in run_roots:
-        logs = sorted((run_root / "queue-state" / "logs").rglob("*.log"))
-        stdout_logs = [path for path in logs if path.name.endswith(".stdout.log")]
-        assert len(logs) == 6
-        assert {path.read_text(encoding="utf-8").strip() for path in stdout_logs} == {
-            "item-1:a,b",
-            "item-2:a",
-            "item-3:b",
-        }
-        assert len({path.name for path in logs}) == len(logs)
+        assert (run_root / "coordinator" / "control.sqlite").is_file()
+        assert (run_root / "coordinator" / "execution.sqlite").is_file()
+        assert (run_root / "agent" / "journal.sqlite").is_file()
+        assert not (run_root / "coordinator" / "daemon.sock").exists()

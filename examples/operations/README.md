@@ -1,5 +1,9 @@
 # Operations Examples
 
+The [NVIDIA local GPU pool](nvidia-gpu-pool/README.md) example uses a fake
+command runner to demonstrate explicit discovery, whole/share/group plans, and
+a managed-local lifecycle without requiring NVIDIA hardware.
+
 Operations examples cover how users inspect, debug, and manage runs after or
 around execution: authority lifecycle, preflight checks, status, bounded logs,
 metadata-only artifact inspection, failure diagnostics, resource coordination,
@@ -19,13 +23,15 @@ workflows.
 | `operations.failing-run` | A stage failure followed by status and artifact diagnostics. |
 | `operations.resource-preflight` | Local executor resource warnings and strict preflight escalation. |
 | `operations.offline-import-rejections` | Stable machine-readable rejections for incomplete and conflicting offline imports. |
+| `operations.run-catalog-and-bundles` | Index and compare two runs, then export, inspect, import, and verify one payload. |
+| `operations.cleanup-and-gc` | Preview and explicitly delete registered temporary candidates while preserving runs and committed outputs. |
 | `operations.slurm-live-jobs` | Manual scheduler-aware status and cancellation commands for a real submitted SLURM run. |
 
 ## Public Python API Workflows
 
 | Example | Demonstrates |
 | --- | --- |
-| `operations.captured-logs` | Captured local stdout/stderr inspected with `loom logs`. |
+| `operations.captured-logs` | Captured local stdout/stderr, explicit file-backed output registration, and a separate workspace file. |
 | `operations.resource-leases` | Public authority-backed resource-limit and resource-lease coordination through the Python API. |
 | `operations.managed-local-queue` | Three local commands over two generic static slots with redacted pool status and separate logs. |
 
@@ -45,11 +51,16 @@ uv run python examples/operations/captured-logs/run_captured_logs.py
 uv run python examples/operations/resource-preflight/run_resource_preflight.py
 uv run python examples/operations/resource-leases/run_resource_leases.py
 uv run python examples/operations/offline-import-rejections/run_offline_import_rejections.py
+uv run python examples/operations/run-catalog-and-bundles/run_catalog_workflow.py
+uv run python examples/operations/cleanup-and-gc/run_cleanup_and_gc.py
 uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
 ```
 
 Set `LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to redirect generated
 run directories.
+
+For the stage-author journey and executor-specific log ownership, see
+[`docs/downstream-operations.md`](../../docs/downstream-operations.md).
 
 ## Full Example Integration Evidence
 
@@ -65,6 +76,10 @@ The following `validation: full` examples are supported by focused integration t
   `tests/integration/examples/test_example_workflows.py::test_example_resource_leases_coordinate_blocked_then_released_state`
 - `operations.offline-import-rejections`:
   `tests/integration/examples/test_example_workflows.py::test_example_offline_import_rejections_report_rejection_codes_and_acceptance`
+- `operations.run-catalog-and-bundles`:
+  `tests/integration/examples/test_example_workflows.py::test_example_run_catalog_and_bundles_compares_and_preserves_payload`
+- `operations.cleanup-and-gc`:
+  `tests/integration/examples/test_example_workflows.py::test_example_cleanup_and_gc_is_preview_first_and_candidate_only`
 - `operations.managed-local-queue`:
   `tests/e2e/test_queue_cli.py::test_managed_local_queue_example_is_rerunnable`
 

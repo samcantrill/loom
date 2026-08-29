@@ -32,6 +32,7 @@ from .errors import ExecutorError
 
 WORKER_MAIN_SNIPPET = "from loom.cli.main import main; raise SystemExit(main())"
 MAX_CAPTURE_SNIPPET_CHARS = 1000
+_INTERRUPT_CLEANUP_TIMEOUT_SECONDS = 5
 
 Clock = Callable[[], str]
 
@@ -75,6 +76,7 @@ class SubprocessExecutor:
         run_store: RunStore | None = None,
         python_executable: str | None = None,
         process_runner: ProcessRunner | None = None,
+        plugin_selectors: Sequence[str] = (),
         clock: Clock = utc_timestamp,
     ) -> None:
         if worker_results is None:
@@ -100,6 +102,7 @@ class SubprocessExecutor:
         self.worker_results = worker_results
         self.python_executable = python_executable or sys.executable
         self.process_runner = process_runner or _run_subprocess
+        self.plugin_selectors = tuple(plugin_selectors)
         self.clock = clock
 
     def execute(self, request: StageExecutionRequest) -> StageExecutionResult:
@@ -114,6 +117,7 @@ class SubprocessExecutor:
             stage_name=request.stage.name,
             attempt=request.attempt,
             authority_cli_args=request.worker_authority_cli_args,
+            plugin_selectors=self.plugin_selectors,
         )
         policy = timeout_policy_from_request(request)
         timeout_seconds = None if policy is None else policy.duration_seconds
@@ -305,6 +309,7 @@ def build_stage_worker_command(
     attempt: int,
     authority_config: AuthorityConfig | None = None,
     authority_cli_args: Sequence[str] = (),
+    plugin_selectors: Sequence[str] = (),
 ) -> tuple[str, ...]:
     """Return the command used to invoke the durable stage worker."""
 
@@ -339,6 +344,10 @@ def build_stage_worker_command(
         command.extend(authority_cli_args)
     elif authority_config is not None:
         command.extend(authority_config_to_cli_args(authority_config))
+    for selector in plugin_selectors:
+        if not isinstance(selector, str) or not selector:
+            raise ExecutorError("plugin_selectors must contain non-empty GROUP:NAME strings")
+        command.extend(("--plugin", selector))
     command.extend(("--format", "json"))
     return tuple(command)
 
@@ -348,18 +357,44 @@ def _run_subprocess(
     *,
     timeout_seconds: float | None = None,
 ) -> SubprocessRunResult:
-    completed = subprocess.run(
+    process = subprocess.Popen(
         tuple(command),
-        check=False,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout_seconds,
     )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except KeyboardInterrupt:
+        _terminate_and_observe(process)
+        raise
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        stdout, stderr = process.communicate()
+        if timeout_seconds is None:
+            raise AssertionError("subprocess timeout requires a configured deadline")
+        raise subprocess.TimeoutExpired(
+            tuple(command),
+            timeout_seconds,
+            output=stdout,
+            stderr=stderr,
+        ) from exc
     return SubprocessRunResult(
-        returncode=completed.returncode,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
     )
+
+
+def _terminate_and_observe(process: subprocess.Popen[str]) -> None:
+    """Terminate the owned worker and observe its exit before interrupt propagation."""
+
+    process.terminate()
+    try:
+        process.communicate(timeout=_INTERRUPT_CLEANUP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate(timeout=_INTERRUPT_CLEANUP_TIMEOUT_SECONDS)
 
 
 def _read_worker_result(

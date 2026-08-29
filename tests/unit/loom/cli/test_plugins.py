@@ -27,7 +27,6 @@ pytestmark = pytest.mark.unit
 
 _FUTURE_GROUPS = (
     LOOM_SOURCES_GROUP,
-    LOOM_EXECUTORS_GROUP,
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
@@ -82,7 +81,9 @@ def test_plugins_list_json_is_metadata_only(monkeypatch: pytest.MonkeyPatch) -> 
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["plugins", "list", "--format", "json"], stdout=stdout, stderr=stderr) == 0
+    assert (
+        main(["plugins", "list", "--format", "json"], stdout=stdout, stderr=stderr) == 0
+    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == plugins_command.PLUGINS_LIST_SCHEMA_VERSION
@@ -202,7 +203,9 @@ def test_plugins_check_reports_listing_only_group_as_nonzero(
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == plugins_command.PLUGINS_CHECK_SCHEMA_VERSION
     assert payload["ok"] is False
-    assert payload["result"]["unsupported_groups"] == [LOOM_ARTIFACT_STORE_BACKENDS_GROUP]
+    assert payload["result"]["unsupported_groups"] == [
+        LOOM_ARTIFACT_STORE_BACKENDS_GROUP
+    ]
     assert payload["result"]["records"][0]["status"] == "listing-only"
     assert stderr.getvalue() == ""
 
@@ -225,7 +228,9 @@ def test_plugins_list_labels_all_future_groups_listing_only(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["plugins", "list", "--format", "json"], stdout=stdout, stderr=stderr) == 0
+    assert (
+        main(["plugins", "list", "--format", "json"], stdout=stdout, stderr=stderr) == 0
+    )
 
     payload = json.loads(stdout.getvalue())
     by_group = {record["group"]: record for record in payload["result"]["records"]}
@@ -254,13 +259,58 @@ def test_plugins_list_labels_event_sinks_registry_ready(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["plugins", "list", "--format", "json"], stdout=stdout, stderr=stderr) == 0
+    assert (
+        main(["plugins", "list", "--format", "json"], stdout=stdout, stderr=stderr) == 0
+    )
 
     payload = json.loads(stdout.getvalue())
     record = payload["result"]["records"][0]
     assert record["group"] == LOOM_EVENT_SINKS_GROUP
     assert record["readiness"] == "registry-ready"
     assert record["status"] == "metadata"
+    assert stderr.getvalue() == ""
+
+
+def test_plugins_list_text_reports_facet_evidence_without_importing_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        plugins_command,
+        "_entry_point_provider",
+        _fake_provider(
+            (
+                _fake_entry_point(
+                    group=LOOM_EXECUTORS_GROUP,
+                    name="project",
+                    value="loom.plugins._project:executor",
+                ),
+            )
+        ),
+    )
+
+    def fail_import(name: str, package: str | None = None) -> ModuleType:
+        del package
+        raise AssertionError(f"listing-only target should not be imported: {name}")
+
+    monkeypatch.setattr(importlib, "import_module", fail_import)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["plugins", "list", "--group", LOOM_EXECUTORS_GROUP],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    output = stdout.getvalue()
+    assert "readiness loom.executors contract: supported" in output
+    assert "readiness loom.executors plugin_loading: supported" in output
+    assert "readiness loom.executors cli_selection: supported" in output
+    assert "readiness loom.sources registry: not_applicable" in output
+    assert "Run commands explicitly select ordinary executor plugins." in output
     assert stderr.getvalue() == ""
 
 
@@ -367,14 +417,19 @@ def test_plugins_check_requires_selector() -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["plugins", "check", "--format", "json"], stdout=stdout, stderr=stderr) == 2
+    assert (
+        main(["plugins", "check", "--format", "json"], stdout=stdout, stderr=stderr)
+        == 2
+    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["error"]["code"] == "cli.plugins.check_requires_selector"
     assert stderr.getvalue() == ""
 
 
-def test_plugins_help_does_not_discover_entry_points(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plugins_help_does_not_discover_entry_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fail_provider() -> tuple[object, ...]:
         raise AssertionError("entry point discovery should not happen for help")
 

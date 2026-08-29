@@ -125,6 +125,7 @@ _EXPOSED = (
     "write_timeout_outcome",
     "list_timeout_outcomes",
     "record_output_commit",
+    "list_output_commits",
     "append_event_sink_failure",
     "read_event_sink_failures",
     "append_event_observer_link",
@@ -561,6 +562,7 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
     ) -> OutputCommit:
         return cast(
@@ -575,10 +577,18 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
                     outputs={
                         name: artifact.to_dict() for name, artifact in outputs.items()
                     },
+                    supersedes_commit_id=supersedes_commit_id,
                     reason=_reason_to_wire(reason),
                 )
             ),
         )
+
+    def list_output_commits(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[OutputCommit, ...]:
+        return tuple(OutputCommit.from_dict(record) for record in cast(
+            tuple[object, ...], self._call("list_output_commits", run_uri, stage_name=stage_name)
+        ))
 
     def append_audit_event(
         self, run_uri: str, event: PipelineEvent
@@ -774,6 +784,7 @@ class _RunState:
         self.leases: dict[str, LeaseRecord] = {}
         self.submitted: dict[str, SubmittedOperationRecord] = {}
         self.commits: dict[str, OutputCommitRecord] = {}
+        self.output_commits: list[OutputCommit] = []
         self.facts: dict[str, list[ArtifactFactRecord]] = {}
         self.cleanup: list[CleanupCandidate] = []
         self.cleanup_reports: dict[str, CleanupReportFact] = {}
@@ -977,7 +988,10 @@ class _ServiceAuthorityCore:
     ) -> AttemptAllocation:
         with self._lock:
             state = self._require_run(run_uri)
-            if stage_name in state.commits:
+            if (
+                stage_name in state.commits
+                and state.stage_statuses.get(stage_name) is not StageStatus.STALE
+            ):
                 raise ValueError("stage already has an output commit")
             if (
                 lease_ttl_seconds is not None
@@ -1019,6 +1033,13 @@ class _ServiceAuthorityCore:
     ) -> LeaseRecord:
         with self._lock:
             state = self._require_run(run_uri)
+            if any(
+                lease.kind is LeaseKind.CONTROLLER
+                and lease.state is LeaseState.ACTIVE
+                and not self._lease_expired(lease)
+                for lease in state.leases.values()
+            ):
+                raise AuthorityStoreError("run already has an active controller lease")
             return self._new_lease(
                 state,
                 kind=LeaseKind.CONTROLLER,
@@ -1295,12 +1316,17 @@ class _ServiceAuthorityCore:
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, object],
+        supersedes_commit_id: str | None = None,
         reason: object = None,
     ) -> dict[str, PlainData]:
         with self._lock:
             state = self._require_run(run_uri)
-            if stage_name in state.commits:
-                raise ValueError("stage already has an output commit")
+            current = state.commits.get(stage_name)
+            if current is None:
+                if supersedes_commit_id is not None:
+                    raise ValueError("output commit has no current predecessor")
+            elif supersedes_commit_id != current.commit_id:
+                raise ValueError("stale or missing output commit current head")
             lease = self._require_stage_fence(
                 state, stage_name, attempt_id, fencing_token
             )
@@ -1313,6 +1339,7 @@ class _ServiceAuthorityCore:
                 committed_at=self._now(),
                 revision=revision,
                 output_names=tuple(outputs),
+                supersedes_commit_id=supersedes_commit_id,
             )
             facts = tuple(
                 ArtifactFactRecord(
@@ -1325,6 +1352,7 @@ class _ServiceAuthorityCore:
             )
             state.commits[stage_name] = commit
             state.facts[stage_name] = list(facts)
+            state.output_commits.append(OutputCommit(commit=commit, artifact_facts=facts))
             self._replace_lease(
                 state,
                 lease,
@@ -1355,6 +1383,16 @@ class _ServiceAuthorityCore:
             state.stage_statuses[stage_name] = StageStatus.SUCCEEDED
             state.revision = revision
             return OutputCommit(commit=commit, artifact_facts=facts).to_dict()
+
+    def list_output_commits(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            return tuple(
+                record.to_dict()
+                for record in self._require_run(run_uri).output_commits
+                if stage_name is None or record.commit.stage_name == stage_name
+            )
 
     def append_audit_event(self, run_uri: str, event: object) -> dict[str, PlainData]:
         with self._lock:

@@ -1,0 +1,12 @@
+name: event-sink-example
+schema_version: 1
+pipeline:
+  name: event-sink-example
+  stages:
+    - name: publish
+      factory:
+        _target_: stages:PublishStage
+      outputs:
+        report:
+          artifact_type: text
+          codec_key: text.v1

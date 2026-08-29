@@ -21,6 +21,7 @@ def test_pipeline_planning_public_exports_are_phase_scoped() -> None:
         "STAGE_FINGERPRINT_POLICY_VERSION",
         "STAGE_FINGERPRINT_SCHEMA_VERSION",
         "BoundInput",
+        "AttemptReadiness",
         "ExecutionPlan",
         "FingerprintContext",
         "FingerprintStatus",
@@ -35,6 +36,8 @@ def test_pipeline_planning_public_exports_are_phase_scoped() -> None:
         "PlanningValidationError",
         "ResumeCheck",
         "ResumeOptions",
+        "ReadinessAttemptView",
+        "RetryAuthorization",
         "ResumeStateError",
         "SelectorValidationError",
         "StageFingerprintError",
@@ -48,6 +51,7 @@ def test_pipeline_planning_public_exports_are_phase_scoped() -> None:
         "PlanExplanation",
         "StageExplanation",
         "plan_pipeline",
+        "evaluate_attempt_readiness",
     ]
     assert "plan_pipeline" not in loom.__all__
     assert "plan_pipeline" not in loom.pipeline.__all__

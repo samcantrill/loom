@@ -1,0 +1,52 @@
+schema_version: 1
+kind: loom.coordinator-service
+deployment_root: .state/coordinator-deployment
+run_store_root: ../../../runs
+machine_id: local-machine
+poll_interval_seconds: 0.05
+max_accepted_time_step_seconds: 3600
+
+embedded_profile:
+  descriptor:
+    profile_id: local-default
+    revision: v1
+    project_fingerprint: example-project-v1
+    environment_fingerprint: example-environment-v1
+    executor_fingerprint: local-executor-v1
+  project_root: ../../..
+  python_executable: ../../../.venv/bin/python
+  cpu_capacity: 2
+  memory_capacity_bytes: 0
+  gpu_devices: []
+  environment:
+    LOOM_EXAMPLE_MODE: "1"
+
+remote_profiles:
+  - profile_id: remote-default
+    revision: v1
+    project_fingerprint: example-project-v1
+    environment_fingerprint: example-environment-v1
+    executor_fingerprint: local-executor-v1
+
+agent_policy:
+  revision: policy-1
+  agents:
+    - credential_id: remote-agent-certificate
+      principal_id: remote-agent-principal
+      agent_id: machine-B
+      pools: [default]
+      capabilities:
+        - python
+        - remote-stage-execution-v3
+        - regular-file-relay-v1
+      gpu_devices: []
+  principals: []
+
+agent_server:
+  host: 127.0.0.1
+  port: 8443
+  certificate_path: tls/coordinator.crt
+  private_key_path: tls/coordinator.key
+  client_ca_path: tls/ca.crt
+  credential_fingerprints:
+    "0000000000000000000000000000000000000000000000000000000000000000": remote-agent-certificate

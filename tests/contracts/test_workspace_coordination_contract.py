@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -26,6 +27,7 @@ from loom.pipeline.stores import (
     AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LIMITS_ENSURE_PATH,
     AUTHORITY_COORDINATION_SWEEP_CREATE_PATH,
     AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH,
     AUTHORITY_COORDINATION_TRIAL_LIST_PATH,
@@ -118,6 +120,9 @@ _COORDINATION_OPERATIONS = {
     ),
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH: (
         AuthorityMutationOperation.SET_RESOURCE_LIMIT
+    ),
+    AUTHORITY_COORDINATION_RESOURCE_LIMITS_ENSURE_PATH: (
+        AuthorityMutationOperation.ENSURE_RESOURCE_LIMITS
     ),
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH: (
         AuthorityMutationOperation.READ_RESOURCE_LIMIT
@@ -248,9 +253,7 @@ def test_workspace_coordination_contract_records_cross_run_facts_only(
         if record.trial_id is not None
     } == {("workspace-1", "sweep-1", "trial-1")}
     expected_resource_recovery = (
-        {("workspace-1", "gpu", 2)}
-        if coordination_case.supports_resources
-        else set()
+        {("workspace-1", "gpu", 2)} if coordination_case.supports_resources else set()
     )
     assert {
         (record.workspace_id, record.resource_key, record.amount)
@@ -304,7 +307,9 @@ def test_workspace_coordination_contract_fences_leases_and_counters(
             owner_id="worker-2",
             lease_ttl_seconds=10,
         )
-    with pytest.raises(CoordinationStoreError, match="stale or foreign lease token") as stale:
+    with pytest.raises(
+        CoordinationStoreError, match="stale or foreign lease token"
+    ) as stale:
         store.renew_lease(
             trial_lease.lease.lease_id,
             owner_id="worker-2",
@@ -415,6 +420,74 @@ def test_workspace_coordination_contract_reports_local_safety_limits(
         "unsafe_remote_coordination",
     ]
     assert all(diagnostic.severity.value == "error" for diagnostic in diagnostics)
+
+
+def test_resource_limit_ensure_is_atomic_create_or_match(
+    coordination_case: CoordinationStoreCase,
+) -> None:
+    store = coordination_case.store
+    store.create_workspace(WorkspaceIdentity("workspace-ensure"))
+
+    created = store.ensure_resource_limits("workspace-ensure", {"gpu-b": 2, "gpu-a": 1})
+
+    assert [counter.counter_name for counter in created] == [
+        "resource:gpu-a",
+        "resource:gpu-b",
+    ]
+    assert [counter.limit for counter in created] == [1, 2]
+    assert (
+        store.ensure_resource_limits("workspace-ensure", {"gpu-a": 1, "gpu-b": 2})
+        == created
+    )
+
+    with pytest.raises(CoordinationStoreError) as mismatch:
+        store.ensure_resource_limits(
+            "workspace-ensure", {"gpu-a": 1, "gpu-b": 3, "gpu-c": 1}
+        )
+
+    assert mismatch.value.kind is CoordinationFailureKind.INVALID_OR_UNSUPPORTED
+    assert store.read_resource_limit("workspace-ensure", "gpu-a").limit == 1  # type: ignore[union-attr]
+    assert store.read_resource_limit("workspace-ensure", "gpu-b").limit == 2  # type: ignore[union-attr]
+    assert store.read_resource_limit("workspace-ensure", "gpu-c") is None
+
+
+def test_sqlite_resource_limit_ensure_does_not_partially_apply_a_race(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "coordination.sqlite"
+    first = SQLiteWorkspaceCoordinationStore(path)
+    second = SQLiteWorkspaceCoordinationStore(path)
+    first.create_workspace(WorkspaceIdentity("workspace-race"))
+
+    def ensure(store: SQLiteWorkspaceCoordinationStore, limits: dict[str, int]):
+        try:
+            return store.ensure_resource_limits("workspace-race", limits)
+        except CoordinationStoreError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        left, right = tuple(
+            pool.map(
+                lambda item: ensure(*item),
+                (
+                    (first, {"gpu-a": 1, "gpu-b": 1}),
+                    (second, {"gpu-a": 1, "gpu-b": 2}),
+                ),
+            )
+        )
+
+    assert (
+        sum(not isinstance(result, CoordinationStoreError) for result in (left, right))
+        == 1
+    )
+    assert (
+        sum(isinstance(result, CoordinationStoreError) for result in (left, right)) == 1
+    )
+    limits = {
+        key: first.read_resource_limit("workspace-race", key).limit  # type: ignore[union-attr]
+        for key in ("gpu-a", "gpu-b")
+    }
+    assert limits in ({"gpu-a": 1, "gpu-b": 1}, {"gpu-a": 1, "gpu-b": 2})
 
 
 @pytest.mark.parametrize(

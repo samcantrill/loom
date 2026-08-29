@@ -16,6 +16,7 @@ from loom.plugins import (
     LOOM_EVENT_SINKS_GROUP,
     LOOM_EXECUTORS_GROUP,
     LOOM_RECIPES_GROUP,
+    LOOM_RESOURCE_VALIDATORS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SOURCES_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
@@ -53,11 +54,21 @@ def _module_for_name(name: str, with_factory: bool = True) -> ModuleType:
     return module
 
 
-def test_metadata_listing_does_not_import_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_metadata_listing_does_not_import_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = _fake_provider(
         [
-            _DummyEP(group=LOOM_CODECS_GROUP, name="one", value="loom.plugins.contract_a:factory"),
-            _DummyEP(group=LOOM_RECIPES_GROUP, name="two", value="loom.plugins.contract_b:factory"),
+            _DummyEP(
+                group=LOOM_CODECS_GROUP,
+                name="one",
+                value="loom.plugins.contract_a:factory",
+            ),
+            _DummyEP(
+                group=LOOM_RECIPES_GROUP,
+                name="two",
+                value="loom.plugins.contract_b:factory",
+            ),
         ]
     )
 
@@ -72,7 +83,9 @@ def test_metadata_listing_does_not_import_targets(monkeypatch: pytest.MonkeyPatc
     assert records[1].value == "loom.plugins.contract_b:factory"
 
 
-def test_selected_loading_only_imports_selected_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_selected_loading_only_imports_selected_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     selected = PluginRecord(
         group=LOOM_CODECS_GROUP,
         name="selected",
@@ -143,6 +156,7 @@ def test_future_group_constants_are_metadata_contracts_only() -> None:
         LOOM_RUN_EXPORTERS_GROUP,
         LOOM_SWEEP_PROVIDERS_GROUP,
         LOOM_EVENT_SINKS_GROUP,
+        LOOM_RESOURCE_VALIDATORS_GROUP,
     )
 
     assert not hasattr(entrypoints, "load_source_entry_points")

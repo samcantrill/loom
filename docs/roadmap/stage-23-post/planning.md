@@ -2,13 +2,13 @@
 
 Status: confirmed; implementation-plan quality gate passed
 Roadmap stage: 23-post
-Evidence tree: `/home/can134/work/active/loom` at `4c7059bcf4358da866700df416d068eaab62c80b`; relevant pre-existing dirty paths are `docs/roadmap.md`, `docs/roadmap/stage-24/**`, and `src/loom/queue/models.py`; broader unrelated dirty work was not used or changed
+Evidence tree: `/home/can134/work/active/loom` at `4c7059bcf4358da866700df416d068eaab62c80b`; relevant pre-existing dirty paths are `docs/roadmap.md`, `docs/roadmap/stage-25/**`, and `src/loom/queue/models.py`; broader unrelated dirty work was not used or changed
 Planning route: expanded because the stage adds one public runtime surface and an explicit trust boundary for local-process crash recovery; the manager completed a removal-first review locally and did not use an optional spawned review
 Current gate: planning workflow complete; Phase 1 not started
 Blockers: none
 
-This follows completed Stage 23 without replacing Stage 25 or reopening Stage
-24 queue-selection policy.
+This follows completed Stage 23 without replacing Stage 26 or reopening Stage
+25 queue-selection policy.
 
 ## Current State
 
@@ -24,7 +24,7 @@ This follows completed Stage 23 without replacing Stage 25 or reopening Stage
 | Controller and local adapter | Cycles reconcile before fill and stop on degradation; process/provider state and renewal deadlines are in memory; foreign local work is not mutated. | Runtime, health, recovery. | FR-4 through FR-8 |
 | Config, assignments, and preflight | Static inventory parses and amount two already leases two slots, but no config-to-runtime factory exists. | Factory and resources. | FR-2, FR-3, FR-10 |
 | Status, example, and e2e | Status is persistence-first and live only for matching owner/session. The example mismatches `example-controller` and `controller-1`, and its test misses the fallback. | Truthful status and defect. | FR-1, FR-9, FR-11 |
-| Roadmap and Stage 24 | Stage 23 status text is stale. Stage 24 owns candidate selection, not managed-local process maintenance. | Docs and compatibility. | FR-11, FR-12 |
+| Roadmap and Stage 25 | Stage 23 status text is stale. Stage 25 owns candidate selection, not managed-local process maintenance. | Docs and compatibility. | FR-11, FR-12 |
 
 - User-visible outcome: a downstream project can construct and operate one
   managed-local queue pool with one small Python API instead of manually
@@ -76,7 +76,7 @@ This follows completed Stage 23 without replacing Stage 25 or reopening Stage
 | FR-9 | Runtime status separates live in-process health from persisted pool evidence and states that hardware/lease liveness was not observed. Same-session process status remains explicitly labelled; persisted expiry evidence is never described as current availability. | No new authority lease-read API or hardware probe. | Existing `QueuePoolStatus`. | Plain-data shape and wording tests. | locked |
 | FR-10 | Documentation and validated examples show the normal two-slot request (`resources={"accelerator": 2}`) and a custom indivisible-bundle provider that acquires the same underlying physical member keys used by every other allocator. | No weighted built-in slot or synthetic bundle key that can overlap separate member allocation. | Existing provider protocol and leases. | Two-slot integration plus acquire-all/rollback/release provider tests. | locked |
 | FR-11 | Fix the example owner mismatch, assert `same_session_live`, correct stale Stage 23 roadmap status, and document POSIX/supervisor/recovery expectations. | No broad historical-plan rewrite. | Existing example/e2e/docs. | Example rerun and docs review. | locked |
-| FR-12 | Fake, delegated SLURM, direct controller, schema-v1, CPU-only, and Stage 24 selection behavior remain compatible. The runtime calls the controller's public cycle and owns no candidate policy. | Managed-local runtime is opt-in. | Existing contracts. | Focused compatibility and import-boundary tests. | locked |
+| FR-12 | Fake, delegated SLURM, direct controller, schema-v1, CPU-only, and Stage 25 selection behavior remain compatible. The runtime calls the controller's public cycle and owns no candidate policy. | Managed-local runtime is opt-in. | Existing contracts. | Focused compatibility and import-boundary tests. | locked |
 
 ## Functionality Agreement
 
@@ -132,7 +132,7 @@ This follows completed Stage 23 without replacing Stage 25 or reopening Stage
   lease mutation; existing durable schemas unchanged.
 - Private discretion covers helpers, waits, classification, factory layout, and
   internal exceptions. The assignment provider remains the topology seam;
-  Stage 24 may change controller candidate policy, not runtime maintenance.
+  Stage 25 may change controller candidate policy, not runtime maintenance.
 - Import and dependency direction: `loom.queue.managed_local` may import
   queue-local modules and public `loom.pipeline.stores` contracts. Core
   controller/config/service modules must not import the managed-local runtime.
@@ -202,7 +202,7 @@ Causal interactions requiring combined coverage:
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Safe managed-local runtime | Downstream can construct one runtime, validate it, serve it with automatic maintenance, see truthful health, stop by draining, and fail closed on foreign work. | Runtime module plus the smallest controller/resources seams; no foreign resolution, cancel mode, daemon, or docs migration. | Stage 23 merged; independent of Stage 24 policy. | Owner, factory, static/custom provider, validation, wake timing, degraded no-refill, recovery gate, drain, status, and import tests pass. | pending |
+| 1. Safe managed-local runtime | Downstream can construct one runtime, validate it, serve it with automatic maintenance, see truthful health, stop by draining, and fail closed on foreign work. | Runtime module plus the smallest controller/resources seams; no foreign resolution, cancel mode, daemon, or docs migration. | Stage 23 merged; independent of Stage 25 policy. | Owner, factory, static/custom provider, validation, wake timing, degraded no-refill, recovery gate, drain, status, and import tests pass. | pending |
 | 2. Explicit recovery and shutdown | Operators can explicitly resolve contained foreign work as unknown and request bounded cancel shutdown without lease takeover or early release. | Recovery transition/audit and runtime shutdown only; no PID kill, reattach, requeue, or lease read API. | Phase 1 merged. | Crash, two-slot crash, attestation, CAS, no-release, cancel, pending-exit, and timeout tests pass. | pending |
 | 3. Downstream operations proof | Canonical docs/example use the runtime correctly, prove a two-slot item, provide a safe bundle-provider pattern, and explain supervisor/status/recovery boundaries. | Examples/docs/tests and small Stage 23 defects; no core GPU logic or generic operations redesign. | Phase 2 merged. | Rerunnable e2e reports `same_session_live`, two slots, correct logs/counts; bundle tests and docs review pass. | pending |
 
@@ -241,7 +241,7 @@ Accepted risks and revisit triggers:
 
 | Item | Decision or deferral | Rationale | Revisit trigger |
 | --- | --- | --- | --- |
-| Roadmap placement | Use Stage 23-post and leave Stage 25's broad design scope intact. | This is a demonstrated Stage 23 operational follow-up. | Maintainer prefers folding it into Stage 25. |
+| Roadmap placement | Use Stage 23-post and leave Stage 26's broad design scope intact. | This is a demonstrated Stage 23 operational follow-up. | Maintainer prefers folding it into Stage 26. |
 | Runtime identity/scope | `spec.controller.owner_id`; one managed pool. | Prevents mismatch and matches one cycle owner. | Multi-tenant or atomic multi-pool requirement. |
 | Default stop | Drain. | Preserves work by default. | Deployments consistently require cancel-on-restart. |
 | Crash/leases | Mark contained foreign work `UNKNOWN`; never mutate its leases. | No trustworthy result/token survives; authority owns expiry. | Durable reattachment or safe authority recovery exists. |

@@ -22,6 +22,12 @@ resource limits.
 Pool status is a read-only operation and likewise does not refresh durable lease
 acquisition evidence or turn a preflight result into live process proof.
 
+NVIDIA local GPU observation is deliberately outside default queue preflight.
+An operator explicitly imports `loom.queue.gpu.nvidia`, calls discovery once,
+then explicitly prepares authority limits before constructing a runtime. This
+avoids command execution while loading config, importing Loom, or performing a
+generic preflight check.
+
 ## Scope
 
 Preflight owns:
@@ -496,6 +502,87 @@ git metadata availability
 
 Environment capture should not make a run fail unless required information is
 missing for the selected execution mode.
+
+## Stage 29 Daemon, Agent, And Ready-Stage SLURM Preflight Direction
+
+Stage 29 adds deployment preflight for the persistent coordinator and agent
+composition. It validates configured evidence without admitting a run,
+publishing capacity, changing a session, or launching a process:
+
+```text
+coordinator and agent state roots are explicit and distinct after resolution
+roots are owner-permissioned local filesystem state, not shared/NFS signalling
+SQLite schema, writable durability/locking behavior, and storage headroom pass
+stable role identity and current process-lock expectations are coherent
+requested state-root operation is explicit initialize or open-only start
+initialize target is verified absent/empty, or open target is readable and identity-bound
+coordinator accepted-time source/high-water is coherent or reports degraded
+coordinator/authority endpoint and expected service/workspace are configured
+mTLS trust, credential references, principal roles, and pool scopes are present
+configured resource planner/provider/claim contracts and retained descriptors
+can be reconstructed
+configured manageable resources exclude capacity the provider cannot account for
+resident project/environment/executor fingerprints are configured
+agent restart begins at zero availability and names the intended session path
+agent configuration declares outbound coordinator connectivity and no inbound scheduler
+coordinator principal policy intersects agent identity, pools, capabilities, and contracts
+each enabled SLURM profile has stable identity/fingerprint and authorized callers
+profile account/partition/QoS/directive mappings are allowlisted protected config
+every supported canonical hard request maps completely without weakening
+submit/status/cancel and exact operation-ID discovery capabilities are configured
+resident bootstrap project/environment and coordinator data path are compatible
+assignment-scoped bootstrap credential delivery is protected and secret-safe
+profile outstanding/inspection/retention/message bounds are valid
+secret values are protected references and excluded from job/worker configuration
+```
+
+Where portable code cannot prove the filesystem type, preflight reports the
+requirement and rejects a root configured or detected as shared/unsupported; it
+does not claim a universal remote-mount detector. Alias, permission, lock,
+schema, fsync/rename, and high-water failures are definite failures for
+production role state. Required-store failure never suggests an in-memory
+fallback. A configured existing role whose expected root is missing, corrupt, or
+identity-mismatched is reported as lost-state recovery; it is not initialized as
+an empty service. Only an explicit initialization operation may create a
+verified absent/empty target and durably establish a new stable role identity.
+
+Preflight does not require a particular inter-service start order. It reports
+the recommended authority -> coordinator -> agents quiet path, while validating
+the configured behavior for other orders: agent-before-coordinator reconnect at
+zero availability, coordinator-before-authority `PENDING_AUTHORITY` admission,
+and coordinator-before-agent no-capacity waiting. It never treats a reachable
+TCP endpoint as readiness, a fresh connection as a session, or an old retained
+offer as current capacity. The supported role commands consume one explicit
+owner-protected v1 coordinator or outbound-agent YAML path for both initialize
+and serve; preflight must not discover a replacement or apply environment
+overrides. Examples may name endpoint/trust/certificate/key/policy references
+but never show or persist private key material.
+
+Ready-stage SLURM preflight is distinct from historical whole-run live/dry-run
+checks. For every enabled named profile it validates the concrete fakeable
+command adapter, strict resource/hard-rule mapper, deterministic fixed-bootstrap
+script capability, scheduler-visible stable submission identity, restricted
+bootstrap authentication, artifact relay/backend compatibility, exact status/
+cancel handle support, and retained-profile reconstruction. Authored stage data
+may select an authorized alias only; raw commands, directives, submit hosts,
+credential providers, or secret bytes fail before admission.
+
+An unavailable profile does not require the whole coordinator to stop. The
+profile is marked unavailable/degraded and explicitly routed stages remain
+visibly waiting or blocked without falling back. Preflight must distinguish
+configuration/schema/security failures from temporary command/gateway/
+scheduler reachability. It never submits a probe job by default, treats queue
+state as Loom capacity, or uses successful `scancel`/missing accounting as a
+containment test. Opt-in real-cluster validation may submit a bounded bootstrap
+receipt only under an explicit acceptance-test configuration.
+
+Preflight may authenticate a no-mutation capability/identity handshake when the
+operator explicitly enables a connectivity check. It does not adopt a rotated
+authority generation, retire/replace an agent session, reconcile outbox events,
+discover unconfigured hardware, fetch code, perform artifact transfer, or
+reserve a resource/profile slot, invoke `sbatch`, or mint a bootstrap grant.
+Those operations require their runtime owners and durable expected-state
+transitions.
 
 ## Output
 

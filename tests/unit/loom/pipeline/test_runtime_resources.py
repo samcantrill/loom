@@ -19,6 +19,8 @@ from loom.pipeline.resources import (
     ResourceValidatorRegistry,
     validate_resource_kind,
 )
+from loom.pipeline.runtime import StageRuntimeOptions, merge_config_run_options
+from loom.pipeline.validation import validate_pipeline_config
 
 
 def test_runtime_public_import_paths_are_compatible() -> None:
@@ -38,11 +40,15 @@ def test_runtime_public_import_paths_are_compatible() -> None:
 
 
 def test_resource_entry_request_round_trip_and_freeze_attributes() -> None:
-    registry = ResourceValidatorRegistry().with_validator("slurm.gres", lambda entry, path: None)
+    registry = ResourceValidatorRegistry().with_validator(
+        "slurm.gres", lambda entry, path: None
+    )
     attributes: dict[str, Any] = {"labels": ["fast"]}
     entry = ResourceEntry(kind="slurm.gres", amount=1, unit=None, attributes=attributes)
     attributes["labels"].append("mutated")
-    request = ResourceRequest(entries={"slurm.gres": entry}, validator_registry=registry)
+    request = ResourceRequest(
+        entries={"slurm.gres": entry}, validator_registry=registry
+    )
 
     assert entry.attributes == {"labels": ("fast",)}
     assert request.to_dict() == {
@@ -67,14 +73,16 @@ def test_parse_resource_request_accepts_authored_entries_without_schema() -> Non
             "entries": {
                 "cpu": {"kind": "cpu", "amount": 2, "unit": "count"},
                 "memory": {"kind": "memory", "amount": 512, "unit": "MiB"},
-                "gpu": {"kind": "gpu", "amount": 0},
+                "gpu": {"kind": "gpu", "amount": 1},
             },
         }
     )
 
     assert request.entries["cpu"] == ResourceEntry(kind="cpu", amount=2, unit="count")
-    assert request.entries["memory"] == ResourceEntry(kind="memory", amount=512, unit="MiB")
-    assert request.entries["gpu"] == ResourceEntry(kind="gpu", amount=0)
+    assert request.entries["memory"] == ResourceEntry(
+        kind="memory", amount=512, unit="MiB"
+    )
+    assert request.entries["gpu"] == ResourceEntry(kind="gpu", amount=1)
 
 
 @pytest.mark.parametrize(
@@ -124,9 +132,13 @@ def test_resource_kind_syntax_rejects_invalid_kinds(kind: str) -> None:
         ({"kind": "memory", "amount": 1, "unit": "MB"}, "one of"),
         ({"kind": "memory", "amount": 1}, "one of"),
         ({"kind": "memory", "amount": True, "unit": "MiB"}, "finite numeric"),
-        ({"kind": "memory", "amount": 1, "unit": "MiB", "attributes": {"node": "a"}}, "attributes"),
-        ({"kind": "gpu", "amount": -1}, "non-negative"),
-        ({"kind": "gpu", "amount": 0.5}, "non-negative integer"),
+        (
+            {"kind": "memory", "amount": 1, "unit": "MiB", "attributes": {"node": "a"}},
+            "attributes",
+        ),
+        ({"kind": "gpu", "amount": -1}, "positive integer"),
+        ({"kind": "gpu", "amount": 0}, "positive integer"),
+        ({"kind": "gpu", "amount": 0.5}, "positive integer"),
         ({"kind": "gpu", "amount": True}, "finite numeric"),
         ({"kind": "gpu", "amount": 1, "unit": "device"}, "count"),
         ({"kind": "gpu", "amount": 1, "attributes": {"model": "a100"}}, "attributes"),
@@ -141,7 +153,9 @@ def test_builtin_resource_validators_reject_invalid_amounts_units_and_attributes
 
 
 @pytest.mark.parametrize("amount", [1, 1.5])
-def test_memory_accepts_positive_integer_or_finite_numeric_amount(amount: int | float) -> None:
+def test_memory_accepts_positive_integer_or_finite_numeric_amount(
+    amount: int | float,
+) -> None:
     request = parse_resource_request(
         {"entries": {"memory": {"kind": "memory", "amount": amount, "unit": "GiB"}}}
     )
@@ -151,7 +165,9 @@ def test_memory_accepts_positive_integer_or_finite_numeric_amount(amount: int | 
 
 def test_resource_request_keys_must_match_entry_kinds() -> None:
     with pytest.raises(RuntimeResourceError, match="match its mapping key"):
-        ResourceRequest(entries={"cpu": ResourceEntry(kind="memory", amount=1, unit="MiB")})
+        ResourceRequest(
+            entries={"cpu": ResourceEntry(kind="memory", amount=1, unit="MiB")}
+        )
 
 
 @pytest.mark.parametrize(
@@ -231,7 +247,12 @@ def test_registry_registration_and_composition_are_explicit_and_isolated() -> No
 
     with pytest.raises(RuntimeResourceError, match="unregistered"):
         parse_resource_request(authored)
-    assert parse_resource_request(authored, registry=composed).entries["local.scratch"].amount == 10
+    assert (
+        parse_resource_request(authored, registry=composed)
+        .entries["local.scratch"]
+        .amount
+        == 10
+    )
     with pytest.raises(RuntimeResourceError, match="unregistered"):
         parse_resource_request(authored)
     with pytest.raises(RuntimeResourceError, match="already registered"):
@@ -240,6 +261,60 @@ def test_registry_registration_and_composition_are_explicit_and_isolated() -> No
         DEFAULT_RESOURCE_VALIDATOR_REGISTRY.compose(
             ResourceValidatorRegistry().with_validator("cpu", _validate_local_scratch)
         )
+
+
+def test_custom_resource_registry_survives_pipeline_and_runtime_reparse() -> None:
+    registry = DEFAULT_RESOURCE_VALIDATOR_REGISTRY.with_validator(
+        "stage28.device",
+        lambda entry, path: None,
+    )
+    resources = {
+        "entries": {
+            "stage28.device": {
+                "kind": "stage28.device",
+                "amount": 1,
+                "attributes": {"model": "v1"},
+            }
+        }
+    }
+    config = {
+        "pipeline": {
+            "stages": [
+                {
+                    "name": "build",
+                    "factory": {
+                        "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                    },
+                    "resources": resources,
+                    "outputs": {
+                        "data": {
+                            "artifact_type": "json",
+                            "codec_key": "json.v1",
+                        }
+                    },
+                }
+            ]
+        },
+        "runtime": {"stage_options": {"build": {"resources": resources}}},
+    }
+
+    with pytest.raises(RuntimeResourceError, match="unregistered"):
+        validate_pipeline_config(config)
+    result = validate_pipeline_config(config, registry=registry)
+    stage = result.spec.get_stage("build")
+    assert stage.resources == resources
+    assert stage.resource_request.entries["stage28.device"].amount == 1
+
+    with pytest.raises(RuntimeResourceError, match="unregistered"):
+        merge_config_run_options(config, known_stage_ids=("build",))
+    options = merge_config_run_options(
+        config,
+        known_stage_ids=("build",),
+        registry=registry,
+    )
+    stage_options = cast(StageRuntimeOptions, options.stage_options["build"])
+    runtime_resources = cast(ResourceRequest, stage_options.resources)
+    assert runtime_resources.entries["stage28.device"].amount == 1
 
 
 def test_runtime_request_round_trips_local_runtime_with_entry_resources() -> None:
@@ -291,9 +366,27 @@ def test_runtime_request_rejects_nested_old_resource_documents() -> None:
     "runtime",
     [
         {"schema_version": 1, "kind": "SLURM", "resources": {}, "metadata": {}},
-        {"schema_version": 1, "kind": "LOCAL", "resources": {}, "metadata": {}, "executor": "local"},
-        {"schema_version": 1, "kind": "LOCAL", "resources": {}, "metadata": {}, "timeout": 5},
-        {"schema_version": 1, "kind": "LOCAL", "resources": {}, "metadata": {}, "container": {}},
+        {
+            "schema_version": 1,
+            "kind": "LOCAL",
+            "resources": {},
+            "metadata": {},
+            "executor": "local",
+        },
+        {
+            "schema_version": 1,
+            "kind": "LOCAL",
+            "resources": {},
+            "metadata": {},
+            "timeout": 5,
+        },
+        {
+            "schema_version": 1,
+            "kind": "LOCAL",
+            "resources": {},
+            "metadata": {},
+            "container": {},
+        },
     ],
 )
 def test_runtime_request_rejects_unsupported_runtime_fields(

@@ -1,128 +1,96 @@
-# Managed Local Queue Operations
+# Managed Local Daemon
 
-This dependency-free example is the recommended starting point for one
-managed-local pool. It builds `ManagedLocalQueueRuntime.from_spec(...)` from a
-schema-v2 spec with one config-owned controller owner, two generic accelerator
-slots, queue-owned logs, and three short commands. The first command requests
-both slots; the later one-slot commands demonstrate refill.
+This example creates a normal persisted Loom plan and starts the supported
+single-machine daemon. The client submits only a queue identity and run URI.
+The daemon reloads the plan, resolves dependency-ready stages, reserves local
+CPU capacity, and runs the existing assignment saga.
 
 ```sh
 uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
 ```
 
-Each invocation writes a new `run-*` directory below `LOOM_EXAMPLE_OUTPUT_ROOT`
-(or this directory's `output/`). Rerunning preserves earlier SQLite evidence
-and separate stdout/stderr logs. The active output is deliberately redacted,
-but proves that `item-1` owns two distinct slots and is
-`source=same_session_live`.
+The Python example remains useful for embedding and tests. Production role
+processes use the supported protected config surface shown by
+[`coordinator-service.yaml`](coordinator-service.yaml) and
+[`outbound-agent-service.yaml`](outbound-agent-service.yaml):
+
+```sh
+chmod 600 examples/operations/managed-local-queue/*-service.yaml
+loom queue daemon-init examples/operations/managed-local-queue/coordinator-service.yaml
+loom queue agent-init examples/operations/managed-local-queue/outbound-agent-service.yaml
+
+loom queue daemon-serve examples/operations/managed-local-queue/coordinator-service.yaml
+loom queue agent-serve examples/operations/managed-local-queue/outbound-agent-service.yaml
+```
+
+Replace the illustrative TLS files and certificate fingerprint first. The
+coordinator and agent documents deliberately repeat the same remote resident
+profile identity; a mismatch makes the offer ineligible. The coordinator's
+policy maps the verified client certificate to the site-owned logical agent ID,
+pools, and capabilities. The agent cannot grant itself any of those values.
+Paths are resolved relative to each config file.
 
 ## Public Python Surface
 
-The runtime constructs and keeps alive the queue service, local adapter,
-controller, and authored static-slot provider. Do not manually give those
-objects different owners or copy a controller timing loop. A long-lived process
-normally installs a signal handler that sets a `threading.Event` and lets
-`serve()` own maintenance and shutdown:
+The example uses Loom's public local-daemon types from `loom.queue`. Project
+code persists the plan, resolved config, and exact managed-local runtime record
+first; daemon clients then submit only the queue item identity and `run_uri`.
+`runtime.json` is safe observability metadata and is not executable input.
+
+The important public flow is:
 
 ```python
-from threading import Event
-import signal
-
-from loom.queue.managed_local import ManagedLocalQueueRuntime
-
-runtime = ManagedLocalQueueRuntime.from_spec(
-    spec, workspace_id="project-workspace", coordination_store=store
+config = LocalDaemonConfig(
+    coordinator_root=Path(".loom/coordinator"),
+    agent_root=Path(".loom/agent"),
+    run_store_root=Path("runs"),
+    resident_worker_launch_profile=ResidentWorkerLaunchProfile(
+        project_root=Path.cwd(),
+        python_executable=Path(sys.executable),
+        descriptor={
+            "profile_id": "local-default",
+            "revision": "v1",
+            "project_fingerprint": "my-project",
+            "environment_fingerprint": "my-environment",
+            "executor_fingerprint": "local",
+        },
+    ),
 )
-stop = Event()
-signal.signal(signal.SIGTERM, lambda *_args: stop.set())
-signal.signal(signal.SIGINT, lambda *_args: stop.set())
-runtime.serve(stop, shutdown_mode="drain", shutdown_timeout_seconds=120)
-```
+LocalDaemon.initialize(config)  # fresh roots only
+daemon = LocalDaemon(config)
+daemon.start()
 
-`runtime.start()` and `runtime.run_cycle()` remain useful narrow test and
-advanced-control seams. `serve()` is the normal foreground operation. The
-example's finite harness only sets its event after all work completes; it does
-not implement its own maintenance loop.
-
-## Ownership And Status Truth
-
-One runtime is deployed for one pool. `controller.owner_id` is the only owner
-value: it reaches claims, local-adapter evidence, and same-session status
-matching. The runtime owns process-local object lifetime, wake timing, health,
-recovery gating, and drain/cancel choice. The controller owns reconcile before
-fill and its local active limit; the provider owns physical placement and
-member leases; the coordination authority owns lease capacity, expiry, and
-fencing. An external supervisor/operator owns containment of a prior process
-tree after a crash.
-
-`READY` means the current runtime can reconcile/fill. `DEGRADED` prevents
-refill after a current-session problem; a healthy later reconciliation is
-required before it becomes ready again. `RECOVERY_REQUIRED` blocks claiming
-when selected-pool work belongs to a previous session. On normal stop,
-`DRAINING` stops new claims but continues maintenance until current work is
-terminal. `shutdown_mode="cancel"` enters `CANCELLING`; a timeout reports the
-remaining work and never force-releases its leases. Successful shutdown ends in
-`STOPPED`.
-
-Pool status combines distinct scopes: queue facts and assignment/log evidence
-are persisted, `same_session_live` is only an observation by this in-process
-runtime, and hardware health plus current lease liveness are not observed. A
-persisted expiry is never proof that a device is available.
-
-## Recovery And Supervision
-
-After a crash, contain the old process group with the external supervisor
-first. Loom does not kill by PID, reattach, take over, renew, or release foreign
-leases. Once an operator has confirmed containment, resolve exactly one foreign
-item at a time as `UNKNOWN` with an explicit audit assertion:
-
-```python
-runtime.resolve_recovery_unknown(
-    "item-17",
-    previous_processes_confirmed_stopped=True,
-    requested_by="queue-operator",
-    reason="supervisor confirmed the prior control group stopped",
+client = daemon.client_view(
+    LocalDaemonPrincipal("local-client", LocalDaemonRole.CLIENT)
 )
+client.submit(LocalDaemonAdmissionRequest("queue-1", run_uri))
+result = client.wait("queue-1", timeout_seconds=120)
 ```
 
-The boolean is an operator attestation, not automatic process verification.
-For POSIX's built-in local runner, a small systemd unit can make containment
-explicit:
+Initialization creates the coordinator execution store and local-agent journal
+alongside the private control roots and independent worker supervisor. Use the
+same roots and exact resident profile after stopping and restarting the daemon.
+If a worker is still running, `daemon.start()` waits for that same supervised
+process and replays its result before the daemon becomes available; it never
+starts a replacement worker or advertises that capacity early.
 
-```ini
-[Service]
-ExecStart=/path/to/project/.venv/bin/python -m project.queue_runtime
-KillMode=control-group
-TimeoutStopSec=120
-```
+These stores are retained owner truth: a missing or unreadable expected store
+makes start fail closed, and a live loss degrades status and prevents new
+scheduling work. Status joins owner snapshots rather than inferring health from
+empty collections; each scheduling, assignment, and agent axis reports its
+owner, aggregate state, revision, observation time, and freshness.
 
-This is an illustrative deployment pattern, not a Loom daemon or a required
-Linux acceptance environment.
+There is no compatibility adapter for `loom.queue.managed_local`, its
+whole-run requests, or its old roots. Existing state is rejected without being
+read, changed, migrated, cancelled, or deleted. Delegated whole-run Slurm is a
+separate owner and is unchanged.
 
-## Two Slots Or An Indivisible Bundle
+## Deployment Choice
 
-For independent devices, use the standard generic request from this example:
-
-```python
-resources={"accelerator": 2}
-```
-
-The authored static assignment binds both values to
-`LOOM_ASSIGNED_ACCELERATORS` (a project may instead use a conventional name
-such as `CUDA_VISIBLE_DEVICES`). Loom does not discover, validate, or report
-vendor hardware.
-
-If two members must be allocated as one topology-specific placement, copy and
-adapt [`paired_assignment_provider.py`](paired_assignment_provider.py). It is
-project-owned placement code, not a stable Loom import. Its key rule is that
-bundle acquisition leases `accelerator-slot-a` and `accelerator-slot-b` -- the
-same physical coordination keys used by the individual static allocator -- and
-rolls back any first member if the second cannot be acquired. It implements
-acquire, renew, and release over every member and produces a two-value
-environment binding. It never uses a synthetic bundle key or accesses queue
-repositories/controller mutation.
-
-The controller's active limit is local to this runtime, not a distributed item
-quota. For broader candidate selection, generic scheduling, device health,
-reattachment, or resource-use telemetry, retain the later Stage 24/25 design
-boundaries rather than extending this example.
+Persistent managed agents and ready-stage SLURM require the coordinator on a
+site-permitted stable host. A ready-stage bootstrap must reach its authenticated
+endpoint while active. The foreground commands do not require that host to be
+an HPC login node. Sites that prohibit persistent services there can use an
+allowed reachable service host, or retain the separate service-less historical
+whole-run queue SLURM, single-job, and `afterok` modes. Those whole-run owners do
+not become Stage 29 managed-stage scheduling merely by using the same project.

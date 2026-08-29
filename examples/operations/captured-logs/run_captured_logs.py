@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 from examples.support import run_cli_json
 from examples.support import started_authority_session
 from weave import compose_config
+from loom.artifacts import ArtifactRef
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.executors import LocalExecutor
@@ -67,6 +68,12 @@ def main() -> None:
 
     print(f"run_uri: {run_uri}")
     print(f"run_status: {result.status.name}")
+    outputs = result.stage_results["noisy"].outputs
+    print(f"output_names: {','.join(sorted(outputs))}")
+    print(
+        "outputs_are_refs: "
+        f"{all(isinstance(ref, ArtifactRef) for ref in outputs.values())}"
+    )
     print(f"stdout_tail: {stdout_logs['result']['streams'][0]['content'].strip()}")
     print(f"stderr_path_available: {stderr_paths['result']['streams'][0]['available']}")
 

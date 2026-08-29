@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TypeVar
 
 from .authority_client import AuthorityClient
@@ -229,6 +230,21 @@ class ServiceWorkspaceCoordinationStore:
             )
         )
         return _required(result.counter, "counter")
+
+    def ensure_resource_limits(
+        self, workspace_id: str, limits: Mapping[str, int]
+    ) -> tuple[ConcurrencyCounter, ...]:
+        result = _accepted(
+            self._client.ensure_resource_limits(
+                workspace_id,
+                limits,
+                service_generation=self._service_generation,
+            )
+        )
+        counters = result.body.get("counters")
+        if not isinstance(counters, list):
+            raise CoordinationStoreError("authority response missing counters")
+        return tuple(ConcurrencyCounter.from_dict(counter) for counter in counters)
 
     def read_resource_limit(
         self, workspace_id: str, resource_key: str

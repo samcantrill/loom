@@ -6,6 +6,7 @@ import pytest
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.status import StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores.read_models import LeaseState, LifecycleReason
 from loom.authority._repository import (
     AuthorityRepositoryError,
@@ -121,7 +122,9 @@ def test_stage_lease_rejects_bad_fence_and_can_be_released(tmp_path) -> None:
     assert released.state is LeaseState.RELEASED
 
 
-def test_output_commit_persists_artifacts_and_rejects_stale_generation(tmp_path) -> None:
+def test_output_commit_persists_artifacts_and_rejects_stale_generation(
+    tmp_path,
+) -> None:
     repository = _repository(tmp_path)
     allocation = repository.allocate_stage_attempt(
         RUN_URI,
@@ -164,6 +167,82 @@ def test_output_commit_persists_artifacts_and_rejects_stale_generation(tmp_path)
     assert stage.attempts[0].status is StageStatus.SUCCEEDED
     assert stage.latest_commit == commit.commit
     assert stage.artifact_facts == commit.artifact_facts
+
+
+def test_output_commit_supersession_retains_history_and_projects_current(
+    tmp_path,
+) -> None:
+    repository = _repository(tmp_path)
+    first_allocation = repository.allocate_stage_attempt(
+        RUN_URI,
+        "build",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+    )
+    assert first_allocation.lease is not None
+    first = repository.record_output_commit(
+        RUN_URI,
+        "build",
+        attempt_id=first_allocation.attempt.attempt_id,
+        owner_id="worker-1",
+        fencing_token=first_allocation.lease.fencing_token,
+        outputs={
+            "out": ArtifactRef(
+                artifact_id="build/out-1",
+                uri=f"{RUN_URI}/artifacts/build/out-1.json",
+                artifact_type="json",
+            )
+        },
+    )
+    repository.transition_stage(
+        RUN_URI,
+        "build",
+        from_status=StageStatus.SUCCEEDED,
+        to_status=StageStatus.STALE,
+        intent=TransitionIntent.RESUME,
+        reason=LifecycleReason(code="artifact_checksum_mismatch"),
+    )
+    second_allocation = repository.allocate_stage_attempt(
+        RUN_URI,
+        "build",
+        owner_id="worker-2",
+        lease_ttl_seconds=30,
+    )
+    assert second_allocation.lease is not None
+
+    with pytest.raises(AuthorityRepositoryError, match="stale output commit"):
+        repository.record_output_commit(
+            RUN_URI,
+            "build",
+            attempt_id=second_allocation.attempt.attempt_id,
+            owner_id="worker-2",
+            fencing_token=second_allocation.lease.fencing_token,
+            outputs={},
+            supersedes_commit_id="wrong-commit",
+        )
+
+    second = repository.record_output_commit(
+        RUN_URI,
+        "build",
+        attempt_id=second_allocation.attempt.attempt_id,
+        owner_id="worker-2",
+        fencing_token=second_allocation.lease.fencing_token,
+        outputs={
+            "out": ArtifactRef(
+                artifact_id="build/out-2",
+                uri=f"{RUN_URI}/artifacts/build/out-2.json",
+                artifact_type="json",
+            )
+        },
+        supersedes_commit_id=first.commit.commit_id,
+    )
+
+    history = repository.list_output_commits(RUN_URI, stage_name="build")
+    snapshot = repository.open_run(RUN_URI).stages[0]
+    assert history == (first, second)
+    assert second.commit.supersedes_commit_id == first.commit.commit_id
+    assert snapshot.latest_commit == second.commit
+    assert snapshot.artifact_facts == second.artifact_facts
 
 
 def test_finish_stage_attempt_records_terminal_state(tmp_path) -> None:

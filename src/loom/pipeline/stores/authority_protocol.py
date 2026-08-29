@@ -15,6 +15,7 @@ from .authority_resolution import (
     AuthorityResolutionFailureKind,
     AuthorityResolverDiagnostic,
 )
+from .authority import OutputCommit
 from .capabilities import BackendCapabilitySet, StoreDiagnostic
 from .coordination import (
     ConcurrencyCounter,
@@ -43,7 +44,7 @@ from .schema_policy import (
 )
 
 
-AUTHORITY_PROTOCOL_VERSION = 1
+AUTHORITY_PROTOCOL_VERSION = 2
 
 
 class AuthorityProtocolError(ValueError):
@@ -126,9 +127,7 @@ class AuthorityProtocolVersion:
             self, "schema_version", _positive_int(self.schema_version, "schema_version")
         )
         if not isinstance(self.schema_check, AuthoritySchemaCheck):
-            raise AuthorityProtocolError(
-                "schema_check must be an AuthoritySchemaCheck"
-            )
+            raise AuthorityProtocolError("schema_check must be an AuthoritySchemaCheck")
 
     @property
     def supported(self) -> bool:
@@ -199,11 +198,15 @@ class AuthorityProtocolMetadata:
     idempotency_key: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "request_id", _non_empty(self.request_id, "request_id"))
+        object.__setattr__(
+            self, "request_id", _non_empty(self.request_id, "request_id")
+        )
         object.__setattr__(
             self,
             "operation_kind",
-            _enum(self.operation_kind, AuthorityProtocolOperationKind, "operation_kind"),
+            _enum(
+                self.operation_kind, AuthorityProtocolOperationKind, "operation_kind"
+            ),
         )
         object.__setattr__(
             self,
@@ -357,7 +360,9 @@ class AuthorityProtocolRequest:
         )
         expected = mapping.get("expected_revision")
         return cls(
-            metadata=AuthorityProtocolMetadata.from_dict(_required(mapping, "metadata")),
+            metadata=AuthorityProtocolMetadata.from_dict(
+                _required(mapping, "metadata")
+            ),
             run_uri=_optional_string(mapping.get("run_uri"), "run_uri"),
             stage_name=_optional_string(mapping.get("stage_name"), "stage_name"),
             submission_id=_optional_string(
@@ -388,9 +393,7 @@ class AuthorityProtocolReadiness:
 
     def __post_init__(self) -> None:
         if not isinstance(self.version, AuthorityProtocolVersion):
-            raise AuthorityProtocolError(
-                "version must be an AuthorityProtocolVersion"
-            )
+            raise AuthorityProtocolError("version must be an AuthorityProtocolVersion")
         object.__setattr__(
             self,
             "readiness",
@@ -420,7 +423,9 @@ class AuthorityProtocolReadiness:
 
     @property
     def ready(self) -> bool:
-        return self.readiness is AuthorityReadinessState.READY and self.version.supported
+        return (
+            self.readiness is AuthorityReadinessState.READY and self.version.supported
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -434,9 +439,7 @@ class AuthorityProtocolReadiness:
             "capabilities": None
             if self.capabilities is None
             else self.capabilities.to_dict(),
-            "diagnostics": [
-                diagnostic.to_dict() for diagnostic in self.diagnostics
-            ],
+            "diagnostics": [diagnostic.to_dict() for diagnostic in self.diagnostics],
         }
 
     @classmethod
@@ -523,6 +526,7 @@ class AuthorityProtocolResult:
     snapshot: AuthoritativeRunSnapshot | None = None
     stage_attempt: StageAttempt | None = None
     output_commit: OutputCommitRecord | None = None
+    output_commits: tuple[OutputCommit, ...] = ()
     submitted_operation: SubmittedOperationRecord | None = None
     workspace: WorkspaceIdentity | None = None
     sweep: SweepIdentity | None = None
@@ -571,6 +575,11 @@ class AuthorityProtocolResult:
         _optional_instance(self.snapshot, AuthoritativeRunSnapshot, "snapshot")
         _optional_instance(self.stage_attempt, StageAttempt, "stage_attempt")
         _optional_instance(self.output_commit, OutputCommitRecord, "output_commit")
+        object.__setattr__(
+            self,
+            "output_commits",
+            _tuple_of(self.output_commits, OutputCommit, "output_commits"),
+        )
         _optional_instance(
             self.submitted_operation,
             SubmittedOperationRecord,
@@ -650,6 +659,7 @@ class AuthorityProtocolResult:
             "output_commit": None
             if self.output_commit is None
             else self.output_commit.to_dict(),
+            "output_commits": [commit.to_dict() for commit in self.output_commits],
             "submitted_operation": None
             if self.submitted_operation is None
             else self.submitted_operation.to_dict(),
@@ -673,9 +683,7 @@ class AuthorityProtocolResult:
             ],
             "cleanup_reports": [fact.to_dict() for fact in self.cleanup_reports],
             "cleanup_results": [fact.to_dict() for fact in self.cleanup_results],
-            "recovery_records": [
-                record.to_dict() for record in self.recovery_records
-            ],
+            "recovery_records": [record.to_dict() for record in self.recovery_records],
             "coordination_recovery_records": [
                 record.to_dict() for record in self.coordination_recovery_records
             ],
@@ -696,6 +704,7 @@ class AuthorityProtocolResult:
                 "snapshot",
                 "stage_attempt",
                 "output_commit",
+                "output_commits",
                 "submitted_operation",
                 "workspace",
                 "sweep",
@@ -736,6 +745,12 @@ class AuthorityProtocolResult:
             output_commit=_optional_record(
                 mapping.get("output_commit"), OutputCommitRecord.from_dict
             ),
+            output_commits=tuple(
+                OutputCommit.from_dict(item)
+                for item in _sequence(
+                    mapping.get("output_commits", ()), "output_commits"
+                )
+            ),
             submitted_operation=_optional_record(
                 mapping.get("submitted_operation"),
                 SubmittedOperationRecord.from_dict,
@@ -751,7 +766,9 @@ class AuthorityProtocolResult:
             resource_lease=_optional_record(
                 mapping.get("resource_lease"), ResourceLeaseRecord.from_dict
             ),
-            counter=_optional_record(mapping.get("counter"), ConcurrencyCounter.from_dict),
+            counter=_optional_record(
+                mapping.get("counter"), ConcurrencyCounter.from_dict
+            ),
             artifact_facts=tuple(
                 ArtifactFactRecord.from_dict(item)
                 for item in _sequence(
@@ -855,15 +872,12 @@ class AuthorityProtocolRejection:
             "code": self.code,
             "message": self.message,
             "detail": dict(self.detail),
-            "diagnostics": [
-                diagnostic.to_dict() for diagnostic in self.diagnostics
-            ],
+            "diagnostics": [diagnostic.to_dict() for diagnostic in self.diagnostics],
             "resolver_failure_kind": None
             if self.resolver_failure_kind is None
             else self.resolver_failure_kind.value,
             "resolver_diagnostics": [
-                diagnostic.to_dict()
-                for diagnostic in self.resolver_diagnostics
+                diagnostic.to_dict() for diagnostic in self.resolver_diagnostics
             ],
         }
 
@@ -957,9 +971,7 @@ class AuthorityProtocolResponse:
             "metadata": self.metadata.to_dict(),
             "accepted": self.accepted,
             "result": None if self.result is None else self.result.to_dict(),
-            "rejection": None
-            if self.rejection is None
-            else self.rejection.to_dict(),
+            "rejection": None if self.rejection is None else self.rejection.to_dict(),
         }
 
     @classmethod
@@ -974,7 +986,9 @@ class AuthorityProtocolResponse:
         result_data = mapping.get("result")
         rejection_data = mapping.get("rejection")
         return cls(
-            metadata=AuthorityProtocolMetadata.from_dict(_required(mapping, "metadata")),
+            metadata=AuthorityProtocolMetadata.from_dict(
+                _required(mapping, "metadata")
+            ),
             accepted=accepted,
             result=None
             if result_data is None

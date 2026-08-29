@@ -111,6 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     from loom.cli import runs as runs_command
     from loom.cli import stage as stage_command
     from loom.cli import stage_job as stage_job_command
+    from loom.cli import slurm_bootstrap as slurm_bootstrap_command
     from loom.cli import status as status_command
     from loom.cli import sweep as sweep_command
     from loom.cli import validate as validate_command
@@ -123,6 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     plugins_command.register_subparser(subparsers)
     stage_command.register_subparser(subparsers)
     stage_job_command.register_subparser(subparsers)
+    slurm_bootstrap_command.register_subparser(subparsers)
     status_command.register_subparser(subparsers)
     cancel_command.register_subparser(subparsers)
     logs_command.register_subparser(subparsers)

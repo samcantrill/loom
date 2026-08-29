@@ -1,0 +1,25 @@
+id: extensions.event-sink
+title: Observe-Only Event Sink
+summary: Register local observers directly, receive committed lifecycle records, and retain one observer failure without failing the run.
+capability: extensions
+level: intermediate
+introduced_in: v30
+status: runnable
+validation: full
+surface: python_api
+public_surfaces:
+  - python_api
+owner_docs:
+  - examples/extensions/README.md
+owner_stages:
+  - v30
+validation_path: tests/integration/examples/test_example_workflows.py::test_example_event_sink_observes_committed_events_and_isolates_failure
+entrypoints:
+  - path: run_event_sink.py
+    kind: python
+    description: Run a local pipeline with direct event sink registry registration.
+tags:
+  - extensions
+  - event-sink
+  - observer
+  - diagnostics

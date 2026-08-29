@@ -31,10 +31,8 @@ def test_maps_cpu_memory_and_gpu_resources_to_sbatch_directives() -> None:
     ]
 
 
-def test_gpu_zero_produces_no_gres_directive() -> None:
-    resources = ResourceRequest(
-        entries={"gpu": ResourceEntry(kind="gpu", amount=0, unit="count")}
-    )
+def test_missing_gpu_produces_no_gres_directive() -> None:
+    resources = ResourceRequest(entries={})
 
     assert map_slurm_resources(resources) == ()
 

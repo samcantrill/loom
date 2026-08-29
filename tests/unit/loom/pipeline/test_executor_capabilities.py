@@ -399,7 +399,7 @@ def test_local_resource_requests_warn_without_failing_validation() -> None:
                     entries={
                         "memory": ResourceEntry(kind="memory", amount=2, unit="GiB"),
                         "cpu": ResourceEntry(kind="cpu", amount=2),
-                        "gpu": ResourceEntry(kind="gpu", amount=0),
+                        "gpu": ResourceEntry(kind="gpu", amount=1),
                     }
                 )
             )

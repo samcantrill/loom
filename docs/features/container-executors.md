@@ -9,6 +9,25 @@ They improve environment reproducibility and make local, CI, and HPC execution
 more consistent. They should be optional executor adapters, not required core
 runtime dependencies.
 
+## Current Support
+
+Loom provides Docker and Apptainer/Singularity executor paths with inspectable
+command and provenance records. Their external runtimes remain optional and are
+validated before live execution.
+
+## Quick Start
+
+Run the hermetic fake-Apptainer walkthrough:
+
+```sh
+uv run python examples/execution/containers/slurm-apptainer/run_apptainer_pipeline.py
+```
+
+## Deferred
+
+Managed external image-build services, image publishing, Kubernetes, and Docker
+Compose are not container-executor features.
+
 ## Scope
 
 This component owns:

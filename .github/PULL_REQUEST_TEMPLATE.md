@@ -31,7 +31,6 @@ Use compact Markdown tables for final validation and suite evidence.
 | --- | --- | --- |
 | `make validate-pr` |  |  |
 | `make test-summary` |  |  |
-| GitHub checks |  |  |
 
 If a command could not be run, explain why in the table.
 

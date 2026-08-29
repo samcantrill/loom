@@ -30,7 +30,11 @@ from loom.pipeline.executors.docker import (
     DockerExecutor,
     DockerRunCommand,
 )
-from loom.pipeline.planning import FingerprintContext, build_stage_fingerprint, plan_pipeline
+from loom.pipeline.planning import (
+    FingerprintContext,
+    build_stage_fingerprint,
+    plan_pipeline,
+)
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
@@ -268,6 +272,7 @@ def test_docker_executor_reads_successful_worker_result(tmp_path: Path) -> None:
         run_store=store,
         docker_command_runner=runner,
         python_executable="/usr/bin/python",
+        plugin_selectors=("loom.codecs:stage28.tagged-json.v1",),
     ).execute(request)
 
     assert result.status == StageStatus.SUCCEEDED
@@ -285,6 +290,12 @@ def test_docker_executor_reads_successful_worker_result(tmp_path: Path) -> None:
         "run",
         "--run-uri",
         run_uri,
+    )
+    assert runner.calls[0].argv[-4:] == (
+        "--plugin",
+        "loom.codecs:stage28.tagged-json.v1",
+        "--format",
+        "json",
     )
 
 
@@ -365,7 +376,9 @@ def test_docker_executor_missing_container_options_is_failure(tmp_path: Path) ->
     assert failure.message == (
         "docker worker setup failed: docker container adapter options are missing"
     )
-    assert failure.details["setup_error"] == "docker container adapter options are missing"
+    assert (
+        failure.details["setup_error"] == "docker container adapter options are missing"
+    )
 
 
 def test_docker_executor_requires_writable_run_mount(tmp_path: Path) -> None:
@@ -553,7 +566,9 @@ def test_docker_executor_wraps_failed_worker_result(tmp_path: Path) -> None:
 
     result = DockerExecutor(
         run_store=store,
-        docker_command_runner=RecordingDockerRunner(returncode=1, callback=write_failure),
+        docker_command_runner=RecordingDockerRunner(
+            returncode=1, callback=write_failure
+        ),
     ).execute(request)
 
     assert result.status == StageStatus.FAILED

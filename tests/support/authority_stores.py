@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from threading import RLock
 from typing import cast
 
 from loom.artifacts import ArtifactRef
@@ -48,6 +49,8 @@ from loom.pipeline.stores import (
     OutputCommit,
     OutputCommitRecord,
     PerRunAuthorityStore,
+    PreparedAttemptReceipt,
+    PreparedAttemptRequest,
     RecoveryKind,
     RecoveryRecord,
     ReliabilityPolicyFact,
@@ -62,6 +65,7 @@ from loom.pipeline.stores import (
     WorkspaceIdentity,
     check_authority_schema_version,
 )
+from loom.pipeline.stores.authority import ExecutionFence
 from loom.pipeline.stores.reliability_facts import (
     reliability_payload_matches,
     reliability_policy_fact_key,
@@ -95,6 +99,7 @@ class _RunState:
     leases: dict[str, LeaseRecord] = field(default_factory=dict)
     submitted: dict[str, SubmittedOperationRecord] = field(default_factory=dict)
     commits: dict[str, OutputCommitRecord] = field(default_factory=dict)
+    output_commits: list[OutputCommit] = field(default_factory=list)
     facts: dict[str, list[ArtifactFactRecord]] = field(default_factory=dict)
     cleanup: list[CleanupCandidate] = field(default_factory=list)
     cleanup_reports: dict[str, CleanupReportFact] = field(default_factory=dict)
@@ -113,6 +118,11 @@ class _RunState:
     )
     retry_decisions: dict[str, RetryDecisionRecord] = field(default_factory=dict)
     timeout_outcomes: dict[str, TimeoutOutcomeRecord] = field(default_factory=dict)
+    prepared_attempts: dict[str, PreparedAttemptReceipt] = field(default_factory=dict)
+    managed_bindings: dict[str, tuple[str, str, str | None]] = field(
+        default_factory=dict
+    )
+    managed_unbind_receipts: dict[str, str] = field(default_factory=dict)
 
 
 class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
@@ -121,6 +131,7 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         self._revision = 0
         self._tick = 0
         self._lease_expiry_ticks: dict[str, int] = {}
+        self._preparation_lock = RLock()
 
     def capabilities(self) -> BackendCapabilitySet:
         return BackendCapabilitySet(
@@ -288,6 +299,313 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             )
         return AttemptAllocation(attempt=attempt, lease=lease)
 
+    def ensure_prepared_attempt(
+        self, run_uri: str, request: PreparedAttemptRequest
+    ) -> PreparedAttemptReceipt:
+        if not isinstance(request, PreparedAttemptRequest):
+            raise ValueError("request must be a PreparedAttemptRequest")
+        with self._preparation_lock:
+            state = self._require_run(run_uri)
+            existing = state.prepared_attempts.get(request.operation_id)
+            if existing is not None:
+                if existing.request != request:
+                    raise ValueError(
+                        "prepared attempt operation conflicts with its receipt"
+                    )
+                return existing
+            if any(
+                receipt.request.stage_name == request.stage_name
+                and receipt.request.readiness_generation == request.readiness_generation
+                for receipt in state.prepared_attempts.values()
+            ):
+                raise ValueError(
+                    "readiness generation was prepared by another operation"
+                )
+            _require_expected_revision(state.revision, request.expected_revision)
+            if state.status in {
+                RunStatus.SUCCEEDED,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+                RunStatus.INTERRUPTED,
+            }:
+                raise ValueError("run is terminal or cancelling")
+            if (
+                state.stage_statuses.get(request.stage_name)
+                is not request.expected_stage_status
+            ):
+                raise ValueError("prepared attempt stage state is stale")
+            if request.expected_stage_status not in {
+                None,
+                StageStatus.STALE,
+                StageStatus.FAILED,
+            }:
+                raise ValueError(
+                    "stage state does not permit semantic attempt preparation"
+                )
+            attempts = state.attempts.get(request.stage_name, ())
+            current_attempt_id = attempts[-1].attempt_id if attempts else None
+            if current_attempt_id != request.expected_attempt_id:
+                raise ValueError("prepared attempt identity is stale")
+            attempt_number = len(attempts) + 1
+            if attempt_number != request.next_attempt:
+                raise ValueError("prepared attempt number is stale")
+            for upstream_stage, commit_id in request.upstream_commits.items():
+                commit = state.commits.get(upstream_stage)
+                if commit is None or commit.commit_id != commit_id:
+                    raise ValueError("upstream commit evidence is stale")
+            if request.expected_stage_status is StageStatus.FAILED:
+                decision = (
+                    None
+                    if request.retry_decision_id is None
+                    else state.retry_decisions.get(request.retry_decision_id)
+                )
+                if (
+                    decision is None
+                    or not decision.should_retry
+                    or decision.next_attempt != attempt_number
+                    or decision.status.stage_id != request.stage_name
+                ):
+                    raise ValueError("failed stage retry is not authorized")
+            elif request.retry_decision_id is not None:
+                raise ValueError("retry evidence requires a failed stage")
+            revision = self._next_revision()
+            attempt = StageAttempt(
+                run_uri=run_uri,
+                stage_name=request.stage_name,
+                attempt=attempt_number,
+                attempt_id=f"{request.stage_name}-{attempt_number}",
+                status=StageStatus.PENDING,
+                revision=revision,
+                created_at=self._now(),
+                owner=request.owner_id,
+            )
+            state.attempts.setdefault(request.stage_name, []).append(attempt)
+            state.stage_statuses[request.stage_name] = StageStatus.PENDING
+            state.revision = revision
+            receipt = PreparedAttemptReceipt(request=request, attempt=attempt)
+            state.prepared_attempts[request.operation_id] = receipt
+            return receipt
+
+    def bind_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str
+    ) -> None:
+        state = self._require_run(run_uri)
+        unbound_attempt = state.managed_unbind_receipts.get(assignment_id)
+        if unbound_attempt is not None:
+            if unbound_attempt != attempt_id:
+                raise ValueError("assignment binding conflicts")
+            return
+        current = state.managed_bindings.get(assignment_id)
+        if current is not None:
+            if current[0] != attempt_id:
+                raise ValueError("assignment binding conflicts")
+            return
+        if state.status in {
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+            RunStatus.INTERRUPTED,
+        }:
+            raise ValueError("terminal run cannot bind prepared work")
+        attempt = next(
+            (
+                item
+                for items in state.attempts.values()
+                for item in items
+                if item.attempt_id == attempt_id
+            ),
+            None,
+        )
+        if attempt is None or attempt.status is not StageStatus.PENDING:
+            raise ValueError("only a PENDING prepared attempt may bind")
+        receipt = next(
+            (
+                receipt
+                for receipt in state.prepared_attempts.values()
+                if receipt.attempt.attempt_id == attempt_id
+            ),
+            None,
+        )
+        if receipt is None:
+            raise ValueError("prepared attempt receipt is missing")
+        for upstream_stage, commit_id in receipt.request.upstream_commits.items():
+            commit = state.commits.get(upstream_stage)
+            if commit is None or commit.commit_id != commit_id:
+                raise ValueError("prepared attempt upstream commit evidence is stale")
+        if any(value[0] == attempt_id for value in state.managed_bindings.values()):
+            raise ValueError("prepared attempt is already bound")
+        state.managed_bindings[assignment_id] = (attempt_id, "bound", None)
+
+    def unbind_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str
+    ) -> None:
+        state = self._require_run(run_uri)
+        unbound_attempt = state.managed_unbind_receipts.get(assignment_id)
+        if unbound_attempt is not None:
+            if unbound_attempt != attempt_id:
+                raise ValueError("assignment unbind conflicts")
+            return
+        if state.managed_bindings.get(assignment_id) != (attempt_id, "bound", None):
+            raise ValueError("only the same ungranted binding may unbind")
+        state.managed_unbind_receipts[assignment_id] = attempt_id
+        del state.managed_bindings[assignment_id]
+
+    def grant_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str
+    ) -> ExecutionFence:
+        state = self._require_run(run_uri)
+        binding = state.managed_bindings.get(assignment_id)
+        if binding is None or binding[0] != attempt_id:
+            raise ValueError("prepared attempt is not bound to assignment")
+        if binding[1] in {"granted", "running", "terminal"}:
+            return ExecutionFence(assignment_id, attempt_id, cast(str, binding[2]))
+        if binding[1] != "bound":
+            raise ValueError("prepared attempt binding is not grantable")
+        attempts = state.attempts.get(
+            next(
+                stage
+                for stage, items in state.attempts.items()
+                if any(item.attempt_id == attempt_id for item in items)
+            ),
+            [],
+        )
+        index = next(
+            index
+            for index, item in enumerate(attempts)
+            if item.attempt_id == attempt_id
+        )
+        old = attempts[index]
+        if old.status is not StageStatus.PENDING:
+            raise ValueError("prepared attempt is no longer pending")
+        revision = self._next_revision()
+        updated = StageAttempt(
+            old.run_uri,
+            old.stage_name,
+            old.attempt,
+            old.attempt_id,
+            StageStatus.SUBMITTED,
+            revision,
+            old.created_at,
+            old.owner,
+        )
+        attempts[index] = updated
+        state.stage_statuses[old.stage_name] = StageStatus.SUBMITTED
+        state.revision = revision
+        fence = f"managed-fence-{revision.sequence}"
+        state.managed_bindings[assignment_id] = (attempt_id, "granted", fence)
+        return ExecutionFence(assignment_id, attempt_id, fence)
+
+    def confirm_execution_started(self, run_uri: str, *, fence: ExecutionFence) -> None:
+        state = self._require_run(run_uri)
+        binding = state.managed_bindings.get(fence.assignment_id)
+        if (
+            binding is not None
+            and binding[0] == fence.attempt_id
+            and binding[1] in {"running", "terminal"}
+            and binding[2] == fence.fencing_token
+        ):
+            return
+        if binding != (
+            fence.attempt_id,
+            "granted",
+            fence.fencing_token,
+        ):
+            raise ValueError("stale execution fence")
+        for stage_name, attempts in state.attempts.items():
+            for index, old in enumerate(attempts):
+                if old.attempt_id == fence.attempt_id:
+                    revision = self._next_revision()
+                    attempts[index] = StageAttempt(
+                        old.run_uri,
+                        old.stage_name,
+                        old.attempt,
+                        old.attempt_id,
+                        StageStatus.RUNNING,
+                        revision,
+                        old.created_at,
+                        old.owner,
+                    )
+                    state.stage_statuses[stage_name] = StageStatus.RUNNING
+                    state.revision = revision
+                    state.managed_bindings[fence.assignment_id] = (
+                        fence.attempt_id,
+                        "running",
+                        fence.fencing_token,
+                    )
+                    return
+        raise ValueError("unknown attempt")
+
+    def record_managed_attempt_terminal(
+        self,
+        run_uri: str,
+        *,
+        fence: ExecutionFence,
+        status: StageStatus,
+        reason: LifecycleReason,
+    ) -> StatusTransition:
+        status = StageStatus(status)
+        if status not in {StageStatus.FAILED, StageStatus.CANCELLED}:
+            raise ValueError("managed terminal status must be FAILED or CANCELLED")
+        if not isinstance(reason, LifecycleReason):
+            raise ValueError("managed terminal reason is required")
+        state = self._require_run(run_uri)
+        binding = state.managed_bindings.get(fence.assignment_id)
+        if (
+            binding is None
+            or binding[0] != fence.attempt_id
+            or binding[2] != fence.fencing_token
+        ):
+            raise ValueError("stale execution fence")
+        for stage_name, attempts in state.attempts.items():
+            for index, old in enumerate(attempts):
+                if old.attempt_id != fence.attempt_id:
+                    continue
+                if binding[1] == "terminal":
+                    if old.status is not status or old.reason != reason:
+                        raise ValueError("managed terminal result conflicts")
+                    return StatusTransition(
+                        run_uri=run_uri,
+                        stage_name=stage_name,
+                        previous_status=status,
+                        status=status,
+                        revision=old.revision,
+                        reason=reason,
+                    )
+                if binding[1] not in {"granted", "running"}:
+                    raise ValueError("execution fence is not terminal-writable")
+                if old.status not in {StageStatus.SUBMITTED, StageStatus.RUNNING}:
+                    raise ValueError("attempt is not execution-active")
+                previous = old.status
+                ensure_stage_transition(previous, status)
+                revision = self._next_revision()
+                attempts[index] = StageAttempt(
+                    old.run_uri,
+                    old.stage_name,
+                    old.attempt,
+                    old.attempt_id,
+                    status,
+                    revision,
+                    old.created_at,
+                    old.owner,
+                    reason,
+                )
+                state.stage_statuses[stage_name] = status
+                state.revision = revision
+                state.managed_bindings[fence.assignment_id] = (
+                    fence.attempt_id,
+                    "terminal",
+                    fence.fencing_token,
+                )
+                return StatusTransition(
+                    run_uri=run_uri,
+                    stage_name=stage_name,
+                    previous_status=previous,
+                    status=status,
+                    revision=revision,
+                    reason=reason,
+                )
+        raise ValueError("unknown attempt")
+
     def acquire_controller_lease(
         self,
         run_uri: str,
@@ -424,7 +742,11 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         return self._stage_reliability_records(
             self._require_run(run_uri).reliability_status_details.values(),
             stage_name=stage_name,
-            sort_key=lambda detail: (detail.stage_id, detail.attempt, detail.created_at),
+            sort_key=lambda detail: (
+                detail.stage_id,
+                detail.attempt,
+                detail.created_at,
+            ),
         )
 
     def write_stage_attempt_transaction(
@@ -528,10 +850,60 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, ArtifactRef],
+        supersedes_commit_id: str | None = None,
         reason: LifecycleReason | None = None,
+        assignment_id: str | None = None,
     ) -> OutputCommit:
         state = self._require_run(run_uri)
-        self._require_stage_fence(state, stage_name, attempt_id, fencing_token)
+        managed = (
+            None if assignment_id is None else state.managed_bindings.get(assignment_id)
+        )
+        if assignment_id is not None and (
+            managed is None or managed[0] != attempt_id or managed[2] != fencing_token
+        ):
+            raise ValueError("stale execution fence")
+        if managed is not None and managed[1] == "terminal":
+            replay = next(
+                (
+                    item
+                    for item in state.output_commits
+                    if item.commit.attempt_id == attempt_id
+                ),
+                None,
+            )
+            replay_attempt = next(
+                (
+                    item
+                    for items in state.attempts.values()
+                    for item in items
+                    if item.attempt_id == attempt_id
+                ),
+                None,
+            )
+            if (
+                replay is None
+                or replay_attempt is None
+                or replay.commit.stage_name != stage_name
+                or replay.commit.supersedes_commit_id != supersedes_commit_id
+                or replay_attempt.reason != reason
+                or dict(outputs)
+                != {fact.artifact_name: fact.artifact for fact in replay.artifact_facts}
+            ):
+                raise ValueError("managed output result conflicts")
+            return replay
+        if managed is not None and managed[1] not in {"granted", "running"}:
+            raise ValueError("execution fence is not output-writable")
+        lease = (
+            None
+            if managed is not None
+            else self._require_stage_fence(state, stage_name, attempt_id, fencing_token)
+        )
+        current = state.commits.get(stage_name)
+        if current is None:
+            if supersedes_commit_id is not None:
+                raise ValueError("output commit has no current predecessor")
+        elif supersedes_commit_id != current.commit_id:
+            raise ValueError("stale or missing output commit current head")
         revision = self._next_revision()
         commit = OutputCommitRecord(
             commit_id=f"{stage_name}-{attempt_id}-commit",
@@ -541,6 +913,7 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             committed_at=self._now(),
             revision=revision,
             output_names=tuple(outputs),
+            supersedes_commit_id=supersedes_commit_id,
         )
         facts = tuple(
             ArtifactFactRecord(
@@ -553,6 +926,15 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         )
         state.commits[stage_name] = commit
         state.facts[stage_name] = list(facts)
+        state.output_commits.append(OutputCommit(commit=commit, artifact_facts=facts))
+        if lease is not None:
+            self._replace_lease(
+                state,
+                lease,
+                revision=revision,
+                state_value=LeaseState.RELEASED,
+                reason=reason,
+            )
         state.attempts[stage_name] = [
             StageAttempt(
                 run_uri=attempt.run_uri,
@@ -573,7 +955,22 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         ]
         state.stage_statuses[stage_name] = StageStatus.SUCCEEDED
         state.revision = revision
+        if assignment_id is not None:
+            state.managed_bindings[assignment_id] = (
+                attempt_id,
+                "terminal",
+                fencing_token,
+            )
         return OutputCommit(commit=commit, artifact_facts=facts)
+
+    def list_output_commits(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[OutputCommit, ...]:
+        return tuple(
+            commit
+            for commit in self._require_run(run_uri).output_commits
+            if stage_name is None or commit.commit.stage_name == stage_name
+        )
 
     def append_audit_event(
         self, run_uri: str, event: PipelineEvent
@@ -585,7 +982,9 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         )
         if existing is not None:
             if not _event_matches_record(event, existing):
-                raise ValueError(f"event_id {event.event_id!r} conflicts with an existing event")
+                raise ValueError(
+                    f"event_id {event.event_id!r} conflicts with an existing event"
+                )
             return existing
         record = PipelineEventRecord(
             run_uri=run_uri,
@@ -922,7 +1321,7 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         stage_name: str,
         attempt_id: str,
         fencing_token: str,
-    ) -> None:
+    ) -> LeaseRecord:
         for lease in state.leases.values():
             if (
                 lease.kind is LeaseKind.STAGE
@@ -934,7 +1333,7 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
                     raise ValueError("stage lease has expired")
                 if lease.state is not LeaseState.ACTIVE:
                     raise ValueError("stage lease is not active")
-                return
+                return lease
         raise ValueError("missing active stage lease for output commit")
 
     def _active_stage_lease(
@@ -1198,6 +1597,44 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
             revision=revision,
         )
 
+    def ensure_resource_limits(
+        self, workspace_id: str, limits: Mapping[str, int]
+    ) -> tuple[ConcurrencyCounter, ...]:
+        if workspace_id not in self._workspaces:
+            raise ValueError("unknown workspace")
+        normalized = _resource_limits_mapping(limits)
+        mismatched = [
+            key
+            for key, limit in normalized.items()
+            if (existing := self._resource_limits.get((workspace_id, key))) is not None
+            and existing != limit
+        ]
+        if mismatched:
+            raise CoordinationStoreError(
+                "resource limits do not match existing authority limits: "
+                + ", ".join(mismatched),
+                kind=CoordinationFailureKind.INVALID_OR_UNSUPPORTED,
+            )
+        missing = [
+            key
+            for key in normalized
+            if (workspace_id, key) not in self._resource_limits
+        ]
+        revision = self._next_revision() if missing else None
+        for key in missing:
+            self._resource_limits[(workspace_id, key)] = normalized[key]
+            if revision is not None:
+                self._resource_limit_revisions[(workspace_id, key)] = revision
+        return tuple(
+            ConcurrencyCounter(
+                counter_name=f"resource:{key}",
+                value=self._active_resource_amount(workspace_id, key),
+                limit=normalized[key],
+                revision=self._resource_limit_revisions[(workspace_id, key)],
+            )
+            for key in normalized
+        )
+
     def read_resource_limit(
         self, workspace_id: str, resource_key: str
     ) -> ConcurrencyCounter | None:
@@ -1365,7 +1802,8 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         lease = self._leases[lease_id]
         if lease.owner_id != owner_id or lease.fencing_token != fencing_token:
             raise CoordinationStoreError(
-                "stale or foreign lease token", kind=CoordinationFailureKind.OWNERSHIP_LOST
+                "stale or foreign lease token",
+                kind=CoordinationFailureKind.OWNERSHIP_LOST,
             )
         if lease.state is not LeaseState.ACTIVE:
             raise CoordinationStoreError(
@@ -1450,6 +1888,19 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
     def _at_tick(tick: int) -> str:
         value = datetime(2020, 1, 1, tzinfo=UTC) + timedelta(seconds=tick)
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _resource_limits_mapping(limits: Mapping[str, int]) -> dict[str, int]:
+    if not isinstance(limits, Mapping):
+        raise ValueError("limits must be a mapping")
+    normalized: dict[str, int] = {}
+    for key, value in limits.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError("resource limit keys must be non-empty strings")
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError("resource limits must be positive integers")
+        normalized[key] = value
+    return dict(sorted(normalized.items()))
 
 
 __all__ = [

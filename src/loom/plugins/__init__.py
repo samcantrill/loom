@@ -12,6 +12,7 @@ from .entrypoints import (
     LOOM_EVENT_SINKS_GROUP,
     LOOM_EXECUTORS_GROUP,
     LOOM_RECIPES_GROUP,
+    LOOM_RESOURCE_VALIDATORS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SOURCES_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
@@ -30,14 +31,23 @@ from .diagnostics import (
     LOADABLE_PLUGIN_GROUPS,
     PLUGIN_GROUP_READINESS,
     PLUGIN_GROUP_READINESS_DETAILS,
+    READINESS_FACETS,
     PluginDiagnosticResult,
     PluginGroupReadiness,
     PluginMissingRequest,
+    PluginReadinessFacet,
     PluginSelection,
     check_plugin_records,
     filter_plugin_records,
     plugin_group_readiness,
     summarize_plugin_records,
+)
+from .activation import (
+    PLUGIN_ACTIVATIONS_METADATA_KEY,
+    PluginActivationManifest,
+    compare_plugin_activation_records,
+    parse_plugin_selector,
+    resolve_plugin_selections,
 )
 from .errors import (
     PluginDiscoveryError,
@@ -53,6 +63,8 @@ if TYPE_CHECKING:
     )
     from .codecs import load_codec_entry_points as load_codec_entry_points
     from .event_sinks import load_event_sink_entry_points as load_event_sink_entry_points
+    from .executors import load_executor_entry_points as load_executor_entry_points
+    from .resource_validators import load_resource_validator_entry_points as load_resource_validator_entry_points
     from .recipes import load_recipe_entry_points as load_recipe_entry_points
 
 _LAZY_EXPORTS = {
@@ -60,6 +72,8 @@ _LAZY_EXPORTS = {
     "load_codec_entry_points": ".codecs",
     "load_event_sink_entry_points": ".event_sinks",
     "load_recipe_entry_points": ".recipes",
+    "load_executor_entry_points": ".executors",
+    "load_resource_validator_entry_points": ".resource_validators",
 }
 
 
@@ -74,11 +88,13 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "KNOWN_PLUGIN_GROUPS",
+    "PLUGIN_ACTIVATIONS_METADATA_KEY",
     "LOOM_ARTIFACT_STORE_BACKENDS_GROUP",
     "LOOM_CODECS_GROUP",
     "LOOM_EVENT_SINKS_GROUP",
     "LOOM_EXECUTORS_GROUP",
     "LOOM_RECIPES_GROUP",
+    "LOOM_RESOURCE_VALIDATORS_GROUP",
     "LOOM_RUN_EXPORTERS_GROUP",
     "LOOM_SOURCES_GROUP",
     "LOOM_SWEEP_PROVIDERS_GROUP",
@@ -86,8 +102,10 @@ __all__ = [
     "LOADABLE_PLUGIN_GROUPS",
     "PLUGIN_GROUP_READINESS",
     "PLUGIN_GROUP_READINESS_DETAILS",
+    "READINESS_FACETS",
     "LoadedPlugin",
     "PluginDiagnosticResult",
+    "PluginActivationManifest",
     "PluginDiscoveryError",
     "PluginDuplicate",
     "PluginDuplicateError",
@@ -98,10 +116,12 @@ __all__ = [
     "PluginLoadError",
     "PluginLoadResult",
     "PluginMissingRequest",
+    "PluginReadinessFacet",
     "PluginRecord",
     "PluginRegistrationError",
     "PluginSelection",
     "check_plugin_records",
+    "compare_plugin_activation_records",
     "find_plugin_duplicates",
     "filter_plugin_records",
     "load_artifact_store_backend_entry_points",
@@ -110,6 +130,10 @@ __all__ = [
     "load_event_sink_entry_points",
     "load_recipe_entry_points",
     "load_entry_points",
+    "load_executor_entry_points",
+    "load_resource_validator_entry_points",
     "plugin_group_readiness",
+    "parse_plugin_selector",
+    "resolve_plugin_selections",
     "summarize_plugin_records",
 ]

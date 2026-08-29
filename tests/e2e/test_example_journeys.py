@@ -27,14 +27,25 @@ def test_e2e_example_local_pipeline_run_with_resume(tmp_path: Path) -> None:
 
     assert payload["first_status"] == "SUCCEEDED"
     assert payload["resume_status"] == "SUCCEEDED"
+    assert payload["repair_status"] == "SUCCEEDED"
     first_stage_actions = payload["first_stage_actions"]
     resume_stage_actions = payload["resume_stage_actions"]
+    repair_stage_actions = payload["repair_stage_actions"]
     assert isinstance(first_stage_actions, dict)
     assert isinstance(resume_stage_actions, dict)
-    assert set(first_stage_actions) == {"seed", "summarize"}
-    assert set(resume_stage_actions) == {"seed", "summarize"}
-    assert resume_stage_actions["seed"] == "REUSE"
-    assert resume_stage_actions["summarize"] == "REUSE"
+    assert isinstance(repair_stage_actions, dict)
+    stage_names = {"left_seed", "left_summarize", "right_seed", "right_summarize"}
+    assert set(first_stage_actions) == stage_names
+    assert set(resume_stage_actions) == stage_names
+    assert set(repair_stage_actions) == stage_names
+    assert set(resume_stage_actions.values()) == {"REUSE"}
+    assert repair_stage_actions == {
+        "left_seed": "RUN",
+        "left_summarize": "RUN",
+        "right_seed": "REUSE",
+        "right_summarize": "REUSE",
+    }
+    assert payload["repair_reason"] == "ARTIFACT_CHECKSUM_MISMATCH"
     assert _run_uri_path(payload["run_uri"]).is_dir()
 
 
@@ -101,6 +112,25 @@ def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(tmp_path: Pat
     assert failure_payload["stderr_available"] is True
     assert _require_int(failure_payload["fake_docker_call_count"]) >= 1
     assert _run_uri_path(failure_payload["run_uri"]).is_dir()
+
+
+def test_e2e_example_apptainer_executor_runs_with_fake_command(tmp_path: Path) -> None:
+    script = (
+        EXAMPLES_ROOT
+        / "execution"
+        / "containers"
+        / "slurm-apptainer"
+        / "run_apptainer_pipeline.py"
+    )
+    payload = _parse_summary(_run_example_script(script, tmp_path / "apptainer"))
+
+    assert payload["run_status"] == "SUCCEEDED"
+    assert payload["executor"] == "apptainer"
+    assert payload["image"] == "analysis-example.sif"
+    assert {"--cleanenv", "--nv"} <= set(str(payload["flags"]).split(","))
+    assert _require_int(payload["artifact_count"]) == 1
+    assert _require_int(payload["fake_call_count"]) >= 1
+    assert _run_uri_path(payload["run_uri"]).is_dir()
 
 
 def _run_example_script(

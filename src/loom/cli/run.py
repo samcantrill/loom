@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import warnings as python_warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -27,6 +28,7 @@ from loom.cli.options import (
     PlanCliOptions,
     RunCliOptions,
     SelectorCliOptions,
+    add_plugin_option,
     output_format_from_namespace,
 )
 from loom.cli.results import (
@@ -40,6 +42,11 @@ if TYPE_CHECKING:
     from loom.diagnostics import PreflightRequest, PreflightResult
     from weave.api import ComposedConfig
     from loom.pipeline.execution import RunRequest, RunResult
+    from loom.pipeline.event_sinks import EventSinkRegistry
+    from loom.io.codecs import CodecRegistry
+    from loom.pipeline.executors import ExecutorRegistry
+    from loom.pipeline.resources import ResourceValidatorRegistry
+    from loom.plugins.activation import PluginActivationManifest
     from loom.pipeline.executors.slurm import (
         SlurmCommandRunner,
         SlurmDryRunPlanningResult,
@@ -102,6 +109,10 @@ class SlurmLiveSubmissionDeferredError(CliError):
             },
             exit_code=ExitCode.EXECUTOR,
         )
+
+
+class _PluginActivationEvidenceWarning(UserWarning):
+    """Warning emitted when exact plugin distribution evidence is unavailable."""
 
 
 def register_subparser(
@@ -188,6 +199,7 @@ def register_subparser(
         help="output format",
     )
     add_authority_options(parser, include_resolution_mode=True)
+    add_plugin_option(parser)
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -206,6 +218,23 @@ def handle(namespace: argparse.Namespace) -> int:
     output_format = output_format_from_namespace(namespace)
     authority_config = authority_config_from_namespace(namespace)
     authority_mode = authority_resolution_mode_from_namespace(namespace)
+    from loom.cli.plugin_activation import selected_runtime_plugins
+    from loom.plugins import (
+        LOOM_CODECS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
+        LOOM_EXECUTORS_GROUP,
+        LOOM_RESOURCE_VALIDATORS_GROUP,
+    )
+
+    plugin_records = selected_runtime_plugins(
+        getattr(namespace, "plugin", None),
+        allowed_groups=(
+            LOOM_EXECUTORS_GROUP,
+            LOOM_CODECS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+        ),
+    )
 
     if run_options.dry_run:
         return _handle_dry_run(
@@ -215,6 +244,7 @@ def handle(namespace: argparse.Namespace) -> int:
             output_format=output_format,
             authority_config=authority_config,
             authority_mode=authority_mode,
+            plugin_records=plugin_records,
         )
 
     if _run_selects_slurm_executor(
@@ -227,6 +257,7 @@ def handle(namespace: argparse.Namespace) -> int:
             run_options=run_options,
             selector_options=selector_options,
             authority_config=authority_config,
+            plugin_records=plugin_records,
         )
         ok = result.status == "SUBMITTED"
         if output_format is OutputFormat.JSON:
@@ -243,12 +274,13 @@ def handle(namespace: argparse.Namespace) -> int:
             sys.stdout.write(format_slurm_live_submission_text(result) + "\n")
         return int(ExitCode.SUCCESS if ok else ExitCode.RUN_FAILED)
 
-    result = build_run_result(
+    result, warnings = _build_run_result_with_warnings(
         config_options=config_options,
         run_options=run_options,
         selector_options=selector_options,
         authority_config=authority_config,
         authority_mode=authority_mode,
+        plugin_records=plugin_records,
     )
     ok = result.status == "SUCCEEDED"
     if output_format is OutputFormat.JSON:
@@ -256,13 +288,14 @@ def handle(namespace: argparse.Namespace) -> int:
             format_json_envelope(
                 schema_version=RUN_RESULT_SCHEMA_VERSION,
                 ok=ok,
-                warnings=[],
+                warnings=warnings,
                 payload_name="result",
                 payload=result.to_dict(),
             )
         )
     else:
         sys.stdout.write(format_run_text(result) + "\n")
+        _write_run_warnings(warnings)
     return int(ExitCode.SUCCESS if ok else ExitCode.RUN_FAILED)
 
 
@@ -273,10 +306,45 @@ def build_run_result(
     selector_options: SelectorCliOptions,
     authority_config: "AuthorityConfig | None" = None,
     authority_mode: "AuthorityResolutionMode | None" = None,
+    plugin_records: Sequence[object] = (),
 ) -> RunCliResult:
     """Execute a pipeline and build the CLI-specific run result."""
 
-    if run_options.executor_explicit and run_options.executor not in _RUN_EXECUTORS:
+    result, activation_warnings = _build_run_result_with_warnings(
+        config_options=config_options,
+        run_options=run_options,
+        selector_options=selector_options,
+        authority_config=authority_config,
+        authority_mode=authority_mode,
+        plugin_records=plugin_records,
+    )
+    for warning in activation_warnings:
+        python_warnings.warn(
+            warning.message,
+            _PluginActivationEvidenceWarning,
+            stacklevel=2,
+        )
+    return result
+
+
+def _build_run_result_with_warnings(
+    *,
+    config_options: ConfigCliOptions,
+    run_options: RunCliOptions,
+    selector_options: SelectorCliOptions,
+    authority_config: "AuthorityConfig | None" = None,
+    authority_mode: "AuthorityResolutionMode | None" = None,
+    plugin_records: Sequence[object] = (),
+) -> tuple[RunCliResult, tuple[CliWarning, ...]]:
+    """Execute a pipeline and retain CLI activation warnings."""
+
+    _validate_run_plugin_record_groups(plugin_records)
+    unsupported_unregistered_executor = (
+        run_options.executor_explicit
+        and run_options.executor not in _RUN_EXECUTORS
+        and not plugin_records
+    )
+    if unsupported_unregistered_executor and not run_options.resume:
         raise UnsupportedExecutorError(cast(str, run_options.executor))
     store = _create_default_run_store(
         authority_config=authority_config,
@@ -287,38 +355,167 @@ def build_run_result(
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    pipeline_result = _validate_pipeline_config(composed.resolved)
+    checked_resume_run_uri: str | None = None
+    activation_warnings: tuple[CliWarning, ...] = ()
+    if run_options.resume:
+        checked_resume_run_uri = _resolve_run_uri_for_run(
+            store,
+            _resume_run_uri_before_plugin_import(composed.resolved, run_options),
+            open_existing=True,
+        )
+        if checked_resume_run_uri is None:
+            raise AssertionError("resume run URI resolution returned None")
+        activation_warnings = _validate_resume_plugin_activations(
+            store,
+            checked_resume_run_uri,
+            plugin_records,
+        )
+    if unsupported_unregistered_executor:
+        raise UnsupportedExecutorError(cast(str, run_options.executor))
+    codecs: CodecRegistry | None = None
+    validators: ResourceValidatorRegistry | None = None
+    executor_registry: ExecutorRegistry | None = None
+    activation_manifest: PluginActivationManifest | None = None
+    worker_activation_manifest: PluginActivationManifest | None = None
+    event_sink_registry: EventSinkRegistry | None = None
+    if plugin_records:
+        from loom.cli.plugin_activation import (
+            build_selected_event_sink_registry,
+            build_selected_registries,
+            plugin_selectors_for_groups,
+        )
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
+        from loom.plugins.activation import PluginActivationManifest
+        from loom.plugins.entrypoints import PluginRecord
+
+        codecs, validators, executor_registry, activation_manifest = (
+            build_selected_registries(cast(Sequence[PluginRecord], plugin_records))
+        )
+        if any(
+            record.group == LOOM_EVENT_SINKS_GROUP
+            for record in cast(Sequence[PluginRecord], plugin_records)
+        ):
+            event_sink_registry = build_selected_event_sink_registry(
+                cast(Sequence[PluginRecord], plugin_records)
+            )
+        worker_selectors = frozenset(
+            plugin_selectors_for_groups(
+                cast(Sequence[PluginRecord], plugin_records),
+                groups=(LOOM_CODECS_GROUP, LOOM_RESOURCE_VALIDATORS_GROUP),
+            )
+        )
+        worker_activation_manifest = PluginActivationManifest(
+            plugins=tuple(
+                record
+                for record in cast(Sequence[PluginRecord], plugin_records)
+                if f"{record.group}:{record.name}" in worker_selectors
+            )
+        )
+    pipeline_result = (
+        _validate_pipeline_config(composed.resolved, registry=validators)
+        if validators is not None
+        else _validate_pipeline_config(composed.resolved)
+    )
     runtime_options = _merge_runtime_options(
         composed.resolved,
         run_options=run_options,
         selector_options=selector_options,
         known_stage_ids=pipeline_result.spec.stage_names,
+        registry=validators,
     )
     if _is_slurm_executor(runtime_options.executor):
         raise SlurmLiveSubmissionDeferredError(cast(str, runtime_options.executor))
-    run_uri = _resolve_run_uri_for_run(
-        store,
-        runtime_options.run_uri,
-        open_existing=run_options.resume,
+    if checked_resume_run_uri is None:
+        run_uri = _resolve_run_uri_for_run(
+            store,
+            runtime_options.run_uri,
+            open_existing=False,
+        )
+    else:
+        validated_run_uri = runtime_options.run_uri
+        if validated_run_uri is None:
+            raise CliError(
+                "`loom run --resume` requires --run-uri.",
+                code="cli.run.resume_requires_run_uri",
+                hint="Pass --run-uri or configure runtime.run_uri for strict resume.",
+                exit_code=ExitCode.PIPELINE,
+            )
+        final_resume_run_uri = store.resolve_run_uri(validated_run_uri)
+        if final_resume_run_uri != checked_resume_run_uri:
+            raise CliError(
+                "resume run URI changed after runtime option validation",
+                code="cli.run.resume_run_uri_changed",
+                context={
+                    "checked_run_uri": checked_resume_run_uri,
+                    "validated_run_uri": final_resume_run_uri,
+                },
+                exit_code=ExitCode.PIPELINE,
+            )
+        run_uri = checked_resume_run_uri
+    runtime_options = _with_resolved_run_uri(
+        runtime_options,
+        run_uri,
+        registry=validators,
     )
-    runtime_options = _with_resolved_run_uri(runtime_options, run_uri)
-    executor = _build_executor(runtime_options.executor or "local", store)
-    _run_preflight_for_run(
-        config_options=config_options,
-        runtime_options=runtime_options,
-        open_existing=run_options.resume,
-        authority_config=authority_config,
-        authority_mode=authority_mode,
+    executor = (
+        _build_executor(runtime_options.executor or "local", store)
+        if executor_registry is None
+        else _build_executor(
+            runtime_options.executor or "local",
+            store,
+            options=runtime_options,
+            registry=executor_registry,
+            plugin_records=plugin_records,
+        )
     )
-    request = _build_run_request(
-        composed,
-        open_existing=run_options.resume,
-        options=runtime_options,
+    if executor_registry is None:
+        _run_preflight_for_run(
+            config_options=config_options,
+            runtime_options=runtime_options,
+            open_existing=run_options.resume,
+            authority_config=authority_config,
+            authority_mode=authority_mode,
+        )
+    else:
+        _run_preflight_for_run(
+            config_options=config_options,
+            runtime_options=runtime_options,
+            open_existing=run_options.resume,
+            authority_config=authority_config,
+            authority_mode=authority_mode,
+            validator_registry=validators,
+            descriptor_registry=executor_registry.descriptor_registry,
+        )
+    request = (
+        _build_run_request(
+            composed, open_existing=run_options.resume, options=runtime_options
+        )
+        if validators is None
+        else _build_run_request(
+            composed,
+            open_existing=run_options.resume,
+            options=runtime_options,
+            validator_registry=validators,
+            activation_manifest=activation_manifest,
+            worker_activation_manifest=worker_activation_manifest,
+            event_sink_registry=event_sink_registry,
+        )
     )
-    result = _run_pipeline(request, store, executor=executor)
-    return _run_result_from_execution_result(
-        result,
-        offline_evidence=_offline_evidence_summary(store, result.run_uri),
+    result = (
+        _run_pipeline(request, store, executor=executor)
+        if codecs is None
+        else _run_pipeline(request, store, executor=executor, codec_registry=codecs)
+    )
+    return (
+        _run_result_from_execution_result(
+            result,
+            offline_evidence=_offline_evidence_summary(store, result.run_uri),
+        ),
+        activation_warnings,
     )
 
 
@@ -330,7 +527,9 @@ def _handle_dry_run(
     output_format: OutputFormat,
     authority_config: "AuthorityConfig | None" = None,
     authority_mode: "AuthorityResolutionMode | None" = None,
+    plugin_records: Sequence[object] = (),
 ) -> int:
+    _validate_run_plugin_record_groups(plugin_records)
     if _dry_run_selects_slurm_executor(
         config_options=config_options,
         run_options=run_options,
@@ -341,6 +540,7 @@ def _handle_dry_run(
             run_options=run_options,
             selector_options=selector_options,
             authority_config=authority_config,
+            plugin_records=plugin_records,
         )
         if output_format is OutputFormat.JSON:
             sys.stdout.write(
@@ -358,6 +558,17 @@ def _handle_dry_run(
 
     from loom.cli.plan import PLAN_RESULT_SCHEMA_VERSION, build_plan_result
 
+    validator_registry = None
+    descriptor_registry = None
+    if plugin_records:
+        from loom.cli.plugin_activation import build_selected_registries
+        from loom.plugins.entrypoints import PluginRecord
+
+        _codecs, validator_registry, executors, _manifest = build_selected_registries(
+            cast(Sequence[PluginRecord], plugin_records)
+        )
+        descriptor_registry = executors.descriptor_registry
+
     plan_result = build_plan_result(
         config_options=config_options,
         plan_options=PlanCliOptions(
@@ -371,6 +582,8 @@ def _handle_dry_run(
         ),
         selector_options=selector_options,
         authority_config=authority_config,
+        validator_registry=validator_registry,
+        descriptor_registry=descriptor_registry,
     )
     if output_format is OutputFormat.JSON:
         sys.stdout.write(
@@ -403,14 +616,13 @@ def _dry_run_selects_slurm_executor(
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    pipeline_result = _validate_pipeline_config(composed.resolved)
-    runtime_options = _merge_runtime_options(
-        composed.resolved,
-        run_options=run_options,
-        selector_options=selector_options,
-        known_stage_ids=pipeline_result.spec.stage_names,
+    return _is_slurm_executor(
+        _configured_runtime_option_before_plugin_import(
+            composed.resolved,
+            run_options,
+            option="executor",
+        )
     )
-    return _is_slurm_executor(runtime_options.executor)
 
 
 def _run_selects_slurm_executor(
@@ -427,14 +639,13 @@ def _run_selects_slurm_executor(
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    pipeline_result = _validate_pipeline_config(composed.resolved)
-    runtime_options = _merge_runtime_options(
-        composed.resolved,
-        run_options=run_options,
-        selector_options=selector_options,
-        known_stage_ids=pipeline_result.spec.stage_names,
+    return _is_slurm_executor(
+        _configured_runtime_option_before_plugin_import(
+            composed.resolved,
+            run_options,
+            option="executor",
+        )
     )
-    return _is_slurm_executor(runtime_options.executor)
 
 
 def build_slurm_dry_run_result(
@@ -443,24 +654,60 @@ def build_slurm_dry_run_result(
     run_options: RunCliOptions,
     selector_options: SelectorCliOptions,
     authority_config: "AuthorityConfig | None" = None,
+    plugin_records: Sequence[object] = (),
 ) -> tuple[SlurmDryRunCliResult, tuple[CliWarning, ...]]:
     """Prepare persisted state and invoke the public SLURM dry-run planners."""
 
+    _validate_run_plugin_record_groups(plugin_records)
     store = _create_default_run_store(
         authority_config=authority_config,
         owner_id="slurm-dry-run",
     )
+    validator_registry = None
+    activation_manifest = None
+    stage_job_plugin_selectors: tuple[str, ...] = ()
+    if plugin_records:
+        from loom.cli.plugin_activation import (
+            build_selected_registries,
+            plugin_selectors_for_groups,
+        )
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
+        from loom.plugins.entrypoints import PluginRecord
+
+        _codecs, validator_registry, _executors, activation_manifest = (
+            build_selected_registries(cast(Sequence[PluginRecord], plugin_records))
+        )
+        stage_job_plugin_selectors = plugin_selectors_for_groups(
+            cast(Sequence[PluginRecord], plugin_records),
+            groups=(
+                LOOM_CODECS_GROUP,
+                LOOM_EVENT_SINKS_GROUP,
+                LOOM_RESOURCE_VALIDATORS_GROUP,
+            ),
+        )
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    pipeline_result = _validate_pipeline_config(composed.resolved)
+    pipeline_result = (
+        _validate_pipeline_config(composed.resolved)
+        if validator_registry is None
+        else _validate_pipeline_config(
+            composed.resolved,
+            registry=validator_registry,
+        )
+    )
     runtime_options = _merge_runtime_options(
         composed.resolved,
         run_options=run_options,
         selector_options=selector_options,
         known_stage_ids=pipeline_result.spec.stage_names,
+        registry=validator_registry,
     )
     executor = runtime_options.executor or "local"
     if not _is_slurm_executor(executor):
@@ -477,12 +724,17 @@ def build_slurm_dry_run_result(
             code="cli.run.slurm_missing_run_uri",
             exit_code=ExitCode.PIPELINE,
         )
-    runtime_options = _with_resolved_run_uri(runtime_options, run_uri)
+    runtime_options = _with_resolved_run_uri(
+        runtime_options,
+        run_uri,
+        registry=validator_registry,
+    )
     preflight = _run_preflight_for_slurm_dry_run(
         config_options=config_options,
         runtime_options=runtime_options,
         open_existing=run_options.resume,
         authority_config=authority_config,
+        validator_registry=validator_registry,
     )
     warnings = _preflight_cli_warnings(preflight)
     runtime_options, container_build_results = _resolve_slurm_container_runtime_options(
@@ -496,11 +748,22 @@ def build_slurm_dry_run_result(
                 "command": "loom run",
                 "executor": executor,
                 "dry_run": True,
+                **(
+                    {"plugin_activations": activation_manifest.to_dict()}
+                    if activation_manifest is not None
+                    else {}
+                ),
             },
         )
 
-    artifact_safe_pipeline_result = _validate_pipeline_config(
-        _artifact_safe_config_for_plan(composed)
+    artifact_safe_config = _artifact_safe_config_for_plan(composed)
+    artifact_safe_pipeline_result = (
+        _validate_pipeline_config(artifact_safe_config)
+        if validator_registry is None
+        else _validate_pipeline_config(
+            artifact_safe_config,
+            registry=validator_registry,
+        )
     )
     plan = _persist_slurm_dry_run_plan(
         artifact_safe_pipeline_result.spec,
@@ -516,6 +779,7 @@ def build_slurm_dry_run_result(
         plan=plan,
         runtime_options=runtime_options,
         composed=composed,
+        activation_manifest=activation_manifest,
     )
     slurm_options = _slurm_options_from_runtime(runtime_options)
     if executor == "slurm-single-job":
@@ -547,6 +811,7 @@ def build_slurm_dry_run_result(
             apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
             stage_apptainer_options=_stage_slurm_apptainer_options(runtime_options),
             container_build_results=container_build_results,
+            plugin_selectors=stage_job_plugin_selectors,
         )
     return _slurm_dry_run_cli_result(result, warnings=warnings), warnings
 
@@ -566,10 +831,12 @@ def _compose_config(
 
 def _validate_pipeline_config(
     config: Mapping[str, object],
+    *,
+    registry: object | None = None,
 ) -> "PipelineValidationResult":
     from loom.pipeline import validate_pipeline_config
 
-    return validate_pipeline_config(config)
+    return validate_pipeline_config(config, registry=cast(Any, registry))
 
 
 def _artifact_safe_config_for_plan(composed: "ComposedConfig") -> Mapping[str, object]:
@@ -585,6 +852,7 @@ def _merge_runtime_options(
     run_options: RunCliOptions,
     selector_options: SelectorCliOptions,
     known_stage_ids: Sequence[str],
+    registry: "ResourceValidatorRegistry | None" = None,
 ) -> "RunOptions":
     from loom.pipeline.runtime import merge_config_run_options
 
@@ -592,17 +860,23 @@ def _merge_runtime_options(
         config,
         explicit=run_options.to_runtime_source(selectors=selector_options),
         known_stage_ids=known_stage_ids,
+        registry=registry,
     )
 
 
-def _with_resolved_run_uri(options: "RunOptions", run_uri: str | None) -> "RunOptions":
+def _with_resolved_run_uri(
+    options: "RunOptions",
+    run_uri: str | None,
+    *,
+    registry: "ResourceValidatorRegistry | None" = None,
+) -> "RunOptions":
     if run_uri is None or options.run_uri == run_uri:
         return options
     from loom.pipeline.runtime import RunOptions
 
     data = options.to_dict()
     data["run_uri"] = run_uri
-    return RunOptions.from_dict(data)
+    return RunOptions.from_dict(data, registry=registry)
 
 
 def _create_default_run_store(
@@ -663,6 +937,149 @@ def _resolve_run_uri_for_run(
     return resolved
 
 
+def _resume_run_uri_before_plugin_import(
+    config: Mapping[str, object], run_options: RunCliOptions
+) -> str | None:
+    """Resolve the effective resume URI without constructing plugin targets."""
+
+    if run_options.run_uri is not None:
+        return run_options.run_uri
+
+    candidate = _configured_runtime_option_before_plugin_import(
+        config,
+        run_options,
+        option="run_uri",
+    )
+    if candidate is None:
+        return None
+    if not isinstance(candidate, str) or not candidate:
+        raise CliError(
+            "configured resume run URI must be a non-empty string",
+            code="cli.run.invalid_resume_run_uri",
+            exit_code=ExitCode.PIPELINE,
+        )
+    return candidate
+
+
+def _configured_runtime_option_before_plugin_import(
+    config: Mapping[str, object],
+    run_options: RunCliOptions,
+    *,
+    option: str,
+) -> object:
+    """Resolve one trusted scalar using runtime/profile precedence only."""
+
+    runtime_value = config.get("runtime", {})
+    runtime = runtime_value if isinstance(runtime_value, Mapping) else {}
+    selected_profile = run_options.profile
+    if selected_profile is None:
+        configured_profile = runtime.get("profile")
+        if isinstance(configured_profile, str) and configured_profile:
+            selected_profile = configured_profile
+
+    candidate = runtime.get(option)
+    if selected_profile is not None:
+        profiles_value = config.get("runtime_profiles", {})
+        profiles = profiles_value if isinstance(profiles_value, Mapping) else {}
+        profile_value = profiles.get(selected_profile)
+        if isinstance(profile_value, Mapping) and option in profile_value:
+            candidate = profile_value[option]
+    return candidate
+
+
+def _validate_resume_plugin_activations(
+    store: Any,
+    run_uri: str,
+    plugin_records: Sequence[object],
+) -> tuple[CliWarning, ...]:
+    """Compare current metadata authority before importing selected targets."""
+
+    from loom.plugins.activation import (
+        PLUGIN_ACTIVATIONS_METADATA_KEY,
+        PluginActivationManifest,
+        compare_plugin_activation_records,
+    )
+    from loom.plugins.entrypoints import PluginRecord
+
+    current = tuple(cast(Sequence[PluginRecord], plugin_records))
+    metadata = store.read_run_user_metadata(run_uri)
+    raw = metadata.get(PLUGIN_ACTIVATIONS_METADATA_KEY)
+    if raw is None:
+        if current:
+            raise CliError(
+                "resume selected plugins but the existing run has no activation evidence",
+                code="cli.run.plugin_activation_missing_evidence",
+                context={"run_uri": run_uri},
+                exit_code=ExitCode.PIPELINE,
+            )
+        return ()
+
+    try:
+        recorded = PluginActivationManifest.from_dict(raw).plugins
+    except Exception as exc:
+        raise CliError(
+            "existing run plugin activation evidence is invalid",
+            code="cli.run.plugin_activation_invalid_evidence",
+            context={"run_uri": run_uri},
+            exit_code=ExitCode.PIPELINE,
+        ) from exc
+
+    findings = compare_plugin_activation_records(recorded, current)
+    errors = tuple(
+        finding
+        for finding in findings
+        if "distribution evidence unavailable" not in finding
+    )
+    if errors:
+        raise CliError(
+            "resume plugin activation mismatch: " + "; ".join(errors),
+            code="cli.run.plugin_activation_identity_mismatch",
+            context={"run_uri": run_uri},
+            details={"findings": errors},
+            exit_code=ExitCode.PIPELINE,
+        )
+    return tuple(
+        CliWarning(
+            code="cli.run.plugin_activation_distribution_unavailable",
+            message=finding,
+            details={"run_uri": run_uri},
+        )
+        for finding in findings
+    )
+
+
+def _validate_run_plugin_record_groups(plugin_records: Sequence[object]) -> None:
+    """Reject records for groups this Phase 2 composition root cannot consume."""
+
+    from loom.plugins import (
+        LOOM_CODECS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
+        LOOM_EXECUTORS_GROUP,
+        LOOM_RESOURCE_VALIDATORS_GROUP,
+    )
+
+    allowed = {
+        LOOM_CODECS_GROUP,
+        LOOM_EXECUTORS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
+        LOOM_RESOURCE_VALIDATORS_GROUP,
+    }
+    for record in plugin_records:
+        group = getattr(record, "group", None)
+        if group not in allowed:
+            raise CliError(
+                f"plugin group {group!r} is not applicable to `loom run`",
+                code="cli.run.plugin_group_not_applicable",
+                context={"group": group, "allowed_groups": sorted(allowed)},
+                exit_code=ExitCode.PIPELINE,
+            )
+
+
+def _write_run_warnings(warnings: Sequence[CliWarning]) -> None:
+    for warning in warnings:
+        sys.stderr.write(f"warning: {warning.message}\n")
+
+
 def _run_preflight_for_run(
     *,
     config_options: ConfigCliOptions,
@@ -670,6 +1087,8 @@ def _run_preflight_for_run(
     open_existing: bool,
     authority_config: "AuthorityConfig | None" = None,
     authority_mode: "AuthorityResolutionMode | None" = None,
+    validator_registry: "ResourceValidatorRegistry | None" = None,
+    descriptor_registry: object | None = None,
 ) -> None:
     from loom.diagnostics import PreflightError, PreflightRequest
 
@@ -697,6 +1116,8 @@ def _run_preflight_for_run(
                 runtime_options=runtime_options,
                 authority_config=authority_config,
                 authority_mode=authority_mode,
+                resource_validator_registry=validator_registry,
+                executor_descriptor_registry=descriptor_registry,
             )
         )
     except PreflightError as exc:
@@ -724,6 +1145,7 @@ def _run_preflight_for_slurm_dry_run(
     runtime_options: "RunOptions",
     open_existing: bool,
     authority_config: "AuthorityConfig | None" = None,
+    validator_registry: "ResourceValidatorRegistry | None" = None,
 ) -> "PreflightResult":
     from loom.diagnostics import PreflightError, PreflightRequest
 
@@ -759,6 +1181,7 @@ def _run_preflight_for_slurm_dry_run(
                 overrides=config_options.overrides,
                 runtime_options=runtime_options,
                 authority_config=authority_config,
+                resource_validator_registry=validator_registry,
             )
         )
     except PreflightError as exc:
@@ -790,6 +1213,7 @@ def _run_preflight_for_slurm_live_submission(
     runtime_options: "RunOptions",
     open_existing: bool,
     authority_config: "AuthorityConfig | None" = None,
+    validator_registry: "ResourceValidatorRegistry | None" = None,
 ) -> "PreflightResult":
     from loom.diagnostics import PreflightError, PreflightRequest
 
@@ -825,6 +1249,7 @@ def _run_preflight_for_slurm_live_submission(
                 overrides=config_options.overrides,
                 runtime_options=runtime_options,
                 authority_config=authority_config,
+                resource_validator_registry=validator_registry,
             )
         )
     except PreflightError as exc:
@@ -904,6 +1329,7 @@ def _write_slurm_prepared_run(
     plan: "ExecutionPlan",
     runtime_options: "RunOptions",
     composed: "ComposedConfig",
+    activation_manifest: "PluginActivationManifest | None" = None,
 ) -> None:
     from loom.pipeline.execution import (
         PREPARED_RUN_CONTINUATION_WHOLE_RUN,
@@ -949,7 +1375,12 @@ def _write_slurm_prepared_run(
                     "dry_run": dry_run,
                     "continuation_type": PREPARED_RUN_CONTINUATION_WHOLE_RUN,
                 },
-            }
+            },
+            **(
+                {"plugin_activations": activation_manifest.to_dict()}
+                if activation_manifest is not None
+                else {}
+            ),
         },
     )
     store.write_prepared_run(run_uri, record.to_dict())
@@ -1338,24 +1769,60 @@ def build_slurm_live_submission_result(
     run_options: RunCliOptions,
     selector_options: SelectorCliOptions,
     authority_config: "AuthorityConfig | None" = None,
+    plugin_records: Sequence[object] = (),
 ) -> SlurmLiveRunCliResult:
     """Prepare a SLURM plan and submit it with ``sbatch``."""
 
+    _validate_run_plugin_record_groups(plugin_records)
     store = _create_default_run_store(
         authority_config=authority_config,
         owner_id="slurm-live-submission",
     )
+    validator_registry = None
+    activation_manifest = None
+    stage_job_plugin_selectors: tuple[str, ...] = ()
+    if plugin_records:
+        from loom.cli.plugin_activation import (
+            build_selected_registries,
+            plugin_selectors_for_groups,
+        )
+        from loom.plugins import (
+            LOOM_CODECS_GROUP,
+            LOOM_EVENT_SINKS_GROUP,
+            LOOM_RESOURCE_VALIDATORS_GROUP,
+        )
+        from loom.plugins.entrypoints import PluginRecord
+
+        _codecs, validator_registry, _executors, activation_manifest = (
+            build_selected_registries(cast(Sequence[PluginRecord], plugin_records))
+        )
+        stage_job_plugin_selectors = plugin_selectors_for_groups(
+            cast(Sequence[PluginRecord], plugin_records),
+            groups=(
+                LOOM_CODECS_GROUP,
+                LOOM_EVENT_SINKS_GROUP,
+                LOOM_RESOURCE_VALIDATORS_GROUP,
+            ),
+        )
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    pipeline_result = _validate_pipeline_config(composed.resolved)
+    pipeline_result = (
+        _validate_pipeline_config(composed.resolved)
+        if validator_registry is None
+        else _validate_pipeline_config(
+            composed.resolved,
+            registry=validator_registry,
+        )
+    )
     runtime_options = _merge_runtime_options(
         composed.resolved,
         run_options=run_options,
         selector_options=selector_options,
         known_stage_ids=pipeline_result.spec.stage_names,
+        registry=validator_registry,
     )
     executor = runtime_options.executor or "local"
     if executor not in _SLURM_EXECUTORS:
@@ -1373,12 +1840,17 @@ def build_slurm_live_submission_result(
             code="cli.run.slurm_live_missing_run_uri",
             exit_code=ExitCode.PIPELINE,
         )
-    runtime_options = _with_resolved_run_uri(runtime_options, run_uri)
+    runtime_options = _with_resolved_run_uri(
+        runtime_options,
+        run_uri,
+        registry=validator_registry,
+    )
     _run_preflight_for_slurm_live_submission(
         config_options=config_options,
         runtime_options=runtime_options,
         open_existing=run_options.resume,
         authority_config=authority_config,
+        validator_registry=validator_registry,
     )
     runtime_options, container_build_results = _resolve_slurm_container_runtime_options(
         runtime_options,
@@ -1391,11 +1863,23 @@ def build_slurm_live_submission_result(
                 "command": "loom run",
                 "executor": executor,
                 "dry_run": False,
+                **(
+                    {"plugin_activations": activation_manifest.to_dict()}
+                    if activation_manifest is not None
+                    else {}
+                ),
             },
         )
 
     artifact_safe_config = _artifact_safe_config_for_plan(composed)
-    artifact_safe_pipeline_result = _validate_pipeline_config(artifact_safe_config)
+    artifact_safe_pipeline_result = (
+        _validate_pipeline_config(artifact_safe_config)
+        if validator_registry is None
+        else _validate_pipeline_config(
+            artifact_safe_config,
+            registry=validator_registry,
+        )
+    )
     plan = _persist_slurm_dry_run_plan(
         artifact_safe_pipeline_result.spec,
         run_uri=run_uri,
@@ -1421,6 +1905,7 @@ def build_slurm_live_submission_result(
         plan=plan,
         runtime_options=runtime_options,
         composed=composed,
+        activation_manifest=activation_manifest,
     )
 
     from loom.pipeline.executors.slurm import (
@@ -1460,6 +1945,7 @@ def build_slurm_live_submission_result(
             apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
             stage_apptainer_options=_stage_slurm_apptainer_options(runtime_options),
             container_build_results=container_build_results,
+            plugin_selectors=stage_job_plugin_selectors,
         )
         submit = submit_afterok_slurm
     try:
@@ -1539,6 +2025,10 @@ def _build_run_request(
     *,
     open_existing: bool,
     options: "RunOptions",
+    validator_registry: "ResourceValidatorRegistry | None" = None,
+    activation_manifest: "PluginActivationManifest | None" = None,
+    worker_activation_manifest: "PluginActivationManifest | None" = None,
+    event_sink_registry: "EventSinkRegistry | None" = None,
 ) -> "RunRequest":
     from loom.pipeline.execution import RunRequest
 
@@ -1546,10 +2036,37 @@ def _build_run_request(
         config=config,
         open_existing=open_existing,
         options=options,
+        resource_validator_registry=validator_registry,
+        plugin_activation_manifest=(
+            activation_manifest.to_dict() if activation_manifest is not None else None
+        ),
+        worker_plugin_activation_manifest=(
+            worker_activation_manifest.to_dict()
+            if worker_activation_manifest is not None
+            else None
+        ),
+        event_sink_registry=event_sink_registry,
     )
 
 
-def _build_executor(executor: str, store: Any) -> "Executor":
+def _build_executor(
+    executor: str,
+    store: Any,
+    *,
+    options: "RunOptions | None" = None,
+    registry: "ExecutorRegistry | None" = None,
+    plugin_records: Sequence[object] = (),
+) -> "Executor":
+    if registry is not None:
+        from loom.pipeline.execution import RuntimeServices
+
+        if options is None:
+            raise AssertionError("selected executor construction requires RunOptions")
+        return registry.build(
+            executor,
+            services=RuntimeServices.from_legacy(getattr(store, "local_store", store)),
+            options=options,
+        )
     if executor == "local":
         from loom.pipeline.executors import LocalExecutor
 
@@ -1557,7 +2074,9 @@ def _build_executor(executor: str, store: Any) -> "Executor":
     if executor == "subprocess":
         from loom.pipeline.executors import SubprocessExecutor
 
-        return SubprocessExecutor(worker_results=store)
+        return SubprocessExecutor(
+            worker_results=store,
+        )
     if executor == "docker":
         from loom.pipeline.executors import DockerExecutor
 
@@ -1584,17 +2103,29 @@ def _run_pipeline(
     store: Any,
     *,
     executor: "Executor",
+    codec_registry: "CodecRegistry | None" = None,
 ) -> "RunResult":
     from loom.pipeline.execution import (
         PipelineRunner,
         RuntimeServices,
         is_offline_evidence_run_store,
     )
+    from loom.pipeline.stores import LocalArtifactStore
 
     if is_offline_evidence_run_store(store):
-        return PipelineRunner(run_store=store, executor=executor).run(request)
+        return PipelineRunner(
+            run_store=store,
+            executor=executor,
+            artifact_store_factory=lambda root: LocalArtifactStore(
+                root, codec_registry=codec_registry
+            ),
+        ).run(request)
     return PipelineRunner(
-        services=RuntimeServices.from_legacy(store), executor=executor
+        services=RuntimeServices.from_legacy(store),
+        executor=executor,
+        artifact_store_factory=lambda root: LocalArtifactStore(
+            root, codec_registry=codec_registry
+        ),
     ).run(request)
 
 

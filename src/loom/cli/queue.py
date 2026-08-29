@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,13 +23,17 @@ from loom.queue.status import (
     QueueCancellationStatus,
     build_queue_operational_status,
 )
+from loom.serialization import PlainData
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from loom.pipeline.stores import AuthorityConfig
     from loom.queue import QueueDrainResult, QueueService
-    from loom.queue.controller import QueueDispatchAdapter, QueueInspectableDispatchAdapter
+    from loom.queue.controller import (
+        QueueDispatchAdapter,
+        QueueInspectableDispatchAdapter,
+    )
     from loom.queue.preflight import QueuePreflightResult
     from loom.queue.status import QueueOperationalStatus
 
@@ -37,6 +42,7 @@ QUEUE_PREFLIGHT_SCHEMA_VERSION = "loom.cli.queue.preflight.v1"
 QUEUE_STATUS_SCHEMA_VERSION = "loom.cli.queue.status.v1"
 QUEUE_CANCEL_SCHEMA_VERSION = "loom.cli.queue.cancel.v1"
 QUEUE_DRAIN_SCHEMA_VERSION = "loom.cli.queue.drain.v1"
+LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v4"
 
 
 def register_subparser(
@@ -141,6 +147,113 @@ def register_subparser(
     _add_output_options(drain)
     drain.set_defaults(handler=handle_drain_foreground)
 
+    daemon_init = queue_subparsers.add_parser(
+        "daemon-init",
+        help="initialize one protected coordinator deployment bundle",
+    )
+    _add_config_argument(daemon_init)
+    _add_output_options(daemon_init)
+    daemon_init.set_defaults(handler=handle_daemon_init)
+
+    daemon_serve = queue_subparsers.add_parser(
+        "daemon-serve",
+        help="serve one initialized coordinator deployment bundle",
+    )
+    _add_config_argument(daemon_serve)
+    _add_output_options(daemon_serve)
+    daemon_serve.set_defaults(handler=handle_daemon_serve)
+
+    agent_init = queue_subparsers.add_parser(
+        "agent-init",
+        help="initialize one protected outbound-agent root",
+    )
+    _add_config_argument(agent_init)
+    _add_output_options(agent_init)
+    agent_init.set_defaults(handler=handle_agent_init)
+
+    agent_serve = queue_subparsers.add_parser(
+        "agent-serve",
+        help="serve one initialized outbound-agent root",
+    )
+    _add_config_argument(agent_serve)
+    _add_output_options(agent_serve)
+    agent_serve.set_defaults(handler=handle_agent_serve)
+
+    for command, help_text, handler in (
+        ("daemon-submit", "submit one persisted run", handle_daemon_submit),
+        ("daemon-status", "inspect daemon status", handle_daemon_status),
+        ("daemon-wait", "wait for one admitted run", handle_daemon_wait),
+        ("daemon-cancel", "cancel one admitted run", handle_daemon_cancel),
+    ):
+        daemon_client = queue_subparsers.add_parser(command, help=help_text)
+        daemon_client.add_argument("--endpoint", required=True, type=Path)
+        if command != "daemon-status":
+            daemon_client.add_argument("queue_item_id", metavar="QUEUE_ITEM_ID")
+        if command == "daemon-submit":
+            daemon_client.add_argument("run_uri", metavar="RUN_URI")
+        if command == "daemon-wait":
+            daemon_client.add_argument("--timeout", type=float, default=None)
+        _add_output_options(daemon_client)
+        daemon_client.set_defaults(handler=handler)
+
+    for kind in ("drain", "resume", "reload"):
+        control = queue_subparsers.add_parser(
+            f"daemon-agent-{kind}", help=f"{kind} one managed agent"
+        )
+        control.add_argument("--endpoint", required=True, type=Path)
+        control.add_argument("--operation-id", required=True)
+        control.add_argument("--agent-id", required=True)
+        control.add_argument("--session-id", required=True)
+        control.add_argument("--config-revision", required=True)
+        control.add_argument("--pool")
+        control.add_argument("--cancel-active", action="store_true")
+        control.add_argument("--reason", default=f"cli-{kind}")
+        control.set_defaults(handler=handle_daemon_agent_control, agent_control=kind)
+        _add_output_options(control)
+
+    scheduling_reload = queue_subparsers.add_parser(
+        "daemon-scheduling-reload",
+        help="reload protected coordinator scheduling configuration",
+    )
+    scheduling_reload.add_argument("--endpoint", required=True, type=Path)
+    scheduling_reload.add_argument("--operation-id", required=True)
+    scheduling_reload.add_argument("--expected-scheduling-epoch", required=True)
+    scheduling_reload.add_argument("--reason", default="cli-scheduling-reload")
+    scheduling_reload.set_defaults(handler=handle_daemon_scheduling_reload)
+    _add_output_options(scheduling_reload)
+
+    time_recovery = queue_subparsers.add_parser(
+        "daemon-time-recover",
+        help="recover one exact degraded coordinator time revision",
+    )
+    time_recovery.add_argument("--endpoint", required=True, type=Path)
+    time_recovery.add_argument("--operation-id", required=True)
+    time_recovery.add_argument("--expected-time-revision", required=True, type=int)
+    time_recovery.add_argument("--expected-coordinator-epoch", required=True)
+    time_recovery.add_argument("--reason", default="cli-time-recovery")
+    time_recovery.set_defaults(handler=handle_daemon_time_recover)
+    _add_output_options(time_recovery)
+
+    replacement = queue_subparsers.add_parser(
+        "daemon-replace-agent-session",
+        help="fence one completely classified lost agent session before re-registration",
+    )
+    replacement.add_argument("--endpoint", required=True, type=Path)
+    replacement.add_argument("--operation-id", required=True)
+    replacement.add_argument("--agent-id", required=True)
+    replacement.add_argument("--reason", default="cli-session-replacement")
+    replacement.set_defaults(handler=handle_daemon_replace_agent_session)
+    _add_output_options(replacement)
+
+    recovery = queue_subparsers.add_parser(
+        "daemon-recover-unknown",
+        help="close one exact unknown assignment from a guarded request",
+    )
+    recovery.add_argument("--endpoint", required=True, type=Path)
+    recovery.add_argument("--request", required=True, type=Path)
+    recovery.set_defaults(handler=handle_daemon_recover_unknown)
+    _add_output_options(recovery)
+
 
 def handle_preflight(namespace: argparse.Namespace) -> int:
     """Handle ``loom queue preflight``."""
@@ -163,9 +276,7 @@ def handle_preflight(namespace: argparse.Namespace) -> int:
     else:
         sys.stdout.write(format_queue_preflight_text(result) + "\n")
     return int(
-        ExitCode.PIPELINE
-        if _enum_value(result.status) == "FAIL"
-        else ExitCode.SUCCESS
+        ExitCode.PIPELINE if _enum_value(result.status) == "FAIL" else ExitCode.SUCCESS
     )
 
 
@@ -238,6 +349,265 @@ def handle_drain_foreground(namespace: argparse.Namespace) -> int:
     else:
         sys.stdout.write(format_queue_drain_text(result) + "\n")
     return int(ExitCode.SUCCESS)
+
+
+def handle_daemon_init(namespace: argparse.Namespace) -> int:
+    """Atomically initialize one complete coordinator deployment bundle."""
+
+    from loom.queue import LocalDaemon
+    from loom.queue.deployment import load_coordinator_service_config
+
+    try:
+        service = load_coordinator_service_config(namespace.config)
+        LocalDaemon.initialize_deployment(service.daemon)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(
+        namespace,
+        {
+            "operation": "initialize",
+            "deployment_root": str(service.daemon.deployment_root),
+            "coordinator_root": str(service.daemon.coordinator_root),
+            "agent_root": str(service.daemon.agent_root),
+            "run_store_root": str(service.daemon.run_store_root),
+        },
+    )
+
+
+def handle_daemon_serve(namespace: argparse.Namespace) -> int:
+    """Run the persistent coordinator and its configured endpoints."""
+
+    from threading import Event
+
+    from loom.queue import LocalDaemon, LocalDaemonSocketServer
+    from loom.queue.agent_session_transport import LocalDaemonAgentHttpServer
+    from loom.queue.deployment import load_coordinator_service_config
+
+    try:
+        service = load_coordinator_service_config(namespace.config)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    config = service.daemon
+    daemon = LocalDaemon(config)
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    agent_server = (
+        None
+        if service.agent_server is None
+        else LocalDaemonAgentHttpServer(daemon, service.agent_server)
+    )
+    try:
+        status = daemon.start()
+        server.start()
+        if agent_server is not None:
+            agent_server.start()
+        _emit_daemon_payload(
+            namespace,
+            {
+                "operation": "serve",
+                "endpoint": str(config.endpoint),
+                "agent_port": None if agent_server is None else agent_server.port,
+                "coordinator_id": status.coordinator_id,
+                "coordinator_epoch": status.coordinator_epoch,
+            },
+        )
+        Event().wait()
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    finally:
+        if agent_server is not None:
+            agent_server.stop()
+        server.stop()
+        daemon.stop()
+    return int(ExitCode.SUCCESS)
+
+
+def handle_agent_init(namespace: argparse.Namespace) -> int:
+    """Atomically initialize one complete outbound-agent role root."""
+
+    from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
+    from loom.queue.deployment import load_outbound_agent_service_config
+
+    try:
+        service = load_outbound_agent_service_config(namespace.config)
+        LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(
+        namespace,
+        {
+            "operation": "agent-initialize",
+            "agent_root": str(service.client.agent_root),
+            "coordinator_url": service.client.url,
+        },
+    )
+
+
+def handle_agent_serve(namespace: argparse.Namespace) -> int:
+    """Run one foreground outbound agent with bounded reconnect."""
+
+    from threading import Event
+
+    from loom.queue.deployment import (
+        load_outbound_agent_service_config,
+        run_outbound_agent_service,
+    )
+
+    try:
+        service = load_outbound_agent_service_config(namespace.config)
+        _emit_daemon_payload(
+            namespace,
+            {
+                "operation": "agent-serve",
+                "agent_root": str(service.client.agent_root),
+                "coordinator_url": service.client.url,
+            },
+        )
+        run_outbound_agent_service(service, stop=Event())
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return int(ExitCode.SUCCESS)
+
+
+def handle_daemon_submit(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonAdmissionRequest, LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).submit(
+            LocalDaemonAdmissionRequest(namespace.queue_item_id, namespace.run_uri)
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_status(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).status()
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_wait(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).wait(
+            namespace.queue_item_id, timeout_seconds=namespace.timeout
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_cancel(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).cancel(
+            namespace.queue_item_id
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
+    from loom.queue import AgentControl, LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).control_agent(
+            AgentControl(
+                operation_id=namespace.operation_id,
+                kind=namespace.agent_control,
+                agent_id=namespace.agent_id,
+                expected_session_id=namespace.session_id,
+                expected_config_revision=namespace.config_revision,
+                pool=namespace.pool,
+                cancel_active=bool(namespace.cancel_active),
+                reason=namespace.reason,
+            )
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
+
+
+def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
+    from loom.queue import CoordinatorSchedulingReload, LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).reload_scheduling(
+            CoordinatorSchedulingReload(
+                operation_id=namespace.operation_id,
+                expected_scheduling_epoch=namespace.expected_scheduling_epoch,
+                reason=namespace.reason,
+            )
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
+
+
+def handle_daemon_time_recover(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient, TimeRecoveryRequest
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).recover_time(
+            TimeRecoveryRequest(
+                operation_id=namespace.operation_id,
+                expected_time_revision=namespace.expected_time_revision,
+                expected_coordinator_epoch=namespace.expected_coordinator_epoch,
+                reason=namespace.reason,
+            )
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_replace_agent_session(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient, SessionReplacementRequest
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).replace_agent_session(
+            SessionReplacementRequest(
+                operation_id=namespace.operation_id,
+                agent_id=namespace.agent_id,
+                reason=namespace.reason,
+            )
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
+
+
+def handle_daemon_recover_unknown(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient, RecoverUnknownAssignment
+
+    try:
+        raw = json.loads(namespace.request.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CliError(
+            "guarded recovery request is unreadable",
+            code="cli.queue.recovery_request_invalid",
+            exit_code=ExitCode.USAGE,
+        ) from exc
+    if not isinstance(raw, dict):
+        raise CliError(
+            "guarded recovery request must be a JSON object",
+            code="cli.queue.recovery_request_invalid",
+            exit_code=ExitCode.USAGE,
+        )
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).recover_unknown(
+            RecoverUnknownAssignment.from_dict(raw)
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
 
 
 def build_queue_preflight_result(
@@ -400,7 +770,9 @@ def _default_dispatch_adapters(
 
 
 def _queue_cli_error(error: QueueError) -> CliError:
-    exit_code = ExitCode.CONFIG if isinstance(error, QueueConfigError) else ExitCode.RUN_STATE
+    exit_code = (
+        ExitCode.CONFIG if isinstance(error, QueueConfigError) else ExitCode.RUN_STATE
+    )
     code = (
         "cli.queue.config_error"
         if isinstance(error, QueueConfigError)
@@ -433,6 +805,27 @@ def _explicit_authority_config_from_namespace(
     return authority_config_from_namespace(namespace)
 
 
+def _emit_daemon_payload(
+    namespace: argparse.Namespace, payload: "Mapping[str, PlainData]"
+) -> int:
+    output_format = output_format_from_namespace(namespace)
+    if output_format is OutputFormat.JSON:
+        sys.stdout.write(
+            format_json_envelope(
+                schema_version=LOCAL_DAEMON_SCHEMA_VERSION,
+                ok=True,
+                warnings=[],
+                payload_name="result",
+                payload=payload,
+            )
+        )
+    else:
+        sys.stdout.write("local daemon:\n")
+        for key, value in payload.items():
+            sys.stdout.write(f"  {key}: {value}\n")
+    return int(ExitCode.SUCCESS)
+
+
 def _enum_value(value: object) -> str:
     enum_value = getattr(value, "value", value)
     return str(enum_value)
@@ -463,12 +856,26 @@ __all__ = [
     "QUEUE_DRAIN_SCHEMA_VERSION",
     "QUEUE_PREFLIGHT_SCHEMA_VERSION",
     "QUEUE_STATUS_SCHEMA_VERSION",
+    "LOCAL_DAEMON_SCHEMA_VERSION",
     "build_queue_cancel_result",
     "build_queue_drain_result",
     "build_queue_preflight_result",
     "build_queue_status_result",
+    "handle_agent_init",
+    "handle_agent_serve",
     "handle_cancel",
     "handle_drain_foreground",
+    "handle_daemon_cancel",
+    "handle_daemon_agent_control",
+    "handle_daemon_init",
+    "handle_daemon_serve",
+    "handle_daemon_status",
+    "handle_daemon_scheduling_reload",
+    "handle_daemon_time_recover",
+    "handle_daemon_replace_agent_session",
+    "handle_daemon_recover_unknown",
+    "handle_daemon_submit",
+    "handle_daemon_wait",
     "handle_preflight",
     "handle_start",
     "handle_status",

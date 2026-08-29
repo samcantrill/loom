@@ -66,10 +66,19 @@ def test_pipeline_store_public_exports() -> None:
         "AuthorityStoreError",
         "StatusTransition",
         "AttemptAllocation",
+        "PreparedAttemptAuthority",
+        "PreparedAttemptRequest",
+        "PreparedAttemptReceipt",
         "OutputCommit",
+        "CoordinatorAdmissionRequest",
+        "CoordinatorAdmissionReceipt",
+        "CancellationEpochRequest",
+        "CancellationEpochReceipt",
+        "LocalDaemonAuthority",
         "AUTHORITY_MUTATION_ROUTE_PREFIX",
         "AUTHORITY_MUTATION_RUN_ADMIT_PATH",
         "AUTHORITY_MUTATION_OPEN_RUN_PATH",
+        "AUTHORITY_MUTATION_LIST_OUTPUT_COMMITS_PATH",
         "AUTHORITY_MUTATION_RUN_TRANSITION_PATH",
         "AUTHORITY_MUTATION_STAGE_TRANSITION_PATH",
         "AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH",
@@ -91,6 +100,7 @@ def test_pipeline_store_public_exports() -> None:
         "AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH",
         "AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH",
         "AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH",
+        "AUTHORITY_COORDINATION_RESOURCE_LIMITS_ENSURE_PATH",
         "AuthorityClient",
         "AuthorityClientError",
         "DEFAULT_AUTHORITY_READINESS_TIMEOUT_SECONDS",
@@ -314,6 +324,7 @@ def test_pipeline_store_public_exports() -> None:
     assert "read_stage_worker_result" in stores.StageStateStore.__dict__
     assert "write_stage_worker_result" in stores.StageStateStore.__dict__
     assert "allocate_stage_attempt" in stores.PerRunAuthorityStore.__dict__
+    assert "ensure_prepared_attempt" in stores.PreparedAttemptAuthority.__dict__
     assert "record_output_commit" in stores.PerRunAuthorityStore.__dict__
     assert "admit_run" in stores.RunStore.__dict__
     assert "stage_store" in stores.RunStore.__dict__

@@ -14,9 +14,6 @@ runtime:
             kind: memory
             amount: 2
             unit: GiB
-          gpu:
-            kind: gpu
-            amount: 0
 pipeline:
   name: runtime-resource-preflight
   stages:
