@@ -710,7 +710,7 @@ def _detail(
             "owner": "per-run-authority",
             "availability": "available",
             "state": state,
-            "stages": stages,
+            "stages": dict(stages),
             "observed_at": "2026-08-28T00:00:00Z",
             "freshness": "current",
         },

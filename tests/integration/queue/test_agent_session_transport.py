@@ -331,6 +331,7 @@ def test_outbound_service_registers_offers_and_stops_cleanly(tmp_path: Path) -> 
     thread.start()
     try:
         deadline = monotonic() + 10
+        active = 0
         while monotonic() < deadline:
             with sqlite3.connect(daemon_config.control_database) as conn:
                 active = int(

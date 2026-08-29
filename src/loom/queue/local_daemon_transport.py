@@ -133,7 +133,11 @@ class LocalDaemonSocketServer:
             elif operation == "admissions":
                 limit = payload.get("limit", 100)
                 cursor = payload.get("cursor")
-                if cursor is not None and not isinstance(cursor, str):
+                if (
+                    isinstance(limit, bool)
+                    or not isinstance(limit, int)
+                    or (cursor is not None and not isinstance(cursor, str))
+                ):
                     raise QueueServiceError("admission cursor is invalid")
                 result = client.admissions(limit=limit, cursor=cursor).to_dict()
             elif operation == "admission":
@@ -271,17 +275,20 @@ class LocalDaemonSocketClient:
                 "timeout": timeout,
             }
         )
+        kind = result.get("kind")
+        admission = result.get("admission")
+        revision = result.get("revision")
         if (
-            not isinstance(result.get("kind"), str)
-            or not isinstance(result.get("admission"), Mapping)
-            or isinstance(result.get("revision"), bool)
-            or not isinstance(result.get("revision"), int)
+            not isinstance(kind, str)
+            or not isinstance(admission, Mapping)
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
         ):
             raise QueueServiceError("admission wait response is invalid")
         return AdmissionWaitResult(
-            AdmissionWaitKind(result["kind"]),
-            LocalDaemonAdmission.from_dict(result["admission"]),
-            result["revision"],
+            AdmissionWaitKind(kind),
+            LocalDaemonAdmission.from_dict(admission),
+            revision,
         )
 
     def wait(

@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     )
     from ._remote_stage_execution import GpuDeviceDescriptor
     from .local_daemon import (
+        AdmissionPage,
+        AdmissionWaitKind,
+        AdmissionWaitResult,
         AgentControl,
         CoordinatorSchedulingReload,
         LocalDaemon,
@@ -31,6 +34,7 @@ if TYPE_CHECKING:
         LocalDaemonConfig,
         LocalDaemonSchedulingComponents,
         ConfiguredGpuDevice,
+        DaemonStatus,
         LocalDaemonPrincipal,
         LocalDaemonRole,
         LocalDaemonStatus,
