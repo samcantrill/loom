@@ -212,10 +212,14 @@ Final commands:
   requirements, profile-qualified compatibility/targets, allowlisted worker
   environments, and the public provider contract check; explicit configurable
   agent-owned provider composition and its custom-provider production path remain
-- Refiner: correction 1/3 pending for the qualified provider-composition blocker
+- Refiner: correction 1/3 commit `88b73e6` added protected local/remote provider
+  inputs and same-kind validation, but manager verification found production still
+  rejected multiple providers for one kind and remote offers did not carry the
+  claim-contract evidence required for coordinator-side acceptance
 - Pre-submit gate: pending
 - Independent review: not needed unless a material residual risk remains
-- Blocker corrections: 1/3
+- Blocker corrections: 2/3; manager-local provider-qualified runtime/offer
+  correction in progress
 - PR and merge: pending
 
 ## Completion Record
@@ -227,4 +231,4 @@ Final commands:
 | Validated revision/tree state and evidence | Executor-local evidence for `0eefd04`: 80 targeted unit/contract tests, one profile-routing integration, one remote-recovery integration, and Ruff passed. This is partial evidence, not the phase gate. |
 | Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Qualified blocker: local and outbound-agent paths still synthesize built-in providers instead of consuming an explicit agent composition, so same-kind planner/contract startup validation and a custom provider lifecycle/environment path are absent. Correction 1/3 owns the smallest complete fix; branch/worktree remain dedicated. |
+| Residual risk and cleanup | Correction 1/3 made providers configurable and proved one local custom CPU lifecycle, but its validator accepts multiple same-kind providers immediately before production rejects them, its remote factory is keyed to one provider per kind, and the remote offer carries no provider claim-contract evidence for coordinator-side validation. Manager-local correction 2/3 owns these concrete gaps; branch/worktree remain dedicated. |
