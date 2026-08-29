@@ -108,6 +108,92 @@ def test_recovery_request_round_trips_complete_immutable_identity() -> None:
     assert RecoverUnknownAssignment.from_dict(payload).run_uri == "file:///other"
 
 
+def test_operational_admission_reads_are_bounded_and_keyset_ordered(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    with sqlite3.connect(config.control_database) as conn:
+        daemon._coordinator_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    with daemon._connection() as conn:
+        for sequence, admission_id in (
+            (1, "admission-b"),
+            (2, "admission-a"),
+            (3, "admission-c"),
+        ):
+            conn.execute(
+                "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, enqueue_sequence, cancellation_operation_id, blocked_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+                (
+                    admission_id,
+                    f"item-{sequence}",
+                    daemon._coordinator_id,
+                    f"file:///run-{sequence}",
+                    "digest",
+                    "managed-stage",
+                    "ACTIVE",
+                    "2026-01-01T00:00:00Z",
+                    f"operation-{sequence}",
+                    0,
+                    sequence,
+                ),
+            )
+        conn.commit()
+
+    first = daemon.admissions(limit=2)
+    assert [item.admission_id for item in first.admissions] == [
+        "admission-b",
+        "admission-a",
+    ]
+    assert first.next_cursor is not None
+    second = daemon.admissions(limit=2, cursor=first.next_cursor)
+    assert [item.admission_id for item in second.admissions] == ["admission-c"]
+    assert second.next_cursor is None
+
+    direct_detail = daemon.admission("admission-b")
+    assert direct_detail.admission.admission_id == "admission-b"
+    assert direct_detail.authority["availability"] == "unavailable"
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server.start()
+    try:
+        socket_detail = LocalDaemonSocketClient(config.endpoint).admission(
+            "admission-b"
+        )
+    finally:
+        server.stop()
+    assert socket_detail == direct_detail
+
+
+def test_admission_wait_observes_revision_without_status_history(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    with sqlite3.connect(config.control_database) as conn:
+        daemon._coordinator_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    with daemon._connection() as conn:
+        conn.execute(
+            "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, enqueue_sequence, cancellation_operation_id, blocked_reason) VALUES (?, 'item-1', ?, 'file:///run', 'digest', 'managed-stage', 'ACTIVE', '2026-01-01T00:00:00Z', 'operation-1', 0, 1, NULL, NULL)",
+            ("admission-1", daemon._coordinator_id),
+        )
+        conn.commit()
+    changed = daemon.wait_admission("admission-1", expected_revision=0, timeout=0)
+    assert changed.kind.value == "CHANGED"
+    timed_out = daemon.wait_admission(
+        "admission-1", expected_revision=changed.revision, timeout=0
+    )
+    assert timed_out.kind.value == "TIMEOUT"
+    with pytest.raises(QueueConflictError, match="ahead"):
+        daemon.wait_admission(
+            "admission-1", expected_revision=changed.revision + 1, timeout=0
+        )
+
+
 def test_recovery_persists_exact_evidence_before_close_and_replays_it(
     tmp_path: Path,
 ) -> None:
@@ -345,11 +431,7 @@ def test_scheduling_reload_is_local_atomic_and_durable(tmp_path: Path) -> None:
         assert operator.reload_scheduling(request) == receipt
         status = operator.status()
         assert status.scheduling_epoch == receipt["scheduling_epoch"]
-        assert any(
-            item.get("owner") == "coordinator-scheduling"
-            and item.get("state") == "applied"
-            for item in status.controls
-        )
+        assert status.active_admissions == 0
     finally:
         daemon.stop()
 

@@ -293,7 +293,7 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Uncommitted partial work currently changes `local_daemon.py`, `local_daemon_transport.py`, `agent_sessions.py`, queue public imports, and their focused unit tests for bounded status/admission operations and sequenced poll state. Deployment, time recovery, initialization, commands, integration, docs, and final hard-cut closure remain incomplete. |
-| Tests added or updated | Focused `test_local_daemon.py` execution passed 36 tests; incomplete-tree additions are not yet accepted phase evidence. |
+| Tests added or updated | Correction 1/3 adds direct/socket targeted-detail coverage and Discord bounded page/detail collection coverage. Focused `test_local_daemon.py` and `test_discord_webhook.py` pass 49 tests; incomplete-tree additions are not yet accepted phase evidence. |
 | Validated revision/tree state and evidence | pending |
 | Validation-relevant changes after evidence | The partial tree has no reusable final evidence; full gates must run only after the public deployment contract and all six slices are complete. |
 | PR, review, and merge | pending |
