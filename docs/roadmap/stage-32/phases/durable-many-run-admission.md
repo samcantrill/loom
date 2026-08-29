@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 32, Phase 1
 - Manifest: docs/roadmap/stage-32/implementation-plan.md
 - Branch: agent/stage-32-p1-durable-many-run-admission
 - Worktree root and path: use the manifest-recorded root;
   `<root>/stage-32-p1-durable-many-run-admission`
-- Base revision: current `origin/develop` after Stage 29 Phase 12 is remotely merged
+- Base revision: `fd5543b1dd75dd3e78a2b7b5bb9ebc73535fac6b`
 - PR target: develop
 - PR title: `Stage 32 phase 1: add durable many-run admission`
 - Dependencies: completed Stage 29 production correction and existing whole-run queue service/repository
 - Requirements and decisions: FR-1 through FR-5; FQ-1, FQ-2; DQ-1 through DQ-3
 - Workflow path: expanded; public request/receipt and hard-cut durable queue identity are fixed by the stage plan
-- Blockers: Stage 29 Phase 12 merge
+- Blockers: none
 
 ## Objective And Context
 
@@ -31,7 +31,7 @@
 
 - Relevant files and symbols: `QueueEnqueueRequest`, `QueueService.enqueue`,
   `QueueItem`/`RunIntent`, `SQLiteQueueRepository.enqueue`, schema creation,
-  bounded selection reads, queue client/public exports, and queue CLI JSON
+  bounded selection reads, `QueueClient`, package exports, and queue CLI JSON
   formatting.
 - Existing tests and seams: model serialization, SQLite exact updates/FIFO,
   service lifecycle, concurrent selection, queue status, and deterministic sweep
@@ -89,9 +89,9 @@ Assumptions:
 
 - One queue database is one deduplication scope. Projects sharing it include
   project identity in their normalized scientific content when required.
-- The caller fully consumes `enqueue_many` receipts when it wants all requests
-  admitted; unconsumed iterable suffixes were never accepted.
-- Authored project code and its fingerprint normalization are trusted.
+- Complete admission requires consuming `enqueue_many` receipts; unconsumed
+  suffixes were never accepted.
+- Project fingerprint normalization is trusted.
 
 ## Fixed Contracts And Private Discretion
 
@@ -159,7 +159,7 @@ Assumptions:
 Targeted commands:
 
     uv run pytest tests/unit/loom/queue/test_queue_models.py tests/unit/loom/queue/test_service_client.py
-    uv run pytest tests/integration/queue/test_sqlite_repository.py tests/integration/queue/test_queue_service.py
+    uv run pytest tests/integration/queue/test_sqlite_repository.py tests/integration/queue/test_service_lifecycle.py
     uv run pytest tests/e2e/test_queue_cli.py -k enqueue
     uv run ruff check src/loom/queue tests/unit/loom/queue tests/integration/queue
     uv run pyright src/loom/queue tests/unit/loom/queue tests/integration/queue
@@ -198,11 +198,12 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning approved; pending Stage 29 Phase 12 merge and
-  exact implementation base recording.
-- Expanded planning: stage-level minimum design is complete; no phase refinement
-  unless implementation exposes a concrete schema/transaction ambiguity.
-- Implementation: pending.
+- Manager preparation: passed; Stage 29 Phase 12 is remotely merged, the branch
+  and dedicated worktree are based on `fd5543b`, and the executor packet is
+  current.
+- Expanded planning: not needed; the approved stage-level design fixes the
+  schema/transaction contract. Reconsider only for a concrete ambiguity.
+- Implementation: pending executor.
 - Refiner: not needed.
 - Pre-submit gate: pending.
 - Independent review: expected only if the durable identity/index diff departs
