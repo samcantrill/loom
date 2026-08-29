@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 12
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p12-operational-bounds-deployment`
@@ -12,8 +12,11 @@
 - PR title: `feat(queue): bound daemon operations and deployment`
 - Dependencies: remotely merged Phase 11
 - Workflow path: fast; public and durable shapes are fixed by the correction
-- Blockers: none; Phase 11 remotely merged as `5fac22c` and its merge metadata
-  is current on `develop`
+- Blockers: the approved plan does not name the public coordinator/outbound-agent
+  initialization and service commands or fix how their explicit protected
+  configuration paths resolve to the two typed role configurations. The
+  maintainer must approve that public deployment contract before slices 4-5 can
+  be implemented without inventing a user-facing interface
 
 ## Objective And Context
 
@@ -256,9 +259,13 @@ Final commands:
   fast-path decision, validation commands, and the permitted-service-host versus
   service-less whole-run SLURM boundary are current
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: assigned to the normal single phase executor
+- Implementation: the normal single phase executor stopped at the required
+  missing-contract boundary after leaving bounded summary/admission/list/detail/
+  wait and sequenced-poll work uncommitted for verification and continuation
 - Refiner: not needed
-- Pre-submit gate: pending
+- Pre-submit gate: pending; an early run on the deliberately incomplete tree is
+  not evidence. Its summary recorded 2,312 passes, one unit failure, and two
+  collection/setup errors before the missing deployment contract was resolved
 - Independent review: not needed unless a material residual risk remains
 - Blocker corrections: 0/3
 - PR and merge: pending
@@ -267,9 +274,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
+| Implementation and changed paths | Uncommitted partial work currently changes `local_daemon.py`, `local_daemon_transport.py`, `agent_sessions.py`, queue public imports, and their focused unit tests for bounded status/admission operations and sequenced poll state. Deployment, time recovery, initialization, commands, integration, docs, and final hard-cut closure remain incomplete. |
+| Tests added or updated | Focused `test_local_daemon.py` execution passed 36 tests; incomplete-tree additions are not yet accepted phase evidence. |
 | Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
+| Validation-relevant changes after evidence | The partial tree has no reusable final evidence; full gates must run only after the public deployment contract and all six slices are complete. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Blocked on one public deployment-contract decision. The dedicated worktree and branch retain the uncommitted bounded-query work; correction budget remains 0/3. |
