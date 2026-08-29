@@ -16,6 +16,7 @@ from loom.pipeline.status import RunStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.queue import (
+    ExecutionRequirement,
     LocalDaemon,
     LocalDaemonAdmissionRequest,
     LocalDaemonConfig,
@@ -119,7 +120,16 @@ def main() -> None:
         json_dumps_pretty({"pipeline": pipeline}),
     )
     prepare_managed_local_runtime_record(
-        store=store, run_uri=run_uri, plan=plan, pipeline=spec
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=spec,
+        execution_requirements={
+            stage_name: ExecutionRequirement(
+                "managed-local-example", "managed-local-example", "local"
+            )
+            for stage_name in spec.stage_names
+        },
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)

@@ -217,13 +217,16 @@ Final commands:
   inputs and same-kind validation, but manager verification found production still
   rejected multiple providers for one kind and remote offers did not carry the
   claim-contract evidence required for coordinator-side acceptance
-- Pre-submit gate: targeted implementation and static checks pass; full
-  `make validate-pr` and `make test-summary` are pending
+- Pre-submit gate: targeted implementation and static checks pass; the first
+  `make validate-pr` run passed Ruff, Pyright, and 2,589 of 2,590 default tests,
+  then found the managed-local example still omitted the mandatory requirement
+  mapping; correction 3/3 owns that current consumer before the gate is rerun
 - Independent review: not needed unless a material residual risk remains
-- Blocker corrections: 2/3 used and closed; correction 2 preserved multiple
-  same-kind physical providers through one stable runtime owner, separated
-  immutable configured inventory from mutable availability, and added
-  coordinator-side per-provider contract validation
+- Blocker corrections: 3/3 used; corrections 1 and 2 are closed, and correction
+  3 updates the one missed managed-local example caller found by the full gate.
+  Correction 2 preserved multiple same-kind physical providers through one
+  stable runtime owner, separated immutable configured inventory from mutable
+  availability, and added coordinator-side per-provider contract validation
 - PR and merge: pending
 
 ## Completion Record
@@ -232,7 +235,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | `0eefd04` added protected runtime/stage-work identity, profile-qualified scheduling/delivery, resident launch environment construction, and the public testing helper. `88b73e6` plus `77510e7` added protected local/remote provider factories, physical provider advertisements with exact claim contracts, same-kind composition and aggregate claim partitioning, provider-observed offer atoms, immutable configured inventory, and protocol v8 hard cuts. |
 | Tests added or updated | Exact requirement coverage now reaches every direct orchestrator caller. Provider tests cover unknown kinds, no contract intersection, cross-kind non-Cartesian acceptance, multiple same-kind providers, aggregate prepare/activate/release, local custom CPU lifecycle/environment, and remote custom GPU offer-through-release with externally unavailable inventory withheld by the provider. |
-| Validated revision/tree state and evidence | At `77510e7` plus the current documentation-only tree: Pyright and Ruff pass; 128 focused unit/integration tests, 14 provider contract tests, 32 resident-agent transport integrations, 42 local-daemon production integrations, and 39 agent-session/package checks pass. Full repository gates remain pending. |
-| Validation-relevant changes after evidence | Documentation metadata only. |
+| Validated revision/tree state and evidence | At `77510e7`, Pyright and Ruff pass; 128 focused unit/integration tests, 14 provider contract tests, 32 resident-agent transport integrations, 42 local-daemon production integrations, and 39 agent-session/package checks pass. The first full gate passed Ruff, Pyright, and 2,589 default tests but failed the managed-local example because it had not supplied the newly mandatory mapping. |
+| Validation-relevant changes after evidence | Correction 3/3 updates only that example caller with exact fingerprints matching its resident profile; full gates must be rerun. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | The qualified provider-composition blocker is closed within correction 2/3. Worker isolation remains the accepted out-of-scope residual risk. Branch/worktree remain dedicated pending full validation, review, PR, merge, and cleanup. |
+| Residual risk and cleanup | The provider-composition blocker is closed. Correction budget is exhausted after the full gate found one missed mandatory-mapping consumer. Worker isolation remains the accepted out-of-scope residual risk. Branch/worktree remain dedicated pending the rerun, review, PR, merge, and cleanup. |
