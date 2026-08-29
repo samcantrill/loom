@@ -208,22 +208,23 @@ Final commands:
   `origin/develop` base, branch/worktree, source seams, fast-path risk decision,
   and validation commands verified at `860c518`
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: the first executor turn stopped before edits at the public
-  input boundary; the maintainer approved a required exact per-stage mapping on
-  2026-08-29, so the same executor may resume the directly related task
-- Refiner: not needed
+- Implementation: partial implementation `0eefd04` adds exact per-stage
+  requirements, profile-qualified compatibility/targets, allowlisted worker
+  environments, and the public provider contract check; explicit configurable
+  agent-owned provider composition and its custom-provider production path remain
+- Refiner: correction 1/3 pending for the qualified provider-composition blocker
 - Pre-submit gate: pending
 - Independent review: not needed unless a material residual risk remains
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | The initial executor turn made no source or test changes. The maintainer then approved the required exact per-stage preparation mapping; implementation resumed. |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
+| Implementation and changed paths | Partial implementation `0eefd04` changes protected runtime/stage-work identity, profile-qualified scheduling/delivery, resident launch environment construction, and the public testing helper. Configurable agent-owned provider composition is not yet implemented. |
+| Tests added or updated | Exact requirement, profile routing, environment, schema fixture, and provider-check tests are present; the required custom provider offer-through-release production test remains pending. |
+| Validated revision/tree state and evidence | Executor-local evidence for `0eefd04`: 80 targeted unit/contract tests, one profile-routing integration, one remote-recovery integration, and Ruff passed. This is partial evidence, not the phase gate. |
 | Validation-relevant changes after evidence | none |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | No unresolved product decision. The phase branch/worktree remain dedicated and clean while implementation resumes. |
+| Residual risk and cleanup | Qualified blocker: local and outbound-agent paths still synthesize built-in providers instead of consuming an explicit agent composition, so same-kind planner/contract startup validation and a custom provider lifecycle/environment path are absent. Correction 1/3 owns the smallest complete fix; branch/worktree remain dedicated. |
