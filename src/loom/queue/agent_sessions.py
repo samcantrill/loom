@@ -26,12 +26,14 @@ from loom.pipeline.status import StageStatus
 from loom.scheduling import (
     CapacityAtom,
     ExactQuantity,
+    ResourceClaimContractDescriptor,
     SchedulingComponentDescriptor,
 )
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
+from ._managed_local import _provider_group_descriptor
 from ._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
@@ -60,7 +62,7 @@ if TYPE_CHECKING:
     )
 
 
-PROTOCOL_VERSION = "7"
+PROTOCOL_VERSION = "8"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -568,6 +570,56 @@ class AgentSession:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentProviderDescriptor:
+    """Inert wire identity and claim contracts for one physical provider."""
+
+    descriptor: SchedulingComponentDescriptor
+    claim_contracts: tuple[ResourceClaimContractDescriptor, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.descriptor, SchedulingComponentDescriptor):
+            raise QueueServiceError("agent provider descriptor is invalid")
+        contracts = tuple(self.claim_contracts)
+        if not contracts or any(
+            not isinstance(contract, ResourceClaimContractDescriptor)
+            or contract.kind != self.descriptor.kind
+            for contract in contracts
+        ):
+            raise QueueServiceError("agent provider claim contracts are invalid")
+        object.__setattr__(
+            self,
+            "claim_contracts",
+            tuple(sorted(set(contracts), key=lambda item: item.key)),
+        )
+
+    def value(self) -> dict[str, PlainData]:
+        return {
+            "descriptor": self.descriptor.to_dict(),
+            "claim_contracts": [
+                contract.to_dict() for contract in self.claim_contracts
+            ],
+        }
+
+    @classmethod
+    def from_value(cls, value: object) -> AgentProviderDescriptor:
+        if not isinstance(value, Mapping) or set(value) != {
+            "descriptor",
+            "claim_contracts",
+        }:
+            raise QueueServiceError("agent provider value is invalid")
+        contracts = value["claim_contracts"]
+        if not isinstance(contracts, Sequence) or isinstance(contracts, (str, bytes)):
+            raise QueueServiceError("agent provider value is invalid")
+        return cls(
+            SchedulingComponentDescriptor.from_dict(value["descriptor"]),
+            tuple(
+                ResourceClaimContractDescriptor.from_dict(contract)
+                for contract in contracts
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AgentOffer:
     session_id: str
     coordinator_epoch: str
@@ -577,12 +629,13 @@ class AgentOffer:
     cpu: int
     memory_bytes: int
     ttl_seconds: int
-    provider_descriptors: tuple[SchedulingComponentDescriptor, ...]
+    provider_composition: tuple[AgentProviderDescriptor, ...]
     pools: tuple[str, ...] = ("default",)
     reflected_claim_ids: tuple[str, ...] = ()
     resident_profiles: tuple[ResidentProfileDescriptor, ...] = ()
     gpu_devices: tuple[GpuDeviceDescriptor, ...] = ()
     gpu_atoms: tuple[CapacityAtom, ...] = ()
+    capacity_atoms: tuple[CapacityAtom, ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -602,37 +655,99 @@ class AgentOffer:
                 raise QueueServiceError(
                     f"{name} must be a bounded non-negative integer"
                 )
-        if not self.cpu and not self.memory_bytes and not self.gpu_devices:
-            raise QueueServiceError("offer capacity must not be empty")
+        capacity_atoms = tuple(self.capacity_atoms)
+        if not capacity_atoms:
+            built_atoms: list[CapacityAtom] = []
+            if self.cpu:
+                built_atoms.append(
+                    CapacityAtom(
+                        "cpu",
+                        "cpu",
+                        ExactQuantity(self.cpu),
+                        "count",
+                        ExactQuantity(1),
+                    )
+                )
+            if self.memory_bytes:
+                built_atoms.append(
+                    CapacityAtom(
+                        "memory",
+                        "memory",
+                        ExactQuantity(self.memory_bytes),
+                        "byte",
+                        ExactQuantity(1),
+                    )
+                )
+            built_atoms.extend(self.gpu_atoms)
+            capacity_atoms = tuple(built_atoms)
+        if any(not isinstance(atom, CapacityAtom) for atom in capacity_atoms) or len(
+            {atom.key for atom in capacity_atoms}
+        ) != len(capacity_atoms):
+            raise QueueServiceError("offer capacity atoms are invalid")
+        if any(
+            quantity.numerator > _MAX_RESOURCE_ATOM
+            or quantity.denominator > _MAX_RESOURCE_ATOM
+            for atom in capacity_atoms
+            for quantity in (atom.amount, atom.granularity)
+        ):
+            raise QueueServiceError("offer capacity is outside its bound")
+        cpu_atoms = tuple(
+            atom for atom in capacity_atoms if atom.owner_resource_kind == "cpu"
+        )
+        memory_atoms = tuple(
+            atom for atom in capacity_atoms if atom.owner_resource_kind == "memory"
+        )
+        if (
+            any(
+                atom.unit != "count"
+                or atom.amount.denominator != 1
+                or atom.granularity != ExactQuantity(1)
+                for atom in cpu_atoms
+            )
+            or sum(atom.amount.numerator for atom in cpu_atoms) != self.cpu
+        ):
+            raise QueueServiceError("offer CPU atoms conflict with the CPU total")
+        if (
+            any(
+                atom.unit != "byte"
+                or atom.amount.denominator != 1
+                or atom.granularity != ExactQuantity(1)
+                for atom in memory_atoms
+            )
+            or sum(atom.amount.numerator for atom in memory_atoms) != self.memory_bytes
+        ):
+            raise QueueServiceError("offer memory atoms conflict with the memory total")
         if (
             isinstance(self.ttl_seconds, bool)
             or not isinstance(self.ttl_seconds, int)
             or not 1 <= self.ttl_seconds <= _MAX_OFFER_TTL_SECONDS
         ):
             raise QueueServiceError("offer TTL is outside the permitted range")
-        provider_descriptors = tuple(self.provider_descriptors)
+        providers = tuple(self.provider_composition)
         if any(
-            not isinstance(item, SchedulingComponentDescriptor)
-            for item in provider_descriptors
-        ) or len({item.kind for item in provider_descriptors}) != len(
-            provider_descriptors
+            not isinstance(item, AgentProviderDescriptor) for item in providers
+        ) or len({item.descriptor.key for item in providers}) != len(providers):
+            raise QueueServiceError("offer provider composition is invalid")
+        if not providers:
+            raise QueueServiceError("offer provider composition is required")
+        provider_kinds = {item.descriptor.kind for item in providers}
+        if any(
+            contract.kind != item.descriptor.kind
+            for item in providers
+            for contract in item.claim_contracts
         ):
-            raise QueueServiceError("offer provider descriptors are invalid")
-        configured_kinds: set[str] = set()
-        if self.cpu:
-            configured_kinds.add("cpu")
-        if self.memory_bytes:
-            configured_kinds.add("memory")
+            raise QueueServiceError("offer provider composition is invalid")
+        configured_kinds = {atom.owner_resource_kind for atom in capacity_atoms}
         if self.gpu_devices:
             configured_kinds.add("gpu")
-        if {item.kind for item in provider_descriptors} != configured_kinds:
+        if not configured_kinds.issubset(provider_kinds):
             raise QueueServiceError(
-                "offer provider descriptors must match configured resources"
+                "offer provider composition must match configured resources"
             )
         object.__setattr__(
             self,
-            "provider_descriptors",
-            tuple(sorted(provider_descriptors, key=lambda item: item.kind)),
+            "provider_composition",
+            tuple(sorted(providers, key=lambda item: item.descriptor.key)),
         )
         _identifiers(self.reflected_claim_ids, "reflected claim IDs")
         _identifiers(self.pools, "offer pools", non_empty=True)
@@ -673,40 +788,33 @@ class AgentOffer:
             "gpu_atoms",
             tuple(sorted(gpu_atoms, key=lambda item: item.local_capacity_key)),
         )
+        capacity_gpu_atoms = tuple(
+            sorted(
+                (atom for atom in capacity_atoms if atom.owner_resource_kind == "gpu"),
+                key=lambda item: item.local_capacity_key,
+            )
+        )
+        if capacity_gpu_atoms != self.gpu_atoms:
+            raise QueueServiceError(
+                "offer GPU capacity atoms conflict with GPU availability"
+            )
+        object.__setattr__(
+            self,
+            "capacity_atoms",
+            tuple(sorted(capacity_atoms, key=lambda item: item.key)),
+        )
 
     def value(self) -> dict[str, PlainData]:
-        capacity_atoms: list[PlainData] = []
-        if self.cpu:
-            capacity_atoms.append(
-                {
-                    "owner_resource_kind": "cpu",
-                    "local_capacity_key": "cpu",
-                    "amount": {"numerator": self.cpu, "denominator": 1},
-                    "unit": "count",
-                    "granularity": {"numerator": 1, "denominator": 1},
-                }
-            )
-        if self.memory_bytes:
-            capacity_atoms.append(
-                {
-                    "owner_resource_kind": "memory",
-                    "local_capacity_key": "memory",
-                    "amount": {"numerator": self.memory_bytes, "denominator": 1},
-                    "unit": "byte",
-                    "granularity": {"numerator": 1, "denominator": 1},
-                }
-            )
-        capacity_atoms.extend(atom.to_dict() for atom in self.gpu_atoms)
         return {
             "session_id": self.session_id,
             "coordinator_epoch": self.coordinator_epoch,
             "config_revision": self.config_revision,
             "inventory_revision": self.inventory_revision,
             "availability_revision": self.availability_revision,
-            "capacity_atoms": capacity_atoms,
+            "capacity_atoms": [atom.to_dict() for atom in self.capacity_atoms],
             "ttl_seconds": self.ttl_seconds,
-            "provider_descriptors": [
-                descriptor.to_dict() for descriptor in self.provider_descriptors
+            "provider_composition": [
+                provider.value() for provider in self.provider_composition
             ],
             "pools": list(self.pools),
             "reflected_claim_ids": list(self.reflected_claim_ids),
@@ -724,7 +832,7 @@ class AgentOffer:
             "availability_revision",
             "capacity_atoms",
             "ttl_seconds",
-            "provider_descriptors",
+            "provider_composition",
             "pools",
             "reflected_claim_ids",
             "resident_profiles",
@@ -735,7 +843,8 @@ class AgentOffer:
         atoms = value["capacity_atoms"]
         if not isinstance(atoms, Sequence) or isinstance(atoms, (str, bytes)):
             raise QueueServiceError("agent offer capacity is invalid")
-        capacities: dict[str, int] = {}
+        capacities: dict[str, int] = {"cpu": 0, "memory": 0}
+        capacity_atoms: list[CapacityAtom] = []
         gpu_atoms: list[CapacityAtom] = []
         for atom in atoms:
             if not isinstance(atom, Mapping) or set(atom) != {
@@ -747,14 +856,13 @@ class AgentOffer:
             }:
                 raise QueueServiceError("agent offer capacity is invalid")
             kind = atom.get("owner_resource_kind")
-            if kind not in {"cpu", "memory", "gpu"}:
-                raise QueueServiceError("agent offer capacity is invalid")
             parsed = _offer_capacity_atom(atom)
+            capacity_atoms.append(parsed)
             if kind == "gpu":
                 gpu_atoms.append(parsed)
                 continue
-            if kind in capacities or parsed.local_capacity_key != kind:
-                raise QueueServiceError("agent offer capacity is invalid")
+            if kind not in {"cpu", "memory"}:
+                continue
             expected_unit = "count" if kind == "cpu" else "byte"
             if (
                 parsed.unit != expected_unit
@@ -762,12 +870,14 @@ class AgentOffer:
                 or parsed.granularity != ExactQuantity(1)
             ):
                 raise QueueServiceError("agent offer capacity is invalid")
-            capacities[cast(str, kind)] = parsed.amount.numerator
+            capacities[cast(str, kind)] += parsed.amount.numerator
+        if len({atom.key for atom in capacity_atoms}) != len(capacity_atoms):
+            raise QueueServiceError("agent offer capacity is invalid")
         pools = value["pools"]
         claims = value["reflected_claim_ids"]
         profiles = value["resident_profiles"]
         gpu_devices = value["gpu_devices"]
-        provider_descriptors = value["provider_descriptors"]
+        provider_composition = value["provider_composition"]
         if (
             not isinstance(pools, Sequence)
             or isinstance(pools, (str, bytes))
@@ -777,8 +887,8 @@ class AgentOffer:
             or isinstance(profiles, (str, bytes))
             or not isinstance(gpu_devices, Sequence)
             or isinstance(gpu_devices, (str, bytes))
-            or not isinstance(provider_descriptors, Sequence)
-            or isinstance(provider_descriptors, (str, bytes))
+            or not isinstance(provider_composition, Sequence)
+            or isinstance(provider_composition, (str, bytes))
         ):
             raise QueueServiceError("agent offer scope is invalid")
         return cls(
@@ -790,9 +900,9 @@ class AgentOffer:
             cpu=capacities.get("cpu", 0),
             memory_bytes=capacities.get("memory", 0),
             ttl_seconds=cast(int, value["ttl_seconds"]),
-            provider_descriptors=tuple(
-                SchedulingComponentDescriptor.from_dict(item)
-                for item in provider_descriptors
+            provider_composition=tuple(
+                AgentProviderDescriptor.from_value(item)
+                for item in provider_composition
             ),
             pools=tuple(cast(Sequence[str], pools)),
             reflected_claim_ids=tuple(cast(Sequence[str], claims)),
@@ -803,7 +913,48 @@ class AgentOffer:
                 GpuDeviceDescriptor.from_dict(item) for item in gpu_devices
             ),
             gpu_atoms=tuple(gpu_atoms),
+            capacity_atoms=tuple(capacity_atoms),
         )
+
+    @property
+    def provider_descriptors(self) -> tuple[SchedulingComponentDescriptor, ...]:
+        grouped: dict[
+            str,
+            list[
+                tuple[
+                    SchedulingComponentDescriptor,
+                    tuple[ResourceClaimContractDescriptor, ...],
+                ]
+            ],
+        ] = {}
+        for provider in self.provider_composition:
+            grouped.setdefault(provider.descriptor.kind, []).append(
+                (provider.descriptor, provider.claim_contracts)
+            )
+        return tuple(
+            _provider_group_descriptor(grouped[kind]) for kind in sorted(grouped)
+        )
+
+    @property
+    def provider_claim_contracts(
+        self,
+    ) -> Mapping[str, tuple[ResourceClaimContractDescriptor, ...]]:
+        return {
+            kind: tuple(
+                sorted(
+                    {
+                        contract
+                        for provider in self.provider_composition
+                        if provider.descriptor.kind == kind
+                        for contract in provider.claim_contracts
+                    },
+                    key=lambda item: item.key,
+                )
+            )
+            for kind in sorted(
+                {provider.descriptor.kind for provider in self.provider_composition}
+            )
+        }
 
 
 def _offer_capacity_atom(value: Mapping[str, object]) -> CapacityAtom:
@@ -1451,7 +1602,7 @@ class AgentSessionService:
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
-                    "agent-sessions-v7",
+                    "agent-sessions-v8",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],
@@ -2027,6 +2178,9 @@ class AgentSessionService:
         self, offer: AgentOffer, *, idempotency_key: str
     ) -> Mapping[str, PlainData]:
         rule, policy_revision = self._authorize("offer")
+        execution = self._daemon._execution  # type: ignore[attr-defined]
+        if execution is None:
+            raise QueueServiceError("agent offer validation is unavailable")
         _identifier(idempotency_key, "idempotency_key")
         digest = _digest(offer.value())
         replacement_admission = _replacement_offer_admission(
@@ -2049,6 +2203,7 @@ class AgentSessionService:
             if replay is not None:
                 conn.commit()
                 return replay
+            execution.validate_agent_offer_provider_composition(offer)
             active_poll = conn.execute(
                 "SELECT poll_id FROM agent_polls WHERE session_id = ? AND active = 1",
                 (offer.session_id,),
@@ -5335,6 +5490,7 @@ __all__ = [
     "AgentControlEffect",
     "AgentControlKind",
     "AgentOffer",
+    "AgentProviderDescriptor",
     "AgentPolicyConfig",
     "AgentPrincipalPolicy",
     "AgentRegistration",

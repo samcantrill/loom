@@ -34,6 +34,7 @@ from loom.queue._agent_process_supervisor import (
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.pipeline.orchestration import (
+    ExecutionRequirement,
     SchedulingProjectionState,
     SQLiteStageWorkStore,
     StageWorkRecord,
@@ -219,6 +220,9 @@ def _seed_stage_work(
                 runtime=None,
                 policy=StagePlacementPolicy(),
                 planners={},
+            ),
+            execution_requirement=ExecutionRequirement(
+                "test-project", "test-environment", "test-executor"
             ),
         )
     )

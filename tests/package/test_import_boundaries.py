@@ -1279,9 +1279,10 @@ def test_orchestration_import_has_no_execution_side_effect_boundary() -> None:
 
         assert set(orchestration.__all__) == {
             "COORDINATOR_STAGE_WORK_SCHEMA_VERSION",
-            "CoordinatorStageWorkStore",
-            "CoordinatorStoreError",
-            "InMemoryStageWorkStore",
+                "CoordinatorStageWorkStore",
+                "CoordinatorStoreError",
+                "ExecutionRequirement",
+                "InMemoryStageWorkStore",
             "PreparationIntent",
             "ReadyStageOrchestrator",
             "RunOrchestrator",

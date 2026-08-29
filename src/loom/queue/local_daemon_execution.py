@@ -55,6 +55,7 @@ from loom.queue._managed_local import (
     ObserveRequest,
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
+    _compose_agent_resource_providers,
     run_managed_local_assignment,
 )
 from loom.pipeline.orchestration import (
@@ -187,7 +188,7 @@ class LocalDaemonExecutionOutcome:
 def _validate_agent_provider_composition(
     providers: Sequence[AgentResourceProvider],
     planners: Mapping[str, ResourcePlanner],
-) -> None:
+) -> dict[str, AgentResourceProvider]:
     """Reject provider/planner skew before an offer can expose capacity.
 
     Providers are checked one at a time.  In particular, a CPU provider is
@@ -211,6 +212,14 @@ def _validate_agent_provider_composition(
             raise QueueServiceError(
                 f"agent resource provider has no claim-contract intersection for {kind!r}"
             )
+        if any(contract.kind != kind for contract in provider.claim_contracts):
+            raise QueueServiceError(
+                f"agent resource provider has an invalid claim contract for {kind!r}"
+            )
+    try:
+        return _compose_agent_resource_providers(providers)
+    except ManagedLocalError as exc:
+        raise QueueServiceError(str(exc)) from exc
 
 
 def _production_preference_scorers() -> Mapping[str, PreferenceScorer]:
@@ -464,20 +473,18 @@ def _coordinator_capacity(config: LocalDaemonConfig) -> tuple[CapacityAtom, ...]
     """Protected upper bounds for local and policy-authorized agent namespaces."""
 
     maximum = 2**63 - 1
-    amounts: dict[tuple[str, str], tuple[int, str]] = {
-        ("cpu", f"{config.machine_id}:cpu"): (config.cpu_capacity, "count")
-    }
-    if config.memory_capacity_bytes:
-        amounts[("memory", f"{config.machine_id}:memory")] = (
-            config.memory_capacity_bytes,
-            "B",
-        )
+    local_atoms = config.agent_resource_capacity
+    amounts: dict[tuple[str, str], tuple[int, str]] = {}
     gpu_atoms: list[CapacityAtom] = []
-    for device in config.gpu_devices:
-        descriptor = device.descriptor
-        gpu_atoms.append(
-            descriptor.capacity_atom(f"{config.machine_id}:{descriptor.device_id}")
-        )
+    for atom in local_atoms:
+        if atom.owner_resource_kind == "gpu":
+            gpu_atoms.append(atom)
+            continue
+        if atom.amount.denominator != 1:
+            raise QueueServiceError(
+                "coordinator capacity requires integral non-GPU provider atoms"
+            )
+        amounts[atom.key] = (atom.amount.numerator, atom.unit)
     for rule in config.agent_policy.agents:
         amounts[("cpu", f"{rule.agent_id}:cpu")] = (maximum, "count")
         amounts[("memory", f"{rule.agent_id}:memory")] = (maximum, "B")
@@ -1110,31 +1117,11 @@ class LocalDaemonExecution:
             config.execution_database, _allow_initialize=False
         )
         initial_planners = self._scheduling.active_planners()
-        local_capacity: list[CapacityAtom] = [
-            CapacityAtom(
-                "cpu",
-                f"{config.machine_id}:cpu",
-                ExactQuantity(config.cpu_capacity),
-                "count",
-                ExactQuantity(1),
-            )
-        ]
-        if config.memory_capacity_bytes:
-            local_capacity.append(
-                CapacityAtom(
-                    "memory",
-                    f"{config.machine_id}:memory",
-                    ExactQuantity(config.memory_capacity_bytes),
-                    "B",
-                    ExactQuantity(1),
-                )
-            )
-        for device in config.gpu_devices:
-            descriptor = device.descriptor
-            local_capacity.append(
-                descriptor.capacity_atom(f"{config.machine_id}:{descriptor.device_id}")
-            )
-        self.local_capacity = tuple(local_capacity)
+        configured_providers = tuple(config.agent_resource_providers or ())
+        self.providers = _validate_agent_provider_composition(
+            configured_providers, initial_planners
+        )
+        self.local_capacity = config.agent_resource_capacity
         self.capacity = _coordinator_capacity(config)
         self.coordinator = SQLiteCoordinatorAssignments(
             config.execution_database, self.capacity, _allow_initialize=False
@@ -1165,17 +1152,6 @@ class LocalDaemonExecution:
             agent_id=self.agent_id,
         ):
             raise QueueServiceError("retained daemon owner state is unavailable")
-        configured_providers = tuple(config.agent_resource_providers or ())
-        _validate_agent_provider_composition(configured_providers, initial_planners)
-        self.providers: dict[str, AgentResourceProvider] = {}
-        for provider in configured_providers:
-            kind = provider.descriptor.kind
-            if kind in self.providers:
-                raise QueueServiceError(
-                    "local runtime requires one provider owner per resource kind"
-                )
-            self.providers[kind] = provider
-        self.provider = self.providers["cpu"]
         # A new in-memory provider must never begin by advertising capacity that
         # a durable accepted/granted/running/unknown assignment might retain.
         # The agent journal is the only owner that has an exact provider claim;
@@ -3783,41 +3759,47 @@ class LocalDaemonExecution:
             if not matching:
                 continue
             agent_id = str(row["agent_id"])
-            availability_atoms: list[CapacityAtom] = []
-            inventory_atoms: list[CapacityAtom] = []
+            detailed_atoms = [
+                CapacityAtom(
+                    atom.owner_resource_kind,
+                    f"{agent_id}:{atom.local_capacity_key}",
+                    atom.amount,
+                    "B" if atom.owner_resource_kind == "memory" else atom.unit,
+                    atom.granularity,
+                )
+                for atom in offer.capacity_atoms
+            ]
+            availability_atoms = [
+                atom
+                for atom in detailed_atoms
+                if atom.owner_resource_kind not in {"cpu", "memory"}
+            ]
             if offer.cpu:
-                cpu_atom = CapacityAtom(
-                    "cpu",
-                    f"{agent_id}:cpu",
-                    ExactQuantity(offer.cpu),
-                    "count",
-                    ExactQuantity(1),
+                availability_atoms.append(
+                    CapacityAtom(
+                        "cpu",
+                        f"{agent_id}:cpu",
+                        ExactQuantity(offer.cpu),
+                        "count",
+                        ExactQuantity(1),
+                    )
                 )
-                inventory_atoms.append(cpu_atom)
-                availability_atoms.append(cpu_atom)
             if offer.memory_bytes:
-                memory_atom = CapacityAtom(
-                    "memory",
-                    f"{agent_id}:memory",
-                    ExactQuantity(offer.memory_bytes),
-                    "B",
-                    ExactQuantity(1),
+                availability_atoms.append(
+                    CapacityAtom(
+                        "memory",
+                        f"{agent_id}:memory",
+                        ExactQuantity(offer.memory_bytes),
+                        "B",
+                        ExactQuantity(1),
+                    )
                 )
-                inventory_atoms.append(memory_atom)
-                availability_atoms.append(memory_atom)
+            inventory_atoms = [
+                atom for atom in availability_atoms if atom.owner_resource_kind != "gpu"
+            ]
             inventory_atoms.extend(
                 device.capacity_atom(f"{agent_id}:{device.device_id}")
                 for device in offer.gpu_devices
-            )
-            availability_atoms.extend(
-                CapacityAtom(
-                    "gpu",
-                    f"{agent_id}:{atom.local_capacity_key}",
-                    atom.amount,
-                    atom.unit,
-                    atom.granularity,
-                )
-                for atom in offer.gpu_atoms
             )
             raw_withheld_claim_ids = row["observed_claim_ids_json"]
             if raw_withheld_claim_ids is None:
@@ -3938,6 +3920,23 @@ class LocalDaemonExecution:
                     ),
                 )
         return targets
+
+    def validate_agent_offer_provider_composition(self, offer: AgentOffer) -> None:
+        """Validate each advertised physical provider against its own planner."""
+
+        planners = self._scheduling.active_planners()
+        for provider in offer.provider_composition:
+            kind = provider.descriptor.kind
+            planner = planners.get(kind)
+            if planner is None:
+                raise QueueServiceError(
+                    f"agent resource provider has no active planner for {kind!r}"
+                )
+            if not set(provider.claim_contracts).intersection(planner.claim_contracts):
+                raise QueueServiceError(
+                    "agent resource provider has no claim-contract intersection "
+                    f"for {kind!r}"
+                )
 
     @staticmethod
     def _remote_eligible(

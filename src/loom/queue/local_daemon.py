@@ -519,6 +519,7 @@ class LocalDaemonConfig:
     memory_capacity_bytes: int = 0
     gpu_devices: tuple[ConfiguredGpuDevice, ...] = ()
     agent_resource_providers: tuple[AgentResourceProvider, ...] | None = None
+    agent_resource_capacity: tuple[CapacityAtom, ...] = field(init=False, repr=False)
     poll_interval_seconds: float = 0.05
     agent_policy: AgentPolicyConfig = AgentPolicyConfig()
     remote_profiles: tuple[ResidentProfileDescriptor, ...] = ()
@@ -583,15 +584,21 @@ class LocalDaemonConfig:
 
             atoms = [
                 CapacityAtom(
-                    "cpu", f"{self.machine_id}:cpu", ExactQuantity(self.cpu_capacity),
-                    "count", ExactQuantity(1)
+                    "cpu",
+                    f"{self.machine_id}:cpu",
+                    ExactQuantity(self.cpu_capacity),
+                    "count",
+                    ExactQuantity(1),
                 )
             ]
             if self.memory_capacity_bytes:
                 atoms.append(
                     CapacityAtom(
-                        "memory", f"{self.machine_id}:memory",
-                        ExactQuantity(self.memory_capacity_bytes), "B", ExactQuantity(1)
+                        "memory",
+                        f"{self.machine_id}:memory",
+                        ExactQuantity(self.memory_capacity_bytes),
+                        "B",
+                        ExactQuantity(1),
                     )
                 )
             atoms.extend(
@@ -600,36 +607,66 @@ class LocalDaemonConfig:
                 )
                 for item in gpu_devices
             )
-            planners = {item.resource_kind: item for item in self.scheduling_components.planners}
+            planners = {
+                item.resource_kind: item for item in self.scheduling_components.planners
+            }
             providers = (
                 AtomResourceProvider(
-                    _configured_provider_descriptor("cpu", tuple(atom for atom in atoms if atom.owner_resource_kind == "cpu")),
+                    _configured_provider_descriptor(
+                        "cpu",
+                        tuple(
+                            atom for atom in atoms if atom.owner_resource_kind == "cpu"
+                        ),
+                    ),
                     planners["cpu"].claim_contracts,
                     tuple(atom for atom in atoms if atom.owner_resource_kind == "cpu"),
                 ),
                 *(
-                    (AtomResourceProvider(
-                        _configured_provider_descriptor("memory", tuple(atom for atom in atoms if atom.owner_resource_kind == "memory")),
-                        planners["memory"].claim_contracts,
-                        tuple(atom for atom in atoms if atom.owner_resource_kind == "memory"),
-                    ),)
-                    if self.memory_capacity_bytes else ()
+                    (
+                        AtomResourceProvider(
+                            _configured_provider_descriptor(
+                                "memory",
+                                tuple(
+                                    atom
+                                    for atom in atoms
+                                    if atom.owner_resource_kind == "memory"
+                                ),
+                            ),
+                            planners["memory"].claim_contracts,
+                            tuple(
+                                atom
+                                for atom in atoms
+                                if atom.owner_resource_kind == "memory"
+                            ),
+                        ),
+                    )
+                    if self.memory_capacity_bytes
+                    else ()
                 ),
                 *(
-                    (GpuResourceProvider(
-                        planners["gpu"].claim_contracts,
-                        tuple(
-                            atom for atom in atoms
-                            if atom.owner_resource_kind == "gpu" and any(
-                                atom.local_capacity_key == f"{self.machine_id}:{device.descriptor.device_id}"
-                                and device.descriptor.healthy for device in gpu_devices
-                            )
+                    (
+                        GpuResourceProvider(
+                            planners["gpu"].claim_contracts,
+                            tuple(
+                                atom
+                                for atom in atoms
+                                if atom.owner_resource_kind == "gpu"
+                                and any(
+                                    atom.local_capacity_key
+                                    == f"{self.machine_id}:{device.descriptor.device_id}"
+                                    and device.descriptor.healthy
+                                    for device in gpu_devices
+                                )
+                            ),
+                            bindings={
+                                f"{self.machine_id}:{device.descriptor.device_id}": device.binding_value
+                                for device in gpu_devices
+                                if device.descriptor.healthy
+                            },
                         ),
-                        bindings={
-                            f"{self.machine_id}:{device.descriptor.device_id}": device.binding_value
-                            for device in gpu_devices if device.descriptor.healthy
-                        },
-                    ),) if gpu_devices else ()
+                    )
+                    if gpu_devices
+                    else ()
                 ),
             )
         providers = tuple(providers)
@@ -642,6 +679,25 @@ class LocalDaemonConfig:
             for item in providers
         ):
             raise QueueServiceError("agent resource providers are invalid")
+        from ._managed_local import ObserveRequest, _compose_agent_resource_providers
+
+        try:
+            provider_owners = _compose_agent_resource_providers(providers)
+            provider_capacity = tuple(
+                atom
+                for kind, provider in sorted(provider_owners.items())
+                for atom in provider.observe(
+                    ObserveRequest(
+                        self.machine_id,
+                        "configured-local-agent",
+                        f"configured-capacity:{kind}",
+                    )
+                ).atoms
+            )
+        except Exception as exc:
+            raise QueueServiceError(
+                "agent resource provider capacity is invalid"
+            ) from exc
         if (
             isinstance(self.poll_interval_seconds, bool)
             or not isinstance(self.poll_interval_seconds, (int, float))
@@ -696,6 +752,7 @@ class LocalDaemonConfig:
         object.__setattr__(self, "resident_worker_launch_profile", profile)
         object.__setattr__(self, "remote_profiles", profiles)
         object.__setattr__(self, "agent_resource_providers", providers)
+        object.__setattr__(self, "agent_resource_capacity", provider_capacity)
         object.__setattr__(self, "slurm_profiles", slurm_profiles)
         object.__setattr__(
             self,

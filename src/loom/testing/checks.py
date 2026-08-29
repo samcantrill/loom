@@ -183,8 +183,11 @@ def check_agent_resource_provider_contract(
         _finding("agent_resource_provider.descriptor", descriptor),
     ]
     if protocol[0] and command[0] and descriptor[0]:
+        checked_provider = cast(AgentResourceProvider, provider)
+        checked_command = cast(ClaimCommand, sample_claim)
         prepare = _check(
-            lambda: provider.prepare(sample_claim), "provider prepared claim"
+            lambda: checked_provider.prepare(checked_command),
+            "provider prepared claim",
         )
         findings.append(
             _finding(
@@ -197,7 +200,8 @@ def check_agent_resource_provider_contract(
             and prepare[1].outcome is ClaimOutcome.PREPARED
         ):
             activate = _check(
-                lambda: provider.activate(sample_claim), "provider activated claim"
+                lambda: checked_provider.activate(checked_command),
+                "provider activated claim",
             )
             findings.append(
                 _finding(
@@ -207,11 +211,11 @@ def check_agent_resource_provider_contract(
                 )
             )
             observe = _check(
-                lambda: provider.observe(
+                lambda: checked_provider.observe(
                     ObserveRequest(
-                        sample_claim.assignment.agent_id,
-                        sample_claim.assignment.session_id,
-                        f"{sample_claim.operation_id}:observe",
+                        checked_command.assignment.agent_id,
+                        checked_command.assignment.session_id,
+                        f"{checked_command.operation_id}:observe",
                     )
                 ),
                 "provider observed claim",
@@ -224,7 +228,8 @@ def check_agent_resource_provider_contract(
                 )
             )
             release = _check(
-                lambda: provider.release(sample_claim), "provider released claim"
+                lambda: checked_provider.release(checked_command),
+                "provider released claim",
             )
             findings.append(
                 _finding(

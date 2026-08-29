@@ -174,12 +174,20 @@ class _RecordingCpuProvider(AtomResourceProvider):
 
 
 def test_provider_composition_checks_each_provider_against_its_own_kind() -> None:
-    cpu_atom = CapacityAtom("cpu", "cpu-0", ExactQuantity(1), "count", ExactQuantity(1))
-    first = _RecordingCpuProvider(cpu_atom)
-    second = _RecordingCpuProvider(cpu_atom)
+    first_atom = CapacityAtom(
+        "cpu", "cpu-0", ExactQuantity(1), "count", ExactQuantity(1)
+    )
+    second_atom = CapacityAtom(
+        "cpu", "cpu-1", ExactQuantity(1), "count", ExactQuantity(1)
+    )
+    first = _RecordingCpuProvider(first_atom)
+    second = _RecordingCpuProvider(second_atom)
     planners = {"cpu": CpuResourcePlanner()}
 
-    _validate_agent_provider_composition((first, second), planners)
+    composition = _validate_agent_provider_composition((first, second), planners)
+    assert composition["cpu"].observe(
+        ObserveRequest("agent", "session", "observe-composition")
+    ).atoms == (first_atom, second_atom)
 
     unknown = AtomResourceProvider(
         _configured_provider_descriptor("synthetic", ()),
@@ -190,9 +198,9 @@ def test_provider_composition_checks_each_provider_against_its_own_kind() -> Non
         _validate_agent_provider_composition((unknown,), planners)
 
     incompatible = AtomResourceProvider(
-        _configured_provider_descriptor("cpu", (cpu_atom,)),
+        _configured_provider_descriptor("cpu", (first_atom,)),
         (ResourceClaimContractDescriptor("cpu", 1, "other-contract"),),
-        (cpu_atom,),
+        (first_atom,),
     )
     with pytest.raises(QueueServiceError, match="no claim-contract intersection"):
         _validate_agent_provider_composition((incompatible,), planners)
@@ -351,7 +359,9 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
     authority.create_run(run_uri, status=RunStatus.RUNNING)
 
     provider = _RecordingCpuProvider(
-        CapacityAtom("cpu", "machine-A:cpu", ExactQuantity(1), "count", ExactQuantity(1))
+        CapacityAtom(
+            "cpu", "machine-A:cpu", ExactQuantity(1), "count", ExactQuantity(1)
+        )
     )
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "daemon" / "coordinator",
@@ -1449,7 +1459,7 @@ def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
             )
         execution = replacement._execution
         assert execution is not None
-        observed = execution.provider.observe(
+        observed = execution.providers["cpu"].observe(
             ObserveRequest(config.machine_id, "post-restart", "fresh")
         )
         assert observed.live_claim_ids == ()
@@ -1682,7 +1692,7 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
         assert _supervisor_launch_count(config) == 1
         replacement_execution = replacement._execution
         assert replacement_execution is not None
-        observed = replacement_execution.provider.observe(
+        observed = replacement_execution.providers["cpu"].observe(
             ObserveRequest(config.machine_id, "post-recovery", "retained")
         )
         assert observed.live_claim_ids == (assignment.claim_id,)
@@ -1868,7 +1878,9 @@ def test_startup_retains_only_the_exact_durable_claim_for_live_coordinator_state
     _coordinator_assignment(config, command.assignment.assignment_id, state)
 
     execution = _execution(config)
-    observed = execution.provider.observe(ObserveRequest("agent", "session", "one"))
+    observed = execution.providers["cpu"].observe(
+        ObserveRequest("agent", "session", "one")
+    )
 
     assert [atom.amount.numerator for atom in observed.atoms] == [1]
     assert observed.live_claim_ids == (command.assignment.claim_id,)
@@ -1881,7 +1893,9 @@ def test_startup_keeps_proven_released_coordinator_capacity_available(
     _coordinator_assignment(config, "released-assignment", "released")
 
     execution = _execution(config)
-    observed = execution.provider.observe(ObserveRequest("agent", "session", "one"))
+    observed = execution.providers["cpu"].observe(
+        ObserveRequest("agent", "session", "one")
+    )
 
     assert [atom.amount.numerator for atom in observed.atoms] == [2]
     assert observed.live_claim_ids == ()
