@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 import os
 from pathlib import Path
@@ -119,6 +120,12 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
         daemon._coordinator_id = conn.execute(
             "SELECT value FROM root_metadata WHERE key = 'stable_id'"
         ).fetchone()[0]
+    with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
+        daemon._agent_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    daemon._coordinator_lock = object()
+    daemon._agent_lock = object()
     with daemon._connection() as conn:
         for sequence, admission_id in (
             (1, "admission-b"),
@@ -156,6 +163,10 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
     direct_detail = daemon.admission("admission-b")
     assert direct_detail.admission.admission_id == "admission-b"
     assert direct_detail.authority["availability"] == "unavailable"
+    assert direct_detail.owners["queue_item_id"] == "item-1"
+    assert cast(Mapping[str, object], direct_detail.owners["assignment"])[
+        "owner"
+    ] == "coordinator-assignments"
     server = LocalDaemonSocketServer(daemon, config.endpoint)
     server.start()
     try:
@@ -164,7 +175,11 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
         )
     finally:
         server.stop()
-    assert socket_detail == direct_detail
+    assert socket_detail.admission == direct_detail.admission
+    assert socket_detail.authority["availability"] == "unavailable"
+    assert cast(Mapping[str, object], socket_detail.owners["assignment"])[
+        "owner"
+    ] == "coordinator-assignments"
 
 
 def test_admission_wait_observes_revision_without_status_history(

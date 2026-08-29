@@ -1040,10 +1040,11 @@ class LocalDaemonAdmission:
 
 @dataclass(frozen=True, slots=True)
 class LocalDaemonAdmissionDetail:
-    """One admission plus its targeted authority-owned lifecycle snapshot."""
+    """One admission plus its explicit targeted owner join."""
 
     admission: LocalDaemonAdmission
     authority: Mapping[str, PlainData]
+    owners: Mapping[str, PlainData] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -1051,19 +1052,34 @@ class LocalDaemonAdmissionDetail:
             "authority": thaw_plain_data(
                 self.authority, path="local daemon admission detail authority"
             ),
+            "owners": thaw_plain_data(
+                self.owners, path="local daemon admission detail owners"
+            ),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "LocalDaemonAdmissionDetail":
-        _exact_fields(data, {"admission", "authority"}, "local daemon admission detail")
+        _exact_fields(
+            data,
+            {"admission", "authority", "owners"},
+            "local daemon admission detail",
+        )
         admission = data.get("admission")
         authority = data.get("authority")
-        if not isinstance(admission, Mapping) or not isinstance(authority, Mapping):
+        owners = data.get("owners")
+        if (
+            not isinstance(admission, Mapping)
+            or not isinstance(authority, Mapping)
+            or not isinstance(owners, Mapping)
+        ):
             raise QueueServiceError("local daemon admission detail is invalid")
         return cls(
             admission=LocalDaemonAdmission.from_dict(admission),
             authority=freeze_plain_data(
                 authority, path="local daemon admission detail authority"
+            ),
+            owners=freeze_plain_data(
+                owners, path="local daemon admission detail owners"
             ),
         )
 
@@ -1679,43 +1695,32 @@ class LocalDaemon:
     def admission(self, admission_id: str) -> LocalDaemonAdmissionDetail:
         _required_string({"admission_id": admission_id}, "admission_id")
         admission = self._admission(admission_id)
-        observed_at = self._clock()
-        parse_timestamp(observed_at)
-        try:
-            from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+        with self._connection() as conn:
+            revision_row = conn.execute(
+                "SELECT revision FROM owner_status_revisions "
+                "WHERE owner = 'admission'"
+            ).fetchone()
+        if revision_row is None:
+            raise QueueStorageError("coordinator admission status is unavailable")
+        from .local_daemon_execution import build_local_daemon_owner_views
 
-            snapshot = SQLitePerRunAuthorityStore(admission.run_uri).open_run(
-                admission.run_uri
-            )
-        except Exception:
-            authority: Mapping[str, PlainData] = freeze_plain_data(
-                {
-                    "owner": "per-run-authority",
-                    "availability": "unavailable",
-                    "state": "unavailable",
-                    "diagnostic": "authority_unavailable",
-                    "observed_at": observed_at,
-                    "freshness": "unavailable",
-                },
-                path="local daemon admission detail authority",
-            )
-        else:
-            authority = freeze_plain_data(
-                {
-                    "owner": "per-run-authority",
-                    "availability": "available",
-                    "state": snapshot.status.value,
-                    "observed_at": observed_at,
-                    "revision": snapshot.revision.to_dict(),
-                    "stages": {
-                        stage.stage_name: stage.status.value
-                        for stage in snapshot.stages
-                    },
-                    "freshness": "current",
-                },
-                path="local daemon admission detail authority",
-            )
-        return LocalDaemonAdmissionDetail(admission=admission, authority=authority)
+        views = build_local_daemon_owner_views(
+            self.config,
+            (admission,),
+            coordinator_id=self._require_started(),
+            agent_id=self._require_agent_id(),
+            clock=self._clock,
+            admission_revision=int(revision_row["revision"]),
+        )
+        if len(views) != 1 or not isinstance(views[0].get("authority"), Mapping):
+            raise QueueStorageError("targeted admission owner detail is unavailable")
+        owners = views[0]
+        authority = cast(Mapping[str, PlainData], owners["authority"])
+        return LocalDaemonAdmissionDetail(
+            admission=admission,
+            authority=authority,
+            owners=owners,
+        )
 
     def admission_for_queue_item(self, queue_item_id: str) -> LocalDaemonAdmission:
         _required_string({"queue_item_id": queue_item_id}, "queue_item_id")

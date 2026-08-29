@@ -5050,6 +5050,10 @@ def build_local_daemon_owner_views(
 ) -> tuple[Mapping[str, PlainData], ...]:
     """Join labelled owner snapshots without claiming cross-owner atomicity."""
 
+    if not admissions:
+        return ()
+    run_uris = tuple(sorted({item.run_uri for item in admissions}))
+    run_placeholders = ",".join("?" for _ in run_uris)
     stage_work_by_run: dict[str, list[dict[str, PlainData]]] = {}
     assignments_by_run: dict[str, list[dict[str, PlainData]]] = {}
     slurm_by_run: dict[str, list[dict[str, PlainData]]] = {}
@@ -5076,7 +5080,9 @@ def build_local_daemon_owner_views(
             scheduling_revision = revisions["scheduling"]
             assignment_revision = revisions["assignment"]
             for (payload,) in conn.execute(
-                "SELECT record_json FROM stage_work ORDER BY stage_work_id"
+                "SELECT record_json FROM stage_work WHERE run_uri IN ("
+                f"{run_placeholders}) ORDER BY stage_work_id",
+                run_uris,
             ):
                 record = StageWorkRecord.from_dict(json.loads(str(payload)))
                 stage_work_by_run.setdefault(record.run_uri, []).append(
@@ -5090,7 +5096,8 @@ def build_local_daemon_owner_views(
             for row in conn.execute(
                 "SELECT assignment_id, run_uri, state, session_id, offer_id, "
                 "claim_id, receipt_json FROM coordinator_assignments "
-                "ORDER BY assignment_id"
+                f"WHERE run_uri IN ({run_placeholders}) ORDER BY assignment_id",
+                run_uris,
             ):
                 assignments_by_run.setdefault(str(row[1]), []).append(
                     {
@@ -5106,7 +5113,11 @@ def build_local_daemon_owner_views(
                     }
                 )
             for operation_id, value_json in conn.execute(
-                "SELECT operation_id, value_json FROM ready_stage_submissions"
+                "SELECT operation_id, value_json FROM ready_stage_submissions "
+                "WHERE operation_id IN (SELECT operation_id FROM "
+                "slurm_stage_assignments WHERE run_uri IN ("
+                f"{run_placeholders}))",
+                run_uris,
             ):
                 submission = SlurmReadyStageSubmission.from_dict(
                     json.loads(str(value_json))
@@ -5126,7 +5137,8 @@ def build_local_daemon_owner_views(
                 "SELECT assignment_id, run_uri, state, profile_id, operation_id, "
                 "job_id, cluster, bootstrap_incarnation, input_ready, fence, "
                 "process_execution_id, report_json FROM slurm_stage_assignments "
-                "ORDER BY assignment_id"
+                f"WHERE run_uri IN ({run_placeholders}) ORDER BY assignment_id",
+                run_uris,
             ):
                 report_status: str | None = None
                 if row[11] is not None:
@@ -5185,11 +5197,28 @@ def build_local_daemon_owner_views(
             if revision_row is None:
                 raise sqlite3.DatabaseError("agent status revision is missing")
             agent_revision = int(revision_row[0])
-            for row in conn.execute(
-                "SELECT assignment_id, identity_json, state, "
-                "process_execution_id, availability_revision "
-                "FROM assignments ORDER BY assignment_id"
-            ):
+            assignment_ids = tuple(
+                sorted(
+                    {
+                        cast(str, item["assignment_id"])
+                        for values in assignments_by_run.values()
+                        for item in values
+                    }
+                )
+            )
+            assignment_placeholders = ",".join("?" for _ in assignment_ids)
+            rows = (
+                ()
+                if not assignment_ids
+                else conn.execute(
+                    "SELECT assignment_id, identity_json, state, "
+                    "process_execution_id, availability_revision "
+                    "FROM assignments WHERE assignment_id IN ("
+                    f"{assignment_placeholders}) ORDER BY assignment_id",
+                    assignment_ids,
+                )
+            )
+            for row in rows:
                 identity = json.loads(str(row[1]))
                 if not isinstance(identity, Mapping):
                     continue

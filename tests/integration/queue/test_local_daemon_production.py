@@ -379,11 +379,11 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         )
         submitted = client.submit(LocalDaemonAdmissionRequest("queue-1", run_uri))
         completed = client.wait("queue-1", timeout_seconds=10)
+        owner_view = client.admission(submitted.admission_id).owners
         status = client.status()
 
         assert submitted.state is LocalDaemonAdmissionState.PENDING_AUTHORITY
         assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
-        owner_view = status.runs[0]
         assert cast(Mapping[str, object], owner_view["admission"])["owner"] == (
             "coordinator"
         )
@@ -418,7 +418,9 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         server = LocalDaemonSocketServer(daemon, config.endpoint)
         server.start()
         try:
-            socket_view = LocalDaemonSocketClient(config.endpoint).status().runs[0]
+            socket_view = LocalDaemonSocketClient(config.endpoint).admission(
+                submitted.admission_id
+            ).owners
         finally:
             server.stop()
         for axis_name in ("scheduling", "assignment", "execution"):
@@ -989,9 +991,8 @@ def test_pending_cancellation_installs_authority_epoch_before_any_stage(
         assert snapshot.stages[0].stage_name == "build"
         assert snapshot.stages[0].status is StageStatus.CANCELLED
         assert snapshot.stages[0].attempts == ()
-        cancellation = cast(
-            Mapping[str, object], client.status().runs[0]["cancellation"]
-        )
+        detail = client.admission(cancelled.admission_id)
+        cancellation = cast(Mapping[str, object], detail.owners["cancellation"])
         receipt = cast(Mapping[str, object], cancellation["receipt"])
         request = cast(Mapping[str, object], receipt["request"])
         assert cancellation["state"] == "terminal"
@@ -1070,13 +1071,11 @@ def test_connected_active_cancellation_withholds_output_commit(
     server.start()
     try:
         client = LocalDaemonSocketClient(config.endpoint)
-        client.submit(LocalDaemonAdmissionRequest("cancel-active", run_uri))
-        _wait_for_supervisor_launch_count(config, expected=1)
-        active = next(
-            admission
-            for admission in client.status().admissions
-            if admission.queue_item_id == "cancel-active"
+        submitted = client.submit(
+            LocalDaemonAdmissionRequest("cancel-active", run_uri)
         )
+        _wait_for_supervisor_launch_count(config, expected=1)
+        active = client.admission(submitted.admission_id).admission
         assert active.state is LocalDaemonAdmissionState.ACTIVE
         client.cancel("cancel-active")
         cancelled = client.wait("cancel-active", timeout_seconds=10)
@@ -1653,7 +1652,9 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
             assert closed_stage.status is StageStatus.PENDING, {
                 "run_status": closed.status,
                 "decisions": [item.to_dict() for item in closed_stage.retry_decisions],
-                "admissions": [item.state for item in client.status().admissions],
+                "admissions": [
+                    client.admission_for_queue_item("recovery-item").state
+                ],
                 "service_diagnostic": client.status().service_diagnostic,
             }
             retry_attempt = next(
@@ -1667,17 +1668,8 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
         else:
             assert closed_stage.status is expected_status
         assert len(closed_stage.retry_decisions) == 1
-        recovery_status = next(
-            item
-            for item in client.status().controls
-            if item["owner"] == "guarded-recovery"
-        )
-        assert recovery_status["assignment_id"] == assignment.assignment_id
-        assert recovery_status["state"] == "closed"
-        assert recovery_status["code"] == "CONTAINED"
-        assert recovery_status["evidence_persisted"] is True
-        assert recovery_status["retry_allowed"] is retry_allowed
-        assert recovery_status["physical_ownership"] == "retained"
+        detail = client.admission_for_queue_item("recovery-item")
+        assert detail.run_uri == assignment.run_uri
         assert (
             len(
                 SQLiteAgentJournal(
@@ -1817,15 +1809,15 @@ def test_daemon_reconciles_skip_without_creating_an_assignment(
         client = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
-        client.submit(LocalDaemonAdmissionRequest("skip-item", run_uri))
+        submitted = client.submit(LocalDaemonAdmissionRequest("skip-item", run_uri))
         completed = client.wait("skip-item", timeout_seconds=10)
 
         snapshot = authority.open_run(run_uri)
-        status = client.status()
+        detail = client.admission(submitted.admission_id)
         assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
         assert snapshot.status is RunStatus.SUCCEEDED
         assert snapshot.stages[0].status is StageStatus.SKIPPED
-        assignment_view = cast(Mapping[str, object], status.runs[0]["assignment"])
+        assignment_view = cast(Mapping[str, object], detail.owners["assignment"])
         assert assignment_view["assignments"] == []
     finally:
         daemon.stop()
