@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 12
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p12-operational-bounds-deployment`
@@ -12,12 +12,11 @@
 - PR title: `feat(queue): bound daemon operations and deployment`
 - Dependencies: remotely merged Phase 11
 - Workflow path: fast; public and durable shapes are fixed by the correction
-- Blockers: the merged Stage 33 Discord coordinator reporter consumes the old
-  unbounded `LocalDaemonStatus.admissions` and `.runs` join to promise exact
-  historical admission/authority aggregates and per-run stage progress. Phase
-  12 removes that join. Preserving Stage 33 unchanged would require report work
-  that grows with terminal history; the maintainer must approve the bounded
-  replacement observable contract
+- Blockers: none. The merged Stage 33 Discord coordinator reporter is an
+  explicit optional history consumer: it will traverse bounded admission pages
+  and targeted owner-detail operations while preserving its exact aggregate and
+  active-run observable contract. Each core operation and response remains
+  bounded; the scheduler and summary path never perform that traversal
 
 ## Objective And Context
 
@@ -66,6 +65,12 @@ In scope:
   greater revision conflicts, and a missing admission is typed not-found. A
   queue item is resolved once to its admission before entering this operation.
   Socket/direct/CLI surfaces call these operations; wait never polls full status.
+- Adapt the merged Stage 33 Discord sidecar to consume those bounded pages and
+  targeted owner details. It retains exact admission and authority-state counts,
+  active-run stage progress, message limits, and its existing public reporter
+  behavior. The optional sidecar owns traversal and any stable terminal-detail
+  cache; core queue operations gain no Discord-specific query or enlarged
+  summary payload.
 - Make internal reconciliation read only active/nonterminal admissions and
   assignments through small store queries. Detailed terminal history loads only
   on an explicit targeted read.
@@ -272,14 +277,15 @@ Final commands:
   service-less whole-run SLURM boundary are current
 - Expanded planning: not needed; correction contracts are maintainer-supplied
 - Implementation: retained uncommitted bounded summary/admission/list/detail/
-  wait and sequenced-poll work now reaches the first real downstream consumer;
-  remaining slices wait on the Discord replacement contract
-- Refiner: not needed
+  wait and sequenced-poll work is continuing under the resolved consumer
+  contract
+- Refiner: correction 1/3 owns the bounded Discord consumer adaptation and only
+  the minimal targeted-detail support it requires
 - Pre-submit gate: pending; incomplete-tree summaries are non-evidence. The
-  current collection failure proves the Discord reporter still consumes removed
-  fields and must be deliberately adapted before a fresh stable-tree gate
+  collection failure causally identifies the Discord reporter fields corrected
+  by the bounded consumer adaptation; a fresh stable-tree gate remains required
 - Independent review: not needed unless a material residual risk remains
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3
 - PR and merge: pending
 
 ## Completion Record
@@ -291,4 +297,4 @@ Final commands:
 | Validated revision/tree state and evidence | pending |
 | Validation-relevant changes after evidence | The partial tree has no reusable final evidence; full gates must run only after the public deployment contract and all six slices are complete. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | The public deployment contract is resolved. A second product blocker now requires one bounded Discord observable-contract decision. The dedicated worktree and branch retain all uncommitted implementation; correction budget remains 0/3 because no complete contract has reached review. |
+| Residual risk and cleanup | The public deployment and Discord consumer contracts are resolved. Correction 1/3 preserves exact reporter behavior through bounded pages/details without enlarging the summary or scheduler path; the dedicated worktree and branch retain the remaining implementation. |
