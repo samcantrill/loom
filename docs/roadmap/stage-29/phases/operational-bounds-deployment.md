@@ -280,9 +280,11 @@ Final commands:
   use the approved hard-cut schemas and supported role commands
 - Refiner: correction 1/3 completed the bounded Discord consumer adaptation and
   only the targeted-detail support required to preserve its observable contract
-- Pre-submit gate: focused review-closure tests, Ruff, and zero-finding Pyright
-  pass at `20d7ca8`; the definitive fresh `make validate-pr` and
-  `make test-summary` remain pending on the documented candidate tree
+- Pre-submit gate: passed for source/test revision `20d7ca8` and documented tree
+  `a0029ed`; `make validate-pr` passed Ruff, zero-finding Pyright, 2,602 default
+  tests, 155 configuration-extra tests with 3 expected environment skips, and
+  both distribution builds. Fresh `make test-summary` recorded 2,757 categorized
+  passes with zero failures/errors and the same 3 skips
 - Manager review: correction 2/3 fences an abandoned active poll at coordinator
   epoch restart, includes ready-stage SLURM in the assignment summary, preserves
   the `DaemonStatus` hard cut, and returns a typed admission-not-found outcome;
@@ -297,8 +299,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Candidate `20d7ca8` completes bounded `DaemonStatus`, keyset admission list, targeted detail/wait and typed not-found operations; sequenced coordinator/agent poll state; per-admission and accepted-time health/recovery; atomic coordinator-bundle and outbound-agent publication; protected config plus four exact role commands; bounded Discord consumption; and deployment/upgrade guidance. Changes remain confined to queue owners/transports/CLI, the current Discord consumer, their tests, and owned docs/examples. |
-| Tests added or updated | Unit, integration, CLI, transport, service-process, Discord, and documentation/example coverage exercise pagination/wait, constant poll rows and replay errors, health isolation, forward/regressed time and recovery, failure-cut initialization, config binding, foreground outbound reconnect, redaction, and the persistent-managed versus service-less deployment boundary. Focused correction tests, Ruff, and Pyright pass at `20d7ca8`; final repository receipts are pending. |
-| Validated revision/tree state and evidence | Source/test candidate `20d7ca8`; definitive full-gate evidence pending. |
+| Tests added or updated | Unit, integration, CLI, transport, service-process, Discord, and documentation/example coverage exercise pagination/wait, constant poll rows and replay errors, health isolation, forward/regressed time and recovery, failure-cut initialization, config binding, foreground outbound reconnect, redaction, and the persistent-managed versus service-less deployment boundary. `make validate-pr` passed 2,602 default and 155 config-extra tests with 3 expected skips; the fresh categorized receipt contains 2,757 passes. |
+| Validated revision/tree state and evidence | Source/test revision `20d7ca8`, documented candidate `a0029ed`; Ruff and Pyright passed, both distribution artifacts built, and `build/test-summary.md` reports package 118, unit 1,849, contract 297, integration 280, E2E 58, and config-extra 155 passes with zero failures/errors. |
 | Validation-relevant changes after evidence | None after `20d7ca8`; roadmap state updates do not change source, tests, dependencies, build, or validation configuration. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | No known phase blocker. Owner-detail traversal remains explicitly opt-in and may be proportional to one admission; the optional Discord process deliberately traverses bounded pages outside scheduler/status paths. Old roots, polls, runtime records, and the old status surface remain unsupported. Dedicated worktree and branch remain until verified merge. |
