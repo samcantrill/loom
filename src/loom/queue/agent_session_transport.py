@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.queue._managed_local import (
+    AgentResourceProvider,
     AssignmentState,
     AtomResourceProvider,
     ClaimCommand,
@@ -167,6 +168,9 @@ class AgentTlsClientConfig:
     private_key_path: Path
     agent_root: Path | None = None
     resident_profiles: tuple[ResidentExecutionProfile, ...] = ()
+    agent_resource_provider_factory: Callable[
+        [str, ResidentExecutionProfile], Mapping[str, AgentResourceProvider]
+    ] | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
@@ -204,7 +208,49 @@ class AgentTlsClientConfig:
             )
         if profiles and self.agent_root is None:
             raise QueueServiceError("resident execution requires an agent root")
+        factory = self.agent_resource_provider_factory or _default_remote_providers
+        if not callable(factory):
+            raise QueueServiceError("agent resource provider factory is invalid")
         object.__setattr__(self, "resident_profiles", profiles)
+        object.__setattr__(self, "agent_resource_provider_factory", factory)
+
+
+def _default_remote_providers(
+    agent_id: str, profile: ResidentExecutionProfile
+) -> Mapping[str, AgentResourceProvider]:
+    """Protected compatibility composition for one resident profile."""
+
+    planners = {
+        "cpu": CpuResourcePlanner(),
+        "memory": MemoryResourcePlanner(),
+        "gpu": GpuResourcePlanner(),
+    }
+    atoms = profile.capacity_atoms(agent_id)
+    result: dict[str, AgentResourceProvider] = {}
+    for kind in {atom.owner_resource_kind for atom in atoms}:
+        if kind == "gpu":
+            continue
+        provider_atoms = tuple(atom for atom in atoms if atom.owner_resource_kind == kind)
+        result[kind] = AtomResourceProvider(
+            _configured_provider_descriptor(kind, provider_atoms),
+            planners[kind].claim_contracts,
+            provider_atoms,
+        )
+    if profile.gpu_devices:
+        bindings = {
+            f"{agent_id}:{device.descriptor.device_id}": device.binding_value
+            for device in profile.gpu_devices
+            if device.descriptor.healthy
+        }
+        result["gpu"] = GpuResourceProvider(
+            planners["gpu"].claim_contracts,
+            tuple(
+                atom for atom in atoms
+                if atom.owner_resource_kind == "gpu" and atom.local_capacity_key in bindings
+            ),
+            bindings=bindings,
+        )
+    return result
 
 
 def _resident_provider_descriptors(
@@ -1191,7 +1237,7 @@ class LocalDaemonAgentHttpClient:
         )
         self._runtime_agent_id: str | None = None
         self._runtime_provider_key: str | None = None
-        self._providers: dict[str, AtomResourceProvider] = {}
+        self._providers: dict[str, AgentResourceProvider] = {}
         self._cancelled_assignments: set[str] = set(
             self._journal.contained_assignment_ids()
             if self._journal is not None
@@ -1367,10 +1413,20 @@ class LocalDaemonAgentHttpClient:
                 for atom in offer.gpu_atoms
             ):
                 raise QueueConflictError("offer exceeds the resident GPU capacity")
-            expected_provider_descriptors = _resident_provider_descriptors(
-                capacity,
-                self._require_journal().session(offer.session_id).agent_id,
-                resource_kinds={item.kind for item in offer.provider_descriptors},
+            factory = self._config.agent_resource_provider_factory
+            if factory is None:
+                raise QueueConflictError("remote agent provider composition is missing")
+            expected_provider_descriptors = tuple(
+                sorted(
+                    (
+                        provider.descriptor
+                        for provider in factory(
+                            self._require_journal().session(offer.session_id).agent_id,
+                            capacity,
+                        ).values()
+                    ),
+                    key=lambda descriptor: descriptor.kind,
+                )
             )
             if offer.provider_descriptors != expected_provider_descriptors:
                 raise QueueConflictError(
@@ -2594,7 +2650,7 @@ class LocalDaemonAgentHttpClient:
         workspace: _ResidentAssignmentWorkspace,
         assignment: ManagedAssignment,
         commands: tuple[ClaimCommand, ...],
-        providers: Mapping[str, AtomResourceProvider],
+        providers: Mapping[str, AgentResourceProvider],
         execution_journal: SQLiteAgentJournal,
         *,
         fence: str,
@@ -2709,7 +2765,7 @@ class LocalDaemonAgentHttpClient:
         assignment_id: str,
         assignment: ManagedAssignment,
         commands: tuple[ClaimCommand, ...],
-        providers: Mapping[str, AtomResourceProvider],
+        providers: Mapping[str, AgentResourceProvider],
         execution_journal: SQLiteAgentJournal,
     ) -> Mapping[str, PlainData] | None:
         for _ in range(32):
@@ -2750,7 +2806,7 @@ class LocalDaemonAgentHttpClient:
         session: AgentSession,
         assignment: ManagedAssignment,
         commands: tuple[ClaimCommand, ...],
-        providers: Mapping[str, AtomResourceProvider],
+        providers: Mapping[str, AgentResourceProvider],
         execution_journal: SQLiteAgentJournal,
     ) -> str:
         """Release the exact composite and persist fresh capacity before RPC."""
@@ -2796,7 +2852,7 @@ class LocalDaemonAgentHttpClient:
     def _availability_revision(
         session: AgentSession,
         assignment_id: str,
-        providers: Mapping[str, AtomResourceProvider],
+        providers: Mapping[str, AgentResourceProvider],
     ) -> str:
         observations = {
             kind: provider.observe(
@@ -2936,54 +2992,22 @@ class LocalDaemonAgentHttpClient:
 
     def _runtime_owners(
         self, session: AgentSession, profile: ResidentExecutionProfile
-    ) -> tuple[dict[str, AtomResourceProvider], SQLiteAgentJournal]:
+    ) -> tuple[dict[str, AgentResourceProvider], SQLiteAgentJournal]:
         journal = self._execution_journal
         if journal is None:
             raise QueueServiceError("remote execution journal is required")
         if self._runtime_agent_id is None:
             self._runtime_agent_id = session.agent_id
             self._runtime_provider_key = _resident_provider_key(profile)
-            planners = {
-                "cpu": CpuResourcePlanner(),
-                "memory": MemoryResourcePlanner(),
-                "gpu": GpuResourcePlanner(),
-            }
-            atoms = profile.capacity_atoms(session.agent_id)
-            self._providers = {}
-            for kind in {atom.owner_resource_kind for atom in atoms}:
-                if kind == "gpu":
-                    continue
-                provider_atoms = tuple(
-                    atom for atom in atoms if atom.owner_resource_kind == kind
-                )
-                self._providers[kind] = AtomResourceProvider(
-                    _configured_provider_descriptor(kind, provider_atoms),
-                    planners[kind].claim_contracts,
-                    provider_atoms,
-                )
-            if profile.gpu_devices:
-                healthy_gpu_keys = {
-                    f"{session.agent_id}:{device.descriptor.device_id}"
-                    for device in profile.gpu_devices
-                    if device.descriptor.healthy
-                }
-                gpu_atoms = tuple(
-                    atom
-                    for atom in atoms
-                    if atom.owner_resource_kind == "gpu"
-                    and atom.local_capacity_key in healthy_gpu_keys
-                )
-                self._providers["gpu"] = GpuResourceProvider(
-                    planners["gpu"].claim_contracts,
-                    gpu_atoms,
-                    bindings={
-                        f"{session.agent_id}:{device.descriptor.device_id}": (
-                            device.binding_value
-                        )
-                        for device in profile.gpu_devices
-                        if device.descriptor.healthy
-                    },
-                )
+            factory = self._config.agent_resource_provider_factory
+            if factory is None:
+                raise QueueServiceError("remote agent provider composition is missing")
+            self._providers = dict(factory(session.agent_id, profile))
+            if not self._providers or any(
+                provider.descriptor.kind != kind
+                for kind, provider in self._providers.items()
+            ):
+                raise QueueConflictError("remote agent provider composition is invalid")
             for command in journal.retained_claim_commands():
                 provider = self._providers.get(command.claim.resource_kind)
                 if provider is None:

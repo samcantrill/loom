@@ -47,16 +47,14 @@ from loom.pipeline.executors.slurm.errors import (
 )
 from loom.pipeline.execution.lifecycle import bind_stage_inputs
 from loom.queue._managed_local import (
-    AtomResourceProvider,
+    AgentResourceProvider,
     AssignmentState,
-    GpuResourceProvider,
     ManagedAssignment,
     ManagedLocalError,
     ManagedOfferSnapshot,
     ObserveRequest,
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
-    _configured_provider_descriptor,
     run_managed_local_assignment,
 )
 from loom.pipeline.orchestration import (
@@ -184,6 +182,35 @@ class ManagedLocalIntent:
 class LocalDaemonExecutionOutcome:
     state: LocalDaemonAdmissionState
     reason: str | None = None
+
+
+def _validate_agent_provider_composition(
+    providers: Sequence[AgentResourceProvider],
+    planners: Mapping[str, ResourcePlanner],
+) -> None:
+    """Reject provider/planner skew before an offer can expose capacity.
+
+    Providers are checked one at a time.  In particular, a CPU provider is
+    never compared with a GPU planner merely because both are configured.
+    """
+
+    for provider in providers:
+        if (
+            not hasattr(provider, "descriptor")
+            or not hasattr(provider, "claim_contracts")
+            or not callable(getattr(provider, "observe", None))
+        ):
+            raise QueueServiceError("agent resource provider is invalid")
+        kind = provider.descriptor.kind
+        planner = planners.get(kind)
+        if planner is None:
+            raise QueueServiceError(
+                f"agent resource provider has no active planner for {kind!r}"
+            )
+        if not set(provider.claim_contracts) & set(planner.claim_contracts):
+            raise QueueServiceError(
+                f"agent resource provider has no claim-contract intersection for {kind!r}"
+            )
 
 
 def _production_preference_scorers() -> Mapping[str, PreferenceScorer]:
@@ -1138,41 +1165,16 @@ class LocalDaemonExecution:
             agent_id=self.agent_id,
         ):
             raise QueueServiceError("retained daemon owner state is unavailable")
-        self.providers = {}
-        for kind in {atom.owner_resource_kind for atom in self.local_capacity}:
-            if kind == "gpu":
-                continue
-            provider_atoms = tuple(
-                atom for atom in self.local_capacity if atom.owner_resource_kind == kind
-            )
-            self.providers[kind] = AtomResourceProvider(
-                _configured_provider_descriptor(kind, provider_atoms),
-                initial_planners[kind].claim_contracts,
-                provider_atoms,
-            )
-        if config.gpu_devices:
-            healthy_gpu_keys = {
-                f"{config.machine_id}:{device.descriptor.device_id}"
-                for device in config.gpu_devices
-                if device.descriptor.healthy
-            }
-            gpu_atoms = tuple(
-                atom
-                for atom in self.local_capacity
-                if atom.owner_resource_kind == "gpu"
-                and atom.local_capacity_key in healthy_gpu_keys
-            )
-            self.providers["gpu"] = GpuResourceProvider(
-                initial_planners["gpu"].claim_contracts,
-                gpu_atoms,
-                bindings={
-                    f"{config.machine_id}:{device.descriptor.device_id}": (
-                        device.binding_value
-                    )
-                    for device in config.gpu_devices
-                    if device.descriptor.healthy
-                },
-            )
+        configured_providers = tuple(config.agent_resource_providers or ())
+        _validate_agent_provider_composition(configured_providers, initial_planners)
+        self.providers: dict[str, AgentResourceProvider] = {}
+        for provider in configured_providers:
+            kind = provider.descriptor.kind
+            if kind in self.providers:
+                raise QueueServiceError(
+                    "local runtime requires one provider owner per resource kind"
+                )
+            self.providers[kind] = provider
         self.provider = self.providers["cpu"]
         # A new in-memory provider must never begin by advertising capacity that
         # a durable accepted/granted/running/unknown assignment might retain.

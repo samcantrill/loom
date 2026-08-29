@@ -87,6 +87,7 @@ from loom.queue.local_daemon_execution import (
     LocalDaemonExecution,
     LocalDaemonExecutionOutcome,
     _ScopedCoordinatorAuthority,
+    _validate_agent_provider_composition,
     build_local_daemon_owner_views,
     initialize_local_daemon_owner_stores,
     load_managed_local_intent,
@@ -141,6 +142,60 @@ class _ConfiguredCpuPlanner(CpuResourcePlanner):
         implementation_version="configured-2",
         implementation_fingerprint="test:configured-cpu:v2",
     )
+
+
+class _RecordingCpuProvider(AtomResourceProvider):
+    """A protected site provider used to prove the production composition."""
+
+    def __init__(self, atom: CapacityAtom) -> None:
+        planner = CpuResourcePlanner()
+        super().__init__(
+            _configured_provider_descriptor("cpu", (atom,)),
+            planner.claim_contracts,
+            (atom,),
+        )
+        self.operations: list[str] = []
+
+    def prepare(self, command: ClaimCommand):  # type: ignore[no-untyped-def]
+        self.operations.append("prepare")
+        return super().prepare(command)
+
+    def activate(self, command: ClaimCommand):  # type: ignore[no-untyped-def]
+        self.operations.append("activate")
+        return super().activate(command)
+
+    def release(self, command: ClaimCommand):  # type: ignore[no-untyped-def]
+        self.operations.append("release")
+        return super().release(command)
+
+    def worker_environment(self, command: ClaimCommand) -> dict[str, str]:
+        self.operations.append("environment")
+        return {"LOOM_TEST_PROVIDER": command.assignment.assignment_id}
+
+
+def test_provider_composition_checks_each_provider_against_its_own_kind() -> None:
+    cpu_atom = CapacityAtom("cpu", "cpu-0", ExactQuantity(1), "count", ExactQuantity(1))
+    first = _RecordingCpuProvider(cpu_atom)
+    second = _RecordingCpuProvider(cpu_atom)
+    planners = {"cpu": CpuResourcePlanner()}
+
+    _validate_agent_provider_composition((first, second), planners)
+
+    unknown = AtomResourceProvider(
+        _configured_provider_descriptor("synthetic", ()),
+        (ResourceClaimContractDescriptor("synthetic", 1, "synthetic-v1"),),
+        (),
+    )
+    with pytest.raises(QueueServiceError, match="no active planner"):
+        _validate_agent_provider_composition((unknown,), planners)
+
+    incompatible = AtomResourceProvider(
+        _configured_provider_descriptor("cpu", (cpu_atom,)),
+        (ResourceClaimContractDescriptor("cpu", 1, "other-contract"),),
+        (cpu_atom,),
+    )
+    with pytest.raises(QueueServiceError, match="no claim-contract intersection"):
+        _validate_agent_provider_composition((incompatible,), planners)
 
 
 @pytest.mark.parametrize(
@@ -295,11 +350,15 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
 
+    provider = _RecordingCpuProvider(
+        CapacityAtom("cpu", "machine-A:cpu", ExactQuantity(1), "count", ExactQuantity(1))
+    )
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "daemon" / "coordinator",
         agent_root=tmp_path / "daemon" / "agent",
         run_store_root=run_root,
         resident_worker_launch_profile=_launch_profile(),
+        agent_resource_providers=(provider,),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -369,6 +428,10 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "train",
         ]
         assert all(stage.status is StageStatus.SUCCEEDED for stage in snapshot.stages)
+        assert provider.operations.count("prepare") == 2
+        assert provider.operations.count("activate") == 2
+        assert provider.operations.count("environment") == 2
+        assert provider.operations.count("release") == 2
         assert run_store.read_stage_outputs(run_uri, "preprocess") is None
         assert run_store.read_stage_outputs(run_uri, "train") is None
     finally:

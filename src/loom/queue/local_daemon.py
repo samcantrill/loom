@@ -27,6 +27,8 @@ from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp, utc_timestamp
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 from loom.scheduling import (
+    CapacityAtom,
+    ExactQuantity,
     HardConstraintEvaluator,
     PreferenceScorer,
     ResourcePlanner,
@@ -45,6 +47,7 @@ from .agent_sessions import (
     validate_agent_session_schema,
 )
 from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+from ._managed_local import AgentResourceProvider
 from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
@@ -515,6 +518,7 @@ class LocalDaemonConfig:
     cpu_capacity: int = 1
     memory_capacity_bytes: int = 0
     gpu_devices: tuple[ConfiguredGpuDevice, ...] = ()
+    agent_resource_providers: tuple[AgentResourceProvider, ...] | None = None
     poll_interval_seconds: float = 0.05
     agent_policy: AgentPolicyConfig = AgentPolicyConfig()
     remote_profiles: tuple[ResidentProfileDescriptor, ...] = ()
@@ -566,6 +570,78 @@ class LocalDaemonConfig:
             raise QueueServiceError("configured GPU device IDs must be unique")
         if len({item.binding_value for item in gpu_devices}) != len(gpu_devices):
             raise QueueServiceError("configured GPU bindings must be unique")
+        providers = self.agent_resource_providers
+        if providers is None:
+            # This compatibility construction belongs to trusted configuration,
+            # never to the daemon runtime.  Deployments that need a different
+            # physical provider pass the complete composition explicitly.
+            from ._managed_local import (
+                GpuResourceProvider,
+                AtomResourceProvider,
+                _configured_provider_descriptor,
+            )
+
+            atoms = [
+                CapacityAtom(
+                    "cpu", f"{self.machine_id}:cpu", ExactQuantity(self.cpu_capacity),
+                    "count", ExactQuantity(1)
+                )
+            ]
+            if self.memory_capacity_bytes:
+                atoms.append(
+                    CapacityAtom(
+                        "memory", f"{self.machine_id}:memory",
+                        ExactQuantity(self.memory_capacity_bytes), "B", ExactQuantity(1)
+                    )
+                )
+            atoms.extend(
+                item.descriptor.capacity_atom(
+                    f"{self.machine_id}:{item.descriptor.device_id}"
+                )
+                for item in gpu_devices
+            )
+            planners = {item.resource_kind: item for item in self.scheduling_components.planners}
+            providers = (
+                AtomResourceProvider(
+                    _configured_provider_descriptor("cpu", tuple(atom for atom in atoms if atom.owner_resource_kind == "cpu")),
+                    planners["cpu"].claim_contracts,
+                    tuple(atom for atom in atoms if atom.owner_resource_kind == "cpu"),
+                ),
+                *(
+                    (AtomResourceProvider(
+                        _configured_provider_descriptor("memory", tuple(atom for atom in atoms if atom.owner_resource_kind == "memory")),
+                        planners["memory"].claim_contracts,
+                        tuple(atom for atom in atoms if atom.owner_resource_kind == "memory"),
+                    ),)
+                    if self.memory_capacity_bytes else ()
+                ),
+                *(
+                    (GpuResourceProvider(
+                        planners["gpu"].claim_contracts,
+                        tuple(
+                            atom for atom in atoms
+                            if atom.owner_resource_kind == "gpu" and any(
+                                atom.local_capacity_key == f"{self.machine_id}:{device.descriptor.device_id}"
+                                and device.descriptor.healthy for device in gpu_devices
+                            )
+                        ),
+                        bindings={
+                            f"{self.machine_id}:{device.descriptor.device_id}": device.binding_value
+                            for device in gpu_devices if device.descriptor.healthy
+                        },
+                    ),) if gpu_devices else ()
+                ),
+            )
+        providers = tuple(providers)
+        if not providers:
+            raise QueueServiceError("agent resource provider composition is required")
+        if any(
+            not hasattr(item, "descriptor")
+            or not hasattr(item, "claim_contracts")
+            or not callable(getattr(item, "observe", None))
+            for item in providers
+        ):
+            raise QueueServiceError("agent resource providers are invalid")
         if (
             isinstance(self.poll_interval_seconds, bool)
             or not isinstance(self.poll_interval_seconds, (int, float))
@@ -619,6 +695,7 @@ class LocalDaemonConfig:
         object.__setattr__(self, "run_store_root", run_store)
         object.__setattr__(self, "resident_worker_launch_profile", profile)
         object.__setattr__(self, "remote_profiles", profiles)
+        object.__setattr__(self, "agent_resource_providers", providers)
         object.__setattr__(self, "slurm_profiles", slurm_profiles)
         object.__setattr__(
             self,
