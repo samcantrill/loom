@@ -57,7 +57,7 @@ def test_sqlite_repository_classifies_exact_replay_and_changed_id_conflict(
     )
 
     assert first.disposition is QueueEnqueueDisposition.ENQUEUED
-    assert replay.disposition is QueueEnqueueDisposition.REPLAYED
+    assert replay.disposition is QueueEnqueueDisposition.SUBMISSION_REPLAY
     assert replay.queue_item == first.queue_item
     assert replay.accepted_at == first.accepted_at
     with pytest.raises(QueueConflictError, match="already exists"):
@@ -110,6 +110,46 @@ def test_sqlite_repository_deduplicates_scientific_identity_atomically(
     assert len(first.list_items(limit=10).items) == 1
 
 
+def test_sqlite_repository_null_fingerprints_remain_independent(tmp_path: Path) -> None:
+    repository = SQLiteQueueRepository(tmp_path / "queue.sqlite")
+
+    first = repository.admit(_item("item-1", "gpu-pool", "2020-01-01T00:00:00Z"))
+    second = repository.admit(_item("item-2", "gpu-pool", "2020-01-01T00:00:01Z"))
+
+    assert first.disposition is QueueEnqueueDisposition.ENQUEUED
+    assert second.disposition is QueueEnqueueDisposition.ENQUEUED
+    assert len(repository.list_items(limit=10).items) == 2
+
+
+def test_sqlite_repository_scientific_duplicate_retains_canonical_run_uri(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteQueueRepository(tmp_path / "queue.sqlite")
+    fingerprint = "sha256:" + "c" * 64
+    canonical = repository.admit(
+        _item(
+            "item-canonical",
+            "gpu-pool",
+            "2020-01-01T00:00:00Z",
+            run_uri="file:///runs/canonical",
+            scientific_fingerprint=fingerprint,
+        )
+    )
+    duplicate = repository.admit(
+        _item(
+            "item-path-changed",
+            "gpu-pool",
+            "2020-01-01T00:00:01Z",
+            run_uri="file:///different-root/changed-path",
+            scientific_fingerprint=fingerprint,
+        )
+    )
+
+    assert duplicate.disposition is QueueEnqueueDisposition.SCIENTIFIC_DUPLICATE
+    assert duplicate.canonical_queue_item_id == canonical.queue_item.queue_item_id
+    assert duplicate.queue_item.run_uri == "file:///runs/canonical"
+
+
 def test_sqlite_repository_force_bypasses_only_scientific_deduplication(
     tmp_path: Path,
 ) -> None:
@@ -132,9 +172,19 @@ def test_sqlite_repository_force_bypasses_only_scientific_deduplication(
     assert repository.admit(forced).disposition is QueueEnqueueDisposition.ENQUEUED
     assert (
         repository.admit(replace(forced, updated_at="2020-01-01T00:00:02Z")).disposition
-        is QueueEnqueueDisposition.REPLAYED
+        is QueueEnqueueDisposition.SUBMISSION_REPLAY
     )
     assert repository.admit(ordinary).disposition is QueueEnqueueDisposition.ENQUEUED
+    with pytest.raises(QueueConflictError, match="already exists"):
+        repository.admit(
+            _item(
+                "forced",
+                "gpu-pool",
+                "2020-01-01T00:00:02Z",
+                scientific_fingerprint=fingerprint,
+                scientific_deduplication_bypassed=False,
+            )
+        )
     assert (
         repository.admit(
             _item(
@@ -522,10 +572,11 @@ def _item(
     enqueued_at: str,
     *,
     metadata: dict[str, PlainData] | None = None,
+    run_uri: str | None = None,
     scientific_fingerprint: str | None = None,
     scientific_deduplication_bypassed: bool = False,
 ) -> QueueItem:
-    run_uri = f"file:///runs/{item_id}"
+    run_uri = f"file:///runs/{item_id}" if run_uri is None else run_uri
     return QueueItem(
         queue_item_id=item_id,
         queue_name=f"{pool_name}-queue",

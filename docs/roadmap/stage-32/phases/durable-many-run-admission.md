@@ -207,10 +207,12 @@ Final commands:
   classification, streaming receipts, bounded listing, public imports, and the
   normalized project example are committed on the phase branch.
 - Refiner: not needed.
-- Pre-submit gate: pending.
+- Pre-submit gate: stale after correction 1/3; manager must obtain a fresh
+  full-gate receipt for the repaired commit.
 - Independent review: expected only if the durable identity/index diff departs
   from the fixed single-transaction design.
-- Blocker corrections: 0/3.
+- Blocker corrections: 1/3 — corrected the approved public
+  `submission_replay` disposition and completed the admission identity matrix.
 - PR and merge: pending.
 
 ## Completion Record
@@ -218,8 +220,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Queue record/schema v2 admission identity, SQLite classification/indexes, service/client streaming and pages, intentional exports, queue docs/example, and phase-scoped tests. |
-| Tests added or updated | Queue model/receipt validation; SQLite exact replay, concurrent scientific dedupe, force, pages; streaming interruption/restart across 2,000 requests; public example E2E. |
-| Validated revision/tree state and evidence | Targeted unit: 13 passed; integration: 19 passed; E2E `-k enqueue`: 1 passed; queue lint and pyright: passed; package and queue contract checks: 134 passed. `make validate-pr` was started after those checks; its full harness remains in progress in the shared environment. |
-| Validation-relevant changes after evidence | None. |
+| Tests added or updated | Queue model/receipt validation; SQLite exact replay, concurrent scientific dedupe, null identity, canonical run-URI retention, force conflict, pages; request digest/force validation; streaming interruption/restart across 2,000 requests; public example E2E. |
+| Validated revision/tree state and evidence | Prior implementation evidence is stale after correction 1/3. Repair checks: queue unit 14 passed; queue integration/service lifecycle 21 passed; focused ruff and pyright passed. A fresh full gate remains manager work. |
+| Validation-relevant changes after evidence | Correction 1/3 changes the public receipt spelling and adds identity-matrix tests; it invalidates the prior in-progress full-gate attempt. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

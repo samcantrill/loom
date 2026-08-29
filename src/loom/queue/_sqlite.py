@@ -76,7 +76,7 @@ class SQLiteQueueRepository:
                 existing_item = _item_from_json(cast(str, existing["item_json"]))
                 if existing_item.admission_digest == item.admission_digest:
                     return _receipt(
-                        QueueEnqueueDisposition.REPLAYED,
+                        QueueEnqueueDisposition.SUBMISSION_REPLAY,
                         requested_queue_item_id=item.queue_item_id,
                         queue_item=existing_item,
                     )

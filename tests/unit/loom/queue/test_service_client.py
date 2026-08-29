@@ -12,6 +12,7 @@ from loom.queue import (
     QueueEnqueueRequest,
     QueueItemStatus,
     QueueService,
+    QueueServiceError,
     QueueServiceSpec,
     QueueServiceState,
     QueueServiceStateError,
@@ -120,6 +121,31 @@ def test_queue_client_streams_ordered_receipts_with_a_consumption_boundary(
     ]
 
 
+def test_enqueue_request_normalizes_scientific_fingerprint_and_force_boundary() -> None:
+    request = QueueEnqueueRequest(
+        queue_item_id="item-1",
+        queue_name="gpu",
+        run_uri="file:///runs/item-1",
+        scientific_fingerprint="sha256:" + "A" * 64,
+    )
+
+    assert request.scientific_fingerprint == "sha256:" + "a" * 64
+    with pytest.raises(QueueServiceError, match="scientific_fingerprint"):
+        QueueEnqueueRequest(
+            queue_item_id="invalid-fingerprint",
+            queue_name="gpu",
+            run_uri="file:///runs/invalid-fingerprint",
+            scientific_fingerprint="not-a-digest",
+        )
+    with pytest.raises(QueueServiceError, match="force must be a boolean"):
+        QueueEnqueueRequest(
+            queue_item_id="invalid-force",
+            queue_name="gpu",
+            run_uri="file:///runs/invalid-force",
+            force=1,  # type: ignore[arg-type]
+        )
+
+
 def test_queue_many_replay_survives_large_prefix_restart(tmp_path: Path) -> None:
     service = _service(tmp_path, clock=_clock("2020-01-01T00:00:00Z"))
     client = QueueClient(service)
@@ -149,7 +175,7 @@ def test_queue_many_replay_survives_large_prefix_restart(tmp_path: Path) -> None
         receipt.disposition is QueueEnqueueDisposition.ENQUEUED for receipt in prefix
     )
     assert all(
-        receipt.disposition is QueueEnqueueDisposition.REPLAYED
+        receipt.disposition is QueueEnqueueDisposition.SUBMISSION_REPLAY
         for receipt in replayed_and_new[:1_000]
     )
     assert all(

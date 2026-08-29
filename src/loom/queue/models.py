@@ -59,7 +59,7 @@ class QueueEnqueueDisposition(StrEnum):
     """Durable classification of one enqueue request."""
 
     ENQUEUED = "enqueued"
-    REPLAYED = "replayed"
+    SUBMISSION_REPLAY = "submission_replay"
     SCIENTIFIC_DUPLICATE = "scientific_duplicate"
 
 
