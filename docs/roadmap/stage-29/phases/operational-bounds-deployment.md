@@ -2,17 +2,18 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 12
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p12-operational-bounds-deployment`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; phase path is `<root>/stage-29-p12-operational-bounds-deployment`
-- Base revision: current `origin/develop` after Phase 11 is remotely merged
+- Base revision: `4f2e155d975009bc7a33f814db2034832e6592c2`
 - PR target: `develop`
 - PR title: `feat(queue): bound daemon operations and deployment`
 - Dependencies: remotely merged Phase 11
 - Workflow path: fast; public and durable shapes are fixed by the correction
-- Blockers: predecessor must be remotely merged
+- Blockers: none; Phase 11 remotely merged as `5fac22c` and its merge metadata
+  is current on `develop`
 
 ## Objective And Context
 
@@ -250,9 +251,12 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning draft complete; exact base/worktree pending predecessor merge
+- Manager preparation: complete; manifest status, verified predecessor merge,
+  exact `origin/develop` base, dedicated branch/worktree, source seams,
+  fast-path decision, validation commands, and the permitted-service-host versus
+  service-less whole-run SLURM boundary are current
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: pending
+- Implementation: assigned to the normal single phase executor
 - Refiner: not needed
 - Pre-submit gate: pending
 - Independent review: not needed unless a material residual risk remains
