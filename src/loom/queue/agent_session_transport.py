@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import sqlite3
 import ssl
 import stat
@@ -111,6 +112,7 @@ _MAX_JSON_COLLECTION = 64
 _HTTP_TIMEOUT_SECONDS = 10
 _ASSIGNMENT_RECONCILIATION_SECONDS = 60
 _MAX_TRANSFER_AUTHORIZATION_RENEWALS = 64
+_AGENT_BINDING_FILE = "role-binding.json"
 
 
 def _supervisor_containment_evidence(
@@ -178,6 +180,7 @@ class AgentTlsClientConfig:
         Callable[[str, ResidentExecutionProfile], Sequence[AgentResourceProvider]]
         | None
     ) = None
+    deployment_configuration_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
@@ -220,6 +223,15 @@ class AgentTlsClientConfig:
             raise QueueServiceError("agent resource provider factory is invalid")
         object.__setattr__(self, "resident_profiles", profiles)
         object.__setattr__(self, "agent_resource_provider_factory", factory)
+        fingerprint = self.deployment_configuration_fingerprint
+        if fingerprint is not None and (
+            not isinstance(fingerprint, str)
+            or len(fingerprint) != 64
+            or any(character not in "0123456789abcdef" for character in fingerprint)
+        ):
+            raise QueueServiceError(
+                "agent deployment configuration fingerprint is invalid"
+            )
 
 
 def _default_remote_providers(
@@ -312,7 +324,9 @@ class _RemoteAgentJournal:
     daemon's configured local-agent root.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self, root: Path, *, expected_configuration_fingerprint: str | None = None
+    ) -> None:
         self._root = Path(root)
         if not self._root.is_dir():
             raise QueueServiceError("remote agent root is missing")
@@ -335,6 +349,23 @@ class _RemoteAgentJournal:
                 ):
                     raise QueueServiceError("remote agent root identity is invalid")
                 validate_agent_session_schema(conn, coordinator=False)
+                if expected_configuration_fingerprint is not None:
+                    binding_path = self._root / _AGENT_BINDING_FILE
+                    if (
+                        not binding_path.is_file()
+                        or stat.S_IMODE(binding_path.stat().st_mode) & 0o077
+                    ):
+                        raise QueueServiceError("remote agent binding is unavailable")
+                    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+                    if binding != {
+                        "schema_version": 1,
+                        "role": "outbound-agent",
+                        "stable_id": metadata["stable_id"],
+                        "configuration_fingerprint": (
+                            expected_configuration_fingerprint
+                        ),
+                    }:
+                        raise QueueServiceError("remote agent binding is invalid")
         except QueueError:
             raise
         except (sqlite3.Error, TypeError, ValueError) as exc:
@@ -468,6 +499,32 @@ class _RemoteAgentJournal:
         if not isinstance(value, Mapping):
             raise QueueServiceError("remote agent session evidence is invalid")
         return _session_from_value(cast(Mapping[str, PlainData], value))
+
+    def active_session(self) -> AgentSession | None:
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT value_json FROM agent_sessions_local WHERE state = ? "
+                    "ORDER BY session_id LIMIT 2",
+                    (AgentSessionState.ACTIVE.value,),
+                )
+            )
+        if len(rows) > 1:
+            raise QueueServiceError("remote agent retained several active sessions")
+        if not rows:
+            return None
+        value = json.loads(str(rows[0]["value_json"]))
+        if not isinstance(value, Mapping):
+            raise QueueServiceError("remote agent session evidence is invalid")
+        return _session_from_value(cast(Mapping[str, PlainData], value))
+
+    def next_poll_sequence(self, session_id: str) -> int:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT sequence FROM agent_poll_state_local WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return 1 if row is None else int(row["sequence"]) + 1
 
     def persist_reconciled_session(self, session: AgentSession) -> None:
         if (
@@ -1294,7 +1351,14 @@ class LocalDaemonAgentHttpClient:
         # root lock.  A rejected opening must not strand that lock.
         self._supervisor = self._open_supervisor(config)
         self._journal = (
-            _RemoteAgentJournal(config.agent_root) if config.agent_root else None
+            _RemoteAgentJournal(
+                config.agent_root,
+                expected_configuration_fingerprint=(
+                    config.deployment_configuration_fingerprint
+                ),
+            )
+            if config.agent_root
+            else None
         )
         self._profiles = {
             item.descriptor.profile_id: item for item in config.resident_profiles
@@ -1338,6 +1402,12 @@ class LocalDaemonAgentHttpClient:
     def agent_root_id(self) -> str:
         return self._require_journal().root_id
 
+    def active_session(self) -> AgentSession | None:
+        return self._require_journal().active_session()
+
+    def next_poll_sequence(self, session_id: str) -> int:
+        return self._require_journal().next_poll_sequence(session_id)
+
     @classmethod
     def initialize_agent_root(cls, config: AgentTlsClientConfig) -> None:
         """Create the complete remote root and its continuous private owner.
@@ -1350,18 +1420,69 @@ class LocalDaemonAgentHttpClient:
             raise QueueServiceError(
                 "remote agent initialization requires resident profiles"
             )
-        LocalDaemon.initialize_agent_root(config.agent_root)
-        journal = _RemoteAgentJournal(config.agent_root)
+        target = Path(config.agent_root)
+        if target.exists():
+            raise QueueServiceError("remote agent requires a fresh root")
+        target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        staging = target.parent / f".{target.name}.staging-{secrets.token_hex(8)}"
+        journal: _RemoteAgentJournal | None = None
+        supervisor: AgentProcessSupervisorClient | None = None
         try:
+            LocalDaemon.initialize_agent_root(staging)
+            with sqlite3.connect(staging / "control.sqlite") as conn:
+                stable_row = conn.execute(
+                    "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+                ).fetchone()
+            if stable_row is None:
+                raise QueueServiceError("remote agent root identity is invalid")
+            atomic_write_bytes(
+                staging / _AGENT_BINDING_FILE,
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "role": "outbound-agent",
+                        "stable_id": str(stable_row[0]),
+                        "configuration_fingerprint": (
+                            config.deployment_configuration_fingerprint
+                        ),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8"),
+            )
+            (staging / _AGENT_BINDING_FILE).chmod(0o600)
+            journal = _RemoteAgentJournal(
+                staging,
+                expected_configuration_fingerprint=(
+                    config.deployment_configuration_fingerprint
+                ),
+            )
             profiles = tuple(item.launch_profile for item in config.resident_profiles)
             configuration = SupervisorLaunchConfiguration(journal.root_id, profiles)
-            AgentProcessSupervisorService.initialize(
-                config.agent_root, configuration=configuration
+            supervisor = AgentProcessSupervisorService.initialize(
+                staging, configuration=configuration
+            )
+            AgentProcessSupervisorClient(staging, configuration)
+            supervisor.shutdown_empty_for_relocation()
+            supervisor = None
+            journal.close()
+            journal = None
+            if target.exists():
+                raise QueueServiceError("remote agent requires a fresh root")
+            staging.rename(target)
+            AgentProcessSupervisorService.start_empty_initialized(
+                target, configuration=configuration
             )
         except AgentProcessSupervisorError as exc:
             raise QueueServiceError(str(exc)) from exc
         finally:
-            journal.close()
+            if supervisor is not None:
+                supervisor.shutdown_empty_for_relocation()
+            if journal is not None:
+                journal.close()
+            if staging.exists():
+                shutil.rmtree(staging)
 
     @staticmethod
     def _open_supervisor(
@@ -1415,7 +1536,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v8",
+                    "agent-sessions-v9",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))

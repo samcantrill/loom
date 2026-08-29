@@ -9,13 +9,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import stat
 from threading import Event, RLock, Thread
@@ -61,6 +62,7 @@ _LOCAL_DAEMON_SCHEMA_VERSION = 9
 _MIN_RUN_PRIORITY = -1_000_000
 _MAX_RUN_PRIORITY = 1_000_000
 _MAX_ADMISSION_PAGE_SIZE = 100
+_DEPLOYMENT_BINDING_FILE = "deployment-binding.json"
 
 
 def _default_admission_priority(_run_uri: str) -> int:
@@ -635,11 +637,27 @@ class LocalDaemonConfig:
     )
     admission_priority_resolver: Callable[[str], int] = _default_admission_priority
     max_accepted_time_step_seconds: float = 3600.0
+    deployment_root: Path | None = None
+    deployment_configuration_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
         agent = Path(self.agent_root)
         run_store = Path(self.run_store_root)
+        deployment_root = (
+            None if self.deployment_root is None else Path(self.deployment_root)
+        )
+        if self.deployment_configuration_fingerprint is not None and (
+            not isinstance(self.deployment_configuration_fingerprint, str)
+            or len(self.deployment_configuration_fingerprint) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.deployment_configuration_fingerprint
+            )
+        ):
+            raise QueueServiceError(
+                "deployment configuration fingerprint is invalid"
+            )
         profile = self.resident_worker_launch_profile
         if not isinstance(profile, ResidentWorkerLaunchProfile):
             raise QueueServiceError("resident worker launch profile is required")
@@ -654,6 +672,13 @@ class LocalDaemonConfig:
         if coordinator == agent:
             raise QueueServiceError(
                 "coordinator and local-agent roots must be distinct"
+            )
+        if deployment_root is not None and (
+            coordinator != deployment_root / "coordinator"
+            or agent != deployment_root / "agent"
+        ):
+            raise QueueServiceError(
+                "deployment roots must be the coordinator and agent bundle subroots"
             )
         if not isinstance(self.machine_id, str) or not self.machine_id:
             raise QueueServiceError("machine_id must be non-empty")
@@ -862,6 +887,7 @@ class LocalDaemonConfig:
         object.__setattr__(self, "coordinator_root", coordinator)
         object.__setattr__(self, "agent_root", agent)
         object.__setattr__(self, "run_store_root", run_store)
+        object.__setattr__(self, "deployment_root", deployment_root)
         object.__setattr__(self, "resident_worker_launch_profile", profile)
         object.__setattr__(self, "remote_profiles", profiles)
         object.__setattr__(self, "agent_resource_providers", providers)
@@ -1191,6 +1217,86 @@ class LocalDaemon:
         self._agent_policy = config.agent_policy
 
     @classmethod
+    def initialize_deployment(cls, config: LocalDaemonConfig) -> None:
+        """Publish one complete coordinator/embedded-agent bundle atomically."""
+
+        target = config.deployment_root
+        if target is None:
+            raise QueueServiceError("coordinator deployment root is required")
+        if target.exists():
+            raise QueueServiceError("coordinator deployment requires a fresh root")
+        target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        staging = target.parent / f".{target.name}.staging-{uuid4()}"
+        staged = replace(
+            config,
+            coordinator_root=staging / "coordinator",
+            agent_root=staging / "agent",
+            deployment_root=staging,
+        )
+        supervisor = None
+        try:
+            staging.mkdir(mode=0o700)
+            cls.initialize(staged)
+            coordinator_id = _open_root(
+                staged.coordinator_root, role="coordinator"
+            )
+            agent_id = _open_root(staged.agent_root, role="local-agent")
+            binding = {
+                "schema_version": 1,
+                "role": "coordinator-bundle",
+                "coordinator_id": coordinator_id,
+                "agent_id": agent_id,
+                "scheduling_fingerprint": _scheduling_fingerprint(staged),
+                "configuration_fingerprint": (
+                    staged.deployment_configuration_fingerprint
+                ),
+            }
+            binding_path = staging / _DEPLOYMENT_BINDING_FILE
+            binding_path.write_text(
+                json.dumps(
+                    binding,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
+                encoding="utf-8",
+            )
+            binding_path.chmod(0o600)
+            from ._agent_process_supervisor import (
+                AgentProcessSupervisorClient,
+                AgentProcessSupervisorService,
+                SupervisorLaunchConfiguration,
+            )
+            from .local_daemon_execution import local_daemon_owner_stores_available
+
+            supervisor_configuration = SupervisorLaunchConfiguration(
+                agent_id, (staged.resident_worker_launch_profile,)
+            )
+            supervisor = AgentProcessSupervisorClient(
+                staged.agent_root,
+                supervisor_configuration,
+            )
+            if not local_daemon_owner_stores_available(
+                staged, coordinator_id=coordinator_id, agent_id=agent_id
+            ):
+                raise QueueServiceError(
+                    "coordinator deployment owner stores are incomplete"
+                )
+            if target.exists():
+                raise QueueServiceError("coordinator deployment requires a fresh root")
+            supervisor.shutdown_empty_for_relocation()
+            supervisor = None
+            staging.rename(target)
+            AgentProcessSupervisorService.start_empty_initialized(
+                target / "agent", configuration=supervisor_configuration
+            )
+        finally:
+            if supervisor is not None:
+                supervisor.shutdown_empty_for_relocation()
+            if staging.exists():
+                shutil.rmtree(staging)
+
+    @classmethod
     def initialize(cls, config: LocalDaemonConfig) -> None:
         """Create fresh owner-private roots; existing/legacy roots are rejected."""
 
@@ -1200,6 +1306,7 @@ class LocalDaemon:
                 "with existing managed-local state are unsupported"
             )
         _initialize_root(config.coordinator_root, role="coordinator")
+        supervisor = None
         try:
             with sqlite3.connect(config.control_database) as conn:
                 conn.execute(
@@ -1220,7 +1327,7 @@ class LocalDaemon:
             )
 
             agent_id = _open_root(config.agent_root, role="local-agent")
-            AgentProcessSupervisorService.initialize(
+            supervisor = AgentProcessSupervisorService.initialize(
                 config.agent_root,
                 configuration=SupervisorLaunchConfiguration(
                     agent_id, (config.resident_worker_launch_profile,)
@@ -1234,6 +1341,8 @@ class LocalDaemon:
                 agent_id=agent_id,
             )
         except Exception:
+            if supervisor is not None:
+                supervisor.shutdown_empty_for_relocation()
             raise
 
     @classmethod
@@ -1251,6 +1360,8 @@ class LocalDaemon:
     def start(self) -> LocalDaemonStatus:
         if self._coordinator_lock is not None:
             raise QueueServiceError("local daemon is already started")
+        if self.config.deployment_root is not None:
+            _validate_deployment_binding(self.config)
         _validate_distinct_roots(self.config)
         coordinator_lock = _acquire_lock(self.config.coordinator_root)
         try:
@@ -1265,15 +1376,28 @@ class LocalDaemon:
             agent_id = _open_root(self.config.agent_root, role="local-agent")
             from ._agent_process_supervisor import (
                 AgentProcessSupervisorClient,
+                AgentProcessSupervisorError,
+                AgentProcessSupervisorService,
                 SupervisorLaunchConfiguration,
             )
 
-            AgentProcessSupervisorClient(
-                self.config.agent_root,
-                SupervisorLaunchConfiguration(
-                    agent_id, (self.config.resident_worker_launch_profile,)
-                ),
+            supervisor_configuration = SupervisorLaunchConfiguration(
+                agent_id, (self.config.resident_worker_launch_profile,)
             )
+            try:
+                AgentProcessSupervisorClient(
+                    self.config.agent_root, supervisor_configuration
+                )
+            except AgentProcessSupervisorError as exc:
+                if (
+                    self.config.deployment_root is None
+                    or str(exc) != "managed supervisor endpoint is unavailable"
+                ):
+                    raise
+                AgentProcessSupervisorService.start_empty_initialized(
+                    self.config.agent_root,
+                    configuration=supervisor_configuration,
+                )
             self._coordinator_id = coordinator_id
             self._agent_id = agent_id
             epoch = f"coordinator-epoch-{uuid4()}"
@@ -3216,6 +3340,34 @@ def _open_root(path: Path, *, role: str) -> str:
     if values.get("role") != role or not values.get("stable_id"):
         raise QueueStorageError(f"{role} root identity is invalid")
     return values["stable_id"]
+
+
+def _validate_deployment_binding(config: LocalDaemonConfig) -> None:
+    target = config.deployment_root
+    if target is None:
+        raise QueueServiceError("coordinator deployment root is required")
+    _validate_private_directory(target)
+    binding_path = target / _DEPLOYMENT_BINDING_FILE
+    if (
+        not binding_path.is_file()
+        or binding_path.stat().st_uid != os.getuid()
+        or stat.S_IMODE(binding_path.stat().st_mode) & 0o077
+    ):
+        raise QueueServiceError("coordinator deployment binding is unavailable")
+    try:
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise QueueServiceError("coordinator deployment binding is invalid") from exc
+    expected = {
+        "schema_version": 1,
+        "role": "coordinator-bundle",
+        "coordinator_id": _open_root(config.coordinator_root, role="coordinator"),
+        "agent_id": _open_root(config.agent_root, role="local-agent"),
+        "scheduling_fingerprint": _scheduling_fingerprint(config),
+        "configuration_fingerprint": config.deployment_configuration_fingerprint,
+    }
+    if binding != expected:
+        raise QueueServiceError("coordinator deployment binding is invalid")
 
 
 def _validate_private_directory(path: Path) -> None:

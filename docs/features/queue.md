@@ -698,8 +698,18 @@ one revision-bound work request. Authority -> coordinator -> agents is the
 recommended low-noise start order but not a correctness dependency: an early
 agent reconnects at zero availability, a coordinator without authority admits
 only `PENDING_AUTHORITY`, and a coordinator without agents retains no-capacity
-waiting work. Exact CLI/env names are private, and private keys/service
-credentials never enter job data, committed `.env`, offers, or workers.
+waiting work. Private keys and service credentials never enter job data,
+committed `.env`, offers, or workers.
+
+The supported role applications now freeze the command and configuration
+boundary: `daemon-init CONFIG` and `daemon-serve CONFIG` use a
+`loom.coordinator-service` v1 document, while `agent-init CONFIG` and
+`agent-serve CONFIG` use a `loom.outbound-agent-service` v1 document. The file
+must be owned by the current user with no group/other permission bits. Init and
+serve use the same file and compare its canonical configuration fingerprint to
+the role binding. Relative paths resolve beside that file. There is no implicit
+search path, environment override, old root/profile flag translation, or
+in-place root migration.
 
 Queue status preserves separately versioned admission/control, authority
 lifecycle/cancellation, scheduling/route, assignment/execution, external-
@@ -799,8 +809,46 @@ a separate persistent service with an owner-only socket transport.
 
 `loom queue drain-foreground` includes the fake adapter by default and can enable
 the built-in delegated SLURM adapter with `--slurm`. Managed local production
-adapters also expose an owner-only local daemon socket. A typical `machine-B`
-maintenance cut-over is:
+adapters also expose an owner-only local daemon socket. Bootstrap the persistent
+roles explicitly:
+
+```bash
+chmod 600 coordinator-service.yaml outbound-agent-service.yaml
+loom queue daemon-init coordinator-service.yaml
+loom queue agent-init outbound-agent-service.yaml
+
+# Run these as foreground services under the site's chosen process manager.
+loom queue daemon-serve coordinator-service.yaml
+loom queue agent-serve outbound-agent-service.yaml
+```
+
+The coordinator initializer publishes one absent directory containing its
+coordinator and embedded-agent roots. The outbound initializer publishes one
+absent role root. Each uses a private sibling staging directory and one final
+rename, never overwrites an existing target, and leaves no requested target on
+a pre-publication failure. Startup accepts only a complete role binding made by
+the same config. See the
+[managed-local example](../../examples/operations/managed-local-queue/README.md)
+for the two exact config shapes.
+
+A degraded accepted-time revision never heals itself. After repairing and
+verifying the site clock, recover the exact visible revision and epoch:
+
+```bash
+loom queue daemon-time-recover \
+  --endpoint COORDINATOR_SOCKET \
+  --operation-id recover-clock-1 \
+  --expected-time-revision CURRENT_TIME_REVISION \
+  --expected-coordinator-epoch CURRENT_COORDINATOR_EPOCH \
+  --reason "site clock repaired" \
+  --format json
+```
+
+Recovery samples the coordinator clock, refuses a value below its retained
+high-water, rotates the coordinator epoch, and withholds prior-epoch offers
+until agents publish fresh observations.
+
+A typical `machine-B` maintenance cut-over is:
 
 ```bash
 loom queue daemon-status --endpoint COORDINATOR_SOCKET --format json
@@ -890,7 +938,7 @@ loom queue daemon-wait --endpoint COORDINATOR_SOCKET QUEUE_ITEM
 Reuse the same operation ID when retrying a response-loss case. Changed content
 under that ID conflicts. This is a hard cut-over: initialize fresh daemon/agent
 roots and use the v4 CLI result shape with agent protocol and coordinator/agent
-state version 7. Loom does not upgrade or dual-read a previous control schema.
+state version 9. Loom does not upgrade or dual-read a previous control schema.
 
 For a resident remote agent, initialize its protected root and detached
 supervisor before starting the agent application.  On an application restart,
@@ -904,6 +952,21 @@ Reloading a resident remote agent cannot change its executable profile set. To
 add, remove, or alter a resident executable binding, drain the old root and
 initialize a fresh one; a trusted reload that differs only in profile ordering
 is accepted.
+
+### Deployment mode matrix
+
+| Mode | Persistent coordinator required? | Supported use |
+| --- | --- | --- |
+| Stage 29 managed agents | Yes, on a site-permitted stable service host | Many admitted runs with globally selected dependency-ready stages |
+| Stage 29 ready-stage SLURM | Yes while submission/bootstrap/reconciliation is active; compute must reach its authenticated endpoint | One explicitly routed ready attempt under the named protected profile |
+| Historical whole-run queue SLURM | No Stage 29 coordinator | Service-less dispatch of independent whole-run queue items |
+| Historical single-job / `afterok` SLURM | No Stage 29 coordinator | Service-less whole-run continuation using their existing owners |
+
+The foreground role commands do not require a daemon on an HPC login node. A
+site that forbids persistent processes there must place the coordinator on an
+allowed reachable service host or select one of the separate service-less
+whole-run modes. Ready-stage SLURM is not an intermittent or service-less
+protocol: its protected bootstrap needs the coordinator endpoint while active.
 
 ## Preflight And Status Output
 

@@ -15,7 +15,7 @@ import sqlite3
 import subprocess
 import sys
 from collections.abc import Mapping
-from threading import Event
+from threading import Event, Thread
 from time import monotonic, sleep
 from typing import Any, cast
 
@@ -85,6 +85,11 @@ from loom.queue.agent_session_transport import (
     LocalDaemonAgentHttpServer,
     _decode,
     _resident_provider_descriptors,
+)
+from loom.queue.deployment import (
+    OutboundAgentRegistrationConfig,
+    OutboundAgentServiceConfig,
+    run_outbound_agent_service,
 )
 from loom.queue.agent_sessions import (
     AgentControl,
@@ -239,6 +244,111 @@ def _request(handshake: Mapping[str, object], agent_root_id: str) -> AgentRegist
         declared_pools=("default",),
         declared_capabilities=("python",),
     )
+
+
+def test_outbound_service_registers_offers_and_stops_cleanly(tmp_path: Path) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    capabilities = (
+        "python",
+        REMOTE_EXECUTION_CAPABILITY,
+        REGULAR_FILE_RELAY_CAPABILITY,
+    )
+    policy = AgentPolicyConfig(
+        agents=(
+            AgentPrincipalPolicy(
+                "agent-credential",
+                "agent-principal",
+                "agent-a",
+                ("default",),
+                capabilities,
+            ),
+        )
+    )
+    daemon_config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "coordinator-agent",
+        tmp_path / "runs",
+        _local_launch_profile(),
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(daemon_config)
+    daemon = LocalDaemon(daemon_config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(credentials["agent"].with_suffix(".crt")): (
+                    "agent-credential"
+                )
+            },
+        ),
+    )
+    server.start()
+    profile = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+        ),
+        Path(__file__).resolve().parents[3],
+        Path(sys.executable),
+    )
+    client_config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}",
+        credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(client_config)
+    service = OutboundAgentServiceConfig(
+        client_config,
+        OutboundAgentRegistrationConfig(
+            "config-1",
+            "inventory-1",
+            "availability-1",
+            ("default",),
+            capabilities,
+        ),
+        0.01,
+        tmp_path / "agent.yaml",
+    )
+    stop = Event()
+    failure: list[BaseException] = []
+
+    def serve() -> None:
+        try:
+            run_outbound_agent_service(service, stop=stop)
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            failure.append(exc)
+
+    thread = Thread(target=serve)
+    thread.start()
+    try:
+        deadline = monotonic() + 10
+        while monotonic() < deadline:
+            with sqlite3.connect(daemon_config.control_database) as conn:
+                active = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM agent_offers WHERE current = 1"
+                    ).fetchone()[0]
+                )
+            if active:
+                break
+            sleep(0.02)
+        assert active == 1
+    finally:
+        stop.set()
+        thread.join(timeout=7)
+        server.stop()
+        daemon.stop()
+    assert not thread.is_alive()
+    assert failure == []
 
 
 def _remote_agent_root(tmp_path: Path, name: str = "remote-owner") -> Path:

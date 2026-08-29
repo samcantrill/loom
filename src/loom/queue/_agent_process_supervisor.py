@@ -710,7 +710,35 @@ class AgentProcessSupervisorClient:
         return _receipt_from_value(self._call("contain", _launch_value(launch)))
 
     def shutdown_for_test(self) -> None:
+        self._shutdown()
+
+    def shutdown_empty_for_relocation(self) -> None:
+        """Stop an initialized owner only before it has accepted any launch."""
+
+        try:
+            with sqlite3.connect(self._root / "supervisor.sqlite") as conn:
+                launches = int(
+                    conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0]
+                )
+        except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+            raise AgentProcessSupervisorError(
+                "managed_supervisor_state_requires_reinitialization"
+            ) from exc
+        if launches:
+            raise AgentProcessSupervisorError(
+                "managed supervisor cannot relocate after launch"
+            )
+        self._shutdown()
+
+    def _shutdown(self) -> None:
         self._call("shutdown", None)
+        deadline = monotonic() + 2
+        while self._endpoint.exists():
+            if monotonic() >= deadline:
+                raise AgentProcessSupervisorError(
+                    "managed supervisor endpoint did not stop"
+                )
+            sleep(0.01)
 
     def _call(self, operation: str, value: object) -> object:
         if not self._endpoint.exists():
@@ -780,6 +808,43 @@ class AgentProcessSupervisorService:
         secret = root / "service.secret"
         secret.write_bytes(secrets.token_bytes(32))
         secret.chmod(0o600)
+        return cls._start(agent_root, configuration)
+
+    @classmethod
+    def start_empty_initialized(
+        cls, agent_root: Path, *, configuration: SupervisorLaunchConfiguration
+    ) -> AgentProcessSupervisorClient:
+        """Start relocated initialized state only before its first launch."""
+
+        root = Path(agent_root).resolve() / "supervisor"
+        persisted = _service_configuration(root)
+        if persisted != configuration:
+            raise AgentProcessSupervisorError(
+                "managed_supervisor_state_requires_reinitialization"
+            )
+        AgentProcessSupervisor(
+            root,
+            agent_id=configuration.agent_id,
+            profiles=configuration.profiles,
+        )
+        try:
+            with sqlite3.connect(root / "supervisor.sqlite") as conn:
+                launches = int(conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0])
+        except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+            raise AgentProcessSupervisorError(
+                "managed_supervisor_state_requires_reinitialization"
+            ) from exc
+        if launches:
+            raise AgentProcessSupervisorError(
+                "managed supervisor continuity cannot restart after launch"
+            )
+        return cls._start(agent_root, configuration)
+
+    @staticmethod
+    def _start(
+        agent_root: Path, configuration: SupervisorLaunchConfiguration
+    ) -> AgentProcessSupervisorClient:
+        root = Path(agent_root).resolve() / "supervisor"
         subprocess.Popen(
             [
                 sys.executable,

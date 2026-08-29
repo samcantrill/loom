@@ -1,0 +1,33 @@
+schema_version: 1
+kind: loom.outbound-agent-service
+agent_root: .state/outbound-agent
+url: https://localhost:8443
+server_ca_path: tls/ca.crt
+certificate_path: tls/agent.crt
+private_key_path: tls/agent.key
+reconnect_seconds: 1
+
+resident_profiles:
+  - descriptor:
+      profile_id: remote-default
+      revision: v1
+      project_fingerprint: example-project-v1
+      environment_fingerprint: example-environment-v1
+      executor_fingerprint: local-executor-v1
+    project_root: ../../..
+    python_executable: ../../../.venv/bin/python
+    cpu_capacity: 2
+    memory_capacity_bytes: 0
+    gpu_devices: []
+    environment:
+      LOOM_EXAMPLE_MODE: "1"
+
+registration:
+  config_revision: remote-config-v1
+  inventory_revision: remote-inventory-v1
+  availability_revision: remote-availability-v1
+  pools: [default]
+  capabilities:
+    - python
+    - remote-stage-execution-v3
+    - regular-file-relay-v1

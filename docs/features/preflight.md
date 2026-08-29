@@ -552,9 +552,11 @@ the configured behavior for other orders: agent-before-coordinator reconnect at
 zero availability, coordinator-before-authority `PENDING_AUTHORITY` admission,
 and coordinator-before-agent no-capacity waiting. It never treats a reachable
 TCP endpoint as readiness, a fresh connection as a session, or an old retained
-offer as current capacity. Exact CLI/env names remain deployment choices;
-examples may name endpoint/trust/certificate/key/policy references but never
-show or persist private key material.
+offer as current capacity. The supported role commands consume one explicit
+owner-protected v1 coordinator or outbound-agent YAML path for both initialize
+and serve; preflight must not discover a replacement or apply environment
+overrides. Examples may name endpoint/trust/certificate/key/policy references
+but never show or persist private key material.
 
 Ready-stage SLURM preflight is distinct from historical whole-run live/dry-run
 checks. For every enabled named profile it validates the concrete fakeable
