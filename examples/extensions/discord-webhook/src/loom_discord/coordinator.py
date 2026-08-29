@@ -7,7 +7,11 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from loom.queue import LocalDaemonAdmissionState, LocalDaemonStatus
+from loom.queue import (
+    DaemonStatus,
+    LocalDaemonAdmissionDetail,
+    LocalDaemonAdmissionState,
+)
 from loom.serialization import PlainData
 
 from .sink import DEFAULT_TIMEOUT_SECONDS, MAX_CONTENT_LENGTH, _send_webhook_content
@@ -68,10 +72,16 @@ class DiscordCoordinatorReporter:
         self._timeout_seconds = timeout_seconds
         self._last_projection: _CoordinatorProjection | None = None
 
-    def report(self, status: LocalDaemonStatus, *, force: bool = False) -> bool:
+    def report(
+        self,
+        status: DaemonStatus,
+        details: tuple[LocalDaemonAdmissionDetail, ...],
+        *,
+        force: bool = False,
+    ) -> bool:
         """Attempt one report, returning false only when it is unchanged."""
 
-        projection = _project_status(status)
+        projection = _project_status(status, details)
         if not force and projection == self._last_projection:
             return False
         # Record before external I/O so a transient failure cannot cause one
@@ -85,23 +95,22 @@ class DiscordCoordinatorReporter:
         return True
 
 
-def _project_status(status: LocalDaemonStatus) -> _CoordinatorProjection:
-    admission_counts = Counter(admission.state.value for admission in status.admissions)
-    views_by_queue_item = {
-        _string(view.get("queue_item_id")): view
-        for view in status.runs
-        if _string(view.get("queue_item_id")) is not None
-    }
+def _project_status(
+    status: DaemonStatus, details: tuple[LocalDaemonAdmissionDetail, ...]
+) -> _CoordinatorProjection:
+    admission_counts = Counter(detail.admission.state.value for detail in details)
     authority_run_counts: Counter[str] = Counter()
     authority_stage_counts: Counter[str] = Counter()
     active_runs: list[_ActiveRun] = []
-    for admission in status.admissions:
-        view = views_by_queue_item.get(admission.queue_item_id)
-        authority = _mapping(None if view is None else view.get("authority"))
+    for detail in details:
+        admission = detail.admission
+        authority = detail.authority
         availability = _string(authority.get("availability")) or "unavailable"
         authority_state = _string(authority.get("state")) or "unavailable"
         authority_run_counts[authority_state] += 1
-        stages = _mapping(authority.get("stages")) if availability == "available" else {}
+        stages = (
+            _mapping(authority.get("stages")) if availability == "available" else {}
+        )
         stage_states = tuple(
             sorted(
                 (stage_name, state)

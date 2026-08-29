@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import sqlite3
 import ssl
 import stat
@@ -56,10 +57,12 @@ from .agent_sessions import (
     AgentControl,
     AgentControlEffect,
     AgentPollActiveError,
+    AgentPollSequenceGapError,
     AgentRegistration,
     AgentRetirementProof,
     AgentSession,
     AgentSessionState,
+    AgentStalePollError,
     SessionReplacementRequest,
     AgentTransferAuthorizationStaleError,
     PROTOCOL_VERSION,
@@ -98,6 +101,8 @@ from .local_daemon import (
     LocalDaemonPrincipal,
     LocalDaemonRole,
     RecoverUnknownAssignment,
+    TimeRecoveryReceipt,
+    TimeRecoveryRequest,
 )
 
 
@@ -107,6 +112,7 @@ _MAX_JSON_COLLECTION = 64
 _HTTP_TIMEOUT_SECONDS = 10
 _ASSIGNMENT_RECONCILIATION_SECONDS = 60
 _MAX_TRANSFER_AUTHORIZATION_RENEWALS = 64
+_AGENT_BINDING_FILE = "role-binding.json"
 
 
 def _supervisor_containment_evidence(
@@ -174,6 +180,7 @@ class AgentTlsClientConfig:
         Callable[[str, ResidentExecutionProfile], Sequence[AgentResourceProvider]]
         | None
     ) = None
+    deployment_configuration_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
@@ -216,6 +223,15 @@ class AgentTlsClientConfig:
             raise QueueServiceError("agent resource provider factory is invalid")
         object.__setattr__(self, "resident_profiles", profiles)
         object.__setattr__(self, "agent_resource_provider_factory", factory)
+        fingerprint = self.deployment_configuration_fingerprint
+        if fingerprint is not None and (
+            not isinstance(fingerprint, str)
+            or len(fingerprint) != 64
+            or any(character not in "0123456789abcdef" for character in fingerprint)
+        ):
+            raise QueueServiceError(
+                "agent deployment configuration fingerprint is invalid"
+            )
 
 
 def _default_remote_providers(
@@ -308,7 +324,9 @@ class _RemoteAgentJournal:
     daemon's configured local-agent root.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self, root: Path, *, expected_configuration_fingerprint: str | None = None
+    ) -> None:
         self._root = Path(root)
         if not self._root.is_dir():
             raise QueueServiceError("remote agent root is missing")
@@ -320,7 +338,7 @@ class _RemoteAgentJournal:
             raise QueueServiceError("remote agent control state is unavailable")
         try:
             with self._connection() as conn:
-                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 8:
+                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 9:
                     raise QueueServiceError("remote agent root schema is unsupported")
                 metadata = {
                     str(row[0]): str(row[1])
@@ -331,6 +349,23 @@ class _RemoteAgentJournal:
                 ):
                     raise QueueServiceError("remote agent root identity is invalid")
                 validate_agent_session_schema(conn, coordinator=False)
+                if expected_configuration_fingerprint is not None:
+                    binding_path = self._root / _AGENT_BINDING_FILE
+                    if (
+                        not binding_path.is_file()
+                        or stat.S_IMODE(binding_path.stat().st_mode) & 0o077
+                    ):
+                        raise QueueServiceError("remote agent binding is unavailable")
+                    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+                    if binding != {
+                        "schema_version": 1,
+                        "role": "outbound-agent",
+                        "stable_id": metadata["stable_id"],
+                        "configuration_fingerprint": (
+                            expected_configuration_fingerprint
+                        ),
+                    }:
+                        raise QueueServiceError("remote agent binding is invalid")
         except QueueError:
             raise
         except (sqlite3.Error, TypeError, ValueError) as exc:
@@ -465,6 +500,32 @@ class _RemoteAgentJournal:
             raise QueueServiceError("remote agent session evidence is invalid")
         return _session_from_value(cast(Mapping[str, PlainData], value))
 
+    def active_session(self) -> AgentSession | None:
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT value_json FROM agent_sessions_local WHERE state = ? "
+                    "ORDER BY session_id LIMIT 2",
+                    (AgentSessionState.ACTIVE.value,),
+                )
+            )
+        if len(rows) > 1:
+            raise QueueServiceError("remote agent retained several active sessions")
+        if not rows:
+            return None
+        value = json.loads(str(rows[0]["value_json"]))
+        if not isinstance(value, Mapping):
+            raise QueueServiceError("remote agent session evidence is invalid")
+        return _session_from_value(cast(Mapping[str, PlainData], value))
+
+    def next_poll_sequence(self, session_id: str) -> int:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT sequence FROM agent_poll_state_local WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return 1 if row is None else int(row["sequence"]) + 1
+
     def persist_reconciled_session(self, session: AgentSession) -> None:
         if (
             session.agent_root_id != self.root_id
@@ -508,29 +569,68 @@ class _RemoteAgentJournal:
         self,
         session_id: str,
         availability_revision: str,
-        poll_id: str,
+        sequence: int,
         request: Mapping[str, PlainData],
-    ) -> None:
+    ) -> Mapping[str, PlainData] | None:
         session = self.session(session_id)
         if session.availability_revision != availability_revision:
             raise QueueConflictError("poll does not match the durable agent session")
-        self._persist_mutation("poll", poll_id, request)
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise QueueServiceError("work poll sequence must be positive")
+        digest = _canonical_digest(request)
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             current = conn.execute(
-                "SELECT poll_id, state FROM agent_polls_local WHERE session_id = ? AND availability_revision = ?",
-                (session_id, availability_revision),
+                "SELECT sequence, request_digest, state, result_json "
+                "FROM agent_poll_state_local WHERE session_id = ?",
+                (session_id,),
             ).fetchone()
-            if (
-                current is not None
-                and str(current["state"]) == "PENDING"
-                and str(current["poll_id"]) != poll_id
-            ):
-                raise QueueConflictError("agent already has a pending work poll")
-            conn.execute(
-                "INSERT INTO agent_polls_local(session_id, availability_revision, poll_id, state) VALUES (?, ?, ?, 'PENDING') ON CONFLICT(session_id, availability_revision) DO UPDATE SET poll_id = excluded.poll_id, state = 'PENDING'",
-                (session_id, availability_revision, poll_id),
-            )
+            if current is None:
+                if sequence != 1:
+                    raise AgentPollSequenceGapError("work poll sequence has a gap")
+                conn.execute(
+                    "INSERT INTO agent_poll_state_local("
+                    "session_id, availability_revision, sequence, request_digest, "
+                    "state, result_json) VALUES (?, ?, ?, ?, 'PENDING', NULL)",
+                    (session_id, availability_revision, sequence, digest),
+                )
+            else:
+                stored_sequence = int(current["sequence"])
+                if sequence < stored_sequence:
+                    raise AgentStalePollError("work poll sequence is stale")
+                if sequence > stored_sequence + 1:
+                    raise AgentPollSequenceGapError("work poll sequence has a gap")
+                if sequence == stored_sequence:
+                    if str(current["request_digest"]) != digest:
+                        raise QueueConflictError(
+                            "poll sequence was reused with different content"
+                        )
+                    if current["result_json"] is not None:
+                        value = json.loads(str(current["result_json"]))
+                        if not isinstance(value, Mapping):
+                            raise QueueServiceError("agent poll result is invalid")
+                        conn.commit()
+                        frozen = freeze_plain_data(
+                            dict(value), path="agent poll replay"
+                        )
+                        assert isinstance(frozen, Mapping)
+                        return frozen
+                    if str(current["state"]) == "PENDING":
+                        conn.commit()
+                        return None
+                    raise QueueConflictError(
+                        "work poll was fenced and is not reusable"
+                    )
+                if str(current["state"]) == "PENDING":
+                    raise AgentPollActiveError("work poll is already active")
+                conn.execute(
+                    "UPDATE agent_poll_state_local SET availability_revision = ?, "
+                    "sequence = ?, request_digest = ?, state = 'PENDING', "
+                    "result_json = NULL WHERE session_id = ?",
+                    (availability_revision, sequence, digest, session_id),
+                )
             conn.commit()
+        return None
 
     def complete_mutation(
         self,
@@ -565,40 +665,62 @@ class _RemoteAgentJournal:
                     "UPDATE agent_offers_local SET state = 'ACTIVE' WHERE session_id = ?",
                     (session_id,),
                 )
-            elif operation == "poll":
-                poll_result = result.get("result")
-                if poll_result == "assignment":
-                    request_value = result.get("request")
-                    request = _ResidentAssignmentBundle.from_dict(request_value)
-                    poll_request = json.loads(str(row["request_json"]))
-                    if not isinstance(poll_request, Mapping):
-                        raise QueueServiceError("agent poll intent is invalid")
-                    request_session = poll_request.get("session_id")
-                    if not isinstance(request_session, str):
-                        raise QueueServiceError("agent poll intent is invalid")
-                    conn.execute(
-                        "INSERT INTO agent_session_references(session_id, "
-                        "reference_kind, reference_id, resolved) "
-                        "VALUES (?, 'delivery', ?, 0) ON CONFLICT(session_id, "
-                        "reference_kind, reference_id) DO NOTHING",
-                        (request_session, request.assignment_id),
-                    )
-                    poll_state = "DELIVERED"
-                elif poll_result == "wait":
-                    poll_state = "WAIT"
-                else:
-                    raise QueueServiceError("agent poll result is invalid")
-                conn.execute(
-                    "UPDATE agent_polls_local SET state = ? WHERE poll_id = ?",
-                    (poll_state, operation_id),
-                )
             conn.commit()
 
-    def fence_poll(self, poll_id: str) -> None:
+    def complete_poll(
+        self,
+        session_id: str,
+        sequence: int,
+        result: Mapping[str, PlainData],
+    ) -> None:
+        encoded = _canonical_json(result)
+        poll_result = result.get("result")
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT state, result_json FROM agent_poll_state_local "
+                "WHERE session_id = ? AND sequence = ?",
+                (session_id, sequence),
+            ).fetchone()
+            if row is None:
+                raise QueueServiceError("agent poll state is unavailable")
+            if row["result_json"] is not None:
+                if str(row["result_json"]) != encoded:
+                    raise QueueConflictError(
+                        "poll replay returned a different result"
+                    )
+                conn.commit()
+                return
+            if str(row["state"]) != "PENDING":
+                raise QueueConflictError("work poll was fenced")
+            if poll_result == "assignment":
+                request_value = result.get("request")
+                request = _ResidentAssignmentBundle.from_dict(request_value)
+                conn.execute(
+                    "INSERT INTO agent_session_references(session_id, "
+                    "reference_kind, reference_id, resolved) "
+                    "VALUES (?, 'delivery', ?, 0) ON CONFLICT(session_id, "
+                    "reference_kind, reference_id) DO NOTHING",
+                    (session_id, request.assignment_id),
+                )
+                poll_state = "DELIVERED"
+            elif poll_result == "wait":
+                poll_state = "WAIT"
+            else:
+                raise QueueServiceError("agent poll result is invalid")
+            conn.execute(
+                "UPDATE agent_poll_state_local SET state = ?, result_json = ? "
+                "WHERE session_id = ? AND sequence = ? AND state = 'PENDING'",
+                (poll_state, encoded, session_id, sequence),
+            )
+            conn.commit()
+
+    def fence_poll(self, session_id: str, sequence: int) -> None:
         with self._connection() as conn:
             conn.execute(
-                "UPDATE agent_polls_local SET state = 'FENCED' WHERE poll_id = ?",
-                (poll_id,),
+                "UPDATE agent_poll_state_local SET state = 'FENCED' "
+                "WHERE session_id = ? AND sequence = ?",
+                (session_id, sequence),
             )
             conn.commit()
 
@@ -651,7 +773,7 @@ class _RemoteAgentJournal:
                     (session.session_id,),
                 )
                 conn.execute(
-                    "UPDATE agent_polls_local SET state = 'FENCED' "
+                    "UPDATE agent_poll_state_local SET state = 'FENCED' "
                     "WHERE session_id = ?",
                     (session.session_id,),
                 )
@@ -871,7 +993,8 @@ class _RemoteAgentJournal:
                 "reference_kind = 'delivery' AND resolved = 0 LIMIT 1"
             ).fetchone()
             pending_poll = conn.execute(
-                "SELECT 1 FROM agent_polls_local WHERE state = 'PENDING' LIMIT 1"
+                "SELECT 1 FROM agent_poll_state_local "
+                "WHERE state = 'PENDING' LIMIT 1"
             ).fetchone()
         return row is not None or pending_poll is not None
 
@@ -1029,7 +1152,8 @@ class _RemoteAgentJournal:
                 (session_id,),
             )
             conn.execute(
-                "UPDATE agent_polls_local SET state = 'FENCED' WHERE session_id = ?",
+                "UPDATE agent_poll_state_local SET state = 'FENCED' "
+                "WHERE session_id = ?",
                 (session_id,),
             )
             unresolved = conn.execute(
@@ -1227,7 +1351,14 @@ class LocalDaemonAgentHttpClient:
         # root lock.  A rejected opening must not strand that lock.
         self._supervisor = self._open_supervisor(config)
         self._journal = (
-            _RemoteAgentJournal(config.agent_root) if config.agent_root else None
+            _RemoteAgentJournal(
+                config.agent_root,
+                expected_configuration_fingerprint=(
+                    config.deployment_configuration_fingerprint
+                ),
+            )
+            if config.agent_root
+            else None
         )
         self._profiles = {
             item.descriptor.profile_id: item for item in config.resident_profiles
@@ -1271,6 +1402,12 @@ class LocalDaemonAgentHttpClient:
     def agent_root_id(self) -> str:
         return self._require_journal().root_id
 
+    def active_session(self) -> AgentSession | None:
+        return self._require_journal().active_session()
+
+    def next_poll_sequence(self, session_id: str) -> int:
+        return self._require_journal().next_poll_sequence(session_id)
+
     @classmethod
     def initialize_agent_root(cls, config: AgentTlsClientConfig) -> None:
         """Create the complete remote root and its continuous private owner.
@@ -1283,18 +1420,69 @@ class LocalDaemonAgentHttpClient:
             raise QueueServiceError(
                 "remote agent initialization requires resident profiles"
             )
-        LocalDaemon.initialize_agent_root(config.agent_root)
-        journal = _RemoteAgentJournal(config.agent_root)
+        target = Path(config.agent_root)
+        if target.exists():
+            raise QueueServiceError("remote agent requires a fresh root")
+        target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        staging = target.parent / f".{target.name}.staging-{secrets.token_hex(8)}"
+        journal: _RemoteAgentJournal | None = None
+        supervisor: AgentProcessSupervisorClient | None = None
         try:
+            LocalDaemon.initialize_agent_root(staging)
+            with sqlite3.connect(staging / "control.sqlite") as conn:
+                stable_row = conn.execute(
+                    "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+                ).fetchone()
+            if stable_row is None:
+                raise QueueServiceError("remote agent root identity is invalid")
+            atomic_write_bytes(
+                staging / _AGENT_BINDING_FILE,
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "role": "outbound-agent",
+                        "stable_id": str(stable_row[0]),
+                        "configuration_fingerprint": (
+                            config.deployment_configuration_fingerprint
+                        ),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8"),
+            )
+            (staging / _AGENT_BINDING_FILE).chmod(0o600)
+            journal = _RemoteAgentJournal(
+                staging,
+                expected_configuration_fingerprint=(
+                    config.deployment_configuration_fingerprint
+                ),
+            )
             profiles = tuple(item.launch_profile for item in config.resident_profiles)
             configuration = SupervisorLaunchConfiguration(journal.root_id, profiles)
-            AgentProcessSupervisorService.initialize(
-                config.agent_root, configuration=configuration
+            supervisor = AgentProcessSupervisorService.initialize(
+                staging, configuration=configuration
+            )
+            AgentProcessSupervisorClient(staging, configuration)
+            supervisor.shutdown_empty_for_relocation()
+            supervisor = None
+            journal.close()
+            journal = None
+            if target.exists():
+                raise QueueServiceError("remote agent requires a fresh root")
+            staging.rename(target)
+            AgentProcessSupervisorService.start_empty_initialized(
+                target, configuration=configuration
             )
         except AgentProcessSupervisorError as exc:
             raise QueueServiceError(str(exc)) from exc
         finally:
-            journal.close()
+            if supervisor is not None:
+                supervisor.shutdown_empty_for_relocation()
+            if journal is not None:
+                journal.close()
+            if staging.exists():
+                shutil.rmtree(staging)
 
     @staticmethod
     def _open_supervisor(
@@ -1348,7 +1536,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v8",
+                    "agent-sessions-v9",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -1476,7 +1664,7 @@ class LocalDaemonAgentHttpClient:
         session_id: str,
         availability_revision: str,
         *,
-        poll_id: str,
+        sequence: int,
         wait_timeout_ms: int,
     ) -> Mapping[str, PlainData]:
         if self._drained:
@@ -1488,11 +1676,15 @@ class LocalDaemonAgentHttpClient:
         value: dict[str, PlainData] = {
             "session_id": session_id,
             "availability_revision": availability_revision,
-            "poll_id": poll_id,
+            "sequence": sequence,
             "wait_timeout_ms": wait_timeout_ms,
         }
         journal = self._require_journal()
-        journal.prepare_poll(session_id, availability_revision, poll_id, value)
+        replay = journal.prepare_poll(
+            session_id, availability_revision, sequence, value
+        )
+        if replay is not None:
+            return replay
         try:
             result = self._call("poll", value)
         except AgentPollActiveError:
@@ -1500,14 +1692,14 @@ class LocalDaemonAgentHttpClient:
             # Preserve the local intent so the same identity can be retried.
             raise
         except QueueConflictError:
-            journal.fence_poll(poll_id)
+            journal.fence_poll(session_id, sequence)
             raise
         except _IndeterminateAgentProtocolError:
             raise
         except QueueServiceError:
-            journal.fence_poll(poll_id)
+            journal.fence_poll(session_id, sequence)
             raise
-        journal.complete_mutation("poll", poll_id, result)
+        journal.complete_poll(session_id, sequence, result)
         return result
 
     def poll_control(self, session_id: str) -> AgentControl | None:
@@ -1732,6 +1924,13 @@ class LocalDaemonAgentHttpClient:
     ) -> Mapping[str, PlainData]:
         return self._call(
             "recover_unknown", {"request": request.to_dict()}, role="operator"
+        )
+
+    def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
+        return TimeRecoveryReceipt.from_dict(
+            self._call(
+                "recover_time", {"request": request.to_dict()}, role="operator"
+            )
         )
 
     def replace_agent_session(
@@ -2161,7 +2360,7 @@ class LocalDaemonAgentHttpClient:
         session_id: str,
         availability_revision: str,
         *,
-        poll_id: str,
+        sequence: int,
         wait_timeout_ms: int,
     ) -> Mapping[str, PlainData]:
         """Poll and drive at most one resident assignment to ordered release."""
@@ -2169,7 +2368,7 @@ class LocalDaemonAgentHttpClient:
         delivery = self.wait_for_work(
             session_id,
             availability_revision,
-            poll_id=poll_id,
+            sequence=sequence,
             wait_timeout_ms=wait_timeout_ms,
         )
         if delivery.get("result") != "assignment":
@@ -3232,6 +3431,10 @@ class LocalDaemonAgentHttpClient:
             self._close_connection()
             if payload.get("error") == "agent_poll_active":
                 raise AgentPollActiveError("work poll is already active")
+            if payload.get("error") == "agent_poll_stale":
+                raise AgentStalePollError("work poll sequence is stale")
+            if payload.get("error") == "agent_poll_sequence_gap":
+                raise AgentPollSequenceGapError("work poll sequence has a gap")
             if payload.get("error") == "agent_transfer_authorization_stale":
                 raise AgentTransferAuthorizationStaleError(
                     "remote transfer authorization is stale"
@@ -3377,6 +3580,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(200, {"ok": True, "result": result})
         except AgentPollActiveError:
             self._reply(409, {"ok": False, "error": "agent_poll_active"})
+        except AgentStalePollError:
+            self._reply(409, {"ok": False, "error": "agent_poll_stale"})
+        except AgentPollSequenceGapError:
+            self._reply(409, {"ok": False, "error": "agent_poll_sequence_gap"})
         except AgentTransferAuthorizationStaleError:
             self._reply(
                 409,
@@ -3435,12 +3642,12 @@ def _dispatch(
     if operation == "poll":
         _exact(
             value,
-            {"session_id", "availability_revision", "poll_id", "wait_timeout_ms"},
+            {"session_id", "availability_revision", "sequence", "wait_timeout_ms"},
         )
         return view.wait_for_work(
             _string(value, "session_id"),
             _string(value, "availability_revision"),
-            poll_id=_string(value, "poll_id"),
+            sequence=_integer(value, "sequence"),
             wait_timeout_ms=_integer(value, "wait_timeout_ms"),
         )
     if operation == "authorize":
@@ -3715,6 +3922,12 @@ def _dispatch_application(
             if not isinstance(request, Mapping):
                 raise QueueServiceError("recovery request is invalid")
             return view.recover_unknown(RecoverUnknownAssignment.from_dict(request))
+        if operation == "recover_time":
+            _exact(value, {"request"})
+            request = value["request"]
+            if not isinstance(request, Mapping):
+                raise QueueServiceError("time recovery request is invalid")
+            return view.recover_time(TimeRecoveryRequest.from_dict(request)).to_dict()
         if operation == "replace_agent_session":
             _exact(value, {"request"})
             request = value["request"]

@@ -588,6 +588,7 @@ def _exercise_mixed_route_run(
             recovery_receipt = operator.recover_unknown(recovery_request)
             assert recovery_receipt["state"] == "closed"
             assert recovery_receipt["retry_allowed"] is False
+            assert recovery_receipt["physical_ownership"] == "retained"
             recovery_evidence = cast(dict[str, object], recovery_receipt["evidence"])
             assert recovery_evidence["kind"] == "slurm_helper"
             assert recovery_evidence["helper_descriptor"] == "test-contained-v1"
@@ -650,13 +651,6 @@ def _exercise_mixed_route_run(
                 retained_after_close,
             )
             assert Path(profile.job_private_file_provider.fixed_path).exists()
-            recovery_status = next(
-                item
-                for item in client.status().controls
-                if item["owner"] == "guarded-recovery"
-            )
-            assert recovery_status["code"] == "CONTAINED"
-            assert recovery_status["physical_ownership"] == "retained"
             assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
             return
         if terminal_boundary is None:

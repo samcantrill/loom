@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import pytest
 
 import loom.queue.local_daemon_execution as local_daemon_execution
 from loom.queue import (
+    AdmissionNotFoundError,
     AgentControl,
     CoordinatorSchedulingReload,
     LocalDaemon,
@@ -32,6 +34,7 @@ from loom.queue import (
     QueueServiceError,
     QueueStorageError,
     ResidentWorkerLaunchProfile,
+    TimeRecoveryRequest,
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.agent_sessions import (
@@ -106,6 +109,145 @@ def test_recovery_request_round_trips_complete_immutable_identity() -> None:
     payload = request.to_dict()
     payload["run_uri"] = "file:///other"
     assert RecoverUnknownAssignment.from_dict(payload).run_uri == "file:///other"
+
+
+def test_operational_admission_reads_are_bounded_and_keyset_ordered(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    with sqlite3.connect(config.control_database) as conn:
+        daemon._coordinator_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    with sqlite3.connect(config.agent_root / "control.sqlite") as conn:
+        daemon._agent_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    daemon._coordinator_lock = object()
+    daemon._agent_lock = object()
+    with daemon._connection() as conn:
+        for sequence, admission_id in (
+            (1, "admission-b"),
+            (2, "admission-a"),
+            (3, "admission-c"),
+        ):
+            conn.execute(
+                "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, enqueue_sequence, cancellation_operation_id, blocked_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+                (
+                    admission_id,
+                    f"item-{sequence}",
+                    daemon._coordinator_id,
+                    f"file:///run-{sequence}",
+                    "digest",
+                    "managed-stage",
+                    "ACTIVE",
+                    "2026-01-01T00:00:00Z",
+                    f"operation-{sequence}",
+                    0,
+                    sequence,
+                ),
+            )
+        conn.commit()
+    with sqlite3.connect(config.execution_database) as conn:
+        conn.execute(
+            "INSERT INTO slurm_stage_assignments(assignment_id, operation_id, "
+            "run_uri, stage_work_id, profile_id, state, identity_json, request_json, "
+            "delivery_json, input_paths_json, issuer_epoch, input_ready, "
+            "submission_eligible, capability_consumed) VALUES "
+            "('slurm-assignment-1', 'slurm-operation-1', 'file:///run-1', "
+            "'slurm-work-1', 'slurm-profile-1', 'running', '{}', '{}', '{}', '{}', "
+            "'epoch-1', 0, 0, 0)"
+        )
+        conn.commit()
+
+    first = daemon.admissions(limit=2)
+    assert [item.admission_id for item in first.admissions] == [
+        "admission-b",
+        "admission-a",
+    ]
+    assert first.next_cursor is not None
+    second = daemon.admissions(limit=2, cursor=first.next_cursor)
+    assert [item.admission_id for item in second.admissions] == ["admission-c"]
+    assert second.next_cursor is None
+
+    with daemon._connection() as conn:
+        for sequence in range(4, 154):
+            conn.execute(
+                "INSERT INTO managed_admissions(admission_id, queue_item_id, "
+                "coordinator_id, run_uri, intent_digest, execution_owner, state, "
+                "accepted_at, authority_operation_id, run_priority, "
+                "enqueue_sequence, cancellation_operation_id, blocked_reason) "
+                "VALUES (?, ?, ?, ?, 'digest', 'managed-stage', 'SUCCEEDED', "
+                "'2026-01-01T00:00:00Z', ?, 0, ?, NULL, NULL)",
+                (
+                    f"terminal-admission-{sequence}",
+                    f"terminal-item-{sequence}",
+                    daemon._coordinator_id,
+                    f"file:///terminal-run-{sequence}",
+                    f"terminal-operation-{sequence}",
+                    sequence,
+                ),
+            )
+        conn.commit()
+    summary = daemon.status()
+    assert summary.active_admissions == 3
+    assert summary.running_assignments == 1
+    assert "admissions" not in summary.to_dict()
+
+    direct_detail = daemon.admission("admission-b")
+    assert direct_detail.admission.admission_id == "admission-b"
+    assert direct_detail.authority["availability"] == "unavailable"
+    assert direct_detail.owners["queue_item_id"] == "item-1"
+    assert cast(Mapping[str, object], direct_detail.owners["assignment"])[
+        "owner"
+    ] == "coordinator-assignments"
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server.start()
+    try:
+        socket_detail = LocalDaemonSocketClient(config.endpoint).admission(
+            "admission-b"
+        )
+        with pytest.raises(AdmissionNotFoundError):
+            LocalDaemonSocketClient(config.endpoint).admission("missing-admission")
+    finally:
+        server.stop()
+    assert socket_detail.admission == direct_detail.admission
+    assert socket_detail.authority["availability"] == "unavailable"
+    assert cast(Mapping[str, object], socket_detail.owners["assignment"])[
+        "owner"
+    ] == "coordinator-assignments"
+    with pytest.raises(AdmissionNotFoundError):
+        daemon.admission("missing-admission")
+
+
+def test_admission_wait_observes_revision_without_status_history(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    with sqlite3.connect(config.control_database) as conn:
+        daemon._coordinator_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    with daemon._connection() as conn:
+        conn.execute(
+            "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, enqueue_sequence, cancellation_operation_id, blocked_reason) VALUES (?, 'item-1', ?, 'file:///run', 'digest', 'managed-stage', 'ACTIVE', '2026-01-01T00:00:00Z', 'operation-1', 0, 1, NULL, NULL)",
+            ("admission-1", daemon._coordinator_id),
+        )
+        conn.commit()
+    changed = daemon.wait_admission("admission-1", expected_revision=0, timeout=0)
+    assert changed.kind.value == "CHANGED"
+    timed_out = daemon.wait_admission(
+        "admission-1", expected_revision=changed.revision, timeout=0
+    )
+    assert timed_out.kind.value == "TIMEOUT"
+    with pytest.raises(QueueConflictError, match="ahead"):
+        daemon.wait_admission(
+            "admission-1", expected_revision=changed.revision + 1, timeout=0
+        )
 
 
 def test_recovery_persists_exact_evidence_before_close_and_replays_it(
@@ -284,7 +426,7 @@ def _config(tmp_path: Path) -> LocalDaemonConfig:
                     "operator-credential",
                     "operator",
                     "operator",
-                    actions=("scheduling_reload",),
+                    actions=("recover_time", "scheduling_reload"),
                 ),
             )
         ),
@@ -318,6 +460,83 @@ def test_initialize_start_restart_preserves_owner_and_rotates_epoch(
     assert second_status.coordinator_epoch != first_status.coordinator_epoch
 
 
+def test_forward_clock_jump_degrades_without_advancing_and_requires_recovery(
+    tmp_path: Path,
+) -> None:
+    now = ["2026-08-29T00:00:00Z"]
+    config = replace(_config(tmp_path), max_accepted_time_step_seconds=10)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, clock=lambda: now[0])
+    initial = daemon.start()
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+    )
+    try:
+        now[0] = "2026-08-29T00:01:00Z"
+        with pytest.raises(QueueServiceError, match="degraded|step"):
+            daemon._accepted_snapshot()  # noqa: SLF001 - exact clock-owner proof
+        status = daemon.status()
+        assert status.accepted_time_health == "degraded"
+        assert status.accepted_time_diagnostic == "clock_step_exceeds_policy"
+        assert not status.scheduling_ready
+        with sqlite3.connect(config.control_database) as conn:
+            state = dict(
+                conn.execute(
+                    "SELECT key, value FROM daemon_metadata WHERE key IN "
+                    "('accepted_time_high_water', 'accepted_time_revision')"
+                )
+            )
+        assert state == {
+            "accepted_time_high_water": "2026-08-29T00:00:00Z",
+            "accepted_time_revision": "1",
+        }
+
+        request = TimeRecoveryRequest(
+            "recover-clock-1",
+            1,
+            initial.coordinator_epoch,
+            "operator verified the site clock",
+        )
+        receipt = operator.recover_time(request)
+        assert receipt.recovered_at == now[0]
+        assert receipt.previous_coordinator_epoch == initial.coordinator_epoch
+        assert receipt.coordinator_epoch != initial.coordinator_epoch
+        assert receipt.time_revision == 2
+        assert operator.recover_time(request) == receipt
+        assert daemon.status().accepted_time_health == "healthy"
+        with pytest.raises(QueueConflictError, match="different content"):
+            operator.recover_time(replace(request, reason="changed assertion"))
+    finally:
+        daemon.stop()
+
+
+def test_regressed_clock_cannot_be_recovered_by_assertion(tmp_path: Path) -> None:
+    now = ["2026-08-29T00:00:10Z"]
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, clock=lambda: now[0])
+    initial = daemon.start()
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+    )
+    try:
+        now[0] = "2026-08-29T00:00:00Z"
+        with pytest.raises(QueueServiceError, match="regressed|degraded"):
+            daemon._accepted_snapshot()  # noqa: SLF001 - exact clock-owner proof
+        with pytest.raises(QueueConflictError, match="still below"):
+            operator.recover_time(
+                TimeRecoveryRequest(
+                    "recover-clock-regressed",
+                    1,
+                    initial.coordinator_epoch,
+                    "clock is still behind",
+                )
+            )
+        assert daemon.status().accepted_time_health == "degraded"
+    finally:
+        daemon.stop()
+
+
 def test_scheduling_reload_is_local_atomic_and_durable(tmp_path: Path) -> None:
     config = _config(tmp_path)
     replacement = replace(
@@ -345,11 +564,7 @@ def test_scheduling_reload_is_local_atomic_and_durable(tmp_path: Path) -> None:
         assert operator.reload_scheduling(request) == receipt
         status = operator.status()
         assert status.scheduling_epoch == receipt["scheduling_epoch"]
-        assert any(
-            item.get("owner") == "coordinator-scheduling"
-            and item.get("state") == "applied"
-            for item in status.controls
-        )
+        assert status.active_admissions == 0
     finally:
         daemon.stop()
 

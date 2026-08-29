@@ -8,6 +8,7 @@ status: runnable
 validation: full
 surface: python_api
 public_surfaces:
+  - cli
   - python_api
 owner_docs:
   - examples/operations/README.md

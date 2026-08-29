@@ -236,10 +236,11 @@ sessions        coordinator-issued ID replay/persist-before-offer, same-session
                 registration intent persisted before send, reconnect,
                 cooperative complete-empty rollover, unresolved or lost-journal
                 refusal, late old-session tombstone
-deployment      explicit initialize versus open-only roots; duplicate-owner
-                locks; authority/coordinator/agent start-order matrix; early
-                agent zero-availability reconnect; no inbound agent listener;
-                fresh current-epoch offer after coordinator restart
+deployment      protected same-config initialize/serve; one-rename coordinator
+                bundle and outbound-root publication; injected failure leaves no
+                requested target; duplicate-owner locks; authority/coordinator/
+                agent start-order matrix; early agent zero-availability reconnect;
+                no inbound agent listener; fresh current-epoch offer after restart
 security        current credential-policy recheck on ordinary and long-poll
                 requests; revoked connection cannot mutate or imply retirement
 cancellation    request before authority outage; effective epoch versus

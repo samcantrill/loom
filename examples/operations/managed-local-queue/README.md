@@ -9,6 +9,27 @@ CPU capacity, and runs the existing assignment saga.
 uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
 ```
 
+The Python example remains useful for embedding and tests. Production role
+processes use the supported protected config surface shown by
+[`coordinator-service.yaml`](coordinator-service.yaml) and
+[`outbound-agent-service.yaml`](outbound-agent-service.yaml):
+
+```sh
+chmod 600 examples/operations/managed-local-queue/*-service.yaml
+loom queue daemon-init examples/operations/managed-local-queue/coordinator-service.yaml
+loom queue agent-init examples/operations/managed-local-queue/outbound-agent-service.yaml
+
+loom queue daemon-serve examples/operations/managed-local-queue/coordinator-service.yaml
+loom queue agent-serve examples/operations/managed-local-queue/outbound-agent-service.yaml
+```
+
+Replace the illustrative TLS files and certificate fingerprint first. The
+coordinator and agent documents deliberately repeat the same remote resident
+profile identity; a mismatch makes the offer ineligible. The coordinator's
+policy maps the verified client certificate to the site-owned logical agent ID,
+pools, and capabilities. The agent cannot grant itself any of those values.
+Paths are resolved relative to each config file.
+
 ## Public Python Surface
 
 The example uses Loom's public local-daemon types from `loom.queue`. Project
@@ -63,3 +84,13 @@ There is no compatibility adapter for `loom.queue.managed_local`, its
 whole-run requests, or its old roots. Existing state is rejected without being
 read, changed, migrated, cancelled, or deleted. Delegated whole-run Slurm is a
 separate owner and is unchanged.
+
+## Deployment Choice
+
+Persistent managed agents and ready-stage SLURM require the coordinator on a
+site-permitted stable host. A ready-stage bootstrap must reach its authenticated
+endpoint while active. The foreground commands do not require that host to be
+an HPC login node. Sites that prohibit persistent services there can use an
+allowed reachable service host, or retain the separate service-less historical
+whole-run queue SLURM, single-job, and `afterok` modes. Those whole-run owners do
+not become Stage 29 managed-stage scheduling merely by using the same project.

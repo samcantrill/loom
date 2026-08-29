@@ -2,17 +2,21 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 12
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p12-operational-bounds-deployment`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; phase path is `<root>/stage-29-p12-operational-bounds-deployment`
-- Base revision: current `origin/develop` after Phase 11 is remotely merged
+- Base revision: `4f2e155d975009bc7a33f814db2034832e6592c2`
 - PR target: `develop`
 - PR title: `feat(queue): bound daemon operations and deployment`
 - Dependencies: remotely merged Phase 11
 - Workflow path: fast; public and durable shapes are fixed by the correction
-- Blockers: predecessor must be remotely merged
+- Blockers: none. The merged Stage 33 Discord coordinator reporter is an
+  explicit optional history consumer: it will traverse bounded admission pages
+  and targeted owner-detail operations while preserving its exact aggregate and
+  active-run observable contract. Each core operation and response remains
+  bounded; the scheduler and summary path never perform that traversal
 
 ## Objective And Context
 
@@ -29,7 +33,7 @@
 
 ## Current Source And Harness
 
-- Relevant files and symbols: `LocalDaemonStatus`, `LocalDaemon.status`,
+- Relevant files and symbols: `DaemonStatus`, `LocalDaemon.status`,
   `LocalDaemon.reconcile_once`, `LocalDaemonSocketServer/Client`, CLI daemon
   handlers/configuration, agent poll request/storage in `agent_sessions.py`,
   `_accepted_time`, `_initialize_root`, `LocalDaemon.initialize`, and existing
@@ -61,6 +65,12 @@ In scope:
   greater revision conflicts, and a missing admission is typed not-found. A
   queue item is resolved once to its admission before entering this operation.
   Socket/direct/CLI surfaces call these operations; wait never polls full status.
+- Adapt the merged Stage 33 Discord sidecar to consume those bounded pages and
+  targeted owner details. It retains exact admission and authority-state counts,
+  active-run stage progress, message limits, and its existing public reporter
+  behavior. The optional sidecar owns traversal and any stable terminal-detail
+  cache; core queue operations gain no Discord-specific query or enlarged
+  summary payload.
 - Make internal reconciliation read only active/nonterminal admissions and
   assignments through small store queries. Detailed terminal history loads only
   on an explicit targeted read.
@@ -105,6 +115,17 @@ In scope:
   same application protocol; no second embedded-only behavior path. These are
   foreground role applications, not a requirement to daemonize on an HPC login
   node or an assertion that every site permits such a host.
+- The exact approved command surface is `loom queue daemon-init CONFIG` and
+  `loom queue daemon-serve CONFIG` for the coordinator bundle, plus
+  `loom queue agent-init CONFIG` and `loom queue agent-serve CONFIG` for the
+  outbound agent. `CONFIG` is one explicit-path, owner-protected, versioned YAML
+  document loaded through Loom's existing trusted configuration machinery and
+  resolving to the corresponding typed coordinator-service or outbound-agent-
+  service configuration. Initialization and serving consume the same document
+  so root bindings and composition fingerprints are revalidated. There is no
+  implicit discovery or environment override. The former setup root/profile
+  flags are removed without compatibility; existing daemon client/operation
+  command names remain unchanged.
 - Update feature, CLI, testing, deployment/recovery guidance and final examples
   for the new schemas, upgrade procedure, endpoints, and service commands. The
   deployment matrix must distinguish this persistent managed mode from the
@@ -250,22 +271,37 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning draft complete; exact base/worktree pending predecessor merge
+- Manager preparation: complete; manifest status, verified predecessor merge,
+  exact `origin/develop` base, dedicated branch/worktree, source seams,
+  fast-path decision, validation commands, and the permitted-service-host versus
+  service-less whole-run SLURM boundary are current
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: pending
-- Refiner: not needed
-- Pre-submit gate: pending
-- Independent review: not needed unless a material residual risk remains
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Implementation: complete at source/test candidate `20d7ca8`; all six slices
+  use the approved hard-cut schemas and supported role commands
+- Refiner: correction 1/3 completed the bounded Discord consumer adaptation and
+  only the targeted-detail support required to preserve its observable contract
+- Pre-submit gate: passed for source/test revision `20d7ca8` and documented tree
+  `a0029ed`; `make validate-pr` passed Ruff, zero-finding Pyright, 2,602 default
+  tests, 155 configuration-extra tests with 3 expected environment skips, and
+  both distribution builds. Fresh `make test-summary` recorded 2,757 categorized
+  passes with zero failures/errors and the same 3 skips
+- Manager review: correction 2/3 fences an abandoned active poll at coordinator
+  epoch restart, includes ready-stage SLURM in the assignment summary, preserves
+  the `DaemonStatus` hard cut, and returns a typed admission-not-found outcome;
+  each finding has causal direct/socket or restart coverage
+- Independent review: not needed; the fast-path manager review found no
+  remaining material residual risk after correction 2/3
+- Blocker corrections: 2/3
+- PR and merge: [#254](https://github.com/samcantrill/loom/pull/254) is open,
+  targets exactly `develop`, is non-draft, and was immediately verified mergeable
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Candidate `20d7ca8` completes bounded `DaemonStatus`, keyset admission list, targeted detail/wait and typed not-found operations; sequenced coordinator/agent poll state; per-admission and accepted-time health/recovery; atomic coordinator-bundle and outbound-agent publication; protected config plus four exact role commands; bounded Discord consumption; and deployment/upgrade guidance. Changes remain confined to queue owners/transports/CLI, the current Discord consumer, their tests, and owned docs/examples. |
+| Tests added or updated | Unit, integration, CLI, transport, service-process, Discord, and documentation/example coverage exercise pagination/wait, constant poll rows and replay errors, health isolation, forward/regressed time and recovery, failure-cut initialization, config binding, foreground outbound reconnect, redaction, and the persistent-managed versus service-less deployment boundary. `make validate-pr` passed 2,602 default and 155 config-extra tests with 3 expected skips; the fresh categorized receipt contains 2,757 passes. |
+| Validated revision/tree state and evidence | Source/test revision `20d7ca8`, documented candidate `a0029ed`; Ruff and Pyright passed, both distribution artifacts built, and `build/test-summary.md` reports package 118, unit 1,849, contract 297, integration 280, E2E 58, and config-extra 155 passes with zero failures/errors. |
+| Validation-relevant changes after evidence | None after `20d7ca8`; roadmap state updates do not change source, tests, dependencies, build, or validation configuration. |
+| PR, review, and merge | [#254](https://github.com/samcantrill/loom/pull/254) targets `develop` with the approved title; manager-local review and local validation pass, and automatic squash merge is pending the final remote-state check. |
+| Residual risk and cleanup | No known phase blocker. Owner-detail traversal remains explicitly opt-in and may be proportional to one admission; the optional Discord process deliberately traverses bounded pages outside scheduler/status paths. Old roots, polls, runtime records, and the old status surface remain unsupported. Dedicated worktree and branch remain until verified merge. |

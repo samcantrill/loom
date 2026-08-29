@@ -23,16 +23,22 @@ from .errors import (
     QueueValidationError,
 )
 from .local_daemon import (
+    AdmissionNotFoundError,
     AgentControl,
     CoordinatorSchedulingReload,
     LocalDaemon,
     LocalDaemonAdmission,
+    LocalDaemonAdmissionDetail,
+    AdmissionPage,
+    AdmissionWaitResult,
+    DaemonStatus,
     LocalDaemonAdmissionRequest,
     LocalDaemonPrincipal,
     LocalDaemonRole,
-    LocalDaemonStatus,
     RecoverUnknownAssignment,
     SessionReplacementRequest,
+    TimeRecoveryReceipt,
+    TimeRecoveryRequest,
 )
 
 
@@ -125,6 +131,41 @@ class LocalDaemonSocketServer:
                 ).to_dict()
             elif operation == "status":
                 result = client.status().to_dict()
+            elif operation == "admissions":
+                limit = payload.get("limit", 100)
+                cursor = payload.get("cursor")
+                if (
+                    isinstance(limit, bool)
+                    or not isinstance(limit, int)
+                    or (cursor is not None and not isinstance(cursor, str))
+                ):
+                    raise QueueServiceError("admission cursor is invalid")
+                result = client.admissions(limit=limit, cursor=cursor).to_dict()
+            elif operation == "admission":
+                admission_id = payload.get("admission_id")
+                if not isinstance(admission_id, str):
+                    raise QueueServiceError("admission ID is invalid")
+                result = client.admission(admission_id).to_dict()
+            elif operation == "admission_for_queue_item":
+                queue_item_id = payload.get("queue_item_id")
+                if not isinstance(queue_item_id, str):
+                    raise QueueServiceError("queue item ID is invalid")
+                result = client.admission_for_queue_item(queue_item_id).to_dict()
+            elif operation == "wait_admission":
+                admission_id = payload.get("admission_id")
+                expected_revision = payload.get("expected_revision")
+                timeout = payload.get("timeout")
+                if (
+                    not isinstance(admission_id, str)
+                    or isinstance(expected_revision, bool)
+                    or not isinstance(expected_revision, int)
+                ):
+                    raise QueueServiceError("admission wait request is invalid")
+                if timeout is not None and not isinstance(timeout, (int, float)):
+                    raise QueueServiceError("admission wait request is invalid")
+                result = client.wait_admission(
+                    admission_id, expected_revision=expected_revision, timeout=timeout
+                ).to_dict()
             elif operation == "cancel":
                 queue_item_id = payload.get("queue_item_id")
                 if not isinstance(queue_item_id, str) or not queue_item_id:
@@ -155,6 +196,13 @@ class LocalDaemonSocketServer:
                         RecoverUnknownAssignment.from_dict(request)
                     )
                 )
+            elif operation == "recover_time":
+                request = payload.get("request")
+                if not isinstance(request, Mapping):
+                    raise QueueServiceError("time recovery request must be a mapping")
+                result = operator.recover_time(
+                    TimeRecoveryRequest.from_dict(request)
+                ).to_dict()
             elif operation == "replace_agent_session":
                 request = payload.get("request")
                 if not isinstance(request, Mapping):
@@ -189,8 +237,60 @@ class LocalDaemonSocketClient:
         result = self._call({"operation": "submit", "request": request.to_dict()})
         return LocalDaemonAdmission.from_dict(result)
 
-    def status(self) -> LocalDaemonStatus:
-        return LocalDaemonStatus.from_dict(self._call({"operation": "status"}))
+    def status(self) -> DaemonStatus:
+        return DaemonStatus.from_dict(self._call({"operation": "status"}))
+
+    def admissions(
+        self, *, limit: int = 100, cursor: str | None = None
+    ) -> AdmissionPage:
+        result = self._call(
+            {"operation": "admissions", "limit": limit, "cursor": cursor}
+        )
+        records = result.get("admissions")
+        next_cursor = result.get("next_cursor")
+        if (
+            not isinstance(records, list)
+            or not all(isinstance(item, Mapping) for item in records)
+            or (next_cursor is not None and not isinstance(next_cursor, str))
+        ):
+            raise QueueServiceError("admission page response is invalid")
+        return AdmissionPage(
+            tuple(LocalDaemonAdmission.from_dict(item) for item in records), next_cursor
+        )
+
+    def admission(self, admission_id: str) -> LocalDaemonAdmissionDetail:
+        return LocalDaemonAdmissionDetail.from_dict(
+            self._call({"operation": "admission", "admission_id": admission_id})
+        )
+
+    def wait_admission(
+        self, admission_id: str, *, expected_revision: int, timeout: float | None = None
+    ) -> AdmissionWaitResult:
+        from .local_daemon import AdmissionWaitKind
+
+        result = self._call(
+            {
+                "operation": "wait_admission",
+                "admission_id": admission_id,
+                "expected_revision": expected_revision,
+                "timeout": timeout,
+            }
+        )
+        kind = result.get("kind")
+        admission = result.get("admission")
+        revision = result.get("revision")
+        if (
+            not isinstance(kind, str)
+            or not isinstance(admission, Mapping)
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+        ):
+            raise QueueServiceError("admission wait response is invalid")
+        return AdmissionWaitResult(
+            AdmissionWaitKind(kind),
+            LocalDaemonAdmission.from_dict(admission),
+            revision,
+        )
 
     def wait(
         self, queue_item_id: str, *, timeout_seconds: float | None = None
@@ -200,26 +300,29 @@ class LocalDaemonSocketClient:
         deadline = (
             None if timeout_seconds is None else time.monotonic() + timeout_seconds
         )
-        terminal = {
-            "SUCCEEDED",
-            "FAILED",
-            "CANCELLED",
-            "BLOCKED",
-        }
+        admission = LocalDaemonAdmission.from_dict(
+            self._call(
+                {
+                    "operation": "admission_for_queue_item",
+                    "queue_item_id": queue_item_id,
+                }
+            )
+        )
+        revision = 0
         while True:
-            for admission in self.status().admissions:
-                if admission.queue_item_id != queue_item_id:
-                    continue
-                if admission.state.value in terminal:
-                    return admission
-                break
-            else:
-                raise QueueServiceError("managed admission was not found")
-            if deadline is not None and time.monotonic() >= deadline:
+            remaining = (
+                None if deadline is None else max(0.0, deadline - time.monotonic())
+            )
+            result = self.wait_admission(
+                admission.admission_id, expected_revision=revision, timeout=remaining
+            )
+            admission, revision = result.admission, result.revision
+            if result.kind.value == "TERMINAL":
+                return admission
+            if result.kind.value == "TIMEOUT":
                 raise TimeoutError(
                     "managed local admission did not reach terminal state"
                 )
-            time.sleep(0.05)
 
     def cancel(self, queue_item_id: str) -> LocalDaemonAdmission:
         result = self._call({"operation": "cancel", "queue_item_id": queue_item_id})
@@ -249,6 +352,13 @@ class LocalDaemonSocketClient:
             self._call({"operation": "recover_unknown", "request": request.to_dict()}),
         )
 
+    def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
+        return TimeRecoveryReceipt.from_dict(
+            self._call(
+                {"operation": "recover_time", "request": request.to_dict()}
+            )
+        )
+
     def replace_agent_session(
         self, request: SessionReplacementRequest
     ) -> Mapping[str, PlainData]:
@@ -271,6 +381,8 @@ class LocalDaemonSocketClient:
             connection.close()
         if response.get("ok") is not True:
             diagnostic = response.get("error")
+            if diagnostic == "local_daemon_admission_not_found":
+                raise AdmissionNotFoundError(diagnostic)
             raise QueueServiceError(
                 diagnostic
                 if isinstance(diagnostic, str)
@@ -283,6 +395,8 @@ class LocalDaemonSocketClient:
 
 
 def _safe_error_code(exc: Exception) -> str:
+    if isinstance(exc, AdmissionNotFoundError):
+        return "local_daemon_admission_not_found"
     if isinstance(exc, QueueConflictError):
         return "local_daemon_conflict"
     if isinstance(exc, QueueValidationError):

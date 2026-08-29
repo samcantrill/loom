@@ -1,12 +1,12 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: production correction active; Phases 10-11 merged and Phase 12 pending;
+Status: production correction active; Phases 10-11 merged and Phase 12 PR open;
 historical blocked evidence remains read-only
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 12 `pending`
+Current phase: Phase 12 `pr_open`
 Blockers: none at the stage level. Phase 9 correction budget 3/3 was exhausted
 after candidate `ef3be2f` implemented only the validated resident-worker service
 hard cut. Fresh Phase 9A selectively reused that source change and attempted the
@@ -703,7 +703,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 9F | `session-replacement-recovery-operations` | merged | `docs/roadmap/stage-29/phases/session-replacement-recovery-operations.md` | `agent/stage-29-p9f-session-replacement-recovery-operations` | [#249](https://github.com/samcantrill/loom/pull/249) merged | Complete different-session replacement; old-root provider-release proof before capacity restoration; fresh coordinator identities for changed withholding; stale old-session fact rejection; joined status and authenticated operations; operational guidance; final Stage 29 validation | Required review findings closed by correction 2/3; 179 phase tests, the fresh local gate, and 2,720 categorized tests passed; squash-merged as `a6cd482`. |
 | 10 | `global-scheduler-assignment-concurrency` | merged | `docs/roadmap/stage-29/phases/global-scheduler-assignment-concurrency.md` | `agent/stage-29-p10-global-scheduler-assignment-concurrency` | [#250](https://github.com/samcantrill/loom/pull/250) merged | Protected-policy run priority; durable enqueue sequence; globally ordered 256-item ready window; all-admission projection; assignment-keyed asynchronous local/remote/SLURM launch and reconciliation; same-run concurrency; per-admission reconciliation health | Fresh local gates and manager-local review passed at source/test revision `23dec2d`; squash-merged as `c2dab20`. |
 | 11 | `resident-agent-correctness-security` | merged | `docs/roadmap/stage-29/phases/resident-agent-correctness-security.md` | `agent/stage-29-p11-resident-agent-correctness-security` | [#253](https://github.com/samcantrill/loom/pull/253) merged | Mandatory managed execution requirement; one candidate per agent resident profile; exact pinned profile target; allowlisted worker environment; explicit agent provider composition; planner/provider contract startup validation; public provider conformance check | Fresh full validation, durable test summary, and manager-local review passed; squash-merged as `5fac22c`. |
-| 12 | `operational-bounds-deployment` | pending | `docs/roadmap/stage-29/phases/operational-bounds-deployment.md` | `agent/stage-29-p12-operational-bounds-deployment` | not opened | Constant-shape summary status; ordered bounded/cursored admission list; targeted revision-aware detail/wait; one sequenced replay state per session; fenced accepted-time health/recovery; atomic local deployment-bundle and remote-agent-root publication; supported protected coordinator config and agent service command for permitted service hosts; persistent-managed versus service-less whole-run SLURM guidance | Make internal and public operations bounded, keep failures correctly scoped, fail closed on time anomalies, and expose a complete supported coordinator/agent deployment path without presenting a login-node service as the universal HPC route. |
+| 12 | `operational-bounds-deployment` | pr_open | `docs/roadmap/stage-29/phases/operational-bounds-deployment.md` | `agent/stage-29-p12-operational-bounds-deployment` | [#254](https://github.com/samcantrill/loom/pull/254) open | Constant-shape summary status; ordered bounded/cursored admission list; targeted revision-aware detail/wait; one sequenced replay state per session; fenced accepted-time health/recovery; atomic local deployment-bundle and remote-agent-root publication; supported protected coordinator config and agent service command for permitted service hosts; persistent-managed versus service-less whole-run SLURM guidance | Candidate `20d7ca8` is complete. Correction 1/3 adapted the Discord reporter through bounded pages/details; manager correction 2/3 fenced abandoned polls on coordinator restart, completed assignment counts, and closed the typed hard-cut public surface. Fresh full validation and the 2,757-pass categorized receipt are clean; PR #254 is verified against `develop`. |
 
 Phase 1 is the pure-kernel/preparation/projection architectural gate: its only
 new authoritative lifecycle operation is idempotent creation of an unassigned

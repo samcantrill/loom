@@ -11,10 +11,18 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TextIO
 
-from loom.queue import LocalDaemonSocketClient, LocalDaemonStatus
+from loom.queue import (
+    DaemonStatus,
+    LocalDaemonAdmissionDetail,
+    LocalDaemonSocketClient,
+)
 
 from .coordinator import DiscordCoordinatorReporter
-from .sink import DEFAULT_TIMEOUT_SECONDS, DiscordWebhookError, WEBHOOK_URL_ENVIRONMENT_VARIABLE
+from .sink import (
+    DEFAULT_TIMEOUT_SECONDS,
+    DiscordWebhookError,
+    WEBHOOK_URL_ENVIRONMENT_VARIABLE,
+)
 
 
 DEFAULT_POLL_INTERVAL_SECONDS = 60.0
@@ -24,7 +32,9 @@ DEFAULT_HEARTBEAT_SECONDS = 900.0
 def main(
     argv: Sequence[str] | None = None,
     *,
-    client_factory: Callable[[str | Path], LocalDaemonSocketClient] = LocalDaemonSocketClient,
+    client_factory: Callable[
+        [str | Path], LocalDaemonSocketClient
+    ] = LocalDaemonSocketClient,
     reporter_factory: Callable[[str, float], DiscordCoordinatorReporter] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
@@ -54,9 +64,7 @@ def main(
     last_attempt = monotonic()
     while True:
         force = monotonic() - last_attempt >= namespace.heartbeat_seconds
-        _result, attempted = _report_once(
-            client, reporter, force=force, stderr=stderr
-        )
+        _result, attempted = _report_once(client, reporter, force=force, stderr=stderr)
         if attempted:
             last_attempt = monotonic()
         try:
@@ -73,12 +81,13 @@ def _report_once(
     stderr: TextIO,
 ) -> tuple[int, bool]:
     try:
-        status: LocalDaemonStatus = client.status()
+        status: DaemonStatus = client.status()
+        details = _collect_admission_details(client)
     except Exception:
         print("Discord coordinator status read failed", file=stderr)
         return 1, False
     try:
-        attempted = reporter.report(status, force=force)
+        attempted = reporter.report(status, details, force=force)
     except DiscordWebhookError as exc:
         print(f"Discord coordinator report delivery failed: {exc}", file=stderr)
         return 1, True
@@ -86,6 +95,21 @@ def _report_once(
         print("Discord coordinator report delivery failed", file=stderr)
         return 1, True
     return 0, attempted
+
+
+def _collect_admission_details(
+    client: LocalDaemonSocketClient,
+) -> tuple[LocalDaemonAdmissionDetail, ...]:
+    """Traverse the bounded coordinator list and read each owner detail."""
+
+    cursor: str | None = None
+    details: list[LocalDaemonAdmissionDetail] = []
+    while True:
+        page = client.admissions(limit=100, cursor=cursor)
+        details.extend(client.admission(item.admission_id) for item in page.admissions)
+        if page.next_cursor is None:
+            return tuple(details)
+        cursor = page.next_cursor
 
 
 def _parser() -> argparse.ArgumentParser:

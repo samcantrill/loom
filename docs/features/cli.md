@@ -25,6 +25,14 @@ V23 adds `loom queue status CONFIG --pool POOL`, which renders a safe selected
 pool summary through the existing queue-status envelope. CLI formatting does
 not inspect dispatch evidence or make scheduling decisions.
 
+V29 adds the protected persistent-role surface. `loom queue daemon-init CONFIG`
+and `daemon-serve CONFIG` own one coordinator/embedded-agent deployment bundle;
+`loom queue agent-init CONFIG` and `agent-serve CONFIG` own one outbound-agent
+root. The same explicit owner-protected versioned YAML is required for init and
+serve, with no discovery or environment override. Former daemon root/profile
+setup flags are a hard cut. Existing client and operator commands retain their
+endpoint-based surface, including the guarded `daemon-time-recover` operation.
+
 V12 adds portable run exchange commands under the existing `loom runs` group:
 `loom runs export`, `loom runs inspect`, and `loom runs import`. These commands
 are thin wrappers over public `loom.runs` bundle APIs. They do not parse archive

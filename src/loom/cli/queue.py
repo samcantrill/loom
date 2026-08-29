@@ -149,19 +149,35 @@ def register_subparser(
 
     daemon_init = queue_subparsers.add_parser(
         "daemon-init",
-        help="initialize fresh managed-local daemon roots",
+        help="initialize one protected coordinator deployment bundle",
     )
-    _add_daemon_root_options(daemon_init)
+    _add_config_argument(daemon_init)
     _add_output_options(daemon_init)
     daemon_init.set_defaults(handler=handle_daemon_init)
 
     daemon_serve = queue_subparsers.add_parser(
         "daemon-serve",
-        help="serve one initialized managed-local daemon",
+        help="serve one initialized coordinator deployment bundle",
     )
-    _add_daemon_root_options(daemon_serve)
+    _add_config_argument(daemon_serve)
     _add_output_options(daemon_serve)
     daemon_serve.set_defaults(handler=handle_daemon_serve)
+
+    agent_init = queue_subparsers.add_parser(
+        "agent-init",
+        help="initialize one protected outbound-agent root",
+    )
+    _add_config_argument(agent_init)
+    _add_output_options(agent_init)
+    agent_init.set_defaults(handler=handle_agent_init)
+
+    agent_serve = queue_subparsers.add_parser(
+        "agent-serve",
+        help="serve one initialized outbound-agent root",
+    )
+    _add_config_argument(agent_serve)
+    _add_output_options(agent_serve)
+    agent_serve.set_defaults(handler=handle_agent_serve)
 
     for command, help_text, handler in (
         ("daemon-submit", "submit one persisted run", handle_daemon_submit),
@@ -205,6 +221,18 @@ def register_subparser(
     scheduling_reload.add_argument("--reason", default="cli-scheduling-reload")
     scheduling_reload.set_defaults(handler=handle_daemon_scheduling_reload)
     _add_output_options(scheduling_reload)
+
+    time_recovery = queue_subparsers.add_parser(
+        "daemon-time-recover",
+        help="recover one exact degraded coordinator time revision",
+    )
+    time_recovery.add_argument("--endpoint", required=True, type=Path)
+    time_recovery.add_argument("--operation-id", required=True)
+    time_recovery.add_argument("--expected-time-revision", required=True, type=int)
+    time_recovery.add_argument("--expected-coordinator-epoch", required=True)
+    time_recovery.add_argument("--reason", default="cli-time-recovery")
+    time_recovery.set_defaults(handler=handle_daemon_time_recover)
+    _add_output_options(time_recovery)
 
     replacement = queue_subparsers.add_parser(
         "daemon-replace-agent-session",
@@ -324,44 +352,60 @@ def handle_drain_foreground(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_init(namespace: argparse.Namespace) -> int:
-    """Initialize fresh role roots without starting a process owner."""
+    """Atomically initialize one complete coordinator deployment bundle."""
 
     from loom.queue import LocalDaemon
+    from loom.queue.deployment import load_coordinator_service_config
 
-    config = _daemon_config(namespace)
     try:
-        LocalDaemon.initialize(config)
+        service = load_coordinator_service_config(namespace.config)
+        LocalDaemon.initialize_deployment(service.daemon)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(
         namespace,
         {
             "operation": "initialize",
-            "coordinator_root": str(config.coordinator_root),
-            "agent_root": str(config.agent_root),
-            "run_store_root": str(config.run_store_root),
+            "deployment_root": str(service.daemon.deployment_root),
+            "coordinator_root": str(service.daemon.coordinator_root),
+            "agent_root": str(service.daemon.agent_root),
+            "run_store_root": str(service.daemon.run_store_root),
         },
     )
 
 
 def handle_daemon_serve(namespace: argparse.Namespace) -> int:
-    """Run the persistent owner and its owner-only Unix endpoint."""
+    """Run the persistent coordinator and its configured endpoints."""
 
     from threading import Event
 
     from loom.queue import LocalDaemon, LocalDaemonSocketServer
+    from loom.queue.agent_session_transport import LocalDaemonAgentHttpServer
+    from loom.queue.deployment import load_coordinator_service_config
 
-    config = _daemon_config(namespace)
+    try:
+        service = load_coordinator_service_config(namespace.config)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    config = service.daemon
     daemon = LocalDaemon(config)
     server = LocalDaemonSocketServer(daemon, config.endpoint)
+    agent_server = (
+        None
+        if service.agent_server is None
+        else LocalDaemonAgentHttpServer(daemon, service.agent_server)
+    )
     try:
         status = daemon.start()
         server.start()
+        if agent_server is not None:
+            agent_server.start()
         _emit_daemon_payload(
             namespace,
             {
                 "operation": "serve",
                 "endpoint": str(config.endpoint),
+                "agent_port": None if agent_server is None else agent_server.port,
                 "coordinator_id": status.coordinator_id,
                 "coordinator_epoch": status.coordinator_epoch,
             },
@@ -370,8 +414,57 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     finally:
+        if agent_server is not None:
+            agent_server.stop()
         server.stop()
         daemon.stop()
+    return int(ExitCode.SUCCESS)
+
+
+def handle_agent_init(namespace: argparse.Namespace) -> int:
+    """Atomically initialize one complete outbound-agent role root."""
+
+    from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
+    from loom.queue.deployment import load_outbound_agent_service_config
+
+    try:
+        service = load_outbound_agent_service_config(namespace.config)
+        LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(
+        namespace,
+        {
+            "operation": "agent-initialize",
+            "agent_root": str(service.client.agent_root),
+            "coordinator_url": service.client.url,
+        },
+    )
+
+
+def handle_agent_serve(namespace: argparse.Namespace) -> int:
+    """Run one foreground outbound agent with bounded reconnect."""
+
+    from threading import Event
+
+    from loom.queue.deployment import (
+        load_outbound_agent_service_config,
+        run_outbound_agent_service,
+    )
+
+    try:
+        service = load_outbound_agent_service_config(namespace.config)
+        _emit_daemon_payload(
+            namespace,
+            {
+                "operation": "agent-serve",
+                "agent_root": str(service.client.agent_root),
+                "coordinator_url": service.client.url,
+            },
+        )
+        run_outbound_agent_service(service, stop=Event())
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
     return int(ExitCode.SUCCESS)
 
 
@@ -456,6 +549,23 @@ def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result)
+
+
+def handle_daemon_time_recover(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient, TimeRecoveryRequest
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).recover_time(
+            TimeRecoveryRequest(
+                operation_id=namespace.operation_id,
+                expected_time_revision=namespace.expected_time_revision,
+                expected_coordinator_epoch=namespace.expected_coordinator_epoch,
+                reason=namespace.reason,
+            )
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_daemon_replace_agent_session(namespace: argparse.Namespace) -> int:
@@ -695,32 +805,6 @@ def _explicit_authority_config_from_namespace(
     return authority_config_from_namespace(namespace)
 
 
-def _daemon_config(namespace: argparse.Namespace):  # type: ignore[no-untyped-def]
-    from loom.queue import LocalDaemonConfig, ResidentWorkerLaunchProfile
-    from loom.queue._remote_stage_execution import ResidentProfileDescriptor
-
-    descriptor = ResidentProfileDescriptor(
-        profile_id=namespace.resident_profile_id,
-        revision=namespace.resident_profile_revision,
-        project_fingerprint=namespace.resident_project_fingerprint,
-        environment_fingerprint=namespace.resident_environment_fingerprint,
-        executor_fingerprint=namespace.resident_executor_fingerprint,
-    )
-
-    return LocalDaemonConfig(
-        coordinator_root=namespace.coordinator_root,
-        agent_root=namespace.agent_root,
-        run_store_root=namespace.run_store_root,
-        resident_worker_launch_profile=ResidentWorkerLaunchProfile(
-            project_root=namespace.resident_project_root,
-            python_executable=namespace.resident_python_executable,
-            descriptor=descriptor.to_dict(),
-        ),
-        machine_id=namespace.machine_id,
-        cpu_capacity=namespace.cpu_capacity,
-    )
-
-
 def _emit_daemon_payload(
     namespace: argparse.Namespace, payload: "Mapping[str, PlainData]"
 ) -> int:
@@ -751,21 +835,6 @@ def _add_config_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("config", metavar="CONFIG", help="queue config path")
 
 
-def _add_daemon_root_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--coordinator-root", required=True, type=Path)
-    parser.add_argument("--agent-root", required=True, type=Path)
-    parser.add_argument("--run-store-root", required=True, type=Path)
-    parser.add_argument("--machine-id", default="machine-A")
-    parser.add_argument("--cpu-capacity", type=int, default=1)
-    parser.add_argument("--resident-project-root", required=True, type=Path)
-    parser.add_argument("--resident-python-executable", required=True, type=Path)
-    parser.add_argument("--resident-profile-id", required=True)
-    parser.add_argument("--resident-profile-revision", required=True)
-    parser.add_argument("--resident-project-fingerprint", required=True)
-    parser.add_argument("--resident-environment-fingerprint", required=True)
-    parser.add_argument("--resident-executor-fingerprint", required=True)
-
-
 def _add_output_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--format",
@@ -792,6 +861,8 @@ __all__ = [
     "build_queue_drain_result",
     "build_queue_preflight_result",
     "build_queue_status_result",
+    "handle_agent_init",
+    "handle_agent_serve",
     "handle_cancel",
     "handle_drain_foreground",
     "handle_daemon_cancel",
@@ -800,6 +871,7 @@ __all__ = [
     "handle_daemon_serve",
     "handle_daemon_status",
     "handle_daemon_scheduling_reload",
+    "handle_daemon_time_recover",
     "handle_daemon_replace_agent_session",
     "handle_daemon_recover_unknown",
     "handle_daemon_submit",

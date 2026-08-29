@@ -201,30 +201,26 @@ def test_delivered_poll_atomically_retains_an_unresolved_assignment(
     poll_request = {
         "session_id": "session-1",
         "availability_revision": "availability-1",
-        "poll_id": "poll-1",
+        "sequence": 1,
         "wait_timeout_ms": 1,
     }
     with sqlite3.connect(agent_root / "control.sqlite") as conn:
         conn.execute(
-            "INSERT INTO agent_mutation_intents(operation, operation_id, digest, "
-            "request_json, result_json) VALUES ('poll', 'poll-1', ?, ?, NULL)",
-            ("0" * 64, json.dumps(poll_request)),
-        )
-        conn.execute(
-            "INSERT INTO agent_polls_local(session_id, availability_revision, "
-            "poll_id, state) VALUES ('session-1', 'availability-1', "
-            "'poll-1', 'PENDING')"
+            "INSERT INTO agent_poll_state_local(session_id, availability_revision, "
+            "sequence, request_digest, state, result_json) VALUES "
+            "('session-1', 'availability-1', 1, ?, 'PENDING', NULL)",
+            (hashlib.sha256(json.dumps(poll_request).encode()).hexdigest(),),
         )
         conn.commit()
 
     journal = _RemoteAgentJournal(agent_root)
     try:
-        journal.complete_mutation(
-            "poll",
-            "poll-1",
+        journal.complete_poll(
+            "session-1",
+            1,
             {
                 "result": "assignment",
-                "poll_id": "poll-1",
+                "sequence": 1,
                 "coordinator_epoch": "epoch-1",
                 "request": request.to_dict(),
             },
@@ -239,7 +235,8 @@ def test_delivered_poll_atomically_retains_an_unresolved_assignment(
             ("session-1", request.assignment_id),
         ).fetchone()
         poll_state = conn.execute(
-            "SELECT state FROM agent_polls_local WHERE poll_id = 'poll-1'"
+            "SELECT state FROM agent_poll_state_local "
+            "WHERE session_id = 'session-1' AND sequence = 1"
         ).fetchone()
     assert reference == (0,)
     assert poll_state == ("DELIVERED",)
@@ -544,7 +541,7 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
                 input_paths={"input-1": input_path},
             )
         delivered = view.wait_for_work(
-            session.session_id, "availability-1", poll_id="poll-1", wait_timeout_ms=1
+            session.session_id, "availability-1", sequence=1, wait_timeout_ms=1
         )
         assert delivered["result"] == "assignment"
         assert (
