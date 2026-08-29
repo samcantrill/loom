@@ -7,7 +7,7 @@ or session selector from the HTTP path as transport identity.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 import fcntl
 import hashlib
@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.queue._managed_local import (
+    AgentResourceProvider,
     AssignmentState,
     AtomResourceProvider,
     ClaimCommand,
@@ -37,17 +38,20 @@ from loom.queue._managed_local import (
     SQLiteAgentJournal,
     GpuResourceProvider,
     _cancelled_worker_result,
+    _compose_agent_resource_providers,
     _configured_provider_descriptor,
+    _worker_environment,
 )
 from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.stores.atomic import atomic_write_bytes
-from loom.scheduling import SchedulingComponentDescriptor
+from loom.scheduling import CapacityAtom
 
 from .agent_sessions import (
     AgentAssignmentControl,
     AgentOffer,
+    AgentProviderDescriptor,
     AgentProviderReleaseProof,
     AgentControl,
     AgentControlEffect,
@@ -166,6 +170,10 @@ class AgentTlsClientConfig:
     private_key_path: Path
     agent_root: Path | None = None
     resident_profiles: tuple[ResidentExecutionProfile, ...] = ()
+    agent_resource_provider_factory: (
+        Callable[[str, ResidentExecutionProfile], Sequence[AgentResourceProvider]]
+        | None
+    ) = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
@@ -203,7 +211,53 @@ class AgentTlsClientConfig:
             )
         if profiles and self.agent_root is None:
             raise QueueServiceError("resident execution requires an agent root")
+        factory = self.agent_resource_provider_factory or _default_remote_providers
+        if not callable(factory):
+            raise QueueServiceError("agent resource provider factory is invalid")
         object.__setattr__(self, "resident_profiles", profiles)
+        object.__setattr__(self, "agent_resource_provider_factory", factory)
+
+
+def _default_remote_providers(
+    agent_id: str, profile: ResidentExecutionProfile
+) -> tuple[AgentResourceProvider, ...]:
+    """Protected compatibility composition for one resident profile."""
+
+    planners = {
+        "cpu": CpuResourcePlanner(),
+        "memory": MemoryResourcePlanner(),
+        "gpu": GpuResourcePlanner(),
+    }
+    atoms = profile.capacity_atoms(agent_id)
+    result: dict[str, AgentResourceProvider] = {}
+    for kind in {atom.owner_resource_kind for atom in atoms}:
+        if kind == "gpu":
+            continue
+        provider_atoms = tuple(
+            atom for atom in atoms if atom.owner_resource_kind == kind
+        )
+        result[kind] = AtomResourceProvider(
+            _configured_provider_descriptor(kind, provider_atoms),
+            planners[kind].claim_contracts,
+            provider_atoms,
+        )
+    if profile.gpu_devices:
+        bindings = {
+            f"{agent_id}:{device.descriptor.device_id}": device.binding_value
+            for device in profile.gpu_devices
+            if device.descriptor.healthy
+        }
+        result["gpu"] = GpuResourceProvider(
+            planners["gpu"].claim_contracts,
+            tuple(
+                atom
+                for atom in atoms
+                if atom.owner_resource_kind == "gpu"
+                and atom.local_capacity_key in bindings
+            ),
+            bindings=bindings,
+        )
+    return tuple(result[kind] for kind in sorted(result))
 
 
 def _resident_provider_descriptors(
@@ -211,12 +265,17 @@ def _resident_provider_descriptors(
     agent_id: str,
     *,
     resource_kinds: set[str] | None = None,
-) -> tuple[SchedulingComponentDescriptor, ...]:
+) -> tuple[AgentProviderDescriptor, ...]:
     """Derive safe provider identities from one protected resident profile."""
 
     atoms = profile.capacity_atoms(agent_id)
     kinds = resource_kinds or {atom.owner_resource_kind for atom in atoms}
-    result: list[SchedulingComponentDescriptor] = []
+    result: list[AgentProviderDescriptor] = []
+    planners = {
+        "cpu": CpuResourcePlanner(),
+        "memory": MemoryResourcePlanner(),
+        "gpu": GpuResourcePlanner(),
+    }
     for kind in sorted(kinds):
         provider_atoms = tuple(
             atom for atom in atoms if atom.owner_resource_kind == kind
@@ -232,7 +291,12 @@ def _resident_provider_descriptors(
                 atom for atom in provider_atoms if atom.local_capacity_key in bindings
             )
         result.append(
-            _configured_provider_descriptor(kind, provider_atoms, bindings=bindings)
+            AgentProviderDescriptor(
+                _configured_provider_descriptor(
+                    kind, provider_atoms, bindings=bindings
+                ),
+                planners[kind].claim_contracts,
+            )
         )
     return tuple(result)
 
@@ -1190,7 +1254,11 @@ class LocalDaemonAgentHttpClient:
         )
         self._runtime_agent_id: str | None = None
         self._runtime_provider_key: str | None = None
-        self._providers: dict[str, AtomResourceProvider] = {}
+        self._providers: dict[str, AgentResourceProvider] = {}
+        self._configured_provider_members: tuple[AgentResourceProvider, ...] | None = (
+            None
+        )
+        self._configured_provider_agent_id: str | None = None
         self._cancelled_assignments: set[str] = set(
             self._journal.contained_assignment_ids()
             if self._journal is not None
@@ -1280,7 +1348,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v7",
+                    "agent-sessions-v8",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -1366,12 +1434,32 @@ class LocalDaemonAgentHttpClient:
                 for atom in offer.gpu_atoms
             ):
                 raise QueueConflictError("offer exceeds the resident GPU capacity")
-            expected_provider_descriptors = _resident_provider_descriptors(
-                capacity,
+            factory = self._config.agent_resource_provider_factory
+            if factory is None:
+                raise QueueConflictError("remote agent provider composition is missing")
+            self._provider_composition(
                 self._require_journal().session(offer.session_id).agent_id,
-                resource_kinds={item.kind for item in offer.provider_descriptors},
+                capacity,
             )
-            if offer.provider_descriptors != expected_provider_descriptors:
+            self._validate_offer_provider_capacity(
+                offer,
+                self._require_journal().session(offer.session_id).agent_id,
+            )
+            members = self._configured_provider_members
+            if members is None:
+                raise QueueConflictError("remote agent provider composition is missing")
+            expected_provider_composition = tuple(
+                sorted(
+                    (
+                        AgentProviderDescriptor(
+                            provider.descriptor, provider.claim_contracts
+                        )
+                        for provider in members
+                    ),
+                    key=lambda item: item.descriptor.key,
+                )
+            )
+            if offer.provider_composition != expected_provider_composition:
                 raise QueueConflictError(
                     "offer provider identity differs from resident configuration"
                 )
@@ -2288,24 +2376,9 @@ class LocalDaemonAgentHttpClient:
         }:
 
             def start_supervisor_launch() -> str:
-                environment = {
-                    key: value
-                    for key, value in os.environ.items()
-                    if not any(
-                        marker in key.upper()
-                        for marker in (
-                            "TOKEN",
-                            "SECRET",
-                            "CREDENTIAL",
-                            "PASSWORD",
-                            "KEY",
-                        )
-                    )
-                }
-                for command in commands:
-                    provider = providers[command.claim.resource_kind]
-                    if isinstance(provider, GpuResourceProvider):
-                        environment.update(provider.worker_environment(command))
+                environment = _worker_environment(
+                    profile.launch_profile, workspace.root, commands, providers
+                )
                 nonlocal launch
                 launch = ResidentWorkerLaunch(
                     supervisor_id=supervisor.supervisor_id,
@@ -2608,7 +2681,7 @@ class LocalDaemonAgentHttpClient:
         workspace: _ResidentAssignmentWorkspace,
         assignment: ManagedAssignment,
         commands: tuple[ClaimCommand, ...],
-        providers: Mapping[str, AtomResourceProvider],
+        providers: Mapping[str, AgentResourceProvider],
         execution_journal: SQLiteAgentJournal,
         *,
         fence: str,
@@ -2723,7 +2796,7 @@ class LocalDaemonAgentHttpClient:
         assignment_id: str,
         assignment: ManagedAssignment,
         commands: tuple[ClaimCommand, ...],
-        providers: Mapping[str, AtomResourceProvider],
+        providers: Mapping[str, AgentResourceProvider],
         execution_journal: SQLiteAgentJournal,
     ) -> Mapping[str, PlainData] | None:
         for _ in range(32):
@@ -2764,7 +2837,7 @@ class LocalDaemonAgentHttpClient:
         session: AgentSession,
         assignment: ManagedAssignment,
         commands: tuple[ClaimCommand, ...],
-        providers: Mapping[str, AtomResourceProvider],
+        providers: Mapping[str, AgentResourceProvider],
         execution_journal: SQLiteAgentJournal,
     ) -> str:
         """Release the exact composite and persist fresh capacity before RPC."""
@@ -2810,7 +2883,7 @@ class LocalDaemonAgentHttpClient:
     def _availability_revision(
         session: AgentSession,
         assignment_id: str,
-        providers: Mapping[str, AtomResourceProvider],
+        providers: Mapping[str, AgentResourceProvider],
     ) -> str:
         observations = {
             kind: provider.observe(
@@ -2950,54 +3023,16 @@ class LocalDaemonAgentHttpClient:
 
     def _runtime_owners(
         self, session: AgentSession, profile: ResidentExecutionProfile
-    ) -> tuple[dict[str, AtomResourceProvider], SQLiteAgentJournal]:
+    ) -> tuple[dict[str, AgentResourceProvider], SQLiteAgentJournal]:
         journal = self._execution_journal
         if journal is None:
             raise QueueServiceError("remote execution journal is required")
         if self._runtime_agent_id is None:
             self._runtime_agent_id = session.agent_id
-            self._runtime_provider_key = _resident_provider_key(profile)
-            planners = {
-                "cpu": CpuResourcePlanner(),
-                "memory": MemoryResourcePlanner(),
-                "gpu": GpuResourcePlanner(),
-            }
-            atoms = profile.capacity_atoms(session.agent_id)
-            self._providers = {}
-            for kind in {atom.owner_resource_kind for atom in atoms}:
-                if kind == "gpu":
-                    continue
-                provider_atoms = tuple(
-                    atom for atom in atoms if atom.owner_resource_kind == kind
-                )
-                self._providers[kind] = AtomResourceProvider(
-                    _configured_provider_descriptor(kind, provider_atoms),
-                    planners[kind].claim_contracts,
-                    provider_atoms,
-                )
-            if profile.gpu_devices:
-                healthy_gpu_keys = {
-                    f"{session.agent_id}:{device.descriptor.device_id}"
-                    for device in profile.gpu_devices
-                    if device.descriptor.healthy
-                }
-                gpu_atoms = tuple(
-                    atom
-                    for atom in atoms
-                    if atom.owner_resource_kind == "gpu"
-                    and atom.local_capacity_key in healthy_gpu_keys
-                )
-                self._providers["gpu"] = GpuResourceProvider(
-                    planners["gpu"].claim_contracts,
-                    gpu_atoms,
-                    bindings={
-                        f"{session.agent_id}:{device.descriptor.device_id}": (
-                            device.binding_value
-                        )
-                        for device in profile.gpu_devices
-                        if device.descriptor.healthy
-                    },
-                )
+            self._providers = self._provider_composition(session.agent_id, profile)
+            self._runtime_provider_key = _agent_provider_composition_key(
+                self._providers.values()
+            )
             for command in journal.retained_claim_commands():
                 provider = self._providers.get(command.claim.resource_kind)
                 if provider is None:
@@ -3007,7 +3042,9 @@ class LocalDaemonAgentHttpClient:
                 provider.restore_capacity_holding(command)
         elif self._runtime_agent_id != session.agent_id:
             raise QueueConflictError("remote runtime agent identity changed")
-        elif self._runtime_provider_key != _resident_provider_key(profile):
+        elif self._runtime_provider_key != _agent_provider_composition_key(
+            self._providers.values()
+        ):
             raise QueueConflictError(
                 "resident provider configuration changed while claims are retained"
             )
@@ -3020,6 +3057,62 @@ class LocalDaemonAgentHttpClient:
         ):
             raise QueueConflictError("resident provider composition changed")
         return self._providers, journal
+
+    def _provider_composition(
+        self, agent_id: str, capacity_profile: ResidentExecutionProfile
+    ) -> dict[str, AgentResourceProvider]:
+        if self._configured_provider_members is None:
+            factory = self._config.agent_resource_provider_factory
+            if factory is None:
+                raise QueueServiceError("remote agent provider composition is missing")
+            members = tuple(factory(agent_id, capacity_profile))
+            try:
+                providers = _compose_agent_resource_providers(members)
+            except Exception as exc:
+                raise QueueConflictError(
+                    "remote agent provider composition is invalid"
+                ) from exc
+            self._configured_provider_members = members
+            self._configured_provider_agent_id = agent_id
+            self._providers = providers
+        elif self._configured_provider_agent_id != agent_id:
+            raise QueueConflictError("remote agent provider identity changed")
+        return dict(self._providers)
+
+    def _validate_offer_provider_capacity(
+        self, offer: AgentOffer, agent_id: str
+    ) -> None:
+        observed: list[CapacityAtom] = []
+        for kind, provider in sorted(self._providers.items()):
+            result = provider.observe(
+                ObserveRequest(
+                    agent_id,
+                    offer.session_id,
+                    f"offer:{offer.availability_revision}:observe:{kind}",
+                )
+            )
+            for atom in result.atoms:
+                prefix = f"{agent_id}:"
+                local_key = atom.local_capacity_key
+                if local_key.startswith(prefix):
+                    local_key = local_key[len(prefix) :]
+                observed.append(
+                    CapacityAtom(
+                        atom.owner_resource_kind,
+                        local_key,
+                        atom.amount,
+                        (
+                            "byte"
+                            if atom.owner_resource_kind == "memory" and atom.unit == "B"
+                            else atom.unit
+                        ),
+                        atom.granularity,
+                    )
+                )
+        if tuple(sorted(observed, key=lambda item: item.key)) != offer.capacity_atoms:
+            raise QueueConflictError(
+                "offer capacity differs from configured provider observations"
+            )
 
     def _profile_for_descriptor(
         self, descriptor: object
@@ -4012,18 +4105,23 @@ def _resident_launch_profile_set(
     )
 
 
-def _resident_provider_key(profile: ResidentExecutionProfile) -> str:
+def _agent_provider_composition_key(
+    providers: Iterable[AgentResourceProvider],
+) -> str:
     return _agent_revision(
         "resident-provider",
         {
-            "cpu_capacity": profile.cpu_capacity,
-            "memory_capacity_bytes": profile.memory_capacity_bytes,
-            "gpu_devices": [
+            "providers": [
                 {
-                    "descriptor": device.descriptor.to_dict(),
-                    "binding_value": device.binding_value,
+                    "descriptor": provider.descriptor.to_dict(),
+                    "claim_contracts": [
+                        contract.to_dict()
+                        for contract in sorted(
+                            provider.claim_contracts, key=lambda item: item.key
+                        )
+                    ],
                 }
-                for device in profile.gpu_devices
+                for provider in sorted(providers, key=lambda item: item.descriptor.key)
             ],
         },
     )

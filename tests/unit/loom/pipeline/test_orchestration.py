@@ -9,6 +9,7 @@ import pytest
 from loom.artifacts import ArtifactRef
 from loom.pipeline.orchestration import (
     CoordinatorStoreError,
+    ExecutionRequirement,
     InMemoryStageWorkStore,
     RunOrchestrator,
     SchedulingProjectionState,
@@ -116,6 +117,15 @@ def _placement(*, pool_name: str = "default", target: str | None = None):
     )
 
 
+def _requirements(plan: ExecutionPlan) -> dict[str, ExecutionRequirement]:
+    return {
+        stage_name: ExecutionRequirement(
+            "test-project", "test-environment", "test-executor"
+        )
+        for stage_name in plan.stage_order
+    }
+
+
 def _authority(run_uri: str) -> InMemoryPerRunAuthorityStore:
     authority = InMemoryPerRunAuthorityStore()
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -170,6 +180,7 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
         plan=plan,
         authority_snapshot=initial,
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )[0]
     replay_store = (
@@ -184,6 +195,7 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=20,
     )[0]
 
@@ -215,6 +227,7 @@ def test_reconcile_preserves_a_durable_decision_until_authority_changes(
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )[0]
     store.create_or_refresh(
@@ -230,6 +243,7 @@ def test_reconcile_preserves_a_durable_decision_until_authority_changes(
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=20,
     )
     retained = store.list_stage_work()[0]
@@ -247,6 +261,7 @@ def test_reconcile_preserves_a_durable_decision_until_authority_changes(
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=30,
     )
     assert store.list_stage_work()[0].scheduling_state is SchedulingProjectionState.WAIT
@@ -283,6 +298,7 @@ def test_response_loss_after_authority_commit_replays_one_attempt(
             plan=plan,
             authority_snapshot=snapshot,
             placements={"train": _placement()},
+            execution_requirements=_requirements(plan),
             ready_at=10,
         )
 
@@ -291,6 +307,7 @@ def test_response_loss_after_authority_commit_replays_one_attempt(
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )
     assert len(result) == 1
@@ -327,6 +344,7 @@ def test_intent_replays_before_first_attempt_after_authority_advances(
             plan=plan,
             authority_snapshot=authority.open_run(run_uri),
             placements={"left": _placement(), "right": _placement()},
+            execution_requirements=_requirements(plan),
             ready_at=10,
         )
 
@@ -336,6 +354,7 @@ def test_intent_replays_before_first_attempt_after_authority_advances(
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"left": _placement(), "right": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=20,
     )
 
@@ -370,6 +389,7 @@ def test_old_receipt_replay_does_not_regress_revision_for_new_retry() -> None:
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"left": _placement(), "right": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )
     assert [record.stage_name for record in first] == ["left"]
@@ -403,6 +423,7 @@ def test_old_receipt_replay_does_not_regress_revision_for_new_retry() -> None:
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"left": _placement(), "right": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )
     assert [record.stage_name for record in second] == ["left", "right"]
@@ -424,6 +445,7 @@ def test_retry_uses_a_new_intent_after_the_prior_attempt_was_projected() -> None
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )
     assert len(first) == 1
@@ -464,6 +486,7 @@ def test_retry_uses_a_new_intent_after_the_prior_attempt_was_projected() -> None
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=11,
     )
 
@@ -486,6 +509,7 @@ def test_replay_rejects_equal_revision_sequence_with_changed_token() -> None:
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )
     snapshot = authority.open_run(run_uri)
@@ -500,6 +524,7 @@ def test_replay_rejects_equal_revision_sequence_with_changed_token() -> None:
             plan=plan,
             authority_snapshot=conflicting,
             placements={"train": _placement()},
+            execution_requirements=_requirements(plan),
             ready_at=20,
         )
 
@@ -518,6 +543,7 @@ def test_all_ready_branches_project_without_parallel_slot_suppression() -> None:
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"left": _placement(), "right": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )
     assert [record.stage_name for record in records] == ["left", "right"]
@@ -543,6 +569,7 @@ def test_controller_actions_do_not_create_work_or_unlock_from_projection() -> No
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"consume": _placement(), "independent": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
         controller_action=lambda stage, _readiness: actions.append(stage.stage_name),
     )
@@ -563,6 +590,7 @@ def test_stage_work_feeds_pure_kernel_without_reservation() -> None:
         plan=_plan(run_uri, _stage("train")),
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(_plan(run_uri, _stage("train"))),
         ready_at=10,
     )
     decision = orchestrator.decide(
@@ -591,6 +619,7 @@ def test_decision_can_be_scoped_to_one_admission() -> None:
         plan=_plan(first_uri, _stage("first")),
         authority_snapshot=first_authority.open_run(first_uri),
         placements={"first": _placement()},
+        execution_requirements=_requirements(_plan(first_uri, _stage("first"))),
         ready_at=10,
     )
     second.reconcile(
@@ -598,6 +627,7 @@ def test_decision_can_be_scoped_to_one_admission() -> None:
         plan=_plan(second_uri, _stage("second")),
         authority_snapshot=second_authority.open_run(second_uri),
         placements={"second": _placement()},
+        execution_requirements=_requirements(_plan(second_uri, _stage("second"))),
         ready_at=11,
     )
 
@@ -626,6 +656,7 @@ def test_resolved_pool_and_target_reach_mandatory_kernel_eligibility() -> None:
         plan=_plan(run_uri, _stage("train")),
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement(pool_name="pool-b", target="machine-b")},
+        execution_requirements=_requirements(_plan(run_uri, _stage("train"))),
         ready_at=10,
     )
 
@@ -656,6 +687,7 @@ def test_authority_disagreement_makes_projection_ineligible() -> None:
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )
     authority.transition_stage(
@@ -670,6 +702,7 @@ def test_authority_disagreement_makes_projection_ineligible() -> None:
             plan=plan,
             authority_snapshot=authority.open_run(run_uri),
             placements={"train": _placement()},
+            execution_requirements=_requirements(plan),
             ready_at=10,
         )
         == ()
@@ -697,6 +730,7 @@ def test_run_cancellation_retires_pending_ready_projection() -> None:
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )
     assert (
@@ -717,6 +751,7 @@ def test_run_cancellation_retires_pending_ready_projection() -> None:
             plan=plan,
             authority_snapshot=authority.open_run(run_uri),
             placements={"train": _placement()},
+            execution_requirements=_requirements(plan),
             ready_at=20,
         )
         == ()
@@ -746,6 +781,7 @@ def test_superseded_upstream_commit_retires_pending_ready_projection() -> None:
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={"source": _placement(), "train": _placement()},
+        execution_requirements=_requirements(plan),
         ready_at=10,
     )
     assert [record.stage_name for record in first] == ["train"]
@@ -764,6 +800,7 @@ def test_superseded_upstream_commit_retires_pending_ready_projection() -> None:
             plan=plan,
             authority_snapshot=authority.open_run(run_uri),
             placements={"source": _placement(), "train": _placement()},
+            execution_requirements=_requirements(plan),
             ready_at=20,
         )
         == ()
@@ -785,6 +822,7 @@ def test_sqlite_store_rejects_unsupported_schema_on_reopen(tmp_path: Path) -> No
         plan=_plan(run_uri, _stage("train")),
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(_plan(run_uri, _stage("train"))),
         ready_at=10,
     )
     with sqlite3.connect(path) as conn:
@@ -810,6 +848,7 @@ def test_257_stage_pipeline_drains_across_bounded_ready_windows(
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
         placements={stage.stage_name: _placement() for stage in stages},
+        execution_requirements=_requirements(plan),
         ready_at=10,
         run_priority=9,
         enqueue_sequence=3,
@@ -857,6 +896,7 @@ def test_ready_window_preserves_fifo_admission_order_after_restart(
             plan=_plan(run_uri, _stage(suffix)),
             authority_snapshot=authority.open_run(run_uri),
             placements={suffix: _placement()},
+            execution_requirements=_requirements(_plan(run_uri, _stage(suffix))),
             ready_at=ready_at,
             run_priority=4,
             enqueue_sequence=enqueue_sequence,
@@ -880,6 +920,7 @@ def test_stage_work_hard_cut_requires_durable_global_order_fields() -> None:
         plan=_plan(run_uri, _stage("train")),
         authority_snapshot=authority.open_run(run_uri),
         placements={"train": _placement()},
+        execution_requirements=_requirements(_plan(run_uri, _stage("train"))),
         ready_at=10,
         run_priority=5,
         enqueue_sequence=7,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -47,19 +47,19 @@ from loom.pipeline.executors.slurm.errors import (
 )
 from loom.pipeline.execution.lifecycle import bind_stage_inputs
 from loom.queue._managed_local import (
-    AtomResourceProvider,
+    AgentResourceProvider,
     AssignmentState,
-    GpuResourceProvider,
     ManagedAssignment,
     ManagedLocalError,
     ManagedOfferSnapshot,
     ObserveRequest,
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
-    _configured_provider_descriptor,
+    _compose_agent_resource_providers,
     run_managed_local_assignment,
 )
 from loom.pipeline.orchestration import (
+    ExecutionRequirement,
     RunOrchestrator,
     SchedulingProjectionState,
     SQLiteStageWorkStore,
@@ -173,6 +173,7 @@ class ManagedLocalIntent:
     plan: ExecutionPlan
     runtime: Mapping[str, ResolvedStageRuntimeOptions]
     placements: Mapping[str, ResolvedStagePlacement]
+    execution_requirements: Mapping[str, ExecutionRequirement]
     pipeline: PipelineSpec
     digest: str
     max_parallel_stages: int
@@ -182,6 +183,43 @@ class ManagedLocalIntent:
 class LocalDaemonExecutionOutcome:
     state: LocalDaemonAdmissionState
     reason: str | None = None
+
+
+def _validate_agent_provider_composition(
+    providers: Sequence[AgentResourceProvider],
+    planners: Mapping[str, ResourcePlanner],
+) -> dict[str, AgentResourceProvider]:
+    """Reject provider/planner skew before an offer can expose capacity.
+
+    Providers are checked one at a time.  In particular, a CPU provider is
+    never compared with a GPU planner merely because both are configured.
+    """
+
+    for provider in providers:
+        if (
+            not hasattr(provider, "descriptor")
+            or not hasattr(provider, "claim_contracts")
+            or not callable(getattr(provider, "observe", None))
+        ):
+            raise QueueServiceError("agent resource provider is invalid")
+        kind = provider.descriptor.kind
+        planner = planners.get(kind)
+        if planner is None:
+            raise QueueServiceError(
+                f"agent resource provider has no active planner for {kind!r}"
+            )
+        if not set(provider.claim_contracts) & set(planner.claim_contracts):
+            raise QueueServiceError(
+                f"agent resource provider has no claim-contract intersection for {kind!r}"
+            )
+        if any(contract.kind != kind for contract in provider.claim_contracts):
+            raise QueueServiceError(
+                f"agent resource provider has an invalid claim contract for {kind!r}"
+            )
+    try:
+        return _compose_agent_resource_providers(providers)
+    except ManagedLocalError as exc:
+        raise QueueServiceError(str(exc)) from exc
 
 
 def _production_preference_scorers() -> Mapping[str, PreferenceScorer]:
@@ -391,6 +429,18 @@ class _RemoteCandidateTarget:
     reflected_claim_ids: tuple[str, ...]
 
 
+def _profile_satisfies_requirement(
+    profile: ResidentProfileDescriptor, requirement: ExecutionRequirement
+) -> bool:
+    """Compare inert identities before any reservation or delivery."""
+
+    return (
+        profile.project_fingerprint == requirement.project_fingerprint
+        and profile.environment_fingerprint == requirement.environment_fingerprint
+        and profile.executor_fingerprint == requirement.executor_fingerprint
+    )
+
+
 def _replacement_scheduling_identities(
     *,
     offer_id: str,
@@ -423,20 +473,18 @@ def _coordinator_capacity(config: LocalDaemonConfig) -> tuple[CapacityAtom, ...]
     """Protected upper bounds for local and policy-authorized agent namespaces."""
 
     maximum = 2**63 - 1
-    amounts: dict[tuple[str, str], tuple[int, str]] = {
-        ("cpu", f"{config.machine_id}:cpu"): (config.cpu_capacity, "count")
-    }
-    if config.memory_capacity_bytes:
-        amounts[("memory", f"{config.machine_id}:memory")] = (
-            config.memory_capacity_bytes,
-            "B",
-        )
+    local_atoms = config.agent_resource_capacity
+    amounts: dict[tuple[str, str], tuple[int, str]] = {}
     gpu_atoms: list[CapacityAtom] = []
-    for device in config.gpu_devices:
-        descriptor = device.descriptor
-        gpu_atoms.append(
-            descriptor.capacity_atom(f"{config.machine_id}:{descriptor.device_id}")
-        )
+    for atom in local_atoms:
+        if atom.owner_resource_kind == "gpu":
+            gpu_atoms.append(atom)
+            continue
+        if atom.amount.denominator != 1:
+            raise QueueServiceError(
+                "coordinator capacity requires integral non-GPU provider atoms"
+            )
+        amounts[atom.key] = (atom.amount.numerator, atom.unit)
     for rule in config.agent_policy.agents:
         amounts[("cpu", f"{rule.agent_id}:cpu")] = (maximum, "count")
         amounts[("memory", f"{rule.agent_id}:memory")] = (maximum, "B")
@@ -852,6 +900,24 @@ def load_managed_local_intent(
         name: ResolvedStagePlacement.from_dict(payload)
         for name, payload in placements_payload.items()
     }
+    requirements_payload = record["execution_requirements"]
+    if not isinstance(requirements_payload, Mapping):
+        raise QueueServiceError(
+            "exact runtime record execution requirements are invalid"
+        )
+    try:
+        execution_requirements = {
+            name: ExecutionRequirement.from_dict(payload)
+            for name, payload in requirements_payload.items()
+        }
+    except Exception as exc:
+        raise QueueServiceError(
+            "exact runtime record execution requirements are invalid"
+        ) from exc
+    if set(execution_requirements) != set(pipeline.stage_names):
+        raise QueueServiceError(
+            "exact runtime record execution requirements conflict with pipeline"
+        )
     allowed_targets = {config.machine_id} | {
         rule.agent_id for rule in config.agent_policy.agents
     }
@@ -898,6 +964,7 @@ def load_managed_local_intent(
         plan,
         runtime,
         placements,
+        execution_requirements,
         pipeline,
         str(record["digest"]),
         cast(int, record["max_parallel_stages"]),
@@ -1050,31 +1117,11 @@ class LocalDaemonExecution:
             config.execution_database, _allow_initialize=False
         )
         initial_planners = self._scheduling.active_planners()
-        local_capacity: list[CapacityAtom] = [
-            CapacityAtom(
-                "cpu",
-                f"{config.machine_id}:cpu",
-                ExactQuantity(config.cpu_capacity),
-                "count",
-                ExactQuantity(1),
-            )
-        ]
-        if config.memory_capacity_bytes:
-            local_capacity.append(
-                CapacityAtom(
-                    "memory",
-                    f"{config.machine_id}:memory",
-                    ExactQuantity(config.memory_capacity_bytes),
-                    "B",
-                    ExactQuantity(1),
-                )
-            )
-        for device in config.gpu_devices:
-            descriptor = device.descriptor
-            local_capacity.append(
-                descriptor.capacity_atom(f"{config.machine_id}:{descriptor.device_id}")
-            )
-        self.local_capacity = tuple(local_capacity)
+        configured_providers = tuple(config.agent_resource_providers or ())
+        self.providers = _validate_agent_provider_composition(
+            configured_providers, initial_planners
+        )
+        self.local_capacity = config.agent_resource_capacity
         self.capacity = _coordinator_capacity(config)
         self.coordinator = SQLiteCoordinatorAssignments(
             config.execution_database, self.capacity, _allow_initialize=False
@@ -1105,42 +1152,6 @@ class LocalDaemonExecution:
             agent_id=self.agent_id,
         ):
             raise QueueServiceError("retained daemon owner state is unavailable")
-        self.providers = {}
-        for kind in {atom.owner_resource_kind for atom in self.local_capacity}:
-            if kind == "gpu":
-                continue
-            provider_atoms = tuple(
-                atom for atom in self.local_capacity if atom.owner_resource_kind == kind
-            )
-            self.providers[kind] = AtomResourceProvider(
-                _configured_provider_descriptor(kind, provider_atoms),
-                initial_planners[kind].claim_contracts,
-                provider_atoms,
-            )
-        if config.gpu_devices:
-            healthy_gpu_keys = {
-                f"{config.machine_id}:{device.descriptor.device_id}"
-                for device in config.gpu_devices
-                if device.descriptor.healthy
-            }
-            gpu_atoms = tuple(
-                atom
-                for atom in self.local_capacity
-                if atom.owner_resource_kind == "gpu"
-                and atom.local_capacity_key in healthy_gpu_keys
-            )
-            self.providers["gpu"] = GpuResourceProvider(
-                initial_planners["gpu"].claim_contracts,
-                gpu_atoms,
-                bindings={
-                    f"{config.machine_id}:{device.descriptor.device_id}": (
-                        device.binding_value
-                    )
-                    for device in config.gpu_devices
-                    if device.descriptor.healthy
-                },
-            )
-        self.provider = self.providers["cpu"]
         # A new in-memory provider must never begin by advertising capacity that
         # a durable accepted/granted/running/unknown assignment might retain.
         # The agent journal is the only owner that has an exact provider claim;
@@ -1481,6 +1492,7 @@ class LocalDaemonExecution:
             plan=intent.plan,
             authority_snapshot=snapshot,
             placements=placements,
+            execution_requirements=intent.execution_requirements,
             ready_at=snapshot_time,
             run_priority=admission.run_priority,
             enqueue_sequence=admission.enqueue_sequence,
@@ -1563,13 +1575,31 @@ class LocalDaemonExecution:
                     and record.admission_id not in exhausted_admissions
                     and record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
                 )
+                local_profile = ResidentProfileDescriptor.from_dict(
+                    self.config.resident_worker_launch_profile.descriptor
+                )
                 candidates = tuple(
                     [
                         local_candidate
                         for _ in (0,)
                         if local_candidate.candidate_id not in remote_targets
+                        and any(
+                            _profile_satisfies_requirement(
+                                local_profile, record.execution_requirement
+                            )
+                            for record in managed_records
+                        )
                     ]
-                    + [target[0] for _, target in sorted(remote_targets.items())]
+                    + [
+                        target[0]
+                        for _, target in sorted(remote_targets.items())
+                        if any(
+                            _profile_satisfies_requirement(
+                                target[1].profile, record.execution_requirement
+                            )
+                            for record in managed_records
+                        )
+                    ]
                 )
                 decision = self._scheduling.kernel(managed_records).decide(
                     work=tuple(record.to_work_item() for record in managed_records),
@@ -1624,10 +1654,23 @@ class LocalDaemonExecution:
                 intent, authority = contexts[record.admission_id]
                 snapshot = authority.open_run(admission.run_uri)
                 candidate_id = cast(str, decision.candidate_id)
-                if candidate_id in remote_targets and not self._remote_eligible(
-                    intent=intent,
-                    snapshot=snapshot,
-                    record=record,
+                remote_target = remote_targets.get(candidate_id)
+                local_profile = ResidentProfileDescriptor.from_dict(
+                    self.config.resident_worker_launch_profile.descriptor
+                )
+                selected_profile = (
+                    local_profile if remote_target is None else remote_target[1].profile
+                )
+                if not _profile_satisfies_requirement(
+                    selected_profile, record.execution_requirement
+                ):
+                    if remote_target is not None:
+                        del remote_targets[candidate_id]
+                    else:
+                        excluded_work.add(record.stage_work_id)
+                    continue
+                if remote_target is not None and not self._remote_eligible(
+                    intent=intent, snapshot=snapshot, record=record
                 ):
                     del remote_targets[candidate_id]
                     continue
@@ -3715,43 +3758,48 @@ class LocalDaemonExecution:
             )
             if not matching:
                 continue
-            profile = sorted(matching, key=lambda item: item.profile_id)[0]
             agent_id = str(row["agent_id"])
-            availability_atoms: list[CapacityAtom] = []
-            inventory_atoms: list[CapacityAtom] = []
+            detailed_atoms = [
+                CapacityAtom(
+                    atom.owner_resource_kind,
+                    f"{agent_id}:{atom.local_capacity_key}",
+                    atom.amount,
+                    "B" if atom.owner_resource_kind == "memory" else atom.unit,
+                    atom.granularity,
+                )
+                for atom in offer.capacity_atoms
+            ]
+            availability_atoms = [
+                atom
+                for atom in detailed_atoms
+                if atom.owner_resource_kind not in {"cpu", "memory"}
+            ]
             if offer.cpu:
-                cpu_atom = CapacityAtom(
-                    "cpu",
-                    f"{agent_id}:cpu",
-                    ExactQuantity(offer.cpu),
-                    "count",
-                    ExactQuantity(1),
+                availability_atoms.append(
+                    CapacityAtom(
+                        "cpu",
+                        f"{agent_id}:cpu",
+                        ExactQuantity(offer.cpu),
+                        "count",
+                        ExactQuantity(1),
+                    )
                 )
-                inventory_atoms.append(cpu_atom)
-                availability_atoms.append(cpu_atom)
             if offer.memory_bytes:
-                memory_atom = CapacityAtom(
-                    "memory",
-                    f"{agent_id}:memory",
-                    ExactQuantity(offer.memory_bytes),
-                    "B",
-                    ExactQuantity(1),
+                availability_atoms.append(
+                    CapacityAtom(
+                        "memory",
+                        f"{agent_id}:memory",
+                        ExactQuantity(offer.memory_bytes),
+                        "B",
+                        ExactQuantity(1),
+                    )
                 )
-                inventory_atoms.append(memory_atom)
-                availability_atoms.append(memory_atom)
+            inventory_atoms = [
+                atom for atom in availability_atoms if atom.owner_resource_kind != "gpu"
+            ]
             inventory_atoms.extend(
                 device.capacity_atom(f"{agent_id}:{device.device_id}")
                 for device in offer.gpu_devices
-            )
-            availability_atoms.extend(
-                CapacityAtom(
-                    "gpu",
-                    f"{agent_id}:{atom.local_capacity_key}",
-                    atom.amount,
-                    atom.unit,
-                    atom.granularity,
-                )
-                for atom in offer.gpu_atoms
             )
             raw_withheld_claim_ids = row["observed_claim_ids_json"]
             if raw_withheld_claim_ids is None:
@@ -3825,38 +3873,70 @@ class LocalDaemonExecution:
                     data=data,
                     atoms=kind_availability_atoms,
                 )
-            candidate = Candidate(
-                agent_id,
-                inventory,
-                availability,
-                attributes={
-                    "resident_profile_id": profile.profile_id,
-                    "resident_profile_revision": profile.revision,
-                    "resident_project_fingerprint": profile.project_fingerprint,
-                    "resident_environment_fingerprint": (
-                        profile.environment_fingerprint
+            for profile in sorted(matching, key=lambda item: item.profile_id):
+                candidate_id = ":".join(
+                    (agent_id, str(row["session_id"]), profile.profile_id)
+                )
+                candidate = Candidate(
+                    candidate_id,
+                    {
+                        kind: replace(envelope, candidate_id=candidate_id)
+                        for kind, envelope in inventory.items()
+                    },
+                    {
+                        kind: replace(envelope, candidate_id=candidate_id)
+                        for kind, envelope in availability.items()
+                    },
+                    attributes={
+                        "agent_id": agent_id,
+                        "target": agent_id,
+                        "resident_profile_id": profile.profile_id,
+                        "resident_profile_revision": profile.revision,
+                        "resident_profile_fingerprint": profile.fingerprint,
+                        "resident_project_fingerprint": profile.project_fingerprint,
+                        "resident_environment_fingerprint": profile.environment_fingerprint,
+                        "resident_executor_fingerprint": profile.executor_fingerprint,
+                        "artifact_capability": "regular-file-relay-v1",
+                    },
+                    pool_names=offer.pools,
+                )
+                targets[candidate_id] = (
+                    candidate,
+                    _RemoteCandidateTarget(
+                        agent_id=agent_id,
+                        session_id=str(row["session_id"]),
+                        offer_id=scheduling_offer_id,
+                        availability_revision=offer.availability_revision,
+                        scheduling_availability_revision=scheduling_availability_revision,
+                        inventory_revision=offer.inventory_revision,
+                        offer=offer,
+                        profile=profile,
+                        availability_atoms=tuple(availability_atoms),
+                        reflected_claim_ids=tuple(
+                            sorted(
+                                set(offer.reflected_claim_ids) | set(withheld_claim_ids)
+                            )
+                        ),
                     ),
-                    "resident_executor_fingerprint": profile.executor_fingerprint,
-                    "artifact_capability": "regular-file-relay-v1",
-                },
-                pool_names=offer.pools,
-            )
-            target = _RemoteCandidateTarget(
-                agent_id=agent_id,
-                session_id=str(row["session_id"]),
-                offer_id=scheduling_offer_id,
-                availability_revision=offer.availability_revision,
-                scheduling_availability_revision=(scheduling_availability_revision),
-                inventory_revision=offer.inventory_revision,
-                offer=offer,
-                profile=profile,
-                availability_atoms=tuple(availability_atoms),
-                reflected_claim_ids=tuple(
-                    sorted(set(offer.reflected_claim_ids) | set(withheld_claim_ids))
-                ),
-            )
-            targets[agent_id] = (candidate, target)
+                )
         return targets
+
+    def validate_agent_offer_provider_composition(self, offer: AgentOffer) -> None:
+        """Validate each advertised physical provider against its own planner."""
+
+        planners = self._scheduling.active_planners()
+        for provider in offer.provider_composition:
+            kind = provider.descriptor.kind
+            planner = planners.get(kind)
+            if planner is None:
+                raise QueueServiceError(
+                    f"agent resource provider has no active planner for {kind!r}"
+                )
+            if not set(provider.claim_contracts).intersection(planner.claim_contracts):
+                raise QueueServiceError(
+                    "agent resource provider has no claim-contract intersection "
+                    f"for {kind!r}"
+                )
 
     @staticmethod
     def _remote_eligible(

@@ -2,17 +2,18 @@
 
 ## Metadata
 
-- Status: pending
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 11
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p11-resident-agent-correctness-security`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees`; phase path is `<root>/stage-29-p11-resident-agent-correctness-security`
-- Base revision: current `origin/develop` after Phase 10 is remotely merged
+- Base revision: `860c518d4201e659bf329f64339da77586d4c58f`
 - PR target: `develop`
 - PR title: `feat(agent): require exact resident execution profiles`
-- Dependencies: remotely merged Phase 10
+- Dependencies: Phase 10 remotely merged as `c2dab20`
 - Workflow path: fast; the identity and environment contracts are fixed
-- Blockers: predecessor must be remotely merged
+- Blockers: none; the maintainer approved the mandatory exact per-stage
+  preparation mapping on 2026-08-29
 
 ## Objective And Context
 
@@ -48,8 +49,12 @@ In scope:
 - Add immutable `ExecutionRequirement(project_fingerprint,
   environment_fingerprint, executor_fingerprint)` and persist it in the
   protected managed runtime/stage placement record for every managed stage.
-  Missing or malformed requirements reject before admission; bump the runtime
-  record and dependent wire/durable identities with no compatibility.
+  `prepare_managed_local_runtime_record` requires an explicit mapping keyed by
+  every prepared stage name; its keys must exactly cover the plan and no
+  authored-field, run-wide, daemon-profile, agent-profile, or other default is
+  inferred. Missing, extra, or malformed requirements reject before admission;
+  bump the runtime record and dependent wire/durable identities with no
+  compatibility.
 - Materialize one scheduling candidate per `(agent_id, session_id, profile_id)`.
   Candidate identity is stable and profile-qualified; capacity/resource atoms
   remain correctly namespaced and cannot be double-counted between profiles.
@@ -100,6 +105,7 @@ Assumptions:
   a custom provider executes end-to-end.
 - Public or durable shapes: new execution requirement, profile-qualified
   candidate/assignment target, agent provider composition, and testing helper.
+  The preparation API accepts one mandatory exact per-stage requirement mapping.
   Managed-runtime and agent-session/assignment schema identities hard-cut.
 - Trust and failure boundaries: coordinator compares inert exact fingerprints;
   agent verifies the pinned live profile and owns provider/environment effects;
@@ -189,30 +195,55 @@ Final commands:
 - Read section range: this complete phase plan, especially Scope through Risks.
 - Safe implementation slices: the five numbered slices in order.
 - Decisions not to revisit: exact identity equality; one profile per candidate;
-  selected profile pinned; new allowlisted environment; providers are agent-owned;
-  old formats unsupported.
+  mandatory exact per-stage preparation mapping with complete plan coverage and
+  no inference/default; selected profile pinned; new allowlisted environment;
+  providers are agent-owned; old formats unsupported.
 - Conditions requiring manager action: any ambiguity in durable/public shape not
   resolved by this plan, capacity duplication across profiles, or qualified
   lifecycle/security blocker.
 
 ## Workflow State
 
-- Manager preparation: planning draft complete; exact base/worktree pending predecessor merge
+- Manager preparation: complete; manifest status, merged predecessor, exact
+  `origin/develop` base, branch/worktree, source seams, fast-path risk decision,
+  and validation commands verified at `860c518`
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: pending
-- Refiner: not needed
-- Pre-submit gate: pending
-- Independent review: not needed unless a material residual risk remains
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Implementation: complete across `0eefd04`, `88b73e6`, and manager correction
+  `77510e7`; exact requirements, profile-qualified targets, allowlisted worker
+  environments, provider contract checking, configurable physical-provider
+  composition, exact offer evidence, and custom-provider production paths are
+  present
+- Refiner: correction 1/3 commit `88b73e6` added protected local/remote provider
+  inputs and same-kind validation, but manager verification found production still
+  rejected multiple providers for one kind and remote offers did not carry the
+  claim-contract evidence required for coordinator-side acceptance
+- Pre-submit gate: passed at `3034d58`; fresh `make validate-pr` passed Ruff,
+  Pyright, 2,590 default tests, 154 config-extra tests with 3 expected skips,
+  and both distribution builds. Fresh `make test-summary` recorded 2,744 passes,
+  3 expected skips, and no failures or errors
+- Manager review: passed with no blocker; exact execution identity is checked
+  before reservation/delivery and pinned in the delivered profile descriptor,
+  provider binding values remain agent-local behind non-secret descriptor
+  fingerprints, same-kind physical providers retain independent contract and
+  lifecycle ownership, protocol/runtime hard cuts reject old shapes, and the
+  worker spawn receives only the explicitly constructed environment
+- Independent review: not needed; the fixed fast-path contracts have no
+  material residual risk requiring a separate pass
+- Blocker corrections: 3/3 used; corrections 1 and 2 are closed, and correction
+  3 updates the one missed managed-local example caller found by the full gate.
+  Correction 2 preserved multiple same-kind physical providers through one
+  stable runtime owner, separated immutable configured inventory from mutable
+  availability, and added coordinator-side per-provider contract validation
+- PR and merge: [#253](https://github.com/samcantrill/loom/pull/253) is open
+  against `develop`; local gates and manager review are complete
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | `0eefd04` added protected runtime/stage-work identity, profile-qualified scheduling/delivery, resident launch environment construction, and the public testing helper. `88b73e6` plus `77510e7` added protected local/remote provider factories, physical provider advertisements with exact claim contracts, same-kind composition and aggregate claim partitioning, provider-observed offer atoms, immutable configured inventory, and protocol v8 hard cuts. |
+| Tests added or updated | Exact requirement coverage now reaches every direct orchestrator caller. Provider tests cover unknown kinds, no contract intersection, cross-kind non-Cartesian acceptance, multiple same-kind providers, aggregate prepare/activate/release, local custom CPU lifecycle/environment, and remote custom GPU offer-through-release with externally unavailable inventory withheld by the provider. |
+| Validated revision/tree state and evidence | At `3034d58`, fresh `make validate-pr` passed Ruff, Pyright, 2,590 default tests, 154 config-extra tests with 3 expected skips, and both distribution builds. Fresh `make test-summary` recorded 2,744 passes, 3 expected skips, and no failures or errors across 118 package, 1,838 unit, 297 contract, 279 integration, 58 end-to-end, and 154 config-extra passes. |
+| Validation-relevant changes after evidence | Only this durable documentation update records the fresh result and manager review; source, tests, dependencies, build, and validation configuration are unchanged. |
+| PR, review, and merge | [#253](https://github.com/samcantrill/loom/pull/253) targets `develop` with the approved title and phase-only diff; it is non-draft and mergeable. Manager-local fast-path review passed with no blocker; merge is pending. |
+| Residual risk and cleanup | The provider-composition blocker is closed and the correction budget is exhausted. CPU and memory providers deliberately account capacity without claiming OS-level enforcement; worker process isolation remains the accepted out-of-scope residual risk. Branch/worktree remain dedicated pending PR, merge, metadata, and cleanup. |

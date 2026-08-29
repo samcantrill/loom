@@ -55,6 +55,7 @@ from loom.scheduling import (
 )
 from loom.queue import (
     ConfiguredGpuDevice,
+    ExecutionRequirement,
     GpuDeviceDescriptor,
     LocalDaemon,
     LocalDaemonAdmission,
@@ -86,6 +87,7 @@ from loom.queue.local_daemon_execution import (
     LocalDaemonExecution,
     LocalDaemonExecutionOutcome,
     _ScopedCoordinatorAuthority,
+    _validate_agent_provider_composition,
     build_local_daemon_owner_views,
     initialize_local_daemon_owner_stores,
     load_managed_local_intent,
@@ -94,6 +96,15 @@ from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
 
 
 pytestmark = pytest.mark.integration
+
+
+def _execution_requirements(pipeline: PipelineSpec) -> dict[str, ExecutionRequirement]:
+    return {
+        stage_name: ExecutionRequirement(
+            "test-project", "test-environment", "test-executor"
+        )
+        for stage_name in pipeline.stage_names
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -131,6 +142,68 @@ class _ConfiguredCpuPlanner(CpuResourcePlanner):
         implementation_version="configured-2",
         implementation_fingerprint="test:configured-cpu:v2",
     )
+
+
+class _RecordingCpuProvider(AtomResourceProvider):
+    """A protected site provider used to prove the production composition."""
+
+    def __init__(self, atom: CapacityAtom) -> None:
+        planner = CpuResourcePlanner()
+        super().__init__(
+            _configured_provider_descriptor("cpu", (atom,)),
+            planner.claim_contracts,
+            (atom,),
+        )
+        self.operations: list[str] = []
+
+    def prepare(self, command: ClaimCommand):  # type: ignore[no-untyped-def]
+        self.operations.append("prepare")
+        return super().prepare(command)
+
+    def activate(self, command: ClaimCommand):  # type: ignore[no-untyped-def]
+        self.operations.append("activate")
+        return super().activate(command)
+
+    def release(self, command: ClaimCommand):  # type: ignore[no-untyped-def]
+        self.operations.append("release")
+        return super().release(command)
+
+    def worker_environment(self, command: ClaimCommand) -> dict[str, str]:
+        self.operations.append("environment")
+        return {"LOOM_TEST_PROVIDER": command.assignment.assignment_id}
+
+
+def test_provider_composition_checks_each_provider_against_its_own_kind() -> None:
+    first_atom = CapacityAtom(
+        "cpu", "cpu-0", ExactQuantity(1), "count", ExactQuantity(1)
+    )
+    second_atom = CapacityAtom(
+        "cpu", "cpu-1", ExactQuantity(1), "count", ExactQuantity(1)
+    )
+    first = _RecordingCpuProvider(first_atom)
+    second = _RecordingCpuProvider(second_atom)
+    planners = {"cpu": CpuResourcePlanner()}
+
+    composition = _validate_agent_provider_composition((first, second), planners)
+    assert composition["cpu"].observe(
+        ObserveRequest("agent", "session", "observe-composition")
+    ).atoms == (first_atom, second_atom)
+
+    unknown = AtomResourceProvider(
+        _configured_provider_descriptor("synthetic", ()),
+        (ResourceClaimContractDescriptor("synthetic", 1, "synthetic-v1"),),
+        (),
+    )
+    with pytest.raises(QueueServiceError, match="no active planner"):
+        _validate_agent_provider_composition((unknown,), planners)
+
+    incompatible = AtomResourceProvider(
+        _configured_provider_descriptor("cpu", (first_atom,)),
+        (ResourceClaimContractDescriptor("cpu", 1, "other-contract"),),
+        (first_atom,),
+    )
+    with pytest.raises(QueueServiceError, match="no claim-contract intersection"):
+        _validate_agent_provider_composition((incompatible,), planners)
 
 
 @pytest.mark.parametrize(
@@ -280,15 +353,22 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
 
+    provider = _RecordingCpuProvider(
+        CapacityAtom(
+            "cpu", "machine-A:cpu", ExactQuantity(1), "count", ExactQuantity(1)
+        )
+    )
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "daemon" / "coordinator",
         agent_root=tmp_path / "daemon" / "agent",
         run_store_root=run_root,
         resident_worker_launch_profile=_launch_profile(),
+        agent_resource_providers=(provider,),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -358,6 +438,10 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             "train",
         ]
         assert all(stage.status is StageStatus.SUCCEEDED for stage in snapshot.stages)
+        assert provider.operations.count("prepare") == 2
+        assert provider.operations.count("activate") == 2
+        assert provider.operations.count("environment") == 2
+        assert provider.operations.count("release") == 2
         assert run_store.read_stage_outputs(run_uri, "preprocess") is None
         assert run_store.read_stage_outputs(run_uri, "train") is None
     finally:
@@ -436,6 +520,7 @@ def test_exact_runtime_record_keeps_attributes_settings_and_run_concurrency(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
         options={
             "run_uri": run_uri,
             "execution": {"settings": {"max_parallel_stages": 2}},
@@ -502,6 +587,7 @@ def test_fresh_runtime_placement_uses_the_trusted_active_planner(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
         scheduling_components=components,
     )
 
@@ -963,7 +1049,11 @@ def test_connected_active_cancellation_withholds_output_commit(
         json_dumps_pretty({"pipeline": pipeline_config}),
     )
     prepare_managed_local_runtime_record(
-        store=run_store, run_uri=run_uri, plan=plan, pipeline=spec
+        store=run_store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -1369,7 +1459,7 @@ def test_daemon_restart_joins_one_supervised_worker_before_reopening_capacity(
             )
         execution = replacement._execution
         assert execution is not None
-        observed = execution.provider.observe(
+        observed = execution.providers["cpu"].observe(
             ObserveRequest(config.machine_id, "post-restart", "fresh")
         )
         assert observed.live_claim_ids == ()
@@ -1520,9 +1610,7 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
             operator.recover_unknown(stale)
         with sqlite3.connect(config.control_database) as conn:
             assert (
-                conn.execute(
-                    "SELECT COUNT(*) FROM recovery_operations"
-                ).fetchone()[0]
+                conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[0]
                 == 0
             )
         assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
@@ -1604,7 +1692,7 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
         assert _supervisor_launch_count(config) == 1
         replacement_execution = replacement._execution
         assert replacement_execution is not None
-        observed = replacement_execution.provider.observe(
+        observed = replacement_execution.providers["cpu"].observe(
             ObserveRequest(config.machine_id, "post-recovery", "retained")
         )
         assert observed.live_claim_ids == (assignment.claim_id,)
@@ -1658,7 +1746,7 @@ def test_guarded_recovery_rejects_active_managed_work_without_freezing_it(
         assert snapshot.stages[0].status is StageStatus.RUNNING
         execution = daemon._execution
         assert execution is not None
-        (assignment, _receipt), = execution.coordinator.retained_assignments(
+        ((assignment, _receipt),) = execution.coordinator.retained_assignments(
             agent_id=config.machine_id
         )
         workspace = _ResidentAssignmentWorkspace(
@@ -1688,17 +1776,13 @@ def test_guarded_recovery_rejects_active_managed_work_without_freezing_it(
             reason="must not close active work",
         )
 
-        with pytest.raises(
-            QueueConflictError, match="not in an exact unknown state"
-        ):
+        with pytest.raises(QueueConflictError, match="not in an exact unknown state"):
             daemon.operator_view(
                 LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
             ).recover_unknown(request)
         with sqlite3.connect(config.control_database) as conn:
             assert (
-                conn.execute(
-                    "SELECT COUNT(*) FROM recovery_operations"
-                ).fetchone()[0]
+                conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[0]
                 == 0
             )
         assert not daemon._recovery_fences_ordinary_terminal(  # noqa: SLF001
@@ -1794,7 +1878,9 @@ def test_startup_retains_only_the_exact_durable_claim_for_live_coordinator_state
     _coordinator_assignment(config, command.assignment.assignment_id, state)
 
     execution = _execution(config)
-    observed = execution.provider.observe(ObserveRequest("agent", "session", "one"))
+    observed = execution.providers["cpu"].observe(
+        ObserveRequest("agent", "session", "one")
+    )
 
     assert [atom.amount.numerator for atom in observed.atoms] == [1]
     assert observed.live_claim_ids == (command.assignment.claim_id,)
@@ -1807,7 +1893,9 @@ def test_startup_keeps_proven_released_coordinator_capacity_available(
     _coordinator_assignment(config, "released-assignment", "released")
 
     execution = _execution(config)
-    observed = execution.provider.observe(ObserveRequest("agent", "session", "one"))
+    observed = execution.providers["cpu"].observe(
+        ObserveRequest("agent", "session", "one")
+    )
 
     assert [atom.amount.numerator for atom in observed.atoms] == [2]
     assert observed.live_claim_ids == ()
@@ -2015,7 +2103,11 @@ def _persist_single_stage_run(
         json_dumps_pretty({"pipeline": pipeline_config}),
     )
     prepare_managed_local_runtime_record(
-        store=run_store, run_uri=run_uri, plan=plan, pipeline=spec
+        store=run_store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
     )
     return run_store, run_uri, pipeline_config
 
@@ -2095,6 +2187,7 @@ def _persist_sleep_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements=_execution_requirements(spec),
         options=(
             None
             if retry_max_attempts is None and max_parallel_stages is None

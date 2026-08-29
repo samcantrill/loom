@@ -147,6 +147,98 @@ def check_resource_planner_contract(
     return ContractReport("loom.scheduling.resource_planner", 1, tuple(findings))
 
 
+def check_agent_resource_provider_contract(
+    provider: object, *, sample_claim: object
+) -> ContractReport:
+    """Exercise the closed physical-provider lifecycle with one supplied claim."""
+
+    from loom.queue._managed_local import (
+        AgentResourceProvider,
+        ClaimCommand,
+        ClaimOutcome,
+        ClaimResult,
+        ObserveRequest,
+        ObserveResult,
+    )
+
+    protocol = _check(
+        lambda: isinstance(provider, AgentResourceProvider),
+        "provider satisfies AgentResourceProvider",
+    )
+    command = _check(
+        lambda: isinstance(sample_claim, ClaimCommand), "sample claim is a ClaimCommand"
+    )
+    descriptor = _check(
+        lambda: (
+            isinstance(getattr(provider, "descriptor"), SchedulingComponentDescriptor)
+            and bool(getattr(provider, "claim_contracts"))
+            and getattr(provider, "descriptor").kind
+            == getattr(sample_claim, "claim").resource_kind
+        ),
+        "provider descriptor and claim contracts agree",
+    )
+    findings = [
+        _finding("agent_resource_provider.protocol", protocol),
+        _finding("agent_resource_provider.sample_claim", command),
+        _finding("agent_resource_provider.descriptor", descriptor),
+    ]
+    if protocol[0] and command[0] and descriptor[0]:
+        checked_provider = cast(AgentResourceProvider, provider)
+        checked_command = cast(ClaimCommand, sample_claim)
+        prepare = _check(
+            lambda: checked_provider.prepare(checked_command),
+            "provider prepared claim",
+        )
+        findings.append(
+            _finding(
+                "agent_resource_provider.prepare", prepare, require_type=ClaimResult
+            )
+        )
+        if (
+            prepare[0]
+            and isinstance(prepare[1], ClaimResult)
+            and prepare[1].outcome is ClaimOutcome.PREPARED
+        ):
+            activate = _check(
+                lambda: checked_provider.activate(checked_command),
+                "provider activated claim",
+            )
+            findings.append(
+                _finding(
+                    "agent_resource_provider.activate",
+                    activate,
+                    require_type=ClaimResult,
+                )
+            )
+            observe = _check(
+                lambda: checked_provider.observe(
+                    ObserveRequest(
+                        checked_command.assignment.agent_id,
+                        checked_command.assignment.session_id,
+                        f"{checked_command.operation_id}:observe",
+                    )
+                ),
+                "provider observed claim",
+            )
+            findings.append(
+                _finding(
+                    "agent_resource_provider.observe",
+                    observe,
+                    require_type=ObserveResult,
+                )
+            )
+            release = _check(
+                lambda: checked_provider.release(checked_command),
+                "provider released claim",
+            )
+            findings.append(
+                _finding(
+                    "agent_resource_provider.release", release, require_type=ClaimResult
+                )
+            )
+    return ContractReport("loom.queue.agent_resource_provider", 1, tuple(findings))
+
+
 def check_hard_constraint_contract(
     evaluator: object,
     *,

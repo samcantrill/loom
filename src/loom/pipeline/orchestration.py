@@ -42,7 +42,7 @@ from loom.scheduling import (
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 
-COORDINATOR_STAGE_WORK_SCHEMA_VERSION = 2
+COORDINATOR_STAGE_WORK_SCHEMA_VERSION = 3
 READY_WINDOW_LIMIT = 256
 _MIN_RUN_PRIORITY = -1_000_000
 _MAX_RUN_PRIORITY = 1_000_000
@@ -56,6 +56,54 @@ class SchedulingProjectionState(StrEnum):
     READY = "ready"
     WAIT = "wait"
     DECIDED = "decided"
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionRequirement:
+    """Exact inert execution identity required by one managed stage.
+
+    This deliberately carries no paths, executable details, or environment
+    values.  Those remain protected agent-local profile configuration.
+    """
+
+    project_fingerprint: str
+    environment_fingerprint: str
+    executor_fingerprint: str
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.project_fingerprint, "project_fingerprint"),
+            (self.environment_fingerprint, "environment_fingerprint"),
+            (self.executor_fingerprint, "executor_fingerprint"),
+        ):
+            _non_empty(value, name)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "project_fingerprint": self.project_fingerprint,
+            "environment_fingerprint": self.environment_fingerprint,
+            "executor_fingerprint": self.executor_fingerprint,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ExecutionRequirement":
+        mapping = _mapping(data, "ExecutionRequirement")
+        _exact_fields(
+            mapping,
+            {"project_fingerprint", "environment_fingerprint", "executor_fingerprint"},
+            "ExecutionRequirement",
+        )
+        return cls(
+            project_fingerprint=_non_empty(
+                mapping["project_fingerprint"], "project_fingerprint"
+            ),
+            environment_fingerprint=_non_empty(
+                mapping["environment_fingerprint"], "environment_fingerprint"
+            ),
+            executor_fingerprint=_non_empty(
+                mapping["executor_fingerprint"], "executor_fingerprint"
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +151,7 @@ class StageWorkRecord:
     bound_inputs: Mapping[str, PlainData]
     upstream_commits: Mapping[str, str]
     placement: ResolvedStagePlacement
+    execution_requirement: ExecutionRequirement
     scheduling_state: SchedulingProjectionState = SchedulingProjectionState.READY
     scheduling_diagnostics: Mapping[str, PlainData] = field(default_factory=dict)
     projection_revision: int = 1
@@ -138,6 +187,10 @@ class StageWorkRecord:
             raise CoordinatorStoreError("authority_revision must be a BackendRevision")
         if not isinstance(self.placement, ResolvedStagePlacement):
             raise CoordinatorStoreError("placement must be a ResolvedStagePlacement")
+        if not isinstance(self.execution_requirement, ExecutionRequirement):
+            raise CoordinatorStoreError(
+                "execution_requirement must be an ExecutionRequirement"
+            )
         object.__setattr__(
             self,
             "bound_inputs",
@@ -205,6 +258,7 @@ class StageWorkRecord:
             "bound_inputs": thaw_plain_data(self.bound_inputs, path="bound_inputs"),
             "upstream_commits": dict(self.upstream_commits),
             "placement": self.placement.to_dict(),
+            "execution_requirement": self.execution_requirement.to_dict(),
             "scheduling_state": self.scheduling_state.value,
             "scheduling_diagnostics": thaw_plain_data(
                 self.scheduling_diagnostics, path="scheduling_diagnostics"
@@ -233,6 +287,7 @@ class StageWorkRecord:
             "bound_inputs",
             "upstream_commits",
             "placement",
+            "execution_requirement",
             "scheduling_state",
             "scheduling_diagnostics",
             "projection_revision",
@@ -267,6 +322,9 @@ class StageWorkRecord:
                 "upstream_commits",
             ),
             placement=ResolvedStagePlacement.from_dict(mapping["placement"]),
+            execution_requirement=ExecutionRequirement.from_dict(
+                mapping["execution_requirement"]
+            ),
             scheduling_state=SchedulingProjectionState(
                 _non_empty(mapping["scheduling_state"], "scheduling_state")
             ),
@@ -667,6 +725,7 @@ class RunOrchestrator:
         plan: ExecutionPlan,
         authority_snapshot: AuthoritativeRunSnapshot,
         placements: Mapping[str, ResolvedStagePlacement],
+        execution_requirements: Mapping[str, ExecutionRequirement],
         ready_at: int,
         run_priority: int = 0,
         enqueue_sequence: int = 0,
@@ -680,6 +739,13 @@ class RunOrchestrator:
         _integer(enqueue_sequence, "enqueue_sequence", minimum=0)
         if plan.run_uri != authority_snapshot.run_uri:
             raise CoordinatorStoreError("plan and authority snapshot run differ")
+        if set(execution_requirements) != set(plan.stage_order) or any(
+            not isinstance(value, ExecutionRequirement)
+            for value in execution_requirements.values()
+        ):
+            raise CoordinatorStoreError(
+                "managed stage execution requirements must exactly cover the plan"
+            )
         stage_facts = {stage.stage_name: stage for stage in authority_snapshot.stages}
         completed = {
             name
@@ -768,6 +834,7 @@ class RunOrchestrator:
                 run_uri=plan.run_uri,
                 readiness=readiness,
                 placement=placement,
+                execution_requirement=execution_requirements[stage_plan.stage_name],
                 ready_at=ready_at,
                 ready_order=ready_order,
                 expected_revision=current_revision,
@@ -896,6 +963,7 @@ class RunOrchestrator:
         run_uri: str,
         readiness: AttemptReadiness,
         placement: ResolvedStagePlacement,
+        execution_requirement: ExecutionRequirement,
         ready_at: int,
         ready_order: int,
         expected_revision: BackendRevision,
@@ -945,6 +1013,7 @@ class RunOrchestrator:
             bound_inputs=intent.request.bound_inputs,
             upstream_commits=intent.request.upstream_commits,
             placement=placement,
+            execution_requirement=execution_requirement,
             run_priority=run_priority,
             enqueue_sequence=enqueue_sequence,
         )
@@ -1286,6 +1355,7 @@ __all__ = [
     "COORDINATOR_STAGE_WORK_SCHEMA_VERSION",
     "CoordinatorStageWorkStore",
     "CoordinatorStoreError",
+    "ExecutionRequirement",
     "InMemoryStageWorkStore",
     "PreparationIntent",
     "ReadyStageOrchestrator",

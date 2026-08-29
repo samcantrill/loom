@@ -42,6 +42,7 @@ from loom.queue.agent_sessions import (
     TransportPrincipalPolicy,
 )
 from loom.pipeline.orchestration import (
+    ExecutionRequirement,
     SchedulingProjectionState,
     StageWorkRecord,
     stage_work_identity,
@@ -595,6 +596,9 @@ def test_reload_collects_nonterminal_stage_work_and_retains_its_exact_planner(
                 runtime=None,
                 policy=StagePlacementPolicy(),
                 planners={"cpu": old_cpu},
+            ),
+            execution_requirement=ExecutionRequirement(
+                "test-project", "test-environment", "test-executor"
             ),
         )
     )

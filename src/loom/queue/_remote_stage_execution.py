@@ -130,6 +130,12 @@ class ResidentProfileDescriptor:
             "executor_fingerprint": self.executor_fingerprint,
         }
 
+    @property
+    def fingerprint(self) -> str:
+        return hashlib.sha256(
+            json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
     @classmethod
     def from_dict(cls, value: object) -> "ResidentProfileDescriptor":
         if not isinstance(value, Mapping) or set(value) != {
@@ -350,6 +356,7 @@ class ResidentExecutionProfile:
     cpu_capacity: int = 1
     memory_capacity_bytes: int = 0
     gpu_devices: tuple[ResidentGpuDevice, ...] = ()
+    environment: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ResidentProfileDescriptor):
@@ -380,6 +387,13 @@ class ResidentExecutionProfile:
         object.__setattr__(self, "project_root", project_root)
         object.__setattr__(self, "python_executable", executable)
         object.__setattr__(self, "gpu_devices", gpu_devices)
+        environment = dict(self.environment)
+        if any(
+            not isinstance(key, str) or not key or not isinstance(value, str)
+            for key, value in environment.items()
+        ):
+            raise QueueServiceError("resident execution environment is invalid")
+        object.__setattr__(self, "environment", environment)
 
     def capacity_atoms(self, agent_id: str) -> tuple[CapacityAtom, ...]:
         _identifier(agent_id, "agent_id")
@@ -415,6 +429,7 @@ class ResidentExecutionProfile:
             project_root=self.project_root,
             python_executable=self.python_executable,
             descriptor=self.descriptor.to_dict(),
+            environment=self.environment,
         )
 
 

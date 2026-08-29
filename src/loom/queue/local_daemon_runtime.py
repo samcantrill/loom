@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import cast
 
 from loom.pipeline.planning import ExecutionPlan
+from loom.pipeline.orchestration import ExecutionRequirement
 from loom.pipeline.runtime import (
     ExecutionRoute,
     ExecutionRouteKind,
@@ -45,7 +46,7 @@ from .local_daemon import (
 )
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _RECORD_NAME = "managed_local_runtime.json"
 
 
@@ -55,6 +56,7 @@ def prepare_managed_local_runtime_record(
     run_uri: str,
     plan: ExecutionPlan,
     pipeline: PipelineSpec,
+    execution_requirements: Mapping[str, ExecutionRequirement],
     options: RunOptions | Mapping[str, object] | None = None,
     slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
     scheduling_components: LocalDaemonSchedulingComponents | None = None,
@@ -68,6 +70,13 @@ def prepare_managed_local_runtime_record(
 
     if plan.run_uri != run_uri or set(plan.stage_order) != set(pipeline.stage_names):
         raise QueueServiceError("managed-local runtime preparation identity conflicts")
+    if set(execution_requirements) != set(plan.stage_order) or any(
+        not isinstance(value, ExecutionRequirement)
+        for value in execution_requirements.values()
+    ):
+        raise QueueServiceError(
+            "managed-local execution requirements must exactly cover the plan"
+        )
     normalized = (
         options
         if isinstance(options, RunOptions)
@@ -128,6 +137,9 @@ def prepare_managed_local_runtime_record(
         ).hexdigest(),
         "runtime_options": runtime_options,
         "placements": placements,
+        "execution_requirements": {
+            name: execution_requirements[name].to_dict() for name in plan.stage_order
+        },
         "max_parallel_stages": parallel_execution_options(
             normalized
         ).max_parallel_stages,
@@ -372,6 +384,7 @@ def load_managed_local_runtime_record(
         "runtime_options",
         "pipeline_digest",
         "placements",
+        "execution_requirements",
         "max_parallel_stages",
         "digest",
     }:
@@ -397,6 +410,20 @@ def load_managed_local_runtime_record(
     if not isinstance(runtime_options, Mapping):
         raise QueueServiceError("managed-local runtime record lacks exact options")
     _reject_forbidden(runtime_options, path="runtime_options")
+    requirements = payload.get("execution_requirements")
+    if not isinstance(requirements, Mapping) or set(requirements) != set(
+        ExecutionPlan.from_dict(cast(object, payload["plan"])).stage_order
+    ):
+        raise QueueServiceError(
+            "managed-local runtime record execution requirements are invalid"
+        )
+    try:
+        for value in requirements.values():
+            ExecutionRequirement.from_dict(value)
+    except Exception as exc:
+        raise QueueServiceError(
+            "managed-local runtime record execution requirements are invalid"
+        ) from exc
     max_parallel_stages = payload.get("max_parallel_stages")
     if (
         isinstance(max_parallel_stages, bool)

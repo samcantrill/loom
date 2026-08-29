@@ -33,6 +33,7 @@ from loom.queue._managed_local import (
     ManagedAssignment,
     ManagedOfferSnapshot,
     SQLiteAgentJournal,
+    _configured_provider_descriptor,
 )
 from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
 from loom.pipeline.executors.slurm.ready_stage import (
@@ -41,6 +42,7 @@ from loom.pipeline.executors.slurm.ready_stage import (
 )
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import CpuResourcePlanner
+from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     LocalArtifactStore,
@@ -49,7 +51,9 @@ from loom.pipeline.stores import (
 )
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.queue import (
+    AgentResourceProvider,
     ConfiguredGpuDevice,
+    ExecutionRequirement,
     GpuDeviceDescriptor,
     LocalDaemon,
     LocalDaemonAdmissionRequest,
@@ -86,6 +90,7 @@ from loom.queue.agent_sessions import (
     AgentControl,
     AgentControlKind,
     AgentOffer,
+    AgentProviderDescriptor,
     AgentPolicyConfig,
     AgentPrincipalPolicy,
     AgentRegistration,
@@ -95,7 +100,11 @@ from loom.queue.agent_sessions import (
     TransportPrincipalPolicy,
 )
 from loom.queue.errors import QueueConflictError, QueueError, QueueServiceError
-from loom.scheduling import ResourceClaim, SchedulingComponentDescriptor
+from loom.scheduling import (
+    ResourceClaim,
+    ResourceClaimContractDescriptor,
+    SchedulingComponentDescriptor,
+)
 from loom.serialization import PlainData, json_dumps_pretty
 
 
@@ -109,10 +118,22 @@ def _local_launch_profile() -> ResidentWorkerLaunchProfile:
     )
 
 
-def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, ...]:
+def _execution_requirements(pipeline: PipelineSpec) -> dict[str, ExecutionRequirement]:
+    return {
+        stage_name: ExecutionRequirement(
+            "test-project", "test-environment", "test-executor"
+        )
+        for stage_name in pipeline.stage_names
+    }
+
+
+def _provider_descriptors(*kinds: str) -> tuple[AgentProviderDescriptor, ...]:
     return tuple(
-        SchedulingComponentDescriptor(
-            kind, 1, "1", f"test-{kind}-provider", f"{kind}-configuration"
+        AgentProviderDescriptor(
+            SchedulingComponentDescriptor(
+                kind, 1, "1", f"test-{kind}-provider", f"{kind}-configuration"
+            ),
+            (ResourceClaimContractDescriptor(kind, 1, f"builtin-{kind}-claim-v1"),),
         )
         for kind in sorted(kinds)
     )
@@ -660,6 +681,7 @@ def _prepare_remote_producer_run(
     run_name: str,
     machine_id: str,
     value: int,
+    requirement: ExecutionRequirement | None = None,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -704,6 +726,15 @@ def _prepare_remote_producer_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements={
+            stage_name: (
+                requirement
+                or ExecutionRequirement(
+                    "test-project", "test-environment", "test-executor"
+                )
+            )
+            for stage_name in spec.stage_names
+        },
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -764,6 +795,12 @@ def _prepare_mixed_local_remote_sleep_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements={
+            "local": ExecutionRequirement(
+                "test-project", "test-environment", "test-executor"
+            ),
+            "remote": ExecutionRequirement("project-1", "environment-1", "executor-1"),
+        },
         options={
             "run_uri": run_uri,
             "executor": "local",
@@ -819,6 +856,10 @@ def _prepare_remote_sleep_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements={
+            stage_name: ExecutionRequirement("project-1", "environment-1", "executor-1")
+            for stage_name in spec.stage_names
+        },
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -1100,7 +1141,7 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
                     session.config_revision,
                     session.inventory_revision,
                     session.availability_revision,
-                    1,
+                    0,
                     0,
                     30,
                     _resident_provider_descriptors(profile, session.agent_id),
@@ -1146,7 +1187,11 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
             idempotency_key="replacement-successor-observation",
         )
         candidates = daemon._execution._remote_candidates()  # type: ignore[union-attr]  # noqa: SLF001
-        successor_target = candidates[successor.agent_id][1]
+        successor_target = next(
+            target
+            for _candidate, target in candidates.values()
+            if target.agent_id == successor.agent_id
+        )
         assert successor_target.session_id == successor.session_id
         assert successor_target.availability_atoms == ()
         withheld_snapshot = ManagedOfferSnapshot(
@@ -1230,7 +1275,11 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
         assert retained_proof[0] is not None
         assert "retirement_secret" not in str(retained_proof[0])
         candidates = daemon._execution._remote_candidates()  # type: ignore[union-attr]  # noqa: SLF001
-        released_target = candidates[successor.agent_id][1]
+        released_target = next(
+            target
+            for _candidate, target in candidates.values()
+            if target.agent_id == successor.agent_id
+        )
         assert released_target.availability_revision == (
             successor_target.availability_revision
         )
@@ -1289,6 +1338,7 @@ def _prepare_gpu_environment_run(
     include_cpu_preprocess: bool = False,
     fallback_after_seconds: int | None = None,
     target: str | None = None,
+    capture_requirement: ExecutionRequirement | None = None,
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -1373,6 +1423,13 @@ def _prepare_gpu_environment_run(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements={
+            **_execution_requirements(spec),
+            "capture": capture_requirement
+            or ExecutionRequirement(
+                "test-project", "test-environment", "test-executor"
+            ),
+        },
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -1427,7 +1484,9 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
         (atom,),
         1,
     )
-    provider_descriptor = _resident_provider_descriptors(profile, "agent-a")[0]
+    provider_descriptor = _resident_provider_descriptors(profile, "agent-a")[
+        0
+    ].descriptor
     command = ClaimCommand(
         assignment, "assignment-1:prepare:0", claim, provider_descriptor
     )
@@ -1575,7 +1634,11 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
     )
     runs = LocalRunStore(tmp_path / "runs")
     run_uri, authority = _prepare_remote_producer_run(
-        runs, run_name="restart-run", machine_id="agent-a", value=42
+        runs,
+        run_name="restart-run",
+        machine_id="agent-a",
+        value=42,
+        requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -1768,7 +1831,11 @@ def test_fresh_agent_processes_replay_one_continuous_supervisor_launch(
     )
     runs = LocalRunStore(tmp_path / "runs")
     run_uri, authority = _prepare_remote_producer_run(
-        runs, run_name="fresh-restart-run", machine_id="agent-a", value=42
+        runs,
+        run_name="fresh-restart-run",
+        machine_id="agent-a",
+        value=42,
+        requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -1898,10 +1965,18 @@ def test_one_supervisor_routes_selected_work_through_two_bound_profiles(
     )
     runs = LocalRunStore(tmp_path / "runs")
     first_run, first_authority = _prepare_remote_producer_run(
-        runs, run_name="profile-a-run", machine_id="agent-a", value=1
+        runs,
+        run_name="profile-a-run",
+        machine_id="agent-a",
+        value=1,
+        requirement=ExecutionRequirement("project-a", "environment-a", "executor-a"),
     )
     second_run, second_authority = _prepare_remote_producer_run(
-        runs, run_name="profile-b-run", machine_id="agent-a", value=2
+        runs,
+        run_name="profile-b-run",
+        machine_id="agent-a",
+        value=2,
+        requirement=ExecutionRequirement("project-b", "environment-b", "executor-b"),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -2055,12 +2130,14 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
         run_name="remote-a",
         machine_id="agent-a",
         value=1,
+        requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
     )
     run_b, authority_b = _prepare_remote_producer_run(
         store,
         run_name="remote-b",
         machine_id="agent-b",
         value=2,
+        requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -2380,6 +2457,9 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
         run_name="remote-model-preferred",
         preferred_models=("large", "small"),
         include_cpu_preprocess=True,
+        capture_requirement=ExecutionRequirement(
+            "project-1", "environment-1", "executor-1"
+        ),
     )
     local_run, local_authority = _prepare_gpu_environment_run(
         store,
@@ -2421,6 +2501,37 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
             ResidentGpuDevice(remote_gpu, remote_binding),
         ),
     )
+    provider_members: dict[str, tuple[AgentResourceProvider, ...]] = {}
+
+    def provider_factory(
+        agent_id: str, resident_profile: ResidentExecutionProfile
+    ) -> tuple[AgentResourceProvider, ...]:
+        configured = provider_members.get(agent_id)
+        if configured is not None:
+            return configured
+        cpu_planner = CpuResourcePlanner()
+        cpu_atoms = tuple(
+            atom
+            for atom in resident_profile.capacity_atoms(agent_id)
+            if atom.owner_resource_kind == "cpu"
+        )
+        gpu_planner = GpuResourcePlanner()
+        gpu_atom = remote_gpu.capacity_atom(f"{agent_id}:{remote_gpu.device_id}")
+        configured = (
+            AtomResourceProvider(
+                _configured_provider_descriptor("cpu", cpu_atoms),
+                cpu_planner.claim_contracts,
+                cpu_atoms,
+            ),
+            GpuResourceProvider(
+                gpu_planner.claim_contracts,
+                (gpu_atom,),
+                bindings={gpu_atom.local_capacity_key: remote_binding},
+            ),
+        )
+        provider_members[agent_id] = configured
+        return configured
+
     remote_config = AgentTlsClientConfig(
         f"https://localhost:{server.port}",
         credentials["ca"].with_suffix(".crt"),
@@ -2428,6 +2539,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
         credentials["agent"].with_suffix(".key"),
         remote_root,
         (profile,),
+        agent_resource_provider_factory=provider_factory,
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     agent = LocalDaemonAgentHttpClient(remote_config)
@@ -2450,6 +2562,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
     monkeypatch.setattr(GpuResourceProvider, "release", record_release)
 
     def offer_for(session_value: Mapping[str, object]) -> AgentOffer:
+        members = provider_factory(str(session_value["agent_id"]), profile)
         return AgentOffer(
             str(session_value["session_id"]),
             str(session_value["coordinator_epoch"]),
@@ -2459,7 +2572,10 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
             1,
             0,
             30,
-            _resident_provider_descriptors(profile, str(session_value["agent_id"])),
+            tuple(
+                AgentProviderDescriptor(member.descriptor, member.claim_contracts)
+                for member in members
+            ),
             resident_profiles=(profile_descriptor,),
             gpu_devices=(remote_busy_gpu, remote_gpu),
             # The first configured device is externally occupied. Inventory
@@ -3102,6 +3218,10 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
         run_uri=run_uri,
         plan=plan,
         pipeline=spec,
+        execution_requirements={
+            stage_name: ExecutionRequirement("project-1", "environment-1", "executor-1")
+            for stage_name in spec.stage_names
+        },
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)

@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         LocalDaemonSocketServer,
     )
     from .local_daemon_runtime import prepare_managed_local_runtime_record
+    from loom.pipeline.orchestration import ExecutionRequirement
 from .config import (
     QUEUE_CONFIG_SCHEMA_VERSION,
     QueueControllerSpec,
@@ -180,6 +181,10 @@ def __getattr__(name: str) -> object:
         from .local_daemon_runtime import prepare_managed_local_runtime_record
 
         return prepare_managed_local_runtime_record
+    if name == "ExecutionRequirement":
+        from loom.pipeline.orchestration import ExecutionRequirement
+
+        return ExecutionRequirement
     if name == "GpuDeviceDescriptor":
         from ._remote_stage_execution import GpuDeviceDescriptor
 
@@ -198,6 +203,7 @@ __all__ = [
     "ClaimResult",
     "CpuResourceProvider",
     "DispatchHandle",
+    "ExecutionRequirement",
     "FakeQueueDispatchAdapter",
     "GpuDeviceDescriptor",
     "LaunchContract",

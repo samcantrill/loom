@@ -18,8 +18,10 @@ from loom.queue._managed_local import (
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
     ObserveRequest,
+    _compose_agent_resource_providers,
 )
 from loom.pipeline.orchestration import (
+    ExecutionRequirement,
     SchedulingProjectionState,
     SQLiteStageWorkStore,
     StageWorkRecord,
@@ -89,6 +91,9 @@ def _seed_stage_work(path, assignment: ManagedAssignment) -> None:
                 runtime=None,
                 policy=StagePlacementPolicy(),
                 planners={},
+            ),
+            execution_requirement=ExecutionRequirement(
+                "test-project", "test-environment", "test-executor"
             ),
         )
     )
@@ -162,6 +167,42 @@ def test_provider_is_idempotent_and_never_claims_process_enforcement() -> None:
     assert provider.release(command).outcome is ClaimOutcome.RELEASED
     observed = provider.observe(ObserveRequest("agent", "session", "observe-1"))
     assert observed.atoms[0].amount == ExactQuantity(2)
+
+
+def test_same_kind_provider_group_splits_and_releases_aggregate_claim() -> None:
+    contract = ResourceClaimContractDescriptor("cpu", 1, "configured")
+    atoms = (
+        CapacityAtom("cpu", "cpu-a", ExactQuantity(1), "count", ExactQuantity(1)),
+        CapacityAtom("cpu", "cpu-b", ExactQuantity(1), "count", ExactQuantity(1)),
+    )
+    members = tuple(
+        AtomResourceProvider(
+            SchedulingComponentDescriptor(
+                "cpu", 1, "1", "implementation", f"configured-{index}"
+            ),
+            (contract,),
+            (atom,),
+        )
+        for index, atom in enumerate(atoms)
+    )
+    provider = _compose_agent_resource_providers(members)["cpu"]
+    aggregate = CapacityAtom(
+        "cpu", "agent:cpu", ExactQuantity(2), "count", ExactQuantity(1)
+    )
+    claim = ResourceClaim("cpu", contract, (aggregate,), 1)
+    command = ClaimCommand(
+        _assignment(), "prepare-composite", claim, provider.descriptor
+    )
+
+    assert provider.prepare(command).outcome is ClaimOutcome.PREPARED
+    assert provider.activate(command).outcome is ClaimOutcome.ACTIVE
+    held = provider.observe(ObserveRequest("agent", "session", "observe-held"))
+    assert held.atoms == ()
+    assert held.live_claim_ids == ("claim",)
+    assert provider.release(command).outcome is ClaimOutcome.RELEASED
+    released = provider.observe(ObserveRequest("agent", "session", "observe-released"))
+    assert released.atoms == atoms
+    assert released.live_claim_ids == ()
 
 
 class _RaisingAtomProvider(AtomResourceProvider):

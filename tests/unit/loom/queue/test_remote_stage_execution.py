@@ -24,6 +24,7 @@ from loom.queue import (
 )
 from loom.queue.agent_sessions import (
     AgentOffer,
+    AgentProviderDescriptor,
     AgentPolicyConfig,
     AgentPrincipalPolicy,
     AgentRegistration,
@@ -61,6 +62,20 @@ def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, .
             kind, 1, "1", f"test-{kind}-provider", f"{kind}-configuration"
         )
         for kind in sorted(kinds)
+    )
+
+
+def _agent_provider_descriptors(*kinds: str) -> tuple[AgentProviderDescriptor, ...]:
+    return tuple(
+        AgentProviderDescriptor(
+            descriptor,
+            (
+                ResourceClaimContractDescriptor(
+                    descriptor.kind, 1, f"builtin-{descriptor.kind}-claim-v1"
+                ),
+            ),
+        )
+        for descriptor in _provider_descriptors(*kinds)
     )
 
 
@@ -495,7 +510,7 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
                 1,
                 1,
                 30,
-                _provider_descriptors("cpu", "memory"),
+                _agent_provider_descriptors("cpu", "memory"),
                 resident_profiles=(profile.descriptor,),
             ),
             idempotency_key="offer-1",

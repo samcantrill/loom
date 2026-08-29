@@ -149,3 +149,11 @@ worker, imports its result, releases its claims, and publishes a fresh capacity
 observation. Loom will not launch a replacement process or reuse uncertain
 capacity. If the supervisor continuity or retained bundle cannot be proved,
 startup fails closed and the roots must be reinitialized deliberately.
+
+Managed-local preparation separately requires an explicit exact execution
+requirement for every stage: project, environment, and executor fingerprints.
+It never derives those identities from an authored field, a daemon profile, an
+agent profile, the current process, or one run-wide default. A resident offer
+is eligible only when one named profile exactly matches the prepared stage;
+the selected profile is retained with the delivery. Worker processes receive a
+new allowlisted environment rather than the daemon's ambient environment.

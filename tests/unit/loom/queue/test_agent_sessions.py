@@ -29,6 +29,7 @@ from loom.queue._remote_stage_execution import (
 )
 from loom.queue.agent_sessions import (
     AgentOffer,
+    AgentProviderDescriptor,
     AgentControl,
     AgentControlEffect,
     AgentControlKind,
@@ -46,7 +47,12 @@ from loom.queue.agent_sessions import (
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError, QueueStorageError
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-from loom.scheduling import SchedulingComponentDescriptor
+from loom.scheduling import (
+    CapacityAtom,
+    ExactQuantity,
+    ResourceClaimContractDescriptor,
+    SchedulingComponentDescriptor,
+)
 from loom.serialization import PlainData
 
 
@@ -183,10 +189,13 @@ def test_replacement_projection_rejects_execution_assignment_without_target() ->
         )
 
 
-def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, ...]:
+def _provider_descriptors(*kinds: str) -> tuple[AgentProviderDescriptor, ...]:
     return tuple(
-        SchedulingComponentDescriptor(
-            kind, 1, "1", f"test-{kind}-provider", f"{kind}-configuration"
+        AgentProviderDescriptor(
+            SchedulingComponentDescriptor(
+                kind, 1, "1", f"test-{kind}-provider", f"{kind}-configuration"
+            ),
+            (ResourceClaimContractDescriptor(kind, 1, f"builtin-{kind}-claim-v1"),),
         )
         for kind in sorted(kinds)
     )
@@ -284,7 +293,7 @@ def _offer(
         cpu=2,
         memory_bytes=1024,
         ttl_seconds=30,
-        provider_descriptors=_provider_descriptors("cpu", "memory"),
+        provider_composition=_provider_descriptors("cpu", "memory"),
     )
 
 
@@ -453,7 +462,6 @@ def test_session_replacement_rejects_empty_reachable_session(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("local_capacity_key", "host-cpu"),
         ("unit", "cores"),
         ("granularity", {"numerator": 2, "denominator": 1}),
     ],
@@ -470,6 +478,107 @@ def test_offer_codec_rejects_noncanonical_capacity_atoms(
 
     with pytest.raises(QueueServiceError, match="capacity is invalid"):
         AgentOffer.from_value(encoded)
+
+
+def test_offer_codec_preserves_physical_capacity_atom_identity() -> None:
+    original = _offer("session-1", "epoch-1")
+    offer = replace(
+        original,
+        capacity_atoms=(
+            CapacityAtom("cpu", "cpu-a", ExactQuantity(1), "count", ExactQuantity(1)),
+            CapacityAtom("cpu", "cpu-b", ExactQuantity(1), "count", ExactQuantity(1)),
+            CapacityAtom(
+                "memory",
+                "memory",
+                ExactQuantity(1024),
+                "byte",
+                ExactQuantity(1),
+            ),
+        ),
+    )
+
+    assert AgentOffer.from_value(offer.value()) == offer
+
+
+def test_offer_checks_each_physical_provider_only_against_its_kind(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        session = _register(daemon)
+        base = _offer(session.session_id, session.coordinator_epoch)
+        cpu_contract = ResourceClaimContractDescriptor("cpu", 1, "builtin-cpu-claim-v1")
+        memory_provider = _provider_descriptors("memory")[0]
+        cpu_providers = tuple(
+            AgentProviderDescriptor(
+                SchedulingComponentDescriptor(
+                    "cpu", 1, "1", f"test-cpu-provider-{suffix}", suffix
+                ),
+                (cpu_contract,),
+            )
+            for suffix in ("a", "b")
+        )
+        multi_provider = replace(
+            base,
+            provider_composition=(*cpu_providers, memory_provider),
+        )
+
+        accepted = _view(daemon).publish_offer(
+            multi_provider, idempotency_key="multi-provider-offer"
+        )
+        assert accepted["state"] == "retained"
+
+        incompatible = replace(
+            base,
+            provider_composition=(
+                AgentProviderDescriptor(
+                    cpu_providers[0].descriptor,
+                    (ResourceClaimContractDescriptor("cpu", 1, "incompatible"),),
+                ),
+                memory_provider,
+            ),
+        )
+        with pytest.raises(QueueServiceError, match="no claim-contract intersection"):
+            _view(daemon).publish_offer(
+                incompatible, idempotency_key="incompatible-provider-offer"
+            )
+
+        synthetic = AgentOffer(
+            session.session_id,
+            session.coordinator_epoch,
+            session.config_revision,
+            session.inventory_revision,
+            session.availability_revision,
+            0,
+            0,
+            30,
+            (
+                AgentProviderDescriptor(
+                    SchedulingComponentDescriptor(
+                        "synthetic", 1, "1", "test-synthetic-provider", "configured"
+                    ),
+                    (ResourceClaimContractDescriptor("synthetic", 1, "synthetic-v1"),),
+                ),
+            ),
+            capacity_atoms=(
+                CapacityAtom(
+                    "synthetic",
+                    "token-1",
+                    ExactQuantity(1),
+                    "token",
+                    ExactQuantity(1),
+                ),
+            ),
+        )
+        with pytest.raises(QueueServiceError, match="no active planner"):
+            _view(daemon).publish_offer(
+                synthetic, idempotency_key="unknown-provider-offer"
+            )
+    finally:
+        daemon.stop()
 
 
 def _proof(session) -> AgentRetirementProof:
@@ -1156,7 +1265,7 @@ def test_gpu_offer_has_one_strict_exact_round_trip_without_private_binding() -> 
     with pytest.raises(QueueServiceError, match="descriptor is invalid"):
         GpuDeviceDescriptor.from_dict(old_descriptor)
     old_offer = offer.value()
-    del old_offer["provider_descriptors"]
+    old_offer["provider_descriptors"] = old_offer.pop("provider_composition")
     with pytest.raises(QueueServiceError, match="agent offer is invalid"):
         AgentOffer.from_value(old_offer)
 
@@ -1207,6 +1316,11 @@ def test_gpu_offer_rejects_old_or_policy_different_inventory(tmp_path: Path) -> 
             accepted,
             gpu_devices=(GpuDeviceDescriptor("other-gpu", "large", 80 * 1024**3),),
             gpu_atoms=(),
+            capacity_atoms=tuple(
+                atom
+                for atom in accepted.capacity_atoms
+                if atom.owner_resource_kind != "gpu"
+            ),
         )
         with pytest.raises(QueueConflictError, match="protected policy"):
             _view(daemon).publish_offer(

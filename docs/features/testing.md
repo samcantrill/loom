@@ -165,6 +165,10 @@ not access hardware, stores, networks, discover plugins, enforce termination,
 or certify safety. The scheduling kernel separately validates every extension
 result before mutation even when conformance has previously passed.
 
+`loom.testing.check_agent_resource_provider_contract` accepts one provider and
+one caller-supplied `ClaimCommand`; it exercises prepare, activation,
+observation, and release without discovering providers or touching hardware.
+
 Kernel tests separately require complete per-resource/composite search before
 assignment, checked lexicographic site tiers, stable ties, durable-ready-time
 fallback across restart, typed work-conserving bypass of exhausted older work,
