@@ -33,7 +33,7 @@
 
 ## Current Source And Harness
 
-- Relevant files and symbols: `LocalDaemonStatus`, `LocalDaemon.status`,
+- Relevant files and symbols: `DaemonStatus`, `LocalDaemon.status`,
   `LocalDaemon.reconcile_once`, `LocalDaemonSocketServer/Client`, CLI daemon
   handlers/configuration, agent poll request/storage in `agent_sessions.py`,
   `_accepted_time`, `_initialize_root`, `LocalDaemon.initialize`, and existing
@@ -276,25 +276,29 @@ Final commands:
   fast-path decision, validation commands, and the permitted-service-host versus
   service-less whole-run SLURM boundary are current
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: retained uncommitted bounded summary/admission/list/detail/
-  wait and sequenced-poll work is continuing under the resolved consumer
-  contract
-- Refiner: correction 1/3 owns the bounded Discord consumer adaptation and only
-  the minimal targeted-detail support it requires
-- Pre-submit gate: pending; incomplete-tree summaries are non-evidence. The
-  collection failure causally identifies the Discord reporter fields corrected
-  by the bounded consumer adaptation; a fresh stable-tree gate remains required
-- Independent review: not needed unless a material residual risk remains
-- Blocker corrections: 1/3
+- Implementation: complete at source/test candidate `20d7ca8`; all six slices
+  use the approved hard-cut schemas and supported role commands
+- Refiner: correction 1/3 completed the bounded Discord consumer adaptation and
+  only the targeted-detail support required to preserve its observable contract
+- Pre-submit gate: focused review-closure tests, Ruff, and zero-finding Pyright
+  pass at `20d7ca8`; the definitive fresh `make validate-pr` and
+  `make test-summary` remain pending on the documented candidate tree
+- Manager review: correction 2/3 fences an abandoned active poll at coordinator
+  epoch restart, includes ready-stage SLURM in the assignment summary, preserves
+  the `DaemonStatus` hard cut, and returns a typed admission-not-found outcome;
+  each finding has causal direct/socket or restart coverage
+- Independent review: not needed; the fast-path manager review found no
+  remaining material residual risk after correction 2/3
+- Blocker corrections: 2/3
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Uncommitted partial work currently changes `local_daemon.py`, `local_daemon_transport.py`, `agent_sessions.py`, queue public imports, and their focused unit tests for bounded status/admission operations and sequenced poll state. Deployment, time recovery, initialization, commands, integration, docs, and final hard-cut closure remain incomplete. |
-| Tests added or updated | Correction 1/3 adds direct/socket targeted-detail coverage and Discord bounded page/detail collection coverage. Focused `test_local_daemon.py` and `test_discord_webhook.py` pass 49 tests; incomplete-tree additions are not yet accepted phase evidence. |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | The partial tree has no reusable final evidence; full gates must run only after the public deployment contract and all six slices are complete. |
+| Implementation and changed paths | Candidate `20d7ca8` completes bounded `DaemonStatus`, keyset admission list, targeted detail/wait and typed not-found operations; sequenced coordinator/agent poll state; per-admission and accepted-time health/recovery; atomic coordinator-bundle and outbound-agent publication; protected config plus four exact role commands; bounded Discord consumption; and deployment/upgrade guidance. Changes remain confined to queue owners/transports/CLI, the current Discord consumer, their tests, and owned docs/examples. |
+| Tests added or updated | Unit, integration, CLI, transport, service-process, Discord, and documentation/example coverage exercise pagination/wait, constant poll rows and replay errors, health isolation, forward/regressed time and recovery, failure-cut initialization, config binding, foreground outbound reconnect, redaction, and the persistent-managed versus service-less deployment boundary. Focused correction tests, Ruff, and Pyright pass at `20d7ca8`; final repository receipts are pending. |
+| Validated revision/tree state and evidence | Source/test candidate `20d7ca8`; definitive full-gate evidence pending. |
+| Validation-relevant changes after evidence | None after `20d7ca8`; roadmap state updates do not change source, tests, dependencies, build, or validation configuration. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | The public deployment and Discord consumer contracts are resolved. Correction 1/3 preserves exact reporter behavior through bounded pages/details without enlarging the summary or scheduler path; the dedicated worktree and branch retain the remaining implementation. |
+| Residual risk and cleanup | No known phase blocker. Owner-detail traversal remains explicitly opt-in and may be proportional to one admission; the optional Discord process deliberately traverses bounded pages outside scheduler/status paths. Old roots, polls, runtime records, and the old status surface remain unsupported. Dedicated worktree and branch remain until verified merge. |
