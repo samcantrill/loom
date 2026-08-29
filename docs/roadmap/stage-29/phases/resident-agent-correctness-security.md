@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 11
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p11-resident-agent-correctness-security`
@@ -234,7 +234,8 @@ Final commands:
   Correction 2 preserved multiple same-kind physical providers through one
   stable runtime owner, separated immutable configured inventory from mutable
   availability, and added coordinator-side per-provider contract validation
-- PR and merge: pending; local gates and review are complete
+- PR and merge: [#253](https://github.com/samcantrill/loom/pull/253) is open
+  against `develop`; local gates and manager review are complete
 
 ## Completion Record
 
@@ -244,5 +245,5 @@ Final commands:
 | Tests added or updated | Exact requirement coverage now reaches every direct orchestrator caller. Provider tests cover unknown kinds, no contract intersection, cross-kind non-Cartesian acceptance, multiple same-kind providers, aggregate prepare/activate/release, local custom CPU lifecycle/environment, and remote custom GPU offer-through-release with externally unavailable inventory withheld by the provider. |
 | Validated revision/tree state and evidence | At `3034d58`, fresh `make validate-pr` passed Ruff, Pyright, 2,590 default tests, 154 config-extra tests with 3 expected skips, and both distribution builds. Fresh `make test-summary` recorded 2,744 passes, 3 expected skips, and no failures or errors across 118 package, 1,838 unit, 297 contract, 279 integration, 58 end-to-end, and 154 config-extra passes. |
 | Validation-relevant changes after evidence | Only this durable documentation update records the fresh result and manager review; source, tests, dependencies, build, and validation configuration are unchanged. |
-| PR, review, and merge | Manager-local fast-path review passed with no blocker; PR and merge are pending. |
+| PR, review, and merge | [#253](https://github.com/samcantrill/loom/pull/253) targets `develop` with the approved title and phase-only diff; it is non-draft and mergeable. Manager-local fast-path review passed with no blocker; merge is pending. |
 | Residual risk and cleanup | The provider-composition blocker is closed and the correction budget is exhausted. CPU and memory providers deliberately account capacity without claiming OS-level enforcement; worker process isolation remains the accepted out-of-scope residual risk. Branch/worktree remain dedicated pending PR, merge, metadata, and cleanup. |
