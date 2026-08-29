@@ -203,7 +203,9 @@ Final commands:
   current.
 - Expanded planning: not needed; the approved stage-level design fixes the
   schema/transaction contract. Reconsider only for a concrete ambiguity.
-- Implementation: pending executor.
+- Implementation: complete; immutable admission records, atomic SQLite
+  classification, streaming receipts, bounded listing, public imports, and the
+  normalized project example are committed on the phase branch.
 - Refiner: not needed.
 - Pre-submit gate: pending.
 - Independent review: expected only if the durable identity/index diff departs
@@ -215,9 +217,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Queue record/schema v2 admission identity, SQLite classification/indexes, service/client streaming and pages, intentional exports, queue docs/example, and phase-scoped tests. |
+| Tests added or updated | Queue model/receipt validation; SQLite exact replay, concurrent scientific dedupe, force, pages; streaming interruption/restart across 2,000 requests; public example E2E. |
+| Validated revision/tree state and evidence | Targeted unit: 13 passed; integration: 19 passed; E2E `-k enqueue`: 1 passed; queue lint and pyright: passed; package and queue contract checks: 134 passed. `make validate-pr` was started after those checks; its full harness remains in progress in the shared environment. |
+| Validation-relevant changes after evidence | None. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

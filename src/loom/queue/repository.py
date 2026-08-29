@@ -11,6 +11,7 @@ from loom.serialization import PlainData
 from .models import (
     CancellationRecord,
     DispatchHandle,
+    QueueEnqueueReceipt,
     QueueAuditEvent,
     QueueItem,
     QueueItemStatus,
@@ -26,15 +27,27 @@ class QueuePoolSnapshot:
     items: tuple[QueueItem, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class QueueItemPage:
+    """One bounded FIFO page of queue items."""
+
+    items: tuple[QueueItem, ...]
+    next_cursor: str | None
+
+
 @runtime_checkable
 class QueueRepository(Protocol):
     """Repository operations required by the first queue persistence phase."""
 
     def enqueue(self, item: QueueItem) -> QueueItem: ...
 
+    def admit(self, item: QueueItem) -> QueueEnqueueReceipt: ...
+
     def read_item(self, queue_item_id: str) -> QueueItem | None: ...
 
     def read_pool_snapshot(self, pool_name: str) -> QueuePoolSnapshot: ...
+
+    def list_items(self, *, limit: int, cursor: str | None = None) -> QueueItemPage: ...
 
     def record_dispatch_handle(
         self,
@@ -77,5 +90,6 @@ class QueueRepository(Protocol):
 
 __all__ = [
     "QueuePoolSnapshot",
+    "QueueItemPage",
     "QueueRepository",
 ]

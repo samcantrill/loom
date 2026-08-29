@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from typing import cast
 
 import pytest
@@ -13,6 +13,8 @@ from loom.queue import (
     LaunchContract,
     QueueClaim,
     QueueDefinition,
+    QueueEnqueueDisposition,
+    QueueEnqueueReceipt,
     QueueItem,
     QueueItemStatus,
     QueuePool,
@@ -28,7 +30,7 @@ def test_queue_item_serializes_versioned_plain_data() -> None:
 
     data = item.to_dict()
 
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
     assert data["queue_item_id"] == "item-1"
     assert data["queue_name"] == "gpu"
     assert data["pool_name"] == "gpu-pool"
@@ -41,6 +43,49 @@ def test_queue_item_serializes_versioned_plain_data() -> None:
     assert QueueItem.from_dict(data) == item
     with pytest.raises(FrozenInstanceError):
         item.run_uri = "file:///runs/other"  # type: ignore[misc]
+
+
+def test_queue_admission_identity_and_receipt_are_canonical() -> None:
+    item = _queue_item()
+    with_fingerprint = QueueItem(
+        queue_item_id=item.queue_item_id,
+        queue_name=item.queue_name,
+        pool_name=item.pool_name,
+        run_uri=item.run_uri,
+        run_intent=item.run_intent,
+        launch_contract=item.launch_contract,
+        enqueued_at=item.enqueued_at,
+        updated_at=item.updated_at,
+        scientific_fingerprint="sha256:" + "A" * 64,
+    )
+    same_content = QueueItem(
+        queue_item_id=item.queue_item_id,
+        queue_name=item.queue_name,
+        pool_name=item.pool_name,
+        run_uri=item.run_uri,
+        run_intent=item.run_intent,
+        launch_contract=item.launch_contract,
+        enqueued_at="2020-01-01T00:01:00Z",
+        updated_at="2020-01-01T00:01:00Z",
+        scientific_fingerprint="sha256:" + "a" * 64,
+    )
+    receipt = QueueEnqueueReceipt(
+        disposition=QueueEnqueueDisposition.ENQUEUED,
+        requested_queue_item_id=item.queue_item_id,
+        canonical_queue_item_id=item.queue_item_id,
+        queue_item=item,
+        accepted_at=item.enqueued_at,
+    )
+
+    assert same_content.scientific_fingerprint == "sha256:" + "a" * 64
+    assert with_fingerprint.admission_digest == same_content.admission_digest
+    assert with_fingerprint.admission_digest != item.admission_digest
+    assert QueueEnqueueReceipt.from_dict(receipt.to_dict()) == receipt
+
+
+def test_queue_item_rejects_noncanonical_scientific_identity() -> None:
+    with pytest.raises(QueueValidationError, match="scientific_fingerprint"):
+        replace(_queue_item(), scientific_fingerprint="not-a-digest")
 
 
 def test_queue_records_reject_unknown_fields_and_bad_versions() -> None:

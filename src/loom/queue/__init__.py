@@ -104,6 +104,8 @@ from .models import (
     QueueAuditEvent,
     QueueClaim,
     QueueDefinition,
+    QueueEnqueueDisposition,
+    QueueEnqueueReceipt,
     QueueItem,
     QueueItemStatus,
     QueuePool,
@@ -112,7 +114,7 @@ from .models import (
     RunIntent,
     validate_one_queue_per_pool,
 )
-from .repository import QueuePoolSnapshot, QueueRepository
+from .repository import QueueItemPage, QueuePoolSnapshot, QueueRepository
 from .service import (
     QueueEnqueueRequest,
     QueueItemInspection,
@@ -277,9 +279,12 @@ __all__ = [
     "QueueDispatchResult",
     "QueueDrainResult",
     "QueueEnqueueRequest",
+    "QueueEnqueueDisposition",
+    "QueueEnqueueReceipt",
     "QueueError",
     "QueueItemInspection",
     "QueueItem",
+    "QueueItemPage",
     "QueueItemStatus",
     "QueuePool",
     "QueuePoolSnapshot",

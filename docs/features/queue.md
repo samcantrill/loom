@@ -112,6 +112,41 @@ client.enqueue(
 )
 ```
 
+For a deterministic many-run generator, normalize the project-owned scientific
+mapping before hashing it. Loom does not choose those fields. `enqueue_many()`
+commits and yields one classified receipt at a time; only the consumed prefix is
+accepted if iteration stops.
+
+```python
+from loom.fingerprints import hash_mapping
+from loom.queue import QueueEnqueueRequest
+
+
+def requests(parameters):
+    for index, parameter_set in enumerate(parameters):
+        normalized_science = {
+            "project": "example-project",
+            "parameters": dict(sorted(parameter_set.items())),
+        }
+        yield QueueEnqueueRequest(
+            queue_item_id=f"run-{index:04d}",
+            queue_name="gpu",
+            run_uri=f"file:///runs/run-{index:04d}",
+            request={"parameters": normalized_science["parameters"]},
+            scientific_fingerprint=hash_mapping(normalized_science),
+        )
+
+
+for receipt in client.enqueue_many(requests(parameter_sets)):
+    print(receipt.disposition, receipt.canonical_queue_item_id)
+```
+
+The queue stores an immutable `admission_digest` for every item and uses the
+nullable `scientific_fingerprint` only to find one canonical ordinary
+admission. `force=True` bypasses scientific duplicate detection for a new ID;
+it does not bypass exact replay for that ID. Queue record and SQLite schema v2
+are a hard cut: an older queue database fails explicitly and is not migrated.
+
 Foreground drain is a compatibility mode:
 
 ```python
