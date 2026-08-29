@@ -1,12 +1,12 @@
 # Roadmap Stage 29 Implementation Plan
 
-Status: production correction active; Phases 10-11 merged and Phase 12 PR open;
+Status: production correction complete; Phases 10-12 merged;
 historical blocked evidence remains read-only
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 12 `pr_open`
+Current phase: Phase 12 `merged`
 Blockers: none at the stage level. Phase 9 correction budget 3/3 was exhausted
 after candidate `ef3be2f` implemented only the validated resident-worker service
 hard cut. Fresh Phase 9A selectively reused that source change and attempted the
@@ -703,7 +703,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 9F | `session-replacement-recovery-operations` | merged | `docs/roadmap/stage-29/phases/session-replacement-recovery-operations.md` | `agent/stage-29-p9f-session-replacement-recovery-operations` | [#249](https://github.com/samcantrill/loom/pull/249) merged | Complete different-session replacement; old-root provider-release proof before capacity restoration; fresh coordinator identities for changed withholding; stale old-session fact rejection; joined status and authenticated operations; operational guidance; final Stage 29 validation | Required review findings closed by correction 2/3; 179 phase tests, the fresh local gate, and 2,720 categorized tests passed; squash-merged as `a6cd482`. |
 | 10 | `global-scheduler-assignment-concurrency` | merged | `docs/roadmap/stage-29/phases/global-scheduler-assignment-concurrency.md` | `agent/stage-29-p10-global-scheduler-assignment-concurrency` | [#250](https://github.com/samcantrill/loom/pull/250) merged | Protected-policy run priority; durable enqueue sequence; globally ordered 256-item ready window; all-admission projection; assignment-keyed asynchronous local/remote/SLURM launch and reconciliation; same-run concurrency; per-admission reconciliation health | Fresh local gates and manager-local review passed at source/test revision `23dec2d`; squash-merged as `c2dab20`. |
 | 11 | `resident-agent-correctness-security` | merged | `docs/roadmap/stage-29/phases/resident-agent-correctness-security.md` | `agent/stage-29-p11-resident-agent-correctness-security` | [#253](https://github.com/samcantrill/loom/pull/253) merged | Mandatory managed execution requirement; one candidate per agent resident profile; exact pinned profile target; allowlisted worker environment; explicit agent provider composition; planner/provider contract startup validation; public provider conformance check | Fresh full validation, durable test summary, and manager-local review passed; squash-merged as `5fac22c`. |
-| 12 | `operational-bounds-deployment` | pr_open | `docs/roadmap/stage-29/phases/operational-bounds-deployment.md` | `agent/stage-29-p12-operational-bounds-deployment` | [#254](https://github.com/samcantrill/loom/pull/254) open | Constant-shape summary status; ordered bounded/cursored admission list; targeted revision-aware detail/wait; one sequenced replay state per session; fenced accepted-time health/recovery; atomic local deployment-bundle and remote-agent-root publication; supported protected coordinator config and agent service command for permitted service hosts; persistent-managed versus service-less whole-run SLURM guidance | Candidate `20d7ca8` is complete. Correction 1/3 adapted the Discord reporter through bounded pages/details; manager correction 2/3 fenced abandoned polls on coordinator restart, completed assignment counts, and closed the typed hard-cut public surface. Fresh full validation and the 2,757-pass categorized receipt are clean; PR #254 is verified against `develop`. |
+| 12 | `operational-bounds-deployment` | merged | `docs/roadmap/stage-29/phases/operational-bounds-deployment.md` | `agent/stage-29-p12-operational-bounds-deployment` | [#254](https://github.com/samcantrill/loom/pull/254) merged | Constant-shape summary status; ordered bounded/cursored admission list; targeted revision-aware detail/wait; one sequenced replay state per session; fenced accepted-time health/recovery; atomic local deployment-bundle and remote-agent-root publication; supported protected coordinator config and agent service command for permitted service hosts; persistent-managed versus service-less whole-run SLURM guidance | Correction 1/3 adapted the Discord reporter through bounded pages/details; manager correction 2/3 fenced abandoned polls on coordinator restart, completed assignment counts, and closed the typed hard-cut public surface. Fresh full validation and the 2,757-pass categorized receipt passed; squash-merged as `4097729`. |
 
 Phase 1 is the pure-kernel/preparation/projection architectural gate: its only
 new authoritative lifecycle operation is idempotent creation of an unassigned
@@ -965,6 +965,20 @@ Stage 29 roots and managed runtime/session records are deliberately unsupported.
   fencing/checkpointing; coordinator availability target; or accepted code-
   bundle/sandbox behavior; or an accepted cross-owner run-forget contract.
 
+## Production Correction Audit
+
+The final audit against the maintainer's ten approved correction requirements
+found no gap. Phase 10 owns requirements 1-3 and 9: global scheduling, assignment-
+scoped background execution, the real 256-item ready window, and per-admission
+reconciliation health. Phase 11 owns requirements 4-6: mandatory resident
+identity, allowlisted worker environments, and explicit provider composition
+with planner/provider conformance. Phase 12 owns requirements 7-8 and 10:
+bounded internal/public status, constant-row sequenced polls, and accepted-time
+health/recovery, and it completes the requested atomic fresh-root plus supported
+coordinator/outbound-agent deployment surface. The hard cut bumps and rejects
+the affected roots, runtime/session records, poll protocol, and status surface;
+there is no migration or dual read.
+
 ## Completion
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
@@ -996,3 +1010,4 @@ Stage 29 roots and managed runtime/session records are deliberately unsupported.
 | 9F | [#249](https://github.com/samcantrill/loom/pull/249), squash-merged as `a6cd482` | Corrected source/test `eb0537d`; 179 phase tests passed; `make validate-pr` passed Ruff, Pyright, 2,578 default tests, 142 config-extra tests with 3 expected skips, and both builds; fresh summary recorded 2,720 passes; required review findings closed by correction 2/3 | No known phase blocker; old formats remain intentionally unsupported and contained ownership stays withheld until exact provider proof or reconciliation | Dedicated worktree and local/remote phase branches removed after the verified merge |
 | 10 | [#250](https://github.com/samcantrill/loom/pull/250), squash-merged as `c2dab20` | Source/test revision `23dec2d`; `make validate-pr` passed Ruff, Pyright, 2,586 default tests, 142 config-extra tests with 3 expected skips, and both builds; fresh summary recorded 2,728 passes; manager-local review passed | No known Phase 10 blocker; execution-profile/environment composition and bounded operations/deployment remain owned by Phases 11-12 | Dedicated worktree and local/remote phase branches removed; the dirty control checkout was left untouched and merge metadata was committed from a clean manager worktree |
 | 11 | [#253](https://github.com/samcantrill/loom/pull/253), squash-merged as `5fac22c` | Source/test revision `3034d58`; `make validate-pr` passed Ruff, Pyright, 2,590 default tests, 154 config-extra tests with 3 expected skips, and both builds; fresh summary recorded 2,744 passes; manager-local review passed | No known Phase 11 blocker; CPU/memory capacity accounting deliberately makes no OS-enforcement claim, and bounded operations/deployment remain Phase 12 | Dedicated phase worktree and local/remote phase branches removed; merge metadata recorded from a clean manager worktree |
+| 12 | [#254](https://github.com/samcantrill/loom/pull/254), squash-merged as `4097729` | Source/test revision `20d7ca8`; `make validate-pr` passed Ruff, zero-finding Pyright, 2,602 default tests, 155 config-extra tests with 3 expected skips, and both builds; fresh summary recorded 2,757 passes; manager-local review passed after correction 2/3 | No known Phase 12 blocker; targeted owner detail and optional Discord traversal are deliberately outside the constant-size summary/scheduler path, and persistent managed/ready-stage SLURM still require a permitted stable coordinator host | Remote branch removed at merge; dedicated worktree/local branch cleanup follows this metadata commit |

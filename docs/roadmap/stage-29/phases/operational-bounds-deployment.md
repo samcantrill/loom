@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 29, Phase 12
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p12-operational-bounds-deployment`
@@ -292,8 +292,8 @@ Final commands:
 - Independent review: not needed; the fast-path manager review found no
   remaining material residual risk after correction 2/3
 - Blocker corrections: 2/3
-- PR and merge: [#254](https://github.com/samcantrill/loom/pull/254) is open,
-  targets exactly `develop`, is non-draft, and was immediately verified mergeable
+- PR and merge: [#254](https://github.com/samcantrill/loom/pull/254)
+  targeted exactly `develop` and squash-merged as `4097729`
 
 ## Completion Record
 
@@ -303,5 +303,5 @@ Final commands:
 | Tests added or updated | Unit, integration, CLI, transport, service-process, Discord, and documentation/example coverage exercise pagination/wait, constant poll rows and replay errors, health isolation, forward/regressed time and recovery, failure-cut initialization, config binding, foreground outbound reconnect, redaction, and the persistent-managed versus service-less deployment boundary. `make validate-pr` passed 2,602 default and 155 config-extra tests with 3 expected skips; the fresh categorized receipt contains 2,757 passes. |
 | Validated revision/tree state and evidence | Source/test revision `20d7ca8`, documented candidate `a0029ed`; Ruff and Pyright passed, both distribution artifacts built, and `build/test-summary.md` reports package 118, unit 1,849, contract 297, integration 280, E2E 58, and config-extra 155 passes with zero failures/errors. |
 | Validation-relevant changes after evidence | None after `20d7ca8`; roadmap state updates do not change source, tests, dependencies, build, or validation configuration. |
-| PR, review, and merge | [#254](https://github.com/samcantrill/loom/pull/254) targets `develop` with the approved title; manager-local review and local validation pass, and automatic squash merge is pending the final remote-state check. |
-| Residual risk and cleanup | No known phase blocker. Owner-detail traversal remains explicitly opt-in and may be proportional to one admission; the optional Discord process deliberately traverses bounded pages outside scheduler/status paths. Old roots, polls, runtime records, and the old status surface remain unsupported. Dedicated worktree and branch remain until verified merge. |
+| PR, review, and merge | [#254](https://github.com/samcantrill/loom/pull/254) targeted `develop` with the approved title, passed manager-local review and fresh local validation, and squash-merged as `4097729`. |
+| Residual risk and cleanup | No known phase blocker. Owner-detail traversal remains explicitly opt-in and may be proportional to one admission; the optional Discord process deliberately traverses bounded pages outside scheduler/status paths. Old roots, polls, runtime records, and the old status surface remain unsupported. Remote branch is removed; dedicated worktree/local branch cleanup follows this metadata commit. |
