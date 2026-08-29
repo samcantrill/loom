@@ -322,7 +322,7 @@ def _crash_remote_agent_application(
             agent.execute_one(
                 session.session_id,
                 session.availability_revision,
-                poll_id="fresh-restart-poll",
+                sequence=1,
                 wait_timeout_ms=5_000,
             )
         except RuntimeError as exc:
@@ -368,7 +368,7 @@ def _reconcile_remote_agent_application(
             agent.wait_for_work(
                 session.session_id,
                 session.availability_revision,
-                poll_id="poll-before-fresh-replay",
+                sequence=1,
                 wait_timeout_ms=1,
             )
         except QueueConflictError:
@@ -998,7 +998,7 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
             agent.execute_one,
             session.session_id,
             session.availability_revision,
-            poll_id="recovery-poll",
+            sequence=1,
             wait_timeout_ms=5_000,
         )
         coordinator.submit(LocalDaemonAdmissionRequest("recovery-item", run_uri))
@@ -1207,10 +1207,10 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
             reflected_claim_ids=successor_target.reflected_claim_ids,
         )
         daemon._execution.coordinator.publish_offer(withheld_snapshot)  # type: ignore[union-attr]  # noqa: SLF001
-        replacement_status = next(
-            item
-            for item in daemon.status().controls
-            if item.get("owner") == "session-replacement"
+        replacement_status = operator.replace_agent_session(
+            SessionReplacementRequest(
+                "replace-remote-agent", session.agent_id, "old agent root was lost"
+            )
         )
         assert replacement_status["readiness"] == "ready"
         with pytest.raises(
@@ -1302,10 +1302,10 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
             reflected_claim_ids=released_target.reflected_claim_ids,
         )
         daemon._execution.coordinator.publish_offer(released_snapshot)  # type: ignore[union-attr]  # noqa: SLF001
-        replacement_status = next(
-            item
-            for item in daemon.status().controls
-            if item.get("owner") == "session-replacement"
+        replacement_status = operator.replace_agent_session(
+            SessionReplacementRequest(
+                "replace-remote-agent", session.agent_id, "old agent root was lost"
+            )
         )
         assert replacement_status["owner_counts"]["contained"] == 0  # type: ignore[index]
         assert replacement_status["owner_counts"]["released"] == 1  # type: ignore[index]
@@ -1533,7 +1533,7 @@ def test_restarted_agent_with_retained_claim_exposes_no_capacity(
             restarted.wait_for_work(
                 "session-1",
                 "availability-1",
-                poll_id="poll-after-restart",
+                sequence=1,
                 wait_timeout_ms=1,
             )
     finally:
@@ -1565,9 +1565,9 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
     LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     with sqlite3.connect(agent_root / "control.sqlite") as conn:
         conn.execute(
-            "INSERT INTO agent_polls_local(session_id, availability_revision, "
-            "poll_id, state) VALUES ('session-1', 'availability-1', "
-            "'poll-1', 'PENDING')"
+            "INSERT INTO agent_poll_state_local(session_id, availability_revision, "
+            "sequence, request_digest, state, result_json) VALUES "
+            "('session-1', 'availability-1', 1, 'digest', 'PENDING', NULL)"
         )
         conn.commit()
 
@@ -1591,7 +1591,7 @@ def test_restarted_agent_with_an_indeterminate_poll_exposes_no_capacity(
             restarted.wait_for_work(
                 "session-1",
                 "availability-1",
-                poll_id="poll-after-restart",
+                sequence=1,
                 wait_timeout_ms=1,
             )
     finally:
@@ -1744,7 +1744,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 agent.execute_one,
                 session.session_id,
                 session.availability_revision,
-                poll_id="restart-poll",
+                sequence=1,
                 wait_timeout_ms=5_000,
             )
             coordinator.submit(LocalDaemonAdmissionRequest("restart-item", run_uri))
@@ -2063,7 +2063,7 @@ def test_one_supervisor_routes_selected_work_through_two_bound_profiles(
                     agent.execute_one,
                     current.session_id,
                     current.availability_revision,
-                    poll_id=f"poll-{suffix}",
+                    sequence=1 if suffix == "a" else 2,
                     wait_timeout_ms=5_000,
                 )
                 coordinator.submit(
@@ -2240,14 +2240,14 @@ def test_two_remote_agents_execute_two_globally_selected_runs(tmp_path: Path) ->
                 agent_a.execute_one,
                 session_a.session_id,
                 session_a.availability_revision,
-                poll_id="poll-a",
+                sequence=1,
                 wait_timeout_ms=5_000,
             )
             execution_b = workers.submit(
                 agent_b.execute_one,
                 session_b.session_id,
                 session_b.availability_revision,
-                poll_id="poll-b",
+                sequence=1,
                 wait_timeout_ms=5_000,
             )
             coordinator.submit(LocalDaemonAdmissionRequest("item-a", run_a))
@@ -2388,7 +2388,7 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
                 agent.execute_one,
                 session.session_id,
                 session.availability_revision,
-                poll_id="poll-mixed-run",
+                sequence=1,
                 wait_timeout_ms=5_000,
             )
             coordinator.submit(LocalDaemonAdmissionRequest("mixed-item", run_uri))
@@ -2629,7 +2629,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
                 agent.execute_one,
                 session.session_id,
                 session.availability_revision,
-                poll_id="poll-gpu-remote",
+                sequence=1,
                 wait_timeout_ms=5_000,
             )
             remote_result = remote_execution.result(timeout=20)
@@ -2822,7 +2822,7 @@ def test_gpu_model_fallback_uses_daemon_accepted_time(
         while monotonic() < deadline:
             admission = next(
                 item
-                for item in client.status().admissions
+                for item in client.admissions().admissions
                 if item.queue_item_id == "fallback-item"
             )
             if admission.state is LocalDaemonAdmissionState.WAITING:
@@ -3045,14 +3045,16 @@ def test_loopback_mtls_derives_credential_and_rechecks_live_policy(
                 client.wait_for_work,
                 registered.session_id,
                 registered.availability_revision,
-                poll_id="poll-live",
+                sequence=1,
                 wait_timeout_ms=1_000,
             )
             deadline = monotonic() + 2
             while monotonic() < deadline:
                 with daemon._connection() as conn:
                     active = conn.execute(
-                        "SELECT active FROM agent_polls WHERE poll_id = 'poll-live'"
+                        "SELECT active FROM agent_poll_state "
+                        "WHERE session_id = ? AND sequence = 1",
+                        (registered.session_id,),
                     ).fetchone()
                 if active is not None and bool(active[0]):
                     break
@@ -3115,7 +3117,7 @@ def test_loopback_mtls_derives_credential_and_rechecks_live_policy(
                 rotated.wait_for_work(
                     resumed.session_id,
                     resumed.availability_revision,
-                    poll_id="poll-rotated-credential",
+                    sequence=2,
                     wait_timeout_ms=10,
                 )["result"]
                 == "wait"
@@ -3420,7 +3422,7 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                 agent.execute_one,
                 session.session_id,
                 session.availability_revision,
-                poll_id="poll-remote-1",
+                sequence=1,
                 wait_timeout_ms=5_000,
             )
             coordinator.submit(LocalDaemonAdmissionRequest("remote-item", run_uri))
@@ -3446,7 +3448,7 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                 agent.execute_one,
                 session.session_id,
                 next_availability,
-                poll_id="poll-remote-2",
+                sequence=2,
                 wait_timeout_ms=5_000,
             )
             first = execution.result(timeout=20)
@@ -3471,7 +3473,7 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                 agent.execute_one,
                 session.session_id,
                 next_availability,
-                poll_id="poll-remote-3",
+                sequence=3,
                 wait_timeout_ms=5_000,
             )
             second = execution.result(timeout=20)
@@ -4016,8 +4018,10 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         )
         assert remote_status["coordinator_id"] == direct_status["coordinator_id"]
         assert remote_status["coordinator_epoch"] == direct_status["coordinator_epoch"]
-        assert remote_status["admissions"] in ((), [])
-        assert direct_status["admissions"] == []
+        assert remote_status["active_admissions"] == 0
+        assert remote_status["waiting_admissions"] == 0
+        assert direct_status["active_admissions"] == 0
+        assert direct_status["waiting_admissions"] == 0
         daemon.replace_agent_policy(
             AgentPolicyConfig(revision="policy-2", agents=policy.agents)
         )

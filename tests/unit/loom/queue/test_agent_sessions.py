@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from collections.abc import Mapping
@@ -35,10 +36,12 @@ from loom.queue.agent_sessions import (
     AgentControlKind,
     AgentPolicyConfig,
     AgentPrincipalPolicy,
+    AgentPollSequenceGapError,
     AgentRegistration,
     AgentRetirementProof,
     AgentSession,
     AgentSessionState,
+    AgentStalePollError,
     SessionReplacementRequest,
     TransportPrincipalPolicy,
     _REPLACEMENT_ASSIGNMENT_REFERENCE_CLASSES,
@@ -389,7 +392,7 @@ def test_session_replacement_hard_cut_binds_fresh_successor_and_readiness(
             _view(daemon).wait_for_work(
                 successor.session_id,
                 successor.availability_revision,
-                poll_id="replacement-early-poll",
+                sequence=1,
                 wait_timeout_ms=10,
             )
         offer = replace(
@@ -404,22 +407,24 @@ def test_session_replacement_hard_cut_binds_fresh_successor_and_readiness(
         _view(daemon).publish_offer(
             offer, idempotency_key="replacement-first-observation"
         )
-        status = next(
-            item
-            for item in daemon.status().controls
-            if item.get("owner") == "session-replacement"
-        )
-        assert status["state"] == "ready"
-        assert status["readiness"] == "ready"
-        assert status["withholding_reason"] is None
-        owner_counts = status["owner_counts"]
+        with daemon._connection() as conn:
+            row = conn.execute(
+                "SELECT state, readiness, withholding_reason, result_json "
+                "FROM session_replacements WHERE operation_id = ?",
+                (request.operation_id,),
+            ).fetchone()
+        assert row is not None
+        assert row["state"] == "ready"
+        assert row["readiness"] == "ready"
+        assert row["withholding_reason"] is None
+        owner_counts = json.loads(str(row["result_json"]))["owner_counts"]
         assert isinstance(owner_counts, Mapping)
         assert owner_counts["assignments"] == 0
         assert (
             _view(daemon).wait_for_work(
                 successor.session_id,
                 successor.availability_revision,
-                poll_id="replacement-ready-poll",
+                sequence=1,
                 wait_timeout_ms=10,
             )["result"]
             == "wait"
@@ -996,12 +1001,12 @@ def test_restart_requires_reconcile_fresh_offer_and_only_returns_wait(
         wait = _view(second).wait_for_work(
             resumed.session_id,
             "availability-1",
-            poll_id="poll-1",
+            sequence=1,
             wait_timeout_ms=5,
         )
         assert wait == {
             "result": "wait",
-            "poll_id": "poll-1",
+            "sequence": 1,
             "coordinator_epoch": epoch,
         }
 
@@ -1047,13 +1052,13 @@ def test_retirement_fences_then_requires_empty_coordinator_references_and_tombst
             )
         with daemon._connection() as conn:  # coordinator-owned known reference
             conn.execute(
-                "INSERT INTO agent_polls(principal_id, poll_id, session_id, "
+                "INSERT INTO agent_poll_state(principal_id, session_id, sequence, "
                 "availability_revision, coordinator_epoch, wait_timeout_ms, "
                 "digest, active, result_json) VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL)",
                 (
                     "principal-a",
-                    "poll-active",
                     registered.session_id,
+                    1,
                     registered.availability_revision,
                     registered.coordinator_epoch,
                     100,
@@ -1076,7 +1081,7 @@ def test_retirement_fences_then_requires_empty_coordinator_references_and_tombst
             )
             assert (
                 conn.execute(
-                    "SELECT COUNT(*) FROM agent_polls WHERE active = 1"
+                    "SELECT COUNT(*) FROM agent_poll_state WHERE active = 1"
                 ).fetchone()[0]
                 == 0
             )
@@ -1194,14 +1199,14 @@ def test_offer_expiry_and_stale_poll_fail_without_touching_execution_owners(
             _view(daemon).wait_for_work(
                 registered.session_id,
                 "availability-1",
-                poll_id="expired-poll",
+                sequence=1,
                 wait_timeout_ms=5,
             )
         with pytest.raises(QueueConflictError, match="availability revision"):
             _view(daemon).wait_for_work(
                 registered.session_id,
                 "availability-2",
-                poll_id="stale-poll",
+                sequence=1,
                 wait_timeout_ms=5,
             )
         with sqlite3.connect(config.execution_database) as conn:
@@ -1377,7 +1382,7 @@ def test_gpu_fraction_descriptor_uses_one_canonical_rational_shape() -> None:
     assert GpuDeviceDescriptor.from_dict(descriptor.to_dict()) == descriptor
 
 
-def test_wait_poll_is_digest_replayed_and_current_policy_is_rechecked(
+def test_wait_poll_is_sequenced_replayed_and_current_policy_is_rechecked(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
@@ -1393,14 +1398,14 @@ def test_wait_poll_is_digest_replayed_and_current_policy_is_rechecked(
         first = _view(daemon).wait_for_work(
             registered.session_id,
             "availability-1",
-            poll_id="poll-1",
+            sequence=1,
             wait_timeout_ms=10,
         )
         assert (
             _view(daemon).wait_for_work(
                 registered.session_id,
                 "availability-1",
-                poll_id="poll-1",
+                sequence=1,
                 wait_timeout_ms=10,
             )
             == first
@@ -1409,7 +1414,7 @@ def test_wait_poll_is_digest_replayed_and_current_policy_is_rechecked(
             _view(daemon).wait_for_work(
                 registered.session_id,
                 "availability-1",
-                poll_id="poll-1",
+                sequence=1,
                 wait_timeout_ms=11,
             )
 
@@ -1418,14 +1423,16 @@ def test_wait_poll_is_digest_replayed_and_current_policy_is_rechecked(
                 _view(daemon).wait_for_work,
                 registered.session_id,
                 "availability-1",
-                poll_id="poll-live",
+                sequence=2,
                 wait_timeout_ms=1_000,
             )
             deadline = monotonic() + 2
             while monotonic() < deadline:
                 with daemon._connection() as conn:
                     active = conn.execute(
-                        "SELECT active FROM agent_polls WHERE poll_id = 'poll-live'"
+                        "SELECT active FROM agent_poll_state "
+                        "WHERE session_id = ? AND sequence = 2",
+                        (registered.session_id,),
                     ).fetchone()
                 if active is not None and bool(active[0]):
                     break
@@ -1436,14 +1443,14 @@ def test_wait_poll_is_digest_replayed_and_current_policy_is_rechecked(
                 _view(daemon).wait_for_work(
                     registered.session_id,
                     "availability-1",
-                    poll_id="poll-live",
+                    sequence=2,
                     wait_timeout_ms=1_000,
                 )
-            with pytest.raises(QueueConflictError, match="active work poll"):
+            with pytest.raises(QueueConflictError, match="already active"):
                 _view(daemon).wait_for_work(
                     registered.session_id,
                     "availability-1",
-                    poll_id="poll-concurrent",
+                    sequence=3,
                     wait_timeout_ms=10,
                 )
             with pytest.raises(QueueConflictError, match="active poll"):
@@ -1454,6 +1461,55 @@ def test_wait_poll_is_digest_replayed_and_current_policy_is_rechecked(
             daemon.replace_agent_policy(AgentPolicyConfig(revision="policy-2"))
             with pytest.raises(QueueServiceError, match="not authorized"):
                 pending.result(timeout=2)
+    finally:
+        daemon.stop()
+
+
+def test_poll_sequence_rejects_stale_and_gap_and_keeps_one_replay_row(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        registered = _register(daemon)
+        _view(daemon).publish_offer(
+            _offer(registered.session_id, registered.coordinator_epoch),
+            idempotency_key="offer-1",
+        )
+        for sequence in (1, 2):
+            assert (
+                _view(daemon).wait_for_work(
+                    registered.session_id,
+                    registered.availability_revision,
+                    sequence=sequence,
+                    wait_timeout_ms=5,
+                )["sequence"]
+                == sequence
+            )
+        with pytest.raises(AgentStalePollError, match="stale"):
+            _view(daemon).wait_for_work(
+                registered.session_id,
+                registered.availability_revision,
+                sequence=1,
+                wait_timeout_ms=5,
+            )
+        with pytest.raises(AgentPollSequenceGapError, match="gap"):
+            _view(daemon).wait_for_work(
+                registered.session_id,
+                registered.availability_revision,
+                sequence=4,
+                wait_timeout_ms=5,
+            )
+        with daemon._connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*), sequence FROM agent_poll_state "
+                "WHERE principal_id = ? AND session_id = ?",
+                ("principal-a", registered.session_id),
+            ).fetchone()
+        assert row is not None
+        assert (int(row[0]), int(row[1])) == (1, 2)
     finally:
         daemon.stop()
 
@@ -1519,15 +1575,16 @@ def test_poll_identity_and_cleanup_are_scoped_to_the_principal(tmp_path: Path) -
                 view_a.wait_for_work,
                 session_a.session_id,
                 session_a.availability_revision,
-                poll_id="shared-poll",
+                sequence=1,
                 wait_timeout_ms=500,
             )
             deadline = monotonic() + 2
             while monotonic() < deadline:
                 with daemon._connection() as conn:
                     active = conn.execute(
-                        "SELECT active FROM agent_polls WHERE principal_id = ? AND poll_id = ?",
-                        ("principal-a", "shared-poll"),
+                        "SELECT active FROM agent_poll_state WHERE principal_id = ? "
+                        "AND session_id = ? AND sequence = 1",
+                        ("principal-a", session_a.session_id),
                     ).fetchone()
                 if active is not None and bool(active[0]):
                     break
@@ -1539,7 +1596,7 @@ def test_poll_identity_and_cleanup_are_scoped_to_the_principal(tmp_path: Path) -
                 view_b.wait_for_work(
                     session_b.session_id,
                     session_b.availability_revision,
-                    poll_id="shared-poll",
+                    sequence=1,
                     wait_timeout_ms=10,
                 )["result"]
                 == "wait"
@@ -1548,21 +1605,21 @@ def test_poll_identity_and_cleanup_are_scoped_to_the_principal(tmp_path: Path) -
                 view_b.wait_for_work(
                     session_a.session_id,
                     session_a.availability_revision,
-                    poll_id="shared-poll",
+                    sequence=1,
                     wait_timeout_ms=10,
                 )
             with daemon._connection() as conn:
                 assert conn.execute(
-                    "SELECT active FROM agent_polls WHERE principal_id = ? AND poll_id = ?",
-                    ("principal-a", "shared-poll"),
+                    "SELECT active FROM agent_poll_state WHERE principal_id = ? "
+                    "AND session_id = ? AND sequence = 1",
+                    ("principal-a", session_a.session_id),
                 ).fetchone()[0]
             assert held.result(timeout=2)["result"] == "wait"
 
         with daemon._connection() as conn:
             assert (
                 conn.execute(
-                    "SELECT COUNT(*) FROM agent_polls WHERE poll_id = ?",
-                    ("shared-poll",),
+                    "SELECT COUNT(*) FROM agent_poll_state WHERE sequence = 1",
                 ).fetchone()[0]
                 == 2
             )
@@ -1647,7 +1704,7 @@ def test_unmerged_candidate_poll_schema_is_rejected_untouched(tmp_path: Path) ->
     config = _config(tmp_path)
     LocalDaemon.initialize(config)
     with sqlite3.connect(config.control_database) as conn:
-        conn.execute("DROP TABLE agent_polls")
+        conn.execute("DROP TABLE agent_poll_state")
         conn.execute(
             "CREATE TABLE agent_polls (poll_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, wait_timeout_ms INTEGER NOT NULL, digest TEXT NOT NULL, active INTEGER NOT NULL, result_json TEXT)"
         )
@@ -1698,7 +1755,7 @@ def test_every_agent_operation_is_causally_outside_execution_owners(
         _view(daemon).wait_for_work(
             reconciled.session_id,
             reconciled.availability_revision,
-            poll_id="poll-no-launch",
+            sequence=1,
             wait_timeout_ms=5,
         )
         _view(daemon).retire_clean(

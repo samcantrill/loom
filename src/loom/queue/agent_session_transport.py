@@ -56,10 +56,12 @@ from .agent_sessions import (
     AgentControl,
     AgentControlEffect,
     AgentPollActiveError,
+    AgentPollSequenceGapError,
     AgentRegistration,
     AgentRetirementProof,
     AgentSession,
     AgentSessionState,
+    AgentStalePollError,
     SessionReplacementRequest,
     AgentTransferAuthorizationStaleError,
     PROTOCOL_VERSION,
@@ -320,7 +322,7 @@ class _RemoteAgentJournal:
             raise QueueServiceError("remote agent control state is unavailable")
         try:
             with self._connection() as conn:
-                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 8:
+                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 9:
                     raise QueueServiceError("remote agent root schema is unsupported")
                 metadata = {
                     str(row[0]): str(row[1])
@@ -508,29 +510,68 @@ class _RemoteAgentJournal:
         self,
         session_id: str,
         availability_revision: str,
-        poll_id: str,
+        sequence: int,
         request: Mapping[str, PlainData],
-    ) -> None:
+    ) -> Mapping[str, PlainData] | None:
         session = self.session(session_id)
         if session.availability_revision != availability_revision:
             raise QueueConflictError("poll does not match the durable agent session")
-        self._persist_mutation("poll", poll_id, request)
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise QueueServiceError("work poll sequence must be positive")
+        digest = _canonical_digest(request)
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             current = conn.execute(
-                "SELECT poll_id, state FROM agent_polls_local WHERE session_id = ? AND availability_revision = ?",
-                (session_id, availability_revision),
+                "SELECT sequence, request_digest, state, result_json "
+                "FROM agent_poll_state_local WHERE session_id = ?",
+                (session_id,),
             ).fetchone()
-            if (
-                current is not None
-                and str(current["state"]) == "PENDING"
-                and str(current["poll_id"]) != poll_id
-            ):
-                raise QueueConflictError("agent already has a pending work poll")
-            conn.execute(
-                "INSERT INTO agent_polls_local(session_id, availability_revision, poll_id, state) VALUES (?, ?, ?, 'PENDING') ON CONFLICT(session_id, availability_revision) DO UPDATE SET poll_id = excluded.poll_id, state = 'PENDING'",
-                (session_id, availability_revision, poll_id),
-            )
+            if current is None:
+                if sequence != 1:
+                    raise AgentPollSequenceGapError("work poll sequence has a gap")
+                conn.execute(
+                    "INSERT INTO agent_poll_state_local("
+                    "session_id, availability_revision, sequence, request_digest, "
+                    "state, result_json) VALUES (?, ?, ?, ?, 'PENDING', NULL)",
+                    (session_id, availability_revision, sequence, digest),
+                )
+            else:
+                stored_sequence = int(current["sequence"])
+                if sequence < stored_sequence:
+                    raise AgentStalePollError("work poll sequence is stale")
+                if sequence > stored_sequence + 1:
+                    raise AgentPollSequenceGapError("work poll sequence has a gap")
+                if sequence == stored_sequence:
+                    if str(current["request_digest"]) != digest:
+                        raise QueueConflictError(
+                            "poll sequence was reused with different content"
+                        )
+                    if current["result_json"] is not None:
+                        value = json.loads(str(current["result_json"]))
+                        if not isinstance(value, Mapping):
+                            raise QueueServiceError("agent poll result is invalid")
+                        conn.commit()
+                        frozen = freeze_plain_data(
+                            dict(value), path="agent poll replay"
+                        )
+                        assert isinstance(frozen, Mapping)
+                        return frozen
+                    if str(current["state"]) == "PENDING":
+                        conn.commit()
+                        return None
+                    raise QueueConflictError(
+                        "work poll was fenced and is not reusable"
+                    )
+                if str(current["state"]) == "PENDING":
+                    raise AgentPollActiveError("work poll is already active")
+                conn.execute(
+                    "UPDATE agent_poll_state_local SET availability_revision = ?, "
+                    "sequence = ?, request_digest = ?, state = 'PENDING', "
+                    "result_json = NULL WHERE session_id = ?",
+                    (availability_revision, sequence, digest, session_id),
+                )
             conn.commit()
+        return None
 
     def complete_mutation(
         self,
@@ -565,40 +606,62 @@ class _RemoteAgentJournal:
                     "UPDATE agent_offers_local SET state = 'ACTIVE' WHERE session_id = ?",
                     (session_id,),
                 )
-            elif operation == "poll":
-                poll_result = result.get("result")
-                if poll_result == "assignment":
-                    request_value = result.get("request")
-                    request = _ResidentAssignmentBundle.from_dict(request_value)
-                    poll_request = json.loads(str(row["request_json"]))
-                    if not isinstance(poll_request, Mapping):
-                        raise QueueServiceError("agent poll intent is invalid")
-                    request_session = poll_request.get("session_id")
-                    if not isinstance(request_session, str):
-                        raise QueueServiceError("agent poll intent is invalid")
-                    conn.execute(
-                        "INSERT INTO agent_session_references(session_id, "
-                        "reference_kind, reference_id, resolved) "
-                        "VALUES (?, 'delivery', ?, 0) ON CONFLICT(session_id, "
-                        "reference_kind, reference_id) DO NOTHING",
-                        (request_session, request.assignment_id),
-                    )
-                    poll_state = "DELIVERED"
-                elif poll_result == "wait":
-                    poll_state = "WAIT"
-                else:
-                    raise QueueServiceError("agent poll result is invalid")
-                conn.execute(
-                    "UPDATE agent_polls_local SET state = ? WHERE poll_id = ?",
-                    (poll_state, operation_id),
-                )
             conn.commit()
 
-    def fence_poll(self, poll_id: str) -> None:
+    def complete_poll(
+        self,
+        session_id: str,
+        sequence: int,
+        result: Mapping[str, PlainData],
+    ) -> None:
+        encoded = _canonical_json(result)
+        poll_result = result.get("result")
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT state, result_json FROM agent_poll_state_local "
+                "WHERE session_id = ? AND sequence = ?",
+                (session_id, sequence),
+            ).fetchone()
+            if row is None:
+                raise QueueServiceError("agent poll state is unavailable")
+            if row["result_json"] is not None:
+                if str(row["result_json"]) != encoded:
+                    raise QueueConflictError(
+                        "poll replay returned a different result"
+                    )
+                conn.commit()
+                return
+            if str(row["state"]) != "PENDING":
+                raise QueueConflictError("work poll was fenced")
+            if poll_result == "assignment":
+                request_value = result.get("request")
+                request = _ResidentAssignmentBundle.from_dict(request_value)
+                conn.execute(
+                    "INSERT INTO agent_session_references(session_id, "
+                    "reference_kind, reference_id, resolved) "
+                    "VALUES (?, 'delivery', ?, 0) ON CONFLICT(session_id, "
+                    "reference_kind, reference_id) DO NOTHING",
+                    (session_id, request.assignment_id),
+                )
+                poll_state = "DELIVERED"
+            elif poll_result == "wait":
+                poll_state = "WAIT"
+            else:
+                raise QueueServiceError("agent poll result is invalid")
+            conn.execute(
+                "UPDATE agent_poll_state_local SET state = ?, result_json = ? "
+                "WHERE session_id = ? AND sequence = ? AND state = 'PENDING'",
+                (poll_state, encoded, session_id, sequence),
+            )
+            conn.commit()
+
+    def fence_poll(self, session_id: str, sequence: int) -> None:
         with self._connection() as conn:
             conn.execute(
-                "UPDATE agent_polls_local SET state = 'FENCED' WHERE poll_id = ?",
-                (poll_id,),
+                "UPDATE agent_poll_state_local SET state = 'FENCED' "
+                "WHERE session_id = ? AND sequence = ?",
+                (session_id, sequence),
             )
             conn.commit()
 
@@ -651,7 +714,7 @@ class _RemoteAgentJournal:
                     (session.session_id,),
                 )
                 conn.execute(
-                    "UPDATE agent_polls_local SET state = 'FENCED' "
+                    "UPDATE agent_poll_state_local SET state = 'FENCED' "
                     "WHERE session_id = ?",
                     (session.session_id,),
                 )
@@ -871,7 +934,8 @@ class _RemoteAgentJournal:
                 "reference_kind = 'delivery' AND resolved = 0 LIMIT 1"
             ).fetchone()
             pending_poll = conn.execute(
-                "SELECT 1 FROM agent_polls_local WHERE state = 'PENDING' LIMIT 1"
+                "SELECT 1 FROM agent_poll_state_local "
+                "WHERE state = 'PENDING' LIMIT 1"
             ).fetchone()
         return row is not None or pending_poll is not None
 
@@ -1029,7 +1093,8 @@ class _RemoteAgentJournal:
                 (session_id,),
             )
             conn.execute(
-                "UPDATE agent_polls_local SET state = 'FENCED' WHERE session_id = ?",
+                "UPDATE agent_poll_state_local SET state = 'FENCED' "
+                "WHERE session_id = ?",
                 (session_id,),
             )
             unresolved = conn.execute(
@@ -1476,7 +1541,7 @@ class LocalDaemonAgentHttpClient:
         session_id: str,
         availability_revision: str,
         *,
-        poll_id: str,
+        sequence: int,
         wait_timeout_ms: int,
     ) -> Mapping[str, PlainData]:
         if self._drained:
@@ -1488,11 +1553,15 @@ class LocalDaemonAgentHttpClient:
         value: dict[str, PlainData] = {
             "session_id": session_id,
             "availability_revision": availability_revision,
-            "poll_id": poll_id,
+            "sequence": sequence,
             "wait_timeout_ms": wait_timeout_ms,
         }
         journal = self._require_journal()
-        journal.prepare_poll(session_id, availability_revision, poll_id, value)
+        replay = journal.prepare_poll(
+            session_id, availability_revision, sequence, value
+        )
+        if replay is not None:
+            return replay
         try:
             result = self._call("poll", value)
         except AgentPollActiveError:
@@ -1500,14 +1569,14 @@ class LocalDaemonAgentHttpClient:
             # Preserve the local intent so the same identity can be retried.
             raise
         except QueueConflictError:
-            journal.fence_poll(poll_id)
+            journal.fence_poll(session_id, sequence)
             raise
         except _IndeterminateAgentProtocolError:
             raise
         except QueueServiceError:
-            journal.fence_poll(poll_id)
+            journal.fence_poll(session_id, sequence)
             raise
-        journal.complete_mutation("poll", poll_id, result)
+        journal.complete_poll(session_id, sequence, result)
         return result
 
     def poll_control(self, session_id: str) -> AgentControl | None:
@@ -2161,7 +2230,7 @@ class LocalDaemonAgentHttpClient:
         session_id: str,
         availability_revision: str,
         *,
-        poll_id: str,
+        sequence: int,
         wait_timeout_ms: int,
     ) -> Mapping[str, PlainData]:
         """Poll and drive at most one resident assignment to ordered release."""
@@ -2169,7 +2238,7 @@ class LocalDaemonAgentHttpClient:
         delivery = self.wait_for_work(
             session_id,
             availability_revision,
-            poll_id=poll_id,
+            sequence=sequence,
             wait_timeout_ms=wait_timeout_ms,
         )
         if delivery.get("result") != "assignment":
@@ -3232,6 +3301,10 @@ class LocalDaemonAgentHttpClient:
             self._close_connection()
             if payload.get("error") == "agent_poll_active":
                 raise AgentPollActiveError("work poll is already active")
+            if payload.get("error") == "agent_poll_stale":
+                raise AgentStalePollError("work poll sequence is stale")
+            if payload.get("error") == "agent_poll_sequence_gap":
+                raise AgentPollSequenceGapError("work poll sequence has a gap")
             if payload.get("error") == "agent_transfer_authorization_stale":
                 raise AgentTransferAuthorizationStaleError(
                     "remote transfer authorization is stale"
@@ -3377,6 +3450,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(200, {"ok": True, "result": result})
         except AgentPollActiveError:
             self._reply(409, {"ok": False, "error": "agent_poll_active"})
+        except AgentStalePollError:
+            self._reply(409, {"ok": False, "error": "agent_poll_stale"})
+        except AgentPollSequenceGapError:
+            self._reply(409, {"ok": False, "error": "agent_poll_sequence_gap"})
         except AgentTransferAuthorizationStaleError:
             self._reply(
                 409,
@@ -3435,12 +3512,12 @@ def _dispatch(
     if operation == "poll":
         _exact(
             value,
-            {"session_id", "availability_revision", "poll_id", "wait_timeout_ms"},
+            {"session_id", "availability_revision", "sequence", "wait_timeout_ms"},
         )
         return view.wait_for_work(
             _string(value, "session_id"),
             _string(value, "availability_revision"),
-            poll_id=_string(value, "poll_id"),
+            sequence=_integer(value, "sequence"),
             wait_timeout_ms=_integer(value, "wait_timeout_ms"),
         )
     if operation == "authorize":

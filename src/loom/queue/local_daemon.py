@@ -2053,7 +2053,7 @@ class LocalDaemon:
                     (control.expected_session_id,),
                 )
                 conn.execute(
-                    "UPDATE agent_polls SET active = 0 WHERE session_id = ?",
+                    "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
                     (control.expected_session_id,),
                 )
             if control.cancel_active:

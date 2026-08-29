@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     )
 
 
-PROTOCOL_VERSION = "8"
+PROTOCOL_VERSION = "9"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -359,6 +359,14 @@ def _managed_containment_evidence(
 
 class AgentPollActiveError(QueueConflictError):
     """An exact poll retry reached the still-held original poll."""
+
+
+class AgentStalePollError(QueueConflictError):
+    """A poll sequence is older than the session's replayable state."""
+
+
+class AgentPollSequenceGapError(QueueConflictError):
+    """A poll sequence skipped the next permitted session value."""
 
 
 class AgentTransferAuthorizationStaleError(QueueConflictError):
@@ -1367,13 +1375,13 @@ class AgentSessionView:
         session_id: str,
         availability_revision: str,
         *,
-        poll_id: str,
+        sequence: int,
         wait_timeout_ms: int,
     ) -> Mapping[str, PlainData]:
         return AgentSessionService(self._daemon, self._principal).wait_for_work(
             session_id,
             availability_revision,
-            poll_id=poll_id,
+            sequence=sequence,
             wait_timeout_ms=wait_timeout_ms,
         )
 
@@ -1744,7 +1752,7 @@ class AgentSessionService:
                     (session_id,),
                 )
                 conn.execute(
-                    "UPDATE agent_polls SET active = 0 WHERE session_id = ?",
+                    "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
                     (session_id,),
                 )
             elif (
@@ -2205,7 +2213,8 @@ class AgentSessionService:
                 return replay
             execution.validate_agent_offer_provider_composition(offer)
             active_poll = conn.execute(
-                "SELECT poll_id FROM agent_polls WHERE session_id = ? AND active = 1",
+                "SELECT sequence FROM agent_poll_state "
+                "WHERE session_id = ? AND active = 1",
                 (offer.session_id,),
             ).fetchone()
             if active_poll is not None:
@@ -2357,16 +2366,17 @@ class AgentSessionService:
         session_id: str,
         availability_revision: str,
         *,
-        poll_id: str,
+        sequence: int,
         wait_timeout_ms: int,
     ) -> Mapping[str, PlainData]:
         rule, policy_revision = self._authorize("poll")
         for identifier, name in (
             (session_id, "session_id"),
             (availability_revision, "availability_revision"),
-            (poll_id, "poll_id"),
         ):
             _identifier(identifier, name)
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise QueueServiceError("work poll sequence must be positive")
         if (
             isinstance(wait_timeout_ms, bool)
             or not isinstance(wait_timeout_ms, int)
@@ -2376,6 +2386,7 @@ class AgentSessionService:
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
         request_value: dict[str, PlainData] = {
             "session_id": session_id,
+            "sequence": sequence,
             "availability_revision": availability_revision,
             "coordinator_epoch": epoch,
             "wait_timeout_ms": wait_timeout_ms,
@@ -2403,54 +2414,70 @@ class AgentSessionService:
                     "replacement successor readiness is still withheld"
                 )
             existing = conn.execute(
-                "SELECT digest, active, result_json FROM agent_polls "
-                "WHERE principal_id = ? AND poll_id = ?",
-                (rule.principal_id, poll_id),
+                "SELECT sequence, digest, active, result_json FROM agent_poll_state "
+                "WHERE principal_id = ? AND session_id = ?",
+                (rule.principal_id, session_id),
             ).fetchone()
             if existing is not None:
-                if str(existing["digest"]) != digest:
+                stored_sequence = int(existing["sequence"])
+                if sequence < stored_sequence:
+                    raise AgentStalePollError("work poll sequence is stale")
+                if sequence > stored_sequence + 1:
+                    raise AgentPollSequenceGapError("work poll sequence has a gap")
+                if sequence == stored_sequence and str(existing["digest"]) != digest:
                     raise QueueConflictError(
-                        "poll ID was reused with different content"
+                        "poll sequence was reused with different content"
                     )
-                if existing["result_json"] is not None:
+                if sequence == stored_sequence and existing["result_json"] is not None:
                     value = _plain_result(existing["result_json"], "agent poll receipt")
                     conn.commit()
                     return value
                 if bool(existing["active"]):
                     raise AgentPollActiveError("work poll is already active")
-                raise QueueConflictError("work poll was fenced and is not reusable")
+                if sequence == stored_sequence:
+                    raise QueueConflictError("work poll was fenced and is not reusable")
+            elif sequence != 1:
+                raise AgentPollSequenceGapError("work poll sequence has a gap")
             self._require_current_offer(conn, session_id, availability_revision)
-            active = conn.execute(
-                "SELECT poll_id FROM agent_polls WHERE session_id = ? "
-                "AND availability_revision = ? AND active = 1",
-                (session_id, availability_revision),
-            ).fetchone()
-            if active is not None:
-                raise QueueConflictError(
-                    "agent session already has an active work poll"
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO agent_poll_state("
+                    "principal_id, session_id, sequence, availability_revision, "
+                    "coordinator_epoch, wait_timeout_ms, digest, active, result_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL)",
+                    (
+                        rule.principal_id,
+                        session_id,
+                        sequence,
+                        availability_revision,
+                        epoch,
+                        wait_timeout_ms,
+                        digest,
+                    ),
                 )
-            conn.execute(
-                "INSERT INTO agent_polls("
-                "poll_id, principal_id, session_id, availability_revision, "
-                "coordinator_epoch, wait_timeout_ms, digest, active, result_json"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL)",
-                (
-                    poll_id,
-                    rule.principal_id,
-                    session_id,
-                    availability_revision,
-                    epoch,
-                    wait_timeout_ms,
-                    digest,
-                ),
-            )
+            else:
+                conn.execute(
+                    "UPDATE agent_poll_state SET sequence = ?, "
+                    "availability_revision = ?, coordinator_epoch = ?, "
+                    "wait_timeout_ms = ?, digest = ?, active = 1, result_json = NULL "
+                    "WHERE principal_id = ? AND session_id = ?",
+                    (
+                        sequence,
+                        availability_revision,
+                        epoch,
+                        wait_timeout_ms,
+                        digest,
+                        rule.principal_id,
+                        session_id,
+                    ),
+                )
             conn.commit()
 
         delivered = self._take_targeted_delivery(
             principal_id=rule.principal_id,
             session_id=session_id,
             availability_revision=availability_revision,
-            poll_id=poll_id,
+            sequence=sequence,
             epoch=epoch,
             digest=digest,
         )
@@ -2469,9 +2496,10 @@ class AgentSessionService:
                 rule, policy_revision = self._authorize("poll")
                 with self._daemon._connection() as conn:  # type: ignore[attr-defined]
                     row = conn.execute(
-                        "SELECT active, result_json FROM agent_polls "
-                        "WHERE principal_id = ? AND poll_id = ? AND digest = ?",
-                        (rule.principal_id, poll_id, digest),
+                        "SELECT active, result_json FROM agent_poll_state "
+                        "WHERE principal_id = ? AND session_id = ? "
+                        "AND sequence = ? AND digest = ?",
+                        (rule.principal_id, session_id, sequence, digest),
                     ).fetchone()
                     if row is None or not bool(row["active"]):
                         raise QueueConflictError("work poll was fenced")
@@ -2489,7 +2517,7 @@ class AgentSessionService:
                     principal_id=rule.principal_id,
                     session_id=session_id,
                     availability_revision=availability_revision,
-                    poll_id=poll_id,
+                    sequence=sequence,
                     epoch=epoch,
                     digest=digest,
                 )
@@ -2497,7 +2525,7 @@ class AgentSessionService:
                     return delivered
             value = {
                 "result": "wait",
-                "poll_id": poll_id,
+                "sequence": sequence,
                 "coordinator_epoch": epoch,
             }
             rule, policy_revision = self._authorize("poll")
@@ -2514,9 +2542,16 @@ class AgentSessionService:
                 self._check_current_session(session, rule, epoch, policy_revision)
                 self._require_current_offer(conn, session_id, availability_revision)
                 updated = conn.execute(
-                    "UPDATE agent_polls SET active = 0, result_json = ? "
-                    "WHERE principal_id = ? AND poll_id = ? AND digest = ? AND active = 1",
-                    (_canonical_json(value), rule.principal_id, poll_id, digest),
+                    "UPDATE agent_poll_state SET active = 0, result_json = ? "
+                    "WHERE principal_id = ? AND session_id = ? AND sequence = ? "
+                    "AND digest = ? AND active = 1",
+                    (
+                        _canonical_json(value),
+                        rule.principal_id,
+                        session_id,
+                        sequence,
+                        digest,
+                    ),
                 ).rowcount
                 if updated != 1:
                     raise QueueConflictError("work poll was fenced")
@@ -2525,8 +2560,9 @@ class AgentSessionService:
         except Exception:
             with self._daemon._connection() as conn:  # type: ignore[attr-defined]
                 conn.execute(
-                    "UPDATE agent_polls SET active = 0 WHERE principal_id = ? AND poll_id = ? AND digest = ?",
-                    (rule.principal_id, poll_id, digest),
+                    "UPDATE agent_poll_state SET active = 0 WHERE principal_id = ? "
+                    "AND session_id = ? AND sequence = ? AND digest = ?",
+                    (rule.principal_id, session_id, sequence, digest),
                 )
                 conn.commit()
             raise
@@ -2537,7 +2573,7 @@ class AgentSessionService:
         principal_id: str,
         session_id: str,
         availability_revision: str,
-        poll_id: str,
+        sequence: int,
         epoch: str,
         digest: str,
     ) -> Mapping[str, PlainData] | None:
@@ -2555,21 +2591,28 @@ class AgentSessionService:
                 return None
             value: dict[str, PlainData] = {
                 "result": "assignment",
-                "poll_id": poll_id,
+                "sequence": sequence,
                 "coordinator_epoch": epoch,
                 "request": cast(PlainData, json.loads(str(row["request_json"]))),
             }
             updated = conn.execute(
-                "UPDATE agent_deliveries SET state = 'DELIVERED', poll_id = ? "
+                "UPDATE agent_deliveries SET state = 'DELIVERED', poll_sequence = ? "
                 "WHERE assignment_id = ? AND state = 'TARGETED'",
-                (poll_id, str(row["assignment_id"])),
+                (sequence, str(row["assignment_id"])),
             ).rowcount
             if updated != 1:
                 raise QueueConflictError("targeted delivery changed before its poll")
             updated = conn.execute(
-                "UPDATE agent_polls SET active = 0, result_json = ? WHERE "
-                "principal_id = ? AND poll_id = ? AND digest = ? AND active = 1",
-                (_canonical_json(value), principal_id, poll_id, digest),
+                "UPDATE agent_poll_state SET active = 0, result_json = ? WHERE "
+                "principal_id = ? AND session_id = ? AND sequence = ? "
+                "AND digest = ? AND active = 1",
+                (
+                    _canonical_json(value),
+                    principal_id,
+                    session_id,
+                    sequence,
+                    digest,
+                ),
             ).rowcount
             if updated != 1:
                 raise QueueConflictError("work poll was fenced")
@@ -3596,7 +3639,7 @@ class AgentSessionService:
                 (session.session_id,),
             )
             conn.execute(
-                "UPDATE agent_polls SET active = 0 WHERE session_id = ?",
+                "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
                 (session.session_id,),
             )
             conn.execute(
@@ -3823,7 +3866,7 @@ def replace_agent_session(
             (old_session.session_id,),
         )
         conn.execute(
-            "UPDATE agent_polls SET active = 0 WHERE session_id = ?",
+            "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
             (old_session.session_id,),
         )
         updated = conn.execute(
@@ -3938,7 +3981,7 @@ def _build_replacement_projection(
         str(row["assignment_id"]): row
         for row in conn.execute(
             "SELECT assignment_id, session_id, availability_revision, "
-            "coordinator_epoch, state, poll_id FROM agent_deliveries "
+            "coordinator_epoch, state, poll_sequence FROM agent_deliveries "
             "WHERE session_id = ? ORDER BY assignment_id",
             (session.session_id,),
         )
@@ -4271,7 +4314,7 @@ def _build_replacement_projection(
             ),
             "polls": int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM agent_polls WHERE session_id = ?",
+                    "SELECT COUNT(*) FROM agent_poll_state WHERE session_id = ?",
                     (session.session_id,),
                 ).fetchone()[0]
             ),
@@ -4701,20 +4744,20 @@ def _projection_string(value: Mapping[str, object], name: str) -> str:
 def initialize_agent_session_schema(
     conn: sqlite3.Connection, *, coordinator: bool
 ) -> None:
-    """Create the current tables in a freshly initialized version-7 root."""
+    """Create the current hard-cut session protocol tables in a fresh root."""
     if coordinator:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS agent_sessions (session_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, agent_root_id TEXT NOT NULL, principal_id TEXT NOT NULL, policy_revision TEXT NOT NULL, config_revision TEXT NOT NULL, inventory_revision TEXT NOT NULL, availability_revision TEXT NOT NULL, capabilities_json TEXT NOT NULL, pools_json TEXT NOT NULL, retirement_verifier TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS agent_one_open_session ON agent_sessions(agent_id) WHERE state NOT IN ('RETIRED_CLEAN','REPLACED');
         CREATE TABLE IF NOT EXISTS agent_receipts (principal_id TEXT NOT NULL, operation TEXT NOT NULL, idempotency_key TEXT NOT NULL, digest TEXT NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY(principal_id, operation, idempotency_key));
         CREATE TABLE IF NOT EXISTS agent_offers (offer_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, availability_revision TEXT NOT NULL, offer_json TEXT NOT NULL, accepted_at TEXT NOT NULL, expires_at TEXT NOT NULL, current INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS agent_polls (principal_id TEXT NOT NULL, poll_id TEXT NOT NULL, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, wait_timeout_ms INTEGER NOT NULL, digest TEXT NOT NULL, active INTEGER NOT NULL, result_json TEXT, PRIMARY KEY(principal_id, poll_id));
+        CREATE TABLE IF NOT EXISTS agent_poll_state (principal_id TEXT NOT NULL, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, wait_timeout_ms INTEGER NOT NULL, digest TEXT NOT NULL, active INTEGER NOT NULL, result_json TEXT, PRIMARY KEY(principal_id, session_id));
         CREATE TABLE IF NOT EXISTS agent_coordinator_references (session_id TEXT NOT NULL, reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id, reference_kind, reference_id));
         CREATE TABLE IF NOT EXISTS agent_retirement_proofs (session_id TEXT PRIMARY KEY, proof_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_session_tombstones (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS session_replacements (operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, request_json TEXT NOT NULL, request_digest TEXT NOT NULL, agent_id TEXT NOT NULL, old_session_id TEXT NOT NULL UNIQUE, successor_session_id TEXT UNIQUE, state TEXT NOT NULL, readiness TEXT NOT NULL, withholding_reason TEXT, decision_projection_json TEXT NOT NULL, decision_projection_digest TEXT NOT NULL, required_claim_ids_json TEXT NOT NULL, observed_claim_ids_json TEXT NOT NULL, successor_observation_digest TEXT, readiness_projection_digest TEXT, result_json TEXT NOT NULL, decided_at TEXT NOT NULL, ready_at TEXT);
         CREATE TABLE IF NOT EXISTS agent_replacement_coverage (session_id TEXT NOT NULL, assignment_id TEXT NOT NULL, reference_class TEXT NOT NULL, PRIMARY KEY(session_id, assignment_id, reference_class));
-        CREATE TABLE IF NOT EXISTS agent_deliveries (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, poll_id TEXT);
+        CREATE TABLE IF NOT EXISTS agent_deliveries (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, poll_sequence INTEGER);
         CREATE TABLE IF NOT EXISTS remote_assignments (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, issuer_epoch TEXT NOT NULL, run_uri TEXT NOT NULL, stage_work_id TEXT NOT NULL, stage_name TEXT NOT NULL, attempt INTEGER NOT NULL, attempt_id TEXT NOT NULL, profile_json TEXT NOT NULL, state TEXT NOT NULL, fence TEXT, start_permitted INTEGER NOT NULL DEFAULT 0, report_json TEXT, report_digest TEXT, next_availability_revision TEXT, provider_release_proof_json TEXT);
         CREATE TABLE IF NOT EXISTS remote_transfers (assignment_id TEXT NOT NULL, direction TEXT NOT NULL, transfer_id TEXT NOT NULL, logical_name TEXT NOT NULL, digest TEXT NOT NULL, size_bytes INTEGER NOT NULL, private_path TEXT NOT NULL, received_bytes INTEGER NOT NULL DEFAULT 0, finalized INTEGER NOT NULL DEFAULT 0, descriptor_json TEXT, PRIMARY KEY(assignment_id, direction, transfer_id));
         CREATE TABLE IF NOT EXISTS remote_transfer_authorizations (assignment_id TEXT NOT NULL, authorization_id TEXT NOT NULL, revision INTEGER NOT NULL, coordinator_epoch TEXT NOT NULL, operation_id TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, PRIMARY KEY(assignment_id, revision));
@@ -4727,7 +4770,7 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS agent_sessions_local (session_id TEXT PRIMARY KEY, value_json TEXT NOT NULL, registration_operation_id TEXT NOT NULL, retirement_secret TEXT, state TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_mutation_intents (operation TEXT NOT NULL, operation_id TEXT NOT NULL, digest TEXT NOT NULL, request_json TEXT NOT NULL, result_json TEXT, PRIMARY KEY(operation, operation_id));
         CREATE TABLE IF NOT EXISTS agent_offers_local (session_id TEXT PRIMARY KEY, availability_revision TEXT NOT NULL, state TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS agent_polls_local (session_id TEXT NOT NULL, availability_revision TEXT NOT NULL, poll_id TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(session_id, availability_revision));
+        CREATE TABLE IF NOT EXISTS agent_poll_state_local (session_id TEXT PRIMARY KEY, availability_revision TEXT NOT NULL, sequence INTEGER NOT NULL, request_digest TEXT NOT NULL, state TEXT NOT NULL, result_json TEXT);
         CREATE TABLE IF NOT EXISTS agent_session_references (session_id TEXT NOT NULL, reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id, reference_kind, reference_id));
         CREATE TABLE IF NOT EXISTS agent_reference_revision (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), revision INTEGER NOT NULL);
         INSERT OR IGNORE INTO agent_reference_revision(singleton, revision) VALUES (1, 0);
@@ -4951,7 +4994,7 @@ def _target_remote_delivery(
             retained_inputs,
         )
         conn.execute(
-            "INSERT INTO agent_deliveries(assignment_id, session_id, availability_revision, coordinator_epoch, request_json, state, poll_id) VALUES (?, ?, ?, ?, ?, 'TARGETED', NULL)",
+            "INSERT INTO agent_deliveries(assignment_id, session_id, availability_revision, coordinator_epoch, request_json, state, poll_sequence) VALUES (?, ?, ?, ?, ?, 'TARGETED', NULL)",
             (
                 request.assignment_id,
                 session_id,
@@ -5014,10 +5057,10 @@ def validate_agent_session_schema(
                 "expires_at",
                 "current",
             },
-            "agent_polls": {
-                "poll_id",
+            "agent_poll_state": {
                 "principal_id",
                 "session_id",
+                "sequence",
                 "availability_revision",
                 "coordinator_epoch",
                 "wait_timeout_ms",
@@ -5066,7 +5109,7 @@ def validate_agent_session_schema(
                 "coordinator_epoch",
                 "request_json",
                 "state",
-                "poll_id",
+                "poll_sequence",
             },
             "remote_assignments": {
                 "assignment_id",
@@ -5157,11 +5200,13 @@ def validate_agent_session_schema(
                 "availability_revision",
                 "state",
             },
-            "agent_polls_local": {
+            "agent_poll_state_local": {
                 "session_id",
                 "availability_revision",
-                "poll_id",
+                "sequence",
+                "request_digest",
                 "state",
+                "result_json",
             },
             "agent_session_references": {
                 "session_id",
@@ -5217,10 +5262,10 @@ def validate_agent_session_schema(
     if coordinator:
         poll_key = {
             int(row[5]): str(row[1])
-            for row in conn.execute("PRAGMA table_info(agent_polls)")
+            for row in conn.execute("PRAGMA table_info(agent_poll_state)")
             if int(row[5])
         }
-        if poll_key != {1: "principal_id", 2: "poll_id"}:
+        if poll_key != {1: "principal_id", 2: "session_id"}:
             raise QueueServiceError("agent session schema is incomplete")
     if not coordinator:
         revision = conn.execute(
@@ -5490,6 +5535,8 @@ __all__ = [
     "AgentControlEffect",
     "AgentControlKind",
     "AgentOffer",
+    "AgentPollActiveError",
+    "AgentPollSequenceGapError",
     "AgentProviderDescriptor",
     "AgentPolicyConfig",
     "AgentPrincipalPolicy",
@@ -5498,6 +5545,7 @@ __all__ = [
     "AgentSession",
     "AgentSessionState",
     "AgentSessionView",
+    "AgentStalePollError",
     "GpuDeviceDescriptor",
     "PROTOCOL_VERSION",
     "ScopedAuthorizer",
