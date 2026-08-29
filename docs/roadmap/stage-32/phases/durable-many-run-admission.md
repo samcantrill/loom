@@ -209,17 +209,18 @@ Final commands:
 - Refiner: complete; correction 2/3 aligned stale queue-record contract
   expectations and local/Slurm/scheduler reconstruction helpers with the
   approved v2 hard cut.
-- Pre-submit gate: stale after correction 2/3. The prior fresh `make
+- Pre-submit gate: stale after correction 3/3. The prior fresh `make
   validate-pr` at `ba73bf8` passed Ruff and Pyright but its default suite failed
   25 queue tests because v1 fixtures were fed to the v2-only queue records; the
   manager must obtain a fresh full-gate receipt for the repaired commit.
 - Independent review: expected only if the durable identity/index diff departs
   from the fixed single-transaction design.
-- Blocker corrections: 2/3 — correction 1/3 corrected the approved public
+- Blocker corrections: 3/3 — correction 1/3 corrected the approved public
   `submission_replay` disposition and completed the admission identity matrix;
   correction 2/3 updated stale v1 queue-record test fixtures and reconstruction
   helpers to v2, including regenerated admission digests after fixture mutation,
-  without adding a migration or dual read.
+  without adding a migration or dual read; correction 3/3 rejects null persisted
+  admission digests instead of silently repairing corrupt v2 records.
 - PR and merge: pending.
 
 ## Completion Record
@@ -227,8 +228,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Queue record/schema v2 admission identity, SQLite classification/indexes, service/client streaming and pages, intentional exports, queue docs/example, and phase-scoped tests. |
-| Tests added or updated | Queue model/receipt validation; SQLite exact replay, concurrent scientific dedupe, null identity, canonical run-URI retention, force conflict, pages; request digest/force validation; streaming interruption/restart across 2,000 requests; public example E2E. |
-| Validated revision/tree state and evidence | Prior implementation evidence is stale after correction 2/3. The full gate at `ba73bf8` passed Ruff and Pyright but failed 25 queue tests on stale v1 record fixtures. Repair checks: queue record/config/delegated-Slurm contracts plus local/Slurm/scheduler, model, and service-client units, 66 passed; focused ruff and pyright passed. A fresh full gate remains manager work. |
-| Validation-relevant changes after evidence | Correction 1/3 changes the public receipt spelling and adds identity-matrix tests; correction 2/3 updates queue-record schema expectations and reconstruction helpers, invalidating the previous full-gate attempt. |
+| Tests added or updated | Queue model/receipt and null-digest validation; SQLite exact replay, concurrent scientific dedupe, null identity, canonical run-URI retention, force conflict, pages; request digest/force validation; streaming interruption/restart across 2,000 requests; public example E2E. |
+| Validated revision/tree state and evidence | Prior implementation evidence is stale after correction 3/3. The full gate at `ba73bf8` passed Ruff and Pyright but failed 25 queue tests on stale v1 record fixtures. Correction 2/3 repair checks passed 66 focused tests, ruff, and pyright. A fresh full gate remains manager work. |
+| Validation-relevant changes after evidence | Corrections 1/3 and 2/3 changed the receipt spelling, identity tests, and v2 queue-record fixtures; correction 3/3 makes persisted admission digest nullability fail closed. All prior full-gate evidence is stale. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

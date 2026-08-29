@@ -88,6 +88,18 @@ def test_queue_item_rejects_noncanonical_scientific_identity() -> None:
         replace(_queue_item(), scientific_fingerprint="not-a-digest")
 
 
+def test_queue_item_rejects_null_or_mismatched_persisted_admission_digest() -> None:
+    data = _queue_item().to_dict()
+    data["admission_digest"] = None
+    with pytest.raises(QueueValidationError, match="admission_digest must be non-null"):
+        QueueItem.from_dict(data)
+
+    data = _queue_item().to_dict()
+    data["admission_digest"] = "sha256:" + "0" * 64
+    with pytest.raises(QueueValidationError, match="immutable enqueue content"):
+        QueueItem.from_dict(data)
+
+
 def test_queue_records_reject_unknown_fields_and_bad_versions() -> None:
     data = _queue_item().to_dict()
     data["extra"] = "nope"

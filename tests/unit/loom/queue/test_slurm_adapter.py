@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import cast
 
 from loom.pipeline.executors.slurm.commands import (
@@ -64,8 +65,8 @@ def test_slurm_adapter_submits_and_records_durable_handoff_without_leases() -> N
 def test_slurm_adapter_preserves_unsupported_delegated_verification() -> None:
     runner = FakeSlurmCommandRunner(starting_job_id=42)
     adapter = SlurmQueueDispatchAdapter(command_runner=runner)
-    data = _item("item-1").to_dict()
-    launch_contract = cast(dict[str, object], _mapping(data["launch_contract"]))
+    item = _item("item-1")
+    launch_contract = item.launch_contract.to_dict()
     delegated = cast(
         dict[str, object],
         _mapping(launch_contract["delegated_verification"]),
@@ -74,8 +75,11 @@ def test_slurm_adapter_preserves_unsupported_delegated_verification() -> None:
         "status": "unsupported",
         "reason": "object-store transfer is not implemented",
     }
-    data["admission_digest"] = None
-    item = QueueItem.from_dict(data)
+    item = replace(
+        item,
+        launch_contract=LaunchContract.from_dict(launch_contract),
+        admission_digest=None,
+    )
 
     result = adapter.dispatch(item)
 

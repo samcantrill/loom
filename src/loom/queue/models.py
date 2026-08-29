@@ -601,6 +601,10 @@ class QueueItem:
                 "admission_digest",
             },
         )
+        if payload["admission_digest"] is None:
+            raise QueueValidationError(
+                "QueueItem.admission_digest must be non-null and supported"
+            )
         return cls(
             queue_item_id=cast(str, payload["queue_item_id"]),
             queue_name=cast(str, payload["queue_name"]),
