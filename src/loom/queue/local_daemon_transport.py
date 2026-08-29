@@ -36,6 +36,8 @@ from .local_daemon import (
     LocalDaemonStatus,
     RecoverUnknownAssignment,
     SessionReplacementRequest,
+    TimeRecoveryReceipt,
+    TimeRecoveryRequest,
 )
 
 
@@ -189,6 +191,13 @@ class LocalDaemonSocketServer:
                         RecoverUnknownAssignment.from_dict(request)
                     )
                 )
+            elif operation == "recover_time":
+                request = payload.get("request")
+                if not isinstance(request, Mapping):
+                    raise QueueServiceError("time recovery request must be a mapping")
+                result = operator.recover_time(
+                    TimeRecoveryRequest.from_dict(request)
+                ).to_dict()
             elif operation == "replace_agent_session":
                 request = payload.get("request")
                 if not isinstance(request, Mapping):
@@ -333,6 +342,13 @@ class LocalDaemonSocketClient:
         return cast(
             Mapping[str, PlainData],
             self._call({"operation": "recover_unknown", "request": request.to_dict()}),
+        )
+
+    def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
+        return TimeRecoveryReceipt.from_dict(
+            self._call(
+                {"operation": "recover_time", "request": request.to_dict()}
+            )
         )
 
     def replace_agent_session(

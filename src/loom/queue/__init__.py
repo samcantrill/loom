@@ -38,6 +38,8 @@ if TYPE_CHECKING:
         RecoverUnknownAssignment,
         SessionReplacementRequest,
         SlurmRecoveryTarget,
+        TimeRecoveryReceipt,
+        TimeRecoveryRequest,
     )
     from .local_daemon_transport import (
         LocalDaemonSocketClient,
@@ -149,6 +151,8 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
         "SessionReplacementRequest",
         "ResidentWorkerLaunchProfile",
         "SlurmRecoveryTarget",
+        "TimeRecoveryReceipt",
+        "TimeRecoveryRequest",
     }
 )
 
@@ -240,6 +244,8 @@ __all__ = [
     "ResidentWorkerLaunchProfile",
     "SessionReplacementRequest",
     "SlurmRecoveryTarget",
+    "TimeRecoveryReceipt",
+    "TimeRecoveryRequest",
     "prepare_managed_local_runtime_record",
     "LaunchEnvironmentBindings",
     "NoOpResourceAssignmentProvider",

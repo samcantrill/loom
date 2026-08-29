@@ -32,6 +32,7 @@ from loom.queue import (
     QueueServiceError,
     QueueStorageError,
     ResidentWorkerLaunchProfile,
+    TimeRecoveryRequest,
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.agent_sessions import (
@@ -370,7 +371,7 @@ def _config(tmp_path: Path) -> LocalDaemonConfig:
                     "operator-credential",
                     "operator",
                     "operator",
-                    actions=("scheduling_reload",),
+                    actions=("recover_time", "scheduling_reload"),
                 ),
             )
         ),
@@ -402,6 +403,83 @@ def test_initialize_start_restart_preserves_owner_and_rotates_epoch(
 
     assert second_status.coordinator_id == first_status.coordinator_id
     assert second_status.coordinator_epoch != first_status.coordinator_epoch
+
+
+def test_forward_clock_jump_degrades_without_advancing_and_requires_recovery(
+    tmp_path: Path,
+) -> None:
+    now = ["2026-08-29T00:00:00Z"]
+    config = replace(_config(tmp_path), max_accepted_time_step_seconds=10)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, clock=lambda: now[0])
+    initial = daemon.start()
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+    )
+    try:
+        now[0] = "2026-08-29T00:01:00Z"
+        with pytest.raises(QueueServiceError, match="degraded|step"):
+            daemon._accepted_snapshot()  # noqa: SLF001 - exact clock-owner proof
+        status = daemon.status()
+        assert status.accepted_time_health == "degraded"
+        assert status.accepted_time_diagnostic == "clock_step_exceeds_policy"
+        assert not status.scheduling_ready
+        with sqlite3.connect(config.control_database) as conn:
+            state = dict(
+                conn.execute(
+                    "SELECT key, value FROM daemon_metadata WHERE key IN "
+                    "('accepted_time_high_water', 'accepted_time_revision')"
+                )
+            )
+        assert state == {
+            "accepted_time_high_water": "2026-08-29T00:00:00Z",
+            "accepted_time_revision": "1",
+        }
+
+        request = TimeRecoveryRequest(
+            "recover-clock-1",
+            1,
+            initial.coordinator_epoch,
+            "operator verified the site clock",
+        )
+        receipt = operator.recover_time(request)
+        assert receipt.recovered_at == now[0]
+        assert receipt.previous_coordinator_epoch == initial.coordinator_epoch
+        assert receipt.coordinator_epoch != initial.coordinator_epoch
+        assert receipt.time_revision == 2
+        assert operator.recover_time(request) == receipt
+        assert daemon.status().accepted_time_health == "healthy"
+        with pytest.raises(QueueConflictError, match="different content"):
+            operator.recover_time(replace(request, reason="changed assertion"))
+    finally:
+        daemon.stop()
+
+
+def test_regressed_clock_cannot_be_recovered_by_assertion(tmp_path: Path) -> None:
+    now = ["2026-08-29T00:00:10Z"]
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, clock=lambda: now[0])
+    initial = daemon.start()
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+    )
+    try:
+        now[0] = "2026-08-29T00:00:00Z"
+        with pytest.raises(QueueServiceError, match="regressed|degraded"):
+            daemon._accepted_snapshot()  # noqa: SLF001 - exact clock-owner proof
+        with pytest.raises(QueueConflictError, match="still below"):
+            operator.recover_time(
+                TimeRecoveryRequest(
+                    "recover-clock-regressed",
+                    1,
+                    initial.coordinator_epoch,
+                    "clock is still behind",
+                )
+            )
+        assert daemon.status().accepted_time_health == "degraded"
+    finally:
+        daemon.stop()
 
 
 def test_scheduling_reload_is_local_atomic_and_durable(tmp_path: Path) -> None:

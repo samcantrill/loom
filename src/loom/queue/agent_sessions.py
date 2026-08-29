@@ -430,6 +430,7 @@ class TransportPrincipalPolicy:
                 "cancel_active",
                 "scheduling_reload",
                 "recover_unknown",
+                "recover_time",
                 "replace_session",
             }
             if not set(actions).issubset(allowed):

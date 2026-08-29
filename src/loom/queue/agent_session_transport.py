@@ -100,6 +100,8 @@ from .local_daemon import (
     LocalDaemonPrincipal,
     LocalDaemonRole,
     RecoverUnknownAssignment,
+    TimeRecoveryReceipt,
+    TimeRecoveryRequest,
 )
 
 
@@ -1801,6 +1803,13 @@ class LocalDaemonAgentHttpClient:
     ) -> Mapping[str, PlainData]:
         return self._call(
             "recover_unknown", {"request": request.to_dict()}, role="operator"
+        )
+
+    def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
+        return TimeRecoveryReceipt.from_dict(
+            self._call(
+                "recover_time", {"request": request.to_dict()}, role="operator"
+            )
         )
 
     def replace_agent_session(
@@ -3792,6 +3801,12 @@ def _dispatch_application(
             if not isinstance(request, Mapping):
                 raise QueueServiceError("recovery request is invalid")
             return view.recover_unknown(RecoverUnknownAssignment.from_dict(request))
+        if operation == "recover_time":
+            _exact(value, {"request"})
+            request = value["request"]
+            if not isinstance(request, Mapping):
+                raise QueueServiceError("time recovery request is invalid")
+            return view.recover_time(TimeRecoveryRequest.from_dict(request)).to_dict()
         if operation == "replace_agent_session":
             _exact(value, {"request"})
             request = value["request"]

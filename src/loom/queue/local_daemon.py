@@ -38,7 +38,6 @@ from loom.scheduling import (
 
 from .agent_sessions import (
     AgentControl,
-    AgentControlEffect,
     AgentPolicyConfig,
     AgentSessionView,
     SessionReplacementRequest,
@@ -129,6 +128,112 @@ class CoordinatorSchedulingReload:
             ),
             reason=_required_string(data, "reason"),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class TimeRecoveryRequest:
+    """Operator-authorized recovery of one exact degraded clock revision."""
+
+    operation_id: str
+    expected_time_revision: int
+    expected_coordinator_epoch: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.operation_id, "operation_id"),
+            (self.expected_coordinator_epoch, "expected_coordinator_epoch"),
+        ):
+            if not isinstance(value, str) or not value or len(value) > 160:
+                raise QueueServiceError(f"{name} must be a bounded non-empty string")
+        if (
+            isinstance(self.expected_time_revision, bool)
+            or not isinstance(self.expected_time_revision, int)
+            or self.expected_time_revision < 1
+        ):
+            raise QueueServiceError("expected time revision must be positive")
+        if (
+            not isinstance(self.reason, str)
+            or not self.reason
+            or len(self.reason) > 512
+        ):
+            raise QueueServiceError("time recovery reason must be 1..512 characters")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "expected_time_revision": self.expected_time_revision,
+            "expected_coordinator_epoch": self.expected_coordinator_epoch,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "TimeRecoveryRequest":
+        _exact_fields(
+            data,
+            {
+                "operation_id",
+                "expected_time_revision",
+                "expected_coordinator_epoch",
+                "reason",
+            },
+            "time recovery request",
+        )
+        return cls(
+            operation_id=_required_string(data, "operation_id"),
+            expected_time_revision=_required_int(data, "expected_time_revision"),
+            expected_coordinator_epoch=_required_string(
+                data, "expected_coordinator_epoch"
+            ),
+            reason=_required_string(data, "reason"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TimeRecoveryReceipt:
+    operation_id: str
+    request_digest: str
+    recovered_at: str
+    previous_coordinator_epoch: str
+    coordinator_epoch: str
+    time_revision: int
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "request_digest": self.request_digest,
+            "recovered_at": self.recovered_at,
+            "previous_coordinator_epoch": self.previous_coordinator_epoch,
+            "coordinator_epoch": self.coordinator_epoch,
+            "time_revision": self.time_revision,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "TimeRecoveryReceipt":
+        _exact_fields(
+            data,
+            {
+                "operation_id",
+                "request_digest",
+                "recovered_at",
+                "previous_coordinator_epoch",
+                "coordinator_epoch",
+                "time_revision",
+            },
+            "time recovery receipt",
+        )
+        receipt = cls(
+            operation_id=_required_string(data, "operation_id"),
+            request_digest=_required_string(data, "request_digest"),
+            recovered_at=_required_string(data, "recovered_at"),
+            previous_coordinator_epoch=_required_string(
+                data, "previous_coordinator_epoch"
+            ),
+            coordinator_epoch=_required_string(data, "coordinator_epoch"),
+            time_revision=_required_int(data, "time_revision"),
+        )
+        parse_timestamp(receipt.recovered_at)
+        return receipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -1189,9 +1294,19 @@ class LocalDaemon:
                 scheduling_epoch = scheduling.get("scheduling_epoch")
                 if scheduling_epoch is None:
                     raise QueueStorageError("scheduling epoch is unavailable")
+                try:
+                    started_at = self._accepted_time(conn)
+                except QueueServiceError:
+                    high_water = conn.execute(
+                        "SELECT value FROM daemon_metadata "
+                        "WHERE key = 'accepted_time_high_water'"
+                    ).fetchone()
+                    if high_water is None:
+                        raise
+                    started_at = str(high_water["value"])
                 conn.execute(
                     "INSERT INTO coordinator_epochs (epoch, started_at) VALUES (?, ?)",
-                    (epoch, self._accepted_time(conn)),
+                    (epoch, started_at),
                 )
                 conn.commit()
         except Exception:
@@ -1344,6 +1459,7 @@ class LocalDaemon:
         # coordinator's remote assignment table is the bounded public count;
         # local owner activity is included when its journal is available.
         running = 0
+        assignment_counts_available = True
         try:
             with self._connection() as conn:
                 running += int(
@@ -1364,7 +1480,7 @@ class LocalDaemon:
         except (sqlite3.Error, OSError):
             # The coordinator remains observable even if a private owner store
             # is temporarily unavailable; health carries that condition.
-            self._service_error = self._service_error or "owner_status_unavailable"
+            assignment_counts_available = False
         time_health = time_state.get("accepted_time_health", "healthy")
         diagnostic = time_state.get("accepted_time_diagnostic")
         from .local_daemon_execution import local_daemon_owner_stores_available
@@ -1386,6 +1502,7 @@ class LocalDaemon:
                 and failed is None
                 and time_health == "healthy"
                 and owners_available
+                and assignment_counts_available
                 else "degraded"
             ),
             service_diagnostic=(
@@ -1396,7 +1513,7 @@ class LocalDaemon:
                     if failed is not None
                     else (
                         "owner_status_unavailable"
-                        if not owners_available
+                        if not owners_available or not assignment_counts_available
                         else self._service_error
                     )
                 )
@@ -1407,232 +1524,6 @@ class LocalDaemon:
             running_assignments=running,
             accepted_time_health=time_health,
             accepted_time_diagnostic=diagnostic,
-        )
-
-        # Historical implementation retained below temporarily for a compact
-        # source transition; it is unreachable and will be removed with the
-        # prior owner-view helpers in the next source cleanup.
-        with self._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            accepted_time = self._accepted_time(conn)
-            admissions = tuple(
-                _admission_from_row(row)
-                for row in conn.execute(
-                    "SELECT * FROM managed_admissions "
-                    "ORDER BY accepted_at, admission_id"
-                )
-            )
-            revision_row = conn.execute(
-                "SELECT revision FROM owner_status_revisions WHERE owner = 'admission'"
-            ).fetchone()
-            if revision_row is None:
-                raise QueueStorageError("coordinator admission status is unavailable")
-            admission_revision = int(revision_row["revision"])
-            controls: list[Mapping[str, PlainData]] = []
-            for row in conn.execute(
-                "SELECT principal_id, request_json, state, result_code, "
-                "effect_json, acknowledged FROM agent_controls ORDER BY operation_id"
-            ):
-                request = AgentControl.from_value(json.loads(str(row["request_json"])))
-                effect = (
-                    None
-                    if row["effect_json"] is None
-                    else AgentControlEffect.from_value(
-                        json.loads(str(row["effect_json"]))
-                    )
-                )
-                controls.append(
-                    freeze_plain_data(
-                        {
-                            "owner": "agent-control",
-                            "operation_id": request.operation_id,
-                            "principal": str(row["principal_id"]),
-                            "kind": request.kind.value,
-                            "agent_id": request.agent_id,
-                            "session_id": request.expected_session_id,
-                            "pool": request.pool,
-                            "cancel_active": request.cancel_active,
-                            "state": str(row["state"]),
-                            "code": row["result_code"],
-                            "config_revision": (
-                                None if effect is None else effect.config_revision
-                            ),
-                            "inventory_revision": (
-                                None if effect is None else effect.inventory_revision
-                            ),
-                            "availability_revision": (
-                                None if effect is None else effect.availability_revision
-                            ),
-                            "acknowledged": bool(row["acknowledged"]),
-                        },
-                        path="agent control status",
-                    )
-                )
-            for row in conn.execute(
-                "SELECT principal_id, request_json, state, result_code, "
-                "scheduling_epoch FROM scheduling_reloads ORDER BY operation_id"
-            ):
-                request = CoordinatorSchedulingReload.from_dict(
-                    json.loads(str(row["request_json"]))
-                )
-                controls.append(
-                    freeze_plain_data(
-                        {
-                            "owner": "coordinator-scheduling",
-                            "operation_id": request.operation_id,
-                            "principal": str(row["principal_id"]),
-                            "state": str(row["state"]),
-                            "code": row["result_code"],
-                            "scheduling_epoch": row["scheduling_epoch"],
-                        },
-                        path="scheduling reload status",
-                    )
-                )
-            for row in conn.execute(
-                "SELECT principal_id, recovery_id, request_json, request_digest, "
-                "recorded_at, state, evidence_json, result_json "
-                "FROM recovery_operations ORDER BY recovery_id"
-            ):
-                request = RecoverUnknownAssignment.from_dict(
-                    json.loads(str(row["request_json"]))
-                )
-                result = json.loads(str(row["result_json"]))
-                if not isinstance(result, Mapping):
-                    raise QueueStorageError("guarded recovery result is invalid")
-                evidence = (
-                    None
-                    if row["evidence_json"] is None
-                    else json.loads(str(row["evidence_json"]))
-                )
-                controls.append(
-                    freeze_plain_data(
-                        {
-                            "owner": "guarded-recovery",
-                            "operation_id": str(row["recovery_id"]),
-                            "principal": str(row["principal_id"]),
-                            "state": str(row["state"]),
-                            "code": (
-                                "CONTAINED"
-                                if evidence is not None
-                                else result.get("evidence")
-                            ),
-                            "run_uri": request.run_uri,
-                            "stage_name": request.stage_name,
-                            "attempt": request.attempt,
-                            "assignment_id": request.assignment_id,
-                            "target": request.target.to_dict(),
-                            "requested_outcome": request.requested_outcome,
-                            "consider_retry": request.consider_retry,
-                            "expected_state_version": request.expected_state_version,
-                            "request_digest": str(row["request_digest"]),
-                            "recorded_at": str(row["recorded_at"]),
-                            "evidence_persisted": evidence is not None,
-                            "evidence": evidence,
-                            "retry_allowed": result.get("retry_allowed"),
-                            "next_attempt": result.get("next_attempt"),
-                            "physical_ownership": result.get("physical_ownership"),
-                        },
-                        path="guarded recovery status",
-                    )
-                )
-            for row in conn.execute(
-                "SELECT principal_id, request_json, old_session_id, "
-                "successor_session_id, state, readiness, withholding_reason, "
-                "result_json FROM session_replacements "
-                "ORDER BY operation_id"
-            ):
-                request = SessionReplacementRequest.from_dict(
-                    json.loads(str(row["request_json"]))
-                )
-                result = json.loads(str(row["result_json"]))
-                if not isinstance(result, Mapping) or not isinstance(
-                    result.get("owner_counts"), Mapping
-                ):
-                    raise QueueStorageError("session replacement result is invalid")
-                controls.append(
-                    freeze_plain_data(
-                        {
-                            "owner": "session-replacement",
-                            "operation_id": request.operation_id,
-                            "principal": str(row["principal_id"]),
-                            "agent_id": request.agent_id,
-                            "state": str(row["state"]),
-                            "old_session_id": str(row["old_session_id"]),
-                            "successor_session_id": row["successor_session_id"],
-                            "readiness": str(row["readiness"]),
-                            "withholding_reason": row["withholding_reason"],
-                            "owner_counts": result["owner_counts"],
-                        },
-                        path="session replacement status",
-                    )
-                )
-            for row in conn.execute(
-                "SELECT request_json, state, result_code, acknowledged "
-                "FROM remote_assignment_controls ORDER BY operation_id"
-            ):
-                from .agent_sessions import AgentAssignmentControl
-
-                request = AgentAssignmentControl.from_value(
-                    json.loads(str(row["request_json"]))
-                )
-                controls.append(
-                    freeze_plain_data(
-                        {
-                            "owner": "remote-assignment-control",
-                            "operation_id": request.operation_id,
-                            "session_id": request.session_id,
-                            "assignment_id": request.assignment_id,
-                            "state": str(row["state"]),
-                            "code": row["result_code"],
-                            "acknowledged": bool(row["acknowledged"]),
-                        },
-                        path="remote assignment control status",
-                    )
-                )
-            conn.commit()
-        from .local_daemon_execution import (
-            build_local_daemon_owner_views,
-            local_daemon_owner_stores_available,
-        )
-
-        views = build_local_daemon_owner_views(
-            self.config,
-            admissions,
-            coordinator_id=coordinator_id,
-            agent_id=self._require_agent_id(),
-            clock=self._clock,
-            admission_revision=admission_revision,
-        )
-        unavailable = not local_daemon_owner_stores_available(
-            self.config,
-            coordinator_id=coordinator_id,
-            agent_id=self._require_agent_id(),
-        ) or any(
-            any(
-                isinstance(axis, Mapping) and axis.get("availability") == "unavailable"
-                for axis in view.values()
-            )
-            for view in views
-        )
-        as_of = self._clock()
-        parse_timestamp(as_of)
-        return LocalDaemonStatus(
-            coordinator_id=coordinator_id,
-            coordinator_epoch=self._epoch or "",
-            as_of=as_of,
-            accepted_time=accepted_time,
-            service_health=(
-                "healthy"
-                if self._service_error is None and not unavailable
-                else "degraded"
-            ),
-            service_diagnostic=(
-                "owner_status_unavailable" if unavailable else self._service_error
-            ),
-            scheduling_epoch=self._scheduling_epoch or "",
-            admissions=admissions,
-            controls=tuple(controls),
-            runs=views,
         )
 
     def admissions(
@@ -1767,6 +1658,7 @@ class LocalDaemon:
 
         self._require_started()
         with self._cycle_lock:
+            time_healthy = self._sample_clock_health()
             execution = self._execution
             if execution is None:
                 raise QueueServiceError("local daemon execution is absent")
@@ -1822,14 +1714,15 @@ class LocalDaemon:
             # launch at most that many assignments, but a larger pipeline is
             # never rejected merely for having more stages.
             started_admissions: set[str] = set()
-            for _ in range(256):
-                scheduled = execution.schedule_once(schedulable)
-                if scheduled is None:
-                    break
-                admission_id, outcome = scheduled
-                started_admissions.add(admission_id)
-                self._record_admission_health(admission_id, "healthy")
-                self._set_state(admission_id, outcome.state, reason=outcome.reason)
+            if time_healthy:
+                for _ in range(256):
+                    scheduled = execution.schedule_once(schedulable)
+                    if scheduled is None:
+                        break
+                    admission_id, outcome = scheduled
+                    started_admissions.add(admission_id)
+                    self._record_admission_health(admission_id, "healthy")
+                    self._set_state(admission_id, outcome.state, reason=outcome.reason)
             for admission_id, outcome in waiting_outcomes.items():
                 if admission_id in started_admissions:
                     continue
@@ -2651,14 +2544,137 @@ class LocalDaemon:
         if health not in {"healthy", "failed", "unavailable"}:
             raise QueueServiceError("admission reconciliation health is invalid")
         with self._connection() as conn:
+            try:
+                observed_at = self._accepted_time(conn)
+            except QueueServiceError:
+                row = conn.execute(
+                    "SELECT value FROM daemon_metadata "
+                    "WHERE key = 'accepted_time_high_water'"
+                ).fetchone()
+                if row is None:
+                    raise
+                observed_at = str(row["value"])
             conn.execute(
                 "INSERT INTO admission_reconciliation_health("
                 "admission_id, health, observed_at) VALUES (?, ?, ?) "
                 "ON CONFLICT(admission_id) DO UPDATE SET health = excluded.health, "
                 "observed_at = excluded.observed_at",
-                (admission_id, health, self._accepted_time(conn)),
+                (admission_id, health, observed_at),
             )
             conn.commit()
+
+    def _sample_clock_health(self) -> bool:
+        with self._connection() as conn:
+            try:
+                self._accepted_time(conn)
+            except QueueServiceError:
+                return False
+            conn.commit()
+        return True
+
+    def _recover_time(
+        self, principal: LocalDaemonPrincipal, request: TimeRecoveryRequest
+    ) -> TimeRecoveryReceipt:
+        from .agent_sessions import ScopedAuthorizer
+
+        ScopedAuthorizer(self._agent_policy).require_operator(principal, "recover_time")
+        encoded = json.dumps(
+            request.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        with self._cycle_lock:
+            with self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                existing = conn.execute(
+                    "SELECT request_digest, result_json FROM time_recoveries "
+                    "WHERE operation_id = ?",
+                    (request.operation_id,),
+                ).fetchone()
+                if existing is not None:
+                    if str(existing["request_digest"]) != digest:
+                        raise QueueConflictError(
+                            "time recovery operation was reused with different content"
+                        )
+                    value = json.loads(str(existing["result_json"]))
+                    if not isinstance(value, Mapping):
+                        raise QueueStorageError("time recovery receipt is invalid")
+                    conn.commit()
+                    return TimeRecoveryReceipt.from_dict(value)
+                state = {
+                    str(row["key"]): str(row["value"])
+                    for row in conn.execute(
+                        "SELECT key, value FROM daemon_metadata WHERE key IN "
+                        "('accepted_time_high_water', 'accepted_time_health', "
+                        "'accepted_time_revision')"
+                    )
+                }
+                current_epoch = self._epoch or ""
+                revision = int(state.get("accepted_time_revision", "0"))
+                if state.get("accepted_time_health") != "degraded":
+                    raise QueueConflictError("coordinator accepted-time is not degraded")
+                if request.expected_time_revision != revision:
+                    raise QueueConflictError("time recovery revision is stale")
+                if request.expected_coordinator_epoch != current_epoch:
+                    raise QueueConflictError("time recovery coordinator epoch is stale")
+                high_water = state.get("accepted_time_high_water")
+                if high_water is None:
+                    raise QueueStorageError("accepted-time high-water is unavailable")
+                now = self._clock()
+                parse_timestamp(now)
+                if parse_timestamp(now) < parse_timestamp(high_water):
+                    raise QueueConflictError(
+                        "coordinator clock is still below accepted-time high-water"
+                    )
+                new_epoch = f"coordinator-epoch-{uuid4()}"
+                next_revision = revision + 1
+                receipt = TimeRecoveryReceipt(
+                    operation_id=request.operation_id,
+                    request_digest=digest,
+                    recovered_at=now,
+                    previous_coordinator_epoch=current_epoch,
+                    coordinator_epoch=new_epoch,
+                    time_revision=next_revision,
+                )
+                conn.execute(
+                    "INSERT INTO coordinator_epochs(epoch, started_at) VALUES (?, ?)",
+                    (new_epoch, now),
+                )
+                conn.executemany(
+                    "INSERT OR REPLACE INTO daemon_metadata(key, value) VALUES (?, ?)",
+                    (
+                        ("accepted_time_high_water", now),
+                        ("accepted_time_health", "healthy"),
+                        ("accepted_time_revision", str(next_revision)),
+                    ),
+                )
+                conn.execute(
+                    "DELETE FROM daemon_metadata "
+                    "WHERE key = 'accepted_time_diagnostic'"
+                )
+                conn.execute("UPDATE agent_offers SET current = 0 WHERE current = 1")
+                conn.execute(
+                    "INSERT INTO time_recoveries(operation_id, principal_id, "
+                    "request_json, request_digest, result_json) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        request.operation_id,
+                        principal.subject,
+                        encoded,
+                        digest,
+                        json.dumps(
+                            receipt.to_dict(),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ),
+                    ),
+                )
+                conn.commit()
+            self._epoch = new_epoch
+            execution = self._execution
+            if execution is not None:
+                execution.coordinator_epoch = new_epoch
+            self._wake.set()
+            return receipt
 
     def _require_started(self) -> str:
         if self._coordinator_lock is None or self._coordinator_id is None:
@@ -2729,12 +2745,22 @@ class LocalDaemon:
     def _accepted_time(self, conn: sqlite3.Connection) -> str:
         now = self._clock()
         parse_timestamp(now)
-        row = conn.execute(
-            "SELECT value FROM daemon_metadata WHERE key = 'accepted_time_high_water'"
-        ).fetchone()
-        previous = None if row is None else str(row["value"])
+        state = {
+            str(row["key"]): str(row["value"])
+            for row in conn.execute(
+                "SELECT key, value FROM daemon_metadata WHERE key IN "
+                "('accepted_time_high_water', 'accepted_time_health', "
+                "'accepted_time_diagnostic')"
+            )
+        }
+        if state.get("accepted_time_health") == "degraded":
+            raise QueueServiceError(
+                "coordinator accepted-time is degraded; operator recovery is required"
+            )
+        previous = state.get("accepted_time_high_water")
         if previous is not None and parse_timestamp(now) < parse_timestamp(previous):
             self._degrade_time(conn, "clock_regressed")
+            conn.commit()
             raise QueueServiceError(
                 "coordinator accepted-time regressed; scheduling is degraded"
             )
@@ -2744,6 +2770,7 @@ class LocalDaemon:
             > self.config.max_accepted_time_step_seconds
         ):
             self._degrade_time(conn, "clock_step_exceeds_policy")
+            conn.commit()
             raise QueueServiceError(
                 "coordinator accepted-time step exceeds protected policy; scheduling is degraded"
             )
@@ -2753,17 +2780,15 @@ class LocalDaemon:
             "VALUES ('accepted_time_high_water', ?)",
             (accepted,),
         )
-        conn.execute(
-            "INSERT OR REPLACE INTO daemon_metadata (key, value) "
-            "VALUES ('accepted_time_health', 'healthy')"
-        )
-        conn.execute(
-            "DELETE FROM daemon_metadata WHERE key = 'accepted_time_diagnostic'"
-        )
         return accepted
 
     @staticmethod
     def _degrade_time(conn: sqlite3.Connection, diagnostic: str) -> None:
+        health = conn.execute(
+            "SELECT value FROM daemon_metadata WHERE key = 'accepted_time_health'"
+        ).fetchone()
+        if health is not None and str(health["value"]) == "degraded":
+            return
         conn.execute(
             "INSERT OR REPLACE INTO daemon_metadata (key, value) VALUES "
             "('accepted_time_health', 'degraded')"
@@ -2861,6 +2886,9 @@ class LocalDaemonOperatorView:
     ) -> Mapping[str, PlainData]:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon._recover_unknown(self._principal, request)
+
+    def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
+        return self._daemon._recover_time(self._principal, request)
 
     def replace_agent_session(
         self, request: SessionReplacementRequest
@@ -3143,6 +3171,12 @@ def _initialize_root(path: Path, *, role: str) -> None:
                 "recorded_at TEXT NOT NULL, state TEXT NOT NULL, "
                 "evidence_json TEXT, result_json TEXT NOT NULL)"
             )
+            conn.execute(
+                "CREATE TABLE time_recoveries ("
+                "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
+                "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
+                "result_json TEXT NOT NULL)"
+            )
             conn.executescript(
                 """
                 CREATE TRIGGER admission_status_revision_insert
@@ -3393,4 +3427,6 @@ __all__ = [
     "ManagedRecoveryTarget",
     "RecoverUnknownAssignment",
     "SlurmRecoveryTarget",
+    "TimeRecoveryReceipt",
+    "TimeRecoveryRequest",
 ]

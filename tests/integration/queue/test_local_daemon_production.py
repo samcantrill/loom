@@ -1253,6 +1253,10 @@ def test_admission_reconciliation_failure_does_not_stop_other_runs(
             )
         assert health[unhealthy.admission_id] == "unavailable"
         assert health[healthy.admission_id] == "healthy"
+        status = daemon.status()
+        assert status.service_health == "degraded"
+        assert status.service_diagnostic == "admission_reconciliation_degraded"
+        assert not status.scheduling_ready
         assert daemon._service_error is None
     finally:
         daemon.stop()
