@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 12
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p12-operational-bounds-deployment`
@@ -12,11 +12,8 @@
 - PR title: `feat(queue): bound daemon operations and deployment`
 - Dependencies: remotely merged Phase 11
 - Workflow path: fast; public and durable shapes are fixed by the correction
-- Blockers: the approved plan does not name the public coordinator/outbound-agent
-  initialization and service commands or fix how their explicit protected
-  configuration paths resolve to the two typed role configurations. The
-  maintainer must approve that public deployment contract before slices 4-5 can
-  be implemented without inventing a user-facing interface
+- Blockers: none; the maintainer approved the public deployment command and
+  protected-config contract on 2026-08-29
 
 ## Objective And Context
 
@@ -109,6 +106,17 @@ In scope:
   same application protocol; no second embedded-only behavior path. These are
   foreground role applications, not a requirement to daemonize on an HPC login
   node or an assertion that every site permits such a host.
+- The exact approved command surface is `loom queue daemon-init CONFIG` and
+  `loom queue daemon-serve CONFIG` for the coordinator bundle, plus
+  `loom queue agent-init CONFIG` and `loom queue agent-serve CONFIG` for the
+  outbound agent. `CONFIG` is one explicit-path, owner-protected, versioned YAML
+  document loaded through Loom's existing trusted configuration machinery and
+  resolving to the corresponding typed coordinator-service or outbound-agent-
+  service configuration. Initialization and serving consume the same document
+  so root bindings and composition fingerprints are revalidated. There is no
+  implicit discovery or environment override. The former setup root/profile
+  flags are removed without compatibility; existing daemon client/operation
+  command names remain unchanged.
 - Update feature, CLI, testing, deployment/recovery guidance and final examples
   for the new schemas, upgrade procedure, endpoints, and service commands. The
   deployment matrix must distinguish this persistent managed mode from the
@@ -259,13 +267,13 @@ Final commands:
   fast-path decision, validation commands, and the permitted-service-host versus
   service-less whole-run SLURM boundary are current
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: the normal single phase executor stopped at the required
-  missing-contract boundary after leaving bounded summary/admission/list/detail/
-  wait and sequenced-poll work uncommitted for verification and continuation
+- Implementation: the normal single phase executor is continuing the retained
+  bounded summary/admission/list/detail/wait and sequenced-poll work against the
+  now-approved deployment contract
 - Refiner: not needed
-- Pre-submit gate: pending; an early run on the deliberately incomplete tree is
-  not evidence. Its summary recorded 2,312 passes, one unit failure, and two
-  collection/setup errors before the missing deployment contract was resolved
+- Pre-submit gate: pending; the early incomplete-tree run remains non-evidence
+  and its one unit failure plus two collection/setup errors must be closed before
+  a fresh stable-tree gate
 - Independent review: not needed unless a material residual risk remains
 - Blocker corrections: 0/3
 - PR and merge: pending
@@ -279,4 +287,4 @@ Final commands:
 | Validated revision/tree state and evidence | pending |
 | Validation-relevant changes after evidence | The partial tree has no reusable final evidence; full gates must run only after the public deployment contract and all six slices are complete. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Blocked on one public deployment-contract decision. The dedicated worktree and branch retain the uncommitted bounded-query work; correction budget remains 0/3. |
+| Residual risk and cleanup | The public deployment-contract blocker is resolved. The dedicated worktree and branch retain the uncommitted bounded-query work for direct continuation; correction budget remains 0/3. |
