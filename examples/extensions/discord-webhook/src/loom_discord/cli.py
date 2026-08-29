@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import TextIO
 
 from loom.queue import (
+    DaemonStatus,
     LocalDaemonAdmissionDetail,
     LocalDaemonSocketClient,
-    LocalDaemonStatus,
 )
 
 from .coordinator import DiscordCoordinatorReporter
@@ -81,7 +81,7 @@ def _report_once(
     stderr: TextIO,
 ) -> tuple[int, bool]:
     try:
-        status: LocalDaemonStatus = client.status()
+        status: DaemonStatus = client.status()
         details = _collect_admission_details(client)
     except Exception:
         print("Discord coordinator status read failed", file=stderr)

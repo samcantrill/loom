@@ -1128,7 +1128,7 @@ class DaemonStatus:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> "LocalDaemonStatus":
+    def from_dict(cls, data: Mapping[str, object]) -> "DaemonStatus":
         _exact_fields(
             data,
             {
@@ -1168,11 +1168,6 @@ class DaemonStatus:
         )
 
 
-# The old name remains a source-level alias during this phase.  Its wire shape
-# is intentionally the new bounded summary.
-LocalDaemonStatus = DaemonStatus
-
-
 @dataclass(frozen=True, slots=True)
 class AdmissionPage:
     admissions: tuple[LocalDaemonAdmission, ...]
@@ -1189,6 +1184,10 @@ class AdmissionWaitKind(StrEnum):
     CHANGED = "CHANGED"
     TERMINAL = "TERMINAL"
     TIMEOUT = "TIMEOUT"
+
+
+class AdmissionNotFoundError(QueueServiceError):
+    """The requested managed admission does not exist."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1373,7 +1372,7 @@ class LocalDaemon:
         SQLiteAgentJournal(path / "journal.sqlite")._initialize()
         (path / "journal.sqlite").chmod(0o600)
 
-    def start(self) -> LocalDaemonStatus:
+    def start(self) -> DaemonStatus:
         if self._coordinator_lock is not None:
             raise QueueServiceError("local daemon is already started")
         if self.config.deployment_root is not None:
@@ -1447,6 +1446,16 @@ class LocalDaemon:
                 conn.execute(
                     "INSERT INTO coordinator_epochs (epoch, started_at) VALUES (?, ?)",
                     (epoch, started_at),
+                )
+                # An active row without a result belonged to a request held by
+                # the previous process epoch.  Delivery and its replay result
+                # commit in one transaction, so fencing only that abandoned
+                # request cannot hide accepted work.  Committed results remain
+                # replayable while the reconciled agent advances from a fenced
+                # request to the next sequence.
+                conn.execute(
+                    "UPDATE agent_poll_state SET active = 0 "
+                    "WHERE active = 1 AND result_json IS NULL"
                 )
                 conn.commit()
         except Exception:
@@ -1570,7 +1579,7 @@ class LocalDaemon:
 
         ScopedAuthorizer(self._agent_policy).require_role(principal, role.value)
 
-    def status(self) -> LocalDaemonStatus:
+    def status(self) -> DaemonStatus:
         coordinator_id = self._require_started()
         # This is intentionally a small coordinator-only operation.  Do not add
         # owner joins here: detail belongs to admission() and the owner views
@@ -1606,6 +1615,16 @@ class LocalDaemon:
                     conn.execute(
                         "SELECT COUNT(*) FROM remote_assignments "
                         "WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED')"
+                    ).fetchone()[0]
+                )
+            with sqlite3.connect(
+                f"{self.config.execution_database.resolve().as_uri()}?mode=rw",
+                uri=True,
+            ) as execution:
+                running += int(
+                    execution.execute(
+                        "SELECT COUNT(*) FROM slurm_stage_assignments "
+                        "WHERE state NOT IN ('rejected', 'released')"
                     ).fetchone()[0]
                 )
             with sqlite3.connect(
@@ -1758,7 +1777,7 @@ class LocalDaemon:
                     "SELECT revision FROM owner_status_revisions WHERE owner = 'admission'"
                 ).fetchone()
             if row is None:
-                raise QueueServiceError("managed admission was not found")
+                raise AdmissionNotFoundError("managed admission was not found")
             if revision is None:
                 raise QueueStorageError("coordinator admission status is unavailable")
             current = int(revision["revision"])
@@ -1958,7 +1977,7 @@ class LocalDaemon:
                 (queue_item_id,),
             ).fetchone()
             if row is None:
-                raise QueueServiceError("managed admission was not found")
+                raise AdmissionNotFoundError("managed admission was not found")
             admission = _admission_from_row(row)
             if admission.state in {
                 LocalDaemonAdmissionState.SUCCEEDED,
@@ -2641,7 +2660,7 @@ class LocalDaemon:
                 (queue_item_id,),
             ).fetchone()
         if row is None:
-            raise QueueServiceError("managed admission was not found")
+            raise AdmissionNotFoundError("managed admission was not found")
         return _admission_from_row(row)
 
     def _admission(self, admission_id: str) -> LocalDaemonAdmission:
@@ -2651,7 +2670,7 @@ class LocalDaemon:
                 (admission_id,),
             ).fetchone()
         if row is None:
-            raise QueueServiceError("managed admission was not found")
+            raise AdmissionNotFoundError("managed admission was not found")
         return _admission_from_row(row)
 
     def _set_state(
@@ -2951,7 +2970,7 @@ class LocalDaemonClientView:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon._submit(request)
 
-    def status(self) -> LocalDaemonStatus:
+    def status(self) -> DaemonStatus:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.status()
 
@@ -2993,7 +3012,7 @@ class LocalDaemonOperatorView:
     _daemon: LocalDaemon
     _principal: LocalDaemonPrincipal
 
-    def status(self) -> LocalDaemonStatus:
+    def status(self) -> DaemonStatus:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.status()
 
@@ -3576,9 +3595,9 @@ __all__ = [
     "LocalDaemonOperatorView",
     "LocalDaemonPrincipal",
     "LocalDaemonRole",
-    "LocalDaemonStatus",
     "DaemonStatus",
     "AdmissionPage",
+    "AdmissionNotFoundError",
     "AdmissionWaitKind",
     "AdmissionWaitResult",
     "ManagedRecoveryTarget",

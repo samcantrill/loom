@@ -1026,6 +1026,58 @@ def test_restart_requires_reconcile_fresh_offer_and_only_returns_wait(
         second.stop()
 
 
+def test_restart_fences_abandoned_poll_before_fresh_offer(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    first = LocalDaemon(config)
+    first.start()
+    registered = _register(first)
+    _view(first).publish_offer(
+        _offer(registered.session_id, registered.coordinator_epoch),
+        idempotency_key="offer-before-restart",
+    )
+    with first._connection() as conn:
+        conn.execute(
+            "INSERT INTO agent_poll_state(principal_id, session_id, sequence, "
+            "availability_revision, coordinator_epoch, wait_timeout_ms, digest, "
+            "active, result_json) VALUES (?, ?, 1, ?, ?, 1000, 'abandoned', 1, NULL)",
+            (
+                "principal-a",
+                registered.session_id,
+                registered.availability_revision,
+                registered.coordinator_epoch,
+            ),
+        )
+        conn.commit()
+    first.stop()
+
+    second = LocalDaemon(config)
+    status = second.start()
+    try:
+        resumed = _view(second).reconcile(
+            registered,
+            status.coordinator_epoch,
+            idempotency_key="reconcile-after-abandoned-poll",
+        )
+        offer = _view(second).publish_offer(
+            _offer(resumed.session_id, resumed.coordinator_epoch),
+            idempotency_key="offer-after-abandoned-poll",
+        )
+        assert offer["state"] == "retained"
+        assert _view(second).wait_for_work(
+            resumed.session_id,
+            resumed.availability_revision,
+            sequence=2,
+            wait_timeout_ms=5,
+        ) == {
+            "result": "wait",
+            "sequence": 2,
+            "coordinator_epoch": status.coordinator_epoch,
+        }
+    finally:
+        second.stop()
+
+
 def test_retirement_fences_then_requires_empty_coordinator_references_and_tombstones(
     tmp_path: Path,
 ) -> None:

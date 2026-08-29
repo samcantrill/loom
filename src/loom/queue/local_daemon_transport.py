@@ -23,6 +23,7 @@ from .errors import (
     QueueValidationError,
 )
 from .local_daemon import (
+    AdmissionNotFoundError,
     AgentControl,
     CoordinatorSchedulingReload,
     LocalDaemon,
@@ -30,10 +31,10 @@ from .local_daemon import (
     LocalDaemonAdmissionDetail,
     AdmissionPage,
     AdmissionWaitResult,
+    DaemonStatus,
     LocalDaemonAdmissionRequest,
     LocalDaemonPrincipal,
     LocalDaemonRole,
-    LocalDaemonStatus,
     RecoverUnknownAssignment,
     SessionReplacementRequest,
     TimeRecoveryReceipt,
@@ -236,8 +237,8 @@ class LocalDaemonSocketClient:
         result = self._call({"operation": "submit", "request": request.to_dict()})
         return LocalDaemonAdmission.from_dict(result)
 
-    def status(self) -> LocalDaemonStatus:
-        return LocalDaemonStatus.from_dict(self._call({"operation": "status"}))
+    def status(self) -> DaemonStatus:
+        return DaemonStatus.from_dict(self._call({"operation": "status"}))
 
     def admissions(
         self, *, limit: int = 100, cursor: str | None = None
@@ -380,6 +381,8 @@ class LocalDaemonSocketClient:
             connection.close()
         if response.get("ok") is not True:
             diagnostic = response.get("error")
+            if diagnostic == "local_daemon_admission_not_found":
+                raise AdmissionNotFoundError(diagnostic)
             raise QueueServiceError(
                 diagnostic
                 if isinstance(diagnostic, str)
@@ -392,6 +395,8 @@ class LocalDaemonSocketClient:
 
 
 def _safe_error_code(exc: Exception) -> str:
+    if isinstance(exc, AdmissionNotFoundError):
+        return "local_daemon_admission_not_found"
     if isinstance(exc, QueueConflictError):
         return "local_daemon_conflict"
     if isinstance(exc, QueueValidationError):

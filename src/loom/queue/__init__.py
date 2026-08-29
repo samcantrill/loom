@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     )
     from ._remote_stage_execution import GpuDeviceDescriptor
     from .local_daemon import (
+        AdmissionNotFoundError,
         AdmissionPage,
         AdmissionWaitKind,
         AdmissionWaitResult,
@@ -37,7 +38,6 @@ if TYPE_CHECKING:
         DaemonStatus,
         LocalDaemonPrincipal,
         LocalDaemonRole,
-        LocalDaemonStatus,
         ManagedRecoveryTarget,
         RecoverUnknownAssignment,
         SessionReplacementRequest,
@@ -132,6 +132,7 @@ from .selection import (
 _LOCAL_DAEMON_EXPORTS = frozenset(
     {
         "LocalDaemon",
+        "AdmissionNotFoundError",
         "AgentControl",
         "CoordinatorSchedulingReload",
         "LocalDaemonAdmission",
@@ -145,7 +146,6 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
         "LocalDaemonRole",
         "LocalDaemonSocketClient",
         "LocalDaemonSocketServer",
-        "LocalDaemonStatus",
         "DaemonStatus",
         "AdmissionPage",
         "AdmissionWaitKind",
@@ -222,6 +222,7 @@ __all__ = [
     "GpuDeviceDescriptor",
     "LaunchContract",
     "LocalDaemon",
+    "AdmissionNotFoundError",
     "AgentControl",
     "CoordinatorSchedulingReload",
     "LocalDaemonAdmission",
@@ -235,7 +236,6 @@ __all__ = [
     "LocalDaemonRole",
     "LocalDaemonSocketClient",
     "LocalDaemonSocketServer",
-    "LocalDaemonStatus",
     "DaemonStatus",
     "AdmissionPage",
     "AdmissionWaitKind",

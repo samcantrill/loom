@@ -16,6 +16,7 @@ import pytest
 
 import loom.queue.local_daemon_execution as local_daemon_execution
 from loom.queue import (
+    AdmissionNotFoundError,
     AgentControl,
     CoordinatorSchedulingReload,
     LocalDaemon,
@@ -149,6 +150,17 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
                 ),
             )
         conn.commit()
+    with sqlite3.connect(config.execution_database) as conn:
+        conn.execute(
+            "INSERT INTO slurm_stage_assignments(assignment_id, operation_id, "
+            "run_uri, stage_work_id, profile_id, state, identity_json, request_json, "
+            "delivery_json, input_paths_json, issuer_epoch, input_ready, "
+            "submission_eligible, capability_consumed) VALUES "
+            "('slurm-assignment-1', 'slurm-operation-1', 'file:///run-1', "
+            "'slurm-work-1', 'slurm-profile-1', 'running', '{}', '{}', '{}', '{}', "
+            "'epoch-1', 0, 0, 0)"
+        )
+        conn.commit()
 
     first = daemon.admissions(limit=2)
     assert [item.admission_id for item in first.admissions] == [
@@ -159,6 +171,30 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
     second = daemon.admissions(limit=2, cursor=first.next_cursor)
     assert [item.admission_id for item in second.admissions] == ["admission-c"]
     assert second.next_cursor is None
+
+    with daemon._connection() as conn:
+        for sequence in range(4, 154):
+            conn.execute(
+                "INSERT INTO managed_admissions(admission_id, queue_item_id, "
+                "coordinator_id, run_uri, intent_digest, execution_owner, state, "
+                "accepted_at, authority_operation_id, run_priority, "
+                "enqueue_sequence, cancellation_operation_id, blocked_reason) "
+                "VALUES (?, ?, ?, ?, 'digest', 'managed-stage', 'SUCCEEDED', "
+                "'2026-01-01T00:00:00Z', ?, 0, ?, NULL, NULL)",
+                (
+                    f"terminal-admission-{sequence}",
+                    f"terminal-item-{sequence}",
+                    daemon._coordinator_id,
+                    f"file:///terminal-run-{sequence}",
+                    f"terminal-operation-{sequence}",
+                    sequence,
+                ),
+            )
+        conn.commit()
+    summary = daemon.status()
+    assert summary.active_admissions == 3
+    assert summary.running_assignments == 1
+    assert "admissions" not in summary.to_dict()
 
     direct_detail = daemon.admission("admission-b")
     assert direct_detail.admission.admission_id == "admission-b"
@@ -173,6 +209,8 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
         socket_detail = LocalDaemonSocketClient(config.endpoint).admission(
             "admission-b"
         )
+        with pytest.raises(AdmissionNotFoundError):
+            LocalDaemonSocketClient(config.endpoint).admission("missing-admission")
     finally:
         server.stop()
     assert socket_detail.admission == direct_detail.admission
@@ -180,6 +218,8 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
     assert cast(Mapping[str, object], socket_detail.owners["assignment"])[
         "owner"
     ] == "coordinator-assignments"
+    with pytest.raises(AdmissionNotFoundError):
+        daemon.admission("missing-admission")
 
 
 def test_admission_wait_observes_revision_without_status_history(

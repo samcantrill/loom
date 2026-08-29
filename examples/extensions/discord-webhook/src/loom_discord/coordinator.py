@@ -8,9 +8,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from loom.queue import (
+    DaemonStatus,
     LocalDaemonAdmissionDetail,
     LocalDaemonAdmissionState,
-    LocalDaemonStatus,
 )
 from loom.serialization import PlainData
 
@@ -74,7 +74,7 @@ class DiscordCoordinatorReporter:
 
     def report(
         self,
-        status: LocalDaemonStatus,
+        status: DaemonStatus,
         details: tuple[LocalDaemonAdmissionDetail, ...],
         *,
         force: bool = False,
@@ -96,7 +96,7 @@ class DiscordCoordinatorReporter:
 
 
 def _project_status(
-    status: LocalDaemonStatus, details: tuple[LocalDaemonAdmissionDetail, ...]
+    status: DaemonStatus, details: tuple[LocalDaemonAdmissionDetail, ...]
 ) -> _CoordinatorProjection:
     admission_counts = Counter(detail.admission.state.value for detail in details)
     authority_run_counts: Counter[str] = Counter()

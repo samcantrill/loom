@@ -25,7 +25,7 @@ from loom.queue import (
     LocalDaemonAdmission,
     LocalDaemonAdmissionDetail,
     LocalDaemonAdmissionState,
-    LocalDaemonStatus,
+    DaemonStatus,
 )
 from loom.serialization import PlainData
 from tests.support.pipeline_execution_configs import local_execution_config
@@ -334,7 +334,7 @@ def test_coordinator_cli_one_shot_is_injectable_and_sanitizes_status_errors(
     class FakeReporter:
         def report(
             self,
-            status: LocalDaemonStatus,
+            status: DaemonStatus,
             details: tuple[LocalDaemonAdmissionDetail, ...],
             *,
             force: bool = False,
@@ -345,7 +345,7 @@ def test_coordinator_cli_one_shot_is_injectable_and_sanitizes_status_errors(
             return True
 
     class FakeClient:
-        def status(self) -> LocalDaemonStatus:
+        def status(self) -> DaemonStatus:
             return _CLI_STATUS
 
         def admissions(self, *, limit: int, cursor: str | None) -> SimpleNamespace:
@@ -375,7 +375,7 @@ def test_coordinator_cli_one_shot_is_injectable_and_sanitizes_status_errors(
     assert stderr.getvalue() == ""
 
     class FailingClient:
-        def status(self) -> LocalDaemonStatus:
+        def status(self) -> DaemonStatus:
             raise RuntimeError("https://discord.invalid/token")
 
     stderr = StringIO()
@@ -425,7 +425,7 @@ def test_coordinator_cli_continues_after_a_sanitized_failure(
     monkeypatch.setenv(
         WEBHOOK_URL_ENVIRONMENT_VARIABLE, "https://discord.invalid/token"
     )
-    statuses: list[LocalDaemonStatus | Exception] = [
+    statuses: list[DaemonStatus | Exception] = [
         RuntimeError("https://discord.invalid/token"),
         _CLI_STATUS,
     ]
@@ -433,7 +433,7 @@ def test_coordinator_cli_continues_after_a_sanitized_failure(
     sleeps = 0
 
     class FakeClient:
-        def status(self) -> LocalDaemonStatus:
+        def status(self) -> DaemonStatus:
             result = statuses.pop(0)
             if isinstance(result, Exception):
                 raise result
@@ -455,7 +455,7 @@ def test_coordinator_cli_continues_after_a_sanitized_failure(
     class FakeReporter:
         def report(
             self,
-            status: LocalDaemonStatus,
+            status: DaemonStatus,
             details: tuple[LocalDaemonAdmissionDetail, ...],
             *,
             force: bool = False,
@@ -499,7 +499,7 @@ def test_coordinator_cli_heartbeat_restarts_after_a_changed_report(
     sleeps = 0
 
     class FakeClient:
-        def status(self) -> LocalDaemonStatus:
+        def status(self) -> DaemonStatus:
             return _CLI_STATUS
 
         def admissions(self, *, limit: int, cursor: str | None) -> SimpleNamespace:
@@ -518,7 +518,7 @@ def test_coordinator_cli_heartbeat_restarts_after_a_changed_report(
     class FakeReporter:
         def report(
             self,
-            status: LocalDaemonStatus,
+            status: DaemonStatus,
             details: tuple[LocalDaemonAdmissionDetail, ...],
             *,
             force: bool = False,
@@ -565,7 +565,7 @@ def _daemon_status(
     stage_state: str = "RUNNING",
     many_active_runs: int = 0,
     many_waiting_runs: int = 0,
-) -> LocalDaemonStatus:
+) -> DaemonStatus:
     admissions = [_admission("item-active", LocalDaemonAdmissionState.ACTIVE)]
     views: list[Mapping[str, PlainData]] = [
         {
@@ -624,7 +624,7 @@ def _daemon_status(
                 },
             }
         )
-    return LocalDaemonStatus(
+    return DaemonStatus(
         coordinator_id="coordinator-secret",
         coordinator_epoch="epoch-secret",
         as_of=as_of,
