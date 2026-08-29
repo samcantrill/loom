@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 12
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p12-operational-bounds-deployment`
@@ -12,8 +12,12 @@
 - PR title: `feat(queue): bound daemon operations and deployment`
 - Dependencies: remotely merged Phase 11
 - Workflow path: fast; public and durable shapes are fixed by the correction
-- Blockers: none; the maintainer approved the public deployment command and
-  protected-config contract on 2026-08-29
+- Blockers: the merged Stage 33 Discord coordinator reporter consumes the old
+  unbounded `LocalDaemonStatus.admissions` and `.runs` join to promise exact
+  historical admission/authority aggregates and per-run stage progress. Phase
+  12 removes that join. Preserving Stage 33 unchanged would require report work
+  that grows with terminal history; the maintainer must approve the bounded
+  replacement observable contract
 
 ## Objective And Context
 
@@ -267,13 +271,13 @@ Final commands:
   fast-path decision, validation commands, and the permitted-service-host versus
   service-less whole-run SLURM boundary are current
 - Expanded planning: not needed; correction contracts are maintainer-supplied
-- Implementation: the normal single phase executor is continuing the retained
-  bounded summary/admission/list/detail/wait and sequenced-poll work against the
-  now-approved deployment contract
+- Implementation: retained uncommitted bounded summary/admission/list/detail/
+  wait and sequenced-poll work now reaches the first real downstream consumer;
+  remaining slices wait on the Discord replacement contract
 - Refiner: not needed
-- Pre-submit gate: pending; the early incomplete-tree run remains non-evidence
-  and its one unit failure plus two collection/setup errors must be closed before
-  a fresh stable-tree gate
+- Pre-submit gate: pending; incomplete-tree summaries are non-evidence. The
+  current collection failure proves the Discord reporter still consumes removed
+  fields and must be deliberately adapted before a fresh stable-tree gate
 - Independent review: not needed unless a material residual risk remains
 - Blocker corrections: 0/3
 - PR and merge: pending
@@ -287,4 +291,4 @@ Final commands:
 | Validated revision/tree state and evidence | pending |
 | Validation-relevant changes after evidence | The partial tree has no reusable final evidence; full gates must run only after the public deployment contract and all six slices are complete. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | The public deployment-contract blocker is resolved. The dedicated worktree and branch retain the uncommitted bounded-query work for direct continuation; correction budget remains 0/3. |
+| Residual risk and cleanup | The public deployment contract is resolved. A second product blocker now requires one bounded Discord observable-contract decision. The dedicated worktree and branch retain all uncommitted implementation; correction budget remains 0/3 because no complete contract has reached review. |
