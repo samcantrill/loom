@@ -12,6 +12,7 @@ from loom.pipeline.executors.slurm.commands import (
 from loom.serialization import thaw_plain_data
 from loom.queue import (
     LaunchContract,
+    QUEUE_RECORD_SCHEMA_VERSION,
     QueueDispatchDisposition,
     QueueItem,
     QueueItemStatus,
@@ -73,6 +74,7 @@ def test_slurm_adapter_preserves_unsupported_delegated_verification() -> None:
         "status": "unsupported",
         "reason": "object-store transfer is not implemented",
     }
+    data["admission_digest"] = None
     item = QueueItem.from_dict(data)
 
     result = adapter.dispatch(item)
@@ -263,7 +265,7 @@ def _with_dispatch_handle(
     data = item.to_dict()
     data["status"] = QueueItemStatus.DISPATCHED.value
     data["dispatch_handle"] = {
-        "schema_version": 1,
+        "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
         "adapter": "slurm",
         "handle_id": f"slurm:{item.queue_item_id}:1:{job_id}",
         "dispatched_at": "2020-01-01T00:00:01Z",

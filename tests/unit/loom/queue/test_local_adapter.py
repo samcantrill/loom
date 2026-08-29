@@ -16,6 +16,7 @@ from loom.pipeline.stores import (
 )
 from loom.queue import (
     LaunchContract,
+    QUEUE_RECORD_SCHEMA_VERSION,
     QueueDispatchDisposition,
     QueueDispatchNonStartCause,
     QueueItem,
@@ -910,7 +911,7 @@ def _with_dispatch_handle(
     data = item.to_dict()
     data["status"] = QueueItemStatus.DISPATCHED.value
     data["dispatch_handle"] = {
-        "schema_version": 1,
+        "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
         "adapter": "local",
         "handle_id": handle_id,
         "dispatched_at": "2020-01-01T00:00:01Z",

@@ -5,6 +5,7 @@ from __future__ import annotations
 from loom.queue import (
     DispatchHandle,
     LaunchContract,
+    QUEUE_RECORD_SCHEMA_VERSION,
     QueueDefinition,
     QueueItem,
     QueueItemStatus,
@@ -39,7 +40,7 @@ def test_queue_item_contract_shape() -> None:
     )
 
     assert item.to_dict() == {
-        "schema_version": 1,
+        "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
         "queue_item_id": "item-1",
         "queue_name": "gpu",
         "pool_name": "gpu-pool",
@@ -49,14 +50,14 @@ def test_queue_item_contract_shape() -> None:
         "enqueued_at": "2020-01-01T00:00:00Z",
         "updated_at": "2020-01-01T00:00:00Z",
         "run_intent": {
-            "schema_version": 1,
+            "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
             "run_uri": run_uri,
             "request": {"config": "config.yaml"},
             "tags": {"project": "demo"},
             "metadata": {"owner": "contract"},
         },
         "launch_contract": {
-            "schema_version": 1,
+            "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
             "adapter": "local",
             "entrypoint": "loom.pipeline:run",
             "resources": {"gpu": 1},
@@ -69,19 +70,22 @@ def test_queue_item_contract_shape() -> None:
         "dispatch_handle": None,
         "cancellation": None,
         "metadata": {},
+        "scientific_fingerprint": None,
+        "scientific_deduplication_bypassed": False,
+        "admission_digest": item.admission_digest,
     }
 
 
 def test_queue_definition_and_pool_contract_shape() -> None:
     assert QueuePool("gpu-pool", "managed", resources={"gpu": 1}).to_dict() == {
-        "schema_version": 1,
+        "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
         "pool_name": "gpu-pool",
         "mode": "managed",
         "resources": {"gpu": 1},
         "metadata": {},
     }
     assert QueueDefinition("gpu", "gpu-pool").to_dict() == {
-        "schema_version": 1,
+        "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
         "queue_name": "gpu",
         "pool_name": "gpu-pool",
         "metadata": {},
@@ -98,7 +102,7 @@ def test_dispatch_handle_contract_shape() -> None:
     )
 
     assert handle.to_dict() == {
-        "schema_version": 1,
+        "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
         "adapter": "slurm",
         "handle_id": "12345",
         "dispatched_at": "2020-01-01T00:00:01Z",
