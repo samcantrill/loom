@@ -6,7 +6,7 @@ level: advanced
 introduced_in: v23
 status: runnable
 validation: full
-surface: cli
+surface: python_api
 public_surfaces:
   - cli
   - python_api
@@ -20,12 +20,6 @@ entrypoints:
   - path: run_managed_local_queue.py
     kind: python
     description: Start fresh daemon roots, submit a persisted plan by run URI, and print terminal status.
-  - path: coordinator-service.yaml
-    kind: config
-    description: Protected coordinator and embedded-agent role configuration.
-  - path: outbound-agent-service.yaml
-    kind: config
-    description: Protected outbound-agent role configuration.
 tags:
   - queue
   - local
