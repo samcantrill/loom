@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: approved
 - Roadmap stage and phase: Stage 29, Phase 14
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p14-reload-authority-composition`
@@ -12,8 +12,7 @@
 - PR title: `Stage 29 phase 14: complete protected role composition`
 - Dependencies: remotely merged Phase 13A; Phase 13 remains read-only evidence
 - Workflow path: expanded; durable configuration identity and authority trust boundary
-- Blockers: manager correction 2 is required for the incomplete protected
-  configuration-to-runtime boundary described under `Manager Review Findings`
+- Blockers: none
 
 ## Objective And Context
 
@@ -57,13 +56,16 @@ In scope:
   public protocols/descriptors/claim contracts.
 - Queue-owned coordinator-authority protocol plus injected per-run factory;
   direct embedded and authenticated persistent adapters.
+- Additive authority-repository v5-to-v6 migration for the authenticated
+  service-principal binding; legacy unprincipalled admissions remain fail-closed
+  to authenticated coordinator routes.
 - Nonzero CLI result for rejected coordinator or agent reload receipts.
 
 Out of scope:
 
 - Automatic target discovery, untrusted/sandboxed config, new scheduling or
-  provider semantics, authority HA, migration, or secret serialization into
-  fingerprints.
+  provider semantics, authority HA, protected role-root/config migration, or
+  secret serialization into fingerprints.
 - Phase 15 list/detail/operation CLI additions.
 
 Assumptions:
@@ -169,8 +171,9 @@ Final commands:
 
 ## Manager Review Findings
 
-Correction 2/3 is qualified because each finding is reachable from a supported
-schema-v2 production role and violates FR-35 through FR-38:
+Corrections 2/3 and 3/3 were qualified because each finding was reachable from
+a supported schema-v2 production role and violated FR-35 through FR-38. All
+findings below are resolved in validated source/test revision `308ed41`:
 
 1. Immutable and reloadable fingerprints are not canonical protected-value
    projections. Coordinator and outbound immutable projections include authored
@@ -206,6 +209,24 @@ schema-v2 production role and violates FR-35 through FR-38:
    and typed replay/conflict semantics, and an import/search guard covering all
    production queue execution paths.
 
+The independent review then found two final supported-path blockers for
+correction 3/3:
+
+5. Coordinator and outbound reload could durably remain `applying` after a
+   process loss while startup still compared the new protected source with the
+   old active fingerprint. The correction now persists only a fully prepared
+   intent bound to the exact replacement fingerprint, atomically completes its
+   active revision and terminal effect, and resumes that same intent on startup.
+   Exact coordinator replay returns the recovered terminal receipt; outbound
+   restart retains the completed effect for acknowledgement. Non-applied CLI
+   receipts exit nonzero.
+6. The coordinator mTLS route verified the service/certificate pair but dropped
+   the verified identity before mutation dispatch. Authority repository schema
+   v6 now stores that service principal with the coordinator admission and
+   requires it on every later coordinator operation and exact admission replay.
+   Two independently valid principals cannot open, bind, or mutate each other's
+   runs.
+
 The correction must add the package, unit, contract, integration, and E2E
 coverage already required by this plan. Existing schema-fixture edits and
 unrelated older reload tests do not prove these new boundaries.
@@ -232,24 +253,28 @@ unrelated older reload tests do not prove these new boundaries.
   fixes both fingerprint domains, trusted eager target construction, the narrow
   authority factory, and reload CLI semantics. Independent review remains
   required for the durable reload and authority trust boundaries.
-- Implementation: manager review found the executor result incomplete on the
-  four supported production paths recorded under `Manager Review Findings`
-- Refiner: correction 2/3 required; one bounded pass owns the four connected
-  configuration-to-runtime findings and their causal tests
-- Pre-submit gate: pending
-- Independent review: required for authority trust and durable reload/restart boundary
-- Blocker corrections: 2/3 in progress; correction 1 resolved the design stop,
-  and correction 2 addresses the incomplete implementation of that approved
-  design
+- Implementation: complete at source/test revision `308ed41`; the protected
+  coordinator/outbound roles compose and reload their whole supported snapshot,
+  durable accepted reloads recover across restart, and authenticated authority
+  operations are bound to the verified service principal.
+- Refiner: correction 2/3 closed the four connected configuration-to-runtime
+  findings; manager correction 3/3 closed the two final independent-review
+  blockers without expanding the accepted surface.
+- Pre-submit gate: passed; fresh `make validate-pr` completed Ruff, zero-finding
+  Pyright, 2,764 default tests, 157 config-extra tests with 3 expected skips,
+  and both package builds.
+- Independent review: passed on bounded follow-up with no supported-path blocker
+  remaining for reload crash recovery or coordinator-principal ownership.
+- Blocker corrections: 3/3 complete; no known blocker remains.
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Executor commit `b95e32c` added initial schema-v2 bindings, active-state scaffolding, trusted target loading, source-loader wiring, and an authority-factory seam. Manager review found the production boundary incomplete as recorded above; correction 2 is pending. |
-| Tests added or updated | Executor changed only schema fixtures in two unit files. The required projection, complete-composition, authenticated authority, source-reload/reconnect, package/import guard, and real service-command tests remain pending correction 2. |
-| Validated revision/tree state and evidence | `uv run --extra config pytest tests/unit/loom/queue/test_deployment.py tests/unit/loom/cli/test_queue.py -q` — 12 passed; `uv run --extra config pytest tests/unit/loom/queue/test_local_daemon.py -k reload -q` — 10 passed; `uv run --extra config pytest tests/integration/queue/test_agent_session_transport.py -k agent_reload -q` — 3 passed; `uv run --extra config pytest tests/contracts -q` — 305 passed. Ruff and Pyright pass on changed queue/CLI modules. |
-| Validation-relevant changes after evidence | Source, targeted tests, and this completion record changed after evidence revision `ee31fa6`; full repository gates remain manager-owned and were not run. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | Do not advance to gates or independent review until correction 2 proves all four manager findings. Full integration-file and repository gates remain manager-owned. |
+| Implementation and changed paths | Source/test revision `308ed41` completes canonical role projections, schema-v2 trusted composition, whole-role coordinator/outbound reload, durable fingerprint-bound recovery, source-loader/service rotation, injected embedded/HTTPS coordinator authority, v6 principal ownership, and nonzero non-applied reload CLI behavior across `queue`, `authority`, pipeline-store adapters, CLI, and causal tests. |
+| Tests added or updated | Unit/contract/package guards cover projections, nested targets, schema/migration, CLI outcomes, and import direction. Integration/E2E tests cover real coordinator/outbound reload and restart, service reconnection, TLS rotation, live mTLS authority calls, same-CA rejection, two-valid-principal isolation, and crash recovery after each durable reload intent. |
+| Validated revision/tree state and evidence | At source/test revision `308ed41`, fresh `make validate-pr` passed Ruff, Pyright with zero findings, 2,764 default tests with 136 deselected, 157 config-extra tests with 3 expected skips, and both builds. Fresh `make test-summary` recorded package 120, unit 1,943, contract 300, integration 337, E2E 64, and config-extra 157: 2,921 passes, zero failures/errors, 3 expected skips. |
+| Validation-relevant changes after evidence | Only this roadmap evidence and matching manifest metadata changed after the validated source/test revision; no source, test, dependency, build, or validation configuration changed. |
+| PR, review, and merge | Independent review and bounded follow-up passed; PR preparation and automatic merge remain pending. |
+| Residual risk and cleanup | No known phase blocker. Protected role roots/configs remain an intentional hard cut. Migrated authority v5 admissions have no authenticated service identity and therefore remain fail-closed on the new authenticated routes rather than being guessed or claimed. Worktree/branch cleanup follows verified remote merge. |
