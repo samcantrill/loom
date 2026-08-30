@@ -214,9 +214,11 @@ Final commands:
   `transfer_result`, adds the optional stable stage `code`, and exercises a real
   managed stage through direct and Unix reads while preserving non-atomic
   revision semantics.
-- Pre-submit gate: pending.
-- Independent review: reconsider only for a material residual public-contract or
-  cross-owner correctness risk after manager review.
+- Pre-submit gate: complete at `d0d01e1`; manager review found no remaining
+  blocker against the phase plan, accepted contracts, dependency direction,
+  domain neutrality, or proportionality.
+- Independent review: not used. The fast-path manager review covered the final
+  current-target diff and found no material residual risk requiring expansion.
 - Blocker corrections: 3/3; exhausted.
 - PR and merge: pending.
 
@@ -226,7 +228,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added `loom.diagnostics.run_inspection` strict v1 models/projection and lazy exports; owner-only injected Unix operation/client; indexed daemon run-URI lookup; direct/Unix CLI selection, docs, and public import expectation. Corrections compose the production callback, return queue/admission IDs, project targeted managed and service-less owners including local-agent execution/result, expose safe artifact/log locations and stage reason codes, enforce fixed axes/cardinality/socket size, and open an existing queue database read-only for direct inspection. |
 | Tests added or updated | Added strict codec/failure/bounds/precedence/reason/no-content units; direct queue-config and no-fallback CLI units; direct/Unix and read-only queue contracts; real managed execution/socket and both Stage 32 Slurm-mode integrations; an after-driver-exit subprocess JSON journey; and diagnostics public-import coverage. |
-| Validated revision/tree state and evidence | Correction 3 focused model/contract/integration matrix passed (16 tests); Ruff, targeted Pyright, and `git diff --check` passed. The earlier broad gate at `bb562f3` passed Ruff, Pyright, 2,708 default tests, 157 config-extra tests with 3 expected skips, and builds, and its summary recorded 2,865 passes, but correction 3 makes that receipt stale. |
-| Validation-relevant changes after evidence | Correction 3 changed the public stage codec, managed owner projection, and causal tests. A fresh broad gate and summary are required before PR preparation. |
+| Validated revision/tree state and evidence | At `d0d01e1`, after merging current `origin/develop`, the focused unit/contract/integration/E2E matrix passed 52, 3, 49, and 1 tests respectively; targeted Ruff, Pyright, and `git diff --check` passed. Fresh `make validate-pr` passed Ruff, Pyright with 0 errors or warnings, 2,727 default tests with 136 deselected, 157 config-extra tests with 3 expected skips and 2,730 deselected, plus source and wheel builds. Fresh `make test-summary` recorded 2,884 selected passes across package 119, unit 1,921, contract 300, integration 326, E2E 61, and config-extra 157, with the same 3 expected skips. |
+| Validation-relevant changes after evidence | None. Only this phase evidence metadata changed after the validated source/test tree, so the receipt remains current under the repository freshness rule. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | No known implementation blocker; correction budget is exhausted. A fresh broad `make validate-pr`/`make test-summary` receipt and final manager diff review remain required. |
+| Residual risk and cleanup | No known implementation blocker; correction budget is exhausted. PR submission, merge verification, metadata update, and worktree/branch cleanup remain. |
