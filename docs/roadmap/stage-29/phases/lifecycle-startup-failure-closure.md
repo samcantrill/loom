@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 13A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p13a-lifecycle-startup-failure-closure`
-- Worktree root and path: set during manager preparation
-- Base revision: current `origin/develop` after this planning commit
+- Worktree root and path: `/home/can134/work/active/loom-worktrees/stage-29-p13a-lifecycle-startup-failure-closure`
+- Base revision: `f9b18c1cc7dba59de90310ceac4fbae8f4e1b837`
 - PR target: `develop`
 - PR title: `Stage 29 phase 13A: close supervisor startup failure leaks`
 - Dependencies: merged Phase 12 plus read-only Phase 13 candidate `748f938`
@@ -171,7 +171,7 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending
+- Manager preparation: passed; clean current `origin/develop`, blocked candidate evidence, selective-reuse boundary, process ownership invariants, and targeted gates verified at `f9b18c1`
 - Expanded planning: not needed; the independent Phase 13 finding fixes the
   accepted behavior and supplies the smallest remedy/test boundary
 - Implementation: pending
