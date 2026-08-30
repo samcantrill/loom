@@ -1,38 +1,20 @@
 # Roadmap Stage 29 Planning: Durable Dependency-Aware Stage Scheduling
 
-Status: production correction approved; Phases 10-12 pending after the merged
-Phases 1-3D, 4A, 5A, 6, 7B, 8A, 9C2, 9D2, 9E, and 9F baseline
+Status: lifecycle, composition, and management correction approved; Phases
+13-15 pending after the merged Phases 1-12 baseline
 Roadmap stage: 29
-Evidence baseline: repository source at
-`b045f45c763568d8d8cd3e2fbb1e5a8bf80ddf43` plus isolated blocked Phase 3A
-evidence `51ca432`/`9d2d7a0`, Phase 3B candidate/review evidence
-`a1dfe92`/`da89ff4`, and Phase 3C validated/review evidence
-`1879cd1`/`60cf6c7`, Phase 3D validated source/test evidence `2b48d0e`
-and squash merge `6a8cf9f`, blocked Phase 4 validated/review evidence
-`c373d04`/`a991ced` and blocked metadata `e22500f`, plus Phase 4A validated
-source/test evidence `41a6045`, independent review at `b5cf127`, and squash
-merge `2d273b8`; Phase 5/5A evidence `d536a1e`/`4134d70` and merge `5116f18`;
-Phase 6 source/test evidence `75cd70a` and merge `2c6d366`; blocked Phase 7
-candidate/review evidence `3515400`/`1eb7c2c`; blocked Phase 7A validated/review
-evidence `ac1bfd9`/`a70986c`; Phase 7B validated source/test evidence `35cb848`
-plus squash merge `d0da216`; blocked Phase 8 source/test candidate `db254bd`
-plus required review and passing CI in closed PR #244; and Phase 8A validated
-source/test evidence `80b4655`, independent review at `7901d74`, and squash
-merge `900a461`; Phase 9C2 squash merge `b0ed116`; and blocked Phase 9D
-validated source/test evidence `c516f63` plus required review at branch head
-`a7f3014`; and Phase 9D2 validated source/test `731b3c4`, required review, exact
-PR CI, and squash merge `82b311f`; Phase 9E source/test `cc2f82a` and merge
-`0dab7a9`; and Phase 9F corrected source/test `eb0537d`, required review closure,
-fresh 2,720-pass summary, and squash merge `a6cd482`
-Planning route: the original expanded Stage 29 design remains authoritative.
-The maintainer approved the hard cut-over and selected a Slurm prolog/container-
-provisioned allocation-private capability file for the ready-stage recovery.
-Current gate: the maintainer-requested production correction is behavior- and
-design-approved. Three linked execution plans own the hard cut in dependency
-order; Phase 10 is next.
-Blockers: none. The merged Stage 29 safety kernel and lifecycle machinery remain
-the base, but the daemon composition, resident-agent boundary, and operational
-surfaces do not satisfy the production correction until Phases 10-12 merge.
+Evidence baseline: clean `develop` source at
+`2f8dfd93c98bb60a67fe8033075e5fc316c1b8f9`; Phases 10-12 are merged as
+`c2dab20`, `5fac22c`, and `4097729`; earlier blocked branches remain historical
+read-only evidence.
+Planning route: expanded because the approved correction changes durable
+session/admission/configuration state, the coordinator-authority trust boundary,
+supervisor process continuity, and public CLI behavior.
+Current gate: the maintainer supplied and approved the lifecycle,
+configuration, management, CLI, and example correction below. Three fresh
+linked execution plans own it in dependency order; Phase 13 is next.
+Blockers: none. The merged Stage 29 scheduler remains the base, but the accepted
+correction is incomplete until Phases 13-15 merge.
 
 This file is the current Stage 29 authority. It supersedes the earlier Stage 29
 whole-run placement design. A user still submits, observes, and cancels a run,
@@ -117,6 +99,93 @@ identity; Phase 12 bounds and exposes the corrected service. No module split is
 accepted merely to reduce file size; split only around one of these implemented
 owner seams.
 
+## Lifecycle, Composition, And Management Correction Agreement
+
+Review of the merged Phase 12 system found reachable supported-path failures
+that the earlier production correction did not cover. An unchanged outbound
+agent republishes one expiring offer with the same idempotency key, so replay of
+the first receipt cannot extend its lease and idle capacity disappears after
+the TTL. Completed assignment futures are removed without observing their
+result, leaving post-start failures unreconciled until another process start.
+The definite SLURM rejection path can release coordinator state before clearing
+the prepared authority binding. Supervisor initialization starts a detached
+process with no ordinary terminal lifecycle, which leaks from tests and
+examples. These are correctness failures in supported paths, not optional
+resilience work.
+
+Protected service configuration also exposes less composition than the Python
+path: it cannot express the authority endpoint, scheduling components, priority
+resolver, ready-stage SLURM profiles, or complete provider composition. Both
+role reload commands lack their trusted source loaders. The durable role binding
+hashes the whole YAML, so a successful reload and a later restart disagree about
+which configuration is valid. Execution constructs direct SQLite authorities,
+bypassing the configured production boundary. These gaps make documented
+service controls and deployment shapes unreachable.
+
+Finally, targeted admission wait is driven by a global revision changed by
+unrelated/no-op writes, and one synchronous Unix connection can block all other
+management operations. The CLI lacks the bounded list/detail reads needed to
+discover guarded control fences, local examples authorize no usable operator,
+and the example manifest claims surfaces its test does not invoke. The
+correction keeps status summaries bounded while making supported control and
+inspection workflows complete and truthfully validated.
+
+### Functional requirements
+
+| ID | Required behavior | Validation | Status |
+| --- | --- | --- | --- |
+| FR-31 | Offer publication represents changed availability; renewal extends only the current unchanged offer through a durable per-session monotonic sequence. Exact renewal replay returns the same receipt, stale/gapped sequences fail closed, and coordinator plus agent storage remains one compact replay state per session. | Response-loss replay, stale/gap rejection, bounded-row, and idle-for-three-TTL assignment tests. | locked |
+| FR-32 | Every completed background local-assignment future is observed. A failure records assignment/admission health and continuously replays the exact retained assignment, attempt, fence, and operation identities; observation failure never allocates replacement work. | Injected post-start failure, same-ID replay, restart, and no-duplicate-assignment tests. | locked |
+| FR-33 | Definite ready-stage SLURM rejection has one idempotent owner transition: rejected submission and assignment, authority unbind, logical release, capability-provider revoke, then final release. Final release cannot precede successful authority unbind. | Crash/restart tests at every transition boundary and exact replay. | locked |
+| FR-34 | Role initialization publishes durable state without leaving a supervisor process. Serve starts or joins it. A protected quiescence-checked operation records a clean shutdown and terminates only when every launch is terminal or positively contained and no retained agent-journal assignment still depends on that continuity epoch; a later serve creates a valid new epoch. Tests and runnable examples use the same cleanup path and leave no supervisor processes. | Init/serve PID checks, busy refusal, terminal-before-journal-reconcile restart, clean restart, fixture leak sentinel, and example cleanup. | locked |
+| FR-35 | Durable role binding contains only immutable role identity. Reloadable protected configuration has its own fingerprint, revision, and scheduling/configuration epoch. Reload reads the same source, rejects immutable changes, validates a complete replacement before persistence/swap, and restart accepts exactly the persisted active revision. | Successful reload/restart, immutable-change rejection, response-loss/replay, and stale-YAML rejection. | locked |
+| FR-36 | Production coordinator and outbound-agent service commands supply trusted loaders derived from their protected `source_path`; rejected reload receipts return a nonzero CLI result. | Real service-command reload and exit-code tests. | locked |
+| FR-37 | Protected coordinator configuration can construct the same supported authority, priority, scheduling components, ready-stage SLURM profiles, embedded providers, and remote profile/provider composition as the Python application path. Trusted `_target_` values are constructed once and validated against the existing public contracts. | Schema/target validation, custom component/provider, SLURM, and complete-composition startup tests. | locked |
+| FR-38 | Queue execution depends on one narrow coordinator-authority protocol/factory. Embedded composition may use a direct trusted adapter; persistent composition uses its configured authenticated adapter. Production execution does not instantiate `SQLitePerRunAuthorityStore` directly. | Fake/injected authority tests, authenticated production composition, import/search guard, and unchanged authority semantics. | locked |
+| FR-39 | Each admission owns a monotonic revision incremented only by a semantic change to that admission. Targeted detail/wait observes that revision and unrelated/no-op writes do not wake it. | No-op/unrelated isolation, exact change wake, restart, and timeout tests. | locked |
+| FR-40 | Unix management transport handles connections through a bounded worker pool and admits fewer simultaneous long polls than total workers so at least one management worker remains available. Each server long poll is capped and shutdown-aware; clients requesting a longer/infinite wait renew bounded polls without blocking status/control traffic or shutdown. | Pool-saturated wait/status/control, wait admission bound, long client wait, and prompt shutdown tests. | locked |
+| FR-41 | Bounded CLI/application reads expose admission list/detail, agent list/detail, and operation detail/wait. Agent detail includes the session/configuration revisions required by guarded controls; daemon summary includes accepted-time revision/health and coordinator/scheduling epochs. Existing fences stay mandatory. | Parser, transport, boundedness, discover-then-control, and operation-wait tests. | locked |
+| FR-42 | Protected local-owner policy maps explicitly listed operator actions/agents/pools to the verified owner UID of the local socket/config instead of requiring a host-specific hard-coded UID. | Different-UID fixture, scope negatives, and sample-config control tests. | locked |
+| FR-43 | Expiry candidates use the daemon's accepted-time snapshot, successful global reconciliation clears transient service error, and time-recovery idempotency is principal-bound. | Focused owner, recovery replay, and health-clear tests. | locked |
+| FR-44 | Three runnable validated journeys cover managed local lifecycle/reads/restart/cleanup, authenticated remote operations, and ready-stage SLURM rejection/restart/result/release. An example claims `validation: full` only when its tests invoke every listed public surface. | Exact e2e paths, manifest assertion, generated test CA/fake SLURM, and post-suite process leak check. | locked |
+
+### Design decisions
+
+- DD-31: offer renewal is a distinct typed application operation, not another
+  publication key. The coordinator store and agent journal each retain only the
+  current sequence/request digest/receipt for a session.
+- DD-32: durable assignment state is authoritative; futures only notify the
+  coordinator to reconcile an exact retained saga.
+- DD-33: authority unbind owns the safety gate for definite rejection. Logical
+  and physical release are separate idempotent transitions after it.
+- DD-34: supervisor process lifetime begins at serve, not initialization. Clean
+  shutdown rotates continuity only after both supervisor-owned quiescence and
+  absence of agent-journal references to the retiring epoch; it is the one
+  cleanup path for production, tests, and examples.
+- DD-35: immutable and reloadable configuration fingerprints are computed from
+  canonical protected values, never paths or runtime objects. The active row is
+  persisted before a live swap, and startup verifies both identities.
+- DD-36: authored protected configuration remains trusted project/site code;
+  `_target_` construction is explicit, eager at role startup/reload, and checked
+  structurally against existing planner/provider/policy contracts.
+- DD-37: the authority protocol is queue-owned and capability-narrow. Concrete
+  local and authenticated adapters remain pipeline/store owners; execution sees
+  no database implementation.
+- DD-38: admission revision is stored on the admission row and changes in the
+  same transaction as its semantic state. Global store revision remains only a
+  coarse service token.
+- DD-39: management concurrency is bounded and shutdown-aware; long-poll
+  admission reserves management capacity, and indefinite CLI behavior is a
+  client loop over finite server waits.
+- DD-40: examples are product contracts. Each journey owns a manifest whose
+  claimed surfaces and validation paths are mechanically checked.
+
+The correction deliberately does not add coordinator HA, supervisor shutdown
+with unknown work, automatic authority discovery, untrusted plugin loading,
+unbounded management scans, generic external schedulers, or compatibility for
+old durable roots. Affected Stage 29 schemas are hard-cut when an old shape
+could otherwise be misread; fresh example/deployment roots are required.
+
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
@@ -146,6 +215,7 @@ owner seams.
 | Phase 9F execution evidence | Corrected source/test `eb0537d` completes guarded different-session replacement, complete owner classification, fresh successor readiness, old-root provider-release proof before capacity restoration, fresh coordinator offer identities after withholding changes, bounded status, and all adapters/guidance. The 179-test phase matrix, `make validate-pr`, and a fresh 2,720-pass summary succeeded; required review findings closed at correction 2/3. | None. PR #249 squash-merged as `a6cd482`; hosted CI is intentionally disabled. | Preserve the hard-cut version 7 replacement and cleanup contracts; no Phase 9F workflow action remains. |
 | Approval | The maintainer approved the original Stage 29 hard cut-over, explicitly rejected candidate-schema compatibility or migration, approved the Slurm job-private capability contract and recovery closures, and approved Phase 9F implementation after each blocker explanation. | None. | Preserve the merged baseline and historical evidence. |
 | Production correction | The maintainer supplied and approved the global-scheduling, assignment-execution, resident-agent, bounded-operations, time-health, initialization, deployment, and three-phase hard-cut requirements recorded above. | None; compatibility is explicitly unnecessary. | Execute Phases 10-12 in order, starting with Phase 10. |
+| Lifecycle/composition/management correction | The maintainer approved FR-31 through FR-44 after review demonstrated idle-offer expiry, discarded future failures, unsafe SLURM rejection release, detached supervisor leaks, incoherent reload identity, incomplete protected composition/authority injection, global-wake/single-connection management, missing bounded CLI reads, and overclaimed examples. | None; affected schemas may hard cut and compatibility is unnecessary. | Execute Phases 13-15 in order, starting with Phase 13. |
 
 ## Evidence And Scope
 
@@ -1895,6 +1965,12 @@ should be tested at their owning boundary rather than as a Cartesian matrix.
 | 8 — controls and stage-aware cancellation | Candidate `db254bd` implemented drain/resume/reload and cancellation but cannot merge. | Evidence only: review proved local/prepared unresolved work can be bypassed by terminal cancellation, operator policy is role-only, and reload replaces only SLURM profiles. Candidate schemas are unsupported. | Merged Phase 7B at `d0da216`; blocked Phase 7/7A evidence is not a dependency base. | Full local gates, 2,648 categorized tests, and PR #244 CI passed; required review blocked after correction 3/3. | blocked |
 | 8A — control and cancellation closure | Operators use exactly scoped controls; trusted reload swaps one complete component epoch; cancellation becomes terminal only after every prepared/local/remote/SLURM owner settles. | Selective Phase 8 reuse plus protected action/agent/pool grants, existing `ComponentRegistry` and descriptor owners, authority final-cancellation CAS, and fresh protocol/store/CLI IDs. No compatibility or Phase 9 inference. | Phase 7B plus read-only Phase 8 evidence. | Causal authorization negatives, old/new retained component use, authority outage/replay, every local boundary, mixed-target cancellation, strict-version rejection, full local gates, CI, and independent review. | merged |
 | 9 — restart and guarded recovery | Agents and SLURM assignments restart/reconcile without duplicate launch/submission, and privileged operators can resolve positively contained unknown work or replace a fully contained old agent session. | Same-session agent journal/process/outbox recovery; SLURM known/unknown operation/handle/bootstrap reconciliation without resubmit; user-service operation; agent or trusted exact SLURM positive-containment evidence; normal reconciliation of every verified current-fence terminal fact; cross-store fence/close/retry reconciliation; execution-close/provider/profile-slot release separation; stale-event/result rejection; complete agent-session replacement set; regression only for earlier ordinary coordinator/authority restart. No second automatic restart state machine, automatic failover/fallback, or coordinator HA. | Phase 8A. | Phase 9C2, 9D2, 9E, and 9F merged with required review and fresh final validation; blocked predecessors remain evidence only. | merged |
+| 10 — global scheduler and assignment concurrency | One bounded coordinator-wide cycle projects all active admissions, schedules the ordered ready window, and runs assignment-scoped work concurrently. | Durable priority/enqueue order, per-admission health, exact local/remote/SLURM assignment futures, and same-run concurrency; no execution-profile/provider redesign. | Phase 9. | Global ordering, bounded-window, background assignment, health isolation, and full validation passed in PR #250. | merged |
+| 11 — resident agent correctness and security | Every managed placement pins one executable resident profile and explicit conforming provider composition, and workers receive only an allowlisted environment. | Execution requirement/profile identity, provider/planner contracts, and launch environment; no management/deployment expansion. | Phase 10. | Profile/provider/environment matrices and full validation passed in PR #253. | merged |
+| 12 — operational bounds and deployment | The coordinator exposes bounded status/admission/poll behavior, accepted-time health/recovery, atomic fresh roots, and protected coordinator/outbound-agent service commands. | Constant summary, bounded pages/detail/wait, one poll replay state, time fencing, atomic publication, and initial protected schema; no lifecycle renewal, complete composition, or extra CLI reads. | Phase 11. | Operation/deployment tests and full validation passed in PR #254. | merged |
+| 13 — lifecycle and recovery correctness | Idle offers renew in bounded sequence, exact assignment failures reconcile continuously, definite SLURM rejection unbinds before release, and supervisors have serve-owned clean quiescent lifetime. | Offer/session journal, local assignment notification/replay, SLURM rejection order, supervisor continuity and cleanup; no config/management expansion. | Phase 12. | Three-TTL assignment, future failure, every rejection crash arrow, init/serve/shutdown, and leak tests plus full gate. | pending |
+| 14 — reload and authority composition | Protected configs construct/reload the complete supported role and restart from the persisted active revision through the configured authority adapter. | Immutable/active fingerprints, loaders, trusted targets, scheduling/SLURM/providers, authority factory, CLI failure; no list/detail/example expansion. | Phase 13. | Reload/restart crash matrix, target contracts, direct/HTTPS authority, service command, and full gate. | pending |
+| 15 — management, CLI, and examples | Per-admission waits are causal, management remains responsive during bounded long polls, guarded fences are discoverable, local policy is portable, and three journeys prove every claimed surface. | Admission revision, worker pool/client renewal, bounded reads/CLI, policy/defects, docs/examples; no unbounded UI or external default dependency. | Phase 14. | A/B/no-op waits, concurrency/shutdown, discover-control, local/remote/SLURM E2Es, manifest and leak checks, and full gate. | pending |
 
 Nine numbered phases plus Phase 3B, Phase 3C, Phase 3D, Phase 4A, Phase 5A,
 Phase 7A, and Phase 7B
@@ -1981,10 +2057,14 @@ route choices remain in phase-executor discretion.
 | Phase 9D2 recovery agreement | The maintainer approved saved-revision replay after fresh observation, final event acknowledgement before coordinator release, identical decline ordering, no compatibility, and causal crash-cut proof. | pass |
 | Phase 9D2 execution evidence | Source/test `731b3c4` passed the four-case crash matrix, 102 affected tests, refreshed `make validate-pr`, required independent review, and exact PR CI before #247 squash-merged as `82b311f`. | pass |
 | No unresolved planning blocker | The Phase 9D2 plan owns only the exact review finding, reuses existing private states and remote precedent, preserves the hard cut, and leaves Phase 9E/9F unchanged. | pass |
+| Lifecycle/composition/management behavior locked | The maintainer supplied FR-31 through FR-44 and the renewal, reconciliation, release, supervisor, configuration, authority, management, CLI, policy, defect, and example contracts are explicit. | pass |
+| New additions proportionate | Each new state/API corresponds to a demonstrated supported-path failure or an already documented unreachable service capability; HA, generic plugins, forced shutdown, unbounded reads, and real external default dependencies remain deferred. | pass |
+| New phases vertical and reviewable | Phase 13 owns lifecycle/recovery, Phase 14 owns protected composition/reload/authority, and Phase 15 owns bounded management/CLI/examples in causal dependency order. | pass |
+| No current planning blocker | Three linked execution plans cover every new requirement with owners, stop conditions, causal tests, and final gates. | pass |
 
-Gate result: Phase 9D2 merged with no unresolved planning blocker.
-Blocked phases remain read-only evidence; Phase 9E is ready for manager
-preparation from current `develop`.
+Gate result: the lifecycle, composition, and management correction is approved
+with no unresolved planning blocker. Blocked historical phases remain read-only
+evidence; Phase 13 is ready for manager preparation from current `develop`.
 The previous expanded design,
 startup, extension/security, phase-shaping, deep scheduler, manager-local
 whole-stage correctness, deployment clarification, and explicit ready-stage
