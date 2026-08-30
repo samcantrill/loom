@@ -89,7 +89,7 @@ from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
 
-AUTHORITY_REPOSITORY_SCHEMA_VERSION = 5
+AUTHORITY_REPOSITORY_SCHEMA_VERSION = 6
 AUTHORITY_REPOSITORY_DB_NAME = "authority.sqlite3"
 AUTHORITY_REPOSITORY_COORDINATION_DB_NAME = "coordination.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
@@ -249,7 +249,13 @@ _REQUIRED_SCHEMA_COLUMNS = {
         {"run_uri", "assignment_id", "attempt_id"}
     ),
     "coordinator_admission_receipts": frozenset(
-        {"run_uri", "operation_id", "request_json", "receipt_json"}
+        {
+            "run_uri",
+            "operation_id",
+            "service_principal",
+            "request_json",
+            "receipt_json",
+        }
     ),
     "cancellation_epochs": frozenset({"run_uri", "epoch"}),
     "cancellation_epoch_receipts": frozenset(
@@ -477,6 +483,9 @@ class AuthorityRepository:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     _migrate_v3_output_commits(
+                        conn, current_version=self.schema_version
+                    )
+                    _migrate_v5_coordinator_principals(
                         conn, current_version=self.schema_version
                     )
                     _initialize_schema(
@@ -1000,7 +1009,11 @@ class AuthorityRepository:
             return receipt
 
     def bind_coordinator_admission(
-        self, run_uri: str, request: CoordinatorAdmissionRequest
+        self,
+        run_uri: str,
+        request: CoordinatorAdmissionRequest,
+        *,
+        service_principal: str | None = None,
     ) -> CoordinatorAdmissionReceipt:
         """Durably bind one accepted operation to the production coordinator."""
 
@@ -1011,15 +1024,24 @@ class AuthorityRepository:
             )
         if request.run_uri != run_uri:
             raise AuthorityRepositoryError("coordinator admission run_uri conflicts")
+        principal = (
+            None
+            if service_principal is None
+            else _non_empty(service_principal, "service_principal")
+        )
         with self.transaction() as conn:
             _require_run_row(conn, run_uri)
             row = conn.execute(
-                "SELECT request_json, receipt_json "
+                "SELECT service_principal, request_json, receipt_json "
                 "FROM coordinator_admission_receipts "
                 "WHERE run_uri = ? AND operation_id = ?",
                 (run_uri, request.operation_id),
             ).fetchone()
             if row is not None:
+                if row["service_principal"] != principal:
+                    raise AuthorityRepositoryError(
+                        "coordinator authority principal conflicts with admission"
+                    )
                 existing = CoordinatorAdmissionRequest.from_dict(
                     _json_loads(cast(str, row["request_json"]))
                 )
@@ -1036,11 +1058,16 @@ class AuthorityRepository:
                     )
                 return receipt
             binding = conn.execute(
-                "SELECT request_json FROM coordinator_admission_receipts "
+                "SELECT service_principal, request_json "
+                "FROM coordinator_admission_receipts "
                 "WHERE run_uri = ? LIMIT 1",
                 (run_uri,),
             ).fetchone()
             if binding is not None:
+                if binding["service_principal"] != principal:
+                    raise AuthorityRepositoryError(
+                        "coordinator authority principal conflicts with admission"
+                    )
                 bound = CoordinatorAdmissionRequest.from_dict(
                     _json_loads(cast(str, binding["request_json"]))
                 )
@@ -1057,16 +1084,39 @@ class AuthorityRepository:
             receipt = CoordinatorAdmissionReceipt(request=request)
             conn.execute(
                 "INSERT INTO coordinator_admission_receipts "
-                "(run_uri, operation_id, request_json, receipt_json) "
-                "VALUES (?, ?, ?, ?)",
+                "(run_uri, operation_id, service_principal, request_json, "
+                "receipt_json) VALUES (?, ?, ?, ?, ?)",
                 (
                     run_uri,
                     request.operation_id,
+                    principal,
                     _json_dumps(request.to_dict()),
                     _json_dumps(receipt.to_dict()),
                 ),
             )
             return receipt
+
+    def require_coordinator_principal(
+        self, run_uri: str, service_principal: str
+    ) -> None:
+        """Require the authenticated service that first bound this run."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        principal = _non_empty(service_principal, "service_principal")
+        with self._read_connection() as conn:
+            row = conn.execute(
+                "SELECT service_principal FROM coordinator_admission_receipts "
+                "WHERE run_uri = ? LIMIT 1",
+                (run_uri,),
+            ).fetchone()
+        if row is None:
+            raise AuthorityRepositoryError(
+                "coordinator operation requires a coordinator admission"
+            )
+        if row["service_principal"] != principal:
+            raise AuthorityRepositoryError(
+                "coordinator authority principal conflicts with admission"
+            )
 
     def install_cancellation_epoch(
         self, run_uri: str, request: CancellationEpochRequest
@@ -4244,6 +4294,82 @@ def _migrate_v3_output_commits(
     )
 
 
+def _migrate_v5_coordinator_principals(
+    conn: sqlite3.Connection, *, current_version: int
+) -> None:
+    """Atomically add authenticated coordinator ownership to a complete v5 DB."""
+
+    if current_version != 6:
+        return
+    tables = {
+        cast(str, row["name"])
+        for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
+    }
+    if _METADATA_TABLE not in tables:
+        return
+    metadata_columns = {
+        cast(str, row["name"])
+        for row in conn.execute(f"PRAGMA table_info({_METADATA_TABLE})")
+    }
+    if not _REQUIRED_SCHEMA_COLUMNS[_METADATA_TABLE].issubset(metadata_columns):
+        return
+    row = conn.execute(
+        f"SELECT value FROM {_METADATA_TABLE} WHERE key = 'schema_version'"
+    ).fetchone()
+    if row is None:
+        return
+    try:
+        version = int(cast(str, row["value"]))
+    except (TypeError, ValueError):
+        return
+    if version != 5:
+        return
+    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - tables
+    if missing_tables:
+        raise AuthorityRepositoryCompatibilityError(
+            _corrupt_failure(
+                "authority repository v5 schema is incomplete",
+                current_version=current_version,
+            )
+        )
+    for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+        v5_columns = (
+            expected_columns - {"service_principal"}
+            if table_name == "coordinator_admission_receipts"
+            else expected_columns
+        )
+        actual_columns = {
+            cast(str, info["name"])
+            for info in conn.execute(f"PRAGMA table_info({table_name})")
+        }
+        if not v5_columns.issubset(actual_columns):
+            raise AuthorityRepositoryCompatibilityError(
+                _corrupt_failure(
+                    "authority repository v5 schema is incomplete",
+                    current_version=current_version,
+                )
+            )
+    metadata = {
+        cast(str, item["key"]): cast(str, item["value"])
+        for item in conn.execute(f"SELECT key, value FROM {_METADATA_TABLE}")
+    }
+    if not _REQUIRED_METADATA_KEYS.issubset(metadata):
+        raise AuthorityRepositoryCompatibilityError(
+            _corrupt_failure(
+                "authority repository v5 metadata is incomplete",
+                current_version=current_version,
+            )
+        )
+    conn.execute(
+        "ALTER TABLE coordinator_admission_receipts "
+        "ADD COLUMN service_principal TEXT"
+    )
+    conn.execute(
+        f"UPDATE {_METADATA_TABLE} SET value = ? WHERE key = 'schema_version'",
+        (str(current_version),),
+    )
+
+
 def _initialize_schema(
     conn: sqlite3.Connection,
     *,
@@ -4461,6 +4587,7 @@ def _initialize_schema(
         CREATE TABLE IF NOT EXISTS coordinator_admission_receipts (
             run_uri TEXT NOT NULL,
             operation_id TEXT NOT NULL,
+            service_principal TEXT,
             request_json TEXT NOT NULL,
             receipt_json TEXT NOT NULL,
             PRIMARY KEY (run_uri, operation_id)

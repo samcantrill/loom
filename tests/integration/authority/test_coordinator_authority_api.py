@@ -187,6 +187,15 @@ def test_scoped_adapter_rejects_workspace_and_changed_retry_payload(tmp_path) ->
 
     _repository, valid = _authority(tmp_path / "valid")
     valid_revision = _repository.admit_run(RUN_URI)
+    valid.bind_coordinator_admission(
+        RUN_URI,
+        CoordinatorAdmissionRequest(
+            operation_id="admit-valid",
+            coordinator_id="coordinator-1",
+            run_uri=RUN_URI,
+            intent_digest="intent-valid",
+        ),
+    )
     valid.ensure_prepared_attempt(RUN_URI, _prepared_request(valid_revision))
     with pytest.raises(AuthenticatedCoordinatorAuthorityError, match="conflicts"):
         valid.ensure_prepared_attempt(
@@ -227,6 +236,16 @@ def test_coordinator_route_binds_service_id_to_verified_peer_certificate(
     )
     repository.admit_run(RUN_URI)
     peer_fingerprint = "a" * 64
+    repository.bind_coordinator_admission(
+        RUN_URI,
+        CoordinatorAdmissionRequest(
+            operation_id="admit-route-principal",
+            coordinator_id="coordinator-1",
+            run_uri=RUN_URI,
+            intent_digest="intent-route-principal",
+        ),
+        service_principal="research-authority",
+    )
     services = repository_authority_services(
         repository,
         workspace_id="workspace-a",
@@ -280,10 +299,15 @@ def test_live_mutual_tls_authority_rejects_a_different_same_ca_peer(
         state_dir, service_generation="generation-1"
     )
     repository.admit_run(RUN_URI)
+    other_run_uri = "file:///runs/coordinator-api-r2"
+    repository.admit_run(other_run_uri)
     port = _available_port()
     endpoint = f"https://localhost:{port}"
     allowed_fingerprint = certificate_fingerprint(
         credentials["agent"].with_suffix(".crt")
+    )
+    other_fingerprint = certificate_fingerprint(
+        credentials["other"].with_suffix(".crt")
     )
     process = subprocess.Popen(
         [
@@ -306,6 +330,8 @@ def test_live_mutual_tls_authority_rejects_a_different_same_ca_peer(
             str(credentials["ca"].with_suffix(".crt")),
             "--coordinator-credential",
             f"research-authority={allowed_fingerprint}",
+            "--coordinator-credential",
+            f"other-authority={other_fingerprint}",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -317,7 +343,62 @@ def test_live_mutual_tls_authority_rejects_a_different_same_ca_peer(
             credentials=credentials,
             process=process,
         )
-        assert allowed_factory(RUN_URI).open_run(RUN_URI).run_uri == RUN_URI
+        allowed = allowed_factory(RUN_URI)
+        allowed.bind_coordinator_admission(
+            RUN_URI,
+            CoordinatorAdmissionRequest(
+                operation_id="admit-live-a",
+                coordinator_id="coordinator-a",
+                run_uri=RUN_URI,
+                intent_digest="intent-live-a",
+            ),
+        )
+        assert allowed.open_run(RUN_URI).run_uri == RUN_URI
+
+        other_factory = https_coordinator_authority_factory(
+            endpoint,
+            service_id="other-authority",
+            workspace_id="workspace-a",
+            tls=CoordinatorAuthorityTlsConfig(
+                credentials["ca"].with_suffix(".crt"),
+                credentials["other"].with_suffix(".crt"),
+                credentials["other"].with_suffix(".key"),
+            ),
+            timeout_seconds=1.0,
+        )
+        other = other_factory(other_run_uri)
+        other.bind_coordinator_admission(
+            other_run_uri,
+            CoordinatorAdmissionRequest(
+                operation_id="admit-live-b",
+                coordinator_id="coordinator-b",
+                run_uri=other_run_uri,
+                intent_digest="intent-live-b",
+            ),
+        )
+        assert other.open_run(other_run_uri).run_uri == other_run_uri
+        for authority, foreign_run in (
+            (allowed_factory(other_run_uri), other_run_uri),
+            (other_factory(RUN_URI), RUN_URI),
+        ):
+            with pytest.raises(
+                AuthenticatedCoordinatorAuthorityError,
+                match="principal conflicts",
+            ):
+                authority.open_run(foreign_run)
+        with pytest.raises(
+            AuthenticatedCoordinatorAuthorityError,
+            match="principal conflicts",
+        ):
+            other_factory(RUN_URI).bind_coordinator_admission(
+                RUN_URI,
+                CoordinatorAdmissionRequest(
+                    operation_id="admit-live-a",
+                    coordinator_id="coordinator-a",
+                    run_uri=RUN_URI,
+                    intent_digest="intent-live-a",
+                ),
+            )
 
         denied_factory = https_coordinator_authority_factory(
             endpoint,

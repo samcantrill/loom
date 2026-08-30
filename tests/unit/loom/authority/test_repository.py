@@ -99,6 +99,47 @@ def test_repository_hard_cuts_pre_coordinator_schema_without_mutation(tmp_path) 
     assert version == ("4",)
 
 
+def test_repository_migrates_v5_coordinator_admissions_to_principal_binding(
+    tmp_path,
+) -> None:
+    repository = AuthorityRepository(tmp_path)
+    repository.initialize(service_generation="generation-1")
+    database_path = tmp_path / "authority.sqlite3"
+    with sqlite3.connect(database_path) as conn:
+        conn.executescript(
+            """
+            ALTER TABLE coordinator_admission_receipts
+                RENAME TO coordinator_admission_receipts_v6;
+            CREATE TABLE coordinator_admission_receipts (
+                run_uri TEXT NOT NULL,
+                operation_id TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                receipt_json TEXT NOT NULL,
+                PRIMARY KEY (run_uri, operation_id)
+            );
+            INSERT INTO coordinator_admission_receipts (
+                run_uri, operation_id, request_json, receipt_json
+            ) SELECT run_uri, operation_id, request_json, receipt_json
+              FROM coordinator_admission_receipts_v6;
+            DROP TABLE coordinator_admission_receipts_v6;
+            UPDATE repository_metadata SET value = '5'
+             WHERE key = 'schema_version';
+            """
+        )
+
+    identity = AuthorityRepository(tmp_path).initialize()
+
+    assert identity.schema_version == AUTHORITY_REPOSITORY_SCHEMA_VERSION
+    with sqlite3.connect(database_path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(coordinator_admission_receipts)"
+            )
+        }
+    assert "service_principal" in columns
+
+
 def test_read_identity_fails_for_missing_database(tmp_path) -> None:
     repository = AuthorityRepository(tmp_path)
 

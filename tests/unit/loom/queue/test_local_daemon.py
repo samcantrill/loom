@@ -575,6 +575,59 @@ def test_scheduling_reload_is_local_atomic_and_durable(tmp_path: Path) -> None:
     restarted.stop()
 
 
+def test_scheduling_reload_recovers_crash_after_prepared_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    replacement = replace(
+        config,
+        active_configuration_fingerprint="2" * 64,
+        poll_interval_seconds=0.02,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    request = CoordinatorSchedulingReload(
+        operation_id="reload-crash-boundary",
+        expected_scheduling_epoch=before.scheduling_epoch,
+        reason="recover accepted replacement",
+    )
+    original = daemon._record_scheduling_reload_intent  # noqa: SLF001
+
+    def stop_after_intent(**kwargs: object) -> None:
+        original(**cast(Any, kwargs))
+        raise SystemExit("simulated process loss")
+
+    monkeypatch.setattr(daemon, "_record_scheduling_reload_intent", stop_after_intent)
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+    )
+    try:
+        with pytest.raises(SystemExit, match="simulated process loss"):
+            operator.reload_scheduling(request)
+    finally:
+        daemon.stop()
+
+    with sqlite3.connect(config.control_database) as conn:
+        assert conn.execute(
+            "SELECT state FROM scheduling_reloads WHERE operation_id = ?",
+            (request.operation_id,),
+        ).fetchone() == ("applying",)
+
+    restarted = LocalDaemon(replacement)
+    status = restarted.start()
+    try:
+        assert status.scheduling_epoch != before.scheduling_epoch
+        receipt = restarted.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(request)
+        assert receipt["state"] == "applied"
+        assert receipt["scheduling_epoch"] == status.scheduling_epoch
+        assert receipt["configuration_revision"] == 2
+    finally:
+        restarted.stop()
+
+
 def test_scheduling_reload_replaces_idle_provider_capacity_and_authority_factory(
     tmp_path: Path,
 ) -> None:

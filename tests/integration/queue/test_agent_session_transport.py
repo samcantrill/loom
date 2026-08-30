@@ -1008,6 +1008,107 @@ def test_agent_reload_rejects_profile_set_addition_and_requires_resume(
         client.close()
 
 
+def test_agent_reload_recovers_crash_after_bound_replacement(
+    tmp_path: Path,
+) -> None:
+    root = _fresh_remote_agent_root(tmp_path)
+    profile = ResidentExecutionProfile(
+        descriptor=ResidentProfileDescriptor(
+            "python", "1", "project-1", "environment-1", "executor-1"
+        ),
+        project_root=tmp_path,
+        python_executable=Path(sys.executable),
+    )
+    base = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        agent_root=root,
+        resident_profiles=(profile,),
+        deployment_configuration_fingerprint="1" * 64,
+        active_configuration_fingerprint="1" * 64,
+    )
+    replacement = replace(base, active_configuration_fingerprint="2" * 64)
+    LocalDaemonAgentHttpClient.initialize_agent_root(base)
+    client = LocalDaemonAgentHttpClient(
+        base, trusted_config_loader=lambda: replacement
+    )
+    registration = AgentRegistration(
+        idempotency_key="register-crash-reload",
+        coordinator_id="coordinator-a",
+        coordinator_epoch="coordinator-epoch-a",
+        agent_root_id=client.agent_root_id,
+        config_revision="config-1",
+        inventory_revision="inventory-1",
+        availability_revision="availability-1",
+        declared_pools=("default",),
+    )
+    persisted = client._require_journal().persist_registration_intent(registration)
+    session = AgentSession(
+        session_id="session-crash-reload",
+        coordinator_id="coordinator-a",
+        coordinator_epoch="coordinator-epoch-a",
+        agent_id="agent-a",
+        agent_root_id=client.agent_root_id,
+        policy_revision="policy-1",
+        config_revision="config-1",
+        inventory_revision="inventory-1",
+        availability_revision="availability-1",
+        capabilities=("python",),
+        pools=("default",),
+        state=AgentSessionState.ACTIVE,
+    )
+    client._require_journal().persist_session(
+        persisted.idempotency_key, persisted.value(), session
+    )
+    control = AgentControl(
+        operation_id="reload-agent-crash-boundary",
+        kind=AgentControlKind.RELOAD,
+        agent_id="agent-a",
+        expected_session_id=session.session_id,
+        expected_config_revision=session.config_revision,
+        pool=None,
+        cancel_active=False,
+        reason="recover accepted replacement",
+    )
+    plan = client._prepare_agent_reload()  # noqa: SLF001 - exact crash boundary
+    assert (
+        client._require_journal().prepare_control(
+            control, replacement_fingerprint=plan.active_fingerprint
+        )
+        is None
+    )
+    client.close()  # Process loss before complete_reload leaves the bound intent.
+
+    recovered = LocalDaemonAgentHttpClient(replacement)
+    try:
+        retained = recovered._require_journal().next_unacknowledged_control()
+        assert retained is not None
+        retained_control, effect = retained
+        assert retained_control == control
+        assert effect.code == "applied"
+        active_session = recovered.active_session()
+        assert active_session is not None
+        assert active_session.config_revision == effect.config_revision
+        assert recovered._require_journal().availability_drained() is True
+        with sqlite3.connect(root / "control.sqlite") as conn:
+            metadata = dict(
+                conn.execute(
+                    "SELECT key, value FROM root_metadata WHERE key IN "
+                    "('active_configuration_revision', "
+                    "'active_configuration_fingerprint')"
+                )
+            )
+        assert metadata == {
+            "active_configuration_revision": "2",
+            "active_configuration_fingerprint": "2" * 64,
+        }
+        recovered.shutdown_clean()
+    finally:
+        recovered.close()
+
+
 def test_agent_reload_allows_idle_capacity_change_but_not_retained_reinterpretation(
     tmp_path: Path,
 ) -> None:

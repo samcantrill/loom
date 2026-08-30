@@ -16,6 +16,7 @@ from loom.serialization import PlainData
 from ..dependencies import get_authority_services
 from ..mutation_service import (
     AuthorityMutationOperation,
+    TRUSTED_IN_PROCESS_COORDINATOR_PRINCIPAL,
     unsupported_mutation_response,
 )
 from ..services import (
@@ -68,7 +69,7 @@ def _endpoint(
         request: Request,
         services: AuthorityAppServices = Depends(get_authority_services),
     ) -> dict[str, PlainData]:
-        _require_coordinator_principal(request, services)
+        coordinator_principal = _require_coordinator_principal(request, services)
         service = services.mutation_service
         if service is None:
             return unsupported_mutation_response(
@@ -77,7 +78,11 @@ def _endpoint(
                 service_generation=services.service_generation,
                 workspace_id=services.workspace_id,
             ).to_dict()
-        return service.handle(operation, payload).to_dict()
+        return service.handle(
+            operation,
+            payload,
+            coordinator_principal=coordinator_principal,
+        ).to_dict()
 
     apply.__name__ = operation.value
     apply.__doc__ = f"Apply the {operation.value} coordinator authority operation."
@@ -86,13 +91,13 @@ def _endpoint(
 
 def _require_coordinator_principal(
     request: Request, services: AuthorityAppServices
-) -> None:
+) -> str:
     """Bind the application service ID to the verified mTLS peer certificate."""
 
     credentials = services.coordinator_credentials
     if credentials is None:
         # Explicit in-process composition is already inside the trusted owner.
-        return
+        return TRUSTED_IN_PROCESS_COORDINATOR_PRINCIPAL
     service_id = request.headers.get(COORDINATOR_AUTHORITY_SERVICE_HEADER)
     peer_fingerprint = getattr(
         request.state,
@@ -109,6 +114,8 @@ def _require_coordinator_principal(
             status_code=403,
             detail="coordinator authority principal is not authorized",
         )
+    assert service_id is not None
+    return service_id
 
 
 for _path, _operation in _ROUTES.items():

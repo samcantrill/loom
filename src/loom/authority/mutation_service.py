@@ -146,6 +146,9 @@ class AuthorityMutationValidationError(ValueError):
     """Raised when a mutation request body cannot be adapted."""
 
 
+TRUSTED_IN_PROCESS_COORDINATOR_PRINCIPAL = "loom:trusted-in-process-coordinator"
+
+
 _COORDINATOR_EXECUTION_MUTATIONS = frozenset(
     {
         AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
@@ -358,6 +361,8 @@ class AuthorityMutationService:
         self,
         operation: AuthorityMutationOperation,
         payload: Mapping[str, object],
+        *,
+        coordinator_principal: str | None = None,
     ) -> AuthorityProtocolResponse:
         """Return a structured protocol response for one mutation payload."""
 
@@ -370,9 +375,27 @@ class AuthorityMutationService:
         try:
             request = AuthorityProtocolRequest.from_dict(payload)
             metadata = request.metadata
+            scoped_principal: str | None = None
             if operation in _SCOPED_COORDINATOR_MUTATIONS:
                 self._require_coordinator_scope(operation, request)
-            result = self._dispatch(operation, request)
+                scoped_principal = (
+                    TRUSTED_IN_PROCESS_COORDINATOR_PRINCIPAL
+                    if coordinator_principal is None
+                    else coordinator_principal
+                )
+                if not isinstance(scoped_principal, str) or not scoped_principal:
+                    raise AuthorityMutationValidationError(
+                        "coordinator authority principal is invalid"
+                    )
+                if operation is not AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION:
+                    self._repository.require_coordinator_principal(
+                        _required_run_uri(request), scoped_principal
+                    )
+            result = self._dispatch(
+                operation,
+                request,
+                coordinator_principal=scoped_principal,
+            )
             return accepted_authority_response(metadata, result)
         except AuthorityRepositoryCompatibilityError as exc:
             return rejected_authority_response(
@@ -424,6 +447,8 @@ class AuthorityMutationService:
         self,
         operation: AuthorityMutationOperation,
         request: AuthorityProtocolRequest,
+        *,
+        coordinator_principal: str | None = None,
     ) -> AuthorityProtocolResult:
         match operation:
             case AuthorityMutationOperation.ADMIT_RUN:
@@ -509,7 +534,9 @@ class AuthorityMutationService:
             case AuthorityMutationOperation.READ_RESOURCE_LIMIT:
                 return self._read_resource_limit(request)
             case AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION:
-                return self._bind_coordinator_admission(request)
+                return self._bind_coordinator_admission(
+                    request, coordinator_principal=coordinator_principal
+                )
             case AuthorityMutationOperation.COORDINATOR_OPEN_RUN:
                 return self._coordinator_open_run(request)
             case AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN:
@@ -633,13 +660,21 @@ class AuthorityMutationService:
         )
 
     def _bind_coordinator_admission(
-        self, request: AuthorityProtocolRequest
+        self,
+        request: AuthorityProtocolRequest,
+        *,
+        coordinator_principal: str | None,
     ) -> AuthorityProtocolResult:
+        if coordinator_principal is None:
+            raise AuthorityMutationValidationError(
+                "coordinator authority principal is unavailable"
+            )
         receipt = self._repository.bind_coordinator_admission(
             _required_run_uri(request),
             CoordinatorAdmissionRequest.from_dict(
                 _required_body_value(request, "request")
             ),
+            service_principal=coordinator_principal,
         )
         return _result(
             service_generation=self._service_generation,
@@ -2013,6 +2048,7 @@ __all__ = [
     "AuthorityMutationOperation",
     "AuthorityMutationService",
     "AuthorityMutationValidationError",
+    "TRUSTED_IN_PROCESS_COORDINATOR_PRINCIPAL",
     "operation_kind_for",
     "unsupported_mutation_response",
 ]

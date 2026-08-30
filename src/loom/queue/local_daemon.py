@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 10
+_LOCAL_DAEMON_SCHEMA_VERSION = 11
 _MIN_RUN_PRIORITY = -1_000_000
 _MAX_RUN_PRIORITY = 1_000_000
 _MAX_ADMISSION_PAGE_SIZE = 100
@@ -1409,8 +1409,9 @@ class LocalDaemon:
             )
             from .local_daemon_execution import local_daemon_owner_work_is_retained
 
-            # The protected scheduling binding is a read-only rejection point.
-            # Check it before an empty detached owner exists at all.
+            # Recover only a fully prepared reload intent that is bound to the
+            # exact protected source used to construct this process.  This is
+            # done before an empty detached owner exists at all.
             with self._connection() as conn:
                 scheduling = {
                     str(row["key"]): str(row["value"])
@@ -1420,6 +1421,7 @@ class LocalDaemon:
                         "'active_configuration_revision')"
                     )
                 }
+            scheduling = self._recover_scheduling_reload_intent(scheduling)
             if scheduling.get("scheduling_fingerprint") != _scheduling_fingerprint(
                 self.config
             ):
@@ -2250,11 +2252,13 @@ class LocalDaemon:
         )
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         with self._cycle_lock:
+            replacement_fingerprint: str | None = None
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 prior = conn.execute(
                     "SELECT principal_id, request_json, state, result_code, "
-                    "scheduling_epoch, configuration_revision "
+                    "scheduling_epoch, configuration_revision, "
+                    "replacement_fingerprint "
                     "FROM scheduling_reloads WHERE operation_id = ?",
                     (request.operation_id,),
                 ).fetchone()
@@ -2266,27 +2270,18 @@ class LocalDaemon:
                         raise QueueConflictError(
                             "scheduling reload operation conflicts"
                         )
-                    conn.commit()
-                    receipt: dict[str, PlainData] = {
-                            "operation_id": request.operation_id,
-                            "state": str(prior["state"]),
-                            "code": prior["result_code"],
-                            "scheduling_epoch": prior["scheduling_epoch"],
-                        }
-                    if prior["configuration_revision"] is not None:
-                        receipt["configuration_revision"] = int(
-                            prior["configuration_revision"]
+                    if str(prior["state"]) != "applying":
+                        conn.commit()
+                        return _scheduling_reload_receipt(request.operation_id, prior)
+                    if prior["replacement_fingerprint"] is None:
+                        raise QueueStorageError(
+                            "scheduling reload intent is incomplete"
                         )
-                    return freeze_plain_data(receipt, path="scheduling reload receipt")
+                    replacement_fingerprint = str(
+                        prior["replacement_fingerprint"]
+                    )
                 if request.expected_scheduling_epoch != self._scheduling_epoch:
                     raise QueueConflictError("scheduling reload epoch is stale")
-                conn.execute(
-                    "INSERT INTO scheduling_reloads(operation_id, principal_id, "
-                    "request_json, state, result_code, scheduling_epoch, "
-                    "configuration_revision) "
-                    "VALUES (?, ?, ?, 'applying', NULL, NULL, NULL)",
-                    (request.operation_id, principal.subject, encoded),
-                )
                 conn.commit()
 
             try:
@@ -2297,6 +2292,14 @@ class LocalDaemon:
                     )
                 replacement = loader()
                 self._validate_scheduling_replacement(replacement)
+                candidate_fingerprint = _scheduling_fingerprint(replacement)
+                if (
+                    replacement_fingerprint is not None
+                    and replacement_fingerprint != candidate_fingerprint
+                ):
+                    raise QueueConflictError(
+                        "scheduling reload replacement fingerprint conflicts"
+                    )
 
                 def apply_role_reload() -> None:
                     return
@@ -2310,26 +2313,36 @@ class LocalDaemon:
                 execution = self._execution
                 if execution is None:
                     raise QueueServiceError("coordinator execution is unavailable")
-                next_epoch = (
-                    "scheduling-epoch-"
-                    + hashlib.sha256(
-                        (
-                            request.operation_id
-                            + "\0"
-                            + _scheduling_fingerprint(replacement)
-                        ).encode()
-                    ).hexdigest()
+                next_epoch = _scheduling_reload_epoch(
+                    request.operation_id, candidate_fingerprint
                 )
             except Exception:
-                return self._reject_scheduling_reload(operation_id=request.operation_id)
+                if replacement_fingerprint is not None:
+                    return self._pending_scheduling_reload(request.operation_id)
+                return self._reject_scheduling_reload(
+                    operation_id=request.operation_id,
+                    principal_id=principal.subject,
+                    request_json=encoded,
+                )
             with execution.scheduling_reload_guard():
                 try:
                     reload_plan = execution.prepare_scheduling_reload(
                         replacement, next_epoch
                     )
                 except Exception:
+                    if replacement_fingerprint is not None:
+                        return self._pending_scheduling_reload(request.operation_id)
                     return self._reject_scheduling_reload(
-                        operation_id=request.operation_id
+                        operation_id=request.operation_id,
+                        principal_id=principal.subject,
+                        request_json=encoded,
+                    )
+                if replacement_fingerprint is None:
+                    self._record_scheduling_reload_intent(
+                        operation_id=request.operation_id,
+                        principal_id=principal.subject,
+                        request_json=encoded,
+                        replacement_fingerprint=candidate_fingerprint,
                     )
                 with self._connection() as conn:
                     conn.execute("BEGIN IMMEDIATE")
@@ -2353,7 +2366,7 @@ class LocalDaemon:
                     conn.execute(
                         "INSERT OR REPLACE INTO daemon_metadata(key, value) "
                         "VALUES ('scheduling_fingerprint', ?)",
-                        (_scheduling_fingerprint(replacement),),
+                        (candidate_fingerprint,),
                     )
                     conn.execute(
                         "INSERT OR REPLACE INTO daemon_metadata(key, value) "
@@ -2659,15 +2672,60 @@ class LocalDaemon:
             for row in rows
         )
 
+    def _record_scheduling_reload_intent(
+        self,
+        *,
+        operation_id: str,
+        principal_id: str,
+        request_json: str,
+        replacement_fingerprint: str,
+    ) -> None:
+        """Persist the exact fully prepared replacement before activation."""
+
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO scheduling_reloads(operation_id, principal_id, "
+                "request_json, state, result_code, scheduling_epoch, "
+                "configuration_revision, replacement_fingerprint) "
+                "VALUES (?, ?, ?, 'applying', NULL, NULL, NULL, ?)",
+                (
+                    operation_id,
+                    principal_id,
+                    request_json,
+                    replacement_fingerprint,
+                ),
+            )
+            conn.commit()
+
+    def _pending_scheduling_reload(
+        self, operation_id: str
+    ) -> Mapping[str, PlainData]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT state, result_code, scheduling_epoch, "
+                "configuration_revision FROM scheduling_reloads "
+                "WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+        if row is None or str(row["state"]) != "applying":
+            raise QueueStorageError("scheduling reload intent is unavailable")
+        return _scheduling_reload_receipt(operation_id, row)
+
     def _reject_scheduling_reload(
-        self, *, operation_id: str
+        self,
+        *,
+        operation_id: str,
+        principal_id: str,
+        request_json: str,
     ) -> Mapping[str, PlainData]:
         with self._connection() as conn:
             conn.execute(
-                "UPDATE scheduling_reloads SET state = 'failed', "
-                "result_code = 'reload_rejected', scheduling_epoch = ? "
-                "WHERE operation_id = ?",
-                (self._scheduling_epoch, operation_id),
+                "INSERT INTO scheduling_reloads(operation_id, principal_id, "
+                "request_json, state, result_code, scheduling_epoch, "
+                "configuration_revision, replacement_fingerprint) "
+                "VALUES (?, ?, ?, 'failed', 'reload_rejected', ?, NULL, NULL)",
+                (operation_id, principal_id, request_json, self._scheduling_epoch),
             )
             conn.commit()
         return freeze_plain_data(
@@ -2679,6 +2737,102 @@ class LocalDaemon:
             },
             path="scheduling reload receipt",
         )
+
+    def _recover_scheduling_reload_intent(
+        self, scheduling: Mapping[str, str]
+    ) -> dict[str, str]:
+        """Finish the single accepted reload whose source matches this process."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT operation_id, request_json, replacement_fingerprint "
+                    "FROM scheduling_reloads WHERE state = 'applying'"
+                )
+            )
+        if not rows:
+            return dict(scheduling)
+        if len(rows) != 1:
+            raise QueueStorageError("multiple scheduling reload intents are active")
+        row = rows[0]
+        configured_fingerprint = _scheduling_fingerprint(self.config)
+        if str(row["replacement_fingerprint"]) != configured_fingerprint:
+            raise QueueConflictError(
+                "protected scheduling configuration conflicts with pending reload"
+            )
+        try:
+            raw_request = json.loads(str(row["request_json"]))
+            if not isinstance(raw_request, Mapping):
+                raise TypeError
+            request = CoordinatorSchedulingReload.from_dict(raw_request)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise QueueStorageError("scheduling reload intent is invalid") from exc
+        current_epoch = scheduling.get("scheduling_epoch")
+        raw_revision = scheduling.get("active_configuration_revision")
+        if (
+            current_epoch is None
+            or request.expected_scheduling_epoch != current_epoch
+            or raw_revision is None
+            or not raw_revision.isdecimal()
+            or int(raw_revision) < 1
+        ):
+            raise QueueStorageError("scheduling reload intent is stale or invalid")
+        next_epoch = _scheduling_reload_epoch(
+            request.operation_id, configured_fingerprint
+        )
+        next_revision = int(raw_revision) + 1
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            active = {
+                str(item["key"]): str(item["value"])
+                for item in conn.execute(
+                    "SELECT key, value FROM daemon_metadata WHERE key IN "
+                    "('scheduling_epoch', 'active_configuration_revision')"
+                )
+            }
+            intent = conn.execute(
+                "SELECT state, request_json, replacement_fingerprint "
+                "FROM scheduling_reloads WHERE operation_id = ?",
+                (request.operation_id,),
+            ).fetchone()
+            if (
+                active.get("scheduling_epoch") != current_epoch
+                or active.get("active_configuration_revision") != raw_revision
+                or intent is None
+                or str(intent["state"]) != "applying"
+                or str(intent["request_json"]) != str(row["request_json"])
+                or str(intent["replacement_fingerprint"])
+                != configured_fingerprint
+            ):
+                raise QueueStorageError("scheduling reload recovery conflicts")
+            conn.execute(
+                "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                "VALUES ('scheduling_epoch', ?)",
+                (next_epoch,),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                "VALUES ('scheduling_fingerprint', ?)",
+                (configured_fingerprint,),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                "VALUES ('active_configuration_revision', ?)",
+                (str(next_revision),),
+            )
+            conn.execute(
+                "UPDATE scheduling_reloads SET state = 'applied', "
+                "result_code = 'applied', scheduling_epoch = ?, "
+                "configuration_revision = ? WHERE operation_id = ?",
+                (next_epoch, next_revision, request.operation_id),
+            )
+            conn.commit()
+        return {
+            **scheduling,
+            "scheduling_epoch": next_epoch,
+            "scheduling_fingerprint": configured_fingerprint,
+            "active_configuration_revision": str(next_revision),
+        }
 
     def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig) -> None:
         if not isinstance(replacement, LocalDaemonConfig):
@@ -3462,7 +3616,7 @@ def _initialize_root(path: Path, *, role: str) -> None:
                 "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
                 "request_json TEXT NOT NULL, state TEXT NOT NULL, "
                 "result_code TEXT, scheduling_epoch TEXT, "
-                "configuration_revision INTEGER)"
+                "configuration_revision INTEGER, replacement_fingerprint TEXT)"
             )
             conn.execute(
                 "CREATE TABLE recovery_operations ("
@@ -3732,6 +3886,26 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
         payload, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode()
     return "scheduling-" + hashlib.sha256(encoded).hexdigest()
+
+
+def _scheduling_reload_epoch(operation_id: str, fingerprint: str) -> str:
+    return "scheduling-epoch-" + hashlib.sha256(
+        (operation_id + "\0" + fingerprint).encode()
+    ).hexdigest()
+
+
+def _scheduling_reload_receipt(
+    operation_id: str, row: sqlite3.Row
+) -> Mapping[str, PlainData]:
+    receipt: dict[str, PlainData] = {
+        "operation_id": operation_id,
+        "state": str(row["state"]),
+        "code": row["result_code"],
+        "scheduling_epoch": row["scheduling_epoch"],
+    }
+    if row["configuration_revision"] is not None:
+        receipt["configuration_revision"] = int(row["configuration_revision"])
+    return freeze_plain_data(receipt, path="scheduling reload receipt")
 
 
 __all__ = [

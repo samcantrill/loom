@@ -6,6 +6,7 @@ import pytest
 
 from loom.pipeline.status import RunStatus
 from loom.pipeline.events import EventScope, PipelineEvent
+from loom.pipeline.stores.authority import CoordinatorAdmissionRequest
 from loom.pipeline.stores.read_models import BackendRevision, LeaseState
 from loom.authority._repository import (
     AUTHORITY_REPOSITORY_SCHEMA_VERSION,
@@ -20,7 +21,37 @@ RUN_URI = "file:///runs/unit-r1"
 
 
 def test_repository_schema_version_includes_coordinator_authority() -> None:
-    assert AUTHORITY_REPOSITORY_SCHEMA_VERSION == 5
+    assert AUTHORITY_REPOSITORY_SCHEMA_VERSION == 6
+
+
+def test_coordinator_admission_binds_authenticated_service_principal(tmp_path) -> None:
+    repository = initialize_authority_repository(
+        tmp_path, service_generation="generation-1"
+    )
+    repository.admit_run(RUN_URI)
+    request = CoordinatorAdmissionRequest(
+        operation_id="admit-principal-1",
+        coordinator_id="coordinator-1",
+        run_uri=RUN_URI,
+        intent_digest="intent-1",
+    )
+
+    first = repository.bind_coordinator_admission(
+        RUN_URI, request, service_principal="service-a"
+    )
+    assert (
+        repository.bind_coordinator_admission(
+            RUN_URI, request, service_principal="service-a"
+        )
+        == first
+    )
+    repository.require_coordinator_principal(RUN_URI, "service-a")
+    with pytest.raises(AuthorityRepositoryError, match="principal conflicts"):
+        repository.require_coordinator_principal(RUN_URI, "service-b")
+    with pytest.raises(AuthorityRepositoryError, match="principal conflicts"):
+        repository.bind_coordinator_admission(
+            RUN_URI, request, service_principal="service-b"
+        )
 
 
 def test_admit_run_rejects_duplicate_and_returns_revision(tmp_path) -> None:

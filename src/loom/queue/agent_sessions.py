@@ -4925,7 +4925,7 @@ def initialize_agent_session_schema(
         CREATE TRIGGER IF NOT EXISTS agent_reference_revision_update AFTER UPDATE ON agent_session_references BEGIN UPDATE agent_reference_revision SET revision = revision + 1 WHERE singleton = 1; END;
         CREATE TRIGGER IF NOT EXISTS agent_reference_revision_delete AFTER DELETE ON agent_session_references BEGIN UPDATE agent_reference_revision SET revision = revision + 1 WHERE singleton = 1; END;
         CREATE TABLE IF NOT EXISTS agent_retirement_proofs_local (session_id TEXT PRIMARY KEY, proof_json TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS agent_controls_local (operation_id TEXT PRIMARY KEY, request_json TEXT NOT NULL, effect_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS agent_controls_local (operation_id TEXT PRIMARY KEY, request_json TEXT NOT NULL, replacement_fingerprint TEXT, effect_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS remote_assignment_controls_local (operation_id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL, result_code TEXT, evidence_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         """)
 
@@ -5381,6 +5381,7 @@ def validate_agent_session_schema(
             "agent_controls_local": {
                 "operation_id",
                 "request_json",
+                "replacement_fingerprint",
                 "effect_json",
                 "acknowledged",
             },

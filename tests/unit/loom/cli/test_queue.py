@@ -291,6 +291,45 @@ def test_queue_agent_reload_waits_for_rejected_receipt_and_exits_nonzero(
     assert json.loads(stdout.getvalue())["result"]["code"] == "reload_rejected"
 
 
+def test_queue_agent_reload_timeout_while_applying_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.cli import queue as queue_cli
+    from loom.queue import LocalDaemonSocketClient
+
+    monkeypatch.setattr(
+        LocalDaemonSocketClient,
+        "control_agent",
+        lambda *_args, **_kwargs: {
+            "operation_id": "reload-agent-applying",
+            "state": "applying",
+            "code": None,
+        },
+    )
+    monkeypatch.setattr(queue_cli, "_AGENT_RELOAD_RECEIPT_WAIT_SECONDS", 0.0)
+
+    exit_code = main(
+        [
+            "queue",
+            "daemon-agent-reload",
+            "--endpoint",
+            str(tmp_path / "daemon.sock"),
+            "--operation-id",
+            "reload-agent-applying",
+            "--agent-id",
+            "agent-a",
+            "--session-id",
+            "session-a",
+            "--config-revision",
+            "config-1",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert exit_code != 0
+
+
 def test_queue_scheduling_reload_rejection_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -335,6 +374,40 @@ def test_queue_scheduling_reload_rejection_exits_nonzero(
     assert exit_code != 0
     assert [item.operation_id for item in seen] == ["reload-scheduling-1"]
     assert json.loads(stdout.getvalue())["result"]["code"] == "reload_rejected"
+
+
+def test_queue_scheduling_reload_applying_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loom.queue import LocalDaemonSocketClient
+
+    monkeypatch.setattr(
+        LocalDaemonSocketClient,
+        "reload_scheduling",
+        lambda *_args, **_kwargs: {
+            "operation_id": "reload-scheduling-applying",
+            "state": "applying",
+            "code": None,
+            "scheduling_epoch": None,
+        },
+    )
+
+    exit_code = main(
+        [
+            "queue",
+            "daemon-scheduling-reload",
+            "--endpoint",
+            str(tmp_path / "daemon.sock"),
+            "--operation-id",
+            "reload-scheduling-applying",
+            "--expected-scheduling-epoch",
+            "scheduling-epoch-1",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert exit_code != 0
 
 
 def _launch_profile() -> ResidentWorkerLaunchProfile:

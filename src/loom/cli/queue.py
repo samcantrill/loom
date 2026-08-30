@@ -658,7 +658,10 @@ def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
     return (
         int(ExitCode.PIPELINE)
         if result.get("code") == "reload_rejected"
-        or (namespace.agent_control == "reload" and result.get("state") == "failed")
+        or (
+            namespace.agent_control == "reload"
+            and result.get("state") != "applied"
+        )
         else exit_code
     )
 
@@ -680,6 +683,7 @@ def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
     return (
         int(ExitCode.PIPELINE)
         if result.get("code") == "reload_rejected"
+        or result.get("state") != "applied"
         else exit_code
     )
 
