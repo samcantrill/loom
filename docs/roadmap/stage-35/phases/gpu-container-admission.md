@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: planned
+- Status: ready
 - Roadmap stage and phase: Stage 35, Phase 2
 - Manifest: `docs/roadmap/stage-35/implementation-plan.md`
 - Branch: `agent/stage-35-p2-gpu-container-admission`
@@ -15,7 +15,8 @@
   Slurm container paths
 - Workflow path: expanded; host/scheduler/container trust boundary and
   intentionally importable executor helper
-- Blockers: none; implementation begins only after Phase 1 remotely merges
+- Blockers: none; Phase 1 merged as
+  `a332bb3712916edb1b4c58386861263eb8a5b586`
 
 ## Objective And Context
 
@@ -184,7 +185,7 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending planning and Phase 1 merge.
+- Manager preparation: completed after planning and verified Phase 1 merge.
 - Expanded planning: completed; all three concrete findings were resolved in
   the stage planning document.
 - Implementation: pending.

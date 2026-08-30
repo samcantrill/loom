@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: ready to merge
+- Status: merged
 - Roadmap stage and phase: Stage 35, Phase 1
 - Manifest: `docs/roadmap/stage-35/implementation-plan.md`
 - Branch: `agent/stage-35-p1-configurable-run-store-root`
@@ -190,7 +190,8 @@ Final commands:
 - Blocker corrections: 2/3 correction passes consumed. Slurm resume validates
   persisted activation before plugin imports; empty nested overlays preserve a
   lower root, explicit null clears it, and path normalization is lexical.
-- PR and merge: #258 is ready for its corrected branch update and merge.
+- PR and merge: #258 squash-merged into `develop` as
+  `a332bb3712916edb1b4c58386861263eb8a5b586`.
 
 ## Completion Record
 
@@ -200,5 +201,5 @@ Final commands:
 | Tests added or updated | Added option/path and profile-precedence tests, sparse empty-overlay and explicit-null tests for bootstrap and full merging, a symlink-containing lexical-path regression, resume/bootstrap and plan factory-spy tests, public export checks, a real profile-selected fresh/resume CLI journey under the configured collection, and both Slurm resume import-order failure cases. |
 | Validated revision/tree state and evidence | Corrected source/test revision `842a8d05f6e4927287491bc8cb4d1fc9617d7c96`; fresh `make validate-pr` passed (Ruff; Pyright with zero errors; default: 2,631 passed/135 deselected; config-extra: 156 passed/3 skipped/2,634 deselected; sdist and wheel built). The earlier executor `make test-summary` receipt at the equivalent pre-rebase implementation had one unrelated queue timestamp-race failure; its isolated rerun passed without a source change. |
 | Validation-relevant changes after evidence | none; this completion metadata only |
-| PR, review, and merge | PR #258; independent review completed, all blockers corrected and manager-verified; merge pending. |
-| Residual risk and cleanup | No Phase 1 blocker. Direct per-factory Slurm root assertions remain optional hardening because existing factory-spy and integration coverage exercise the shared root path. The earlier `make test-summary` anomaly remains classified as an unrelated `scheduler_observed_at` timestamp race because its isolated rerun passed and the fresh required pre-submit gate passed. Worktree and branch remain through merge verification. |
+| PR, review, and merge | PR #258; independent review completed, all blockers corrected and manager-verified; squash-merged as `a332bb3712916edb1b4c58386861263eb8a5b586`. |
+| Residual risk and cleanup | No Phase 1 blocker. Direct per-factory Slurm root assertions remain optional hardening because existing factory-spy and integration coverage exercise the shared root path. The earlier `make test-summary` anomaly remains classified as an unrelated `scheduler_observed_at` timestamp race because its isolated rerun passed and the fresh required pre-submit gate passed. Remote/local phase branches and the phase worktree were removed after merge verification. |
