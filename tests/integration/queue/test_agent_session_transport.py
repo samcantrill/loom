@@ -21,6 +21,7 @@ from typing import Any, cast
 
 import pytest
 
+import loom.queue.deployment as queue_deployment
 import loom.queue.local_daemon_execution as local_daemon_execution
 from loom.pipeline import PipelineSpec
 from loom.queue._managed_local import (
@@ -70,6 +71,7 @@ from loom.queue import (
 from loom.queue._agent_process_supervisor import (
     ResidentWorkerLaunch,
     SupervisorReceipt,
+    SupervisorLaunchState,
 )
 from loom.queue._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
@@ -83,6 +85,7 @@ from loom.queue.agent_session_transport import (
     AgentTlsServerConfig,
     LocalDaemonAgentHttpClient,
     LocalDaemonAgentHttpServer,
+    _RemoteAgentJournal,
     _decode,
     _resident_provider_descriptors,
 )
@@ -246,8 +249,13 @@ def _request(handshake: Mapping[str, object], agent_root_id: str) -> AgentRegist
     )
 
 
-def test_outbound_service_registers_offers_and_stops_cleanly(tmp_path: Path) -> None:
+def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     credentials = _credentials(tmp_path / "tls")
+    descriptor = ResidentProfileDescriptor(
+        "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+    )
     capabilities = (
         "python",
         REMOTE_EXECUTION_CAPABILITY,
@@ -264,12 +272,21 @@ def test_outbound_service_registers_offers_and_stops_cleanly(tmp_path: Path) -> 
             ),
         )
     )
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri, authority = _prepare_remote_producer_run(
+        store,
+        run_name="idle-renewal-run",
+        machine_id="agent-a",
+        value=7,
+        requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
+    )
     daemon_config = LocalDaemonConfig(
         tmp_path / "coordinator",
         tmp_path / "coordinator-agent",
-        tmp_path / "runs",
+        store.root,
         _local_launch_profile(),
         agent_policy=policy,
+        remote_profiles=(descriptor,),
     )
     LocalDaemon.initialize(daemon_config)
     daemon = LocalDaemon(daemon_config)
@@ -291,9 +308,7 @@ def test_outbound_service_registers_offers_and_stops_cleanly(tmp_path: Path) -> 
     )
     server.start()
     profile = ResidentExecutionProfile(
-        ResidentProfileDescriptor(
-            "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
-        ),
+        descriptor,
         Path(__file__).resolve().parents[3],
         Path(sys.executable),
     )
@@ -306,6 +321,24 @@ def test_outbound_service_registers_offers_and_stops_cleanly(tmp_path: Path) -> 
         (profile,),
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(client_config)
+    monkeypatch.setattr(queue_deployment, "_OUTBOUND_OFFER_TTL_SECONDS", 1)
+    monkeypatch.setattr(queue_deployment, "_OUTBOUND_POLL_WAIT_MS", 100)
+    original_complete = _RemoteAgentJournal.complete_offer_renewal
+    lost_response = Event()
+
+    def lose_first_renewal_response(
+        journal: _RemoteAgentJournal, renewal: object, result: object
+    ) -> None:
+        if not lost_response.is_set():
+            lost_response.set()
+            raise QueueServiceError("simulated lost renewal response")
+        original_complete(journal, renewal, result)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        _RemoteAgentJournal,
+        "complete_offer_renewal",
+        lose_first_renewal_response,
+    )
     service = OutboundAgentServiceConfig(
         client_config,
         OutboundAgentRegistrationConfig(
@@ -343,6 +376,35 @@ def test_outbound_service_registers_offers_and_stops_cleanly(tmp_path: Path) -> 
                 break
             sleep(0.02)
         assert active == 1
+        assert len(_supervisor_process_ids(cast(Path, client_config.agent_root))) == 1
+
+        # Keep the production service idle through more than three complete
+        # lease periods. The first accepted renewal response is deliberately
+        # lost, so the durable agent intent must replay that exact sequence.
+        idle_until = monotonic() + 3.2
+        while monotonic() < idle_until:
+            assert thread.is_alive(), failure
+            sleep(0.02)
+        assert lost_response.is_set()
+        with sqlite3.connect(daemon_config.control_database) as conn:
+            renewal = conn.execute(
+                "SELECT sequence FROM agent_offer_renewals"
+            ).fetchone()
+            current = conn.execute(
+                "SELECT COUNT(*) FROM agent_offers WHERE current = 1"
+            ).fetchone()
+        assert renewal is not None and int(renewal[0]) >= 3
+        assert current is not None and int(current[0]) == 1
+
+        coordinator = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+        coordinator.submit(LocalDaemonAdmissionRequest("idle-renewal-item", run_uri))
+        assert (
+            coordinator.wait("idle-renewal-item", timeout_seconds=15).state
+            is LocalDaemonAdmissionState.SUCCEEDED
+        )
+        assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
     finally:
         stop.set()
         thread.join(timeout=7)
@@ -350,6 +412,13 @@ def test_outbound_service_registers_offers_and_stops_cleanly(tmp_path: Path) -> 
         daemon.stop()
     assert not thread.is_alive()
     assert failure == []
+    deadline = monotonic() + 2
+    while (
+        _supervisor_process_ids(cast(Path, client_config.agent_root))
+        and monotonic() < deadline
+    ):
+        sleep(0.01)
+    assert _supervisor_process_ids(cast(Path, client_config.agent_root)) == ()
 
 
 def _remote_agent_root(tmp_path: Path, name: str = "remote-owner") -> Path:
@@ -363,6 +432,173 @@ def _fresh_remote_agent_root(tmp_path: Path, name: str = "remote-owner") -> Path
     root = tmp_path / name / "agent"
     root.parent.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _supervisor_process_ids(agent_root: Path) -> tuple[int, ...]:
+    expected_root = str(agent_root.resolve() / "supervisor")
+    matches: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        if (
+            len(argv) >= 4
+            and argv[-3:-1] == [b"--serve", expected_root.encode()]
+            and argv[-4].endswith(b"loom.queue._agent_process_supervisor")
+        ):
+            matches.append(int(entry.name))
+    return tuple(sorted(matches))
+
+
+def test_outbound_deployment_fingerprint_rejection_starts_no_supervisor(
+    tmp_path: Path,
+) -> None:
+    profile = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+        ),
+        Path(__file__).resolve().parents[3],
+        Path(sys.executable),
+    )
+    config = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+        deployment_configuration_fingerprint="a" * 64,
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(config)
+
+    with pytest.raises(QueueServiceError, match="remote agent binding is invalid"):
+        LocalDaemonAgentHttpClient(
+            replace(config, deployment_configuration_fingerprint="b" * 64)
+        )
+
+    assert _supervisor_process_ids(cast(Path, config.agent_root)) == ()
+
+
+def test_outbound_rejection_preserves_a_preexisting_supervisor(
+    tmp_path: Path,
+) -> None:
+    profile = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+        ),
+        Path(__file__).resolve().parents[3],
+        Path(sys.executable),
+    )
+    config = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+        deployment_configuration_fingerprint="a" * 64,
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(config)
+    client = LocalDaemonAgentHttpClient(config)
+    supervisor = client._supervisor  # noqa: SLF001
+    assert supervisor is not None
+    status = supervisor.status()
+    process_id = status["service_process_id"]
+    assert isinstance(process_id, int)
+    client.close()
+    try:
+        with pytest.raises(QueueServiceError, match="remote agent binding is invalid"):
+            LocalDaemonAgentHttpClient(
+                replace(config, deployment_configuration_fingerprint="b" * 64)
+            )
+
+        assert supervisor.status() == status
+        assert _supervisor_process_ids(cast(Path, config.agent_root)) == (process_id,)
+    finally:
+        supervisor.shutdown_clean()
+
+
+def test_remote_clean_shutdown_joins_terminal_work_until_journal_reconciles(
+    tmp_path: Path,
+) -> None:
+    profile = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+        ),
+        Path(__file__).resolve().parents[3],
+        Path(sys.executable),
+    )
+    config = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(config)
+    client = LocalDaemonAgentHttpClient(config)
+    supervisor = client._supervisor  # noqa: SLF001
+    assert supervisor is not None
+    first_epoch = supervisor.continuity_epoch
+    workspace = tmp_path / "terminal-workspace"
+    workspace.mkdir()
+    launch = ResidentWorkerLaunch(
+        supervisor_id=supervisor.supervisor_id,
+        continuity_epoch=first_epoch,
+        agent_id=client.agent_root_id,
+        session_id="session-A",
+        assignment_id="assignment-A",
+        process_execution_id="process-A",
+        execution_fence="fence-A",
+        launch_operation_id="launch-A",
+        bundle_digest="a" * 64,
+        workspace_root=workspace,
+        profile=profile.launch_profile,
+        environment={},
+    )
+    restarted: LocalDaemonAgentHttpClient | None = None
+    client_closed = False
+    try:
+        supervisor.launch(launch)
+        with pytest.raises(QueueConflictError, match="non-quiescent"):
+            client.shutdown_clean()
+        assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+
+        client._require_journal().retain_assignment_reference(  # noqa: SLF001
+            "session-A", "assignment-A"
+        )
+        with pytest.raises(QueueConflictError, match="retained work"):
+            client.shutdown_clean()
+
+        # Simulate the role application exiting while the independent process
+        # owner remains available for an exact restart join.
+        client.close()
+        client_closed = True
+        joined = LocalDaemonAgentHttpClient(config)
+        try:
+            assert joined._supervisor is not None  # noqa: SLF001
+            assert joined._supervisor.continuity_epoch == first_epoch  # noqa: SLF001
+            joined._require_journal().resolve_assignment_reference(  # noqa: SLF001
+                "session-A", "assignment-A"
+            )
+            joined.shutdown_clean()
+        finally:
+            joined.close()
+
+        restarted = LocalDaemonAgentHttpClient(config)
+        assert restarted._supervisor is not None  # noqa: SLF001
+        assert restarted._supervisor.continuity_epoch != first_epoch  # noqa: SLF001
+        restarted.shutdown_clean()
+    finally:
+        if restarted is not None:
+            restarted.close()
+        if not client_closed:
+            client.close()
+    assert _supervisor_process_ids(cast(Path, config.agent_root)) == ()
 
 
 def _crash_remote_agent_application(

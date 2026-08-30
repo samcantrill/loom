@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import sys
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any, cast
 
 import pytest
@@ -28,7 +30,7 @@ def _profile() -> ResidentWorkerLaunchProfile:
 
 
 def _launch(
-    supervisor: AgentProcessSupervisor, workspace: Path
+    supervisor: AgentProcessSupervisor | AgentProcessSupervisorClient, workspace: Path
 ) -> ResidentWorkerLaunch:
     return ResidentWorkerLaunch(
         supervisor_id=supervisor.supervisor_id,
@@ -151,3 +153,58 @@ def test_separate_service_is_profile_set_bound_and_continuous(tmp_path: Path) ->
             AgentProcessSupervisorClient(agent, changed)
     finally:
         client.shutdown_for_test()
+
+
+def test_process_free_initialization_requires_serve_and_clean_shutdown(
+    tmp_path: Path,
+) -> None:
+    profile = _profile()
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    from loom.queue._agent_process_supervisor import SupervisorLaunchConfiguration
+
+    configuration = SupervisorLaunchConfiguration("agent-A", (profile,))
+    AgentProcessSupervisorService.initialize_process_free(
+        agent, configuration=configuration
+    )
+    with pytest.raises(AgentProcessSupervisorError, match="endpoint is unavailable"):
+        AgentProcessSupervisorClient(agent, configuration)
+    client = AgentProcessSupervisorService.start_empty_initialized(
+        agent, configuration=configuration
+    )
+    first_epoch = client.continuity_epoch
+    process_value = client.status()["service_process_id"]
+    assert isinstance(process_value, int)
+    process_id = process_value
+    workspace = tmp_path / "service-workspace"
+    workspace.mkdir()
+    launch = _launch(client, workspace)
+    try:
+        client.launch(launch)
+        with pytest.raises(AgentProcessSupervisorError, match="non-quiescent"):
+            client.shutdown_clean()
+        assert client.contain(launch).state is SupervisorLaunchState.CONTAINED
+        client.shutdown_clean()
+    finally:
+        if client._endpoint.exists():  # noqa: SLF001
+            client.shutdown_for_test()
+
+    deadline = monotonic() + 2
+    while monotonic() < deadline:
+        try:
+            os.kill(process_id, 0)
+        except ProcessLookupError:
+            break
+        sleep(0.01)
+    with pytest.raises(ProcessLookupError):
+        os.kill(process_id, 0)
+
+    restarted = AgentProcessSupervisorService.start_empty_initialized(
+        agent, configuration=configuration
+    )
+    try:
+        assert restarted.continuity_epoch != first_epoch
+        restarted.shutdown_clean()
+    finally:
+        if restarted._endpoint.exists():  # noqa: SLF001
+            restarted.shutdown_for_test()

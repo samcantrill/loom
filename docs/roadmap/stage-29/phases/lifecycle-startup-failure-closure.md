@@ -174,7 +174,10 @@ Final commands:
 - Manager preparation: passed; clean current `origin/develop`, blocked candidate evidence, selective-reuse boundary, process ownership invariants, and targeted gates verified at `f9b18c1`
 - Expanded planning: not needed; the independent Phase 13 finding fixes the
   accepted behavior and supplies the smallest remedy/test boundary
-- Implementation: pending
+- Implementation: complete; reordered the local scheduling and outbound
+  deployment-binding rejections before supervisor creation, with
+  ownership-aware clean shutdown for the remaining post-start construction
+  windows
 - Refiner: pending only for a qualified blocker
 - Pre-submit gate: pending
 - Independent review: required for the corrected detached-process boundary
@@ -185,9 +188,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Selectively reused the Phase 13 source/test candidate under `src/loom/queue` and directly relevant queue tests, then changed `LocalDaemon.start()` and `LocalDaemonAgentHttpClient` construction to preserve created-versus-joined supervisor ownership and reuse `shutdown_clean`. |
+| Tests added or updated | Added process-level proof for changed local scheduling rejection, mismatched outbound deployment binding, and rejection that leaves a valid pre-existing outbound supervisor's PID and epoch reachable. |
+| Validated revision/tree state and evidence | Focused new tests passed (3); targeted lifecycle matrix passed: 85 tests in 377.39s; targeted SLURM/session/CLI/E2E matrix passed: 69 tests in 121.57s; changed-file Ruff and Pyright passed. |
+| Validation-relevant changes after evidence | None. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

@@ -107,7 +107,7 @@ def test_outbound_agent_publication_is_atomic_and_config_bound(
     with monkeypatch.context() as context:
         context.setattr(
             AgentProcessSupervisorService,
-            "initialize",
+            "initialize_process_free",
             classmethod(reject_supervisor),
         )
         with pytest.raises(QueueServiceError, match="injected"):
@@ -117,7 +117,7 @@ def test_outbound_agent_publication_is_atomic_and_config_bound(
     assert not tuple(tmp_path.glob(".remote-agent.staging-*"))
 
     LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
-    client = LocalDaemonAgentHttpClient(service.client)
+    client = _open_outbound_agent(service.client)
     try:
         assert client.agent_root_id
         payload = json.loads(source.read_text(encoding="utf-8"))

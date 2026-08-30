@@ -39,11 +39,13 @@ from .agent_sessions import (
     AgentRegistration,
     TransportPrincipalPolicy,
 )
-from .errors import QueueConfigError, QueueError, QueueServiceError
+from .errors import QueueConfigError, QueueConflictError, QueueError, QueueServiceError
 from .local_daemon import ConfiguredGpuDevice, LocalDaemonConfig
 
 
 DEPLOYMENT_CONFIG_SCHEMA_VERSION = 1
+_OUTBOUND_OFFER_TTL_SECONDS = 30
+_OUTBOUND_POLL_WAIT_MS = 5_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,15 +102,11 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
     server = (
         None
         if server_value is None
-        else _agent_server(
-            _mapping_value(server_value, "agent_server"), base
-        )
+        else _agent_server(_mapping_value(server_value, "agent_server"), base)
     )
     remote_values = _sequence(payload, "remote_profiles")
     remote_profiles = tuple(
-        _profile_descriptor(
-            _mapping_value(value, f"remote_profiles[{index}]")
-        )
+        _profile_descriptor(_mapping_value(value, f"remote_profiles[{index}]"))
         for index, value in enumerate(remote_values)
     )
     daemon = LocalDaemonConfig(
@@ -209,7 +207,14 @@ def run_outbound_agent_service(
     """Run one foreground agent role with bounded reconnect and poll loops."""
 
     probe = _open_outbound_agent(config.client)
-    probe.close()
+    try:
+        if stop.is_set():
+            try:
+                probe.shutdown_clean()
+            except (QueueConflictError, QueueServiceError):
+                pass
+    finally:
+        probe.close()
     while not stop.is_set():
         client: LocalDaemonAgentHttpClient | None = None
         try:
@@ -252,9 +257,7 @@ def run_outbound_agent_service(
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
                 profile = config.client.resident_profiles[0]
-                gpu_descriptors = tuple(
-                    item.descriptor for item in profile.gpu_devices
-                )
+                gpu_descriptors = tuple(item.descriptor for item in profile.gpu_devices)
                 gpu_atoms = tuple(
                     item.descriptor.capacity_atom()
                     for item in profile.gpu_devices
@@ -268,7 +271,7 @@ def run_outbound_agent_service(
                     session.availability_revision,
                     profile.cpu_capacity,
                     profile.memory_capacity_bytes,
-                    30,
+                    _OUTBOUND_OFFER_TTL_SECONDS,
                     _resident_provider_descriptors(profile, session.agent_id),
                     pools=session.pools,
                     resident_profiles=tuple(
@@ -277,21 +280,24 @@ def run_outbound_agent_service(
                     gpu_devices=gpu_descriptors,
                     gpu_atoms=gpu_atoms,
                 )
-                client.publish_offer(
-                    offer,
-                    idempotency_key=_operation_id(
-                        "offer",
-                        session.session_id,
-                        session.coordinator_epoch,
-                        session.availability_revision,
-                    ),
-                )
+                # Availability revisions publish a new offer.  An unchanged
+                # revision retains that offer identity and only renews its TTL.
+                if client.renew_current_offer(session.session_id) is None:
+                    client.publish_offer(
+                        offer,
+                        idempotency_key=_operation_id(
+                            "offer",
+                            session.session_id,
+                            session.coordinator_epoch,
+                            session.availability_revision,
+                        ),
+                    )
                 sequence = client.next_poll_sequence(session.session_id)
                 client.execute_one(
                     session.session_id,
                     session.availability_revision,
                     sequence=sequence,
-                    wait_timeout_ms=5_000,
+                    wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
                 )
                 session = client.active_session()
                 if session is None:
@@ -302,6 +308,12 @@ def run_outbound_agent_service(
             stop.wait(config.reconnect_seconds)
         finally:
             if client is not None:
+                try:
+                    client.shutdown_clean()
+                except (QueueConflictError, QueueServiceError):
+                    # Retained or uncertain work deliberately keeps its process
+                    # owner alive so the next service incarnation can join it.
+                    pass
                 client.close()
 
 
@@ -358,7 +370,11 @@ def _load_protected_config(
     encoded = json.dumps(
         plain, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
-    return source, cast(Mapping[str, object], plain), hashlib.sha256(encoded).hexdigest()
+    return (
+        source,
+        cast(Mapping[str, object], plain),
+        hashlib.sha256(encoded).hexdigest(),
+    )
 
 
 def _header(payload: Mapping[str, object], kind: str) -> None:
@@ -395,9 +411,7 @@ def _resident_profile(
         )
         devices.append(
             ResidentGpuDevice(
-                GpuDeviceDescriptor.from_dict(
-                    _mapping(device, "descriptor")
-                ),
+                GpuDeviceDescriptor.from_dict(_mapping(device, "descriptor")),
                 _string(device, "binding_value"),
             )
         )

@@ -52,6 +52,7 @@ from loom.scheduling import CapacityAtom
 from .agent_sessions import (
     AgentAssignmentControl,
     AgentOffer,
+    AgentOfferRenewal,
     AgentProviderDescriptor,
     AgentProviderReleaseProof,
     AgentControl,
@@ -338,7 +339,7 @@ class _RemoteAgentJournal:
             raise QueueServiceError("remote agent control state is unavailable")
         try:
             with self._connection() as conn:
-                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 9:
+                if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 10:
                     raise QueueServiceError("remote agent root schema is unsupported")
                 metadata = {
                     str(row[0]): str(row[1])
@@ -565,6 +566,90 @@ class _RemoteAgentJournal:
             )
             conn.commit()
 
+    def prepare_offer_renewal(
+        self, renewal: AgentOfferRenewal
+    ) -> Mapping[str, PlainData] | None:
+        """Persist one bounded renewal intent before issuing it remotely."""
+
+        session = self.session(renewal.session_id)
+        if session.availability_revision != renewal.availability_revision:
+            raise QueueConflictError("offer renewal does not match the durable session")
+        digest = _canonical_digest(renewal.value())
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT offer_id, availability_revision, sequence, digest, result_json "
+                "FROM agent_offer_renewals_local WHERE session_id = ?",
+                (renewal.session_id,),
+            ).fetchone()
+            if (
+                row is None
+                or str(row["offer_id"]) != renewal.offer_id
+                or str(row["availability_revision"]) != renewal.availability_revision
+            ):
+                raise QueueConflictError(
+                    "offer renewal requires the durable current offer"
+                )
+            current = int(row["sequence"])
+            if renewal.sequence < current:
+                raise AgentStalePollError("offer renewal sequence is stale")
+            if renewal.sequence == current:
+                if str(row["digest"]) != digest:
+                    raise QueueConflictError(
+                        "offer renewal sequence was reused with different content"
+                    )
+                if row["result_json"] is None:
+                    conn.commit()
+                    return None
+                value = json.loads(str(row["result_json"]))
+                if not isinstance(value, Mapping):
+                    raise QueueServiceError("offer renewal receipt is invalid")
+                conn.commit()
+                return freeze_plain_data(value, path="agent offer renewal replay")
+            if renewal.sequence != current + 1:
+                raise AgentPollSequenceGapError("offer renewal sequence has a gap")
+            conn.execute(
+                "UPDATE agent_offer_renewals_local SET sequence = ?, digest = ?, result_json = NULL WHERE session_id = ?",
+                (renewal.sequence, digest, renewal.session_id),
+            )
+            conn.commit()
+        return None
+
+    def complete_offer_renewal(
+        self, renewal: AgentOfferRenewal, result: Mapping[str, PlainData]
+    ) -> None:
+        with self._connection() as conn:
+            updated = conn.execute(
+                "UPDATE agent_offer_renewals_local SET result_json = ? WHERE session_id = ? "
+                "AND offer_id = ? AND availability_revision = ? AND sequence = ?",
+                (
+                    _canonical_json(result),
+                    renewal.session_id,
+                    renewal.offer_id,
+                    renewal.availability_revision,
+                    renewal.sequence,
+                ),
+            ).rowcount
+            if updated != 1:
+                raise QueueConflictError("offer renewal intent is unavailable")
+            conn.commit()
+
+    def next_offer_renewal(self, session_id: str) -> AgentOfferRenewal | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT offer_id, availability_revision, sequence, result_json FROM agent_offer_renewals_local WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        sequence = int(row["sequence"])
+        return AgentOfferRenewal(
+            session_id,
+            str(row["offer_id"]),
+            str(row["availability_revision"]),
+            sequence if row["result_json"] is None and sequence else sequence + 1,
+        )
+
     def prepare_poll(
         self,
         session_id: str,
@@ -618,9 +703,7 @@ class _RemoteAgentJournal:
                     if str(current["state"]) == "PENDING":
                         conn.commit()
                         return None
-                    raise QueueConflictError(
-                        "work poll was fenced and is not reusable"
-                    )
+                    raise QueueConflictError("work poll was fenced and is not reusable")
                 if str(current["state"]) == "PENDING":
                     raise AgentPollActiveError("work poll is already active")
                 conn.execute(
@@ -665,6 +748,18 @@ class _RemoteAgentJournal:
                     "UPDATE agent_offers_local SET state = 'ACTIVE' WHERE session_id = ?",
                     (session_id,),
                 )
+                offer_id = result.get("offer_id")
+                availability_revision = request.get("availability_revision")
+                if not isinstance(offer_id, str) or not isinstance(
+                    availability_revision, str
+                ):
+                    raise QueueServiceError("agent offer receipt is invalid")
+                conn.execute(
+                    "INSERT INTO agent_offer_renewals_local(session_id, offer_id, availability_revision, sequence, digest, result_json) "
+                    "VALUES (?, ?, ?, 0, '', NULL) ON CONFLICT(session_id) DO UPDATE SET "
+                    "offer_id = excluded.offer_id, availability_revision = excluded.availability_revision, sequence = 0, digest = '', result_json = NULL",
+                    (session_id, offer_id, availability_revision),
+                )
             conn.commit()
 
     def complete_poll(
@@ -686,9 +781,7 @@ class _RemoteAgentJournal:
                 raise QueueServiceError("agent poll state is unavailable")
             if row["result_json"] is not None:
                 if str(row["result_json"]) != encoded:
-                    raise QueueConflictError(
-                        "poll replay returned a different result"
-                    )
+                    raise QueueConflictError("poll replay returned a different result")
                 conn.commit()
                 return
             if str(row["state"]) != "PENDING":
@@ -993,8 +1086,7 @@ class _RemoteAgentJournal:
                 "reference_kind = 'delivery' AND resolved = 0 LIMIT 1"
             ).fetchone()
             pending_poll = conn.execute(
-                "SELECT 1 FROM agent_poll_state_local "
-                "WHERE state = 'PENDING' LIMIT 1"
+                "SELECT 1 FROM agent_poll_state_local WHERE state = 'PENDING' LIMIT 1"
             ).fetchone()
         return row is not None or pending_poll is not None
 
@@ -1347,9 +1439,9 @@ class LocalDaemonAgentHttpClient:
         self._config = config
         self._trusted_config_loader = trusted_config_loader
         self._connection: http.client.HTTPSConnection | None = None
-        # Validate the durable supervisor binding before acquiring the exclusive
-        # root lock.  A rejected opening must not strand that lock.
-        self._supervisor = self._open_supervisor(config)
+        self._supervisor: AgentProcessSupervisorClient | None = None
+        # The journal validates the durable deployment binding and obtains the
+        # exclusive application lock before an empty supervisor can be started.
         self._journal = (
             _RemoteAgentJournal(
                 config.agent_root,
@@ -1360,43 +1452,58 @@ class LocalDaemonAgentHttpClient:
             if config.agent_root
             else None
         )
-        self._profiles = {
-            item.descriptor.profile_id: item for item in config.resident_profiles
-        }
-        self._retained_profiles: dict[str, ResidentExecutionProfile] = {}
-        self._execution_journal = (
-            SQLiteAgentJournal(
-                Path(config.agent_root) / "journal.sqlite",
-                _allow_initialize=False,
+        created_supervisor = False
+        try:
+            self._supervisor, created_supervisor = self._open_supervisor(config)
+            self._profiles = {
+                item.descriptor.profile_id: item for item in config.resident_profiles
+            }
+            self._retained_profiles: dict[str, ResidentExecutionProfile] = {}
+            self._execution_journal = (
+                SQLiteAgentJournal(
+                    Path(config.agent_root) / "journal.sqlite",
+                    _allow_initialize=False,
+                )
+                if config.agent_root is not None
+                else None
             )
-            if config.agent_root is not None
-            else None
-        )
-        if self._execution_journal is not None:
-            self._execution_journal._open_existing()
-        self._restart_with_retained_work = bool(
-            self._execution_journal.retained_claim_commands()
-            if self._execution_journal is not None
-            else ()
-        ) or bool(
-            self._journal.has_unresolved_assignment_references()
-            if self._journal is not None
-            else False
-        )
-        self._runtime_agent_id: str | None = None
-        self._runtime_provider_key: str | None = None
-        self._providers: dict[str, AgentResourceProvider] = {}
-        self._configured_provider_members: tuple[AgentResourceProvider, ...] | None = (
-            None
-        )
-        self._configured_provider_agent_id: str | None = None
-        self._cancelled_assignments: set[str] = set(
-            self._journal.contained_assignment_ids()
-            if self._journal is not None
-            else ()
-        )
-        self._drained = False
-        self._control_lock = RLock()
+            if self._execution_journal is not None:
+                self._execution_journal._open_existing()
+            self._restart_with_retained_work = bool(
+                self._execution_journal.retained_claim_commands()
+                if self._execution_journal is not None
+                else ()
+            ) or bool(
+                self._journal.has_unresolved_assignment_references()
+                if self._journal is not None
+                else False
+            )
+            self._runtime_agent_id: str | None = None
+            self._runtime_provider_key: str | None = None
+            self._providers: dict[str, AgentResourceProvider] = {}
+            self._configured_provider_members: tuple[AgentResourceProvider, ...] | None = (
+                None
+            )
+            self._configured_provider_agent_id: str | None = None
+            self._cancelled_assignments: set[str] = set(
+                self._journal.contained_assignment_ids()
+                if self._journal is not None
+                else ()
+            )
+            self._drained = False
+            self._control_lock = RLock()
+        except Exception:
+            supervisor = self._supervisor
+            if created_supervisor and supervisor is not None:
+                try:
+                    supervisor.shutdown_clean()
+                except AgentProcessSupervisorError:
+                    pass
+            if self._journal is not None:
+                self._journal.close()
+                self._journal = None
+            self._supervisor = None
+            raise
 
     @property
     def agent_root_id(self) -> str:
@@ -1426,7 +1533,6 @@ class LocalDaemonAgentHttpClient:
         target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         staging = target.parent / f".{target.name}.staging-{secrets.token_hex(8)}"
         journal: _RemoteAgentJournal | None = None
-        supervisor: AgentProcessSupervisorClient | None = None
         try:
             LocalDaemon.initialize_agent_root(staging)
             with sqlite3.connect(staging / "control.sqlite") as conn:
@@ -1460,25 +1566,17 @@ class LocalDaemonAgentHttpClient:
             )
             profiles = tuple(item.launch_profile for item in config.resident_profiles)
             configuration = SupervisorLaunchConfiguration(journal.root_id, profiles)
-            supervisor = AgentProcessSupervisorService.initialize(
+            AgentProcessSupervisorService.initialize_process_free(
                 staging, configuration=configuration
             )
-            AgentProcessSupervisorClient(staging, configuration)
-            supervisor.shutdown_empty_for_relocation()
-            supervisor = None
             journal.close()
             journal = None
             if target.exists():
                 raise QueueServiceError("remote agent requires a fresh root")
             staging.rename(target)
-            AgentProcessSupervisorService.start_empty_initialized(
-                target, configuration=configuration
-            )
         except AgentProcessSupervisorError as exc:
             raise QueueServiceError(str(exc)) from exc
         finally:
-            if supervisor is not None:
-                supervisor.shutdown_empty_for_relocation()
             if journal is not None:
                 journal.close()
             if staging.exists():
@@ -1487,7 +1585,7 @@ class LocalDaemonAgentHttpClient:
     @staticmethod
     def _open_supervisor(
         config: AgentTlsClientConfig,
-    ) -> AgentProcessSupervisorClient | None:
+    ) -> tuple[AgentProcessSupervisorClient | None, bool]:
         if not config.resident_profiles:
             if (
                 config.agent_root is not None
@@ -1496,7 +1594,7 @@ class LocalDaemonAgentHttpClient:
                 raise QueueServiceError(
                     "managed_supervisor_state_requires_reinitialization"
                 )
-            return None
+            return None, False
         if config.agent_root is None:
             raise QueueServiceError("remote resident execution requires an agent root")
         # The journal verifies the root and serializes agent application use;
@@ -1509,8 +1607,21 @@ class LocalDaemonAgentHttpClient:
                     root_id,
                     tuple(item.launch_profile for item in config.resident_profiles),
                 ),
-            )
+            ), False
         except AgentProcessSupervisorError as exc:
+            if str(exc) == "managed supervisor endpoint is unavailable":
+                try:
+                    return AgentProcessSupervisorService.start_empty_initialized(
+                        config.agent_root,
+                        configuration=SupervisorLaunchConfiguration(
+                            root_id,
+                            tuple(
+                                item.launch_profile for item in config.resident_profiles
+                            ),
+                        ),
+                    ), True
+                except AgentProcessSupervisorError as start_exc:
+                    raise QueueServiceError(str(start_exc)) from start_exc
             raise QueueServiceError(str(exc)) from exc
 
     def close(self) -> None:
@@ -1518,6 +1629,20 @@ class LocalDaemonAgentHttpClient:
         if self._journal is not None:
             self._journal.close()
             self._journal = None
+
+    def shutdown_clean(self) -> None:
+        """Stop the resident supervisor only after both agent owners are empty."""
+
+        supervisor = self._supervisor
+        if supervisor is None:
+            return
+        if self._has_retained_agent_work():
+            raise QueueConflictError("agent has retained work")
+        try:
+            supervisor.shutdown_clean()
+        except AgentProcessSupervisorError as exc:
+            raise QueueConflictError(str(exc)) from exc
+        self._supervisor = None
 
     def _close_connection(self) -> None:
         if self._connection is not None:
@@ -1536,7 +1661,7 @@ class LocalDaemonAgentHttpClient:
                 or isinstance(capabilities, (str, bytes))
                 or any(not isinstance(item, str) for item in capabilities)
                 or not {
-                    "agent-sessions-v9",
+                    "agent-sessions-v10",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 }.issubset(set(capabilities))
@@ -1658,6 +1783,21 @@ class LocalDaemonAgentHttpClient:
         )
         journal.complete_mutation("offer", idempotency_key, result)
         return result
+
+    def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
+        if self._drained or self._restart_with_retained_work:
+            raise QueueConflictError("agent cannot renew executable capacity")
+        journal = self._require_journal()
+        replay = journal.prepare_offer_renewal(renewal)
+        if replay is not None:
+            return replay
+        result = self._call("renew", {"renewal": renewal.value()})
+        journal.complete_offer_renewal(renewal, result)
+        return result
+
+    def renew_current_offer(self, session_id: str) -> Mapping[str, PlainData] | None:
+        renewal = self._require_journal().next_offer_renewal(session_id)
+        return None if renewal is None else self.renew_offer(renewal)
 
     def wait_for_work(
         self,
@@ -1928,9 +2068,7 @@ class LocalDaemonAgentHttpClient:
 
     def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
         return TimeRecoveryReceipt.from_dict(
-            self._call(
-                "recover_time", {"request": request.to_dict()}, role="operator"
-            )
+            self._call("recover_time", {"request": request.to_dict()}, role="operator")
         )
 
     def replace_agent_session(
@@ -3545,6 +3683,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "register",
                     "reconcile",
                     "offer",
+                    "renew",
                     "poll",
                     "authorize",
                     "input",
@@ -3639,6 +3778,12 @@ def _dispatch(
         return view.publish_offer(
             _offer(offer), idempotency_key=_string(value, "idempotency_key")
         )
+    if operation == "renew":
+        _exact(value, {"renewal"})
+        renewal = value["renewal"]
+        if not isinstance(renewal, Mapping):
+            raise QueueServiceError("agent offer renewal is invalid")
+        return view.renew_offer(AgentOfferRenewal.from_value(renewal))
     if operation == "poll":
         _exact(
             value,

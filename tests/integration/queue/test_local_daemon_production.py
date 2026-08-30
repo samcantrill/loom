@@ -418,9 +418,11 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         server = LocalDaemonSocketServer(daemon, config.endpoint)
         server.start()
         try:
-            socket_view = LocalDaemonSocketClient(config.endpoint).admission(
-                submitted.admission_id
-            ).owners
+            socket_view = (
+                LocalDaemonSocketClient(config.endpoint)
+                .admission(submitted.admission_id)
+                .owners
+            )
         finally:
             server.stop()
         for axis_name in ("scheduling", "assignment", "execution"):
@@ -468,6 +470,18 @@ def test_managed_local_hard_cutover_rejects_old_import_and_existing_roots(
     with pytest.raises(Exception, match="fresh roots"):
         LocalDaemon.initialize(config)
     assert coordinator.read_bytes() == before
+
+
+def test_changed_scheduling_configuration_rejects_before_starting_supervisor(
+    tmp_path: Path,
+) -> None:
+    config = _daemon_config(tmp_path)
+    LocalDaemon.initialize(config)
+
+    with pytest.raises(QueueConflictError, match="scheduling configuration changed"):
+        LocalDaemon(replace(config, cpu_capacity=2)).start()
+
+    assert _supervisor_process_ids(config.agent_root) == ()
 
 
 def test_admission_digest_covers_the_resolved_pipeline_snapshot(
@@ -1071,9 +1085,7 @@ def test_connected_active_cancellation_withholds_output_commit(
     server.start()
     try:
         client = LocalDaemonSocketClient(config.endpoint)
-        submitted = client.submit(
-            LocalDaemonAdmissionRequest("cancel-active", run_uri)
-        )
+        submitted = client.submit(LocalDaemonAdmissionRequest("cancel-active", run_uri))
         _wait_for_supervisor_launch_count(config, expected=1)
         active = client.admission(submitted.admission_id).admission
         assert active.state is LocalDaemonAdmissionState.ACTIVE
@@ -1136,6 +1148,99 @@ def test_daemon_overlaps_independent_runs_with_available_capacity(
             is RunStatus.SUCCEEDED
         )
     finally:
+        daemon.stop()
+
+
+def test_completed_background_failure_replays_the_same_local_assignment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_root = tmp_path / "runs"
+    run_uri = _persist_sleep_run(
+        run_root,
+        run_name="background-replay",
+        stage_name="build",
+        seconds=0.1,
+    )
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    execution = daemon._execution
+    assert execution is not None
+    original_query = execution.supervisor.query
+    third_query_entered = Event()
+    allow_recovery = Event()
+    query_calls = 0
+
+    def fail_two_observers_then_recover(launch: object):
+        nonlocal query_calls
+        query_calls += 1
+        if query_calls <= 2:
+            raise OSError("simulated post-start observation failure")
+        if query_calls == 3:
+            third_query_entered.set()
+            assert allow_recovery.wait(5)
+        return original_query(launch)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(execution.supervisor, "query", fail_two_observers_then_recover)
+    client = daemon.client_view(
+        LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
+    )
+    try:
+        admission = client.submit(
+            LocalDaemonAdmissionRequest("background-replay-item", run_uri)
+        )
+        assert third_query_entered.wait(5)
+        with sqlite3.connect(config.execution_database) as conn:
+            assignment_rows = tuple(
+                conn.execute(
+                    "SELECT assignment_id, identity_json FROM coordinator_assignments"
+                )
+            )
+        assert len(assignment_rows) == 1
+        assignment_id = str(assignment_rows[0][0])
+        identity_json = str(assignment_rows[0][1])
+        with sqlite3.connect(config.control_database) as conn:
+            health = conn.execute(
+                "SELECT health FROM admission_reconciliation_health "
+                "WHERE admission_id = ?",
+                (admission.admission_id,),
+            ).fetchone()
+        assert health is not None and str(health[0]) == "unavailable"
+
+        allow_recovery.set()
+        completed = client.wait("background-replay-item", timeout_seconds=10)
+        assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
+        with sqlite3.connect(config.execution_database) as conn:
+            final_rows = tuple(
+                conn.execute(
+                    "SELECT assignment_id, identity_json FROM coordinator_assignments"
+                )
+            )
+        assert final_rows == ((assignment_id, identity_json),)
+        assert _supervisor_launch_count(config) == 1
+        snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
+        assert len(snapshot.stages[0].attempts) == 1
+        deadline = time.monotonic() + 5
+        final_health = None
+        while time.monotonic() < deadline:
+            with sqlite3.connect(config.control_database) as conn:
+                final_health = conn.execute(
+                    "SELECT health FROM admission_reconciliation_health "
+                    "WHERE admission_id = ?",
+                    (admission.admission_id,),
+                ).fetchone()
+            if final_health is not None and str(final_health[0]) == "healthy":
+                break
+            time.sleep(0.02)
+        assert final_health is not None and str(final_health[0]) == "healthy"
+    finally:
+        allow_recovery.set()
         daemon.stop()
 
 
@@ -1652,9 +1757,7 @@ def test_guarded_recovery_closes_exact_supervised_work_and_retains_capacity(
             assert closed_stage.status is StageStatus.PENDING, {
                 "run_status": closed.status,
                 "decisions": [item.to_dict() for item in closed_stage.retry_decisions],
-                "admissions": [
-                    client.admission_for_queue_item("recovery-item").state
-                ],
+                "admissions": [client.admission_for_queue_item("recovery-item").state],
                 "service_diagnostic": client.status().service_diagnostic,
             }
             retry_attempt = next(
@@ -2238,6 +2341,25 @@ def _running_supervisor_identity(config: LocalDaemonConfig) -> tuple[str, int]:
             return str(metadata[0]), int(launch[1])
         time.sleep(0.01)
     raise AssertionError("supervisor launch did not remain running")
+
+
+def _supervisor_process_ids(agent_root: Path) -> tuple[int, ...]:
+    expected_root = str(agent_root.resolve() / "supervisor")
+    matches: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        if (
+            len(argv) >= 4
+            and argv[-3:-1] == [b"--serve", expected_root.encode()]
+            and argv[-4].endswith(b"loom.queue._agent_process_supervisor")
+        ):
+            matches.append(int(entry.name))
+    return tuple(sorted(matches))
 
 
 def _wait_for_thread(thread: Thread, *, timeout_seconds: float) -> None:
