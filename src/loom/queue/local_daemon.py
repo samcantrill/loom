@@ -1412,9 +1412,11 @@ class LocalDaemon:
             except AgentProcessSupervisorError as exc:
                 if str(exc) != "managed supervisor endpoint is unavailable":
                     raise
-                created_supervisor = AgentProcessSupervisorService.start_empty_initialized(
-                    self.config.agent_root,
-                    configuration=supervisor_configuration,
+                created_supervisor = (
+                    AgentProcessSupervisorService.start_empty_initialized(
+                        self.config.agent_root,
+                        configuration=supervisor_configuration,
+                    )
                 )
             self._coordinator_id = coordinator_id
             self._agent_id = agent_id

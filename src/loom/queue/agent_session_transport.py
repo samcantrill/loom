@@ -1467,7 +1467,9 @@ class LocalDaemonAgentHttpClient:
                 try:
                     self._execution_journal._open_existing()
                 except ManagedLocalError as exc:
-                    raise QueueServiceError("remote execution journal is unavailable") from exc
+                    raise QueueServiceError(
+                        "remote execution journal is unavailable"
+                    ) from exc
             # Reuse the normal shutdown predicate before creating a detached
             # service.  A corrupt journal therefore rejects process-free,
             # while retained work remains protected if later construction
@@ -1486,9 +1488,9 @@ class LocalDaemonAgentHttpClient:
             self._runtime_agent_id: str | None = None
             self._runtime_provider_key: str | None = None
             self._providers: dict[str, AgentResourceProvider] = {}
-            self._configured_provider_members: tuple[AgentResourceProvider, ...] | None = (
-                None
-            )
+            self._configured_provider_members: (
+                tuple[AgentResourceProvider, ...] | None
+            ) = None
             self._configured_provider_agent_id: str | None = None
             self._cancelled_assignments: set[str] = set(
                 self._journal.contained_assignment_ids()
