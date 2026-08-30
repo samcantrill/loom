@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: approved
+- Status: merged
 - Roadmap stage and phase: Stage 34, Phase 1
 - Manifest: docs/roadmap/stage-34/implementation-plan.md
 - Branch: agent/stage-34-p1-singular-run-inspection-core
@@ -221,9 +221,8 @@ Final commands:
 - Independent review: not used. The fast-path manager review covered the final
   current-target diff and found no material residual risk requiring expansion.
 - Blocker corrections: 3/3; exhausted.
-- PR and merge: PR #263 is open with verified base `develop`, phase head,
-  title, non-draft state, and clean mergeability; manager-local review passed.
-  Squash merge is pending.
+- PR and merge: PR #263 was verified against `develop`, approved by
+  manager-local review, and squash-merged as `1f3f7fa` on 2026-08-30.
 
 ## Completion Record
 
@@ -233,5 +232,5 @@ Final commands:
 | Tests added or updated | Added strict codec/failure/bounds/precedence/reason/no-content units; direct queue-config and no-fallback CLI units; direct/Unix and read-only queue contracts; real managed execution/socket and both Stage 32 Slurm-mode integrations; an after-driver-exit subprocess JSON journey; and diagnostics public-import coverage. |
 | Validated revision/tree state and evidence | At `d0d01e1`, after merging current `origin/develop`, the focused unit/contract/integration/E2E matrix passed 52, 3, 49, and 1 tests respectively; targeted Ruff, Pyright, and `git diff --check` passed. Fresh `make validate-pr` passed Ruff, Pyright with 0 errors or warnings, 2,727 default tests with 136 deselected, 157 config-extra tests with 3 expected skips and 2,730 deselected, plus source and wheel builds. Fresh `make test-summary` recorded 2,884 selected passes across package 119, unit 1,921, contract 300, integration 326, E2E 61, and config-extra 157, with the same 3 expected skips. |
 | Validation-relevant changes after evidence | None. Only this phase evidence metadata changed after the validated source/test tree, so the receipt remains current under the repository freshness rule. |
-| PR, review, and merge | [#263](https://github.com/samcantrill/loom/pull/263) opened against `develop`; target, head, title, body, non-draft state, and clean mergeability verified. Manager-local fast-path review passed with no blocker; squash merge pending. |
-| Residual risk and cleanup | No known implementation blocker; correction budget is exhausted. Merge verification, post-merge metadata update, and worktree/branch cleanup remain. |
+| PR, review, and merge | [#263](https://github.com/samcantrill/loom/pull/263) target, head, title, body, non-draft state, and clean mergeability were verified; manager-local fast-path review passed with no blocker; squash-merged to `develop` as `1f3f7fa` on 2026-08-30. |
+| Residual risk and cleanup | No known Phase 1 blocker. Huge collections intentionally truncate without paging. The dedicated worktree and exact local/remote phase branches were removed after the remote merge was verified. |
