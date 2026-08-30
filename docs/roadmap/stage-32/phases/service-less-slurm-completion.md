@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: approved
+- Status: pr_open
 - Roadmap stage and phase: Stage 32, Phase 3
 - Manifest: docs/roadmap/stage-32/implementation-plan.md
 - Branch: agent/stage-32-p3-service-less-slurm-completion
@@ -208,7 +208,8 @@ Final commands:
   same-second prune test close that finding. Manager-local correction review and
   fresh full validation found no remaining blocker.
 - Blocker corrections: 2/3.
-- PR and merge: pending.
+- PR and merge: [#261](https://github.com/samcantrill/loom/pull/261) open;
+  merge pending.
 
 ## Completion Record
 
@@ -218,5 +219,5 @@ Final commands:
 | Tests added or updated | Prepared proof rejection/proven matrix; same-second observe-then-prune retained failure; per-handle current-over-retained join; retained failure beside a different current handle; missing-handle all-complete guard; existing controller, CLI, live-model, and example journey coverage updated for explicit proof. |
 | Validated revision/tree state and evidence | Pre-rebase candidate `b1bfa20`: focused integration 20 passed with Ruff/Pyright; `make validate-pr` passed 2,687 default and 157 config-extra tests with 3 expected skips plus build; final `make test-summary` passed 2,844 tests with 3 skips. One prior summary attempt hit the existing PID-marker empty-read race; the exact test passed twice and an unchanged full summary rerun passed. Final rebased candidate `c00838f` changes only unrelated Stage 29 and Phase 3 roadmap metadata after that evidence. |
 | Validation-relevant changes after evidence | None. Rebase input was Stage 29 roadmap documentation only; this completion/review record is documentation only. Source, tests, dependencies, build, and validation configuration are unchanged. |
-| PR, review, and merge | Independent expanded review passed after correction 2/3; PR pending. |
+| PR, review, and merge | Independent expanded review passed after correction 2/3; [#261](https://github.com/samcantrill/loom/pull/261) is open against `develop` with the exact approved title and a mergeable head. |
 | Residual risk and cleanup | Blocked Phase 2 worktree remains until replacement merge is verified. |
