@@ -738,6 +738,47 @@ def test_agent_control_withdraws_offer_then_requires_agent_acknowledgement(
         daemon.stop()
 
 
+def test_completed_agent_reload_replays_before_the_old_session_revision_is_checked(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        session = _register(daemon)
+        control = AgentControl(
+            operation_id="reload-control-replay",
+            kind=AgentControlKind.RELOAD,
+            agent_id=session.agent_id,
+            expected_session_id=session.session_id,
+            expected_config_revision=session.config_revision,
+            pool=None,
+            cancel_active=False,
+            reason="replace trusted provider config",
+        )
+        operator = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        )
+        assert operator.control_agent(control)["state"] == "pending_delivery"
+        assert _view(daemon).next_control(session.session_id) == control
+        receipt = _view(daemon).acknowledge_control(
+            session.session_id,
+            AgentControlEffect(
+                operation_id=control.operation_id,
+                code="applied",
+                config_revision="config-2",
+                inventory_revision="inventory-2",
+                availability_revision="availability-2",
+            ),
+        )
+
+        assert operator.control_agent(control) == receipt
+        assert receipt["state"] == "applied"
+    finally:
+        daemon.stop()
+
+
 @pytest.mark.parametrize(
     ("actions", "agent_ids", "pools", "cancel_active"),
     [

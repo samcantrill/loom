@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: planned
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 14
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p14-reload-authority-composition`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees/stage-29-p14-reload-authority-composition`
-- Base revision: current `origin/develop` after Phase 13A merges
+- Base revision: `961b87f8ec1a490bd38e9c1de5992a75b18bd2dc`
 - PR target: `develop`
 - PR title: `Stage 29 phase 14: complete protected role composition`
 - Dependencies: remotely merged Phase 13A; Phase 13 remains read-only evidence
@@ -56,13 +56,16 @@ In scope:
   public protocols/descriptors/claim contracts.
 - Queue-owned coordinator-authority protocol plus injected per-run factory;
   direct embedded and authenticated persistent adapters.
+- Additive authority-repository v5-to-v6 migration for the authenticated
+  service-principal binding; legacy unprincipalled admissions remain fail-closed
+  to authenticated coordinator routes.
 - Nonzero CLI result for rejected coordinator or agent reload receipts.
 
 Out of scope:
 
 - Automatic target discovery, untrusted/sandboxed config, new scheduling or
-  provider semantics, authority HA, migration, or secret serialization into
-  fingerprints.
+  provider semantics, authority HA, protected role-root/config migration, or
+  secret serialization into fingerprints.
 - Phase 15 list/detail/operation CLI additions.
 
 Assumptions:
@@ -85,6 +88,12 @@ Assumptions:
 - Trust boundary: only protected local source creates `_target_` objects.
   Configured persistent authority uses authenticated least privilege; embedded
   direct access is an explicit trusted composition.
+- Authenticated authority boundary: expose only the existing
+  `PreparedAttemptExecutionAuthority` operations as explicit coordinator- and
+  run-scoped service calls. Exact retries reuse the existing durable operation,
+  assignment, attempt, fence, recovery, and output identities and typed
+  conflict/error semantics; do not add generic authority CRUD or a SQLite
+  fallback.
 - Cross-phase contracts: Phase 15 reads scheduling/time/configuration revisions
   but does not mutate fingerprint ownership.
 - Reproducibility: fingerprints use canonical non-secret authored values; live
@@ -160,6 +169,68 @@ Final commands:
 - Accepted debt: certificate/config rotation is explicit reload and active
   service connection replacement; distributed config coordination is deferred.
 
+## Manager Review Findings
+
+Corrections 2/3 and 3/3 were qualified because each finding was reachable from
+a supported schema-v2 production role and violated FR-35 through FR-38. All
+findings below are resolved in validated source/test revision `308ed41`:
+
+1. Immutable and reloadable fingerprints are not canonical protected-value
+   projections. Coordinator and outbound immutable projections include authored
+   filesystem/TLS paths, while active fingerprints are recomputed from runtime
+   objects, `repr`, executable paths, and incomplete fields. Coordinator reload
+   also fails to fence authority/service and supervisor-profile identity. The
+   smallest fix is to compute both fingerprints in `deployment.py` from explicit
+   non-secret, path-free authored projections, carry them on the role configs,
+   validate the immutable fingerprint on reload, and persist/verify the authored
+   reloadable fingerprint and epoch.
+2. A successful outbound reload persists and swaps only the inner HTTP client's
+   configuration. The service loop continues to publish offers from the original
+   `OutboundAgentServiceConfig` and reconnects with its original client, which is
+   then rejected by the newly persisted active fingerprint. The smallest fix is
+   one coherent reloadable outbound role snapshot used by offer publication,
+   reconnect, registration, operational timing, persistence, and restart.
+3. The protected schema does not construct the promised production composition.
+   Authenticated authority accepts only an arbitrary callable target rather than
+   the supported HTTPS service/workspace/TLS fields; nested trusted targets are
+   not constructed; a complete SLURM profile cannot compose its runner/private
+   provider; and outbound resident provider composition is absent. The smallest
+   fix is the explicit schema-v2 shapes from FR-37, eager recursive target
+   construction where a constructor argument is itself a target, structural
+   protocol validation, and causal loader/startup tests.
+4. `CoordinatorAuthorityStore` exposes only `open_run`, execution casts it to
+   `Any`, and the authenticated adapter implements only prepared-attempt calls.
+   The first production admission calls missing coordinator binding, lifecycle,
+   cancellation, and reliability methods. The agent-control path also still
+   imports `SQLitePerRunAuthorityStore` directly. The smallest fix is one typed
+   queue-owned protocol containing exactly the methods reached by coordinator
+   execution, concrete embedded/authenticated adapters owned at the store/service
+   boundary, explicit authenticated service calls with workspace/service scope
+   and typed replay/conflict semantics, and an import/search guard covering all
+   production queue execution paths.
+
+The independent review then found two final supported-path blockers for
+correction 3/3:
+
+5. Coordinator and outbound reload could durably remain `applying` after a
+   process loss while startup still compared the new protected source with the
+   old active fingerprint. The correction now persists only a fully prepared
+   intent bound to the exact replacement fingerprint, atomically completes its
+   active revision and terminal effect, and resumes that same intent on startup.
+   Exact coordinator replay returns the recovered terminal receipt; outbound
+   restart retains the completed effect for acknowledgement. Non-applied CLI
+   receipts exit nonzero.
+6. The coordinator mTLS route verified the service/certificate pair but dropped
+   the verified identity before mutation dispatch. Authority repository schema
+   v6 now stores that service principal with the coordinator admission and
+   requires it on every later coordinator operation and exact admission replay.
+   Two independently valid principals cannot open, bind, or mutate each other's
+   runs.
+
+The correction must add the package, unit, contract, integration, and E2E
+coverage already required by this plan. Existing schema-fixture edits and
+unrelated older reload tests do not prove these new boundaries.
+
 ## Executor Handoff
 
 - Read section range: this entire phase plan plus Stage 29 planning FR-35-38 and
@@ -174,22 +245,37 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planned at evidence revision `2f8dfd9`
-- Expanded planning: design-safety findings on supervisor epoch references and long-poll saturation were corrected; bounded plan review passed after narrowing CLI failure semantics to reloads
-- Implementation: pending
-- Refiner: not needed
-- Pre-submit gate: pending
-- Independent review: required for authority trust and durable reload/restart boundary
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation: passed at clean current `origin/develop`
+  `961b87f`; Phase 13A merge/cleanup, FR-35 through FR-38, DD-35 through
+  DD-37, source owners, target matrices, authority seam, and stop conditions
+  were verified
+- Expanded planning: no phase-planner pass needed; the approved plan already
+  fixes both fingerprint domains, trusted eager target construction, the narrow
+  authority factory, and reload CLI semantics. Independent review remains
+  required for the durable reload and authority trust boundaries.
+- Implementation: complete at source/test revision `308ed41`; the protected
+  coordinator/outbound roles compose and reload their whole supported snapshot,
+  durable accepted reloads recover across restart, and authenticated authority
+  operations are bound to the verified service principal.
+- Refiner: correction 2/3 closed the four connected configuration-to-runtime
+  findings; manager correction 3/3 closed the two final independent-review
+  blockers without expanding the accepted surface.
+- Pre-submit gate: passed; fresh `make validate-pr` completed Ruff, zero-finding
+  Pyright, 2,764 default tests, 157 config-extra tests with 3 expected skips,
+  and both package builds.
+- Independent review: passed on bounded follow-up with no supported-path blocker
+  remaining for reload crash recovery or coordinator-principal ownership.
+- Blocker corrections: 3/3 complete; no known blocker remains.
+- PR: [#265](https://github.com/samcantrill/loom/pull/265), open against
+  `develop`; merge pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Source/test revision `308ed41` completes canonical role projections, schema-v2 trusted composition, whole-role coordinator/outbound reload, durable fingerprint-bound recovery, source-loader/service rotation, injected embedded/HTTPS coordinator authority, v6 principal ownership, and nonzero non-applied reload CLI behavior across `queue`, `authority`, pipeline-store adapters, CLI, and causal tests. |
+| Tests added or updated | Unit/contract/package guards cover projections, nested targets, schema/migration, CLI outcomes, and import direction. Integration/E2E tests cover real coordinator/outbound reload and restart, service reconnection, TLS rotation, live mTLS authority calls, same-CA rejection, two-valid-principal isolation, and crash recovery after each durable reload intent. |
+| Validated revision/tree state and evidence | At source/test revision `308ed41`, fresh `make validate-pr` passed Ruff, Pyright with zero findings, 2,764 default tests with 136 deselected, 157 config-extra tests with 3 expected skips, and both builds. Fresh `make test-summary` recorded package 120, unit 1,943, contract 300, integration 337, E2E 64, and config-extra 157: 2,921 passes, zero failures/errors, 3 expected skips. |
+| Validation-relevant changes after evidence | Only this roadmap evidence and matching manifest metadata changed after the validated source/test revision; no source, test, dependency, build, or validation configuration changed. |
+| PR, review, and merge | Independent review and bounded follow-up passed; [PR #265](https://github.com/samcantrill/loom/pull/265) is open against `develop`, with automatic merge pending. |
+| Residual risk and cleanup | No known phase blocker. Protected role roots/configs remain an intentional hard cut. Migrated authority v5 admissions have no authenticated service identity and therefore remain fail-closed on the new authenticated routes rather than being guessed or claimed. Worktree/branch cleanup follows verified remote merge. |

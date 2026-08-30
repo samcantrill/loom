@@ -12,7 +12,7 @@ import sqlite3
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event, Lock
 from types import MappingProxyType
-from typing import cast
+from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.execution import StageWorkerRequest, prepare_stage_attempt
@@ -101,7 +101,6 @@ from loom.pipeline.stores.authority import (
     PreparedAttemptRequest,
     StatusTransition,
 )
-from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.scheduling import (
     Candidate,
@@ -128,6 +127,10 @@ from loom.serialization import (
 from loom.timestamps import utc_timestamp
 
 from .errors import QueueConflictError, QueueServiceError
+from .coordinator_authority import (
+    CoordinatorAuthorityFactory,
+    CoordinatorAuthorityStore,
+)
 from ._remote_stage_execution import (
     MAX_TRANSFER_BYTES,
     ResidentProfileDescriptor,
@@ -221,6 +224,31 @@ def _validate_agent_provider_composition(
         return _compose_agent_resource_providers(providers)
     except ManagedLocalError as exc:
         raise QueueServiceError(str(exc)) from exc
+
+
+def _provider_composition_fingerprint(
+    providers: Mapping[str, AgentResourceProvider],
+) -> str:
+    """Compare provider contracts by their public, configuration-owned identity."""
+
+    payload = [
+        {
+            "resource_kind": kind,
+            "descriptor": provider.descriptor.to_dict(),
+            "claim_contracts": [
+                contract.to_dict()
+                for contract in sorted(
+                    provider.claim_contracts, key=lambda item: item.key
+                )
+            ],
+        }
+        for kind, provider in sorted(providers.items())
+    ]
+    return hashlib.sha256(
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _production_preference_scorers() -> Mapping[str, PreferenceScorer]:
@@ -342,6 +370,18 @@ class _CoordinatorSchedulingEpoch:
             policy=policy,
             component_epoch=self.epoch_id,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _CoordinatorReloadPlan:
+    """Complete validated owner-local replacement installed by one live swap."""
+
+    scheduling: _CoordinatorSchedulingEpoch
+    providers: Mapping[str, AgentResourceProvider]
+    local_capacity: tuple[CapacityAtom, ...]
+    capacity: tuple[CapacityAtom, ...]
+    coordinator: SQLiteCoordinatorAssignments
+    authority_for_run: CoordinatorAuthorityFactory
 
 
 def _add_exact_descriptor(
@@ -725,7 +765,7 @@ class _ScopedCoordinatorAuthority:
 
     def __init__(
         self,
-        store: SQLitePerRunAuthorityStore,
+        store: CoordinatorAuthorityStore,
         *,
         run_uri: str,
         coordinator_id: str,
@@ -1017,7 +1057,10 @@ def _validate_recovery_request_identity(
 
 
 def _recovery_retry_policy(
-    authority: SQLitePerRunAuthorityStore, run_uri: str, stage_name: str, attempt: int
+    authority: CoordinatorAuthorityStore,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
 ):
     """Read the immutable attempt policy from the authority reliability owner."""
 
@@ -1051,7 +1094,7 @@ def _current_attempt_retry_is_authorized(stage: object) -> bool:
 class _AuthorityReliabilityStore:
     """Narrow reliability facade that persists every fact in authority."""
 
-    def __init__(self, authority: SQLitePerRunAuthorityStore) -> None:
+    def __init__(self, authority: CoordinatorAuthorityStore) -> None:
         self._authority = authority
 
     def write_reliability_policy_fact(
@@ -1130,6 +1173,10 @@ class LocalDaemonExecution:
         daemon: LocalDaemon | None = None,
     ) -> None:
         self.config = config
+        factory = config.coordinator_authority_factory
+        if factory is None:
+            raise QueueServiceError("coordinator authority factory is unavailable")
+        self._authority_for_run = factory
         self._scheduling = _build_scheduling_epoch(
             epoch_id=scheduling_epoch,
             composition=config.scheduling_components,
@@ -1371,8 +1418,7 @@ class LocalDaemonExecution:
             raise QueueConflictError(
                 "retained local assignment has no prepared worker request"
             )
-        authority_store = SQLitePerRunAuthorityStore(assignment.run_uri)
-        authority_store.open_run(assignment.run_uri)
+        authority_store = self._authority_store(assignment.run_uri)
         intent = load_managed_local_intent(
             self.config,
             assignment.run_uri,
@@ -1570,8 +1616,7 @@ class LocalDaemonExecution:
             raise QueueConflictError(
                 "persisted managed-local plan or runtime changed after admission"
             )
-        authority = SQLitePerRunAuthorityStore(admission.run_uri)
-        authority.open_run(admission.run_uri)
+        authority = self._authority_store(admission.run_uri)
         receipt = authority.bind_coordinator_admission(
             admission.run_uri,
             CoordinatorAdmissionRequest(
@@ -2127,7 +2172,7 @@ class LocalDaemonExecution:
 
         binding = self._recovery_binding(request)
         run_uri, stage_name, attempt, attempt_id = binding[1:]
-        authority = SQLitePerRunAuthorityStore(run_uri)
+        authority = self._authority_store(run_uri)
         snapshot = authority.open_run(run_uri)
         for stage in snapshot.stages:
             if stage.stage_name != stage_name:
@@ -2165,7 +2210,7 @@ class LocalDaemonExecution:
 
         binding = self._recovery_binding(request)
         run_uri, stage_name, attempt, attempt_id = binding[1:]
-        snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
+        snapshot = self._authority_store(run_uri).open_run(run_uri)
         matches = [
             item
             for stage in snapshot.stages
@@ -2323,8 +2368,7 @@ class LocalDaemonExecution:
         binding = self._recovery_binding(request)
         self._validate_persisted_recovery_evidence(request, binding, evidence)
         run_uri, stage_name, attempt, attempt_id = binding[1:]
-        authority_store = SQLitePerRunAuthorityStore(run_uri)
-        authority_store.open_run(run_uri)
+        authority_store = self._authority_store(run_uri)
         authority = _ScopedCoordinatorAuthority(
             authority_store,
             run_uri=run_uri,
@@ -2383,7 +2427,7 @@ class LocalDaemonExecution:
 
     def _record_recovery_reliability(
         self,
-        authority: SQLitePerRunAuthorityStore,
+        authority: Any,
         *,
         request: RecoverUnknownAssignment,
         stage_name: str,
@@ -3092,7 +3136,7 @@ class LocalDaemonExecution:
             )
         binding = self._recovery_binding(request)
         _record, run_uri, stage_name, attempt, attempt_id = binding
-        snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
+        snapshot = self._authority_store(run_uri).open_run(run_uri)
         matches = [
             item
             for stage in snapshot.stages
@@ -3136,31 +3180,57 @@ class LocalDaemonExecution:
         self,
         replacement: LocalDaemonConfig,
         scheduling_epoch: str,
-    ) -> _CoordinatorSchedulingEpoch:
+    ) -> _CoordinatorReloadPlan:
         """Build the complete replacement epoch before any durable mutation."""
 
-        replacement_capacity = _coordinator_capacity(replacement)
-        if replacement_capacity != self.capacity:
-            raise QueueConflictError(
-                "scheduling reload cannot reinterpret configured capacity"
-            )
         replacement_planners = {
             item.resource_kind: item
             for item in replacement.scheduling_components.planners
         }
-        for kind, provider in self.providers.items():
-            planner = replacement_planners.get(kind)
-            if (
-                planner is None
-                or not planner.claim_contracts
-                or any(
-                    contract not in provider.claim_contracts
-                    for contract in planner.claim_contracts
-                )
-            ):
+        replacement_providers = _validate_agent_provider_composition(
+            tuple(replacement.agent_resource_providers or ()),
+            replacement_planners,
+        )
+        replacement_local_capacity = replacement.agent_resource_capacity
+        replacement_capacity = _coordinator_capacity(replacement)
+        provider_changed = (
+            replacement_local_capacity != self.local_capacity
+            or replacement_capacity != self.capacity
+            or _provider_composition_fingerprint(replacement_providers)
+            != _provider_composition_fingerprint(self.providers)
+        )
+        if provider_changed:
+            try:
+                retained_claims = self.journal.retained_claim_commands()
+                with sqlite3.connect(self.config.execution_database) as conn:
+                    retained_assignment = conn.execute(
+                        "SELECT 1 FROM coordinator_assignments "
+                        "WHERE state != 'released' LIMIT 1"
+                    ).fetchone()
+            except (ManagedLocalError, sqlite3.DatabaseError) as exc:
                 raise QueueConflictError(
-                    "scheduling reload planner is incompatible with the local provider"
+                    "scheduling reload cannot prove provider quiescence"
+                ) from exc
+            if retained_claims or retained_assignment is not None:
+                raise QueueConflictError(
+                    "scheduling reload cannot replace capacity with retained work"
                 )
+            replacement_coordinator = SQLiteCoordinatorAssignments(
+                replacement.execution_database,
+                replacement_capacity,
+                _allow_initialize=False,
+            )
+            try:
+                replacement_coordinator._open_existing()
+            except ManagedLocalError as exc:
+                raise QueueConflictError(
+                    "replacement coordinator capacity is unavailable"
+                ) from exc
+        else:
+            replacement_providers = self.providers
+            replacement_local_capacity = self.local_capacity
+            replacement_capacity = self.capacity
+            replacement_coordinator = self.coordinator
         runtime_placements = self._referenced_runtime_placements()
         retained: dict[tuple[str, str], SlurmReadyStageProfile] = {}
         for placement in runtime_placements:
@@ -3215,25 +3285,40 @@ class LocalDaemonExecution:
                 raise QueueConflictError(
                     "scheduling reload cannot reinterpret a retained credential"
                 )
-        return _build_scheduling_epoch(
-            epoch_id=scheduling_epoch,
-            composition=replacement.scheduling_components,
-            active_slurm_profiles=active,
-            retained_slurm_profiles=retained,
-            current=self._scheduling,
-            referenced_descriptors=self._referenced_component_descriptors(
-                runtime_placements
+        authority_for_run = replacement.coordinator_authority_factory
+        if authority_for_run is None:
+            raise QueueConflictError("replacement coordinator authority is unavailable")
+        return _CoordinatorReloadPlan(
+            scheduling=_build_scheduling_epoch(
+                epoch_id=scheduling_epoch,
+                composition=replacement.scheduling_components,
+                active_slurm_profiles=active,
+                retained_slurm_profiles=retained,
+                current=self._scheduling,
+                referenced_descriptors=self._referenced_component_descriptors(
+                    runtime_placements
+                ),
             ),
+            providers=MappingProxyType(dict(replacement_providers)),
+            local_capacity=tuple(replacement_local_capacity),
+            capacity=tuple(replacement_capacity),
+            coordinator=replacement_coordinator,
+            authority_for_run=authority_for_run,
         )
 
     def apply_scheduling_reload(
         self,
         replacement: LocalDaemonConfig,
-        plan: _CoordinatorSchedulingEpoch,
+        plan: _CoordinatorReloadPlan,
     ) -> None:
         """Install one already-validated scheduling plan without fallible work."""
 
-        self._scheduling = plan
+        self._scheduling = plan.scheduling
+        self.providers = dict(plan.providers)
+        self.local_capacity = plan.local_capacity
+        self.capacity = plan.capacity
+        self.coordinator = plan.coordinator
+        self._authority_for_run = plan.authority_for_run
         self.config = replacement
 
     def _referenced_component_descriptors(
@@ -3277,7 +3362,7 @@ class LocalDaemonExecution:
             snapshot = snapshots.get(record.run_uri)
             if snapshot is None:
                 try:
-                    snapshot = SQLitePerRunAuthorityStore(record.run_uri).open_run(
+                    snapshot = self._authority_store(record.run_uri).open_run(
                         record.run_uri
                     )
                 except Exception as exc:
@@ -5077,13 +5162,24 @@ class LocalDaemonExecution:
         return row
 
     def _remote_authority(self, run_uri: str) -> _ScopedCoordinatorAuthority:
-        store = SQLitePerRunAuthorityStore(run_uri)
-        store.open_run(run_uri)
+        store = self._authority_store(run_uri)
         return _ScopedCoordinatorAuthority(
             store,
             run_uri=run_uri,
             coordinator_id=self.coordinator_id,
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
+        )
+
+    def _authority_store(self, run_uri: str) -> CoordinatorAuthorityStore:
+        """Open one configured coordinator/run authority, never SQLite directly."""
+
+        return self._authority_for_run(run_uri)
+
+    def cancellation_epoch_receipt(self, run_uri: str, operation_id: str):
+        """Read cancellation truth through the configured authority adapter."""
+
+        return self._authority_store(run_uri).read_cancellation_epoch_receipt(
+            run_uri, operation_id
         )
 
     def _ordinary_mutation_frozen(self, assignment_id: str) -> bool:
@@ -5403,7 +5499,10 @@ def build_local_daemon_owner_views(
         authority_observed_at = clock()
         cancellation_receipt: dict[str, PlainData] | None = None
         try:
-            authority = SQLitePerRunAuthorityStore(admission.run_uri)
+            factory = config.coordinator_authority_factory
+            if factory is None:
+                raise QueueServiceError("coordinator authority factory is unavailable")
+            authority = factory(admission.run_uri)
             snapshot = authority.open_run(admission.run_uri)
             if admission.cancellation_operation_id is not None:
                 receipt = authority.read_cancellation_epoch_receipt(
