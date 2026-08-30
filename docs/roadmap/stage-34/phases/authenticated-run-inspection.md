@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: approved
 - Roadmap stage and phase: Stage 34, Phase 2
 - Manifest: docs/roadmap/stage-34/implementation-plan.md
 - Branch: agent/stage-34-p2-authenticated-run-inspection
@@ -203,15 +203,16 @@ Final commands:
   protected inspection-client config, and explicit CLI remote source.
 - Refiner: one bounded pass completed in `56aadb1` for the qualified remote
   decoder-limit blocker; no further refiner pass is available or needed.
-- Pre-submit gate: complete at `fa38573`; manager review found no remaining
+- Pre-submit gate: complete at `ab9c9d5`; manager review found no remaining
   blocker against the authenticated trust contract, exact coordinator scope,
   Phase 1 wire parity, existing-role compatibility, import direction, or
   proportionality.
 - Independent review: required on the expanded path after PR submission because
   this phase changes the remote credential and authorization boundary. The
-  review found no product blocker and one localized failure-parity correction.
-- Blocker corrections: 3/3 complete; exhausted. The remote client applied the legacy
-  agent-request decoder after reading a Phase 1-sized response, incorrectly
+  review passed after its one localized failure-parity correction was applied
+  and revalidated; no product blocker or material residual risk remains.
+- Blocker corrections: 3/3 complete; exhausted. The remote client applied the
+  legacy agent-request decoder after reading a Phase 1-sized response, incorrectly
   closing valid 65+ record results as unavailable. The correction gives only
   query responses their fixed 1 MiB/256-record strict decoder, preserves the
   existing 64 KiB/64-item agent decoder for request and handshake traffic, and
@@ -227,7 +228,7 @@ Final commands:
   authorization, admission, or public schemas.
 - PR and merge: PR #264 is open with verified base `develop`, phase head,
   title, body, non-draft state, and clean mergeability. Expanded independent
-  review and merge are pending.
+  review and all local gates passed; merge is pending.
 
 ## Completion Record
 
@@ -235,7 +236,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added the dedicated `query` role, exact authenticated `/v1/query/inspect_run` dispatch, capability handshake, bounded no-redirect HTTPS client, and strict protected `loom.run-inspection-client` v1 loader. `loom inspect-run --remote-config` decodes the unchanged Phase 1 model with no selected-source fallback. Coordinator serving now injects the Phase 1 callable into the existing mTLS server; user docs cover managed local, remote mTLS, and service-less SSH use. |
 | Tests added or updated | Added role-exclusivity and protected-config coverage, remote-selector no-fallback coverage, and a localhost mTLS matrix for query success, exact admitted/unadmitted scope, malformed identity/URI closure, mutation-role and query-role isolation with zero owner-view calls, missing capability, immediate policy revocation, and a 256-stage canonical-result round trip. Strict decoder tests cover duplicate keys, 257 records, and the 1-MiB limit. E2E coverage invokes `loom inspect-run --remote-config` as a subprocess against the real local mTLS server. |
-| Validated revision/tree state and evidence | At `fa38573`, the complete phase-targeted unit, contract, and integration commands passed 52, 10, and 44 tests respectively; both direct/service-less and authenticated-remote inspect-run E2E journeys passed (2 tests). Focused Ruff, Pyright with 0 errors/warnings, and `git diff --check` passed. Fresh `make validate-pr` passed Ruff, Pyright with 0 errors/warnings, 2,734 default tests with 136 deselected, 157 config-extra tests with 3 expected skips and 2,737 deselected, plus source and wheel builds. Fresh `make test-summary` recorded 2,891 selected passes across package 119, unit 1,924, contract 300, integration 329, E2E 62, and config-extra 157, with the same 3 expected skips. |
-| Validation-relevant changes after evidence | Correction 3 changed the remote URI guard and causal mTLS test after the recorded broad evidence. Fresh repository gates are required before merge. |
-| PR, review, and merge | [#264](https://github.com/samcantrill/loom/pull/264) opened against `develop`; target, head, title, body, non-draft state, and clean mergeability verified. Expanded independent review and merge are pending. |
-| Residual risk and cleanup | Independent review found no product blocker; its one localized parity finding is corrected and the correction budget is exhausted. Fresh validation, merge verification, metadata, and worktree/branch cleanup remain. Localhost mTLS proves Loom policy behavior but cannot certify site certificate issuance or path reachability. |
+| Validated revision/tree state and evidence | At `ab9c9d5`, the complete phase-targeted unit, contract, and integration commands passed 52, 10, and 44 tests respectively; both direct/service-less and authenticated-remote inspect-run E2E journeys passed (2 tests). Focused Ruff, Pyright with 0 errors/warnings, and `git diff --check` passed. Fresh `make validate-pr` passed Ruff, Pyright with 0 errors/warnings, 2,734 default tests with 136 deselected, 157 config-extra tests with 3 expected skips and 2,737 deselected, plus source and wheel builds. Fresh `make test-summary` recorded 2,891 selected passes across package 119, unit 1,924, contract 300, integration 329, E2E 62, and config-extra 157, with the same 3 expected skips. |
+| Validation-relevant changes after evidence | None. Only phase and manifest evidence metadata changed after the validated source/test tree, so the receipt remains current under the repository freshness rule. |
+| PR, review, and merge | [#264](https://github.com/samcantrill/loom/pull/264) opened against `develop`; target, head, title, body, non-draft state, and clean mergeability verified. Expanded independent review passed after its localized parity finding was corrected; manager review and all local gates pass. Merge is pending. |
+| Residual risk and cleanup | No known blocker or material residual risk; the correction budget is exhausted. Merge verification, final metadata, and worktree/branch cleanup remain. Localhost mTLS proves Loom policy behavior but cannot certify site certificate issuance or path reachability. |
