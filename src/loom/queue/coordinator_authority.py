@@ -10,6 +10,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
+from loom.pipeline.reliability import (
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores.authority import (
     CancellationEpochReceipt,
@@ -21,8 +27,8 @@ from loom.pipeline.stores.read_models import (
     AuthoritativeRunSnapshot,
     BackendRevision,
     LifecycleReason,
+    ReliabilityPolicyFact,
 )
-from loom.pipeline.stores.run_store import RunReliabilityStore
 from loom.pipeline.transition_policy import TransitionIntent
 
 
@@ -30,7 +36,6 @@ from loom.pipeline.transition_policy import TransitionIntent
 class CoordinatorAuthorityStore(
     PreparedAttemptExecutionAuthority,
     LocalDaemonAuthority,
-    RunReliabilityStore,
     Protocol,
 ):
     """Exact authority capabilities reached by production coordination.
@@ -67,6 +72,50 @@ class CoordinatorAuthorityStore(
     def read_cancellation_epoch_receipt(
         self, run_uri: str, operation_id: str
     ) -> CancellationEpochReceipt | None: ...
+
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> BackendRevision: ...
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]: ...
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> BackendRevision: ...
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]: ...
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> BackendRevision: ...
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]: ...
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]: ...
+
+    def write_retry_decision(
+        self, run_uri: str, decision: RetryDecisionRecord
+    ) -> BackendRevision: ...
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]: ...
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> BackendRevision: ...
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]: ...
 
 
 CoordinatorAuthorityFactory = Callable[[str], CoordinatorAuthorityStore]

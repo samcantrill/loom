@@ -484,12 +484,14 @@ class AuthenticatedCoordinatorAuthority:
 
     def write_reliability_policy_fact(
         self, run_uri: str, fact: ReliabilityPolicyFact
-    ) -> None:
-        self._call(
-            COORDINATOR_WRITE_POLICY_PATH,
-            run_uri,
-            kind=AuthorityProtocolOperationKind.RELIABILITY_FACTS,
-            body={"fact": fact.to_dict()},
+    ) -> BackendRevision:
+        return _required_revision(
+            self._call(
+                COORDINATOR_WRITE_POLICY_PATH,
+                run_uri,
+                kind=AuthorityProtocolOperationKind.RELIABILITY_FACTS,
+                body={"fact": fact.to_dict()},
+            )
         )
 
     def list_reliability_policy_facts(
@@ -505,12 +507,14 @@ class AuthenticatedCoordinatorAuthority:
 
     def write_reliability_status_detail(
         self, run_uri: str, detail: ReliabilityStatusDetail
-    ) -> None:
-        self._call(
-            COORDINATOR_WRITE_STATUS_PATH,
-            run_uri,
-            kind=AuthorityProtocolOperationKind.RELIABILITY_FACTS,
-            body={"detail": detail.to_dict()},
+    ) -> BackendRevision:
+        return _required_revision(
+            self._call(
+                COORDINATOR_WRITE_STATUS_PATH,
+                run_uri,
+                kind=AuthorityProtocolOperationKind.RELIABILITY_FACTS,
+                body={"detail": detail.to_dict()},
+            )
         )
 
     def list_reliability_status_details(
@@ -526,12 +530,14 @@ class AuthenticatedCoordinatorAuthority:
 
     def write_stage_attempt_transaction(
         self, run_uri: str, transaction: StageAttemptTransaction
-    ) -> None:
-        self._call(
-            COORDINATOR_WRITE_TRANSACTION_PATH,
-            run_uri,
-            kind=AuthorityProtocolOperationKind.RELIABILITY_FACTS,
-            body={"transaction": transaction.to_dict()},
+    ) -> BackendRevision:
+        return _required_revision(
+            self._call(
+                COORDINATOR_WRITE_TRANSACTION_PATH,
+                run_uri,
+                kind=AuthorityProtocolOperationKind.RELIABILITY_FACTS,
+                body={"transaction": transaction.to_dict()},
+            )
         )
 
     def read_transaction_chain(
@@ -561,12 +567,14 @@ class AuthenticatedCoordinatorAuthority:
 
     def write_retry_decision(
         self, run_uri: str, decision: RetryDecisionRecord
-    ) -> None:
-        self._call(
-            COORDINATOR_WRITE_RETRY_PATH,
-            run_uri,
-            kind=AuthorityProtocolOperationKind.RELIABILITY_FACTS,
-            body={"decision": decision.to_dict()},
+    ) -> BackendRevision:
+        return _required_revision(
+            self._call(
+                COORDINATOR_WRITE_RETRY_PATH,
+                run_uri,
+                kind=AuthorityProtocolOperationKind.RELIABILITY_FACTS,
+                body={"decision": decision.to_dict()},
+            )
         )
 
     def list_retry_decisions(
@@ -582,12 +590,14 @@ class AuthenticatedCoordinatorAuthority:
 
     def write_timeout_outcome(
         self, run_uri: str, outcome: TimeoutOutcomeRecord
-    ) -> None:
-        self._call(
-            COORDINATOR_WRITE_TIMEOUT_PATH,
-            run_uri,
-            kind=AuthorityProtocolOperationKind.RELIABILITY_FACTS,
-            body={"outcome": outcome.to_dict()},
+    ) -> BackendRevision:
+        return _required_revision(
+            self._call(
+                COORDINATOR_WRITE_TIMEOUT_PATH,
+                run_uri,
+                kind=AuthorityProtocolOperationKind.RELIABILITY_FACTS,
+                body={"outcome": outcome.to_dict()},
+            )
         )
 
     def list_timeout_outcomes(
@@ -776,6 +786,12 @@ def _body_required(result: AuthorityProtocolResult, field: str) -> PlainData:
     if field not in result.body:
         raise AuthorityStoreError(f"authority response has no {field}")
     return result.body[field]
+
+
+def _required_revision(result: AuthorityProtocolResult) -> BackendRevision:
+    if result.revision is None:
+        raise AuthorityStoreError("authority response has no backend revision")
+    return result.revision
 
 
 def _body_sequence(

@@ -168,8 +168,10 @@ def test_scoped_adapter_preserves_receipts_fences_outputs_and_reliability(
         policy=ReliabilityPolicy(),
         recorded_at="2026-08-30T00:00:00Z",
     )
-    authority.write_reliability_policy_fact(RUN_URI, fact)
-    authority.write_reliability_policy_fact(RUN_URI, fact)
+    fact_revision = authority.write_reliability_policy_fact(RUN_URI, fact)
+    replay_revision = authority.write_reliability_policy_fact(RUN_URI, fact)
+    assert replay_revision == fact_revision
+    assert authority.open_run(RUN_URI).revision == fact_revision
     assert authority.list_reliability_policy_facts(RUN_URI) == (fact,)
 
 
