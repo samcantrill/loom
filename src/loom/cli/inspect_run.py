@@ -60,7 +60,9 @@ def handle(namespace: argparse.Namespace) -> int:
             exit_code=ExitCode.CONFIG,
         )
     result = build_inspect_run_result(
-        str(namespace.run_uri), endpoint=namespace.endpoint, queue_config=namespace.queue_config
+        str(namespace.run_uri),
+        endpoint=namespace.endpoint,
+        queue_config=namespace.queue_config,
     )
     if output_format_from_namespace(namespace) is OutputFormat.JSON:
         sys.stdout.write(
@@ -78,7 +80,10 @@ def handle(namespace: argparse.Namespace) -> int:
 
 
 def build_inspect_run_result(
-    run_uri: str, *, endpoint: str | None = None, queue_config: str | Path | None = None
+    run_uri: str,
+    *,
+    endpoint: str | Path | None = None,
+    queue_config: str | Path | None = None,
 ) -> "RunInspectionResponse":
     try:
         from loom.diagnostics.run_inspection import (
@@ -89,8 +94,10 @@ def build_inspect_run_result(
         if endpoint is None:
             if queue_config is None:
                 return inspect_run(run_uri)
-            from loom.cli.sweep import _started_queue_service
-            return inspect_run(run_uri, queue_service=_started_queue_service(queue_config))
+            return inspect_run(
+                run_uri,
+                queue_service=_read_only_queue_repository(queue_config),
+            )
         from loom.queue import LocalDaemonSocketClient
 
         return decode_run_inspection_response(
@@ -105,12 +112,35 @@ def build_inspect_run_result(
         ) from exc
 
 
+def _read_only_queue_repository(config_path: str | Path) -> object:
+    """Load one queue config and open its existing database without writes."""
+
+    from loom.queue import SQLiteQueueRepository, load_queue_spec, normalize_queue_spec
+    from loom.serialization import json_loads
+
+    path = Path(config_path)
+    spec = (
+        normalize_queue_spec(
+            json_loads(path.read_text(encoding="utf-8"), path=str(path))
+        )
+        if path.suffix.lower() == ".json"
+        else load_queue_spec(path)
+    )
+    if spec.db_path is None:
+        raise ValueError("queue config requires an existing database path")
+    return SQLiteQueueRepository.open_read_only(spec.db_path)
+
+
 def format_inspect_run_text(result: "RunInspectionResponse") -> str:
     from loom.diagnostics.run_inspection import RunInspectionFailure
 
     if isinstance(result, RunInspectionFailure):
         return f"inspection: {result.code.value}"
     lines = [f"run: {result.run_uri}", f"summary: {result.summary}"]
+    if result.admission_id is not None:
+        lines.append(f"admission: {result.admission_id}")
+    if result.queue_item_id is not None:
+        lines.append(f"queue item: {result.queue_item_id}")
     lines.extend(
         f"{axis.name.value}: {axis.state} ({axis.availability})" for axis in result.axes
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from .models import (
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
         RunInspectionTruncation,
         RunLocationReachability,
     )
+    from loom.serialization import PlainData
 
 
 def run_preflight(request: PreflightRequest) -> PreflightResult:
@@ -61,7 +63,9 @@ def decode_run_inspection_response(data: object) -> "RunInspectionResponse":
     return _decode(data)
 
 
-def projection_callable(**kwargs: object) -> "object":
+def projection_callable(
+    **kwargs: object,
+) -> "Callable[[str], Mapping[str, PlainData]]":
     """Return the injected plain-data inspection callable."""
     from .run_inspection import projection_callable as _projection_callable
 
@@ -81,12 +85,20 @@ def __getattr__(name: str) -> object:
 
         return getattr(backend, name)
     if name in {
-        "RunInspectionAxis", "RunInspectionAxisName", "RunInspectionFailure",
-        "RunInspectionFailureCode", "RunInspectionLocation", "RunInspectionProjection",
-        "RunInspectionResponse", "RunInspectionResult", "RunInspectionStage",
-        "RunInspectionTruncation", "RunLocationReachability",
+        "RunInspectionAxis",
+        "RunInspectionAxisName",
+        "RunInspectionFailure",
+        "RunInspectionFailureCode",
+        "RunInspectionLocation",
+        "RunInspectionProjection",
+        "RunInspectionResponse",
+        "RunInspectionResult",
+        "RunInspectionStage",
+        "RunInspectionTruncation",
+        "RunLocationReachability",
     }:
         from . import run_inspection
+
         return getattr(run_inspection, name)
     raise AttributeError(f"module 'loom.diagnostics' has no attribute {name!r}")
 
@@ -109,9 +121,18 @@ __all__ = [
     "inspect_backend_capabilities",
     "parse_projection_revision",
     "run_preflight",
-    "RunInspectionAxis", "RunInspectionAxisName", "RunInspectionFailure",
-    "RunInspectionFailureCode", "RunInspectionLocation", "RunInspectionProjection",
-    "RunInspectionResponse", "RunInspectionResult", "RunInspectionStage",
-    "RunInspectionTruncation", "RunLocationReachability", "inspect_run",
-    "decode_run_inspection_response", "projection_callable",
+    "RunInspectionAxis",
+    "RunInspectionAxisName",
+    "RunInspectionFailure",
+    "RunInspectionFailureCode",
+    "RunInspectionLocation",
+    "RunInspectionProjection",
+    "RunInspectionResponse",
+    "RunInspectionResult",
+    "RunInspectionStage",
+    "RunInspectionTruncation",
+    "RunLocationReachability",
+    "inspect_run",
+    "decode_run_inspection_response",
+    "projection_callable",
 ]

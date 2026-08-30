@@ -370,9 +370,7 @@ class LocalDaemonSocketClient:
 
     def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
         return TimeRecoveryReceipt.from_dict(
-            self._call(
-                {"operation": "recover_time", "request": request.to_dict()}
-            )
+            self._call({"operation": "recover_time", "request": request.to_dict()})
         )
 
     def replace_agent_session(

@@ -655,9 +655,7 @@ class LocalDaemonConfig:
                 for character in self.deployment_configuration_fingerprint
             )
         ):
-            raise QueueServiceError(
-                "deployment configuration fingerprint is invalid"
-            )
+            raise QueueServiceError("deployment configuration fingerprint is invalid")
         profile = self.resident_worker_launch_profile
         if not isinstance(profile, ResidentWorkerLaunchProfile):
             raise QueueServiceError("resident worker launch profile is required")
@@ -1252,9 +1250,7 @@ class LocalDaemon:
         try:
             staging.mkdir(mode=0o700)
             cls.initialize(staged)
-            coordinator_id = _open_root(
-                staged.coordinator_root, role="coordinator"
-            )
+            coordinator_id = _open_root(staged.coordinator_root, role="coordinator")
             agent_id = _open_root(staged.agent_root, role="local-agent")
             binding = {
                 "schema_version": 1,
@@ -1716,8 +1712,7 @@ class LocalDaemon:
         admission = self._admission(admission_id)
         with self._connection() as conn:
             revision_row = conn.execute(
-                "SELECT revision FROM owner_status_revisions "
-                "WHERE owner = 'admission'"
+                "SELECT revision FROM owner_status_revisions WHERE owner = 'admission'"
             ).fetchone()
         if revision_row is None:
             raise QueueStorageError("coordinator admission status is unavailable")
@@ -2771,7 +2766,9 @@ class LocalDaemon:
                 current_epoch = self._epoch or ""
                 revision = int(state.get("accepted_time_revision", "0"))
                 if state.get("accepted_time_health") != "degraded":
-                    raise QueueConflictError("coordinator accepted-time is not degraded")
+                    raise QueueConflictError(
+                        "coordinator accepted-time is not degraded"
+                    )
                 if request.expected_time_revision != revision:
                     raise QueueConflictError("time recovery revision is stale")
                 if request.expected_coordinator_epoch != current_epoch:
@@ -2808,8 +2805,7 @@ class LocalDaemon:
                     ),
                 )
                 conn.execute(
-                    "DELETE FROM daemon_metadata "
-                    "WHERE key = 'accepted_time_diagnostic'"
+                    "DELETE FROM daemon_metadata WHERE key = 'accepted_time_diagnostic'"
                 )
                 conn.execute("UPDATE agent_offers SET current = 0 WHERE current = 1")
                 conn.execute(

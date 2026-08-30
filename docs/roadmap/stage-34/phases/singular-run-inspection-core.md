@@ -190,26 +190,36 @@ Final commands:
 - Manager preparation: complete; dependency PR #261, exact base, branch,
   worktree, source seams, and fast-path route verified.
 - Expanded planning: not needed; the merged Stage 32 seam matches DQ-3.
-- Implementation: pending executor.
-- Refiner: correction 1/3 complete. The original skeleton did not compose the
-  projection in the production Unix daemon, did not apply direct queue
-  configuration, and did not project the retained service-less exact queue
-  reference. The bounded correction reuses the retained operation, exact queue
-  primary-key read, and dispatch-handle/manifest agreement; it adds no owner
-  persistence or protocol.
+- Implementation: executor pass complete in `f466a81`; it added the public v1
+  model/projection, indexed managed lookup, injected Unix operation, CLI/API,
+  lazy exports, documentation, and initial unit/package coverage.
+- Refiner: correction 1/3 complete in `202f3d3`. The original skeleton did not
+  compose the projection in the production Unix daemon, did not apply direct
+  queue configuration, and did not project the retained service-less exact
+  queue reference. The bounded correction reuses the retained operation, exact
+  queue primary-key read, and dispatch-handle/manifest agreement; it adds no
+  owner persistence or protocol.
+- Manager correction 2/3: complete. The plan-required contract, integration,
+  and subprocess journeys were absent, direct queue configuration started a
+  mutable service/global recovery read, managed detail was not projected, known
+  partial runs could collapse to whole failures, returned identities were
+  omitted, and the response budget did not include the socket envelope. The
+  correction adds one read-only existing-database open, fixed-axis/identity and
+  truncation invariants, exact managed and both Stage 32 Slurm journeys,
+  no-content/secret checks, and direct/Unix parity without new persistence.
 - Pre-submit gate: pending.
 - Independent review: reconsider only for a material residual public-contract or
   cross-owner correctness risk after manager review.
-- Blocker corrections: 1/3.
+- Blocker corrections: 2/3.
 - PR and merge: pending.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added `loom.diagnostics.run_inspection` strict v1 models/projection and lazy exports; owner-only injected Unix operation/client; indexed daemon run-URI lookup; direct/Unix CLI selection, docs, and public import expectation. Correction 1 composes the injected projection in `queue daemon serve`, applies direct-only `--queue-config`, follows one run-local retained operation to one queue primary-key read, verifies the retained handle/manifest queue identity, exposes applicable queue/Slurm/log-location facts, and trims encoded results to the fixed 1-MiB response limit. |
-| Tests added or updated | Added run-inspection codec/bounds, exact service-less queue-reference/mismatch, and CLI direct queue-config tests; updated diagnostics public-import assertion. |
-| Validated revision/tree state and evidence | Correction 1: `uv run pytest tests/unit/loom/diagnostics/test_run_inspection.py tests/unit/loom/cli/test_inspect_run.py tests/unit/loom/queue/test_local_daemon.py` passed (47 tests); Ruff and Pyright passed for changed source/tests; `git diff --check` passed. Earlier evidence remains superseded where these sources/tests changed. |
-| Validation-relevant changes after evidence | Correction 1 changed projection, daemon composition, CLI composition, and focused tests. A fresh broad gate remains required before PR preparation. |
+| Implementation and changed paths | Added `loom.diagnostics.run_inspection` strict v1 models/projection and lazy exports; owner-only injected Unix operation/client; indexed daemon run-URI lookup; direct/Unix CLI selection, docs, and public import expectation. Corrections compose the production callback, return queue/admission IDs, project targeted managed and service-less owners, expose safe artifact/log locations, enforce fixed axes/cardinality/socket size, and open an existing queue database read-only for direct inspection. |
+| Tests added or updated | Added strict codec/failure/bounds/precedence/no-content units; direct queue-config and no-fallback CLI units; direct/Unix and read-only queue contracts; real managed socket and both Stage 32 Slurm-mode integrations; an after-driver-exit subprocess JSON journey; and diagnostics public-import coverage. |
+| Validated revision/tree state and evidence | Correction 2 focused evidence: required unit target passed (52 tests), contract target passed (3 tests), required integration target passed (45 tests), and the subprocess E2E passed (1 test). Ruff, Pyright, and `git diff --check` passed for the changed source/tests. |
+| Validation-relevant changes after evidence | No source or test change after the focused correction evidence. A fresh broad gate remains required before PR preparation. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | No implementation blocker. A fresh broad `make validate-pr`/`make test-summary` receipt is still required after the final public-import test correction. |
+| Residual risk and cleanup | No implementation blocker. A fresh broad `make validate-pr`/`make test-summary` receipt and manager diff review remain required. |
