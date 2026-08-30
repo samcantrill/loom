@@ -5,8 +5,8 @@ Roadmap stage: 32
 Planning document: docs/roadmap/stage-32/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 1 `pr_open`
-Blockers: none for Phase 1; Phase 2 waits for the Phase 1 remote merge
+Current phase: Phase 2 `pending`
+Blockers: none; Phase 1 is remotely merged
 Worktree root: `/home/can134/work/active/loom-worktrees`
 
 ## Summary
@@ -40,7 +40,8 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
 - Shared public and durable contracts: existing `queue_item_id` is exact retry
   identity; `scientific_fingerprint` is canonical or null; force bypasses
   semantic deduplication only; run-local submitted-operation/manifest records
-  remain the scheduler-job inventory owner.
+  remain the scheduler-job inventory owner and retain the canonical queue item
+  ID for Stage 34's exact run-to-item lookup.
 - Shared reproducibility, compatibility, and import constraints: queue records
   and the SQLite schema hard-cut together with no migration; generated examples
   are deterministic; default tests use fake commands/filesystems and no network.
@@ -55,7 +56,7 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | durable-many-run-admission | pr_open | docs/roadmap/stage-32/phases/durable-many-run-admission.md | agent/stage-32-p1-durable-many-run-admission | [#257](https://github.com/samcantrill/loom/pull/257) open | queue request/receipt, service, SQLite schema/index, bounded reads and identity tests | Admit and replay large ordinary-run request streams without duplicate queue work. |
+| 1 | durable-many-run-admission | merged | docs/roadmap/stage-32/phases/durable-many-run-admission.md | agent/stage-32-p1-durable-many-run-admission | [#257](https://github.com/samcantrill/loom/pull/257) merged | queue request/receipt, service, SQLite schema/index, bounded reads and identity tests | Admit and replay large ordinary-run request streams without duplicate queue work. |
 | 2 | service-less-slurm-driving | pending | docs/roadmap/stage-32/phases/service-less-slurm-driving.md | agent/stage-32-p2-service-less-slurm-driving | pending | delegated controller/CLI, prepared-run Slurm adapter, marker recovery, lifecycle join, HPC docs/tests | Submit and reconcile many single-job or `afterok` runs without a long-running coordinator. |
 
 ## Quality Gate
@@ -68,8 +69,8 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
   recorded in `planning.md`. Reconsider only if implementation needs a new
   scheduler or authority format beyond the fixed contracts.
 - Correction: not needed.
-- Ready for implementation: yes; Stage 29 Phase 12 is remotely merged and Phase
-  1 is based on current `origin/develop` at `8da9536`.
+- Ready for implementation: yes; Phase 1 is remotely merged and Phase 2 may
+  begin from current `origin/develop`.
 - Accepted risks: project fingerprint correctness is trusted, old queue
   databases are rejected, shared storage is required, and incomplete work with
   expired accounting remains unknown.
@@ -81,5 +82,5 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | pending | Project semantic normalization can be incorrect. | pending |
+| 1 | [#257](https://github.com/samcantrill/loom/pull/257) squash-merged as `b93d4ac` | Full local gate passed: 2,770 tests overall plus package build, Ruff, and Pyright. | Project semantic normalization can be incorrect. | Dedicated worktree and local/remote phase branches removed. |
 | 2 | pending | pending | Fake Slurm cannot certify site accounting/visibility policy. | pending |

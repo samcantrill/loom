@@ -55,7 +55,8 @@ In scope:
   call.
 - Reuse the existing whole-run Slurm submitters and manifests. The queue dispatch
   handle references the retained submitted operation/manifest and does not copy
-  the logical job list into a second durable inventory.
+  the logical job list into a second durable inventory. The run-local record
+  retains the canonical queue item ID and must agree with that handle.
 - Persist exact per-scheduler-call operation identity/digest and include its
   bounded marker in scheduler-visible comment metadata. Reuse discovery over
   live and retained accounting rows when a call remains `SUBMITTING`/unknown or
@@ -131,9 +132,10 @@ Assumptions:
   scheduler commands/credentials through the new contract; protected
   preparation supplies scripts/options; scheduler output is bounded and parsed;
   authority state cannot be fabricated from Slurm.
-- Cross-phase contracts: consumes Phase 1 submission identity/digest and returns
-  canonical queue item IDs. A later Stage 34 query may join these typed facts but
-  cannot reinterpret them.
+- Cross-phase contracts: consumes Phase 1 submission identity/digest, returns
+  canonical queue item IDs, and retains that ID in the run-local operation or
+  manifest. Stage 34 may follow it for a primary-key read but cannot reinterpret
+  either owner.
 - Reproducibility and compatibility: exact planned submission/operation digests,
   stable markers, retained partial manifests, no blind call replay, and no
   change to direct local or Stage 29 managed execution.

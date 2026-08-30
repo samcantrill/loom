@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 32, Phase 1
 - Manifest: docs/roadmap/stage-32/implementation-plan.md
 - Branch: agent/stage-32-p1-durable-many-run-admission
@@ -221,9 +221,9 @@ Final commands:
   helpers to v2, including regenerated admission digests after fixture mutation,
   without adding a migration or dual read; correction 3/3 rejects null persisted
   admission digests instead of silently repairing corrupt v2 records.
-- PR and merge: [#257](https://github.com/samcantrill/loom/pull/257) is open;
-  base, head, title, non-draft state, mergeability, scope, body, local evidence,
-  and manager review are verified with no blocker.
+- PR and merge: [#257](https://github.com/samcantrill/loom/pull/257) was verified
+  against `develop` and squash-merged as `b93d4ac` on 2026-08-30. The dedicated
+  worktree and local/remote phase branches were removed after the remote merge.
 
 ## Completion Record
 
@@ -233,5 +233,5 @@ Final commands:
 | Tests added or updated | Queue model/receipt and null-digest validation; SQLite exact replay, concurrent scientific dedupe, null identity, canonical run-URI retention, force conflict, pages; request digest/force validation; streaming interruption/restart across 2,000 requests; public example E2E. |
 | Validated revision/tree state and evidence | `make validate-pr` passed at `ec31668`: ruff, pyright, 2,615 default tests, 155 config-extra tests with 3 skips, and sdist/wheel build. `make test-summary` passed: package 118, unit 1,855, contract 297, integration 286, E2E 59, config-extra 155; overall 2,770 passed and 3 skipped. The rebase to `8da9536` added only upstream Stage 35 roadmap documents. |
 | Validation-relevant changes after evidence | None. The post-validation rebase added only upstream roadmap documents; this evidence/phase metadata update changes no source, test, dependency, build, or validation configuration. |
-| PR, review, and merge | [#257](https://github.com/samcantrill/loom/pull/257) targets `develop`; manager review passed with no blocker; merge pending final recheck. |
-| Residual risk and cleanup | Manager review passed. Trusted project fingerprints can still over/under-deduplicate and old queue databases are intentionally rejected; worktree/branch cleanup waits for merge. |
+| PR, review, and merge | [#257](https://github.com/samcantrill/loom/pull/257) targets `develop`; manager review passed with no blocker; squash-merged as `b93d4ac`. |
+| Residual risk and cleanup | Trusted project fingerprints can still over/under-deduplicate and old queue databases are intentionally rejected. Dedicated worktree and local/remote phase branches were removed. |

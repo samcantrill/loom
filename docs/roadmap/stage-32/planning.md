@@ -4,13 +4,11 @@ Status: approved
 Roadmap stage: 32
 Evidence tree: `/home/can134/work/active/loom` at `c55892f5bd04691938da1a5a8ba76a4f4a0fabc9`; relevant dirty paths: the prior unapproved `docs/roadmap/stage-32/` draft, replaced by this packet
 Planning route: expanded; admission identity changes durable whole-run queue state, and crash-safe SLURM submission crosses the filesystem and external-scheduler boundary
-Current gate: passed; implementation awaits the Stage 29 Phase 12 dependency
+Current gate: passed; Phase 1 is merged and Phase 2 may begin
 Blockers: none
 
-This packet replaces the unapproved draft. The maintainer approved behavior and
-nullable fingerprints on 2026-08-28 and this packet on 2026-08-29. It
-strengthens whole-run queue and SLURM paths without
-sweep, batch-job, remote-store, or pipeline abstractions.
+Approved: behavior/fingerprints 2026-08-28; packet 2026-08-29; Stage 34
+run-to-item reference 2026-08-30. No new owner is added.
 
 ## Current State
 
@@ -21,7 +19,7 @@ sweep, batch-job, remote-store, or pipeline abstractions.
 | Design | Exact replay uses existing `queue_item_id` as the stable submission identity; optional scientific deduplication uses a project-supplied canonical fingerprint; force requires a new queue item ID. | None. | Hard-cut the whole-run queue schema. |
 | Validation | Fake scheduler/process tests cover 2,000-run replay and causal crash boundaries; one shared-filesystem HPC journey covers both Slurm modes. | None. | Keep real Slurm opt-in. |
 | Detailed plan | Two vertical phases separate durable admission from external-scheduler driving. | None. | Use the linked phase plans. |
-| Approval | Behavior direction, fingerprint choice, and the completed planning packet are accepted. | None. | Begin Phase 1 after Stage 29 Phase 12 merges. |
+| Approval | Behavior direction, fingerprint choice, run-to-item reference, and the completed packet are accepted. | None. | Begin Phase 2 after the Phase 1 merge. |
 
 ## Evidence And Scope
 
@@ -80,7 +78,7 @@ sweep, batch-job, remote-store, or pipeline abstractions.
 | FR-4 | Support an explicit forced repeat only with a new stable queue item ID. Force bypasses scientific deduplication on first admission but exact replay remains idempotent. | Force never mutates, reopens, or duplicates an existing ID. | FR-2, FR-3. | Lost-response force replay and changed-force conflict. | locked |
 | FR-5 | Commit each new admission before acknowledging it. Replaying 2,000 deterministic requests after a crash at any prefix returns existing receipts for the prefix and inserts only missing requests. | No promise for requests the service never received or whose iterable was never consumed. | SQLite transaction owner. | Causal 1,000/2,000 interruption and restart test. | locked |
 | FR-6 | Run the ordinary delegated controller as a foreground, restartable driver with bounded active reconciliation and bounded submission work per cycle. A quiescent exit means no immediate local action, not that Slurm work is terminal. | No daemonization framework or scheduler-capacity ownership. | Existing controller/repository bounds. | Many pending/active rows and restart tests. | locked |
-| FR-7 | For a project-prepared run, select existing single-job or static `afterok` Slurm mode and persist the existing run-local submission identity/manifest as the scheduler-job inventory owner. | No new job-group abstraction and no dynamic stage decisions. | Existing Slurm planners/submitters. | Both modes through the queue driver. | locked |
+| FR-7 | For a project-prepared run, select existing single-job or static `afterok` Slurm mode and persist the run-local submission identity/manifest as scheduler-job inventory. Retain its canonical `queue_item_id` for exact later lookup. | No new job-group abstraction or dynamic stage decisions. | Existing Slurm planners/submitters. | Both modes and run-to-item agreement. | locked |
 | FR-8 | Before every scheduler call, persist exact operation identity and launch digest. On ambiguous response or handle-commit loss, discover the exact scheduler-visible marker; one match repairs, none stays unknown, and multiple matches conflict. | Never blindly resubmit an uncertain call. | Stage 29 operation-marker/discovery seam. | Before/after-`sbatch` crash cuts and exact discovery matrix. | locked |
 | FR-9 | Reconcile lifecycle in owner order: authoritative run/stage terminal state, retained submission manifest/handle, `sacct`, `squeue`, then persisted last-known evidence. Scheduler `COMPLETED` alone is not scientific success. | Missing both terminal run evidence and retained scheduler evidence remains `UNKNOWN`. | Authority-backed run state and Slurm status. | Completed/failed/missing-result/accounting-expired cases. | locked |
 | FR-10 | Keep run state, logs, results, and artifacts in project-configured filesystem stores and require compute-visible paths for this route. Queries return local references; Stage 32 does not stream or copy bytes. | No default remote store or log aggregation. | Existing local/shared-filesystem Slurm contract. | Preflight rejection plus fake shared-root journey. | locked |
@@ -124,8 +122,9 @@ sweep, batch-job, remote-store, or pipeline abstractions.
 - `SQLiteQueueRepository` owns admission digest, scientific-deduplication index,
   transaction, and enqueue order. `QueueService` exposes single and
   streaming-many operations; clients do not inspect SQLite.
-- Existing run-local Slurm manifests own logical jobs, scripts, handles, partial
-  submission, logs, and snapshots. Queue stores only a typed reference/summary.
+- Existing run-local Slurm manifests own jobs, scripts, handles, partial state,
+  logs, snapshots, and the canonical queue-item reference. Queue stores only a
+  typed manifest reference/summary.
 - The foreground driver reconciles bounded windows before selection, continues
   after durable handoff, returns safe counts/diagnostics, and need not remain
   alive.
@@ -156,7 +155,7 @@ sweep, batch-job, remote-store, or pipeline abstractions.
 | DQ-1 | FR-2..FR-5 | Queue repository is the sole admission/deduplication owner. | One indexed transaction can atomically choose new, exact replay, or semantic duplicate. | Queue schema hard-cuts. | locked |
 | DQ-2 | FR-3 | Scientific fingerprints are canonical digests produced by trusted project code, and null is meaningful. | Loom cannot infer scientific equivalence from paths or complete operational config. | Incorrect project normalization can over- or under-deduplicate. | locked |
 | DQ-3 | FR-4 | Force bypasses only semantic deduplication; it never bypasses submission-ID replay/conflict. | Prevents response loss from turning one forced request into repeated executions. | A deliberate additional repeat needs another stable ID. | locked |
-| DQ-4 | FR-7, FR-8 | Run-local Slurm manifests own scheduler jobs; queue rows reference them. | Avoids duplicate job inventories and reuses partial-submission/status behavior. | Raw arbitrary `sbatch` launch contracts do not gain equivalent group semantics. | locked |
+| DQ-4 | FR-7, FR-8 | Run-local Slurm manifests own scheduler jobs and retain the canonical queue item ID; queue rows reference the same manifest. | Avoids duplicate inventories and lets Stage 34 resolve `run_uri` to an exact primary-key read without scanning. | The cross-owner IDs must agree. | locked; reference approved 2026-08-30 |
 | DQ-5 | FR-8 | Persist before call and discover by exact bounded marker. | This is the existing conservative Stage 29 solution to the external-call atomicity gap. | No match remains unknown rather than favoring liveness. | locked |
 | DQ-6 | FR-9 | Run authority decides scientific terminal success; scheduler facts remain a separate axis. | Prevents `COMPLETED` wrappers with missing results from becoming false success. | Some jobs settle as unknown and require explicit operator action. | locked |
 | DQ-7 | FR-10, FR-11 | No byte relay or compute-originated external reporting. | Shared filesystem and centralized reporting meet the accepted current deployment. | Disconnected service-less runs provide no real-time remote notifications. | locked |
