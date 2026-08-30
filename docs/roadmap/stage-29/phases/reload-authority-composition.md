@@ -182,7 +182,9 @@ Final commands:
   fixes both fingerprint domains, trusted eager target construction, the narrow
   authority factory, and reload CLI semantics. Independent review remains
   required for the durable reload and authority trust boundaries.
-- Implementation: pending
+- Implementation: blocked — the configured authenticated authority API lacks
+  the prepared-attempt/coordinator-mutation operations required by the existing
+  production daemon; substituting direct SQLite would violate FR-38.
 - Refiner: not needed
 - Pre-submit gate: pending
 - Independent review: required for authority trust and durable reload/restart boundary
@@ -193,9 +195,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Blocked before source changes; the authenticated authority API exposes no `ensure_prepared_attempt`, prepared-attempt bind/grant/unbind, execution-start confirmation, managed-terminal, or fence-close operation. The current daemon directly uses these SQLite-only operations in `local_daemon_execution.py`. |
+| Tests added or updated | None; no safe in-scope implementation exists without a new authority API design. |
+| Validated revision/tree state and evidence | Evidence revision `ee31fa6`; clean source tree before this completion-record update. `rg` confirms those methods exist on `SQLitePerRunAuthorityStore` but not on the configured authenticated client/service adapters. |
+| Validation-relevant changes after evidence | Completion-record update only; targeted/full validation not run because no implementation was authorized after the stop condition. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Qualified blocker: FR-38 cannot provide persistent authenticated authority composition without defining and implementing a public authenticated authority mutation contract (including replay/error semantics) for the current coordinator operations. Manager decision required; no source fallback or cleanup action taken. |
