@@ -421,6 +421,59 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
     assert _supervisor_process_ids(cast(Path, client_config.agent_root)) == ()
 
 
+def test_outbound_service_stop_during_initial_close_cleans_its_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+        ),
+        Path(__file__).resolve().parents[3],
+        Path(sys.executable),
+    )
+    client_config = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(client_config)
+    service = OutboundAgentServiceConfig(
+        client_config,
+        OutboundAgentRegistrationConfig(
+            "config-1",
+            "inventory-1",
+            "availability-1",
+            ("default",),
+            ("python",),
+        ),
+        0.01,
+        tmp_path / "agent.yaml",
+    )
+    stop = Event()
+    original_close = LocalDaemonAgentHttpClient.close
+    closed = 0
+
+    def fail_handshake(_client: LocalDaemonAgentHttpClient) -> Mapping[str, object]:
+        raise QueueServiceError("expected reconnect")
+
+    def stop_during_close(client: LocalDaemonAgentHttpClient) -> None:
+        nonlocal closed
+        closed += 1
+        stop.set()
+        original_close(client)
+
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "handshake", fail_handshake)
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "close", stop_during_close)
+
+    run_outbound_agent_service(service, stop=stop)
+
+    assert closed == 1
+    assert _supervisor_process_ids(cast(Path, client_config.agent_root)) == ()
+
+
 def _remote_agent_root(tmp_path: Path, name: str = "remote-owner") -> Path:
     root = tmp_path / name / "agent"
     LocalDaemon.initialize_agent_root(root)

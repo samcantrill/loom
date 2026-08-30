@@ -206,19 +206,13 @@ def run_outbound_agent_service(
 ) -> None:
     """Run one foreground agent role with bounded reconnect and poll loops."""
 
-    probe = _open_outbound_agent(config.client)
-    try:
-        if stop.is_set():
-            try:
-                probe.shutdown_clean()
-            except (QueueConflictError, QueueServiceError):
-                pass
-    finally:
-        probe.close()
-    while not stop.is_set():
-        client: LocalDaemonAgentHttpClient | None = None
+    client: LocalDaemonAgentHttpClient | None = _open_outbound_agent(config.client)
+    while True:
         try:
-            client = _open_outbound_agent(config.client)
+            if stop.is_set():
+                return
+            if client is None:
+                client = _open_outbound_agent(config.client)
             client.resume_retained_work()
             handshake = client.handshake()
             coordinator_epoch = cast(str, handshake["coordinator_epoch"])
@@ -308,13 +302,15 @@ def run_outbound_agent_service(
             stop.wait(config.reconnect_seconds)
         finally:
             if client is not None:
+                closing = client
+                client = None
                 try:
-                    client.shutdown_clean()
+                    closing.shutdown_clean()
                 except (QueueConflictError, QueueServiceError):
                     # Retained or uncertain work deliberately keeps its process
                     # owner alive so the next service incarnation can join it.
                     pass
-                client.close()
+                closing.close()
 
 
 def _operation_id(kind: str, *parts: str) -> str:
