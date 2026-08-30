@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from .errors import SlurmPlanningError
-from .manifest import SlurmDependencyType, SlurmPlannedJob
+from .manifest import SlurmDependencyType, SlurmMode, SlurmPlannedJob
 from .options import SlurmCommandArgv, SlurmOptions
 from .resources import SlurmSbatchDirective
 
@@ -64,8 +64,58 @@ def render_slurm_script(
     if options.prelude:
         lines.append("")
         lines.extend(options.prelude)
+    gpu_lines = _gpu_allocation_lines(job)
+    if gpu_lines:
+        lines.append("")
+        lines.extend(gpu_lines)
     lines.extend(("", render_command_argv(command), ""))
     return "\n".join(lines)
+
+
+def _gpu_allocation_lines(job: SlurmPlannedJob) -> tuple[str, ...]:
+    if job.mode is not SlurmMode.AFTEROK:
+        return ()
+    raw = job.resources.get("gpu")
+    if raw is None:
+        return ()
+    if not isinstance(raw, Mapping):
+        raise SlurmPlanningError("planned GPU resources must be a mapping")
+    amount = raw.get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+        raise SlurmPlanningError("planned GPU resource amount must be non-negative")
+    if amount == 0:
+        return ()
+    return (
+        '_loom_cuda_visible_devices="${CUDA_VISIBLE_DEVICES-}"',
+        'if [[ -z "${_loom_cuda_visible_devices}" || "${_loom_cuda_visible_devices}" == "-1" ]]; then',
+        f"  echo 'loom GPU admission failed: requested {amount}, CUDA_VISIBLE_DEVICES is missing' >&2",
+        "  exit 78",
+        "fi",
+        'if [[ "${_loom_cuda_visible_devices}" == ,* || "${_loom_cuda_visible_devices}" == *, || "${_loom_cuda_visible_devices}" == *,,* ]]; then',
+        "  echo 'loom GPU admission failed: invalid visibility token' >&2",
+        "  exit 78",
+        "fi",
+        "IFS=',' read -r -a _loom_cuda_devices <<< \"${_loom_cuda_visible_devices}\"",
+        f'if [[ "${{#_loom_cuda_devices[@]}}" -ne {amount} ]]; then',
+        f"  echo 'loom GPU admission failed: requested {amount}, visibility count differs' >&2",
+        "  exit 78",
+        "fi",
+        'for _loom_cuda_device in "${_loom_cuda_devices[@]}"; do',
+        '  case "${_loom_cuda_device}" in',
+        "    ''|*[!A-Za-z0-9._:/-]*) echo 'loom GPU admission failed: invalid visibility token' >&2; exit 78 ;;",
+        "  esac",
+        "done",
+        "for (( _loom_cuda_i=0; _loom_cuda_i<${#_loom_cuda_devices[@]}; _loom_cuda_i++ )); do",
+        "  for (( _loom_cuda_j=_loom_cuda_i+1; _loom_cuda_j<${#_loom_cuda_devices[@]}; _loom_cuda_j++ )); do",
+        '    if [[ "${_loom_cuda_devices[_loom_cuda_i]}" == "${_loom_cuda_devices[_loom_cuda_j]}" ]]; then',
+        "      echo 'loom GPU admission failed: duplicate visibility token' >&2",
+        "      exit 78",
+        "    fi",
+        "  done",
+        "done",
+        'export APPTAINERENV_CUDA_VISIBLE_DEVICES="${_loom_cuda_visible_devices}"',
+        'export SINGULARITYENV_CUDA_VISIBLE_DEVICES="${_loom_cuda_visible_devices}"',
+    )
 
 
 __all__ = [

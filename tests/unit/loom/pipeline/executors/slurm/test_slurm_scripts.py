@@ -96,3 +96,26 @@ def test_afterok_script_renders_logical_dependency_and_stage_job_command() -> No
     assert "#SBATCH --dependency=afterok:stage:extract:stage:train" in script
     assert "loom stage-job run --run-uri file:///runs/run-1 --stage report --executor local" in script
     assert "loom stage run" not in script
+
+
+def test_afterok_gpu_script_validates_allocation_visibility_and_projects_container_env() -> None:
+    command = build_stage_job_command_argv("file:///runs/run-1", "train")
+    job = SlurmPlannedJob(
+        logical_key="stage:train",
+        mode=SlurmMode.AFTEROK,
+        command=command,
+        resources={"gpu": ResourceEntry(kind="gpu", amount=1).to_dict()},
+        sbatch_directives=(
+            SlurmSbatchDirective(name="gres", value="gpu:1", source="generated"),
+        ),
+    )
+
+    script = render_slurm_script(job, options=SlurmOptions())
+
+    assert "#SBATCH --gres=gpu:1" in script
+    assert '_loom_cuda_visible_devices="${CUDA_VISIBLE_DEVICES-}"' in script
+    assert '"${#_loom_cuda_devices[@]}" -ne 1' in script
+    assert "duplicate visibility token" in script
+    assert "APPTAINERENV_CUDA_VISIBLE_DEVICES" in script
+    assert "SINGULARITYENV_CUDA_VISIBLE_DEVICES" in script
+    assert "printf 'loom.gpu_visibility" not in script

@@ -17,6 +17,7 @@ from loom.pipeline.executors.slurm import (
     wrap_slurm_command_with_apptainer,
 )
 from loom.pipeline.executors.slurm.errors import SlurmPlanningError
+from loom.pipeline.resources import ResourceEntry, ResourceRequest
 
 
 pytestmark = pytest.mark.unit
@@ -101,6 +102,29 @@ def test_resolve_slurm_container_target_maps_selected_sif_output() -> None:
     assert result.target_name == "analysis-env"
     assert result.status == "reused"
     assert [call.requested_by for call in builder.calls] == ["unit-test"]
+
+
+def test_slurm_gpu_wrapper_derives_nv_and_rejects_authored_visibility() -> None:
+    command = SlurmCommandArgv(launcher_argv=("loom",), command_args=("--version",))
+    resources = ResourceRequest(entries={"gpu": ResourceEntry(kind="gpu", amount=1)})
+
+    wrapped = wrap_slurm_command_with_apptainer(
+        command,
+        container_options={"image": {"reference": "analysis.sif"}},
+        apptainer_options={"cleanenv": True},
+        resources=resources,
+    )
+
+    assert "--nv" in wrapped.argv
+    with pytest.raises(SlurmPlanningError, match="owned by Loom"):
+        wrap_slurm_command_with_apptainer(
+            command,
+            container_options={
+                "image": {"reference": "analysis.sif"},
+                "environment": {"variables": {"CUDA_VISIBLE_DEVICES": "0"}},
+            },
+            resources=resources,
+        )
 
 
 def test_resolve_slurm_container_target_rejects_missing_or_wrong_targets() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+import os
 from pathlib import Path
 from typing import cast
 
@@ -16,6 +17,7 @@ from loom.pipeline.execution.models import (
     redact_executor_metadata,
 )
 from loom.pipeline.executors.containers import (
+    ContainerEnvironment,
     ContainerMount,
     ContainerMountMode,
     ContainerOptions,
@@ -24,6 +26,13 @@ from loom.pipeline.executors.containers import (
     parse_container_options,
 )
 from loom.pipeline.executors.errors import ExecutorError
+from loom.pipeline.executors.gpu_visibility import (
+    CUDA_VISIBLE_DEVICES,
+    GpuVisibilityEvidence,
+    project_apptainer_gpu_options,
+    requested_gpu_count,
+    validate_cuda_visibility,
+)
 from loom.pipeline.executors.subprocess import build_stage_worker_command
 from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
@@ -160,6 +169,7 @@ class ApptainerExecutor:
                 worker_command=prepared.worker_command,
                 container=prepared.container,
                 path_parity=prepared.path_parity,
+                gpu_visibility=prepared.gpu_visibility,
                 process=None,
                 started_at=started_at,
                 finished_at=finished_at,
@@ -192,6 +202,7 @@ class ApptainerExecutor:
                 worker_command=prepared.worker_command,
                 container=prepared.container,
                 path_parity=prepared.path_parity,
+                gpu_visibility=prepared.gpu_visibility,
                 process=None,
                 started_at=started_at,
                 finished_at=finished_at,
@@ -222,6 +233,7 @@ class ApptainerExecutor:
             worker_command=prepared.worker_command,
             container=prepared.container,
             path_parity=prepared.path_parity,
+            gpu_visibility=prepared.gpu_visibility,
             process=process,
             started_at=started_at,
             finished_at=finished_at,
@@ -349,6 +361,7 @@ class _PreparedApptainerAttempt:
     path_parity: tuple[ContainerPathParitySummary, ...]
     worker_command: tuple[str, ...]
     command: ApptainerExecCommand
+    gpu_visibility: GpuVisibilityEvidence
 
 
 def _prepare_apptainer_attempt(
@@ -388,6 +401,10 @@ def _prepare_apptainer_attempt(
         adapter_options,
         executor_name=executor_name,
     )
+    resources = cast(ResourceRequest, runtime.resources)
+    apptainer_options = project_apptainer_gpu_options(apptainer_options, resources)
+    gpu_visibility = validate_cuda_visibility(requested_gpu_count(resources), os.environ)
+    container = _with_cuda_visibility(container, gpu_visibility=gpu_visibility)
     worker_command = build_stage_worker_command(
         python_executable=python_executable,
         run_uri=request.run_uri,
@@ -406,6 +423,7 @@ def _prepare_apptainer_attempt(
         path_parity=path_parity,
         worker_command=worker_command,
         command=command,
+        gpu_visibility=gpu_visibility,
     )
 
 
@@ -510,6 +528,36 @@ def _with_required_path_mounts(
         workdir=container.workdir,
         mounts=tuple(mounts),
         environment=container.environment,
+        resources=container.resources,
+    )
+
+
+def _with_cuda_visibility(
+    container: ContainerOptions,
+    *,
+    gpu_visibility: GpuVisibilityEvidence,
+) -> ContainerOptions:
+    if gpu_visibility.requested_gpu_count == 0:
+        return container
+    environment = cast(ContainerEnvironment, container.environment)
+    if (
+        CUDA_VISIBLE_DEVICES in environment.variables
+        or CUDA_VISIBLE_DEVICES in environment.required_host_variables
+    ):
+        raise _ApptainerSetupError(
+            "CUDA_VISIBLE_DEVICES is owned by Loom's GPU resource projection"
+        )
+    return ContainerOptions(
+        image=container.image,
+        workdir=container.workdir,
+        mounts=cast(tuple[ContainerMount, ...], container.mounts),
+        environment=ContainerEnvironment(
+            variables={
+                **dict(environment.variables),
+                CUDA_VISIBLE_DEVICES: ",".join(gpu_visibility.cuda_visible_devices),
+            },
+            required_host_variables=environment.required_host_variables,
+        ),
         resources=container.resources,
     )
 
@@ -805,6 +853,7 @@ def _process_metadata(
     worker_command: Sequence[str],
     container: ContainerOptions,
     path_parity: Sequence[ContainerPathParitySummary],
+    gpu_visibility: GpuVisibilityEvidence,
     process: ApptainerCommandResult | None,
     started_at: str,
     finished_at: str,
@@ -820,6 +869,10 @@ def _process_metadata(
             list[PlainData],
             [summary.to_dict() for summary in path_parity],
         ),
+        "gpu_visibility": {
+            "requested_gpu_count": gpu_visibility.requested_gpu_count,
+            "visible_gpu_count": len(gpu_visibility.cuda_visible_devices),
+        },
         "started_at": started_at,
         "finished_at": finished_at,
     }

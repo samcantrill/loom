@@ -32,6 +32,7 @@ from loom.pipeline.planning import (
     ResumeOptions,
     StagePlan,
 )
+from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.stores import (
     AuthorityBackendKind,
     AuthorityConfig,
@@ -164,6 +165,33 @@ def test_afterok_dry_run_renders_apptainer_exec_without_build_commands(
     assert "apptainer build" not in script
     assert command.metadata["container_runtime"] == "apptainer"
     assert "container_build_results" not in plan_payload
+
+
+def test_afterok_gpu_dry_run_keeps_resource_and_container_admission_coherent(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepared_store(tmp_path, {"train": ()})
+
+    result = plan_afterok_slurm_dry_run(
+        run_store=store,
+        run_uri=run_uri,
+        container_options={"image": {"reference": "analysis.sif"}},
+        stage_resources={
+            "train": ResourceRequest(
+                entries={"gpu": ResourceEntry(kind="gpu", amount=1)}
+            )
+        },
+        planning_id="planning-gpu-afterok",
+        created_at="2026-05-08T00:00:00Z",
+    )
+
+    script = result.script_artifacts["stage:train"].local_path.read_text()
+    manifest_text = result.manifest_artifact.local_path.read_text()
+    assert "#SBATCH --gres=gpu:1" in script
+    assert "apptainer exec --cleanenv --nv" in script
+    assert "APPTAINERENV_CUDA_VISIBLE_DEVICES" in script
+    assert "SINGULARITYENV_CUDA_VISIBLE_DEVICES" in script
+    assert "CUDA_VISIBLE_DEVICES=0" not in manifest_text
 
 
 def test_default_planning_ids_are_distinct_for_repeated_dry_runs(

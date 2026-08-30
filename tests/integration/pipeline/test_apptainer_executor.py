@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from loom.pipeline import PipelineSpec
 from loom.pipeline.execution import (
     PipelineRunner,
@@ -92,7 +94,18 @@ def _spec() -> PipelineSpec:
     )
 
 
-def _request(*, executor: str = "apptainer") -> RunRequest:
+def _request(*, executor: str = "apptainer", gpu: bool = False) -> RunRequest:
+    stage_options = (
+        {
+            "build": {
+                "resources": {
+                    "entries": {"gpu": {"kind": "gpu", "amount": 1}}
+                }
+            }
+        }
+        if gpu
+        else {}
+    )
     return RunRequest(
         pipeline=_spec(),
         options={
@@ -102,8 +115,9 @@ def _request(*, executor: str = "apptainer") -> RunRequest:
                     "image": {"reference": "analysis.sif"},
                     "environment": {"variables": {"TOKEN": "secret"}},
                 },
-                "apptainer": {"cleanenv": True, "nv": True},
+                "apptainer": {"cleanenv": True},
             },
+            "stage_options": stage_options,
         },
         provenance_options=ProvenanceCaptureOptions(
             capture_git=False,
@@ -184,3 +198,30 @@ def test_singularity_executor_fake_runner_uses_singularity_command(
         )
         assert executor_metadata["executor"] == "singularity"
         assert executor_metadata["selected_command"] == "singularity"
+
+
+def test_apptainer_gpu_request_reaches_clean_container_without_durable_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "allocated-device")
+    with LocalAuthorityService.start() as service:
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=service.config(),
+        )
+        apptainer_runner = InProcessApptainerRunner(store)
+
+        result = PipelineRunner(
+            run_store=store,
+            executor=ApptainerExecutor(
+                run_store=store,
+                apptainer_command_runner=apptainer_runner,
+            ),
+        ).run(_request(gpu=True))
+
+        command = apptainer_runner.calls[0]
+        assert result.status == RunStatus.SUCCEEDED
+        assert "--nv" in command.argv
+        assert "CUDA_VISIBLE_DEVICES=allocated-device" in command.argv
+        assert "allocated-device" not in repr(result.stage_results["build"].executor_metadata)
