@@ -1,14 +1,13 @@
 # Roadmap Stage 34 Implementation Plan
 
-Status: approved
+Status: implementation active
 Roadmap stage: 34
 Planning document: docs/roadmap/stage-34/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 1 `pending`
-Blockers: Stage 32 Phase 2 remote merge
-Worktree root: record once at implementation start; default to a
-`loom-worktrees` sibling of the discovered control checkout
+Current phase: Phase 1 `in_progress`
+Blockers: none; Stage 32 replacement Phase 3 is remotely merged
+Worktree root: `/home/can134/work/active/loom-worktrees`
 
 ## Summary
 
@@ -28,8 +27,8 @@ Worktree root: record once at implementation start; default to a
 - Validation and phase-shaping source: `planning.md` Minimum Design, Examples And
   Validation, and Phase Shaping.
 - Out of scope: modifying existing `status`, `logs`, `artifacts`, or `backend
-  inspect` contracts; changing lifecycle/scheduler ownership; starting work
-  before Stage 32 Phase 2 merges.
+  inspect` contracts; changing lifecycle/scheduler ownership; reopening the
+  completed Stage 32 service-less contract.
 
 ## Shared Constraints
 
@@ -57,7 +56,7 @@ Worktree root: record once at implementation start; default to a
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | singular-run-inspection-core | pending | docs/roadmap/stage-34/phases/singular-run-inspection-core.md | agent/stage-34-p1-singular-run-inspection-core | pending | diagnostics model/projection, targeted owner reads, Unix operation, direct/Unix CLI/API and tests | Deliver safe singular-run inspection locally and through the owner socket. |
+| 1 | singular-run-inspection-core | in_progress | docs/roadmap/stage-34/phases/singular-run-inspection-core.md | agent/stage-34-p1-singular-run-inspection-core | pending | diagnostics model/projection, targeted owner reads, Unix operation, direct/Unix CLI/API and tests | Deliver safe singular-run inspection locally and through the owner socket. |
 | 2 | authenticated-run-inspection | pending | docs/roadmap/stage-34/phases/authenticated-run-inspection.md | agent/stage-34-p2-authenticated-run-inspection | pending | query policy/HTTP operation and client config, remote CLI, security/parity tests and final docs | Deliver the same model through least-privilege mTLS inspection. |
 
 ## Quality Gate
@@ -70,8 +69,9 @@ Worktree root: record once at implementation start; default to a
   recorded in `planning.md`. Phase 2 remains expanded because it changes an
   authenticated trust boundary.
 - Correction: not needed.
-- Ready for implementation: planning is approved; Phase 1 preparation remains
-  blocked until Stage 32 Phase 2 is remotely merged.
+- Ready for implementation: yes; Stage 32 replacement Phase 3 merged in
+  [#261](https://github.com/samcantrill/loom/pull/261) and preserves the exact
+  run-to-item reference.
 - Accepted risks: huge runs truncate without paging; location reachability is a
   label, not proof; real site TLS and Slurm policy remain operator-validated.
 - Revisit triggers: a merged Stage 32 result lacks the approved durable queue

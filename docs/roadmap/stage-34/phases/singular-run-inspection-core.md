@@ -2,29 +2,31 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 34, Phase 1
 - Manifest: docs/roadmap/stage-34/implementation-plan.md
 - Branch: agent/stage-34-p1-singular-run-inspection-core
-- Worktree root and path: use the manifest-recorded root;
-  `<root>/stage-34-p1-singular-run-inspection-core`
-- Base revision: current `origin/develop` after Stage 32 Phase 2 is remotely merged
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+  `/home/can134/work/active/loom-worktrees/stage-34-p1-singular-run-inspection-core`
+- Base revision: `4fb44179055855e6402ded80de0890552de759d8`
 - PR target: develop
 - PR title: `Stage 34 phase 1: add singular run inspection core`
-- Dependencies: Stage 32 Phase 2 merged; Stage 29 bounded admission detail;
-  existing authority, artifact, log, diagnostics, Unix socket, and CLI seams
-- Workflow path: expanded; this phase fixes a public serialized projection and
-  a bounded cross-owner join
-- Blockers: Stage 32 Phase 2 merge
+- Dependencies: Stage 32 replacement Phase 3 merged in
+  [#261](https://github.com/samcantrill/loom/pull/261); Stage 29 bounded
+  admission detail; existing authority, artifact, log, diagnostics, Unix
+  socket, and CLI seams
+- Workflow path: fast; the approved public projection is fixed and the merged
+  Stage 32 exact-reference seam matches it without a new planning decision
+- Blockers: none
 
 ## Objective And Context
 
 - Vertical outcome: callers use the public Python API or
   `loom inspect-run RUN_URI` through direct or owner-only Unix sources and
   receive the same safe, bounded result for managed and service-less runs.
-- Earlier dependency: Stage 32 retains the canonical queue item ID in the
-  run-local submitted operation/manifest; Stage 29 supplies indexed managed
-  admission and targeted owner detail.
+- Earlier dependency: Stage 32 replacement Phase 3 retains the canonical queue
+  item ID in the run-local submitted operation/manifest; Stage 29 supplies
+  indexed managed admission and targeted owner detail.
 - Later work explicitly out of scope: mTLS query role/dispatch/client, remote
   client configuration, content delivery, discovery, paging, and subscriptions.
 
@@ -174,8 +176,8 @@ Final commands:
 ## Executor Handoff
 
 - Read section range: this entire phase plan; Stage 34 planning Minimum Design,
-  DQ-1 through DQ-3, validation, and Phase Shaping; merged Stage 32 Phase 2
-  run-to-item contract; `docs/structure.md` diagnostics/import sections.
+  DQ-1 through DQ-3, validation, and Phase Shaping; merged Stage 32 replacement
+  Phase 3 run-to-item contract; `docs/structure.md` diagnostics/import sections.
 - Safe implementation slices: models/codecs; exact projection; socket; CLI/docs;
   focused and full validation.
 - Decisions not to revisit: one run URI, no bytes/list/paging/fallback, fixed
@@ -185,11 +187,10 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning approved; pending Stage 32 Phase 2 merge, then
-  record exact base/worktree.
-- Expanded planning: stage design is complete; use a phase planner only if the
-  merged Stage 32 seam materially conflicts with DQ-3.
-- Implementation: pending.
+- Manager preparation: complete; dependency PR #261, exact base, branch,
+  worktree, source seams, and fast-path route verified.
+- Expanded planning: not needed; the merged Stage 32 seam matches DQ-3.
+- Implementation: pending executor.
 - Refiner: not needed.
 - Pre-submit gate: pending.
 - Independent review: reconsider only for a material residual public-contract or
