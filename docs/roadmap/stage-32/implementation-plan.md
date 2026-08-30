@@ -69,7 +69,7 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
   scheduler or authority format beyond the fixed contracts.
 - Correction: not needed.
 - Ready for implementation: yes; Stage 29 Phase 12 is remotely merged and Phase
-  1 is isolated from `fd5543b`.
+  1 is based on current `origin/develop` at `8da9536`.
 - Accepted risks: project fingerprint correctness is trusted, old queue
   databases are rejected, shared storage is required, and incomplete work with
   expired accounting remains unknown.

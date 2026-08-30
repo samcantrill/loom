@@ -8,7 +8,7 @@
 - Branch: agent/stage-32-p1-durable-many-run-admission
 - Worktree root and path: use the manifest-recorded root;
   `<root>/stage-32-p1-durable-many-run-admission`
-- Base revision: `fd5543b1dd75dd3e78a2b7b5bb9ebc73535fac6b`
+- Base revision: `8da9536d351dba46c6737465839a40802f547f5b`
 - PR target: develop
 - PR title: `Stage 32 phase 1: add durable many-run admission`
 - Dependencies: completed Stage 29 production correction and existing whole-run queue service/repository
@@ -199,8 +199,8 @@ Final commands:
 ## Workflow State
 
 - Manager preparation: passed; Stage 29 Phase 12 is remotely merged, the branch
-  and dedicated worktree are based on `fd5543b`, and the executor packet is
-  current.
+  and dedicated worktree are rebased on current `origin/develop` at `8da9536`,
+  and the executor packet is current.
 - Expanded planning: not needed; the approved stage-level design fixes the
   schema/transaction contract. Reconsider only for a concrete ambiguity.
 - Implementation: complete; immutable admission records, atomic SQLite
@@ -209,19 +209,19 @@ Final commands:
 - Refiner: complete; correction 2/3 aligned stale queue-record contract
   expectations and local/Slurm/scheduler reconstruction helpers with the
   approved v2 hard cut.
-- Pre-submit gate: stale after correction 3/3. The prior fresh `make
-  validate-pr` at `ba73bf8` passed Ruff and Pyright but its default suite failed
-  25 queue tests because v1 fixtures were fed to the v2-only queue records; the
-  manager must obtain a fresh full-gate receipt for the repaired commit.
-- Independent review: expected only if the durable identity/index diff departs
-  from the fixed single-transaction design.
+- Pre-submit gate: passed; manager review found no scope drift, second identity
+  owner, migration, unbounded admission, or future-phase work. Fresh
+  `make validate-pr` and `make test-summary` evidence is recorded below.
+- Independent review: not needed; the final repository/index diff retains the
+  approved single-transaction design and manager review found no material
+  residual risk requiring a spawned pass.
 - Blocker corrections: 3/3 — correction 1/3 corrected the approved public
   `submission_replay` disposition and completed the admission identity matrix;
   correction 2/3 updated stale v1 queue-record test fixtures and reconstruction
   helpers to v2, including regenerated admission digests after fixture mutation,
   without adding a migration or dual read; correction 3/3 rejects null persisted
   admission digests instead of silently repairing corrupt v2 records.
-- PR and merge: pending.
+- PR and merge: pending PR submission.
 
 ## Completion Record
 
@@ -229,7 +229,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Queue record/schema v2 admission identity, SQLite classification/indexes, service/client streaming and pages, intentional exports, queue docs/example, and phase-scoped tests. |
 | Tests added or updated | Queue model/receipt and null-digest validation; SQLite exact replay, concurrent scientific dedupe, null identity, canonical run-URI retention, force conflict, pages; request digest/force validation; streaming interruption/restart across 2,000 requests; public example E2E. |
-| Validated revision/tree state and evidence | Prior implementation evidence is stale after correction 3/3. The full gate at `ba73bf8` passed Ruff and Pyright but failed 25 queue tests on stale v1 record fixtures. Correction 2/3 repair checks passed 66 focused tests, ruff, and pyright. A fresh full gate remains manager work. |
-| Validation-relevant changes after evidence | Corrections 1/3 and 2/3 changed the receipt spelling, identity tests, and v2 queue-record fixtures; correction 3/3 makes persisted admission digest nullability fail closed. All prior full-gate evidence is stale. |
+| Validated revision/tree state and evidence | `make validate-pr` passed at `ec31668`: ruff, pyright, 2,615 default tests, 155 config-extra tests with 3 skips, and sdist/wheel build. `make test-summary` passed: package 118, unit 1,855, contract 297, integration 286, E2E 59, config-extra 155; overall 2,770 passed and 3 skipped. The rebase to `8da9536` added only upstream Stage 35 roadmap documents. |
+| Validation-relevant changes after evidence | None. The post-validation rebase added only upstream roadmap documents; this evidence/phase metadata update changes no source, test, dependency, build, or validation configuration. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | Manager review passed. Trusted project fingerprints can still over/under-deduplicate and old queue databases are intentionally rejected; worktree/branch cleanup waits for merge. |
