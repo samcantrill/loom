@@ -23,6 +23,21 @@ Run the hermetic fake-Apptainer walkthrough:
 uv run python examples/execution/containers/slurm-apptainer/run_apptainer_pipeline.py
 ```
 
+## GPU Admission
+
+An attribute-free exclusive `gpu` count automatically enables Apptainer or
+Singularity `--nv`. For a positive request, direct execution requires exactly
+that many unique opaque `CUDA_VISIBLE_DEVICES` tokens on the invoking host and
+passes the validated value through `--cleanenv`. Project container options must
+not author `CUDA_VISIBLE_DEVICES` for that managed request.
+
+For SLURM `afterok` jobs, the same per-stage resource produces `--gres=gpu:N`
+and `--nv`. The generated script performs the visibility check only inside the
+allocation, then forwards the scheduler value through both
+`APPTAINERENV_CUDA_VISIBLE_DEVICES` and `SINGULARITYENV_CUDA_VISIBLE_DEVICES`.
+Loom does not choose physical devices or persist their tokens. A zero or absent
+GPU request leaves container options and visibility untouched.
+
 ## Deferred
 
 Managed external image-build services, image publishing, Kubernetes, and Docker

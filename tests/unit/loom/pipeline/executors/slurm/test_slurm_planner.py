@@ -27,6 +27,7 @@ from loom.pipeline.planning import (
     ResumeOptions,
     StagePlan,
 )
+from loom.pipeline.resources import ResourceEntry, ResourceRequest
 
 
 def test_single_job_planned_submission_uses_prepared_run_continuation() -> None:
@@ -256,6 +257,30 @@ def test_afterok_planning_applies_stage_specific_container_options() -> None:
         "report",
         "--executor",
         "local",
+    )
+
+
+def test_afterok_gpu_resource_drives_the_same_gres_and_nv_projection() -> None:
+    submission = build_afterok_planned_submission(
+        run_uri="file:///runs/run-1",
+        execution_plan=_execution_plan({"train": ()}),
+        planning_id="planning-1",
+        created_at="2026-05-08T00:00:00Z",
+        options=SlurmOptions(),
+        container_options={"image": {"reference": "analysis.sif"}},
+        stage_resources={
+            "train": ResourceRequest(
+                entries={"gpu": ResourceEntry(kind="gpu", amount=1)}
+            )
+        },
+    )
+
+    job = cast(tuple[SlurmPlannedJob, ...], submission.jobs)[0]
+    command = cast(SlurmCommandArgv, job.command)
+    directives = cast(tuple[SlurmSbatchDirective, ...], job.sbatch_directives)
+    assert "--nv" in command.argv
+    assert {directive.name: directive.value for directive in directives}["gres"] == (
+        "gpu:1"
     )
 
 

@@ -131,12 +131,15 @@ def test_cli_slurm_dry_run_renders_direct_apptainer_image(
         "--nv",
     ]
     assert "analysis.sif" in commands["stage:extract"]
-    assert "apptainer exec --cleanenv --nv" in scripts["stage:report"]
+    assert "apptainer exec --cleanenv --nv" in scripts["stage:extract"]
     assert "analysis.sif loom stage-job run" in scripts["stage:report"]
     assert "apptainer build" not in "".join(scripts.values())
     assert manifest["jobs"][0]["command"]["metadata"]["container_runtime"] == (
         "apptainer"
     )
+    assert "#SBATCH --gres=gpu:1" in scripts["stage:extract"]
+    assert "APPTAINERENV_CUDA_VISIBLE_DEVICES" in scripts["stage:extract"]
+    assert "SINGULARITYENV_CUDA_VISIBLE_DEVICES" in scripts["stage:extract"]
 
 
 def test_cli_slurm_afterok_propagates_sink_to_lifecycle_owning_stage_job(
@@ -396,8 +399,13 @@ def _write_container_config(path: Path) -> None:
         "    container:\n"
         "      image:\n"
         "        reference: analysis.sif\n"
-        "    apptainer:\n"
-        "      nv: true\n",
+    "  stage_options:\n"
+    "    extract:\n"
+    "      resources:\n"
+    "        entries:\n"
+    "          gpu:\n"
+    "            kind: gpu\n"
+    "            amount: 1\n",
         encoding="utf-8",
     )
 

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from typing import cast
 
+import pytest
+
 from loom.pipeline.executors.slurm import (
+    SlurmCommandArgv,
     SlurmMode,
     SlurmOptions,
     SlurmPlannedJob,
@@ -94,5 +99,87 @@ def test_afterok_script_renders_logical_dependency_and_stage_job_command() -> No
     script = render_slurm_script(job, options=SlurmOptions())
 
     assert "#SBATCH --dependency=afterok:stage:extract:stage:train" in script
-    assert "loom stage-job run --run-uri file:///runs/run-1 --stage report --executor local" in script
+    assert (
+        "loom stage-job run --run-uri file:///runs/run-1 --stage report --executor local"
+        in script
+    )
     assert "loom stage run" not in script
+
+
+def test_afterok_gpu_script_validates_allocation_visibility_and_projects_container_env() -> (
+    None
+):
+    command = build_stage_job_command_argv("file:///runs/run-1", "train")
+    job = SlurmPlannedJob(
+        logical_key="stage:train",
+        mode=SlurmMode.AFTEROK,
+        command=command,
+        resources={"gpu": ResourceEntry(kind="gpu", amount=1).to_dict()},
+        sbatch_directives=(
+            SlurmSbatchDirective(name="gres", value="gpu:1", source="generated"),
+        ),
+    )
+
+    script = render_slurm_script(job, options=SlurmOptions())
+
+    assert "#SBATCH --gres=gpu:1" in script
+    assert '_loom_cuda_visible_devices="${CUDA_VISIBLE_DEVICES-}"' in script
+    assert '"${#_loom_cuda_devices[@]}" -ne 1' in script
+    assert "duplicate visibility token" in script
+    assert "APPTAINERENV_CUDA_VISIBLE_DEVICES" in script
+    assert "SINGULARITYENV_CUDA_VISIBLE_DEVICES" in script
+    assert "printf 'loom.gpu_visibility" not in script
+
+
+@pytest.mark.parametrize(
+    ("visible", "expected_returncode"),
+    (
+        ("GPU-abc,MIG-device-7", 0),
+        (None, 78),
+        ("0", 78),
+        ("0,0", 78),
+        ("0,", 78),
+        ("-foo,0", 78),
+        (".foo,0", 78),
+        ("/foo,0", 78),
+    ),
+)
+def test_afterok_gpu_script_executes_the_public_visibility_grammar(
+    visible: str | None,
+    expected_returncode: int,
+) -> None:
+    command = SlurmCommandArgv(
+        launcher_argv=("bash",),
+        command_args=(
+            "-c",
+            (
+                'test "$APPTAINERENV_CUDA_VISIBLE_DEVICES" = '
+                '"$CUDA_VISIBLE_DEVICES" && '
+                'test "$SINGULARITYENV_CUDA_VISIBLE_DEVICES" = '
+                '"$CUDA_VISIBLE_DEVICES"'
+            ),
+        ),
+    )
+    job = SlurmPlannedJob(
+        logical_key="stage:train",
+        mode=SlurmMode.AFTEROK,
+        command=command,
+        resources={"gpu": ResourceEntry(kind="gpu", amount=2).to_dict()},
+    )
+    script = render_slurm_script(job, options=SlurmOptions())
+    environment = dict(os.environ)
+    if visible is None:
+        environment.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        environment["CUDA_VISIBLE_DEVICES"] = visible
+
+    result = subprocess.run(
+        ("bash",),
+        input=script,
+        text=True,
+        capture_output=True,
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == expected_returncode, result.stderr

@@ -693,7 +693,7 @@ def test_selected_apptainer_executor_runs_cheap_checks_and_redacts_env(
                             "required_host_variables": ["HOST_TOKEN"],
                         },
                     },
-                    "apptainer": {"command": "apptainer", "nv": True},
+                    "apptainer": {"command": "apptainer"},
                 },
                 "stage_options": {
                     "train": {
@@ -731,6 +731,11 @@ def test_selected_apptainer_executor_runs_cheap_checks_and_redacts_env(
     assert "host-secret" not in payload
     assert "[redacted]" in payload
     assert not (tmp_path / "runs" / "apptainer-pass").exists()
+    gpu_targets = cast(
+        list[dict[str, Any]],
+        by_id["resources.apptainer.gpu"].details["gpu_targets"],
+    )
+    assert gpu_targets[0]["gpu_flag"] == "nv"
 
 
 def test_selected_apptainer_executor_fails_when_command_is_missing(
