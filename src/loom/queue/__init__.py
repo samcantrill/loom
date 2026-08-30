@@ -20,6 +20,11 @@ if TYPE_CHECKING:
         ObserveResult,
     )
     from ._remote_stage_execution import GpuDeviceDescriptor
+    from .coordinator_authority import (
+        AuthenticatedCoordinatorAuthority,
+        CoordinatorAuthorityFactory,
+        CoordinatorAuthorityStore,
+    )
     from .local_daemon import (
         AdmissionNotFoundError,
         AdmissionPage,
@@ -178,6 +183,14 @@ _MANAGED_RESOURCE_EXPORTS = frozenset(
 
 
 def __getattr__(name: str) -> object:
+    if name in {
+        "AuthenticatedCoordinatorAuthority",
+        "CoordinatorAuthorityFactory",
+        "CoordinatorAuthorityStore",
+    }:
+        from . import coordinator_authority
+
+        return getattr(coordinator_authority, name)
     if name == "ResidentWorkerLaunchProfile":
         from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 
@@ -228,6 +241,9 @@ __all__ = [
     "AdmissionNotFoundError",
     "AgentControl",
     "CoordinatorSchedulingReload",
+    "AuthenticatedCoordinatorAuthority",
+    "CoordinatorAuthorityFactory",
+    "CoordinatorAuthorityStore",
     "LocalDaemonAdmission",
     "LocalDaemonAdmissionDetail",
     "LocalDaemonAdmissionRequest",

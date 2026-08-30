@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
+from importlib import import_module
 import json
 import os
 from pathlib import Path
 import stat
 from threading import Event
-from typing import cast
+from typing import Any, cast
 
 from loom.serialization import PlainData, thaw_plain_data
 
@@ -40,10 +41,14 @@ from .agent_sessions import (
     TransportPrincipalPolicy,
 )
 from .errors import QueueConfigError, QueueConflictError, QueueError, QueueServiceError
-from .local_daemon import ConfiguredGpuDevice, LocalDaemonConfig
+from .local_daemon import (
+    ConfiguredGpuDevice,
+    LocalDaemonConfig,
+    LocalDaemonSchedulingComponents,
+)
 
 
-DEPLOYMENT_CONFIG_SCHEMA_VERSION = 1
+DEPLOYMENT_CONFIG_SCHEMA_VERSION = 2
 _OUTBOUND_OFFER_TTL_SECONDS = 30
 _OUTBOUND_POLL_WAIT_MS = 5_000
 
@@ -73,8 +78,8 @@ class OutboundAgentServiceConfig:
 
 
 def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfig:
-    source, payload, fingerprint = _load_protected_config(path)
-    _exact(
+    source, payload, _ = _load_protected_config(path)
+    _required_allowed(
         payload,
         {
             "schema_version",
@@ -88,16 +93,31 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
             "remote_profiles",
             "agent_policy",
             "agent_server",
+            "authority",
         },
+        {"scheduling", "embedded_agent", "slurm_profiles"},
         "coordinator service config",
     )
     _header(payload, "loom.coordinator-service")
+    fingerprint = _canonical_fingerprint(
+        _coordinator_immutable_projection(payload)
+    )
     base = source.parent
     root = _path(payload, "deployment_root", base)
     embedded = _resident_profile(
         _mapping(payload, "embedded_profile"), base, "embedded_profile"
     )
     policy = _agent_policy(_mapping(payload, "agent_policy"))
+    authority_factory = _coordinator_authority_factory(
+        _mapping(payload, "authority")
+    )
+    scheduling, priority_resolver = _scheduling_composition(payload.get("scheduling"))
+    embedded_providers = _embedded_provider_composition(payload.get("embedded_agent"))
+    slurm_profiles = (
+        ()
+        if payload.get("slurm_profiles") is None
+        else _target_sequence(payload.get("slurm_profiles"), "slurm_profiles")
+    )
     server_value = payload["agent_server"]
     server = (
         None
@@ -129,6 +149,11 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
         ),
         agent_policy=policy,
         remote_profiles=remote_profiles,
+        coordinator_authority_factory=authority_factory,
+        scheduling_components=scheduling,
+        admission_priority_resolver=priority_resolver,
+        agent_resource_providers=cast(Any, embedded_providers),
+        slurm_profiles=cast(Any, slurm_profiles),
     )
     return CoordinatorServiceConfig(daemon, server, source)
 
@@ -136,7 +161,7 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
 def load_outbound_agent_service_config(
     path: str | Path,
 ) -> OutboundAgentServiceConfig:
-    source, payload, fingerprint = _load_protected_config(path)
+    source, payload, _ = _load_protected_config(path)
     _exact(
         payload,
         {
@@ -154,6 +179,7 @@ def load_outbound_agent_service_config(
         "outbound agent service config",
     )
     _header(payload, "loom.outbound-agent-service")
+    fingerprint = _canonical_fingerprint(_outbound_immutable_projection(payload))
     base = source.parent
     profiles = tuple(
         _resident_profile(
@@ -202,17 +228,24 @@ def load_outbound_agent_service_config(
 
 
 def run_outbound_agent_service(
-    config: OutboundAgentServiceConfig, *, stop: Event
+    config: OutboundAgentServiceConfig,
+    *,
+    stop: Event,
+    trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
 ) -> None:
     """Run one foreground agent role with bounded reconnect and poll loops."""
 
-    client: LocalDaemonAgentHttpClient | None = _open_outbound_agent(config.client)
+    client: LocalDaemonAgentHttpClient | None = _open_outbound_agent(
+        config.client, trusted_config_loader=trusted_config_loader
+    )
     while True:
         try:
             if stop.is_set():
                 return
             if client is None:
-                client = _open_outbound_agent(config.client)
+                client = _open_outbound_agent(
+                    config.client, trusted_config_loader=trusted_config_loader
+                )
             client.resume_retained_work()
             handshake = client.handshake()
             coordinator_epoch = cast(str, handshake["coordinator_epoch"])
@@ -318,9 +351,15 @@ def _operation_id(kind: str, *parts: str) -> str:
     return f"{kind}-{hashlib.sha256(encoded).hexdigest()[:32]}"
 
 
-def _open_outbound_agent(config: AgentTlsClientConfig) -> LocalDaemonAgentHttpClient:
+def _open_outbound_agent(
+    config: AgentTlsClientConfig,
+    *,
+    trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
+) -> LocalDaemonAgentHttpClient:
     try:
-        return LocalDaemonAgentHttpClient(config)
+        return LocalDaemonAgentHttpClient(
+            config, trusted_config_loader=trusted_config_loader
+        )
     except QueueServiceError as exc:
         if str(exc) != "managed supervisor endpoint is unavailable":
             raise
@@ -336,7 +375,7 @@ def _open_outbound_agent(config: AgentTlsClientConfig) -> LocalDaemonAgentHttpCl
         )
     except AgentProcessSupervisorError as exc:
         raise QueueServiceError(str(exc)) from exc
-    return LocalDaemonAgentHttpClient(config)
+    return LocalDaemonAgentHttpClient(config, trusted_config_loader=trusted_config_loader)
 
 
 def _load_protected_config(
@@ -371,6 +410,168 @@ def _load_protected_config(
         cast(Mapping[str, object], plain),
         hashlib.sha256(encoded).hexdigest(),
     )
+
+
+def _canonical_fingerprint(value: Mapping[str, object]) -> str:
+    """Fingerprint only inert authored values, never source paths or objects."""
+
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+
+
+def _coordinator_authority_factory(
+    value: Mapping[str, object],
+) -> Callable[[str], object] | None:
+    """Construct one explicit trusted authority factory for this role.
+
+    Embedded access is intentionally the only default.  A persistent role must
+    name its already-authenticated, run-scoped adapter factory explicitly; the
+    deployment loader never discovers targets or falls back to SQLite.
+    """
+
+    kind = _string(value, "kind")
+    if kind == "embedded":
+        _exact(value, {"kind"}, "embedded authority")
+        return None
+    if kind != "authenticated":
+        raise QueueConfigError("authority kind is unsupported")
+    _exact(value, {"kind", "factory"}, "authenticated authority")
+    factory = _trusted_target(_mapping(value, "factory"), "authority factory")
+    if not callable(factory):
+        raise QueueConfigError("authenticated authority factory is invalid")
+    return cast(Callable[[str], object], factory)
+
+
+def _trusted_target(value: Mapping[str, object], label: str) -> object:
+    """Instantiate one protected `_target_` eagerly and without discovery."""
+
+    target = _string(value, "_target_")
+    kwargs = {
+        key: item
+        for key, item in value.items()
+        if key != "_target_"
+    }
+    module_name, separator, attribute = target.rpartition(".")
+    if not separator or not module_name or not attribute:
+        raise QueueConfigError(f"{label} target is invalid")
+    try:
+        constructor = getattr(import_module(module_name), attribute)
+    except (ImportError, AttributeError) as exc:
+        raise QueueConfigError(f"{label} target is unavailable") from exc
+    if not callable(constructor):
+        raise QueueConfigError(f"{label} target is not callable")
+    try:
+        return constructor(**kwargs)
+    except Exception as exc:  # trusted code, normalized at the config boundary
+        raise QueueConfigError(f"{label} target is invalid") from exc
+
+
+def _scheduling_composition(
+    value: object,
+) -> tuple[LocalDaemonSchedulingComponents, Callable[[str], int]]:
+    if value is None:
+        from .local_daemon import _default_scheduling_components
+
+        return _default_scheduling_components(), lambda _run_uri: 0
+    mapping = _mapping_value(value, "scheduling")
+    _exact(
+        mapping,
+        {"planners", "hard_evaluators", "preference_scorers", "policy", "priority_resolver"},
+        "scheduling",
+    )
+    planners = _target_sequence(mapping["planners"], "scheduling planners")
+    hard = _target_sequence(mapping["hard_evaluators"], "scheduling hard evaluators")
+    preferences = _target_sequence(
+        mapping["preference_scorers"], "scheduling preference scorers"
+    )
+    policy = _trusted_target(_mapping(mapping, "policy"), "scheduling policy")
+    resolver = _trusted_target(
+        _mapping(mapping, "priority_resolver"), "priority resolver"
+    )
+    if not callable(resolver):
+        raise QueueConfigError("priority resolver target is invalid")
+    try:
+        composition = LocalDaemonSchedulingComponents(
+            planners=cast(Any, planners),
+            hard_evaluators=cast(Any, hard),
+            preference_scorers=cast(Any, preferences),
+            policy=cast(Any, policy),
+        )
+    except (TypeError, ValueError, QueueServiceError) as exc:
+        raise QueueConfigError("scheduling composition is invalid") from exc
+    return composition, cast(Callable[[str], int], resolver)
+
+
+def _embedded_provider_composition(value: object) -> tuple[object, ...] | None:
+    if value is None:
+        return None
+    mapping = _mapping_value(value, "embedded_agent")
+    _exact(mapping, {"providers"}, "embedded agent")
+    providers = _target_sequence(mapping["providers"], "embedded providers")
+    if not providers:
+        raise QueueConfigError("embedded provider composition is empty")
+    return providers
+
+
+def _target_sequence(value: object, label: str) -> tuple[object, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise QueueConfigError(f"{label} must be a sequence")
+    return tuple(
+        _trusted_target(_mapping_value(item, f"{label}[{index}]"), f"{label}[{index}]")
+        for index, item in enumerate(value)
+    )
+
+
+def _coordinator_immutable_projection(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    """Role-owned coordinator identity, deliberately excluding reloadable policy."""
+
+    embedded = _mapping(payload, "embedded_profile")
+    profile = _mapping(embedded, "descriptor")
+    server = payload.get("agent_server")
+    return {
+        "schema_version": payload["schema_version"],
+        "kind": payload["kind"],
+        "deployment_root": payload["deployment_root"],
+        "run_store_root": payload["run_store_root"],
+        "machine_id": payload["machine_id"],
+        "embedded_profile": {
+            "descriptor": dict(profile),
+            "project_root": embedded["project_root"],
+            "python_executable": embedded["python_executable"],
+        },
+        "agent_server": server,
+        "authority": _mapping(payload, "authority"),
+    }
+
+
+def _outbound_immutable_projection(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    """Outbound role transport and executable-profile identity."""
+
+    profiles = []
+    for value in _sequence(payload, "resident_profiles"):
+        profile = _mapping_value(value, "resident profile")
+        profiles.append(
+            {
+                "descriptor": dict(_mapping(profile, "descriptor")),
+                "project_root": profile["project_root"],
+                "python_executable": profile["python_executable"],
+            }
+        )
+    return {
+        "schema_version": payload["schema_version"],
+        "kind": payload["kind"],
+        "agent_root": payload["agent_root"],
+        "url": payload["url"],
+        "server_ca_path": payload["server_ca_path"],
+        "certificate_path": payload["certificate_path"],
+        "private_key_path": payload["private_key_path"],
+        "resident_profiles": profiles,
+    }
 
 
 def _header(payload: Mapping[str, object], kind: str) -> None:
@@ -581,6 +782,19 @@ def _exact(data: Mapping[str, object], fields: set[str], label: str) -> None:
     if set(data) != fields:
         raise QueueConfigError(
             f"{label} must contain exactly: {', '.join(sorted(fields))}"
+        )
+
+
+def _required_allowed(
+    data: Mapping[str, object],
+    required: set[str],
+    optional: set[str],
+    label: str,
+) -> None:
+    if not required <= set(data) or not set(data) <= required | optional:
+        raise QueueConfigError(
+            f"{label} must contain exactly the required fields and supported "
+            f"extensions: {', '.join(sorted(required | optional))}"
         )
 
 

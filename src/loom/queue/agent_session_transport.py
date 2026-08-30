@@ -327,7 +327,11 @@ class _RemoteAgentJournal:
     """
 
     def __init__(
-        self, root: Path, *, expected_configuration_fingerprint: str | None = None
+        self,
+        root: Path,
+        *,
+        expected_configuration_fingerprint: str | None = None,
+        expected_active_configuration_fingerprint: str | None = None,
     ) -> None:
         self._root = Path(root)
         if not self._root.is_dir():
@@ -360,14 +364,19 @@ class _RemoteAgentJournal:
                         raise QueueServiceError("remote agent binding is unavailable")
                     binding = json.loads(binding_path.read_text(encoding="utf-8"))
                     if binding != {
-                        "schema_version": 1,
-                        "role": "outbound-agent",
+                        "schema_version": 2,
+                        "role_kind": "outbound-agent",
                         "stable_id": metadata["stable_id"],
-                        "configuration_fingerprint": (
+                        "immutable_fingerprint": (
                             expected_configuration_fingerprint
                         ),
                     }:
                         raise QueueServiceError("remote agent binding is invalid")
+                    active = metadata.get("active_configuration_fingerprint")
+                    if active != expected_active_configuration_fingerprint:
+                        raise QueueServiceError(
+                            "protected agent configuration changed without reload"
+                        )
         except QueueError:
             raise
         except (sqlite3.Error, TypeError, ValueError) as exc:
@@ -385,6 +394,28 @@ class _RemoteAgentJournal:
 
     def close(self) -> None:
         self._lock.close()
+
+    def record_active_configuration(self, config: AgentTlsClientConfig) -> None:
+        """Persist a validated active revision before the live client swaps."""
+
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM root_metadata "
+                "WHERE key = 'active_configuration_revision'"
+            ).fetchone()
+            if row is None or not str(row[0]).isdecimal():
+                raise QueueServiceError("remote active configuration is unavailable")
+            conn.execute(
+                "UPDATE root_metadata SET value = ? "
+                "WHERE key = 'active_configuration_revision'",
+                (str(int(str(row[0])) + 1),),
+            )
+            conn.execute(
+                "UPDATE root_metadata SET value = ? "
+                "WHERE key = 'active_configuration_fingerprint'",
+                (_agent_active_fingerprint(config),),
+            )
+            conn.commit()
 
     def _connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -1449,6 +1480,9 @@ class LocalDaemonAgentHttpClient:
                 expected_configuration_fingerprint=(
                     config.deployment_configuration_fingerprint
                 ),
+                expected_active_configuration_fingerprint=_agent_active_fingerprint(
+                    config
+                ),
             )
             if config.agent_root
             else None
@@ -1553,10 +1587,10 @@ class LocalDaemonAgentHttpClient:
                 staging / _AGENT_BINDING_FILE,
                 json.dumps(
                     {
-                        "schema_version": 1,
-                        "role": "outbound-agent",
+                        "schema_version": 2,
+                        "role_kind": "outbound-agent",
                         "stable_id": str(stable_row[0]),
-                        "configuration_fingerprint": (
+                        "immutable_fingerprint": (
                             config.deployment_configuration_fingerprint
                         ),
                     },
@@ -1566,10 +1600,23 @@ class LocalDaemonAgentHttpClient:
                 ).encode("utf-8"),
             )
             (staging / _AGENT_BINDING_FILE).chmod(0o600)
+            with sqlite3.connect(staging / "control.sqlite") as conn:
+                conn.execute(
+                    "INSERT INTO root_metadata(key, value) VALUES (?, ?)",
+                    ("active_configuration_revision", "1"),
+                )
+                conn.execute(
+                    "INSERT INTO root_metadata(key, value) VALUES (?, ?)",
+                    ("active_configuration_fingerprint", _agent_active_fingerprint(config)),
+                )
+                conn.commit()
             journal = _RemoteAgentJournal(
                 staging,
                 expected_configuration_fingerprint=(
                     config.deployment_configuration_fingerprint
+                ),
+                expected_active_configuration_fingerprint=_agent_active_fingerprint(
+                    config
                 ),
             )
             profiles = tuple(item.launch_profile for item in config.resident_profiles)
@@ -1901,6 +1948,7 @@ class LocalDaemonAgentHttpClient:
                 try:
                     replacement = loader()
                     self._validate_reload_config(replacement)
+                    self._require_journal().record_active_configuration(replacement)
                 except (QueueError, OSError, TypeError, ValueError):
                     return self._unchanged_control_effect(
                         control, session, "reload_rejected"
@@ -4519,6 +4567,16 @@ def _agent_inventory_revision(config: AgentTlsClientConfig) -> str:
                 }
                 for profile in config.resident_profiles
             ]
+        },
+    )
+
+
+def _agent_active_fingerprint(config: AgentTlsClientConfig) -> str:
+    return _agent_revision(
+        "active",
+        {
+            "config": _agent_config_revision(config),
+            "inventory": _agent_inventory_revision(config),
         },
     )
 

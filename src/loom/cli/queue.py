@@ -442,7 +442,12 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     config = service.daemon
-    daemon = LocalDaemon(config)
+    daemon = LocalDaemon(
+        config,
+        trusted_scheduling_loader=lambda: load_coordinator_service_config(
+            service.source_path
+        ).daemon,
+    )
     server = LocalDaemonSocketServer(daemon, config.endpoint)
     agent_server = (
         None
@@ -516,7 +521,13 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
                 "coordinator_url": service.client.url,
             },
         )
-        run_outbound_agent_service(service, stop=Event())
+        run_outbound_agent_service(
+            service,
+            stop=Event(),
+            trusted_config_loader=lambda: load_outbound_agent_service_config(
+                service.source_path
+            ).client,
+        )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return int(ExitCode.SUCCESS)
@@ -586,7 +597,12 @@ def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result)
+    exit_code = _emit_daemon_payload(namespace, result)
+    return (
+        int(ExitCode.PIPELINE)
+        if result.get("code") == "reload_rejected"
+        else exit_code
+    )
 
 
 def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
@@ -602,7 +618,12 @@ def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result)
+    exit_code = _emit_daemon_payload(namespace, result)
+    return (
+        int(ExitCode.PIPELINE)
+        if result.get("code") == "reload_rejected"
+        else exit_code
+    )
 
 
 def handle_daemon_time_recover(namespace: argparse.Namespace) -> int:

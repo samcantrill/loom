@@ -12,7 +12,7 @@ import sqlite3
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event, Lock
 from types import MappingProxyType
-from typing import cast
+from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.execution import StageWorkerRequest, prepare_stage_attempt
@@ -101,7 +101,6 @@ from loom.pipeline.stores.authority import (
     PreparedAttemptRequest,
     StatusTransition,
 )
-from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.scheduling import (
     Candidate,
@@ -725,7 +724,7 @@ class _ScopedCoordinatorAuthority:
 
     def __init__(
         self,
-        store: SQLitePerRunAuthorityStore,
+        store: Any,
         *,
         run_uri: str,
         coordinator_id: str,
@@ -1017,7 +1016,7 @@ def _validate_recovery_request_identity(
 
 
 def _recovery_retry_policy(
-    authority: SQLitePerRunAuthorityStore, run_uri: str, stage_name: str, attempt: int
+    authority: Any, run_uri: str, stage_name: str, attempt: int
 ):
     """Read the immutable attempt policy from the authority reliability owner."""
 
@@ -1051,7 +1050,7 @@ def _current_attempt_retry_is_authorized(stage: object) -> bool:
 class _AuthorityReliabilityStore:
     """Narrow reliability facade that persists every fact in authority."""
 
-    def __init__(self, authority: SQLitePerRunAuthorityStore) -> None:
+    def __init__(self, authority: Any) -> None:
         self._authority = authority
 
     def write_reliability_policy_fact(
@@ -1130,6 +1129,10 @@ class LocalDaemonExecution:
         daemon: LocalDaemon | None = None,
     ) -> None:
         self.config = config
+        factory = config.coordinator_authority_factory
+        if factory is None:
+            raise QueueServiceError("coordinator authority factory is unavailable")
+        self._authority_for_run = factory
         self._scheduling = _build_scheduling_epoch(
             epoch_id=scheduling_epoch,
             composition=config.scheduling_components,
@@ -1371,8 +1374,7 @@ class LocalDaemonExecution:
             raise QueueConflictError(
                 "retained local assignment has no prepared worker request"
             )
-        authority_store = SQLitePerRunAuthorityStore(assignment.run_uri)
-        authority_store.open_run(assignment.run_uri)
+        authority_store = self._authority_store(assignment.run_uri)
         intent = load_managed_local_intent(
             self.config,
             assignment.run_uri,
@@ -1570,8 +1572,7 @@ class LocalDaemonExecution:
             raise QueueConflictError(
                 "persisted managed-local plan or runtime changed after admission"
             )
-        authority = SQLitePerRunAuthorityStore(admission.run_uri)
-        authority.open_run(admission.run_uri)
+        authority = self._authority_store(admission.run_uri)
         receipt = authority.bind_coordinator_admission(
             admission.run_uri,
             CoordinatorAdmissionRequest(
@@ -2127,7 +2128,7 @@ class LocalDaemonExecution:
 
         binding = self._recovery_binding(request)
         run_uri, stage_name, attempt, attempt_id = binding[1:]
-        authority = SQLitePerRunAuthorityStore(run_uri)
+        authority = self._authority_store(run_uri)
         snapshot = authority.open_run(run_uri)
         for stage in snapshot.stages:
             if stage.stage_name != stage_name:
@@ -2165,7 +2166,7 @@ class LocalDaemonExecution:
 
         binding = self._recovery_binding(request)
         run_uri, stage_name, attempt, attempt_id = binding[1:]
-        snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
+        snapshot = self._authority_store(run_uri).open_run(run_uri)
         matches = [
             item
             for stage in snapshot.stages
@@ -2323,8 +2324,7 @@ class LocalDaemonExecution:
         binding = self._recovery_binding(request)
         self._validate_persisted_recovery_evidence(request, binding, evidence)
         run_uri, stage_name, attempt, attempt_id = binding[1:]
-        authority_store = SQLitePerRunAuthorityStore(run_uri)
-        authority_store.open_run(run_uri)
+        authority_store = self._authority_store(run_uri)
         authority = _ScopedCoordinatorAuthority(
             authority_store,
             run_uri=run_uri,
@@ -2383,7 +2383,7 @@ class LocalDaemonExecution:
 
     def _record_recovery_reliability(
         self,
-        authority: SQLitePerRunAuthorityStore,
+        authority: Any,
         *,
         request: RecoverUnknownAssignment,
         stage_name: str,
@@ -3092,7 +3092,7 @@ class LocalDaemonExecution:
             )
         binding = self._recovery_binding(request)
         _record, run_uri, stage_name, attempt, attempt_id = binding
-        snapshot = SQLitePerRunAuthorityStore(run_uri).open_run(run_uri)
+        snapshot = self._authority_store(run_uri).open_run(run_uri)
         matches = [
             item
             for stage in snapshot.stages
@@ -3277,7 +3277,7 @@ class LocalDaemonExecution:
             snapshot = snapshots.get(record.run_uri)
             if snapshot is None:
                 try:
-                    snapshot = SQLitePerRunAuthorityStore(record.run_uri).open_run(
+                    snapshot = self._authority_store(record.run_uri).open_run(
                         record.run_uri
                     )
                 except Exception as exc:
@@ -5077,14 +5077,19 @@ class LocalDaemonExecution:
         return row
 
     def _remote_authority(self, run_uri: str) -> _ScopedCoordinatorAuthority:
-        store = SQLitePerRunAuthorityStore(run_uri)
-        store.open_run(run_uri)
+        store = self._authority_store(run_uri)
         return _ScopedCoordinatorAuthority(
             store,
             run_uri=run_uri,
             coordinator_id=self.coordinator_id,
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
         )
+
+    def _authority_store(self, run_uri: str) -> Any:
+        """Open one configured coordinator/run authority, never SQLite directly."""
+
+        authority = self._authority_for_run(run_uri)
+        return cast(Any, authority)
 
     def _ordinary_mutation_frozen(self, assignment_id: str) -> bool:
         daemon = self.daemon
@@ -5403,7 +5408,10 @@ def build_local_daemon_owner_views(
         authority_observed_at = clock()
         cancellation_receipt: dict[str, PlainData] | None = None
         try:
-            authority = SQLitePerRunAuthorityStore(admission.run_uri)
+            factory = config.coordinator_authority_factory
+            if factory is None:
+                raise QueueServiceError("coordinator authority factory is unavailable")
+            authority = cast(Any, factory(admission.run_uri))
             snapshot = authority.open_run(admission.run_uri)
             if admission.cancellation_operation_id is not None:
                 receipt = authority.read_cancellation_epoch_receipt(

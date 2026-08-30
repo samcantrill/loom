@@ -265,7 +265,7 @@ def _coordinator_service_config(tmp_path: Path) -> Path:
     config_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "kind": "loom.coordinator-service",
                 "deployment_root": "deployment",
                 "run_store_root": "runs",
@@ -294,6 +294,7 @@ def _coordinator_service_config(tmp_path: Path) -> Path:
                     "principals": [],
                 },
                 "agent_server": None,
+                "authority": {"kind": "embedded"},
             }
         ),
         encoding="utf-8",
@@ -307,7 +308,7 @@ def _outbound_agent_service_config(tmp_path: Path) -> Path:
     config_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "kind": "loom.outbound-agent-service",
                 "agent_root": "remote-agent",
                 "url": "https://localhost:8443",

@@ -188,9 +188,11 @@ Final commands:
   fixes both fingerprint domains, trusted eager target construction, the narrow
   authority factory, and reload CLI semantics. Independent review remains
   required for the durable reload and authority trust boundaries.
-- Implementation: resumed after maintainer approval of the attached three-phase
-  correction; the missing authenticated operations will narrowly mirror the
-  existing prepared-attempt execution authority contract
+- Implementation: complete; protected role bindings now persist immutable
+  fingerprints while active scheduling/agent configurations persist their own
+  revision/fingerprint before live swap. Production loaders re-read the exact
+  protected source, execution receives a queue-owned authority factory, and
+  configured targets are eager/validated.
 - Refiner: not needed
 - Pre-submit gate: pending
 - Independent review: required for authority trust and durable reload/restart boundary
@@ -203,9 +205,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Initial executor stopped before source changes because the authenticated authority API exposes no `ensure_prepared_attempt`, prepared-attempt bind/grant/unbind, execution-start confirmation, managed-terminal, or fence-close operation. The maintainer then approved the attached three-phase design, including a narrow authenticated coordinator-authority adapter and removal of direct SQLite construction; implementation resumed. |
-| Tests added or updated | Pending resumed implementation; the authenticated and embedded adapters must share the existing prepared-attempt execution authority contract and causal replay/error matrix. |
-| Validated revision/tree state and evidence | Evidence revision `ee31fa6`; clean source tree before this completion-record update. `rg` confirms those methods exist on `SQLitePerRunAuthorityStore` but not on the configured authenticated client/service adapters. |
-| Validation-relevant changes after evidence | Completion-record update only; targeted/full validation not run because no implementation was authorized after the stop condition. |
+| Implementation and changed paths | `src/loom/queue/{coordinator_authority,deployment,local_daemon,local_daemon_execution,agent_session_transport}.py`, `src/loom/queue/__init__.py`, and `src/loom/cli/queue.py`: schema-v2 protected role projections, durable active revisions, eager trusted composition targets, source loaders, rejected-reload exit status, and embedded/authenticated run-scoped authority factories. `local_daemon_execution.py` no longer imports or constructs `SQLitePerRunAuthorityStore`. |
+| Tests added or updated | Updated protected coordinator/outbound test fixtures to schema v2 and reloadable-binding semantics in `tests/unit/loom/queue/test_deployment.py` and `tests/unit/loom/cli/test_queue.py`; existing reload and agent transport matrices cover durable replay and replacement rejection. |
+| Validated revision/tree state and evidence | `uv run --extra config pytest tests/unit/loom/queue/test_deployment.py tests/unit/loom/cli/test_queue.py -q` — 12 passed; `uv run --extra config pytest tests/unit/loom/queue/test_local_daemon.py -k reload -q` — 10 passed; `uv run --extra config pytest tests/integration/queue/test_agent_session_transport.py -k agent_reload -q` — 3 passed; `uv run --extra config pytest tests/contracts -q` — 305 passed. Ruff and Pyright pass on changed queue/CLI modules. |
+| Validation-relevant changes after evidence | Source, targeted tests, and this completion record changed after evidence revision `ee31fa6`; full repository gates remain manager-owned and were not run. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | The qualified FR-38 capability blocker is resolved by explicit maintainer approval of the attached narrow authenticated authority design. Implementation and validation remain pending; no direct SQLite fallback is permitted. |
+| Residual risk and cleanup | Configured authenticated authority factories must provide the existing prepared-attempt execution contract; no generic CRUD or SQLite fallback exists. Full integration-file and repository gates remain for manager pre-submit/review. |

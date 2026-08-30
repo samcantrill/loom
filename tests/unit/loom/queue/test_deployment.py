@@ -125,7 +125,8 @@ def test_outbound_agent_publication_is_atomic_and_config_bound(
         source.write_text(json.dumps(payload), encoding="utf-8")
         source.chmod(0o600)
         changed = load_outbound_agent_service_config(source)
-        with pytest.raises(QueueServiceError, match="binding is invalid"):
+        # Reconnect timing is reloadable and preserves the immutable binding.
+        with pytest.raises(QueueServiceError, match="already locked"):
             LocalDaemonAgentHttpClient(changed.client)
     finally:
         if client._supervisor is not None:  # noqa: SLF001
@@ -144,7 +145,7 @@ def _coordinator_config(tmp_path: Path) -> Path:
     return _write_protected(
         tmp_path / "coordinator.yaml",
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "loom.coordinator-service",
             "deployment_root": "deployment",
             "run_store_root": "runs",
@@ -159,6 +160,7 @@ def _coordinator_config(tmp_path: Path) -> Path:
                 "principals": [],
             },
             "agent_server": None,
+            "authority": {"kind": "embedded"},
         },
     )
 
@@ -167,7 +169,7 @@ def _agent_config(tmp_path: Path) -> Path:
     return _write_protected(
         tmp_path / "agent.yaml",
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "loom.outbound-agent-service",
             "agent_root": "remote-agent",
             "url": "https://localhost:8443",

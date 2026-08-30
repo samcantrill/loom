@@ -643,6 +643,7 @@ class LocalDaemonConfig:
     max_accepted_time_step_seconds: float = 3600.0
     deployment_root: Path | None = None
     deployment_configuration_fingerprint: str | None = None
+    coordinator_authority_factory: Callable[[str], object] | None = None
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
@@ -660,6 +661,13 @@ class LocalDaemonConfig:
             )
         ):
             raise QueueServiceError("deployment configuration fingerprint is invalid")
+        authority_factory = self.coordinator_authority_factory
+        if authority_factory is None:
+            from .coordinator_authority import embedded_coordinator_authority
+
+            authority_factory = embedded_coordinator_authority
+        if not callable(authority_factory):
+            raise QueueServiceError("coordinator authority factory is invalid")
         profile = self.resident_worker_launch_profile
         if not isinstance(profile, ResidentWorkerLaunchProfile):
             raise QueueServiceError("resident worker launch profile is required")
@@ -895,6 +903,7 @@ class LocalDaemonConfig:
         object.__setattr__(self, "agent_resource_providers", providers)
         object.__setattr__(self, "agent_resource_capacity", provider_capacity)
         object.__setattr__(self, "slurm_profiles", slurm_profiles)
+        object.__setattr__(self, "coordinator_authority_factory", authority_factory)
         object.__setattr__(
             self,
             "gpu_devices",
@@ -1256,12 +1265,11 @@ class LocalDaemon:
             coordinator_id = _open_root(staged.coordinator_root, role="coordinator")
             agent_id = _open_root(staged.agent_root, role="local-agent")
             binding = {
-                "schema_version": 1,
-                "role": "coordinator-bundle",
+                "schema_version": 2,
+                "role_kind": "coordinator-bundle",
                 "coordinator_id": coordinator_id,
                 "agent_id": agent_id,
-                "scheduling_fingerprint": _scheduling_fingerprint(staged),
-                "configuration_fingerprint": (
+                "immutable_fingerprint": (
                     staged.deployment_configuration_fingerprint
                 ),
             }
@@ -1312,6 +1320,10 @@ class LocalDaemon:
                     "INSERT INTO daemon_metadata(key, value) "
                     "VALUES ('scheduling_fingerprint', ?)",
                     (_scheduling_fingerprint(config),),
+                )
+                conn.execute(
+                    "INSERT INTO daemon_metadata(key, value) "
+                    "VALUES ('active_configuration_revision', '1')"
                 )
                 conn.commit()
             cls.initialize_agent_root(config.agent_root)
@@ -1386,7 +1398,8 @@ class LocalDaemon:
                     str(row["key"]): str(row["value"])
                     for row in conn.execute(
                         "SELECT key, value FROM daemon_metadata WHERE key IN "
-                        "('scheduling_epoch', 'scheduling_fingerprint')"
+                        "('scheduling_epoch', 'scheduling_fingerprint', "
+                        "'active_configuration_revision')"
                     )
                 }
             if scheduling.get("scheduling_fingerprint") != _scheduling_fingerprint(
@@ -1396,8 +1409,14 @@ class LocalDaemon:
                     "protected scheduling configuration changed without reload"
                 )
             scheduling_epoch = scheduling.get("scheduling_epoch")
-            if scheduling_epoch is None:
-                raise QueueStorageError("scheduling epoch is unavailable")
+            configuration_revision = scheduling.get("active_configuration_revision")
+            if (
+                scheduling_epoch is None
+                or configuration_revision is None
+                or not configuration_revision.isdecimal()
+                or int(configuration_revision) < 1
+            ):
+                raise QueueStorageError("active scheduling configuration is unavailable")
             # This is the same cross-owner proof used by normal shutdown.  It
             # rejects unavailable owner state before process creation and
             # identifies retained work that must keep a newly started service
@@ -2205,7 +2224,8 @@ class LocalDaemon:
                 conn.execute("BEGIN IMMEDIATE")
                 prior = conn.execute(
                     "SELECT principal_id, request_json, state, result_code, "
-                    "scheduling_epoch FROM scheduling_reloads WHERE operation_id = ?",
+                    "scheduling_epoch, configuration_revision "
+                    "FROM scheduling_reloads WHERE operation_id = ?",
                     (request.operation_id,),
                 ).fetchone()
                 if prior is not None:
@@ -2217,21 +2237,24 @@ class LocalDaemon:
                             "scheduling reload operation conflicts"
                         )
                     conn.commit()
-                    return freeze_plain_data(
-                        {
+                    receipt: dict[str, PlainData] = {
                             "operation_id": request.operation_id,
                             "state": str(prior["state"]),
                             "code": prior["result_code"],
                             "scheduling_epoch": prior["scheduling_epoch"],
-                        },
-                        path="scheduling reload receipt",
-                    )
+                        }
+                    if prior["configuration_revision"] is not None:
+                        receipt["configuration_revision"] = int(
+                            prior["configuration_revision"]
+                        )
+                    return freeze_plain_data(receipt, path="scheduling reload receipt")
                 if request.expected_scheduling_epoch != self._scheduling_epoch:
                     raise QueueConflictError("scheduling reload epoch is stale")
                 conn.execute(
                     "INSERT INTO scheduling_reloads(operation_id, principal_id, "
-                    "request_json, state, result_code, scheduling_epoch) "
-                    "VALUES (?, ?, ?, 'applying', NULL, NULL)",
+                    "request_json, state, result_code, scheduling_epoch, "
+                    "configuration_revision) "
+                    "VALUES (?, ?, ?, 'applying', NULL, NULL, NULL)",
                     (request.operation_id, principal.subject, encoded),
                 )
                 conn.commit()
@@ -2270,6 +2293,18 @@ class LocalDaemon:
                     )
                 with self._connection() as conn:
                     conn.execute("BEGIN IMMEDIATE")
+                    revision_row = conn.execute(
+                        "SELECT value FROM daemon_metadata "
+                        "WHERE key = 'active_configuration_revision'"
+                    ).fetchone()
+                    if (
+                        revision_row is None
+                        or not str(revision_row["value"]).isdecimal()
+                    ):
+                        raise QueueStorageError(
+                            "active scheduling configuration is unavailable"
+                        )
+                    next_revision = int(str(revision_row["value"])) + 1
                     conn.execute(
                         "INSERT OR REPLACE INTO daemon_metadata(key, value) "
                         "VALUES ('scheduling_epoch', ?)",
@@ -2281,10 +2316,16 @@ class LocalDaemon:
                         (_scheduling_fingerprint(replacement),),
                     )
                     conn.execute(
+                        "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                        "VALUES ('active_configuration_revision', ?)",
+                        (str(next_revision),),
+                    )
+                    conn.execute(
                         "UPDATE scheduling_reloads SET state = 'applied', "
-                        "result_code = 'applied', scheduling_epoch = ? "
+                        "result_code = 'applied', scheduling_epoch = ?, "
+                        "configuration_revision = ? "
                         "WHERE operation_id = ?",
-                        (next_epoch, request.operation_id),
+                        (next_epoch, next_revision, request.operation_id),
                     )
                     conn.commit()
                 execution.apply_scheduling_reload(replacement, reload_plan)
@@ -2298,6 +2339,7 @@ class LocalDaemon:
                 "state": "applied",
                 "code": "applied",
                 "scheduling_epoch": next_epoch,
+                "configuration_revision": next_revision,
             },
             path="scheduling reload receipt",
         )
@@ -3371,7 +3413,8 @@ def _initialize_root(path: Path, *, role: str) -> None:
                 "CREATE TABLE scheduling_reloads ("
                 "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
                 "request_json TEXT NOT NULL, state TEXT NOT NULL, "
-                "result_code TEXT, scheduling_epoch TEXT)"
+                "result_code TEXT, scheduling_epoch TEXT, "
+                "configuration_revision INTEGER)"
             )
             conn.execute(
                 "CREATE TABLE recovery_operations ("
@@ -3444,12 +3487,11 @@ def _validate_deployment_binding(config: LocalDaemonConfig) -> None:
     except (OSError, json.JSONDecodeError) as exc:
         raise QueueServiceError("coordinator deployment binding is invalid") from exc
     expected = {
-        "schema_version": 1,
-        "role": "coordinator-bundle",
+        "schema_version": 2,
+        "role_kind": "coordinator-bundle",
         "coordinator_id": _open_root(config.coordinator_root, role="coordinator"),
         "agent_id": _open_root(config.agent_root, role="local-agent"),
-        "scheduling_fingerprint": _scheduling_fingerprint(config),
-        "configuration_fingerprint": config.deployment_configuration_fingerprint,
+        "immutable_fingerprint": config.deployment_configuration_fingerprint,
     }
     if binding != expected:
         raise QueueServiceError("coordinator deployment binding is invalid")
