@@ -46,7 +46,11 @@ from .agent_sessions import (
     replace_agent_session,
     validate_agent_session_schema,
 )
-from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+from ._agent_process_supervisor import (
+    AgentProcessSupervisorClient,
+    AgentProcessSupervisorError,
+    ResidentWorkerLaunchProfile,
+)
 from ._managed_local import AgentResourceProvider
 from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
@@ -58,7 +62,7 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 9
+_LOCAL_DAEMON_SCHEMA_VERSION = 10
 _MIN_RUN_PRIORITY = -1_000_000
 _MAX_RUN_PRIORITY = 1_000_000
 _MAX_ADMISSION_PAGE_SIZE = 100
@@ -655,9 +659,7 @@ class LocalDaemonConfig:
                 for character in self.deployment_configuration_fingerprint
             )
         ):
-            raise QueueServiceError(
-                "deployment configuration fingerprint is invalid"
-            )
+            raise QueueServiceError("deployment configuration fingerprint is invalid")
         profile = self.resident_worker_launch_profile
         if not isinstance(profile, ResidentWorkerLaunchProfile):
             raise QueueServiceError("resident worker launch profile is required")
@@ -1248,13 +1250,10 @@ class LocalDaemon:
             agent_root=staging / "agent",
             deployment_root=staging,
         )
-        supervisor = None
         try:
             staging.mkdir(mode=0o700)
             cls.initialize(staged)
-            coordinator_id = _open_root(
-                staged.coordinator_root, role="coordinator"
-            )
+            coordinator_id = _open_root(staged.coordinator_root, role="coordinator")
             agent_id = _open_root(staged.agent_root, role="local-agent")
             binding = {
                 "schema_version": 1,
@@ -1277,20 +1276,8 @@ class LocalDaemon:
                 encoding="utf-8",
             )
             binding_path.chmod(0o600)
-            from ._agent_process_supervisor import (
-                AgentProcessSupervisorClient,
-                AgentProcessSupervisorService,
-                SupervisorLaunchConfiguration,
-            )
             from .local_daemon_execution import local_daemon_owner_stores_available
 
-            supervisor_configuration = SupervisorLaunchConfiguration(
-                agent_id, (staged.resident_worker_launch_profile,)
-            )
-            supervisor = AgentProcessSupervisorClient(
-                staged.agent_root,
-                supervisor_configuration,
-            )
             if not local_daemon_owner_stores_available(
                 staged, coordinator_id=coordinator_id, agent_id=agent_id
             ):
@@ -1299,15 +1286,8 @@ class LocalDaemon:
                 )
             if target.exists():
                 raise QueueServiceError("coordinator deployment requires a fresh root")
-            supervisor.shutdown_empty_for_relocation()
-            supervisor = None
             staging.rename(target)
-            AgentProcessSupervisorService.start_empty_initialized(
-                target / "agent", configuration=supervisor_configuration
-            )
         finally:
-            if supervisor is not None:
-                supervisor.shutdown_empty_for_relocation()
             if staging.exists():
                 shutil.rmtree(staging)
 
@@ -1321,7 +1301,6 @@ class LocalDaemon:
                 "with existing managed-local state are unsupported"
             )
         _initialize_root(config.coordinator_root, role="coordinator")
-        supervisor = None
         try:
             with sqlite3.connect(config.control_database) as conn:
                 conn.execute(
@@ -1342,7 +1321,7 @@ class LocalDaemon:
             )
 
             agent_id = _open_root(config.agent_root, role="local-agent")
-            supervisor = AgentProcessSupervisorService.initialize(
+            AgentProcessSupervisorService.initialize_process_free(
                 config.agent_root,
                 configuration=SupervisorLaunchConfiguration(
                     agent_id, (config.resident_worker_launch_profile,)
@@ -1356,8 +1335,6 @@ class LocalDaemon:
                 agent_id=agent_id,
             )
         except Exception:
-            if supervisor is not None:
-                supervisor.shutdown_empty_for_relocation()
             raise
 
     @classmethod
@@ -1384,14 +1361,15 @@ class LocalDaemon:
         except Exception:
             coordinator_lock.close()
             raise
+        created_supervisor: AgentProcessSupervisorClient | None = None
+        owner_ids: tuple[str, str] | None = None
         try:
             coordinator_id = _open_root(
                 self.config.coordinator_root, role="coordinator"
             )
             agent_id = _open_root(self.config.agent_root, role="local-agent")
+            owner_ids = coordinator_id, agent_id
             from ._agent_process_supervisor import (
-                AgentProcessSupervisorClient,
-                AgentProcessSupervisorError,
                 AgentProcessSupervisorService,
                 SupervisorLaunchConfiguration,
             )
@@ -1399,23 +1377,10 @@ class LocalDaemon:
             supervisor_configuration = SupervisorLaunchConfiguration(
                 agent_id, (self.config.resident_worker_launch_profile,)
             )
-            try:
-                AgentProcessSupervisorClient(
-                    self.config.agent_root, supervisor_configuration
-                )
-            except AgentProcessSupervisorError as exc:
-                if (
-                    self.config.deployment_root is None
-                    or str(exc) != "managed supervisor endpoint is unavailable"
-                ):
-                    raise
-                AgentProcessSupervisorService.start_empty_initialized(
-                    self.config.agent_root,
-                    configuration=supervisor_configuration,
-                )
-            self._coordinator_id = coordinator_id
-            self._agent_id = agent_id
-            epoch = f"coordinator-epoch-{uuid4()}"
+            from .local_daemon_execution import local_daemon_owner_work_is_retained
+
+            # The protected scheduling binding is a read-only rejection point.
+            # Check it before an empty detached owner exists at all.
             with self._connection() as conn:
                 scheduling = {
                     str(row["key"]): str(row["value"])
@@ -1424,15 +1389,39 @@ class LocalDaemon:
                         "('scheduling_epoch', 'scheduling_fingerprint')"
                     )
                 }
-                if scheduling.get("scheduling_fingerprint") != _scheduling_fingerprint(
-                    self.config
-                ):
-                    raise QueueConflictError(
-                        "protected scheduling configuration changed without reload"
+            if scheduling.get("scheduling_fingerprint") != _scheduling_fingerprint(
+                self.config
+            ):
+                raise QueueConflictError(
+                    "protected scheduling configuration changed without reload"
+                )
+            scheduling_epoch = scheduling.get("scheduling_epoch")
+            if scheduling_epoch is None:
+                raise QueueStorageError("scheduling epoch is unavailable")
+            # This is the same cross-owner proof used by normal shutdown.  It
+            # rejects unavailable owner state before process creation and
+            # identifies retained work that must keep a newly started service
+            # available for recovery if later construction fails.
+            local_daemon_owner_work_is_retained(
+                self.config, coordinator_id=coordinator_id, agent_id=agent_id
+            )
+            try:
+                AgentProcessSupervisorClient(
+                    self.config.agent_root, supervisor_configuration
+                )
+            except AgentProcessSupervisorError as exc:
+                if str(exc) != "managed supervisor endpoint is unavailable":
+                    raise
+                created_supervisor = (
+                    AgentProcessSupervisorService.start_empty_initialized(
+                        self.config.agent_root,
+                        configuration=supervisor_configuration,
                     )
-                scheduling_epoch = scheduling.get("scheduling_epoch")
-                if scheduling_epoch is None:
-                    raise QueueStorageError("scheduling epoch is unavailable")
+                )
+            self._coordinator_id = coordinator_id
+            self._agent_id = agent_id
+            epoch = f"coordinator-epoch-{uuid4()}"
+            with self._connection() as conn:
                 try:
                     started_at = self._accepted_time(conn)
                 except QueueServiceError:
@@ -1459,6 +1448,12 @@ class LocalDaemon:
                 )
                 conn.commit()
         except Exception:
+            if created_supervisor is not None and owner_ids is not None:
+                self._shutdown_created_supervisor_if_empty(
+                    created_supervisor,
+                    coordinator_id=owner_ids[0],
+                    agent_id=owner_ids[1],
+                )
             agent_lock.close()
             coordinator_lock.close()
             self._coordinator_id = None
@@ -1487,6 +1482,12 @@ class LocalDaemon:
             # ordinary result/output/provider replay.
             execution.resume_retained_local_work()
         except Exception:
+            if created_supervisor is not None:
+                self._shutdown_created_supervisor_if_empty(
+                    created_supervisor,
+                    coordinator_id=coordinator_id,
+                    agent_id=agent_id,
+                )
             agent_lock.close()
             coordinator_lock.close()
             self._coordinator_id = None
@@ -1517,6 +1518,27 @@ class LocalDaemon:
             raise
         return self.status()
 
+    def _shutdown_created_supervisor_if_empty(
+        self,
+        supervisor: AgentProcessSupervisorClient,
+        *,
+        coordinator_id: str,
+        agent_id: str,
+    ) -> None:
+        """Retire only the empty cross-owner service this start created."""
+
+        from .local_daemon_execution import local_daemon_owner_work_is_retained
+
+        try:
+            if not local_daemon_owner_work_is_retained(
+                self.config, coordinator_id=coordinator_id, agent_id=agent_id
+            ):
+                supervisor.shutdown_clean()
+        except (AgentProcessSupervisorError, QueueConflictError, QueueServiceError):
+            # Unknown or retained owner state is deliberately recoverable; a
+            # constructor failure must never turn it into forced termination.
+            pass
+
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
@@ -1526,6 +1548,12 @@ class LocalDaemon:
             thread.join()
         if self._execution is not None:
             self._execution.close()
+            try:
+                self._execution.shutdown_clean()
+            except (QueueConflictError, QueueServiceError):
+                # A busy or unavailable cross-owner proof deliberately leaves
+                # the detached process running for recovery.
+                pass
         self._execution = None
         for lock in (self._agent_lock, self._coordinator_lock):
             if lock is not None:
@@ -1716,8 +1744,7 @@ class LocalDaemon:
         admission = self._admission(admission_id)
         with self._connection() as conn:
             revision_row = conn.execute(
-                "SELECT revision FROM owner_status_revisions "
-                "WHERE owner = 'admission'"
+                "SELECT revision FROM owner_status_revisions WHERE owner = 'admission'"
             ).fetchone()
         if revision_row is None:
             raise QueueStorageError("coordinator admission status is unavailable")
@@ -1843,7 +1870,16 @@ class LocalDaemon:
                 except Exception:  # one unhealthy run cannot stop other admissions
                     self._record_admission_health(admission.admission_id, "unavailable")
                 else:
-                    self._record_admission_health(admission.admission_id, "healthy")
+                    self._record_admission_health(
+                        admission.admission_id,
+                        (
+                            "unavailable"
+                            if execution.local_assignment_reconciliation_pending(
+                                admission.run_uri
+                            )
+                            else "healthy"
+                        ),
+                    )
                     if outcome.state is LocalDaemonAdmissionState.WAITING:
                         waiting_outcomes[admission.admission_id] = outcome
                     else:
@@ -1869,7 +1905,17 @@ class LocalDaemon:
                         break
                     admission_id, outcome = scheduled
                     started_admissions.add(admission_id)
-                    self._record_admission_health(admission_id, "healthy")
+                    admission = schedulable[admission_id]
+                    self._record_admission_health(
+                        admission_id,
+                        (
+                            "unavailable"
+                            if execution.local_assignment_reconciliation_pending(
+                                admission.run_uri
+                            )
+                            else "healthy"
+                        ),
+                    )
                     self._set_state(admission_id, outcome.state, reason=outcome.reason)
             for admission_id, outcome in waiting_outcomes.items():
                 if admission_id in started_admissions:
@@ -2711,6 +2757,20 @@ class LocalDaemon:
             )
             conn.commit()
 
+    def _record_admission_health_for_run(self, run_uri: str, health: str) -> None:
+        """Join retained exact assignment work to its one admission owner."""
+
+        with self._connection() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT admission_id FROM managed_admissions WHERE run_uri = ?",
+                    (run_uri,),
+                )
+            )
+        if len(rows) != 1:
+            raise QueueConflictError("retained assignment admission is unavailable")
+        self._record_admission_health(str(rows[0]["admission_id"]), health)
+
     def _sample_clock_health(self) -> bool:
         with self._connection() as conn:
             try:
@@ -2759,7 +2819,9 @@ class LocalDaemon:
                 current_epoch = self._epoch or ""
                 revision = int(state.get("accepted_time_revision", "0"))
                 if state.get("accepted_time_health") != "degraded":
-                    raise QueueConflictError("coordinator accepted-time is not degraded")
+                    raise QueueConflictError(
+                        "coordinator accepted-time is not degraded"
+                    )
                 if request.expected_time_revision != revision:
                     raise QueueConflictError("time recovery revision is stale")
                 if request.expected_coordinator_epoch != current_epoch:
@@ -2796,8 +2858,7 @@ class LocalDaemon:
                     ),
                 )
                 conn.execute(
-                    "DELETE FROM daemon_metadata "
-                    "WHERE key = 'accepted_time_diagnostic'"
+                    "DELETE FROM daemon_metadata WHERE key = 'accepted_time_diagnostic'"
                 )
                 conn.execute("UPDATE agent_offers SET current = 0 WHERE current = 1")
                 conn.execute(

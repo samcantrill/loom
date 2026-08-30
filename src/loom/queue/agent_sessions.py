@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     )
 
 
-PROTOCOL_VERSION = "9"
+PROTOCOL_VERSION = "10"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -987,6 +987,56 @@ def _offer_capacity_atom(value: Mapping[str, object]) -> CapacityAtom:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentOfferRenewal:
+    """One sequenced extension of an unchanged current offer."""
+
+    session_id: str
+    offer_id: str
+    availability_revision: str
+    sequence: int
+
+    def __post_init__(self) -> None:
+        for name in ("session_id", "offer_id", "availability_revision"):
+            _identifier(getattr(self, name), name)
+        if (
+            isinstance(self.sequence, bool)
+            or not isinstance(self.sequence, int)
+            or self.sequence < 1
+        ):
+            raise QueueServiceError("offer renewal sequence must be positive")
+
+    def value(self) -> dict[str, PlainData]:
+        return {
+            "session_id": self.session_id,
+            "offer_id": self.offer_id,
+            "availability_revision": self.availability_revision,
+            "sequence": self.sequence,
+        }
+
+    @classmethod
+    def from_value(cls, value: Mapping[str, object]) -> "AgentOfferRenewal":
+        if set(value) != {
+            "session_id",
+            "offer_id",
+            "availability_revision",
+            "sequence",
+        }:
+            raise QueueServiceError("agent offer renewal fields are invalid")
+        sequence = value["sequence"]
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            raise QueueServiceError("agent offer renewal fields are invalid")
+        fields = ("session_id", "offer_id", "availability_revision")
+        if any(not isinstance(value[field], str) for field in fields):
+            raise QueueServiceError("agent offer renewal fields are invalid")
+        return cls(
+            cast(str, value["session_id"]),
+            cast(str, value["offer_id"]),
+            cast(str, value["availability_revision"]),
+            sequence,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AgentRetirementProof:
     session_id: str
     coordinator_id: str
@@ -1371,6 +1421,9 @@ class AgentSessionView:
             offer, idempotency_key=idempotency_key
         )
 
+    def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
+        return AgentSessionService(self._daemon, self._principal).renew_offer(renewal)
+
     def wait_for_work(
         self,
         session_id: str,
@@ -1611,7 +1664,7 @@ class AgentSessionService:
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": [
-                    "agent-sessions-v9",
+                    "agent-sessions-v10",
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],
@@ -2183,6 +2236,91 @@ class AgentSessionService:
         return resumed
 
     @_serialized_offer_operation
+    def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
+        """Extend exactly the current unchanged offer once per sequence."""
+
+        rule, policy_revision = self._authorize("offer")
+        digest = _digest(renewal.value())
+        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id = ?",
+                    (renewal.session_id,),
+                ).fetchone(),
+                self._daemon._require_started(),  # type: ignore[attr-defined]
+                expected_principal=rule.principal_id,
+            )
+            self._check_current_session(
+                session, rule, self._daemon._epoch or "", policy_revision
+            )
+            if session.availability_revision != renewal.availability_revision:
+                raise QueueConflictError("offer renewal availability revision is stale")
+            previous = conn.execute(
+                "SELECT sequence, digest, result_json FROM agent_offer_renewals "
+                "WHERE principal_id = ? AND session_id = ?",
+                (rule.principal_id, renewal.session_id),
+            ).fetchone()
+            if previous is not None:
+                previous_sequence = int(previous["sequence"])
+                if renewal.sequence < previous_sequence:
+                    raise AgentStalePollError("offer renewal sequence is stale")
+                if renewal.sequence == previous_sequence:
+                    if str(previous["digest"]) != digest:
+                        raise QueueConflictError(
+                            "offer renewal sequence was reused with different content"
+                        )
+                    value = json.loads(str(previous["result_json"]))
+                    if not isinstance(value, Mapping):
+                        raise QueueServiceError("offer renewal receipt is invalid")
+                    conn.commit()
+                    return freeze_plain_data(value, path="offer renewal receipt")
+                if renewal.sequence != previous_sequence + 1:
+                    raise AgentPollSequenceGapError("offer renewal sequence has a gap")
+            elif renewal.sequence != 1:
+                raise AgentPollSequenceGapError("offer renewal sequence has a gap")
+            current = conn.execute(
+                "SELECT offer_json FROM agent_offers WHERE offer_id = ? AND session_id = ? "
+                "AND availability_revision = ? AND coordinator_epoch = ? AND current = 1",
+                (
+                    renewal.offer_id,
+                    renewal.session_id,
+                    renewal.availability_revision,
+                    self._daemon._epoch,
+                ),  # type: ignore[attr-defined]
+            ).fetchone()
+            if current is None:
+                raise QueueConflictError("offer renewal requires the current offer")
+            offer = AgentOffer.from_value(json.loads(str(current["offer_json"])))
+            accepted = self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
+            expiry = _add_seconds(accepted, offer.ttl_seconds)
+            conn.execute(
+                "UPDATE agent_offers SET accepted_at = ?, expires_at = ? WHERE offer_id = ?",
+                (accepted, expiry, renewal.offer_id),
+            )
+            result: dict[str, PlainData] = {
+                "offer_id": renewal.offer_id,
+                "accepted_at": accepted,
+                "expires_at": expiry,
+                "sequence": renewal.sequence,
+                "state": "renewed",
+            }
+            conn.execute(
+                "INSERT INTO agent_offer_renewals(principal_id, session_id, sequence, digest, result_json) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(principal_id, session_id) DO UPDATE SET "
+                "sequence = excluded.sequence, digest = excluded.digest, result_json = excluded.result_json",
+                (
+                    rule.principal_id,
+                    renewal.session_id,
+                    renewal.sequence,
+                    digest,
+                    json.dumps(result, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+            conn.commit()
+            return result
+
+    @_serialized_offer_operation
     def publish_offer(
         self, offer: AgentOffer, *, idempotency_key: str
     ) -> Mapping[str, PlainData]:
@@ -2299,6 +2437,10 @@ class AgentSessionService:
             conn.execute(
                 "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
                 (offer.session_id,),
+            )
+            conn.execute(
+                "DELETE FROM agent_offer_renewals WHERE principal_id = ? AND session_id = ?",
+                (rule.principal_id, offer.session_id),
             )
             conn.execute(
                 "INSERT INTO agent_offers(offer_id, session_id, coordinator_epoch, availability_revision, offer_json, accepted_at, expires_at, current) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
@@ -4752,6 +4894,7 @@ def initialize_agent_session_schema(
         CREATE UNIQUE INDEX IF NOT EXISTS agent_one_open_session ON agent_sessions(agent_id) WHERE state NOT IN ('RETIRED_CLEAN','REPLACED');
         CREATE TABLE IF NOT EXISTS agent_receipts (principal_id TEXT NOT NULL, operation TEXT NOT NULL, idempotency_key TEXT NOT NULL, digest TEXT NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY(principal_id, operation, idempotency_key));
         CREATE TABLE IF NOT EXISTS agent_offers (offer_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, availability_revision TEXT NOT NULL, offer_json TEXT NOT NULL, accepted_at TEXT NOT NULL, expires_at TEXT NOT NULL, current INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS agent_offer_renewals (principal_id TEXT NOT NULL, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, digest TEXT NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY(principal_id, session_id));
         CREATE TABLE IF NOT EXISTS agent_poll_state (principal_id TEXT NOT NULL, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, availability_revision TEXT NOT NULL, coordinator_epoch TEXT NOT NULL, wait_timeout_ms INTEGER NOT NULL, digest TEXT NOT NULL, active INTEGER NOT NULL, result_json TEXT, PRIMARY KEY(principal_id, session_id));
         CREATE TABLE IF NOT EXISTS agent_coordinator_references (session_id TEXT NOT NULL, reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id, reference_kind, reference_id));
         CREATE TABLE IF NOT EXISTS agent_retirement_proofs (session_id TEXT PRIMARY KEY, proof_json TEXT NOT NULL);
@@ -4771,6 +4914,7 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS agent_sessions_local (session_id TEXT PRIMARY KEY, value_json TEXT NOT NULL, registration_operation_id TEXT NOT NULL, retirement_secret TEXT, state TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS agent_mutation_intents (operation TEXT NOT NULL, operation_id TEXT NOT NULL, digest TEXT NOT NULL, request_json TEXT NOT NULL, result_json TEXT, PRIMARY KEY(operation, operation_id));
         CREATE TABLE IF NOT EXISTS agent_offers_local (session_id TEXT PRIMARY KEY, availability_revision TEXT NOT NULL, state TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS agent_offer_renewals_local (session_id TEXT PRIMARY KEY, offer_id TEXT NOT NULL, availability_revision TEXT NOT NULL, sequence INTEGER NOT NULL, digest TEXT NOT NULL, result_json TEXT);
         CREATE TABLE IF NOT EXISTS agent_poll_state_local (session_id TEXT PRIMARY KEY, availability_revision TEXT NOT NULL, sequence INTEGER NOT NULL, request_digest TEXT NOT NULL, state TEXT NOT NULL, result_json TEXT);
         CREATE TABLE IF NOT EXISTS agent_session_references (session_id TEXT NOT NULL, reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id, reference_kind, reference_id));
         CREATE TABLE IF NOT EXISTS agent_reference_revision (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), revision INTEGER NOT NULL);
@@ -5058,6 +5202,13 @@ def validate_agent_session_schema(
                 "expires_at",
                 "current",
             },
+            "agent_offer_renewals": {
+                "principal_id",
+                "session_id",
+                "sequence",
+                "digest",
+                "result_json",
+            },
             "agent_poll_state": {
                 "principal_id",
                 "session_id",
@@ -5200,6 +5351,14 @@ def validate_agent_session_schema(
                 "session_id",
                 "availability_revision",
                 "state",
+            },
+            "agent_offer_renewals_local": {
+                "session_id",
+                "offer_id",
+                "availability_revision",
+                "sequence",
+                "digest",
+                "result_json",
             },
             "agent_poll_state_local": {
                 "session_id",
@@ -5536,6 +5695,7 @@ __all__ = [
     "AgentControlEffect",
     "AgentControlKind",
     "AgentOffer",
+    "AgentOfferRenewal",
     "AgentPollActiveError",
     "AgentPollSequenceGapError",
     "AgentProviderDescriptor",

@@ -2,14 +2,15 @@
 
 ## Metadata
 
-- Status: planned
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 13A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p13a-lifecycle-startup-failure-closure`
-- Worktree root and path: set during manager preparation
-- Base revision: current `origin/develop` after this planning commit
+- Worktree root and path: `/home/can134/work/active/loom-worktrees/stage-29-p13a-lifecycle-startup-failure-closure`
+- Base revision: `f9b18c1cc7dba59de90310ceac4fbae8f4e1b837`
 - PR target: `develop`
 - PR title: `Stage 29 phase 13A: close supervisor startup failure leaks`
+- PR: [#262](https://github.com/samcantrill/loom/pull/262)
 - Dependencies: merged Phase 12 plus read-only Phase 13 candidate `748f938`
 - Workflow path: expanded; a detached-process ownership boundary requires one
   independent review after validation
@@ -171,23 +172,38 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending
+- Manager preparation: passed; clean current `origin/develop`, blocked candidate evidence, selective-reuse boundary, process ownership invariants, and targeted gates verified at `f9b18c1`
 - Expanded planning: not needed; the independent Phase 13 finding fixes the
   accepted behavior and supplies the smallest remedy/test boundary
-- Implementation: pending
-- Refiner: pending only for a qualified blocker
-- Pre-submit gate: pending
-- Independent review: required for the corrected detached-process boundary
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Implementation: correction 1/3 complete; owner-store/execution-journal
+  validation and the shared retained-work proof now run before supervisor
+  creation, and created-service cleanup reuses that proof before clean shutdown
+- Refiner: complete; correction 2/3 closes the current-epoch exited-root
+  containment gap before a clean shutdown can retire the service owner
+- Pre-submit gate: passed at final source/test revision `6a578f8`;
+  `make validate-pr` passed Ruff, Pyright, 2,685 default tests, 156
+  configuration-extra tests with 3 expected skips, and both distribution
+  builds. Fresh `make test-summary` recorded 2,841 categorized passes and 3
+  expected skips.
+- Independent review: passed after the reviewer reproduced the pre-loop
+  outbound stop-handoff leak and confirmed correction 3 closes every return
+  after the initially opened client through retained-work-aware cleanup
+- Blocker corrections: 3/3; correction 1 closes direct constructor cleanup's
+  retained-work-proof bypass. Correction 2 contains a current epoch's exited
+  root group before clean shutdown when owned group evidence shows descendants
+  remain; historical clean-epoch terminal rows remain restartable. Correction
+  3 carries the initially opened outbound client through the normal cleanup
+  owner so a stop arriving during close cannot bypass clean shutdown.
+- PR and merge: [#262](https://github.com/samcantrill/loom/pull/262) is open,
+  non-draft, targets `develop`, and was verified cleanly mergeable; merge pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Selectively reused the Phase 13 source/test candidate under `src/loom/queue` and directly relevant queue tests, then changed `LocalDaemon.start()` and `LocalDaemonAgentHttpClient` construction to preserve created-versus-joined supervisor ownership. Correction 1 centralizes the local retained-work proof with normal shutdown, validates owner stores/journals before process creation, and permits created-service cleanup only after a fresh empty proof. Correction 2 changes `AgentProcessSupervisor` clean shutdown to contain an exited current-epoch root's still-live owned process group before writing the clean marker. Correction 3 removes the separate outbound pre-loop probe and carries that opened client through the ordinary cleanup-owned service iteration. |
+| Tests added or updated | Added process-level proof for changed local scheduling rejection, mismatched outbound deployment binding, unavailable local owner-store and outbound execution-journal rejection, retained local owner preservation without a clean marker, and rejection that leaves a valid pre-existing outbound supervisor's PID and epoch reachable. Correction 2 adds supervisor proof that a gone exited group permits epoch rotation, and that clean service shutdown records containment and leaves no TERM-ignoring descendant alive after its root exits. Correction 3 adds a deterministic stop-during-initial-close handoff test with an exact supervisor-process assertion. |
+| Validated revision/tree state and evidence | Original focused tests passed (3); targeted lifecycle matrix passed: 85 tests in 377.39s; targeted SLURM/session/CLI/E2E matrix passed: 69 tests in 121.57s. Correction 1 focused constructor/shutdown matrix passed: 7 tests in 2.25s; changed-file Ruff and Pyright passed. Correction 2 focused supervisor suite passed: 7 tests in 0.82s; changed-file Ruff and Pyright passed. Correction 3 passed its two causal service tests, the complete 38-test outbound/session integration file, Ruff, Pyright with zero findings, and an exact empty post-test process scan. At final source/test revision `6a578f8`, refreshed `make validate-pr` passed Ruff, Pyright with zero findings, 2,685 default tests, 156 configuration-extra tests with 3 expected skips, and source/wheel builds. Fresh `make test-summary` recorded 2,841 categorized passes and 3 expected skips in `build/test-summary.md`. |
+| Validation-relevant changes after evidence | None. This final completion-record update is documentation-only. |
+| PR, review, and merge | Required independent review found one supported outbound stop-handoff leak. Correction 3 closed it, and the same reviewer returned PASS after bounded confirmation. [#262](https://github.com/samcantrill/loom/pull/262) is open, non-draft, targets `develop`, and was verified cleanly mergeable; merge pending. |
+| Residual risk and cleanup | An exact post-gate working-directory scan found no process created by either successful gate. One empty supervisor from an earlier deliberately interrupted pre-gate test run was identified by its exact worktree and durable root, stopped through its authenticated test-only shutdown operation, and repeated exact scans after cleanup, correction 3 tests, and the refreshed full gates were empty. No known phase blocker remains. |

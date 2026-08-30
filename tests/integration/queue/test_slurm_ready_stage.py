@@ -17,7 +17,10 @@ import pytest
 import loom.queue.slurm_ready_stage as slurm_ready_stage
 from loom.pipeline import PipelineSpec
 from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_request
-from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+from loom.pipeline.executors.slurm.commands import (
+    FakeSlurmCommandRunner,
+    SlurmCommandResult,
+)
 from loom.pipeline.executors.slurm.ready_stage import (
     SQLiteReadyStageSubmissions,
     SlurmPlanningError,
@@ -29,7 +32,10 @@ from loom.pipeline.executors.slurm.ready_stage import (
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
-from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.pipeline.stores.sqlite_authority import (
+    SQLitePerRunAuthorityStore,
+    _authority_database_path,
+)
 from loom.queue import (
     LocalDaemon,
     ExecutionRequirement,
@@ -84,6 +90,7 @@ def _profile(
     max_outstanding: int = 1,
     available: bool = True,
     containment_helper: SlurmContainmentHelper | None = None,
+    capability_path: Path | None = None,
 ) -> SlurmReadyStageProfile:
     return SlurmReadyStageProfile(
         profile_id="training",
@@ -99,7 +106,7 @@ def _profile(
         environment_fingerprint="environment-v1",
         executor_fingerprint="executor-v1",
         job_private_file_provider=SlurmJobPrivateFileProvider(
-            fixed_path="/tmp/loom-integration-capability",
+            fixed_path=str(capability_path or "/tmp/loom-integration-capability"),
             descriptor="fake-prolog-v1",
             helper_argv=_TEST_HELPER,
         ),
@@ -116,6 +123,55 @@ def _positive_containment_helper() -> SlurmContainmentHelper:
         "'evidence_revision':'1','echo':value}))"
     )
     return SlurmContainmentHelper("test-contained-v1", (sys.executable, "-c", program))
+
+
+def _persist_rejected_slurm_run(run_root: Path, profile: SlurmReadyStageProfile) -> str:
+    run_store = LocalRunStore(run_root)
+    run_uri = path_to_run_uri(run_root / "rejected-stage-run")
+    run_store.create_run(run_uri)
+    pipeline_config = {
+        "name": "rejected-stage-run",
+        "stages": [
+            {
+                "name": "train",
+                "factory": {
+                    "_target_": (
+                        "tests.support.pipeline_execution_stages.JsonProducerStage"
+                    )
+                },
+                "config": {"value": 1},
+                "outputs": {"data": {"artifact_type": "json", "codec_key": "json.v1"}},
+                "placement": {
+                    "execution_route": {"kind": "slurm", "profile": "training"}
+                },
+            }
+        ],
+    }
+    pipeline = PipelineSpec.from_config(pipeline_config)
+    plan = plan_pipeline(
+        pipeline,
+        run_uri=run_uri,
+        run_store=run_store,
+        artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
+        persist=True,
+    )
+    run_store.write_runtime_metadata(
+        run_uri,
+        {"executor": "local", "stages": {"train": {"executor": "local"}}},
+    )
+    run_store.write_config_snapshot(
+        run_uri, "resolved", json_dumps_pretty({"pipeline": pipeline_config})
+    )
+    prepare_managed_local_runtime_record(
+        store=run_store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=pipeline,
+        execution_requirements=_execution_requirements(pipeline),
+        slurm_profiles=(profile,),
+    )
+    SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=RunStatus.RUNNING)
+    return run_uri
 
 
 def test_slurm_containment_requires_exact_positive_echo() -> None:
@@ -787,6 +843,237 @@ def test_terminal_slurm_result_reconciliation_releases_after_crash_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_boundary: str
 ) -> None:
     _exercise_mixed_route_run(tmp_path, monkeypatch, terminal_boundary)
+
+
+@pytest.mark.parametrize(
+    ("boundary", "expected_state", "authority_bound", "capability_retained"),
+    (
+        ("submission_rejected", "submitting", True, True),
+        ("assignment_rejected", "rejected", True, True),
+        ("authority_unbound", "rejected", False, True),
+        ("logical_released", "logical_released", False, True),
+        ("provider_revoked", "logical_released", False, False),
+        ("final_released", "released", False, False),
+    ),
+)
+def test_definite_slurm_rejection_restarts_after_every_release_arrow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+    expected_state: str,
+    authority_bound: bool,
+    capability_retained: bool,
+) -> None:
+    capability_path = tmp_path / "job-private-capability"
+    runner = FakeSlurmCommandRunner(
+        scripted_results={"sbatch": [SlurmCommandResult("sbatch", ("sbatch",), 1)]}
+    )
+    profile = _profile(runner, capability_path=capability_path)
+    run_root = tmp_path / "runs"
+    run_uri = _persist_rejected_slurm_run(run_root, profile)
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "daemon" / "coordinator",
+        agent_root=tmp_path / "daemon" / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+        slurm_profiles=(profile,),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    runtime = daemon._thread  # noqa: SLF001
+    daemon._stop.set()  # noqa: SLF001
+    daemon._wake.set()  # noqa: SLF001
+    assert runtime is not None
+    runtime.join(timeout=5)
+    assert not runtime.is_alive()
+    daemon._thread = None  # noqa: SLF001
+    execution = daemon._execution  # noqa: SLF001
+    assert execution is not None
+    injected = False
+
+    with monkeypatch.context() as context:
+        if boundary == "submission_rejected":
+            original_record = execution.slurm_assignments.record_submission
+
+            def crash_before_assignment_rejection(
+                assignment_id: str,
+                *,
+                state: str,
+                job_id: str | None,
+                cluster: str | None,
+            ) -> str:
+                nonlocal injected
+                if state == "rejected" and not injected:
+                    injected = True
+                    raise OSError("crash after rejected submission")
+                return original_record(
+                    assignment_id, state=state, job_id=job_id, cluster=cluster
+                )
+
+            context.setattr(
+                execution.slurm_assignments,
+                "record_submission",
+                crash_before_assignment_rejection,
+            )
+        elif boundary in {"assignment_rejected", "authority_unbound"}:
+            original_unbind = SQLitePerRunAuthorityStore.unbind_prepared_attempt
+
+            def crash_at_authority_unbind(
+                store: SQLitePerRunAuthorityStore,
+                candidate_run_uri: str,
+                *,
+                assignment_id: str,
+                attempt_id: str,
+            ) -> None:
+                nonlocal injected
+                if candidate_run_uri == run_uri and not injected:
+                    injected = True
+                    if boundary == "authority_unbound":
+                        original_unbind(
+                            store,
+                            candidate_run_uri,
+                            assignment_id=assignment_id,
+                            attempt_id=attempt_id,
+                        )
+                    raise OSError(f"crash at {boundary}")
+                original_unbind(
+                    store,
+                    candidate_run_uri,
+                    assignment_id=assignment_id,
+                    attempt_id=attempt_id,
+                )
+
+            context.setattr(
+                SQLitePerRunAuthorityStore,
+                "unbind_prepared_attempt",
+                crash_at_authority_unbind,
+            )
+        elif boundary == "logical_released":
+            original_advance = execution.slurm_assignments.advance
+
+            def crash_after_logical_release(
+                assignment_id: str, *, expected: str, next_state: str
+            ) -> str:
+                nonlocal injected
+                result = original_advance(
+                    assignment_id, expected=expected, next_state=next_state
+                )
+                if (
+                    expected == "rejected"
+                    and next_state == "logical_released"
+                    and not injected
+                ):
+                    injected = True
+                    raise OSError("crash after logical release")
+                return result
+
+            context.setattr(
+                execution.slurm_assignments, "advance", crash_after_logical_release
+            )
+        elif boundary == "provider_revoked":
+            original_revoke = SlurmJobPrivateFileProvider.revoke
+
+            def crash_after_provider_revoke(
+                provider: SlurmJobPrivateFileProvider, capability: object
+            ) -> None:
+                nonlocal injected
+                original_revoke(provider, capability)  # type: ignore[arg-type]
+                if not injected:
+                    injected = True
+                    raise SlurmPlanningError("crash after provider revoke")
+
+            context.setattr(
+                SlurmJobPrivateFileProvider, "revoke", crash_after_provider_revoke
+            )
+        else:
+            original_release = execution.slurm_assignments.release
+
+            def crash_after_final_release(assignment_id: str) -> None:
+                nonlocal injected
+                original_release(assignment_id)
+                if not injected:
+                    injected = True
+                    raise OSError("crash after final release")
+
+            context.setattr(
+                execution.slurm_assignments, "release", crash_after_final_release
+            )
+
+        client = daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        )
+        client.submit(LocalDaemonAdmissionRequest("rejected-stage", run_uri))
+        try:
+            daemon.reconcile_once()
+        except OSError as exc:
+            assert "crash" in str(exc)
+
+        assert injected
+        with sqlite3.connect(config.execution_database) as conn:
+            row = conn.execute(
+                "SELECT assignment_id, state FROM slurm_stage_assignments"
+            ).fetchone()
+        assert row is not None
+        assignment_id, retained_state = str(row[0]), str(row[1])
+        assert retained_state == expected_state
+        with sqlite3.connect(_authority_database_path(run_uri)) as conn:
+            bindings = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM managed_attempt_bindings "
+                    "WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()[0]
+            )
+        assert bool(bindings) is authority_bound
+        assert capability_path.exists() is capability_retained
+
+    daemon.stop()
+    replacement = LocalDaemon(config)
+    replacement.start()
+    try:
+        replacement_execution = replacement._execution  # noqa: SLF001
+        assert replacement_execution is not None
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if (
+                replacement_execution.slurm_assignments.read(assignment_id).state
+                == "released"
+            ):
+                break
+            time.sleep(0.02)
+        assert (
+            replacement_execution.slurm_assignments.read(assignment_id).state
+            == "released"
+        )
+        assert not capability_path.exists()
+        with sqlite3.connect(_authority_database_path(run_uri)) as conn:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM managed_attempt_bindings "
+                    "WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()[0]
+                == 0
+            )
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM managed_attempt_unbind_receipts "
+                    "WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()[0]
+                == 1
+            )
+        with sqlite3.connect(config.execution_database) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM slurm_stage_assignments").fetchone()[
+                    0
+                ]
+                == 1
+            )
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+    finally:
+        replacement.stop()
 
 
 def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
