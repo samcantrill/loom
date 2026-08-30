@@ -60,7 +60,7 @@ def handle(namespace: argparse.Namespace) -> int:
             exit_code=ExitCode.CONFIG,
         )
     result = build_inspect_run_result(
-        str(namespace.run_uri), endpoint=namespace.endpoint
+        str(namespace.run_uri), endpoint=namespace.endpoint, queue_config=namespace.queue_config
     )
     if output_format_from_namespace(namespace) is OutputFormat.JSON:
         sys.stdout.write(
@@ -78,7 +78,7 @@ def handle(namespace: argparse.Namespace) -> int:
 
 
 def build_inspect_run_result(
-    run_uri: str, *, endpoint: str | None = None
+    run_uri: str, *, endpoint: str | None = None, queue_config: str | Path | None = None
 ) -> "RunInspectionResponse":
     try:
         from loom.diagnostics.run_inspection import (
@@ -87,7 +87,10 @@ def build_inspect_run_result(
         )
 
         if endpoint is None:
-            return inspect_run(run_uri)
+            if queue_config is None:
+                return inspect_run(run_uri)
+            from loom.cli.sweep import _started_queue_service
+            return inspect_run(run_uri, queue_service=_started_queue_service(queue_config))
         from loom.queue import LocalDaemonSocketClient
 
         return decode_run_inspection_response(

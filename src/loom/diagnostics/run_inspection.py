@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+import json
 from typing import Any, TypeAlias, TypeVar, cast
 
 from loom.pipeline.stores.run_uri import validate_run_uri
@@ -354,10 +355,15 @@ class RunInspectionProjection:
     """Project exact lower-owner facts into the stable public result."""
 
     def __init__(
-        self, *, run_store: Any | None = None, daemon: Any | None = None
+        self,
+        *,
+        run_store: Any | None = None,
+        daemon: Any | None = None,
+        queue_service: Any | None = None,
     ) -> None:
         self._run_store = run_store
         self._daemon = daemon
+        self._queue_service = queue_service
 
     def inspect(self, run_uri: str) -> RunInspectionResponse:
         try:
@@ -383,7 +389,11 @@ class RunInspectionProjection:
         authoritative = _authoritative_read(run_uri, run_store=self._run_store)
         snapshot = None if authoritative is None else authoritative.snapshot
         local_store = (
-            _default_run_store(run_uri)
+            (
+                getattr(self._run_store, "local_store", self._run_store)
+                if self._run_store is not None
+                else _default_run_store(run_uri)
+            )
             if authoritative is None
             else authoritative.local_store
         )
@@ -440,6 +450,8 @@ class RunInspectionProjection:
                 admission.accepted_at,
                 "current",
             )
+        elif self._queue_service is not None:
+            self._project_service_less_queue(run_uri, local_store, axes, locations)
         else:
             axes[RunInspectionAxisName.ADMISSION] = RunInspectionAxis(
                 RunInspectionAxisName.ADMISSION,
@@ -459,7 +471,7 @@ class RunInspectionProjection:
             RunInspectionTruncation("stages", len(all_stages), len(stages)),
             RunInspectionTruncation("locations", len(all_locations), len(locations)),
         )
-        return RunInspectionResult(
+        result = RunInspectionResult(
             run_uri=run_uri,
             as_of=utc_timestamp(),
             summary=_summary(axes[RunInspectionAxisName.LIFECYCLE]),
@@ -468,20 +480,89 @@ class RunInspectionProjection:
             locations=tuple(locations),
             truncation=truncation,
         )
+        return _fit_response(result)
+
+    def _project_service_less_queue(
+        self,
+        run_uri: str,
+        local_store: Any,
+        axes: dict[RunInspectionAxisName, RunInspectionAxis],
+        locations: list[RunInspectionLocation],
+    ) -> None:
+        """Read one retained operation and one queue primary key, never a scan."""
+        operation = local_store.latest_submitted_operation(run_uri)
+        if operation is None:
+            axes[RunInspectionAxisName.ADMISSION] = RunInspectionAxis(
+                RunInspectionAxisName.ADMISSION, "queue", "unavailable", "unavailable",
+                None, None, "unavailable", "queue_reference_unavailable"
+            )
+            return
+        queue = operation.backend_metadata.get("queue")
+        queue_item_id = queue.get("queue_item_id") if isinstance(queue, Mapping) else None
+        if not isinstance(queue_item_id, str):
+            axes[RunInspectionAxisName.ADMISSION] = RunInspectionAxis(
+                RunInspectionAxisName.ADMISSION, "queue", "unavailable", "unavailable",
+                None, operation.updated_at, "unavailable", "queue_reference_missing"
+            )
+            return
+        queue_service = self._queue_service
+        assert queue_service is not None
+        item = queue_service.read_item(queue_item_id)
+        if item is None or item.run_uri != run_uri:
+            axes[RunInspectionAxisName.ADMISSION] = RunInspectionAxis(
+                RunInspectionAxisName.ADMISSION, "queue", "unavailable", "unavailable",
+                None, operation.updated_at, "unavailable", "queue_reference_mismatch"
+            )
+            return
+        axes[RunInspectionAxisName.ADMISSION] = RunInspectionAxis(
+            RunInspectionAxisName.ADMISSION, "queue", "available", item.status.value,
+            item.dispatch_attempt, item.updated_at, "current"
+        )
+        axes[RunInspectionAxisName.SCHEDULING] = RunInspectionAxis(
+            RunInspectionAxisName.SCHEDULING, "queue", "available", item.status.value,
+            item.dispatch_attempt, item.updated_at, "current"
+        )
+        handle = item.dispatch_handle
+        if handle is not None:
+            recorded_item_id = handle.evidence.get("queue_item_id")
+            if recorded_item_id is not None and recorded_item_id != queue_item_id:
+                raise LookupError("dispatch handle queue reference mismatches")
+            axes[RunInspectionAxisName.ASSIGNMENT] = RunInspectionAxis(
+                RunInspectionAxisName.ASSIGNMENT, "queue", "available", "DISPATCHED",
+                handle.dispatch_attempt, handle.dispatched_at, "current"
+            )
+        manifest = _read_slurm_manifest(local_store, run_uri, operation)
+        if manifest is not None:
+            if manifest.queue_item_id != queue_item_id:
+                raise LookupError("retained manifest queue reference mismatches")
+            axes[RunInspectionAxisName.EXTERNAL_SCHEDULER] = RunInspectionAxis(
+                RunInspectionAxisName.EXTERNAL_SCHEDULER, "slurm", "available",
+                manifest.submission_status.value, operation.updated_at, manifest.updated_at,
+                "current"
+            )
+            for job in manifest.submitted_jobs:
+                for stream, path in (("stdout", job.stdout_relative_path), ("stderr", job.stderr_relative_path)):
+                    if path is not None:
+                        locations.append(RunInspectionLocation(
+                            f"log:{job.logical_key}:{stream}", path, "log", "recorded",
+                            None, None, RunLocationReachability.SHARED_UNKNOWN
+                        ))
 
 
 def inspect_run(
-    run_uri: str, *, run_store: Any | None = None, daemon: Any | None = None
+    run_uri: str, *, run_store: Any | None = None, daemon: Any | None = None,
+    queue_service: Any | None = None,
 ) -> RunInspectionResponse:
     """Return one safe, bounded inspection result or a closed failure."""
-    return RunInspectionProjection(run_store=run_store, daemon=daemon).inspect(run_uri)
+    return RunInspectionProjection(run_store=run_store, daemon=daemon, queue_service=queue_service).inspect(run_uri)
 
 
 def projection_callable(
-    *, run_store: Any | None = None, daemon: Any | None = None
+    *, run_store: Any | None = None, daemon: Any | None = None,
+    queue_service: Any | None = None,
 ) -> Callable[[str], Mapping[str, PlainData]]:
     """Return the plain-data callback accepted by lower transports."""
-    projection = RunInspectionProjection(run_store=run_store, daemon=daemon)
+    projection = RunInspectionProjection(run_store=run_store, daemon=daemon, queue_service=queue_service)
     return lambda run_uri: projection.inspect(run_uri).to_dict()
 
 
@@ -534,6 +615,41 @@ def _bounded(values: list[_T], collection: str = "") -> tuple[list[_T], list[_T]
 
 def _summary(axis: RunInspectionAxis) -> str:
     return axis.state if axis.availability == "available" else "unavailable"
+
+
+def _read_slurm_manifest(local_store: Any, run_uri: str, operation: Any) -> Any | None:
+    """Read the one run-local manifest named by the retained operation."""
+    if operation.backend != "slurm":
+        return None
+    from loom.pipeline.executors.slurm.live import read_slurm_live_manifest
+    from loom.pipeline.executors.slurm.paths import resolve_slurm_generated_artifact_path
+
+    paths = getattr(local_store, "paths", local_store)
+    path = resolve_slurm_generated_artifact_path(
+        paths, run_uri, operation.manifest_relative_path
+    ).local_path
+    return read_slurm_live_manifest(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _fit_response(result: RunInspectionResult) -> RunInspectionResult:
+    """Keep the encoded public response below the fixed transport budget."""
+    stages = list(result.stages)
+    locations = list(result.locations)
+    while True:
+        truncation = (
+            RunInspectionTruncation("stages", result.truncation[0].total_count, len(stages)),
+            RunInspectionTruncation("locations", result.truncation[1].total_count, len(locations)),
+        )
+        candidate = RunInspectionResult(result.run_uri, result.as_of, result.summary,
+            result.axes, tuple(stages), tuple(locations), truncation)
+        if len(json.dumps(candidate.to_dict(), separators=(",", ":")).encode("utf-8")) <= MAX_INSPECTION_RESPONSE_BYTES:
+            return candidate
+        if locations:
+            locations.pop()
+        elif stages:
+            stages.pop()
+        else:
+            return candidate
 
 
 def _run_uri(value: object) -> str:

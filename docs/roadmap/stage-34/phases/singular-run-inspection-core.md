@@ -191,20 +191,25 @@ Final commands:
   worktree, source seams, and fast-path route verified.
 - Expanded planning: not needed; the merged Stage 32 seam matches DQ-3.
 - Implementation: pending executor.
-- Refiner: not needed.
+- Refiner: correction 1/3 complete. The original skeleton did not compose the
+  projection in the production Unix daemon, did not apply direct queue
+  configuration, and did not project the retained service-less exact queue
+  reference. The bounded correction reuses the retained operation, exact queue
+  primary-key read, and dispatch-handle/manifest agreement; it adds no owner
+  persistence or protocol.
 - Pre-submit gate: pending.
 - Independent review: reconsider only for a material residual public-contract or
   cross-owner correctness risk after manager review.
-- Blocker corrections: 0/3.
+- Blocker corrections: 1/3.
 - PR and merge: pending.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added `loom.diagnostics.run_inspection` strict v1 models/projection and lazy exports; owner-only injected Unix operation/client; indexed daemon run-URI lookup; direct/Unix CLI selection, docs, and public import expectation. |
-| Tests added or updated | Added run-inspection codec/bounds and CLI selector tests; updated diagnostics public-import assertion. |
-| Validated revision/tree state and evidence | Focused lint and Pyright passed. `pytest tests/package/test_import.py tests/unit/loom/diagnostics/test_run_inspection.py tests/unit/loom/cli/test_inspect_run.py tests/unit/loom/queue/test_local_daemon.py` passed (52 tests). Earlier `make test-summary` found the public-import expectation omission; all other suites passed, and the targeted correction passed. |
-| Validation-relevant changes after evidence | The public-import test expectation was updated after the broad summary; focused validation above is current. |
+| Implementation and changed paths | Added `loom.diagnostics.run_inspection` strict v1 models/projection and lazy exports; owner-only injected Unix operation/client; indexed daemon run-URI lookup; direct/Unix CLI selection, docs, and public import expectation. Correction 1 composes the injected projection in `queue daemon serve`, applies direct-only `--queue-config`, follows one run-local retained operation to one queue primary-key read, verifies the retained handle/manifest queue identity, exposes applicable queue/Slurm/log-location facts, and trims encoded results to the fixed 1-MiB response limit. |
+| Tests added or updated | Added run-inspection codec/bounds, exact service-less queue-reference/mismatch, and CLI direct queue-config tests; updated diagnostics public-import assertion. |
+| Validated revision/tree state and evidence | Correction 1: `uv run pytest tests/unit/loom/diagnostics/test_run_inspection.py tests/unit/loom/cli/test_inspect_run.py tests/unit/loom/queue/test_local_daemon.py` passed (47 tests); Ruff and Pyright passed for changed source/tests; `git diff --check` passed. Earlier evidence remains superseded where these sources/tests changed. |
+| Validation-relevant changes after evidence | Correction 1 changed projection, daemon composition, CLI composition, and focused tests. A fresh broad gate remains required before PR preparation. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | No implementation blocker. A fresh broad `make validate-pr`/`make test-summary` receipt is still required after the final public-import test correction. |
