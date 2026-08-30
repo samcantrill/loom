@@ -484,6 +484,56 @@ def test_changed_scheduling_configuration_rejects_before_starting_supervisor(
     assert _supervisor_process_ids(config.agent_root) == ()
 
 
+def test_unavailable_local_owner_store_rejects_before_starting_supervisor(
+    tmp_path: Path,
+) -> None:
+    config = _daemon_config(tmp_path)
+    LocalDaemon.initialize(config)
+    config.execution_database.unlink()
+
+    with pytest.raises(QueueServiceError, match="retained daemon owner state"):
+        LocalDaemon(config).start()
+
+    assert _supervisor_process_ids(config.agent_root) == ()
+
+
+def test_failed_local_start_preserves_supervisor_with_retained_owner_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _daemon_config(tmp_path)
+    LocalDaemon.initialize(config)
+    _retained_claim(config, assignment_id="retained-startup-failure")
+
+    def fail_resume(_execution: LocalDaemonExecution) -> None:
+        raise QueueServiceError("post-start local construction failed")
+
+    monkeypatch.setattr(
+        LocalDaemonExecution, "resume_retained_local_work", fail_resume
+    )
+    try:
+        with pytest.raises(QueueServiceError, match="retained daemon owner state"):
+            LocalDaemon(config).start()
+
+        process_ids = _supervisor_process_ids(config.agent_root)
+        assert len(process_ids) == 1
+        with sqlite3.connect(config.agent_root / "supervisor" / "supervisor.sqlite") as conn:
+            assert (
+                conn.execute(
+                    "SELECT value FROM metadata WHERE key = 'clean_shutdown_epoch'"
+                ).fetchone()
+                is None
+            )
+    finally:
+        _, agent_id = _owner_ids(config)
+        supervisor = AgentProcessSupervisorClient(
+            config.agent_root,
+            SupervisorLaunchConfiguration(
+                agent_id, (config.resident_worker_launch_profile,)
+            ),
+        )
+        supervisor.shutdown_for_test()
+
+
 def test_admission_digest_covers_the_resolved_pipeline_snapshot(
     tmp_path: Path,
 ) -> None:

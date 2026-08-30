@@ -482,6 +482,33 @@ def test_outbound_deployment_fingerprint_rejection_starts_no_supervisor(
     assert _supervisor_process_ids(cast(Path, config.agent_root)) == ()
 
 
+def test_unavailable_outbound_execution_journal_rejects_before_starting_supervisor(
+    tmp_path: Path,
+) -> None:
+    profile = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
+        ),
+        Path(__file__).resolve().parents[3],
+        Path(sys.executable),
+    )
+    config = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        _fresh_remote_agent_root(tmp_path),
+        (profile,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(config)
+    (cast(Path, config.agent_root) / "journal.sqlite").unlink()
+
+    with pytest.raises(QueueServiceError, match="execution journal is unavailable"):
+        LocalDaemonAgentHttpClient(config)
+
+    assert _supervisor_process_ids(cast(Path, config.agent_root)) == ()
+
+
 def test_outbound_rejection_preserves_a_preexisting_supervisor(
     tmp_path: Path,
 ) -> None:

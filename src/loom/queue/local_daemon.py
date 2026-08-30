@@ -47,6 +47,7 @@ from .agent_sessions import (
     validate_agent_session_schema,
 )
 from ._agent_process_supervisor import (
+    AgentProcessSupervisorClient,
     AgentProcessSupervisorError,
     ResidentWorkerLaunchProfile,
 )
@@ -1361,13 +1362,14 @@ class LocalDaemon:
             coordinator_lock.close()
             raise
         created_supervisor: AgentProcessSupervisorClient | None = None
+        owner_ids: tuple[str, str] | None = None
         try:
             coordinator_id = _open_root(
                 self.config.coordinator_root, role="coordinator"
             )
             agent_id = _open_root(self.config.agent_root, role="local-agent")
+            owner_ids = coordinator_id, agent_id
             from ._agent_process_supervisor import (
-                AgentProcessSupervisorClient,
                 AgentProcessSupervisorService,
                 SupervisorLaunchConfiguration,
             )
@@ -1375,6 +1377,8 @@ class LocalDaemon:
             supervisor_configuration = SupervisorLaunchConfiguration(
                 agent_id, (self.config.resident_worker_launch_profile,)
             )
+            from .local_daemon_execution import local_daemon_owner_work_is_retained
+
             # The protected scheduling binding is a read-only rejection point.
             # Check it before an empty detached owner exists at all.
             with self._connection() as conn:
@@ -1394,6 +1398,13 @@ class LocalDaemon:
             scheduling_epoch = scheduling.get("scheduling_epoch")
             if scheduling_epoch is None:
                 raise QueueStorageError("scheduling epoch is unavailable")
+            # This is the same cross-owner proof used by normal shutdown.  It
+            # rejects unavailable owner state before process creation and
+            # identifies retained work that must keep a newly started service
+            # available for recovery if later construction fails.
+            local_daemon_owner_work_is_retained(
+                self.config, coordinator_id=coordinator_id, agent_id=agent_id
+            )
             try:
                 AgentProcessSupervisorClient(
                     self.config.agent_root, supervisor_configuration
@@ -1435,14 +1446,12 @@ class LocalDaemon:
                 )
                 conn.commit()
         except Exception:
-            if created_supervisor is not None:
-                try:
-                    # This invocation started an otherwise empty service.  The
-                    # supervisor remains the sole authority for proving that
-                    # its clean shutdown cannot affect retained work.
-                    created_supervisor.shutdown_clean()
-                except AgentProcessSupervisorError:
-                    pass
+            if created_supervisor is not None and owner_ids is not None:
+                self._shutdown_created_supervisor_if_empty(
+                    created_supervisor,
+                    coordinator_id=owner_ids[0],
+                    agent_id=owner_ids[1],
+                )
             agent_lock.close()
             coordinator_lock.close()
             self._coordinator_id = None
@@ -1472,10 +1481,11 @@ class LocalDaemon:
             execution.resume_retained_local_work()
         except Exception:
             if created_supervisor is not None:
-                try:
-                    created_supervisor.shutdown_clean()
-                except AgentProcessSupervisorError:
-                    pass
+                self._shutdown_created_supervisor_if_empty(
+                    created_supervisor,
+                    coordinator_id=coordinator_id,
+                    agent_id=agent_id,
+                )
             agent_lock.close()
             coordinator_lock.close()
             self._coordinator_id = None
@@ -1505,6 +1515,27 @@ class LocalDaemon:
             self.stop()
             raise
         return self.status()
+
+    def _shutdown_created_supervisor_if_empty(
+        self,
+        supervisor: AgentProcessSupervisorClient,
+        *,
+        coordinator_id: str,
+        agent_id: str,
+    ) -> None:
+        """Retire only the empty cross-owner service this start created."""
+
+        from .local_daemon_execution import local_daemon_owner_work_is_retained
+
+        try:
+            if not local_daemon_owner_work_is_retained(
+                self.config, coordinator_id=coordinator_id, agent_id=agent_id
+            ):
+                supervisor.shutdown_clean()
+        except (AgentProcessSupervisorError, QueueConflictError, QueueServiceError):
+            # Unknown or retained owner state is deliberately recoverable; a
+            # constructor failure must never turn it into forced termination.
+            pass
 
     def stop(self) -> None:
         self._stop.set()

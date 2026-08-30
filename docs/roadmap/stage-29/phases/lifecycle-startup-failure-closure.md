@@ -174,23 +174,24 @@ Final commands:
 - Manager preparation: passed; clean current `origin/develop`, blocked candidate evidence, selective-reuse boundary, process ownership invariants, and targeted gates verified at `f9b18c1`
 - Expanded planning: not needed; the independent Phase 13 finding fixes the
   accepted behavior and supplies the smallest remedy/test boundary
-- Implementation: complete; reordered the local scheduling and outbound
-  deployment-binding rejections before supervisor creation, with
-  ownership-aware clean shutdown for the remaining post-start construction
-  windows
+- Implementation: correction 1/3 complete; owner-store/execution-journal
+  validation and the shared retained-work proof now run before supervisor
+  creation, and created-service cleanup reuses that proof before clean shutdown
 - Refiner: pending only for a qualified blocker
 - Pre-submit gate: pending
 - Independent review: required for the corrected detached-process boundary
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3; manager found that direct constructor cleanup
+  bypassed the cross-owner retained-work proof, and the bounded correction is
+  complete
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Selectively reused the Phase 13 source/test candidate under `src/loom/queue` and directly relevant queue tests, then changed `LocalDaemon.start()` and `LocalDaemonAgentHttpClient` construction to preserve created-versus-joined supervisor ownership and reuse `shutdown_clean`. |
-| Tests added or updated | Added process-level proof for changed local scheduling rejection, mismatched outbound deployment binding, and rejection that leaves a valid pre-existing outbound supervisor's PID and epoch reachable. |
-| Validated revision/tree state and evidence | Focused new tests passed (3); targeted lifecycle matrix passed: 85 tests in 377.39s; targeted SLURM/session/CLI/E2E matrix passed: 69 tests in 121.57s; changed-file Ruff and Pyright passed. |
-| Validation-relevant changes after evidence | None. |
+| Implementation and changed paths | Selectively reused the Phase 13 source/test candidate under `src/loom/queue` and directly relevant queue tests, then changed `LocalDaemon.start()` and `LocalDaemonAgentHttpClient` construction to preserve created-versus-joined supervisor ownership. Correction 1 centralizes the local retained-work proof with normal shutdown, validates owner stores/journals before process creation, and permits created-service cleanup only after a fresh empty proof. |
+| Tests added or updated | Added process-level proof for changed local scheduling rejection, mismatched outbound deployment binding, unavailable local owner-store and outbound execution-journal rejection, retained local owner preservation without a clean marker, and rejection that leaves a valid pre-existing outbound supervisor's PID and epoch reachable. |
+| Validated revision/tree state and evidence | Original focused tests passed (3); targeted lifecycle matrix passed: 85 tests in 377.39s; targeted SLURM/session/CLI/E2E matrix passed: 69 tests in 121.57s. Correction 1 focused constructor/shutdown matrix passed: 7 tests in 2.25s; changed-file Ruff and Pyright passed. |
+| Validation-relevant changes after evidence | Correction 1 changed local/outbound preflight and cleanup; its focused matrix and Ruff/Pyright ran afterward. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

@@ -571,6 +571,36 @@ def local_daemon_owner_stores_available(
         return False
 
 
+def local_daemon_owner_work_is_retained(
+    config: LocalDaemonConfig,
+    *,
+    coordinator_id: str,
+    agent_id: str,
+) -> bool:
+    """Return only a validated cross-owner retained-work result."""
+
+    if not local_daemon_owner_stores_available(
+        config, coordinator_id=coordinator_id, agent_id=agent_id
+    ):
+        raise QueueServiceError("retained daemon owner state is unavailable")
+    try:
+        journal = SQLiteAgentJournal(config.agent_journal, _allow_initialize=False)
+        coordinator = SQLiteCoordinatorAssignments(
+            config.execution_database,
+            _coordinator_capacity(config),
+            _allow_initialize=False,
+        )
+        journal._open_existing()
+        coordinator._open_existing()
+        return bool(journal.retained_claim_commands()) or bool(
+            coordinator.retained_assignments(agent_id=config.machine_id)
+        )
+    except ManagedLocalError as exc:
+        raise QueueServiceError(
+            "local daemon retained-work proof is unavailable"
+        ) from exc
+
+
 def _bind_owner_store(path: Path, *, role: str, stable_id: str) -> None:
     with _connect_existing_sqlite(path) as conn:
         conn.execute(
@@ -1209,15 +1239,11 @@ class LocalDaemonExecution:
     def shutdown_clean(self) -> None:
         """Use all local authoritative owners before retiring the supervisor."""
 
-        try:
-            retained = bool(self.journal.retained_claim_commands()) or bool(
-                self.coordinator.retained_assignments(agent_id=self.config.machine_id)
-            )
-        except ManagedLocalError as exc:
-            raise QueueServiceError(
-                "local daemon retained-work proof is unavailable"
-            ) from exc
-        if retained:
+        if local_daemon_owner_work_is_retained(
+            self.config,
+            coordinator_id=self.coordinator_id,
+            agent_id=self.agent_id,
+        ):
             raise QueueConflictError("local daemon has retained work")
         try:
             self.supervisor.shutdown_clean()

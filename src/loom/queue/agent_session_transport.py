@@ -34,6 +34,7 @@ from loom.queue._managed_local import (
     ClaimCommand,
     ClaimOutcome,
     ManagedAssignment,
+    ManagedLocalError,
     ObserveRequest,
     ProviderReleaseEvidence,
     SQLiteAgentJournal,
@@ -1454,11 +1455,6 @@ class LocalDaemonAgentHttpClient:
         )
         created_supervisor = False
         try:
-            self._supervisor, created_supervisor = self._open_supervisor(config)
-            self._profiles = {
-                item.descriptor.profile_id: item for item in config.resident_profiles
-            }
-            self._retained_profiles: dict[str, ResidentExecutionProfile] = {}
             self._execution_journal = (
                 SQLiteAgentJournal(
                     Path(config.agent_root) / "journal.sqlite",
@@ -1468,16 +1464,25 @@ class LocalDaemonAgentHttpClient:
                 else None
             )
             if self._execution_journal is not None:
-                self._execution_journal._open_existing()
-            self._restart_with_retained_work = bool(
-                self._execution_journal.retained_claim_commands()
-                if self._execution_journal is not None
-                else ()
-            ) or bool(
-                self._journal.has_unresolved_assignment_references()
-                if self._journal is not None
-                else False
-            )
+                try:
+                    self._execution_journal._open_existing()
+                except ManagedLocalError as exc:
+                    raise QueueServiceError("remote execution journal is unavailable") from exc
+            # Reuse the normal shutdown predicate before creating a detached
+            # service.  A corrupt journal therefore rejects process-free,
+            # while retained work remains protected if later construction
+            # fails.
+            try:
+                self._restart_with_retained_work = self._has_retained_agent_work()
+            except ManagedLocalError as exc:
+                raise QueueServiceError(
+                    "remote retained-work proof is unavailable"
+                ) from exc
+            self._supervisor, created_supervisor = self._open_supervisor(config)
+            self._profiles = {
+                item.descriptor.profile_id: item for item in config.resident_profiles
+            }
+            self._retained_profiles: dict[str, ResidentExecutionProfile] = {}
             self._runtime_agent_id: str | None = None
             self._runtime_provider_key: str | None = None
             self._providers: dict[str, AgentResourceProvider] = {}
@@ -1496,8 +1501,9 @@ class LocalDaemonAgentHttpClient:
             supervisor = self._supervisor
             if created_supervisor and supervisor is not None:
                 try:
-                    supervisor.shutdown_clean()
-                except AgentProcessSupervisorError:
+                    if not self._has_retained_agent_work():
+                        supervisor.shutdown_clean()
+                except (AgentProcessSupervisorError, ManagedLocalError, QueueError):
                     pass
             if self._journal is not None:
                 self._journal.close()
