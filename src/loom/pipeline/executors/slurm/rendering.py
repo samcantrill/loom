@@ -102,7 +102,7 @@ def _gpu_allocation_lines(job: SlurmPlannedJob) -> tuple[str, ...]:
         "fi",
         'for _loom_cuda_device in "${_loom_cuda_devices[@]}"; do',
         '  case "${_loom_cuda_device}" in',
-        "    ''|*[!A-Za-z0-9._:/-]*) echo 'loom GPU admission failed: invalid visibility token' >&2; exit 78 ;;",
+        "    ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._:/-]*) echo 'loom GPU admission failed: invalid visibility token' >&2; exit 78 ;;",
         "  esac",
         "done",
         "for (( _loom_cuda_i=0; _loom_cuda_i<${#_loom_cuda_devices[@]}; _loom_cuda_i++ )); do",

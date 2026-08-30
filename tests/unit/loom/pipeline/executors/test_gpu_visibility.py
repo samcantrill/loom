@@ -30,7 +30,19 @@ def test_visibility_evidence_preserves_opaque_tokens() -> None:
 
 @pytest.mark.parametrize(
     "visible",
-    (None, "", "-1", "0,", ",0", "0,,1", "0, 1", "0,0", "bad token"),
+    (
+        None,
+        "",
+        "-1",
+        "0,",
+        ",0",
+        "0,,1",
+        "0, 1",
+        "0,0",
+        "bad token",
+        "-foo",
+        ".foo",
+    ),
 )
 def test_visibility_rejects_missing_or_invalid_positive_gpu_bindings(
     visible: str | None,
