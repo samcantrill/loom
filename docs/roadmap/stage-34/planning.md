@@ -10,12 +10,13 @@ an authenticated remote trust boundary, and a non-atomic join across coordinator
 authority, scheduler, and filesystem owners
 Current gate: passed; planning approved 2026-08-30
 Planning blockers: none
-Implementation prerequisite: Stage 32 Phase 2 merged
+Implementation prerequisite: Stage 32 complete; replacement Phase 3 merged in
+[#261](https://github.com/samcantrill/loom/pull/261)
 
 This file is current authoritative planning state, not an implementation
 transcript. The complete packet was approved on 2026-08-30. Product
-implementation begins only through the phase workflow after Stage 32 Phase 2
-is remotely merged.
+implementation begins only through the phase workflow after Stage 32's
+service-less completion is remotely merged.
 
 ## Current State
 
@@ -26,7 +27,7 @@ is remotely merged.
 | Design | Diagnostics owns one strict projection shared by direct, owner-only Unix, and authenticated HTTP. Bounds, authorization, source selection, imports, and exact Stage 32 lookup are locked. | None. | Preserve DQ-1 through DQ-5. |
 | Validation | Source mode, owner availability, authorization, projection safety, and bounds are the causal dimensions. | None. | Use the focused matrix below. |
 | Detailed plan | The manifest links two vertical phase plans: core projection/local paths, then authenticated HTTP. | None. | Preserve phase contracts. |
-| Approval | Complete planning packet approved 2026-08-30. | None. | Begin Phase 1 only after Stage 32 Phase 2 merges. |
+| Approval | Complete planning packet approved 2026-08-30. | None. | Begin Phase 1 from the completed Stage 32 base. |
 
 ## Evidence And Scope
 
@@ -71,10 +72,10 @@ is remotely merged.
 | FR-5 | Return bounded artifact and log location records with logical identity, URI/path representation, source/availability, and checksum/type facts where safe. | No payload bytes, log content/tail/follow, codec loading, checksum scan, directory listing, presigned URL, or claim that a remote client can reach a coordinator-local path. | `ArtifactRef`; local materialization path helpers. | No-read fake stores, bounded cardinality, redaction, local/external URI cases. | locked |
 | FR-6 | Support direct construction, owner-only Unix socket, and authenticated HTTP with identical observable result semantics. Document SSH only as an operator invocation of the local JSON CLI for service-less deployments. | No second HTTP server framework, SSH library/client, or compute-node callback. | Stage 29 transports and Stage 32 CLI. | Direct/Unix/HTTP contract tests and documented SSH command seam. | locked |
 | FR-7 | Make remote query authorization read-only and independent of submit, cancel, recovery, agent, bootstrap, and authority credentials. Recheck current policy on every request. | No bearer token shortcut, request-body principal, or broad authority client exposure. | Stage 29 mTLS policy/authorizer. | Wrong role/cert/service/run operation and revocation tests with zero mutation. | locked |
-| FR-8 | Bound request size, response cardinality, query work, and serialization. Managed queries use exact Stage 29 reads; service-less queries follow Stage 32's durable run-to-item reference to an exact item read. | Never load global history or scan queue rows. | Stage 29 Phase 12; Stage 32 Phase 2. | Thousands-of-runs fixture, caps, and truncation counts. | locked |
+| FR-8 | Bound request size, response cardinality, query work, and serialization. Managed queries use exact Stage 29 reads; service-less queries follow Stage 32's durable run-to-item reference to an exact item read. | Never load global history or scan queue rows. | Stage 29 Phase 12; Stage 32 replacement Phase 3. | Thousands-of-runs fixture, caps, and truncation counts. | locked |
 | FR-9 | Return typed not-found, unauthorized, invalid, unavailable, degraded, and truncated outcomes with safe diagnostics. A known run may return partial owner axes; an unavailable owner must not be silently omitted or upgraded. | No internal path/exception leakage in errors and no local fallback that bypasses the selected coordinator boundary. | Existing safe transport errors and state-source vocabulary. | Failure matrix and secret-bearing fake exceptions. | locked |
 | FR-10 | Add `loom inspect-run RUN_URI` with concise text and `loom.cli.inspect_run.v1` JSON. Require exactly one of direct, Unix endpoint, or protected HTTP config; never fall back. Existing commands remain unchanged. | No project-code import, inferred endpoint, secrets in argv/output, or `loom status.v3` change. | Existing CLI/config patterns. | Parser, envelope, subprocess, and import-safety tests. | locked |
-| FR-11 | Preserve status, queue, authority, artifact, and log owners and start only after Stage 32 Phase 2. | No new database/service or owner-schema rewrite. | Predecessor merge and durable run-to-item reference. | Diff/contract review and full gates. | locked |
+| FR-11 | Preserve status, queue, authority, artifact, and log owners and start only after Stage 32's service-less completion is remotely merged. | No new database/service or owner-schema rewrite. | Predecessor merge and durable run-to-item reference. | Diff/contract review and full gates. | locked |
 | FR-12 | Document managed local, authenticated remote, and service-less SSH journeys, including freshness, non-atomicity, inaccessible locations, and content-transfer limits. | Examples use abstract hosts and no real credentials. | Feature and deployment docs. | Documentation assertions and manual setup review. | locked |
 
 ## Functionality Agreement
@@ -196,7 +197,7 @@ Causal interactions requiring combined coverage:
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Singular run inspection core | Python API and `loom inspect-run` work through direct and owner-only Unix sources for managed and service-less runs. | Typed projection, exact reads, socket operation, direct/Unix CLI; no HTTP policy/client. | Stage 32 Phase 2 merged with the approved run-to-item reference. | Allowlist/bounds, mixed-owner and service-less journeys, socket parity, CLI compatibility. | pending |
+| 1. Singular run inspection core | Python API and `loom inspect-run` work through direct and owner-only Unix sources for managed and service-less runs. | Typed projection, exact reads, socket operation, direct/Unix CLI; no HTTP policy/client. | Stage 32 replacement Phase 3 merged with the approved run-to-item reference. | Allowlist/bounds, mixed-owner and service-less journeys, socket parity, CLI compatibility. | in_progress |
 | 2. Authenticated run inspection | The same command/model works through a dedicated read-only mTLS query credential and documented remote journey. | Query policy/dispatch/client config, HTTP adapter, security/parity tests and final docs; no mutation or bytes. | Phase 1 merged. | Auth-before-read, role/revocation/capability failures, three-source parity, full gates. | pending |
 
 Two phases isolate the stable projection and useful local/SSH path from the

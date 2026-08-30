@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import json
 import os
 from pathlib import Path
@@ -48,8 +48,15 @@ _MAX_MESSAGE_BYTES = 1_048_576
 class LocalDaemonSocketServer:
     """Serve the client view without trusting a request-supplied principal."""
 
-    def __init__(self, daemon: LocalDaemon, endpoint: str | Path) -> None:
+    def __init__(
+        self,
+        daemon: LocalDaemon,
+        endpoint: str | Path,
+        *,
+        inspect_run: Callable[[str], Mapping[str, PlainData]] | None = None,
+    ) -> None:
         self._daemon = daemon
+        self._inspect_run = inspect_run
         self.endpoint = Path(endpoint)
         self._socket: socket.socket | None = None
         self._endpoint_identity: tuple[int, int] | None = None
@@ -151,6 +158,11 @@ class LocalDaemonSocketServer:
                 if not isinstance(queue_item_id, str):
                     raise QueueServiceError("queue item ID is invalid")
                 result = client.admission_for_queue_item(queue_item_id).to_dict()
+            elif operation == "inspect_run":
+                run_uri = payload.get("run_uri")
+                if not isinstance(run_uri, str) or self._inspect_run is None:
+                    raise QueueServiceError("run inspection is unsupported")
+                result = dict(self._inspect_run(run_uri))
             elif operation == "wait_admission":
                 admission_id = payload.get("admission_id")
                 expected_revision = payload.get("expected_revision")
@@ -328,6 +340,10 @@ class LocalDaemonSocketClient:
         result = self._call({"operation": "cancel", "queue_item_id": queue_item_id})
         return LocalDaemonAdmission.from_dict(result)
 
+    def inspect_run(self, run_uri: str) -> Mapping[str, object]:
+        """Call the injected read-only run-inspection operation."""
+        return self._call({"operation": "inspect_run", "run_uri": run_uri})
+
     def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
         return cast(
             Mapping[str, PlainData],
@@ -354,9 +370,7 @@ class LocalDaemonSocketClient:
 
     def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
         return TimeRecoveryReceipt.from_dict(
-            self._call(
-                {"operation": "recover_time", "request": request.to_dict()}
-            )
+            self._call({"operation": "recover_time", "request": request.to_dict()})
         )
 
     def replace_agent_session(
