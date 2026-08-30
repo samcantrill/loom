@@ -1,6 +1,6 @@
 # Roadmap Stage 35 Planning: Configurable Run Roots And GPU Container Admission
 
-Status: approved
+Status: complete
 Roadmap stage: 35
 Evidence tree: `/nas/home/can134/work/loom-worktrees/stage-35-planning` at
 `fd5543b1dd75dd3e78a2b7b5bb9ebc73535fac6b`; relevant dirty paths: none before
@@ -8,8 +8,8 @@ this planning packet
 Planning route: expanded; an optional public runtime field participates in
 resume-store bootstrap, while GPU visibility crosses host, scheduler, shell,
 and container boundaries
-Current gate: planning quality gate passed after one bounded expanded design
-review and manager confirmation
+Current gate: implementation complete; Phases 1 and 2 passed expanded review,
+their corrected pre-submit gates, and verified squash merges
 Blockers: none
 
 This file records a current downstream requirement without adding
@@ -21,12 +21,12 @@ on 2026-08-30.
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
-| Evidence | Current Loom validates generic resources, maps CPU/memory/GPU to Slurm directives, carries resolved resources into stage metadata, and can build Apptainer/Singularity commands, but config cannot select the CLI run-store root and a generic GPU request does not drive container passthrough or allocation visibility. | None. | Reuse the current runtime/store/executor paths. |
-| Functionality | A composed config may select one absolute run root; an exclusive GPU count drives NVIDIA passthrough and exact local/allocation-time CUDA visibility. | None. | Implement FR-1 through FR-10. |
-| Design | Add one optional run-store option and one Loom-owned GPU admission module; wire both through existing factories and executors. | None after the bounded expanded review. | Implement the two approved phase plans. |
-| Validation | Fake and public CLI paths prove config, profile, store, local command, Slurm script, and failure behavior; real container/GPU/Slurm checks remain opt-in. | None. | Use the two linked vertical phase plans. |
-| Detailed plan | Two phases separate storage bootstrap from executor/scheduler admission. | None. | Finalize manifest after design review. |
-| Approval | The maintainer explicitly requested implementation of the described behavior, and the planning quality gate passed. | None. | Proceed phase by phase. |
+| Evidence | Loom now validates generic resources, accepts a configured CLI run-store root, maps GPU counts to Slurm, derives container passthrough, and validates operator/scheduler visibility at the correct execution boundary. | None. | Downstream consumers may pin the merged revision. |
+| Functionality | A composed config may select one absolute run root; an exclusive GPU count drives NVIDIA passthrough and exact local/allocation-time CUDA visibility. | None. | Complete in PRs #258 and #259. |
+| Design | One optional run-store option and one Loom-owned GPU admission module are wired through existing factories and executors. | None after expanded review. | Revisit only for a documented deferred capability. |
+| Validation | Fake and public CLI paths prove config, profile, store, local command, executable Slurm script, and failure behavior; real container/GPU/Slurm checks remain opt-in. | None. | Use opt-in live checks when matching infrastructure is available. |
+| Detailed plan | Two merged phases separate storage bootstrap from executor/scheduler admission. | None. | Complete. |
+| Approval | The maintainer explicitly requested implementation; planning and implementation quality gates passed. | None. | Complete. |
 
 ## Evidence And Scope
 
@@ -174,11 +174,11 @@ on 2026-08-30.
 
 | Example or invariant | Behavior or risk | Authoritative owner and boundary | Minimal coverage | Status |
 | --- | --- | --- | --- | --- |
-| Configured fresh and resumed run root | CLI silently continues under `./runs` or opens the wrong prior run. | Runtime merge plus CLI store bootstrap. | Factory-spy tests and one persisted run/resume root. | planned |
-| Profile root override | Bootstrap and full merge select different roots. | Shared profile selection/precedence. | Base/profile/CLI profile cases plus equality guard. | planned |
-| Direct one-GPU clean container | `--nv` is absent or visibility is lost under `cleanenv`. | Direct executor setup. | Fake runner command and worker-environment proof. | planned |
-| Slurm one-GPU container | Submit host is mistaken for allocation or scheduler token is lost. | Slurm resource mapper and generated script. | `--gres`, `--nv`, runtime shell check, and environment exports. | planned |
-| Invalid visibility | Worker starts with missing/mismatched/duplicate binding. | GPU admission owner at external boundary. | Pure and executor/script failure cases. | planned |
+| Configured fresh and resumed run root | CLI silently continues under `./runs` or opens the wrong prior run. | Runtime merge plus CLI store bootstrap. | Factory-spy tests and one persisted run/resume root. | verified |
+| Profile root override | Bootstrap and full merge select different roots. | Shared profile selection/precedence. | Base/profile/CLI profile cases plus equality guard. | verified |
+| Direct one-GPU clean container | `--nv` is absent or visibility is lost under `cleanenv`. | Direct executor setup. | Fake runner command and worker-environment proof. | verified |
+| Slurm one-GPU container | Submit host is mistaken for allocation or scheduler token is lost. | Slurm resource mapper and generated script. | `--gres`, `--nv`, runtime shell check, and environment exports. | verified |
+| Invalid visibility | Worker starts with missing/mismatched/duplicate binding. | GPU admission owner at external boundary. | Pure and executor/script failure cases. | verified |
 
 Causal interactions requiring combined coverage:
 
@@ -192,8 +192,8 @@ Causal interactions requiring combined coverage:
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Configurable run-store root | Config, profile, fresh/resume/plan/Slurm CLI paths consistently use one explicit run collection through existing authority/offline factories. | Runtime options/profile/bootstrap/CLI/docs/tests; no executor or GPU work. | Approved planning packet. | Model, precedence, ordering, CLI and persisted-root tests plus full gates. | pending |
-| 2. GPU container admission | One exclusive GPU request produces scheduler/container access and exact local/allocation visibility without physical-device selection in project config. | GPU helper, direct executor, Slurm wrapper/rendering, preflight/docs/tests; no run-store, distributed, CPU/memory, timeout, discovery, or share-mode work. | Phase 1 remotely merged. | Pure/direct/Slurm/public dry-run coverage plus full gates. | pending |
+| 1. Configurable run-store root | Config, profile, fresh/resume/plan/Slurm CLI paths consistently use one explicit run collection through existing authority/offline factories. | Runtime options/profile/bootstrap/CLI/docs/tests; no executor or GPU work. | Approved planning packet. | Model, precedence, ordering, CLI and persisted-root tests plus full gates. | merged (#258) |
+| 2. GPU container admission | One exclusive GPU request produces scheduler/container access and exact local/allocation visibility without physical-device selection in project config. | GPU helper, direct executor, Slurm wrapper/rendering, preflight/docs/tests; no run-store, distributed, CPU/memory, timeout, discovery, or share-mode work. | Phase 1 remotely merged. | Pure/direct/Slurm/public dry-run coverage plus full gates. | merged (#259) |
 
 Two phases isolate a public storage/bootstrap change from an external
 executor/scheduler boundary and let each PR remain vertically reviewable.
@@ -210,7 +210,8 @@ executor/scheduler boundary and let each PR remain vertically reviewable.
 | Phases vertical and reviewable | Storage then GPU admission, each ending in an observable CLI/runtime outcome. | pass |
 | No unresolved blocker | The three concrete review findings are resolved above. | pass |
 
-Gate result: pass. The two phase plans are ready for sequential implementation.
+Gate result: pass. Both phase plans were implemented, independently reviewed,
+validated, and merged.
 
 Accepted risks and revisit triggers: explicit roots require canonical absolute
 spelling; direct execution validates operator-provided visibility but cannot

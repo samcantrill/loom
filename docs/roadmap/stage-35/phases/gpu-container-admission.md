@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: ready to merge
+- Status: merged
 - Roadmap stage and phase: Stage 35, Phase 2
 - Manifest: `docs/roadmap/stage-35/implementation-plan.md`
 - Branch: `agent/stage-35-p2-gpu-container-admission`
@@ -202,7 +202,8 @@ Final commands:
 - Blocker corrections: 1/3 correction passes consumed. The correction rejects
   malformed leading characters in both admission paths while preserving valid
   opaque GPU and MIG tokens.
-- PR and merge: pending.
+- PR and merge: #259 squash-merged into `develop` as
+  `3a0631b19463e804afe380ea0b192fbc9acf97bb`.
 
 ## Completion Record
 
@@ -212,5 +213,5 @@ Final commands:
 | Tests added or updated | Focused pure token/projection, direct executor, Slurm wrapper/planner/script, preflight, package-import, direct integration, Slurm dry-run integration, and CLI dry-run e2e tests. Reviewer correction adds executable Bash cases for valid opaque GPU/MIG identifiers and missing, mismatched, duplicate, empty, or malformed scheduler visibility. |
 | Validated revision/tree state and evidence | Corrected source/test revision `04bb2f052fe875c509eca00a269977bed151efec`; focused correction suite: 27 passed; fresh `make validate-pr` passed (Ruff; Pyright with zero errors; default: 2,666 passed/135 deselected; config-extra: 156 passed/3 skipped/2,669 deselected; sdist and wheel built). The earlier implementation `make test-summary` passed package 119, unit 1,892, contract 297, e2e 59, and config-extra 156, but its integration lane had two timestamp-only `scheduler_observed_at` flakes; both passed on immediate focused rerun. |
 | Validation-relevant changes after evidence | none; this completion metadata only |
-| PR, review, and merge | Independent review completed; its sole blocker was corrected and manager-verified. PR and merge pending. |
-| Residual risk and cleanup | No phase blocker. No live CUDA, Apptainer/Singularity, or Slurm environment was required; scheduler allocation behavior remains covered by hermetic executable rendered-script and public dry-run tests. The earlier `make test-summary` anomaly remains classified as an unrelated `scheduler_observed_at` timestamp race because both focused reruns and the fresh required pre-submit gate passed. Branch and worktree cleanup follow verified merge. |
+| PR, review, and merge | PR #259; independent review completed, its sole blocker was corrected and manager-verified; squash-merged as `3a0631b19463e804afe380ea0b192fbc9acf97bb`. |
+| Residual risk and cleanup | No phase blocker. No live CUDA, Apptainer/Singularity, or Slurm environment was required; scheduler allocation behavior remains covered by hermetic executable rendered-script and public dry-run tests. The earlier `make test-summary` anomaly remains classified as an unrelated `scheduler_observed_at` timestamp race because both focused reruns and the fresh required pre-submit gate passed. Remote/local phase branches and the phase worktree were removed after merge verification. |

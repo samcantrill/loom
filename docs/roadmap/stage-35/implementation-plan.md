@@ -1,11 +1,11 @@
 # Roadmap Stage 35 Implementation Plan
 
-Status: approved
+Status: complete
 Roadmap stage: 35
 Planning document: docs/roadmap/stage-35/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 2 review and merge
+Current phase: complete
 Blockers: none
 
 ## Summary
@@ -49,7 +49,7 @@ Blockers: none
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | configurable-run-store-root | merged | docs/roadmap/stage-35/phases/configurable-run-store-root.md | agent/stage-35-p1-configurable-run-store-root | #258 | runtime options/profiles, CLI bootstrap/store factories, docs/tests | Use one configured run collection across fresh, resume, plan, Slurm, and offline CLI paths. |
-| 2 | gpu-container-admission | ready to merge | docs/roadmap/stage-35/phases/gpu-container-admission.md | agent/stage-35-p2-gpu-container-admission | pending | executor GPU helper, direct Apptainer/Singularity, Slurm planning/rendering, preflight/docs/tests | Project one bare exclusive GPU request into truthful container access and visibility. |
+| 2 | gpu-container-admission | merged | docs/roadmap/stage-35/phases/gpu-container-admission.md | agent/stage-35-p2-gpu-container-admission | #259 | executor GPU helper, direct Apptainer/Singularity, Slurm planning/rendering, preflight/docs/tests | Project one bare exclusive GPU request into truthful container access and visibility. |
 
 ## Quality Gate
 
@@ -61,8 +61,8 @@ Blockers: none
   blockers are corrected and manager-verified.
 - Correction: single-job GPU aggregation deferred, rich GPU attributes rejected,
   and authored `nv` compatibility locked.
-- Ready for merge: yes; both phases passed their implementation gates and
-  independent review blockers are resolved.
+- Stage result: complete; both phases passed their implementation gates,
+  independent review blockers were resolved, and both PRs are merged.
 - Accepted risks: canonical absolute path requirement; operator/scheduler owns
   physical allocation; fake-backed default validation.
 - Revisit triggers: store backend selection, executor GPU share support,
@@ -73,4 +73,4 @@ Blockers: none
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | #258 squash-merged as `a332bb3` | corrected pre-submit gate passed at `842a8d0` after independent review | no phase blocker | remote/local phase branches and phase worktree removed |
-| 2 | pending | corrected head `04bb2f0` passed focused tests and the complete pre-submit gate after independent review | no phase blocker; live CUDA/container/Slurm remains opt-in | pending verified merge |
+| 2 | #259 squash-merged as `3a0631b` | corrected head `04bb2f0` passed focused tests and the complete pre-submit gate after independent review | no phase blocker; live CUDA/container/Slurm remains opt-in | remote/local phase branches and phase worktree removed |
