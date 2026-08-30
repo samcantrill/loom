@@ -171,11 +171,12 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending planning merge.
+- Manager preparation: completed; implementation started from approved
+  `8da9536d351dba46c6737465839a40802f547f5b`.
 - Expanded planning: completed; the bounded review found no run-store blocker.
-- Implementation: pending.
+- Implementation: completed in `36d199873fd0be0a57a8e50541e036a7e7828d2f`.
 - Refiner: not needed unless a qualified blocker appears.
-- Pre-submit gate: pending.
+- Pre-submit gate: local implementation gate passed; manager verification pending.
 - Independent review: required for resume/bootstrap risk.
 - Blocker corrections: 0/3.
 - PR and merge: pending.
@@ -184,9 +185,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
+| Implementation and changed paths | Added `RunStoreOptions` and optional `RunOptions.run_store`, runtime profile/config bootstrap projection, CLI run/plan authority/offline/Slurm root wiring, public exports, and feature documentation. Changed `src/loom/pipeline/runtime/{options,profiles,config,__init__}.py`, `src/loom/pipeline/__init__.py`, `src/loom/cli/{run,plan}.py`, and `docs/features/{execution,cli}.md`. |
+| Tests added or updated | Added option/path and profile-precedence tests, resume/bootstrap and plan factory-spy tests, public export checks, and a real profile-selected fresh/resume CLI journey under the configured collection. |
+| Validated revision/tree state and evidence | Implementation commit `36d199873fd0be0a57a8e50541e036a7e7828d2f`; `make validate-pr` passed (Ruff, Pyright, default: 2,612 passed/135 deselected; config-extra: 156 passed/3 skipped), and `build/test-summary.md` was generated. Its only unrelated queue timestamp-race failure was reproduced in isolation as passing: `uv run pytest tests/integration/queue/test_slurm_ready_stage.py::test_mixed_route_run_uses_one_slurm_submit_and_verified_loom_result`. |
+| Validation-relevant changes after evidence | none; this completion record only |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No Phase 1 blocker. `make test-summary` reported one unrelated `scheduler_observed_at` timestamp race in the broad queue/SLURM integration suite; the isolated test passed without changes. Worktree and branch remain for manager pre-submit/review. |
