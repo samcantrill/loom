@@ -179,7 +179,10 @@ Final commands:
   creation, and created-service cleanup reuses that proof before clean shutdown
 - Refiner: complete; correction 2/3 closes the current-epoch exited-root
   containment gap before a clean shutdown can retire the service owner
-- Pre-submit gate: pending
+- Pre-submit gate: passed at source/test revision `a59c1ec`; `make validate-pr`
+  passed Ruff, Pyright, 2,684 default tests, 156 configuration-extra tests
+  with 3 expected skips, and both distribution builds. Fresh
+  `make test-summary` recorded 2,840 categorized passes and 3 expected skips.
 - Independent review: required for the corrected detached-process boundary
 - Blocker corrections: 2/3; correction 1 closes direct constructor cleanup's
   retained-work-proof bypass. Correction 2 contains a current epoch's exited
@@ -193,7 +196,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Selectively reused the Phase 13 source/test candidate under `src/loom/queue` and directly relevant queue tests, then changed `LocalDaemon.start()` and `LocalDaemonAgentHttpClient` construction to preserve created-versus-joined supervisor ownership. Correction 1 centralizes the local retained-work proof with normal shutdown, validates owner stores/journals before process creation, and permits created-service cleanup only after a fresh empty proof. Correction 2 changes `AgentProcessSupervisor` clean shutdown to contain an exited current-epoch root's still-live owned process group before writing the clean marker. |
 | Tests added or updated | Added process-level proof for changed local scheduling rejection, mismatched outbound deployment binding, unavailable local owner-store and outbound execution-journal rejection, retained local owner preservation without a clean marker, and rejection that leaves a valid pre-existing outbound supervisor's PID and epoch reachable. Correction 2 adds supervisor proof that a gone exited group permits epoch rotation, and that clean service shutdown records containment and leaves no TERM-ignoring descendant alive after its root exits. |
-| Validated revision/tree state and evidence | Original focused tests passed (3); targeted lifecycle matrix passed: 85 tests in 377.39s; targeted SLURM/session/CLI/E2E matrix passed: 69 tests in 121.57s. Correction 1 focused constructor/shutdown matrix passed: 7 tests in 2.25s; changed-file Ruff and Pyright passed. Correction 2 focused supervisor suite passed: 7 tests in 0.82s; changed-file Ruff and Pyright passed. |
-| Validation-relevant changes after evidence | Correction 2 changes the supervisor clean-shutdown proof; its focused supervisor suite and changed-file Ruff/Pyright ran afterward. |
+| Validated revision/tree state and evidence | Original focused tests passed (3); targeted lifecycle matrix passed: 85 tests in 377.39s; targeted SLURM/session/CLI/E2E matrix passed: 69 tests in 121.57s. Correction 1 focused constructor/shutdown matrix passed: 7 tests in 2.25s; changed-file Ruff and Pyright passed. Correction 2 focused supervisor suite passed: 7 tests in 0.82s; changed-file Ruff and Pyright passed. At source/test revision `a59c1ec`, `make validate-pr` passed Ruff, Pyright with zero findings, 2,684 default tests, 156 configuration-extra tests with 3 expected skips, and source/wheel builds. Fresh `make test-summary` recorded 2,840 categorized passes and 3 expected skips in `build/test-summary.md`. |
+| Validation-relevant changes after evidence | None. This completion-record update is documentation-only. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | An exact post-gate working-directory scan found no process created by either fresh successful gate. One empty supervisor from an earlier deliberately interrupted pre-gate test run was identified by its exact worktree and durable root, stopped through its authenticated test-only shutdown operation, and a repeated exact scan was empty. Independent review remains pending. |
