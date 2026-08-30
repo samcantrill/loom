@@ -54,6 +54,10 @@ _LONG_POLL_WORKER_COUNT = _WORKER_COUNT - 1
 _SERVER_WAIT_SECONDS = 0.5
 
 
+class _WaitCapacityError(QueueServiceError):
+    """A retryable local transport admission response."""
+
+
 class LocalDaemonSocketServer:
     """Serve the client view without trusting a request-supplied principal."""
 
@@ -162,7 +166,7 @@ class LocalDaemonSocketServer:
                 "wait_operation",
             }
             if long_poll and not self._long_poll_slots.acquire(blocking=False):
-                raise QueueServiceError("local daemon wait capacity is exhausted")
+                raise _WaitCapacityError("local daemon wait capacity is exhausted")
             long_poll_acquired = long_poll
             if uid != os.getuid():
                 raise QueueServiceError("local daemon peer is not authorized")
@@ -406,29 +410,55 @@ class LocalDaemonSocketClient:
     ) -> AdmissionWaitResult:
         from .local_daemon import AdmissionWaitKind
 
-        result = self._call(
-            {
-                "operation": "wait_admission",
-                "admission_id": admission_id,
-                "expected_revision": expected_revision,
-                "timeout": timeout,
-            }
-        )
-        kind = result.get("kind")
-        admission = result.get("admission")
-        revision = result.get("revision")
-        if (
-            not isinstance(kind, str)
-            or not isinstance(admission, Mapping)
-            or isinstance(revision, bool)
-            or not isinstance(revision, int)
+        if timeout is not None and (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or timeout < 0
         ):
-            raise QueueServiceError("admission wait response is invalid")
-        return AdmissionWaitResult(
-            AdmissionWaitKind(kind),
-            LocalDaemonAdmission.from_dict(admission),
-            revision,
-        )
+            raise QueueServiceError("admission wait timeout is invalid")
+        deadline = None if timeout is None else time.monotonic() + float(timeout)
+        while True:
+            remaining = (
+                None if deadline is None else max(0.0, deadline - time.monotonic())
+            )
+            try:
+                result = self._call(
+                    {
+                        "operation": "wait_admission",
+                        "admission_id": admission_id,
+                        "expected_revision": expected_revision,
+                        "timeout": remaining,
+                    }
+                )
+            except QueueServiceError as exc:
+                # Renewing clients can race for the bounded long-poll slots at
+                # one server-slice boundary.  This is admission backpressure,
+                # not a terminal result for the caller's requested wait.
+                if str(exc) != "local_daemon_wait_capacity_exhausted":
+                    raise
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.005)
+                continue
+            kind = result.get("kind")
+            admission = result.get("admission")
+            revision = result.get("revision")
+            if (
+                not isinstance(kind, str)
+                or not isinstance(admission, Mapping)
+                or isinstance(revision, bool)
+                or not isinstance(revision, int)
+            ):
+                raise QueueServiceError("admission wait response is invalid")
+            parsed = AdmissionWaitResult(
+                AdmissionWaitKind(kind),
+                LocalDaemonAdmission.from_dict(admission),
+                revision,
+            )
+            if parsed.kind is not AdmissionWaitKind.TIMEOUT:
+                return parsed
+            if deadline is not None and time.monotonic() >= deadline:
+                return parsed
 
     def wait(
         self, queue_item_id: str, *, timeout_seconds: float | None = None
@@ -543,6 +573,8 @@ def _safe_error_code(exc: Exception) -> str:
         return "local_daemon_conflict"
     if isinstance(exc, QueueValidationError):
         return "local_daemon_invalid_request"
+    if isinstance(exc, _WaitCapacityError):
+        return "local_daemon_wait_capacity_exhausted"
     if isinstance(exc, QueueServiceError):
         return "local_daemon_request_rejected"
     if isinstance(exc, (QueueStorageError, QueueError)):

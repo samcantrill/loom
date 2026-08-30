@@ -2018,14 +2018,19 @@ class LocalDaemon:
         ):
             raise QueueServiceError("agent list limit must be in 1..100")
         agent_id = _decode_agent_cursor(cursor) if cursor is not None else None
-        # A renewed session supersedes its predecessor for every public read.
-        # Keep that choice in this bounded projection rather than exposing the
-        # unbounded session journal through the management API.
+        # A replacement may be recorded in the same accepted-time second as
+        # its predecessor.  Prefer the one open session first; only when an
+        # agent has no open session do reads fall back deterministically to its
+        # latest terminal receipt.
         query = (
             "SELECT * FROM agent_sessions AS current WHERE NOT EXISTS ("
             "SELECT 1 FROM agent_sessions AS newer WHERE newer.agent_id = current.agent_id "
+            "AND ((CASE WHEN newer.state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END) "
+            "< (CASE WHEN current.state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END) OR "
+            "((CASE WHEN newer.state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END) "
+            "= (CASE WHEN current.state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END) "
             "AND (newer.created_at > current.created_at OR "
-            "(newer.created_at = current.created_at AND newer.session_id > current.session_id))"
+            "(newer.created_at = current.created_at AND newer.session_id > current.session_id))))"
             ")"
         )
         values: tuple[object, ...] = ()
@@ -2035,7 +2040,10 @@ class LocalDaemon:
         query += " ORDER BY current.agent_id LIMIT ?"
         with self._connection() as conn:
             rows = tuple(conn.execute(query, (*values, limit + 1)))
-            values_out = tuple(_agent_projection(conn, row) for row in rows[:limit])
+            values_out = tuple(
+                _agent_projection(conn, row, coordinator_epoch=self._epoch)
+                for row in rows[:limit]
+            )
         next_cursor = (
             _encode_agent_cursor(str(rows[limit - 1]["agent_id"]))
             if len(rows) > limit
@@ -2047,18 +2055,30 @@ class LocalDaemon:
         _required_string({"agent_id": agent_id}, "agent_id")
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT * FROM agent_sessions WHERE agent_id = ? "
-                "ORDER BY created_at DESC, session_id DESC LIMIT 1",
+                "SELECT * FROM agent_sessions WHERE agent_id = ? ORDER BY "
+                "CASE WHEN state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END, "
+                "created_at DESC, session_id DESC LIMIT 1",
                 (agent_id,),
             ).fetchone()
             if row is None:
                 raise QueueServiceError("managed agent was not found")
-            return _agent_projection(conn, row)
+            return _agent_projection(conn, row, coordinator_epoch=self._epoch)
 
     def operation(self, operation_id: str) -> LocalDaemonOperation:
         """Read the one typed durable operation receipt without a history scan."""
 
         _required_string({"operation_id": operation_id}, "operation_id")
+        execution = self._execution
+        if execution is not None:
+            projected = execution.operation_projection(operation_id)
+            if projected is not None:
+                return LocalDaemonOperation(
+                    operation_id=operation_id,
+                    kind="slurm_submission",
+                    state=projected["state"],
+                    code=projected["code"],
+                    result=projected["result"],
+                )
         with self._connection() as conn:
             return _operation_projection(conn, operation_id)
 
@@ -4072,15 +4092,33 @@ def _decode_agent_cursor(cursor: str) -> str:
     return value
 
 
-def _agent_projection(conn: sqlite3.Connection, row: sqlite3.Row) -> AgentProjection:
+def _agent_projection(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    coordinator_epoch: str | None,
+) -> AgentProjection:
     pools = json.loads(str(row["pools_json"]))
     capabilities = json.loads(str(row["capabilities_json"]))
     if not isinstance(pools, list) or not isinstance(capabilities, list):
         raise QueueStorageError("agent session projection is invalid")
-    offered = conn.execute(
-        "SELECT 1 FROM agent_offers WHERE session_id = ? AND current = 1 LIMIT 1",
-        (str(row["session_id"]),),
+    accepted = conn.execute(
+        "SELECT value FROM daemon_metadata WHERE key = 'accepted_time_high_water'"
     ).fetchone()
+    accepted_at = None if accepted is None else str(accepted["value"])
+    offered = None
+    if accepted_at is not None and coordinator_epoch is not None:
+        offered = conn.execute(
+            "SELECT 1 FROM agent_offers WHERE session_id = ? "
+            "AND availability_revision = ? AND coordinator_epoch = ? "
+            "AND current = 1 AND expires_at >= ? LIMIT 1",
+            (
+                str(row["session_id"]),
+                str(row["availability_revision"]),
+                coordinator_epoch,
+                accepted_at,
+            ),
+        ).fetchone()
     if not all(isinstance(item, str) and item for item in pools) or not all(
         isinstance(item, str) and item for item in capabilities
     ):

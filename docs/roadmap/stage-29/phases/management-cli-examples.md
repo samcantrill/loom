@@ -194,25 +194,28 @@ Final commands:
   references, long-poll saturation, and Phase 14 CLI scope
 - Implementation: corrected candidate `92c248c`; the independent review found
   four concrete management/evidence blockers requiring one bounded correction
-- Refiner: correction 2/3 in progress for deterministic current-agent choice,
-  SLURM operation projection, renewable public admission waits, truthful
-  journeys, and their directly required causal coverage
+- Refiner: correction 2/3 in progress. The same-timestamp current-agent
+  projection, accepted-time/epoch/expiry availability check, execution-owner
+  SLURM operation projection, and renewing public admission wait are corrected;
+  truthful journeys and the remaining FR-43 evidence are still open.
 - Pre-submit gate: not passed; the correction-1 validation receipt is stale for
   submission because accepted example claims and causal coverage remain open
 - Independent review: complete; not merge eligible at `92c248c` because the
   four blockers above remain. It also localized expired-offer availability,
   missing FR-43 causal assertions, and stale operation-catalog node IDs to the
   same correction.
-- Blocker corrections: 1/3 complete; bounded refiner correction 2/3 in progress
+- Blocker corrections: 1/3 complete; bounded refiner correction 2/3 remains in
+  progress (no correction budget increment until the whole approved cluster is
+  closed)
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `6907c14` plus `92c248c`: bounded shutdown-aware socket capacity and renewed client waits; typed current-agent and operation projections; verified config-owner UID policy scopes; guarded replacement/time behavior; CLI serialization; and executable generated-CA/fake-SLURM journey entry points. |
-| Tests added or updated | Admission A/B/no-op and socket saturation/status; current logical agent, operation result/bound wait, verified-owner different-UID/scope negatives; CLI/E2E process journeys; targeted queue unit/CLI and remote/SLURM integration selections. |
-| Validated revision/tree state and evidence | Fresh `make validate-pr` passed. Fresh `make test-summary` passed: 2,927 passed, 3 skipped, 0 failures/errors (2,930 total); receipt: `build/test-summary.md`, generated `2026-08-30T18:25:03+00:00`. Targeted queue tests passed: 91 queue unit tests, 12 queue CLI E2E tests, and 19 selected CLI/remote/SLURM integration tests. |
-| Validation-relevant changes after evidence | None. This completion-record-only update is excluded from the validation-relevant tree. |
+| Implementation and changed paths | Correction 2/3 worktree change: public agent reads now prefer an open successor over a same-timestamp terminal session and require current epoch/revision plus accepted-time offer expiry for availability; ready-stage SLURM submissions project through the execution owner into operation detail/wait; public admission waits renew server slices against a monotonic deadline. |
+| Tests added or updated | Causal same-timestamp successor and expired-offer availability coverage; ready-stage SLURM operation detail/wait coverage; saturated public admission-wait renewal coverage. |
+| Validated revision/tree state and evidence | `uv run --extra config pytest tests/unit/loom/queue/test_local_daemon.py -q`: 47 passed. `uv run --extra config pytest tests/integration/queue/test_slurm_ready_stage.py -x -q`: 15 passed. The prior full-validation receipt is stale. |
+| Validation-relevant changes after evidence | Source, tests, and this record changed; `make validate-pr` and `make test-summary` are required only after the remaining correction scope is closed. |
 | PR, review, and merge | Independent review complete with blockers; bounded refiner correction, refreshed manager pre-submit gate, and merge remain pending. |
-| Residual risk and cleanup | Corrected candidate `92c248c` is not submission-ready: same-timestamp replacement can select the retired session; SLURM assignment operation IDs are not publicly readable; the direct socket-client admission wait returns at the internal server slice; examples shell out to pytest or bypass claimed surfaces; and the accepted saturation, expiry/health/principal, manifest-invocation, and process-cleanup evidence remains incomplete. |
+| Residual risk and cleanup | Not submission-ready: the three full-validation examples still shell out to pytest or bypass claimed public surfaces, and the remaining accepted-time expiry-owner, service-health-clear, principal-replay, manifest-invocation, stale operation-catalog, and process-cleanup evidence remains incomplete. |

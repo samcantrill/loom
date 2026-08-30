@@ -1297,6 +1297,36 @@ class LocalDaemonExecution:
         except AgentProcessSupervisorError as exc:
             raise QueueConflictError(str(exc)) from exc
 
+    def operation_projection(
+        self, operation_id: str
+    ) -> dict[str, str | PlainData | None] | None:
+        """Project one ready-stage submission through its owning execution seam.
+
+        The daemon management owner deliberately does not read the ready-stage
+        store itself: this narrow projection preserves the execution owner's
+        schema and retention boundary while making the durable submission
+        operation discoverable to operators.
+        """
+
+        submission = self.slurm_submissions.find(operation_id)
+        if submission is None:
+            return None
+        result: dict[str, PlainData] = {
+            "job_id": submission.job_id,
+            "cluster": submission.cluster,
+            "evidence": submission.evidence,
+            "scheduler_state": submission.scheduler_state,
+            "scheduler_source": submission.scheduler_source,
+            "scheduler_observed_at": submission.scheduler_observed_at,
+            "cancel_requested": submission.cancel_requested,
+            "start_consumed": submission.start_consumed,
+        }
+        return {
+            "state": submission.state.value,
+            "code": submission.scheduler_state,
+            "result": freeze_plain_data(result, path="SLURM operation result"),
+        }
+
     def begin_cycle(self) -> None:
         """Observe completed exact assignment work before scheduling again."""
 

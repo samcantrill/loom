@@ -337,7 +337,9 @@ def test_socket_wait_saturation_reserves_status_capacity(tmp_path: Path) -> None
             # Every admitted long poll has a bounded server wait; status still
             # has its reserved worker rather than waiting for a poll to finish.
             assert client.status().coordinator_id == daemon.status().coordinator_id
-            assert all(wait.result(timeout=2).kind.value == "TIMEOUT" for wait in waits)
+            # Public waits renew the server's finite slices; allow the caller's
+            # two-second deadline plus scheduling margin for the final renewal.
+            assert all(wait.result(timeout=3).kind.value == "TIMEOUT" for wait in waits)
     finally:
         server.stop()
         daemon.stop()
@@ -353,7 +355,9 @@ def test_management_agent_and_operation_reads_are_current_and_typed(
     try:
         with daemon._connection() as conn:
             for session_id, created_at, state in (
-                ("session-old", "2026-08-30T00:00:00Z", "REPLACED"),
+                # The retired ID sorts after the successor, so timestamp-only
+                # ordering would select the wrong session.
+                ("session-old", "2026-08-31T00:00:00Z", "REPLACED"),
                 ("session-current", "2026-08-31T00:00:00Z", "ACTIVE"),
             ):
                 conn.execute(
@@ -363,13 +367,22 @@ def test_management_agent_and_operation_reads_are_current_and_typed(
             conn.execute(
                 "INSERT INTO scheduling_reloads(operation_id, principal_id, request_json, state, result_code, scheduling_epoch, configuration_revision, replacement_fingerprint) VALUES ('reload-read', 'operator', '{}', 'applied', 'ok', 'epoch-2', 3, 'fingerprint-2')"
             )
+            conn.execute(
+                "INSERT INTO agent_offers(offer_id, session_id, coordinator_epoch, availability_revision, offer_json, accepted_at, expires_at, current) VALUES ('expired-offer', 'session-current', ?, 'availability-1', '{}', '2026-08-30T00:00:00Z', '2026-08-30T00:00:01Z', 1)",
+                (daemon._epoch,),
+            )
             conn.commit()
 
         page = daemon.agents(limit=1)
         assert page.next_cursor is None
         assert page.agents[0].session_id == "session-current"
         assert page.agents[0].pools == ("default",)
+        assert page.agents[0].available is False
         assert daemon.agent("agent-a").to_dict() == page.agents[0].to_dict()
+        with daemon._connection() as conn:
+            conn.execute("UPDATE agent_offers SET expires_at = '9999-12-31T23:59:59Z'")
+            conn.commit()
+        assert daemon.agent("agent-a").available is True
 
         operation = daemon.operation("reload-read")
         assert operation.kind == "scheduling_reload"

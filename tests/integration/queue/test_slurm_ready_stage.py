@@ -388,6 +388,14 @@ def _exercise_mixed_route_run(
         record = records[0]
         assert record.state == "accepted"
         assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+        operation = daemon.operation(record.assignment.operation_id)
+        assert operation.kind == "slurm_submission"
+        assert operation.state == "accepted"
+        assert operation.result is not None
+        assert operation.result["job_id"] == "1200"
+        waited_operation = daemon.wait_operation(record.assignment.operation_id, timeout=0)
+        assert waited_operation.kind.value == "TERMINAL"
+        assert waited_operation.operation == operation
 
         # A fresh daemon/execution/store and fresh helper binding retain the
         # accepted operation rather than preparing or submitting it again.
