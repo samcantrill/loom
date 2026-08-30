@@ -4654,6 +4654,10 @@ def test_loopback_query_role_is_read_only_current_policy_and_capability_gated(
             "schema_version": 1,
             "code": "invalid_request",
         }
+        assert query.inspect_run("file:///runs/\ud800") == {
+            "schema_version": 1,
+            "code": "invalid_request",
+        }
         assert query.inspect_run("file:///runs/unadmitted") == {
             "schema_version": 1,
             "code": "not_found",

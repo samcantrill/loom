@@ -4282,7 +4282,11 @@ def _dispatch_application(
             run_uri = _string(value, "run_uri")
         except QueueError as exc:
             raise _RunInspectionHttpError("invalid_request", 400) from exc
-        if len(run_uri.encode("utf-8")) > 4 * 1024:
+        try:
+            run_uri_bytes = run_uri.encode("utf-8")
+        except UnicodeEncodeError:
+            return {"schema_version": 1, "code": "invalid_request"}
+        if len(run_uri_bytes) > 4 * 1024:
             return {"schema_version": 1, "code": "invalid_request"}
         try:
             run_uri = validate_run_uri(run_uri)
