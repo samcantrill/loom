@@ -188,9 +188,10 @@ Final commands:
 - Manager preparation: completed after planning and verified Phase 1 merge.
 - Expanded planning: completed; all three concrete findings were resolved in
   the stage planning document.
-- Implementation: pending.
+- Implementation: completed in `2990953`.
 - Refiner: not needed unless a qualified blocker appears.
-- Pre-submit gate: pending.
+- Pre-submit gate: passed at `2990953` (Ruff, Pyright, default, config-extra,
+  and build).
 - Independent review: required for scheduler/container boundary.
 - Blocker corrections: 0/3.
 - PR and merge: pending.
@@ -199,9 +200,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
+| Implementation and changed paths | `2990953` adds the executor-owned GPU visibility helper; direct Apptainer/Singularity admission and redacted forwarding; afterok Slurm `--nv` projection and allocation-time validation; preflight alignment; container feature docs; and package, unit, integration, and e2e coverage. |
+| Tests added or updated | Focused pure token/projection, direct executor, Slurm wrapper/planner/script, preflight, package-import, direct integration, Slurm dry-run integration, and CLI dry-run e2e tests. |
+| Validated revision/tree state and evidence | Targeted suite: 193 passed. `make validate-pr` passed (Ruff, Pyright, default 2,656 passed/135 deselected, config-extra 156 passed/3 skipped, build). `make test-summary` passed package 119, unit 1,892, contract 297, e2e 59, and config-extra 156, but its integration lane had two timestamp-only `scheduler_observed_at` flakes; both passed on immediate focused rerun. |
+| Validation-relevant changes after evidence | Workflow metadata only. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No live CUDA, Apptainer/Singularity, or Slurm environment was required; scheduler allocation behavior remains covered by hermetic rendered-script and dry-run tests. Independent review remains pending. |
