@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: approved
+- Status: merged
 - Roadmap stage and phase: Stage 34, Phase 2
 - Manifest: docs/roadmap/stage-34/implementation-plan.md
 - Branch: agent/stage-34-p2-authenticated-run-inspection
@@ -226,9 +226,9 @@ Final commands:
   Correction 3/3 closes the independent review's lone-surrogate URI case as
   `invalid_request` rather than `unavailable`, matching Phase 1 without changing
   authorization, admission, or public schemas.
-- PR and merge: PR #264 is open with verified base `develop`, phase head,
-  title, body, non-draft state, and clean mergeability. Expanded independent
-  review and all local gates passed; merge is pending.
+- PR and merge: PR #264 was verified against `develop`, approved after expanded
+  independent review and all local gates passed, and squash-merged as
+  `7fa9125` on 2026-08-31.
 
 ## Completion Record
 
@@ -238,5 +238,5 @@ Final commands:
 | Tests added or updated | Added role-exclusivity and protected-config coverage, remote-selector no-fallback coverage, and a localhost mTLS matrix for query success, exact admitted/unadmitted scope, malformed identity/URI closure, mutation-role and query-role isolation with zero owner-view calls, missing capability, immediate policy revocation, and a 256-stage canonical-result round trip. Strict decoder tests cover duplicate keys, 257 records, and the 1-MiB limit. E2E coverage invokes `loom inspect-run --remote-config` as a subprocess against the real local mTLS server. |
 | Validated revision/tree state and evidence | At `ab9c9d5`, the complete phase-targeted unit, contract, and integration commands passed 52, 10, and 44 tests respectively; both direct/service-less and authenticated-remote inspect-run E2E journeys passed (2 tests). Focused Ruff, Pyright with 0 errors/warnings, and `git diff --check` passed. Fresh `make validate-pr` passed Ruff, Pyright with 0 errors/warnings, 2,734 default tests with 136 deselected, 157 config-extra tests with 3 expected skips and 2,737 deselected, plus source and wheel builds. Fresh `make test-summary` recorded 2,891 selected passes across package 119, unit 1,924, contract 300, integration 329, E2E 62, and config-extra 157, with the same 3 expected skips. |
 | Validation-relevant changes after evidence | None. Only phase and manifest evidence metadata changed after the validated source/test tree, so the receipt remains current under the repository freshness rule. |
-| PR, review, and merge | [#264](https://github.com/samcantrill/loom/pull/264) opened against `develop`; target, head, title, body, non-draft state, and clean mergeability verified. Expanded independent review passed after its localized parity finding was corrected; manager review and all local gates pass. Merge is pending. |
-| Residual risk and cleanup | No known blocker or material residual risk; the correction budget is exhausted. Merge verification, final metadata, and worktree/branch cleanup remain. Localhost mTLS proves Loom policy behavior but cannot certify site certificate issuance or path reachability. |
+| PR, review, and merge | [#264](https://github.com/samcantrill/loom/pull/264) target, head, title, body, non-draft state, and clean mergeability were verified. Expanded independent review passed after its localized parity finding was corrected; manager review and all local gates passed; squash-merged to `develop` as `7fa9125` on 2026-08-31. |
+| Residual risk and cleanup | No known blocker or material residual risk; the correction budget is exhausted. Localhost mTLS proves Loom policy behavior but cannot certify site certificate issuance or path reachability. The dedicated worktree and exact local/remote phase branches were removed after the remote merge was verified. |

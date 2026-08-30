@@ -8,26 +8,26 @@ Evidence tree: `/home/can134/work/active/loom` at
 Planning route: expanded; this stage introduces a public serialized read model,
 an authenticated remote trust boundary, and a non-atomic join across coordinator,
 authority, scheduler, and filesystem owners
-Current gate: passed; planning approved 2026-08-30
+Current gate: passed; planning approved 2026-08-30 and implementation complete
+2026-08-31
 Planning blockers: none
 Implementation prerequisite: Stage 32 complete; replacement Phase 3 merged in
 [#261](https://github.com/samcantrill/loom/pull/261)
 
 This file is current authoritative planning state, not an implementation
-transcript. The complete packet was approved on 2026-08-30. Product
-implementation begins only through the phase workflow after Stage 32's
-service-less completion is remotely merged.
+transcript. The complete packet was approved on 2026-08-30. Both implementation
+phases are remotely merged and Stage 34 completed on 2026-08-31.
 
 ## Current State
 
 | Gate | Locked result | Open decisions or blockers | Next action |
 | --- | --- | --- | --- |
-| Evidence | Existing authority, diagnostics, targeted managed-status, Unix, and mTLS seams are sufficient inputs; Stage 32 supplies service-less queue/Slurm facts. | None. | Reuse their owners. |
-| Functionality | One known `run_uri`; one typed, bounded, owner-labelled result; metadata/locations only; dedicated read-only mTLS role; fixed allowlist; additive `loom inspect-run` command and Python query API. | None. | Preserve FQ-1 through FQ-6. |
-| Design | Diagnostics owns one strict projection shared by direct, owner-only Unix, and authenticated HTTP. Bounds, authorization, source selection, imports, and exact Stage 32 lookup are locked. | None. | Preserve DQ-1 through DQ-5. |
-| Validation | Source mode, owner availability, authorization, projection safety, and bounds are the causal dimensions. | None. | Use the focused matrix below. |
-| Detailed plan | The manifest links two vertical phase plans: core projection/local paths, then authenticated HTTP. | None. | Preserve phase contracts. |
-| Approval | Complete planning packet approved 2026-08-30. | None. | Begin Phase 1 from the completed Stage 32 base. |
+| Evidence | Existing authority, diagnostics, targeted managed-status, Unix, and mTLS seams are sufficient inputs; Stage 32 supplies service-less queue/Slurm facts. | None. | Implemented through their existing owners. |
+| Functionality | One known `run_uri`; one typed, bounded, owner-labelled result; metadata/locations only; dedicated read-only mTLS role; fixed allowlist; additive `loom inspect-run` command and Python query API. | None. | Delivered in merged Phases 1 and 2. |
+| Design | Diagnostics owns one strict projection shared by direct, owner-only Unix, and authenticated HTTP. Bounds, authorization, source selection, imports, and exact Stage 32 lookup are locked. | None. | Preserved in the merged implementation. |
+| Validation | Source mode, owner availability, authorization, projection safety, and bounds are the causal dimensions. | None. | Focused and full repository gates passed. |
+| Detailed plan | The manifest links two vertical phase plans: core projection/local paths, then authenticated HTTP. | None. | Both phases are remotely merged. |
+| Approval | Complete planning packet approved 2026-08-30. | None. | Stage 34 completed 2026-08-31. |
 
 ## Evidence And Scope
 
@@ -175,13 +175,13 @@ those risks. Phase 2 retains expanded implementation/review treatment.
 
 | Example or invariant | Behavior or risk | Authoritative owner and boundary | Minimal coverage | Status |
 | --- | --- | --- | --- | --- |
-| Managed mixed owners | Scheduler facts could overwrite lifecycle truth. | Authority plus coordinator join. | Disagreement, unavailable owner, revisions, summary precedence. | planned |
-| Service-less Slurm | Query could invent managed facts or lose queue identity. | Stage 32 run reference, queue item, authority, manifest. | Direct query after driver exit for both Slurm modes. | planned |
-| Source parity | Adapters could drift or fall back. | Projection model and selected adapter. | Same fixture through direct/Unix/HTTP plus unavailable selected source. | planned |
-| Remote query credential | Read credential could mutate or enumerate. | mTLS/current authorizer. | Query success; client/operator/cert/capability/revocation denial before read. | planned |
-| Location-only allowlist | Projection could read bytes or leak private data. | Projection boundary. | Read-spy stores, secret-bearing fakes, no-content/unknown-field checks. | planned |
-| Population and response bounds | One query could scan history or overfill transport. | Exact owner reads and serializer. | 2,000 unrelated runs, query-count sentinel, 257-record truncation, 1-MiB cap. | planned |
-| CLI compatibility | New surface could alter existing commands/imports. | CLI presentation. | Direct/Unix/HTTP subprocess JSON v1; unchanged status/log/artifact schemas. | planned |
+| Managed mixed owners | Scheduler facts could overwrite lifecycle truth. | Authority plus coordinator join. | Disagreement, unavailable owner, revisions, summary precedence. | passed |
+| Service-less Slurm | Query could invent managed facts or lose queue identity. | Stage 32 run reference, queue item, authority, manifest. | Direct query after driver exit for both Slurm modes. | passed |
+| Source parity | Adapters could drift or fall back. | Projection model and selected adapter. | Same fixture through direct/Unix/HTTP plus unavailable selected source. | passed |
+| Remote query credential | Read credential could mutate or enumerate. | mTLS/current authorizer. | Query success; client/operator/cert/capability/revocation denial before read. | passed |
+| Location-only allowlist | Projection could read bytes or leak private data. | Projection boundary. | Read-spy stores, secret-bearing fakes, no-content/unknown-field checks. | passed |
+| Population and response bounds | One query could scan history or overfill transport. | Exact owner reads and serializer. | 2,000 unrelated runs, query-count sentinel, 257-record truncation, 1-MiB cap. | passed |
+| CLI compatibility | New surface could alter existing commands/imports. | CLI presentation. | Direct/Unix/HTTP subprocess JSON v1; unchanged status/log/artifact schemas. | passed |
 
 Causal interactions requiring combined coverage:
 
@@ -198,7 +198,7 @@ Causal interactions requiring combined coverage:
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
 | 1. Singular run inspection core | Python API and `loom inspect-run` work through direct and owner-only Unix sources for managed and service-less runs. | Typed projection, exact reads, socket operation, direct/Unix CLI; no HTTP policy/client. | Stage 32 replacement Phase 3 merged with the approved run-to-item reference. | Allowlist/bounds, mixed-owner and service-less journeys, socket parity, CLI compatibility. | merged |
-| 2. Authenticated run inspection | The same command/model works through a dedicated read-only mTLS query credential and documented remote journey. | Query policy/dispatch/client config, HTTP adapter, security/parity tests and final docs; no mutation or bytes. | Phase 1 merged. | Auth-before-read, role/revocation/capability failures, three-source parity, full gates. | in_progress |
+| 2. Authenticated run inspection | The same command/model works through a dedicated read-only mTLS query credential and documented remote journey. | Query policy/dispatch/client config, HTTP adapter, security/parity tests and final docs; no mutation or bytes. | Phase 1 merged. | Auth-before-read, role/revocation/capability failures, three-source parity, full gates. | merged |
 
 Two phases isolate the stable projection and useful local/SSH path from the
 remote trust boundary without creating a model-only or transport-only PR.
