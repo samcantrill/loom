@@ -54,13 +54,16 @@ def test_run_default_store_is_authority_backed_serial_store() -> None:
     )
 
 
-def test_run_default_store_can_be_explicit_offline_evidence_store() -> None:
+def test_run_default_store_can_be_explicit_offline_evidence_store(tmp_path: Path) -> None:
+    root = str(tmp_path / "offline-runs")
     store = run_command._create_default_run_store(
+        root=root,
         authority_mode=AuthorityResolutionMode.OFFLINE_FIRST
     )
 
     assert getattr(store, "offline_evidence_enabled") is True
     assert store.state_source["authoritative"] is False
+    assert store.root == Path(root)
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,10 +258,17 @@ def _patch_common(
     monkeypatch.setattr(
         run_command, "_validate_pipeline_config", lambda _config: FakePipelineResult()
     )
+    def create_default_run_store(
+        *,
+        root: str = "runs",
+        authority_config: object | None = None,
+        authority_mode: object | None = None,
+    ) -> FakeRunStore:
+        calls["run_store_root"] = root
+        return fake_store
+
     monkeypatch.setattr(
-        run_command,
-        "_create_default_run_store",
-        lambda *, authority_config=None, authority_mode=None: fake_store,
+        run_command, "_create_default_run_store", create_default_run_store
     )
     monkeypatch.setattr(run_command, "_build_run_request", build_run_request)
     monkeypatch.setattr(run_command, "_run_preflight_for_run", run_preflight)
@@ -352,6 +362,44 @@ def test_run_resume_opens_existing_run(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls["preflight_run_uri"] == "file:///abs/runs/demo"
     assert calls["request_run_uri"] == "file:///abs/runs/demo"
     assert calls["open_existing"] is True
+
+
+def test_run_profile_root_bootstraps_store_before_resume_plugin_validation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = FakeRunStore()
+    calls = _patch_common(monkeypatch, store=store)
+    root = str(tmp_path / "configured-runs")
+    monkeypatch.setattr(
+        run_command,
+        "_compose_config",
+        lambda *_args, **_kwargs: FakeComposedConfig(
+            resolved={
+                "pipeline": {},
+                "runtime": {"profile": "cluster", "run_uri": "file://./runs/demo"},
+                "runtime_profiles": {
+                    "cluster": {"run_store": {"root": root}},
+                },
+            }
+        ),
+    )
+
+    result = run_command.build_run_result(
+        config_options=ConfigCliOptions(config_path=Path("base.yaml")),
+        run_options=run_command.RunCliOptions(resume=True),
+        selector_options=run_command.SelectorCliOptions(),
+    )
+
+    assert result.status == "SUCCEEDED"
+    assert calls["run_store_root"] == root
+    assert store.opened == ["file:///abs/runs/demo"]
+
+
+def test_run_rejects_bootstrap_root_that_differs_from_final_runtime_options() -> None:
+    options = RunOptions(run_store={"root": "/tmp/final-runs"})
+
+    with pytest.raises(CliError, match="run-store root changed"):
+        run_command._require_bootstrap_run_store_root("/tmp/bootstrap-runs", options)
 
 
 def test_run_resume_compares_exact_activation_before_import(

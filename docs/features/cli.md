@@ -532,6 +532,11 @@ Explicit run URIs must use strict local `file://` syntax until remote stores
 exist. If omitted for `loom run`, store/runtime APIs own default local run URI
 allocation. `loom plan` does not allocate a default run URI.
 
+The composed `runtime.run_store.root` may select the CLI-created collection.
+It must be an absolute canonical local path; omission preserves `runs`. A
+selected runtime profile may provide the same field, and it applies uniformly
+to fresh, resume, plan, SLURM, and offline-first run paths.
+
 ### 7.3 Stage Selector Options
 
 Shared by:

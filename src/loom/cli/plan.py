@@ -24,7 +24,7 @@ from loom.cli.results import PlanCliResult
 if TYPE_CHECKING:
     from weave.api import ComposedConfig
     from loom.pipeline.planning import ExecutionPlan, PlanSelectors, StageExplanation
-    from loom.pipeline.runtime import RunOptions
+    from loom.pipeline.runtime import RunOptions, RunStoreOptions
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.stores.artifact_store import ArtifactStore
     from loom.pipeline.stores import AuthorityConfig
@@ -234,10 +234,17 @@ def build_plan_result(
             descriptor_registry=descriptor_registry,
             validator_registry=validator_registry,
         )
+    run_store = cast("RunStoreOptions | None", runtime_options.run_store)
+    run_store_root = (
+        "runs" if run_store is None or run_store.root is None else run_store.root
+    )
     if plan_options.resume:
-        store = _create_default_run_store(authority_config=authority_config)
+        store = _create_default_run_store(
+            root=run_store_root,
+            authority_config=authority_config,
+        )
     elif runtime_options.run_uri is not None:
-        store = _create_read_only_plan_run_store()
+        store = _create_read_only_plan_run_store(root=run_store_root)
     else:
         store = None
     run_uri = _resolve_run_uri_for_plan(
@@ -343,21 +350,22 @@ def _build_plan_selectors(options: SelectorCliOptions) -> "PlanSelectors":
 
 def _create_default_run_store(
     *,
+    root: str = "runs",
     authority_config: "AuthorityConfig | None" = None,
 ) -> Any:
     from loom.pipeline.execution import create_authority_backed_serial_run_store
 
     return create_authority_backed_serial_run_store(
-        "runs",
+        root,
         authority_config=authority_config,
         owner_id="plan",
     )
 
 
-def _create_read_only_plan_run_store() -> Any:
+def _create_read_only_plan_run_store(*, root: str = "runs") -> Any:
     from loom.pipeline.stores import LocalRunStore
 
-    return LocalRunStore()
+    return LocalRunStore(root)
 
 
 def _resolve_run_uri_for_plan(

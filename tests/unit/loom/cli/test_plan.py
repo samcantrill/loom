@@ -130,15 +130,21 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
 
     monkeypatch.setattr(plan_command, "_compose_config", compose)
     monkeypatch.setattr(plan_command, "_validate_pipeline_config", lambda _config: FakePipelineResult())
+    def create_default_run_store(
+        *, root: str = "runs", authority_config: object = None
+    ) -> FakeRunStore:
+        calls["run_store_root"] = root
+        return fake_store
+
+    def create_read_only_plan_run_store(*, root: str = "runs") -> FakeRunStore:
+        calls["run_store_root"] = root
+        return fake_store
+
     monkeypatch.setattr(
-        plan_command,
-        "_create_default_run_store",
-        lambda *, authority_config=None: fake_store,
+        plan_command, "_create_default_run_store", create_default_run_store
     )
     monkeypatch.setattr(
-        plan_command,
-        "_create_read_only_plan_run_store",
-        lambda: fake_store,
+        plan_command, "_create_read_only_plan_run_store", create_read_only_plan_run_store
     )
     monkeypatch.setattr(plan_command, "_plan_pipeline", plan_pipeline)
     return calls
@@ -261,6 +267,32 @@ def test_plan_resume_opens_existing_run(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
     assert store.opened == ["file:///abs/runs/demo"]
+
+
+def test_plan_uses_configured_run_store_root_for_explicit_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = _patch_common(monkeypatch)
+    root = str(tmp_path / "configured-runs")
+    monkeypatch.setattr(
+        plan_command,
+        "_compose_config",
+        lambda *_args, **_kwargs: FakeComposedConfig(
+            resolved={
+                "pipeline": {},
+                "runtime": {
+                    "run_uri": "file://./runs/demo",
+                    "run_store": {"root": root},
+                },
+            }
+        ),
+    )
+
+    assert (
+        main(["plan", "base.yaml"], stdout=io.StringIO(), stderr=io.StringIO())
+        == 0
+    )
+    assert calls["run_store_root"] == root
 
 
 def test_plan_build_result_supports_explanation_payload(monkeypatch: pytest.MonkeyPatch) -> None:

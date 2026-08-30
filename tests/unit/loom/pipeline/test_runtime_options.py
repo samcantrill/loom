@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -13,6 +14,7 @@ from loom.pipeline import (
     ResourceRequest,
     RunEnvironmentRequest,
     RunOptions,
+    RunStoreOptions,
     StageEnvironmentRequest,
     StageRuntimeOptions,
     parallel_execution_options,
@@ -114,6 +116,29 @@ def test_run_options_populated_round_trip_freezes_inputs_and_sorts_mappings() ->
         cast(Any, options.tags)["a"] = "changed"
     with pytest.raises(TypeError):
         cast(Any, options.adapter_options)["local"] = {}
+
+
+def test_run_store_options_normalize_explicit_absolute_root_and_round_trip(
+    tmp_path: Path,
+) -> None:
+    root = str(tmp_path / "collection" / ".." / "runs")
+    options = RunOptions(run_store={"root": root})
+
+    assert options.run_store == RunStoreOptions(root=str(tmp_path / "runs"))
+    assert options.to_dict()["run_store"] == {"root": str(tmp_path / "runs")}
+    assert options.to_safe_metadata()["run_store"] == {
+        "root": str(tmp_path / "runs")
+    }
+    assert RunOptions.from_dict(options.to_dict()) == options
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "relative/runs", 42, {"root": "/tmp/runs", "unexpected": True}],
+)
+def test_run_store_options_reject_invalid_roots(value: object) -> None:
+    with pytest.raises(RuntimeResourceError):
+        RunOptions.from_dict({"run_store": value})
 
 
 def test_safe_metadata_omits_environment_keys_values_and_raw_adapter_payloads() -> None:

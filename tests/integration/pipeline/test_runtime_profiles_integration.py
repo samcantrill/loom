@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import cast
 from collections.abc import Mapping
+from pathlib import Path
+from typing import cast
 
 import pytest
 
-from loom.pipeline import StageRuntimeOptions, merge_run_options
+from loom.pipeline import RunStoreOptions, StageRuntimeOptions, merge_run_options
+from loom.pipeline.execution import create_offline_evidence_run_store
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy, TimeoutPolicy
 
@@ -135,3 +137,19 @@ def test_profile_merge_preserves_run_and_stage_reliability_contracts() -> None:
         retry=RetryPolicy(enabled=True, max_attempts=2),
         timeout=TimeoutPolicy(enabled=True, duration_seconds=12),
     )
+
+
+def test_profile_selected_root_persists_a_run_in_that_collection(tmp_path: Path) -> None:
+    root = str(tmp_path / "profile-runs")
+    options = merge_run_options(
+        base={"profile": "cluster"},
+        profiles={"cluster": {"run_store": {"root": root}}},
+    )
+    assert isinstance(options.run_store, RunStoreOptions)
+    assert options.run_store.root is not None
+
+    store = create_offline_evidence_run_store(options.run_store.root)
+    run_uri = store.allocate_run_uri()
+    store.create_run(run_uri)
+
+    assert root in run_uri

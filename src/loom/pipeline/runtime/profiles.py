@@ -26,6 +26,7 @@ from loom.pipeline.runtime.options import (
     _bool_value,
     _coerce_reliability,
     _coerce_resource_request,
+    _coerce_run_store_options,
     _object_mapping,
     _optional_string,
     _plain_mapping,
@@ -54,6 +55,7 @@ _RUN_SOURCE_FIELDS = frozenset(
         "stage_options",
         "environment",
         "adapter_options",
+        "run_store",
     }
 )
 _PROFILE_CORE_FIELDS = _RUN_SOURCE_FIELDS - {"schema_version", "profile"}
@@ -368,6 +370,9 @@ def _normalize_run_field(
 ) -> object:
     if key in {"run_uri", "executor", "profile"}:
         return _optional_string(value, path=path)
+    if key == "run_store":
+        options = _coerce_run_store_options(value, path=path)
+        return None if options is None else options.to_dict()
     if key == "dry_run":
         return _bool_value(value, path=path)
     if key == "tags":
@@ -533,7 +538,14 @@ def _object_dict(value: Mapping[str, object]) -> dict[str, object]:
 
 def _merge_run_source(target: dict[str, object], source: Mapping[str, object]) -> None:
     for key, value in source.items():
-        if key in {"run_uri", "executor", "profile", "dry_run", "notes"}:
+        if key in {
+            "run_uri",
+            "executor",
+            "profile",
+            "dry_run",
+            "notes",
+            "run_store",
+        }:
             target[key] = value
         elif key == "tags":
             _merge_mapping_field(target, key, cast(Mapping[str, object], value))

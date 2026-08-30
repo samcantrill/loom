@@ -57,6 +57,7 @@ def test_pipeline_public_exports() -> None:
         "ParallelExecutionOptions",
         "RunEnvironmentRequest",
         "RunOptions",
+        "RunStoreOptions",
         "ResolvedStageRuntimeOptions",
         "ResourceCapability",
         "ResourceEnforcementExpectation",

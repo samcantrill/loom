@@ -60,7 +60,7 @@ if TYPE_CHECKING:
     )
     from loom.pipeline.executors import Executor
     from loom.pipeline.planning import ExecutionPlan, PlanSelectors
-    from loom.pipeline.runtime import RunOptions
+    from loom.pipeline.runtime import RunOptions, RunStoreOptions
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.validation import PipelineValidationResult
     from loom.serialization import PlainData
@@ -346,14 +346,18 @@ def _build_run_result_with_warnings(
     )
     if unsupported_unregistered_executor and not run_options.resume:
         raise UnsupportedExecutorError(cast(str, run_options.executor))
-    store = _create_default_run_store(
-        authority_config=authority_config,
-        authority_mode=authority_mode,
-    )
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
         overrides=config_options.overrides,
+    )
+    bootstrap_run_store_root = _bootstrap_run_store_root(
+        composed.resolved, run_options
+    )
+    store = _create_default_run_store(
+        root=bootstrap_run_store_root or "runs",
+        authority_config=authority_config,
+        authority_mode=authority_mode,
     )
     checked_resume_run_uri: str | None = None
     activation_warnings: tuple[CliWarning, ...] = ()
@@ -426,6 +430,10 @@ def _build_run_result_with_warnings(
         selector_options=selector_options,
         known_stage_ids=pipeline_result.spec.stage_names,
         registry=validators,
+    )
+    _require_bootstrap_run_store_root(
+        bootstrap_run_store_root,
+        runtime_options,
     )
     if _is_slurm_executor(runtime_options.executor):
         raise SlurmLiveSubmissionDeferredError(cast(str, runtime_options.executor))
@@ -659,7 +667,16 @@ def build_slurm_dry_run_result(
     """Prepare persisted state and invoke the public SLURM dry-run planners."""
 
     _validate_run_plugin_record_groups(plugin_records)
+    composed = _compose_config(
+        config_options.config_path,
+        overlays=config_options.overlays,
+        overrides=config_options.overrides,
+    )
+    bootstrap_run_store_root = _bootstrap_run_store_root(
+        composed.resolved, run_options
+    )
     store = _create_default_run_store(
+        root=bootstrap_run_store_root or "runs",
         authority_config=authority_config,
         owner_id="slurm-dry-run",
     )
@@ -689,11 +706,6 @@ def build_slurm_dry_run_result(
                 LOOM_RESOURCE_VALIDATORS_GROUP,
             ),
         )
-    composed = _compose_config(
-        config_options.config_path,
-        overlays=config_options.overlays,
-        overrides=config_options.overrides,
-    )
     pipeline_result = (
         _validate_pipeline_config(composed.resolved)
         if validator_registry is None
@@ -709,6 +721,7 @@ def build_slurm_dry_run_result(
         known_stage_ids=pipeline_result.spec.stage_names,
         registry=validator_registry,
     )
+    _require_bootstrap_run_store_root(bootstrap_run_store_root, runtime_options)
     executor = runtime_options.executor or "local"
     if not _is_slurm_executor(executor):
         raise UnsupportedExecutorError(executor)
@@ -881,6 +894,7 @@ def _with_resolved_run_uri(
 
 def _create_default_run_store(
     *,
+    root: str = "runs",
     authority_config: "AuthorityConfig | None" = None,
     authority_mode: "AuthorityResolutionMode | None" = None,
     owner_id: str = "cli-run",
@@ -894,7 +908,7 @@ def _create_default_run_store(
         if authority_config is not None:
             workspace_id = authority_config.workspace_id
         return create_offline_evidence_run_store(
-            "runs",
+            root,
             owner_id=owner_id,
             workspace_id=workspace_id,
         )
@@ -903,7 +917,7 @@ def _create_default_run_store(
     )
 
     return create_authority_backed_serial_run_store(
-        "runs",
+        root,
         authority_config=authority_config,
         owner_id=owner_id,
     )
@@ -985,6 +999,32 @@ def _configured_runtime_option_before_plugin_import(
         if isinstance(profile_value, Mapping) and option in profile_value:
             candidate = profile_value[option]
     return candidate
+
+
+def _bootstrap_run_store_root(
+    config: Mapping[str, object], run_options: RunCliOptions
+) -> str | None:
+    from loom.pipeline.runtime.config import bootstrap_config_run_store_options
+
+    options = bootstrap_config_run_store_options(config, profile=run_options.profile)
+    return None if options is None else options.root
+
+
+def _require_bootstrap_run_store_root(
+    bootstrap_root: str | None, options: "RunOptions"
+) -> None:
+    run_store = cast("RunStoreOptions | None", options.run_store)
+    validated_root = None if run_store is None else run_store.root
+    if validated_root != bootstrap_root:
+        raise CliError(
+            "run-store root changed after runtime option validation",
+            code="cli.run.run_store_root_changed",
+            context={
+                "bootstrap_run_store_root": bootstrap_root,
+                "validated_run_store_root": validated_root,
+            },
+            exit_code=ExitCode.PIPELINE,
+        )
 
 
 def _validate_resume_plugin_activations(
@@ -1774,7 +1814,16 @@ def build_slurm_live_submission_result(
     """Prepare a SLURM plan and submit it with ``sbatch``."""
 
     _validate_run_plugin_record_groups(plugin_records)
+    composed = _compose_config(
+        config_options.config_path,
+        overlays=config_options.overlays,
+        overrides=config_options.overrides,
+    )
+    bootstrap_run_store_root = _bootstrap_run_store_root(
+        composed.resolved, run_options
+    )
     store = _create_default_run_store(
+        root=bootstrap_run_store_root or "runs",
         authority_config=authority_config,
         owner_id="slurm-live-submission",
     )
@@ -1804,11 +1853,6 @@ def build_slurm_live_submission_result(
                 LOOM_RESOURCE_VALIDATORS_GROUP,
             ),
         )
-    composed = _compose_config(
-        config_options.config_path,
-        overlays=config_options.overlays,
-        overrides=config_options.overrides,
-    )
     pipeline_result = (
         _validate_pipeline_config(composed.resolved)
         if validator_registry is None
@@ -1824,6 +1868,7 @@ def build_slurm_live_submission_result(
         known_stage_ids=pipeline_result.spec.stage_names,
         registry=validator_registry,
     )
+    _require_bootstrap_run_store_root(bootstrap_run_store_root, runtime_options)
     executor = runtime_options.executor or "local"
     if executor not in _SLURM_EXECUTORS:
         raise UnsupportedExecutorError(executor)
