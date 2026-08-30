@@ -1,10 +1,13 @@
-schema_version: 1
+schema_version: 2
 kind: loom.coordinator-service
 deployment_root: .state/coordinator-deployment
 run_store_root: ../../../runs
 machine_id: local-machine
 poll_interval_seconds: 0.05
 max_accepted_time_step_seconds: 3600
+
+authority:
+  kind: embedded
 
 embedded_profile:
   descriptor:
@@ -42,7 +45,15 @@ agent_policy:
       gpu_devices: []
   principals: []
   local_owner:
-    actions: [drain, resume, reload, cancel_active, scheduling_reload, recover_unknown, recover_time, replace_session]
+    actions:
+      - drain
+      - resume
+      - reload
+      - cancel_active
+      - scheduling_reload
+      - recover_unknown
+      - recover_time
+      - replace_session
     agent_ids: [machine-B]
     pools: [default]
 

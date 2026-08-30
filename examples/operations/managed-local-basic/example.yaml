@@ -8,9 +8,25 @@ status: runnable
 validation: full
 surface: python_api
 public_surfaces: [cli, python_api]
+surface_invocations:
+  - cli:queue daemon-admission
+  - cli:queue daemon-admissions
+  - cli:queue daemon-status
+  - cli:queue daemon-submit
+  - cli:queue daemon-wait
+  - python:LocalDaemon.client_view
+  - python:LocalDaemon.initialize
+  - python:LocalDaemon.start
+  - python:LocalDaemon.stop
+  - python:LocalDaemonClientView.admission
+  - python:LocalDaemonClientView.status
+  - python:LocalDaemonSocketServer.start
+  - python:LocalDaemonSocketServer.stop
+  - python:initialize_embedded_coordinator_authority
+  - python:prepare_managed_local_runtime_record
 owner_docs: [examples/operations/README.md, docs/features/queue.md]
 owner_stages: [v29]
-validation_path: tests/e2e/test_queue_cli.py::test_managed_local_basic_journey_is_rerunnable
+validation_path: tests/e2e/test_queue_cli.py::test_managed_local_basic_manifest_claims_match_journey
 entrypoints:
   - path: run_managed_local_basic.py
     kind: python

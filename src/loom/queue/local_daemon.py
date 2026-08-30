@@ -1558,9 +1558,6 @@ class LocalDaemon:
         if self.config.deployment_root is not None:
             _validate_deployment_binding(self.config)
         _validate_distinct_roots(self.config)
-        self._verified_local_owner_subject = (
-            f"uid:{self.config.coordinator_root.stat().st_uid}"
-        )
         coordinator_lock = _acquire_lock(self.config.coordinator_root)
         try:
             agent_lock = _acquire_lock(self.config.agent_root)
@@ -1574,6 +1571,9 @@ class LocalDaemon:
                 self.config.coordinator_root, role="coordinator"
             )
             agent_id = _open_root(self.config.agent_root, role="local-agent")
+            verified_local_owner_subject = (
+                f"uid:{self.config.coordinator_root.stat().st_uid}"
+            )
             owner_ids = coordinator_id, agent_id
             from ._agent_process_supervisor import (
                 AgentProcessSupervisorService,
@@ -1724,6 +1724,7 @@ class LocalDaemon:
         self._epoch = epoch
         self._scheduling_epoch = scheduling_epoch
         self._service_error = None
+        self._verified_local_owner_subject = verified_local_owner_subject
         self._stop.clear()
         self._wake.set()
         self._execution = execution
@@ -1781,6 +1782,7 @@ class LocalDaemon:
         self._agent_id = None
         self._epoch = None
         self._scheduling_epoch = None
+        self._verified_local_owner_subject = None
 
     def client_view(self, principal: LocalDaemonPrincipal) -> "LocalDaemonClientView":
         return LocalDaemonClientView(self, principal)
@@ -2068,19 +2070,33 @@ class LocalDaemon:
         """Read the one typed durable operation receipt without a history scan."""
 
         _required_string({"operation_id": operation_id}, "operation_id")
+        slurm_operation: LocalDaemonOperation | None = None
         execution = self._execution
         if execution is not None:
             projected = execution.operation_projection(operation_id)
             if projected is not None:
-                return LocalDaemonOperation(
+                projected_state = projected.get("state")
+                projected_code = projected.get("code")
+                if not isinstance(projected_state, str) or (
+                    projected_code is not None and not isinstance(projected_code, str)
+                ):
+                    raise QueueServiceError("SLURM operation projection is invalid")
+                slurm_operation = LocalDaemonOperation(
                     operation_id=operation_id,
-                    kind="slurm_submission",
-                    state=projected["state"],
-                    code=projected["code"],
+                    kind="slurm_stage_assignment",
+                    state=projected_state,
+                    code=projected_code,
                     result=projected["result"],
                 )
         with self._connection() as conn:
-            return _operation_projection(conn, operation_id)
+            management_operation = _operation_projection(conn, operation_id)
+        if slurm_operation is not None and management_operation is not None:
+            raise QueueConflictError("managed operation identity is ambiguous")
+        if slurm_operation is not None:
+            return slurm_operation
+        if management_operation is not None:
+            return management_operation
+        raise QueueServiceError("managed operation was not found")
 
     def wait_operation(
         self, operation_id: str, *, timeout: float | None
@@ -2095,6 +2111,13 @@ class LocalDaemon:
         while True:
             operation = self.operation(operation_id)
             state = operation.state
+            if operation.kind == "slurm_stage_assignment":
+                if state in {"released", "conflict"}:
+                    return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
+                if deadline is not None and time.monotonic() >= deadline:
+                    return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
+                time.sleep(min(self.config.poll_interval_seconds, 0.05))
+                continue
             if state not in {
                 "pending_delivery",
                 "applying",
@@ -4077,7 +4100,7 @@ def _encode_agent_cursor(agent_id: str) -> str:
 
 
 def _decode_agent_cursor(cursor: str) -> str:
-    if not isinstance(cursor, str) or "." not in cursor:
+    if not isinstance(cursor, str) or len(cursor) > 512 or "." not in cursor:
         raise QueueServiceError("agent cursor is invalid")
     digest, encoded = cursor.split(".", 1)
     try:
@@ -4107,7 +4130,12 @@ def _agent_projection(
     ).fetchone()
     accepted_at = None if accepted is None else str(accepted["value"])
     offered = None
-    if accepted_at is not None and coordinator_epoch is not None:
+    if (
+        accepted_at is not None
+        and coordinator_epoch is not None
+        and str(row["state"]) == "ACTIVE"
+        and str(row["coordinator_epoch"]) == coordinator_epoch
+    ):
         offered = conn.execute(
             "SELECT 1 FROM agent_offers WHERE session_id = ? "
             "AND availability_revision = ? AND coordinator_epoch = ? "
@@ -4139,7 +4167,7 @@ def _agent_projection(
 
 def _operation_projection(
     conn: sqlite3.Connection, operation_id: str
-) -> LocalDaemonOperation:
+) -> LocalDaemonOperation | None:
     queries = (
         (
             "agent_control",
@@ -4164,11 +4192,9 @@ def _operation_projection(
             "SELECT state, NULL AS result_code, result_json AS effect_json FROM recovery_operations WHERE recovery_id = ?",
         ),
     )
+    matches: list[LocalDaemonOperation] = []
     for kind, query in queries:
-        try:
-            row = conn.execute(query, (operation_id,)).fetchone()
-        except sqlite3.OperationalError:
-            continue
+        row = conn.execute(query, (operation_id,)).fetchone()
         if row is None:
             continue
         result: PlainData | None = None
@@ -4179,14 +4205,18 @@ def _operation_projection(
                 result = freeze_plain_data(decoded, path="operation result")
             except (json.JSONDecodeError, QueueServiceError) as exc:
                 raise QueueStorageError("operation result is invalid") from exc
-        return LocalDaemonOperation(
-            operation_id=operation_id,
-            kind=kind,
-            state=str(row["state"]),
-            code=None if row["result_code"] is None else str(row["result_code"]),
-            result=result,
+        matches.append(
+            LocalDaemonOperation(
+                operation_id=operation_id,
+                kind=kind,
+                state=str(row["state"]),
+                code=(None if row["result_code"] is None else str(row["result_code"])),
+                result=result,
+            )
         )
-    raise QueueServiceError("managed operation was not found")
+    if len(matches) > 1:
+        raise QueueConflictError("managed operation identity is ambiguous")
+    return matches[0] if matches else None
 
 
 def _decode_admission_cursor(cursor: str) -> tuple[int, str]:

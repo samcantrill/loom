@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+from typing import Any
 
 import pytest
 
@@ -42,39 +44,106 @@ from tests.integration.pipeline.test_slurm_dry_run_planning import _prepared_sto
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _run_operation_journey(example: str) -> subprocess.CompletedProcess[str]:
+def _run_operation_journey(
+    example: str, output_root: Path
+) -> subprocess.CompletedProcess[str]:
     script = (
         REPO_ROOT
         / "examples"
         / "operations"
         / example
-        / (
-            "run_managed_remote_operations.py"
-            if example == "managed-remote-operations"
-            else "run_managed_ready_stage_slurm.py"
-        )
+        / f"run_{example.replace('-', '_')}.py"
     )
     return subprocess.run(
         [sys.executable, str(script)],
-        cwd=REPO_ROOT,
+        cwd=script.parent,
         capture_output=True,
         text=True,
         check=False,
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "src")},
+        env={
+            **os.environ,
+            "LOOM_EXAMPLE_OUTPUT_ROOT": str(output_root),
+            "PYTHONPATH": str(REPO_ROOT / "src"),
+        },
     )
 
 
-def test_managed_remote_operations_journey_generates_tls_and_cleans_up() -> None:
-    result = _run_operation_journey("managed-remote-operations")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "1 passed" in result.stdout
+def _assert_manifest_claims_match_journey(
+    example: str, result: subprocess.CompletedProcess[str]
+) -> dict[str, Any]:
+    assert result.returncode == 0, (
+        f"{example} failed with exit {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    result_lines = [
+        line.removeprefix("journey_result: ")
+        for line in result.stdout.splitlines()
+        if line.startswith("journey_result: ")
+    ]
+    assert len(result_lines) == 1, result.stdout
+    journey = json.loads(result_lines[0])
+    assert isinstance(journey, dict)
+
+    yaml = pytest.importorskip("yaml")
+    manifest_path = REPO_ROOT / "examples" / "operations" / example / "example.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert isinstance(manifest, dict)
+    claims = manifest.get("surface_invocations")
+    observed = journey.get("surfaces")
+    assert isinstance(claims, list)
+    assert all(isinstance(item, str) for item in claims)
+    assert len(claims) == len(set(claims))
+    assert isinstance(observed, list)
+    assert set(observed) == set(claims)
+
+    surface_groups = {
+        "cli" if item.startswith("cli:") else "python_api" for item in observed
+    }
+    assert set(manifest["public_surfaces"]) == surface_groups
+    assert all(not _pid_exists(int(pid)) for pid in journey["started_pids"])
+    return journey
 
 
-def test_managed_ready_stage_slurm_journey_restarts_and_releases() -> None:
-    result = _run_operation_journey("managed-ready-stage-slurm")
-    assert result.returncode == 0, result.stdout + result.stderr
-    # Every parameterized fake-gateway boundary was exercised.
-    assert "6 passed" in result.stdout
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def test_managed_remote_operations_manifest_claims_match_journey() -> None:
+    with tempfile.TemporaryDirectory(prefix="loom-remote-e2e-") as output:
+        result = _run_operation_journey("managed-remote-operations", Path(output))
+        journey = _assert_manifest_claims_match_journey(
+            "managed-remote-operations", result
+        )
+        root = Path(journey["root"])
+        assert journey["authenticated"] is True
+        assert journey["agent_id"] == "machine-B"
+        assert journey["final_operation"] == "example-remote-resume"
+        assert (root / "tls" / "ca.crt").is_file()
+        assert (root / "tls" / "server.crt").is_file()
+        assert (root / "tls" / "agent.crt").is_file()
+        assert not (root / "deployment" / "coordinator" / "daemon.sock").exists()
+
+
+def test_managed_ready_stage_slurm_manifest_claims_match_journey() -> None:
+    with tempfile.TemporaryDirectory(prefix="loom-slurm-e2e-") as output:
+        result = _run_operation_journey("managed-ready-stage-slurm", Path(output))
+        journey = _assert_manifest_claims_match_journey(
+            "managed-ready-stage-slurm", result
+        )
+        root = Path(journey["root"])
+        assert journey["rejected"] is True
+        assert journey["restarted"] is True
+        assert journey["result"] == "SUCCEEDED"
+        assert journey["released"] is True
+        assert (root / "coordinator" / "control.sqlite").is_file()
+        assert not (root / "job-private-capability").exists()
+        assert not (root / "coordinator" / "daemon.sock").exists()
 
 
 def test_queue_enqueue_many_example_uses_public_admission_path(tmp_path: Path) -> None:
@@ -403,41 +472,21 @@ def test_session_replacement_cli_uses_the_owner_socket_and_safe_result(
     assert "request_digest" not in envelope["result"]
 
 
-def test_managed_local_basic_journey_is_rerunnable(tmp_path: Path) -> None:
-    script = (
-        REPO_ROOT
-        / "examples"
-        / "operations"
-        / "managed-local-basic"
-        / "run_managed_local_basic.py"
-    )
-    output_root = tmp_path / "managed-local-basic"
-    env = dict(os.environ)
-    env["LOOM_EXAMPLE_OUTPUT_ROOT"] = str(output_root)
-
-    for _ in range(2):
-        result = subprocess.run(
-            [sys.executable, str(script)],
-            cwd=script.parent,
-            capture_output=True,
-            text=True,
-            env=env,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise AssertionError(
-                f"managed-local example failed with exit {result.returncode}\n"
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+def test_managed_local_basic_manifest_claims_match_journey() -> None:
+    with tempfile.TemporaryDirectory(prefix="loom-local-e2e-") as output:
+        output_root = Path(output)
+        roots: set[Path] = set()
+        for _ in range(2):
+            result = _run_operation_journey("managed-local-basic", output_root)
+            journey = _assert_manifest_claims_match_journey(
+                "managed-local-basic", result
             )
-        assert "coordinator: coordinator-" in result.stdout
-        assert "status: SUCCEEDED" in result.stdout
-        assert "stages: produce,consume" in result.stdout
-        assert "admissions: 1" in result.stdout
-
-    run_roots = sorted(output_root.glob("run-*"))
-    assert len(run_roots) == 2
-    for run_root in run_roots:
-        assert (run_root / "coordinator" / "control.sqlite").is_file()
-        assert (run_root / "coordinator" / "execution.sqlite").is_file()
-        assert (run_root / "agent" / "journal.sqlite").is_file()
-        assert not (run_root / "coordinator" / "daemon.sock").exists()
+            assert journey["status"] == "SUCCEEDED"
+            assert journey["restarted"] is True
+            root = Path(journey["root"])
+            roots.add(root)
+            assert (root / "coordinator" / "control.sqlite").is_file()
+            assert (root / "coordinator" / "execution.sqlite").is_file()
+            assert (root / "agent" / "journal.sqlite").is_file()
+            assert not (root / "coordinator" / "daemon.sock").exists()
+        assert len(roots) == 2

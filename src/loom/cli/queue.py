@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 import time
 from pathlib import Path
@@ -609,7 +610,19 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
         run_outbound_agent_service,
     )
 
+    stop = Event()
+    handled_signals = (signal.SIGINT, signal.SIGTERM)
+    previous_handlers = {
+        handled_signal: signal.getsignal(handled_signal)
+        for handled_signal in handled_signals
+    }
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop.set()
+
     try:
+        for handled_signal in handled_signals:
+            signal.signal(handled_signal, request_stop)
         service = load_outbound_agent_service_config(namespace.config)
         _emit_daemon_payload(
             namespace,
@@ -621,13 +634,16 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
         )
         run_outbound_agent_service(
             service,
-            stop=Event(),
+            stop=stop,
             trusted_config_loader=lambda: load_outbound_agent_service_config(
                 service.source_path
             ),
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
+    finally:
+        for handled_signal, previous_handler in previous_handlers.items():
+            signal.signal(handled_signal, previous_handler)
     return int(ExitCode.SUCCESS)
 
 

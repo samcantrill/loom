@@ -7,10 +7,36 @@ introduced_in: v29
 status: runnable
 validation: full
 surface: cli
-public_surfaces: [cli]
+public_surfaces: [cli, python_api]
+surface_invocations:
+  - cli:queue daemon-admission
+  - cli:queue daemon-operation
+  - cli:queue daemon-operation-wait
+  - cli:queue daemon-status
+  - cli:queue daemon-submit
+  - cli:queue daemon-wait
+  - python:LocalDaemon.initialize
+  - python:LocalDaemon.slurm_bootstrap_view
+  - python:LocalDaemon.start
+  - python:LocalDaemon.stop
+  - python:LocalDaemonSlurmBootstrapView.commit_result
+  - python:LocalDaemonSlurmBootstrapView.declare_report
+  - python:LocalDaemonSlurmBootstrapView.grant
+  - python:LocalDaemonSlurmBootstrapView.inputs_ready
+  - python:LocalDaemonSlurmBootstrapView.output_chunk
+  - python:LocalDaemonSlurmBootstrapView.register
+  - python:LocalDaemonSlurmBootstrapView.release
+  - python:LocalDaemonSlurmBootstrapView.start_permit
+  - python:LocalDaemonSlurmBootstrapView.started
+  - python:LocalDaemonSocketServer.start
+  - python:LocalDaemonSocketServer.stop
+  - python:SlurmBootstrapWorkspace
+  - python:execute_resident_stage_worker_request
+  - python:initialize_embedded_coordinator_authority
+  - python:prepare_managed_local_runtime_record
 owner_docs: [examples/operations/README.md, docs/features/queue.md]
 owner_stages: [v29]
-validation_path: tests/e2e/test_queue_cli.py::test_managed_ready_stage_slurm_journey_restarts_and_releases
+validation_path: tests/e2e/test_queue_cli.py::test_managed_ready_stage_slurm_manifest_claims_match_journey
 entrypoints:
   - path: run_managed_ready_stage_slurm.py
     kind: python

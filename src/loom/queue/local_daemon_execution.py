@@ -1300,30 +1300,47 @@ class LocalDaemonExecution:
     def operation_projection(
         self, operation_id: str
     ) -> dict[str, str | PlainData | None] | None:
-        """Project one ready-stage submission through its owning execution seam.
+        """Project one ready-stage assignment through its owning execution seam.
 
         The daemon management owner deliberately does not read the ready-stage
-        store itself: this narrow projection preserves the execution owner's
-        schema and retention boundary while making the durable submission
-        operation discoverable to operators.
+        stores itself. This narrow projection preserves the execution owner's
+        schema and retention boundary while exposing the assignment lifecycle
+        that owns the public operation ID.
         """
 
+        retained = self.slurm_assignments.find_operation(operation_id)
+        if retained is None:
+            return None
         submission = self.slurm_submissions.find(operation_id)
         if submission is None:
-            return None
+            raise QueueServiceError("SLURM submission operation is unavailable")
         result: dict[str, PlainData] = {
+            "assignment_id": retained.assignment.assignment_id,
+            "run_uri": retained.assignment.run_uri,
+            "stage_work_id": retained.assignment.stage_work_id,
+            "stage_name": retained.delivery.stage_name,
+            "profile_id": retained.assignment.profile_id,
+            "request_digest": retained.assignment.request_digest,
             "job_id": submission.job_id,
             "cluster": submission.cluster,
-            "evidence": submission.evidence,
+            "submission_state": submission.state.value,
+            "submission_evidence": submission.evidence,
             "scheduler_state": submission.scheduler_state,
             "scheduler_source": submission.scheduler_source,
             "scheduler_observed_at": submission.scheduler_observed_at,
             "cancel_requested": submission.cancel_requested,
             "start_consumed": submission.start_consumed,
+            "bootstrap_registered": retained.bootstrap_incarnation is not None,
+            "input_ready": retained.input_ready,
+            "fence_bound": retained.fence is not None,
+            "process_execution_id": retained.process_execution_id,
+            "loom_result_status": (
+                None if retained.report is None else retained.report.status.value
+            ),
         }
         return {
-            "state": submission.state.value,
-            "code": submission.scheduler_state,
+            "state": retained.state,
+            "code": submission.evidence,
             "result": freeze_plain_data(result, path="SLURM operation result"),
         }
 

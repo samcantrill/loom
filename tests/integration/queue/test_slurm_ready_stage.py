@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -389,12 +390,18 @@ def _exercise_mixed_route_run(
         assert record.state == "accepted"
         assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
         operation = daemon.operation(record.assignment.operation_id)
-        assert operation.kind == "slurm_submission"
+        assert operation.kind == "slurm_stage_assignment"
         assert operation.state == "accepted"
         assert operation.result is not None
-        assert operation.result["job_id"] == "1200"
-        waited_operation = daemon.wait_operation(record.assignment.operation_id, timeout=0)
-        assert waited_operation.kind.value == "TERMINAL"
+        operation_result = cast(Mapping[str, object], operation.result)
+        assert operation_result["assignment_id"] == record.assignment.assignment_id
+        assert operation_result["request_digest"] == record.assignment.request_digest
+        assert operation_result["submission_state"] == "accepted"
+        assert operation_result["job_id"] == "1200"
+        waited_operation = daemon.wait_operation(
+            record.assignment.operation_id, timeout=0
+        )
+        assert waited_operation.kind.value == "TIMEOUT"
         assert waited_operation.operation == operation
 
         # A fresh daemon/execution/store and fresh helper binding retain the
@@ -748,6 +755,16 @@ def _exercise_mixed_route_run(
 
             completed = client.wait("mixed-route", timeout_seconds=10)
             assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
+            released_operation = daemon.wait_operation(
+                record.assignment.operation_id, timeout=2
+            )
+            assert released_operation.kind.value == "TERMINAL"
+            assert released_operation.operation.state == "released"
+            assert released_operation.operation.result is not None
+            released_result = cast(
+                Mapping[str, object], released_operation.operation.result
+            )
+            assert released_result["loom_result_status"] == "SUCCEEDED"
             snapshot = authority.open_run(run_uri)
             assert snapshot.status is RunStatus.SUCCEEDED
             assert [stage.status for stage in snapshot.stages] == [

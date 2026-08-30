@@ -57,6 +57,8 @@ uv run python examples/operations/offline-import-rejections/run_offline_import_r
 uv run python examples/operations/run-catalog-and-bundles/run_catalog_workflow.py
 uv run python examples/operations/cleanup-and-gc/run_cleanup_and_gc.py
 uv run python examples/operations/managed-local-basic/run_managed_local_basic.py
+uv run python examples/operations/managed-remote-operations/run_managed_remote_operations.py
+uv run python examples/operations/managed-ready-stage-slurm/run_managed_ready_stage_slurm.py
 uv run python examples/operations/service-less-slurm-driving/run_service_less_slurm.py
 ```
 
@@ -85,7 +87,7 @@ The following `validation: full` examples are supported by focused integration t
 - `operations.cleanup-and-gc`:
   `tests/integration/examples/test_example_workflows.py::test_example_cleanup_and_gc_is_preview_first_and_candidate_only`
 - `operations.managed-local-basic`:
-  `tests/e2e/test_queue_cli.py::test_managed_local_basic_journey_is_rerunnable`
+  `tests/e2e/test_queue_cli.py::test_managed_local_basic_manifest_claims_match_journey`
 - `operations.managed-remote-operations`:
   `tests/e2e/test_queue_cli.py::test_managed_remote_operations_manifest_claims_match_journey`
 - `operations.managed-ready-stage-slurm`:

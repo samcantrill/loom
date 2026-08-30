@@ -87,6 +87,17 @@ def test_local_owner_scope_uses_verified_owner_subject_not_process_uid() -> None
         authorizer.require_operator(owner, "drain", agent_id="agent-b", pool="default")
     with pytest.raises(QueueServiceError, match="not authorized"):
         authorizer.require_operator(owner, "drain", agent_id="agent-a", pool="other")
+    with pytest.raises(QueueServiceError, match="not authorized"):
+        authorizer.require_operator(
+            LocalDaemonPrincipal(
+                "uid:verified-owner",
+                LocalDaemonRole.OPERATOR,
+                "remote-certificate",
+            ),
+            "drain",
+            agent_id="agent-a",
+            pool="default",
+        )
 
 
 def _replacement_projection_connection() -> sqlite3.Connection:

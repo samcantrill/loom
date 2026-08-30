@@ -385,20 +385,36 @@ class LocalDaemonSocketClient:
     def wait_operation(
         self, operation_id: str, *, timeout_seconds: float | None = None
     ) -> OperationWaitResult:
+        if timeout_seconds is not None and (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or timeout_seconds < 0
+        ):
+            raise QueueServiceError("operation wait timeout is invalid")
         deadline = (
-            None if timeout_seconds is None else time.monotonic() + timeout_seconds
+            None
+            if timeout_seconds is None
+            else time.monotonic() + float(timeout_seconds)
         )
         while True:
             remaining = (
                 None if deadline is None else max(0.0, deadline - time.monotonic())
             )
-            result = self._call(
-                {
-                    "operation": "wait_operation",
-                    "operation_id": operation_id,
-                    "timeout": remaining,
-                }
-            )
+            try:
+                result = self._call(
+                    {
+                        "operation": "wait_operation",
+                        "operation_id": operation_id,
+                        "timeout": remaining,
+                    }
+                )
+            except QueueServiceError as exc:
+                if str(exc) != "local_daemon_wait_capacity_exhausted":
+                    raise
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.005)
+                continue
             parsed = OperationWaitResult.from_dict(result)
             if parsed.kind is not OperationWaitKind.TIMEOUT:
                 return parsed
