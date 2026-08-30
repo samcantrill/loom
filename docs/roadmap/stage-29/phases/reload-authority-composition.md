@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 14
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p14-reload-authority-composition`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees/stage-29-p14-reload-authority-composition`
-- Base revision: current `origin/develop` after Phase 13A merges
+- Base revision: `961b87f8ec1a490bd38e9c1de5992a75b18bd2dc`
 - PR target: `develop`
 - PR title: `Stage 29 phase 14: complete protected role composition`
 - Dependencies: remotely merged Phase 13A; Phase 13 remains read-only evidence
@@ -174,8 +174,14 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planned at evidence revision `2f8dfd9`
-- Expanded planning: design-safety findings on supervisor epoch references and long-poll saturation were corrected; bounded plan review passed after narrowing CLI failure semantics to reloads
+- Manager preparation: passed at clean current `origin/develop`
+  `961b87f`; Phase 13A merge/cleanup, FR-35 through FR-38, DD-35 through
+  DD-37, source owners, target matrices, authority seam, and stop conditions
+  were verified
+- Expanded planning: no phase-planner pass needed; the approved plan already
+  fixes both fingerprint domains, trusted eager target construction, the narrow
+  authority factory, and reload CLI semantics. Independent review remains
+  required for the durable reload and authority trust boundaries.
 - Implementation: pending
 - Refiner: not needed
 - Pre-submit gate: pending
