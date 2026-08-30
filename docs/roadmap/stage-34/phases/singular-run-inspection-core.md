@@ -2,29 +2,32 @@
 
 ## Metadata
 
-- Status: pending
+- Status: approved
 - Roadmap stage and phase: Stage 34, Phase 1
 - Manifest: docs/roadmap/stage-34/implementation-plan.md
 - Branch: agent/stage-34-p1-singular-run-inspection-core
-- Worktree root and path: use the manifest-recorded root;
-  `<root>/stage-34-p1-singular-run-inspection-core`
-- Base revision: current `origin/develop` after Stage 32 Phase 2 is remotely merged
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+  `/home/can134/work/active/loom-worktrees/stage-34-p1-singular-run-inspection-core`
+- Base revision: `4fb44179055855e6402ded80de0890552de759d8`
 - PR target: develop
 - PR title: `Stage 34 phase 1: add singular run inspection core`
-- Dependencies: Stage 32 Phase 2 merged; Stage 29 bounded admission detail;
-  existing authority, artifact, log, diagnostics, Unix socket, and CLI seams
-- Workflow path: expanded; this phase fixes a public serialized projection and
-  a bounded cross-owner join
-- Blockers: Stage 32 Phase 2 merge
+- PR: [#263](https://github.com/samcantrill/loom/pull/263)
+- Dependencies: Stage 32 replacement Phase 3 merged in
+  [#261](https://github.com/samcantrill/loom/pull/261); Stage 29 bounded
+  admission detail; existing authority, artifact, log, diagnostics, Unix
+  socket, and CLI seams
+- Workflow path: fast; the approved public projection is fixed and the merged
+  Stage 32 exact-reference seam matches it without a new planning decision
+- Blockers: none
 
 ## Objective And Context
 
 - Vertical outcome: callers use the public Python API or
   `loom inspect-run RUN_URI` through direct or owner-only Unix sources and
   receive the same safe, bounded result for managed and service-less runs.
-- Earlier dependency: Stage 32 retains the canonical queue item ID in the
-  run-local submitted operation/manifest; Stage 29 supplies indexed managed
-  admission and targeted owner detail.
+- Earlier dependency: Stage 32 replacement Phase 3 retains the canonical queue
+  item ID in the run-local submitted operation/manifest; Stage 29 supplies
+  indexed managed admission and targeted owner detail.
 - Later work explicitly out of scope: mTLS query role/dispatch/client, remote
   client configuration, content delivery, discovery, paging, and subscriptions.
 
@@ -174,8 +177,8 @@ Final commands:
 ## Executor Handoff
 
 - Read section range: this entire phase plan; Stage 34 planning Minimum Design,
-  DQ-1 through DQ-3, validation, and Phase Shaping; merged Stage 32 Phase 2
-  run-to-item contract; `docs/structure.md` diagnostics/import sections.
+  DQ-1 through DQ-3, validation, and Phase Shaping; merged Stage 32 replacement
+  Phase 3 run-to-item contract; `docs/structure.md` diagnostics/import sections.
 - Safe implementation slices: models/codecs; exact projection; socket; CLI/docs;
   focused and full validation.
 - Decisions not to revisit: one run URI, no bytes/list/paging/fallback, fixed
@@ -185,25 +188,50 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning approved; pending Stage 32 Phase 2 merge, then
-  record exact base/worktree.
-- Expanded planning: stage design is complete; use a phase planner only if the
-  merged Stage 32 seam materially conflicts with DQ-3.
-- Implementation: pending.
-- Refiner: not needed.
-- Pre-submit gate: pending.
-- Independent review: reconsider only for a material residual public-contract or
-  cross-owner correctness risk after manager review.
-- Blocker corrections: 0/3.
-- PR and merge: pending.
+- Manager preparation: complete; dependency PR #261, exact base, branch,
+  worktree, source seams, and fast-path route verified.
+- Expanded planning: not needed; the merged Stage 32 seam matches DQ-3.
+- Implementation: executor pass complete in `f466a81`; it added the public v1
+  model/projection, indexed managed lookup, injected Unix operation, CLI/API,
+  lazy exports, documentation, and initial unit/package coverage.
+- Refiner: correction 1/3 complete in `202f3d3`. The original skeleton did not
+  compose the projection in the production Unix daemon, did not apply direct
+  queue configuration, and did not project the retained service-less exact
+  queue reference. The bounded correction reuses the retained operation, exact
+  queue primary-key read, and dispatch-handle/manifest agreement; it adds no
+  owner persistence or protocol.
+- Manager correction 2/3: complete. The plan-required contract, integration,
+  and subprocess journeys were absent, direct queue configuration started a
+  mutable service/global recovery read, managed detail was not projected, known
+  partial runs could collapse to whole failures, returned identities were
+  omitted, and the response budget did not include the socket envelope. The
+  correction adds one read-only existing-database open, fixed-axis/identity and
+  truncation invariants, exact managed and both Stage 32 Slurm journeys,
+  no-content/secret checks, and direct/Unix parity without new persistence.
+- Manager correction 3/3: complete. Pre-submit review found that a reachable
+  populated local-agent execution/result owner was omitted from the fixed axes
+  and that authoritative per-stage lifecycle reason codes were omitted from the
+  v1 stage record. The correction projects the allowlisted local-agent owner as
+  `transfer_result`, adds the optional stable stage `code`, and exercises a real
+  managed stage through direct and Unix reads while preserving non-atomic
+  revision semantics.
+- Pre-submit gate: complete at `d0d01e1`; manager review found no remaining
+  blocker against the phase plan, accepted contracts, dependency direction,
+  domain neutrality, or proportionality.
+- Independent review: not used. The fast-path manager review covered the final
+  current-target diff and found no material residual risk requiring expansion.
+- Blocker corrections: 3/3; exhausted.
+- PR and merge: PR #263 is open with verified base `develop`, phase head,
+  title, non-draft state, and clean mergeability; manager-local review passed.
+  Squash merge is pending.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added `loom.diagnostics.run_inspection` strict v1 models/projection and lazy exports; owner-only injected Unix operation/client; indexed daemon run-URI lookup; direct/Unix CLI selection, docs, and public import expectation. Corrections compose the production callback, return queue/admission IDs, project targeted managed and service-less owners including local-agent execution/result, expose safe artifact/log locations and stage reason codes, enforce fixed axes/cardinality/socket size, and open an existing queue database read-only for direct inspection. |
+| Tests added or updated | Added strict codec/failure/bounds/precedence/reason/no-content units; direct queue-config and no-fallback CLI units; direct/Unix and read-only queue contracts; real managed execution/socket and both Stage 32 Slurm-mode integrations; an after-driver-exit subprocess JSON journey; and diagnostics public-import coverage. |
+| Validated revision/tree state and evidence | At `d0d01e1`, after merging current `origin/develop`, the focused unit/contract/integration/E2E matrix passed 52, 3, 49, and 1 tests respectively; targeted Ruff, Pyright, and `git diff --check` passed. Fresh `make validate-pr` passed Ruff, Pyright with 0 errors or warnings, 2,727 default tests with 136 deselected, 157 config-extra tests with 3 expected skips and 2,730 deselected, plus source and wheel builds. Fresh `make test-summary` recorded 2,884 selected passes across package 119, unit 1,921, contract 300, integration 326, E2E 61, and config-extra 157, with the same 3 expected skips. |
+| Validation-relevant changes after evidence | None. Only this phase evidence metadata changed after the validated source/test tree, so the receipt remains current under the repository freshness rule. |
+| PR, review, and merge | [#263](https://github.com/samcantrill/loom/pull/263) opened against `develop`; target, head, title, body, non-draft state, and clean mergeability verified. Manager-local fast-path review passed with no blocker; squash merge pending. |
+| Residual risk and cleanup | No known implementation blocker; correction budget is exhausted. Merge verification, post-merge metadata update, and worktree/branch cleanup remain. |

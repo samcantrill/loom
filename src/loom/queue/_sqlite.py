@@ -52,9 +52,25 @@ class SQLiteQueueRepository:
     ) -> None:
         self.db_path = Path(db_path)
         self._clock = clock
+        self._read_only = False
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             _ensure_schema(conn)
+
+    @classmethod
+    def open_read_only(cls, db_path: str | Path) -> "SQLiteQueueRepository":
+        """Open one existing queue database without creating or changing it."""
+
+        path = Path(db_path)
+        if not path.is_file():
+            raise QueueStorageError("queue repository does not exist")
+        repository = cls.__new__(cls)
+        repository.db_path = path
+        repository._clock = utc_timestamp
+        repository._read_only = True
+        with repository._connect() as conn:
+            _verify_schema(conn)
+        return repository
 
     def enqueue(self, item: QueueItem) -> QueueItem:
         """Compatibility operation returning the canonical queue item only."""
@@ -525,17 +541,24 @@ class SQLiteQueueRepository:
 
     def _connect(self) -> Any:
         sqlite = _sqlite3()
+        read_only = self._read_only
         try:
             connection = sqlite.connect(
-                str(self.db_path),
+                (
+                    f"{self.db_path.resolve(strict=False).as_uri()}?mode=ro"
+                    if read_only
+                    else str(self.db_path)
+                ),
                 timeout=_BUSY_TIMEOUT_MS / 1000,
+                uri=read_only,
             )
             connection.row_factory = sqlite.Row
             connection.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
-            try:
-                connection.execute("PRAGMA journal_mode=WAL")
-            except sqlite.DatabaseError:
-                pass
+            if not read_only:
+                try:
+                    connection.execute("PRAGMA journal_mode=WAL")
+                except sqlite.DatabaseError:
+                    pass
             connection.execute("PRAGMA foreign_keys=ON")
             return connection
         except sqlite.DatabaseError as exc:
@@ -568,6 +591,21 @@ def _ensure_schema(conn: Any) -> None:
     if row["value"] != str(QUEUE_DB_SCHEMA_VERSION):
         raise QueueSchemaError(
             f"unsupported queue schema version {row['value']}; "
+            f"expected {QUEUE_DB_SCHEMA_VERSION}"
+        )
+
+
+def _verify_schema(conn: Any) -> None:
+    try:
+        row = conn.execute(
+            "SELECT value FROM queue_metadata WHERE key = 'schema_version'"
+        ).fetchone()
+    except Exception as exc:
+        raise QueueSchemaError("queue repository schema is missing") from exc
+    if row is None or row["value"] != str(QUEUE_DB_SCHEMA_VERSION):
+        actual = None if row is None else row["value"]
+        raise QueueSchemaError(
+            f"unsupported queue schema version {actual}; "
             f"expected {QUEUE_DB_SCHEMA_VERSION}"
         )
 

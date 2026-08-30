@@ -433,6 +433,8 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
 
     from threading import Event
 
+    from loom.diagnostics.run_inspection import projection_callable
+    from loom.pipeline.stores import LocalRunStore
     from loom.queue import LocalDaemon, LocalDaemonSocketServer
     from loom.queue.agent_session_transport import LocalDaemonAgentHttpServer
     from loom.queue.deployment import load_coordinator_service_config
@@ -443,7 +445,13 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
         raise _queue_cli_error(exc) from exc
     config = service.daemon
     daemon = LocalDaemon(config)
-    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server = LocalDaemonSocketServer(
+        daemon,
+        config.endpoint,
+        inspect_run=projection_callable(
+            run_store=LocalRunStore(config.run_store_root), daemon=daemon
+        ),
+    )
     agent_server = (
         None
         if service.agent_server is None
@@ -799,9 +807,7 @@ def build_slurm_drive_result(
         return QueueController(
             service,
             adapters={
-                SLURM_QUEUE_ADAPTER_NAME: SlurmQueueDispatchAdapter(
-                    run_store=run_store
-                )
+                SLURM_QUEUE_ADAPTER_NAME: SlurmQueueDispatchAdapter(run_store=run_store)
             },
         ).drive_foreground(
             pool_name=selected_pool,

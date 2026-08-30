@@ -1772,6 +1772,18 @@ class LocalDaemon:
         _required_string({"queue_item_id": queue_item_id}, "queue_item_id")
         return self._admission_for_queue_item(queue_item_id)
 
+    def admission_for_run_uri(self, run_uri: str) -> LocalDaemonAdmission:
+        """Return the one admission indexed by its canonical run URI."""
+        _required_string({"run_uri": run_uri}, "run_uri")
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM managed_admissions WHERE coordinator_id = ? AND run_uri = ?",
+                (self._require_started(), run_uri),
+            ).fetchone()
+        if row is None:
+            raise AdmissionNotFoundError("managed admission was not found")
+        return _admission_from_row(row)
+
     def wait_admission(
         self, admission_id: str, *, expected_revision: int, timeout: float | None
     ) -> AdmissionWaitResult:
