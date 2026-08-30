@@ -189,24 +189,23 @@ Final commands:
 - Expanded planning: no phase-planner pass needed; the approved expanded design-
   safety and bounded plan-review findings already fixed supervisor epoch
   references, long-poll saturation, and Phase 14 CLI scope
-- Implementation: candidate `6907c14`; correction 1/3 is in progress for the
-  manager-verified management-concurrency, projection, policy/defect-evidence,
-  and executable-example blockers
+- Implementation: `6907c14` plus correction `92c248c`; correction 1/3 closed
+  the management-concurrency, projection, policy/defect-evidence, and
+  executable-example blockers
 - Refiner: not needed
-- Pre-submit gate: blocked on the concrete correction above; the candidate
-  `make validate-pr` and 2,929-pass summary are stale for submission once source
-  or tests change
+- Pre-submit gate: fresh `make validate-pr` and `make test-summary` passed on
+  the corrected tree
 - Independent review: required for concurrent IPC and broad public example claims
-- Blocker corrections: 1/3 in progress
+- Blocker corrections: 1/3 closed
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `6907c14`: per-admission row revisions and targeted waits; bounded Unix workers/client renewal; admission/agent/operation discovery and CLI; explicit local-owner scope; accepted-time/service-health/replay corrections; queue docs and three managed-operation journey manifests. |
-| Tests added or updated | Causal admission A/B/no-op and socket-saturation/status tests; management manifest/journey coverage; CLI schema and Python-example catalog updates; status-fixture hard-cut update. |
-| Validated revision/tree state and evidence | `6907c14` implementation tree; `make validate-pr` passed. Fresh `make test-summary` passed: 2,929 passed, 3 skipped, 0 failures/errors; receipt: `build/test-summary.md`. Targeted queue unit/CLI, queue integration/E2E, and managed-journey selections also passed during implementation. |
+| Implementation and changed paths | `6907c14` plus `92c248c`: bounded shutdown-aware socket capacity and renewed client waits; typed current-agent and operation projections; verified config-owner UID policy scopes; guarded replacement/time behavior; CLI serialization; and executable generated-CA/fake-SLURM journey entry points. |
+| Tests added or updated | Admission A/B/no-op and socket saturation/status; current logical agent, operation result/bound wait, verified-owner different-UID/scope negatives; CLI/E2E process journeys; targeted queue unit/CLI and remote/SLURM integration selections. |
+| Validated revision/tree state and evidence | Fresh `make validate-pr` passed. Fresh `make test-summary` passed: 2,927 passed, 3 skipped, 0 failures/errors (2,930 total); receipt: `build/test-summary.md`, generated `2026-08-30T18:25:03+00:00`. Targeted queue tests passed: 91 queue unit tests, 12 queue CLI E2E tests, and 19 selected CLI/remote/SLURM integration tests. |
 | Validation-relevant changes after evidence | None. This completion-record-only update is excluded from the validation-relevant tree. |
-| PR, review, and merge | pending correction 1/3, refreshed validation, required independent review, and merge. |
-| Residual risk and cleanup | Candidate `6907c14` is not submission-ready: long caller waits can terminate at the internal server cap, request reads remain on the accept thread, current-agent/operation semantics and policy/defect fixes lack their causal matrix, and two claimed journeys are descriptive stubs rather than executable TLS/fake-SLURM examples. |
+| PR, review, and merge | pending required independent review and manager PR/merge workflow. |
+| Residual risk and cleanup | No concrete Phase 15 implementation blocker. Remote and SLURM examples use generated local credentials and the repository fake gateway only; they assert normal cleanup in their invoked journeys. |
