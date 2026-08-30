@@ -12,7 +12,11 @@
 - PR title: `Stage 29 phase 15: complete management and examples`
 - Dependencies: remotely merged Phase 14
 - Workflow path: expanded; public CLI, concurrent IPC, and claimed example coverage
-- Blockers: none
+- Blockers: manager verification found that internal finite server polls escape
+  as premature caller timeouts, the accept thread still owns blocking request
+  reads, agent/operation projections and tests do not yet close their fixed
+  contracts, and the remote/SLURM example entrypoints describe rather than run
+  their claimed journeys. Correction 1/3 is in progress.
 
 ## Objective And Context
 
@@ -185,12 +189,15 @@ Final commands:
 - Expanded planning: no phase-planner pass needed; the approved expanded design-
   safety and bounded plan-review findings already fixed supervisor epoch
   references, long-poll saturation, and Phase 14 CLI scope
-- Implementation: complete at `6907c14`
+- Implementation: candidate `6907c14`; correction 1/3 is in progress for the
+  manager-verified management-concurrency, projection, policy/defect-evidence,
+  and executable-example blockers
 - Refiner: not needed
-- Pre-submit gate: passed at `6907c14`; `make validate-pr` and `make test-summary`
-  completed with no validation-relevant changes afterwards
+- Pre-submit gate: blocked on the concrete correction above; the candidate
+  `make validate-pr` and 2,929-pass summary are stale for submission once source
+  or tests change
 - Independent review: required for concurrent IPC and broad public example claims
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3 in progress
 - PR and merge: pending
 
 ## Completion Record
@@ -201,5 +208,5 @@ Final commands:
 | Tests added or updated | Causal admission A/B/no-op and socket-saturation/status tests; management manifest/journey coverage; CLI schema and Python-example catalog updates; status-fixture hard-cut update. |
 | Validated revision/tree state and evidence | `6907c14` implementation tree; `make validate-pr` passed. Fresh `make test-summary` passed: 2,929 passed, 3 skipped, 0 failures/errors; receipt: `build/test-summary.md`. Targeted queue unit/CLI, queue integration/E2E, and managed-journey selections also passed during implementation. |
 | Validation-relevant changes after evidence | None. This completion-record-only update is excluded from the validation-relevant tree. |
-| PR, review, and merge | pending manager preparation, required independent review, and merge. |
-| Residual risk and cleanup | No implementation blocker. Default journeys retain deterministic local TLS/fake-SLURM evidence; production site smoke tests remain opt-in. |
+| PR, review, and merge | pending correction 1/3, refreshed validation, required independent review, and merge. |
+| Residual risk and cleanup | Candidate `6907c14` is not submission-ready: long caller waits can terminate at the internal server cap, request reads remain on the accept thread, current-agent/operation semantics and policy/defect fixes lack their causal matrix, and two claimed journeys are descriptive stubs rather than executable TLS/fake-SLURM examples. |
