@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: approved
 - Roadmap stage and phase: Stage 29, Phase 15
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p15-management-cli-examples`
@@ -192,30 +192,33 @@ Final commands:
 - Expanded planning: no phase-planner pass needed; the approved expanded design-
   safety and bounded plan-review findings already fixed supervisor epoch
   references, long-poll saturation, and Phase 14 CLI scope
-- Implementation: corrected candidate `92c248c`; the independent review found
-  four concrete management/evidence blockers requiring one bounded correction
-- Refiner: correction 2/3 in progress. The same-timestamp current-agent
-  projection, accepted-time/epoch/expiry availability check, execution-owner
-  SLURM operation projection, and renewing public admission wait are corrected;
-  truthful journeys and the remaining FR-43 evidence are still open.
-- Pre-submit gate: not passed; the correction-1 validation receipt is stale for
-  submission because accepted example claims and causal coverage remain open
-- Independent review: complete; not merge eligible at `92c248c` because the
-  four blockers above remain. It also localized expired-offer availability,
-  missing FR-43 causal assertions, and stale operation-catalog node IDs to the
-  same correction.
-- Blocker corrections: 1/3 complete; bounded refiner correction 2/3 remains in
-  progress (no correction budget increment until the whole approved cluster is
-  closed)
+- Implementation: complete at final reviewed tree `9c87de5`. The implementation
+  owns per-admission revisions, bounded renewable waits, bounded agent and
+  operation reads, verified local-owner scopes, accepted-time recovery fixes,
+  and three executable management journeys.
+- Refiner: complete. Correction 2/3 closed same-timestamp agent selection,
+  accepted-time offer availability, execution-owned SLURM operation projection,
+  and public wait renewal. Manager correction 3/3 then replaced all example
+  shortcuts, completed FR-43 evidence, fixed remote shutdown, and made manifest
+  claims exact.
+- Pre-submit gate: passed. `make validate-pr` passed at source/test revision
+  `76d770d`; the later documentation-only correction `9c87de5` passed all 29
+  documentation/example checks and does not stale that receipt. A fresh
+  `make test-summary` at `9c87de5` records 2,929 passes and 3 expected skips.
+- Independent review: complete. Every blocker reported against `92c248c` is
+  closed, including current-agent selection, ready-stage SLURM operations,
+  truthful public-surface examples, accepted-time and service-health evidence,
+  stale catalog IDs, and process cleanup. Final manager review found no blocker.
+- Blocker corrections: 3/3 complete
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Correction 2/3 worktree change: public agent reads now prefer an open successor over a same-timestamp terminal session and require current epoch/revision plus accepted-time offer expiry for availability; ready-stage SLURM submissions project through the execution owner into operation detail/wait; public admission waits renew server slices against a monotonic deadline. |
-| Tests added or updated | Causal same-timestamp successor and expired-offer availability coverage; ready-stage SLURM operation detail/wait coverage; saturated public admission-wait renewal coverage. |
-| Validated revision/tree state and evidence | `uv run --extra config pytest tests/unit/loom/queue/test_local_daemon.py -q`: 47 passed. `uv run --extra config pytest tests/integration/queue/test_slurm_ready_stage.py -x -q`: 15 passed. The prior full-validation receipt is stale. |
-| Validation-relevant changes after evidence | Source, tests, and this record changed; `make validate-pr` and `make test-summary` are required only after the remaining correction scope is closed. |
-| PR, review, and merge | Independent review complete with blockers; bounded refiner correction, refreshed manager pre-submit gate, and merge remain pending. |
-| Residual risk and cleanup | Not submission-ready: the three full-validation examples still shell out to pytest or bypass claimed public surfaces, and the remaining accepted-time expiry-owner, service-health-clear, principal-replay, manifest-invocation, stale operation-catalog, and process-cleanup evidence remains incomplete. |
+| Implementation and changed paths | `src/loom/queue/local_daemon.py`, `local_daemon_transport.py`, `local_daemon_execution.py`, `agent_sessions.py`, `deployment.py`, and `slurm_ready_stage.py` own the lifecycle, bounded-read/wait, authorization, and SLURM projections. `src/loom/cli/queue.py` and intentional queue exports own CLI/public access. Three `examples/operations/managed-*` journeys, their exact manifests, and queue documentation own the supported examples. |
+| Tests added or updated | Causal admission A/B/no-op revisions; saturated long-poll status/control/stop; bounded agent/detail/operation reads; same-timestamp replacement and expiry; local-owner and remote-credential negatives; accepted-time/service-health/replay; SLURM rejection/restart/result/release; exact manifest-to-invocation and PID cleanup. |
+| Validated revision/tree state and evidence | Focused gates: 323 queue/CLI unit tests, 169 queue integration/E2E tests, 3 combined journey E2Es, 29 documentation/example checks, and the outbound reload lifecycle E2E passed. `make validate-pr` passed Ruff, zero-finding Pyright, 2,772 default tests, 157 configuration-extra tests with 3 expected skips, and both builds. Fresh `make test-summary` records 2,929 passed, 3 skipped, and zero failures/errors. |
+| Validation-relevant changes after evidence | Only this workflow record changes after the fresh validation and summary evidence; no source, test, dependency, build, or validation configuration changed. |
+| PR, review, and merge | Required independent review and manager review passed with no remaining blocker. PR creation and automatic squash merge remain manager-owned. |
+| Residual risk and cleanup | No known phase blocker. Real site CA/prolog and production SLURM smoke validation remain intentionally opt-in; default validation uses generated localhost certificates and the deterministic fake scheduler gateway. Exact stale Phase 14 test supervisors were terminated; phase worktree/branch cleanup waits for merge. |
