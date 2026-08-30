@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -73,6 +74,40 @@ def test_selected_unix_source_never_falls_back_to_direct(
         inspect_run.build_inspect_run_result(
             "file:///tmp/run",
             endpoint=tmp_path / "missing.sock",
+        )
+
+    assert direct_calls == []
+
+
+def test_selected_remote_source_never_falls_back_to_direct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    direct_calls: list[str] = []
+
+    def direct(run_uri: str, **kwargs: object) -> RunInspectionFailure:
+        del kwargs
+        direct_calls.append(run_uri)
+        return RunInspectionFailure(RunInspectionFailureCode.NOT_FOUND)
+
+    class RemoteClient:
+        def __init__(self, _config: object) -> None:
+            pass
+
+        def inspect_run(self, _run_uri: str) -> object:
+            raise RuntimeError("remote is unavailable")
+
+    monkeypatch.setattr("loom.diagnostics.run_inspection.inspect_run", direct)
+    monkeypatch.setattr(
+        "loom.queue.deployment.load_run_inspection_client_config",
+        lambda _path: SimpleNamespace(client=object()),
+    )
+    monkeypatch.setattr(
+        "loom.queue.agent_session_transport.RunInspectionHttpClient", RemoteClient
+    )
+
+    with pytest.raises(CliError, match="run inspection failed"):
+        inspect_run.build_inspect_run_result(
+            "file:///tmp/run", remote_config=Path("remote.yaml")
         )
 
     assert direct_calls == []

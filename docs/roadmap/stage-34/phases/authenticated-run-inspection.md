@@ -196,7 +196,10 @@ Final commands:
   the certificate fingerprint through the current policy and enforces the
   mapped role/path before application dispatch, so an injected query callback
   can remain downstream of authorization without a contract change.
-- Implementation: pending.
+- Implementation: complete; the existing mTLS application server now composes
+  the injected Phase 1 inspection callable behind the role-exclusive `query`
+  principal, exact coordinator admission check, `run-inspection-v1` handshake,
+  protected inspection-client config, and explicit CLI remote source.
 - Refiner: not needed.
 - Pre-submit gate: pending.
 - Independent review: expected if manager review leaves any material
@@ -208,9 +211,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Added the dedicated `query` role, exact authenticated `/v1/query/inspect_run` dispatch, capability handshake, bounded no-redirect HTTPS client, and strict protected `loom.run-inspection-client` v1 loader. `loom inspect-run --remote-config` decodes the unchanged Phase 1 model with no selected-source fallback. Coordinator serving now injects the Phase 1 callable into the existing mTLS server; user docs cover managed local, remote mTLS, and service-less SSH use. |
+| Tests added or updated | Added role-exclusivity and protected-config coverage, remote-selector no-fallback coverage, and a localhost mTLS matrix for query success, mutation-role denial, capability/role denial, and immediate policy revocation before the projection callback. |
+| Validated revision/tree state and evidence | Focused Ruff and Pyright on all changed runtime files passed with 0 errors/warnings; `git diff --check` passed. Focused query-role localhost mTLS test passed. The Phase-plan unit suite and contract suite passed earlier in this implementation pass (52 and 10 tests respectively). |
+| Validation-relevant changes after evidence | None after the final focused Ruff, Pyright, diff, and query-role mTLS checks. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |

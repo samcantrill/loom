@@ -88,6 +88,8 @@ from loom.queue.agent_session_transport import (
     _RemoteAgentJournal,
     _decode,
     _resident_provider_descriptors,
+    RunInspectionHttpClient,
+    RunInspectionTlsClientConfig,
 )
 from loom.queue.deployment import (
     OutboundAgentRegistrationConfig,
@@ -173,6 +175,7 @@ def _credentials(tmp_path: Path) -> dict[str, Path]:
         ("server", "/CN=localhost"),
         ("agent", "/CN=agent"),
         ("other", "/CN=other"),
+        ("query", "/CN=query"),
     ):
         _run(
             "req",
@@ -212,7 +215,10 @@ def _credentials(tmp_path: Path) -> dict[str, Path]:
             f"{name}.ext",
             cwd=tmp_path,
         )
-    return {name: tmp_path / name for name in ("ca", "server", "agent", "other")}
+    return {
+        name: tmp_path / name
+        for name in ("ca", "server", "agent", "other", "query")
+    }
 
 
 def _fingerprint(certificate: Path) -> str:
@@ -4491,6 +4497,106 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
     finally:
         client.close()
         agent.close()
+        server.stop()
+        daemon.stop()
+
+
+def test_loopback_query_role_is_read_only_current_policy_and_capability_gated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    policy = AgentPolicyConfig(
+        principals=(
+            TransportPrincipalPolicy("query-credential", "query-principal", "query"),
+            TransportPrincipalPolicy("client-credential", "client-principal", "client"),
+        )
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "agent-root",
+        tmp_path / "runs",
+        _local_launch_profile(),
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    inspected: list[str] = []
+    monkeypatch.setattr(daemon, "admission_for_run_uri", lambda _uri: object())
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(credentials["query"].with_suffix(".crt")): "query-credential",
+                _fingerprint(credentials["other"].with_suffix(".crt")): "client-credential",
+            },
+        ),
+        inspect_run=lambda run_uri: (
+            inspected.append(run_uri)
+            or {"schema_version": 1, "code": "not_found"}
+        ),
+    )
+    server.start()
+    query = RunInspectionHttpClient(
+        RunInspectionTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".key"),
+        )
+    )
+    mutation_client = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".key"),
+        )
+    )
+    wrong_role = RunInspectionHttpClient(
+        RunInspectionTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".key"),
+        )
+    )
+    try:
+        assert query.inspect_run("file:///runs/known") == {
+            "schema_version": 1,
+            "code": "not_found",
+        }
+        assert inspected == ["file:///runs/known"]
+        with pytest.raises(QueueServiceError, match="agent protocol request failed"):
+            mutation_client.call_application("client", "status", {})
+        assert wrong_role.inspect_run("file:///runs/known") == {
+            "schema_version": 1,
+            "code": "unauthorized",
+        }
+        assert inspected == ["file:///runs/known"]
+
+        daemon.replace_agent_policy(
+            AgentPolicyConfig(
+                revision="policy-2",
+                principals=(
+                    TransportPrincipalPolicy(
+                        "client-credential", "client-principal", "client"
+                    ),
+                ),
+            )
+        )
+        assert query.inspect_run("file:///runs/revoked") == {
+            "schema_version": 1,
+            "code": "unauthorized",
+        }
+        assert inspected == ["file:///runs/known"]
+    finally:
+        mutation_client.close()
         server.stop()
         daemon.stop()
 
