@@ -46,6 +46,7 @@ from .local_daemon import (
     LocalDaemonConfig,
     LocalDaemonSchedulingComponents,
 )
+from .coordinator_authority import CoordinatorAuthorityFactory
 
 
 DEPLOYMENT_CONFIG_SCHEMA_VERSION = 2
@@ -112,7 +113,7 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
     )
     policy = _agent_policy(_mapping(payload, "agent_policy"))
     authority_factory = _coordinator_authority_factory(
-        _mapping(payload, "authority")
+        _mapping(payload, "authority"), base
     )
     scheduling, priority_resolver = _scheduling_composition(payload.get("scheduling"))
     embedded_providers = _embedded_provider_composition(payload.get("embedded_agent"))
@@ -456,7 +457,8 @@ def _canonical_fingerprint(value: Mapping[str, object]) -> str:
 
 def _coordinator_authority_factory(
     value: Mapping[str, object],
-) -> Callable[[str], object] | None:
+    base: Path,
+) -> CoordinatorAuthorityFactory:
     """Construct one explicit trusted authority factory for this role.
 
     Embedded access is intentionally the only default.  A persistent role must
@@ -467,14 +469,45 @@ def _coordinator_authority_factory(
     kind = _string(value, "kind")
     if kind == "embedded":
         _exact(value, {"kind"}, "embedded authority")
-        return None
-    if kind != "authenticated":
+        from loom.pipeline.stores.coordinator_authority import (
+            embedded_coordinator_authority,
+        )
+
+        return cast(CoordinatorAuthorityFactory, embedded_coordinator_authority)
+    if kind != "https":
         raise QueueConfigError("authority kind is unsupported")
-    _exact(value, {"kind", "factory"}, "authenticated authority")
-    factory = _trusted_target(_mapping(value, "factory"), "authority factory")
-    if not callable(factory):
-        raise QueueConfigError("authenticated authority factory is invalid")
-    return cast(Callable[[str], object], factory)
+    _exact(
+        value,
+        {"kind", "url", "service_id", "workspace_id", "tls"},
+        "HTTPS authority",
+    )
+    tls = _mapping(value, "tls")
+    _exact(
+        tls,
+        {"ca", "certificate", "private_key"},
+        "HTTPS authority TLS",
+    )
+    try:
+        from loom.pipeline.stores.coordinator_authority import (
+            CoordinatorAuthorityTlsConfig,
+            https_coordinator_authority_factory,
+        )
+
+        return cast(
+            CoordinatorAuthorityFactory,
+            https_coordinator_authority_factory(
+                _string(value, "url"),
+                service_id=_string(value, "service_id"),
+                workspace_id=_string(value, "workspace_id"),
+                tls=CoordinatorAuthorityTlsConfig(
+                    ca_path=_path(tls, "ca", base),
+                    certificate_path=_path(tls, "certificate", base),
+                    private_key_path=_path(tls, "private_key", base),
+                ),
+            ),
+        )
+    except (OSError, ValueError) as exc:
+        raise QueueConfigError("HTTPS authority is unavailable or invalid") from exc
 
 
 def _trusted_target(value: Mapping[str, object], label: str) -> object:
@@ -640,7 +673,15 @@ def _without_paths(value: object) -> object:
             str(key): _without_paths(item)
             for key, item in value.items()
             if not str(key).endswith("_path")
-            and str(key) not in {"project_root", "python_executable", "environment"}
+            and str(key)
+            not in {
+                "project_root",
+                "python_executable",
+                "environment",
+                "ca",
+                "certificate",
+                "private_key",
+            }
         }
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return [_without_paths(item) for item in value]

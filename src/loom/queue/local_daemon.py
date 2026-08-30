@@ -56,6 +56,7 @@ from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescrip
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 
 if TYPE_CHECKING:
+    from .coordinator_authority import CoordinatorAuthorityFactory
     from .local_daemon_execution import (
         LocalDaemonExecution,
         LocalDaemonExecutionOutcome,
@@ -644,7 +645,7 @@ class LocalDaemonConfig:
     deployment_root: Path | None = None
     deployment_configuration_fingerprint: str | None = None
     active_configuration_fingerprint: str | None = None
-    coordinator_authority_factory: Callable[[str], object] | None = None
+    coordinator_authority_factory: CoordinatorAuthorityFactory | None = None
 
     def __post_init__(self) -> None:
         coordinator = Path(self.coordinator_root)
@@ -673,7 +674,9 @@ class LocalDaemonConfig:
             raise QueueServiceError("active configuration fingerprint is invalid")
         authority_factory = self.coordinator_authority_factory
         if authority_factory is None:
-            from .coordinator_authority import embedded_coordinator_authority
+            from loom.pipeline.stores.coordinator_authority import (
+                embedded_coordinator_authority,
+            )
 
             authority_factory = embedded_coordinator_authority
         if not callable(authority_factory):

@@ -127,6 +127,7 @@ from loom.serialization import (
 from loom.timestamps import utc_timestamp
 
 from .errors import QueueConflictError, QueueServiceError
+from .coordinator_authority import CoordinatorAuthorityStore
 from ._remote_stage_execution import (
     MAX_TRANSFER_BYTES,
     ResidentProfileDescriptor,
@@ -724,7 +725,7 @@ class _ScopedCoordinatorAuthority:
 
     def __init__(
         self,
-        store: Any,
+        store: CoordinatorAuthorityStore,
         *,
         run_uri: str,
         coordinator_id: str,
@@ -1016,7 +1017,10 @@ def _validate_recovery_request_identity(
 
 
 def _recovery_retry_policy(
-    authority: Any, run_uri: str, stage_name: str, attempt: int
+    authority: CoordinatorAuthorityStore,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
 ):
     """Read the immutable attempt policy from the authority reliability owner."""
 
@@ -1050,7 +1054,7 @@ def _current_attempt_retry_is_authorized(stage: object) -> bool:
 class _AuthorityReliabilityStore:
     """Narrow reliability facade that persists every fact in authority."""
 
-    def __init__(self, authority: Any) -> None:
+    def __init__(self, authority: CoordinatorAuthorityStore) -> None:
         self._authority = authority
 
     def write_reliability_policy_fact(
@@ -5085,11 +5089,17 @@ class LocalDaemonExecution:
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
         )
 
-    def _authority_store(self, run_uri: str) -> Any:
+    def _authority_store(self, run_uri: str) -> CoordinatorAuthorityStore:
         """Open one configured coordinator/run authority, never SQLite directly."""
 
-        authority = self._authority_for_run(run_uri)
-        return cast(Any, authority)
+        return self._authority_for_run(run_uri)
+
+    def cancellation_epoch_receipt(self, run_uri: str, operation_id: str):
+        """Read cancellation truth through the configured authority adapter."""
+
+        return self._authority_store(run_uri).read_cancellation_epoch_receipt(
+            run_uri, operation_id
+        )
 
     def _ordinary_mutation_frozen(self, assignment_id: str) -> bool:
         daemon = self.daemon
@@ -5411,7 +5421,7 @@ def build_local_daemon_owner_views(
             factory = config.coordinator_authority_factory
             if factory is None:
                 raise QueueServiceError("coordinator authority factory is unavailable")
-            authority = cast(Any, factory(admission.run_uri))
+            authority = factory(admission.run_uri)
             snapshot = authority.open_run(admission.run_uri)
             if admission.cancellation_operation_id is not None:
                 receipt = authority.read_cancellation_epoch_receipt(

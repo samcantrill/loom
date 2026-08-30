@@ -76,97 +76,27 @@ def test_repository_identity_serializes_paths_and_metadata(tmp_path) -> None:
     assert identity.to_dict()["database_path"] == str(tmp_path / "authority.sqlite3")
 
 
-def test_repository_migrates_complete_v3_output_commits_without_data_loss(
-    tmp_path,
-) -> None:
-    repository = AuthorityRepository(tmp_path)
-    repository.initialize(service_generation="generation-1")
-    run_uri = "file:///runs/migration-r1"
-    repository.admit_run(run_uri)
-    allocation = repository.allocate_stage_attempt(
-        run_uri, "build", owner_id="worker-1", lease_ttl_seconds=30
-    )
-    assert allocation.lease is not None
-    commit = repository.record_output_commit(
-        run_uri,
-        "build",
-        attempt_id=allocation.attempt.attempt_id,
-        owner_id="worker-1",
-        fencing_token=allocation.lease.fencing_token,
-        outputs={},
-    )
-    database_path = tmp_path / "authority.sqlite3"
-    with sqlite3.connect(database_path) as conn:
-        conn.execute("DROP INDEX IF EXISTS idx_output_commits_stage")
-        conn.execute("ALTER TABLE output_commits RENAME TO output_commits_v4")
-        conn.execute(
-            """
-            CREATE TABLE output_commits (
-                commit_id TEXT PRIMARY KEY,
-                run_uri TEXT NOT NULL,
-                stage_name TEXT NOT NULL,
-                attempt_id TEXT NOT NULL,
-                committed_at TEXT NOT NULL,
-                revision_sequence INTEGER NOT NULL,
-                output_names_json TEXT NOT NULL,
-                materialized_refs_json TEXT NOT NULL,
-                UNIQUE (run_uri, stage_name)
-            )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO output_commits (
-                commit_id, run_uri, stage_name, attempt_id, committed_at,
-                revision_sequence, output_names_json, materialized_refs_json
-            )
-            SELECT commit_id, run_uri, stage_name, attempt_id, committed_at,
-                   revision_sequence, output_names_json, materialized_refs_json
-            FROM output_commits_v4
-            """
-        )
-        conn.execute("DROP TABLE output_commits_v4")
-        conn.execute(
-            "UPDATE repository_metadata SET value = '3' WHERE key = 'schema_version'"
-        )
-
-    identity = AuthorityRepository(tmp_path).initialize(
-        service_generation="generation-ignored"
-    )
-    migrated = AuthorityRepository(tmp_path)
-
-    assert identity.schema_version == AUTHORITY_REPOSITORY_SCHEMA_VERSION
-    assert migrated.list_output_commits(run_uri) == (commit,)
-    assert migrated.open_run(run_uri).stages[0].latest_commit == commit.commit
-
-
-def test_repository_rejects_incomplete_v3_without_partial_migration(tmp_path) -> None:
+def test_repository_hard_cuts_pre_coordinator_schema_without_mutation(tmp_path) -> None:
     repository = AuthorityRepository(tmp_path)
     repository.initialize(service_generation="generation-1")
     database_path = tmp_path / "authority.sqlite3"
     with sqlite3.connect(database_path) as conn:
-        conn.execute("DROP TABLE artifact_facts")
         conn.execute(
-            "UPDATE repository_metadata SET value = '3' WHERE key = 'schema_version'"
+            "UPDATE repository_metadata SET value = '4' WHERE key = 'schema_version'"
         )
 
     with pytest.raises(AuthorityRepositoryCompatibilityError) as exc_info:
         AuthorityRepository(tmp_path).initialize()
 
-    assert exc_info.value.failure.kind is AuthorityRepositoryCompatibilityKind.CORRUPT
+    assert (
+        exc_info.value.failure.kind
+        is AuthorityRepositoryCompatibilityKind.UNSUPPORTED_OLDER
+    )
     with sqlite3.connect(database_path) as conn:
         version = conn.execute(
             "SELECT value FROM repository_metadata WHERE key = 'schema_version'"
         ).fetchone()
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_schema WHERE type = 'table'"
-            )
-        }
-    assert version == ("3",)
-    assert "output_commits_v3" not in tables
-    assert "artifact_facts" not in tables
+    assert version == ("4",)
 
 
 def test_read_identity_fails_for_missing_database(tmp_path) -> None:

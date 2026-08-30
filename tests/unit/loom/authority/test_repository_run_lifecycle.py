@@ -19,8 +19,8 @@ pytestmark = pytest.mark.unit
 RUN_URI = "file:///runs/unit-r1"
 
 
-def test_repository_schema_version_includes_output_supersession() -> None:
-    assert AUTHORITY_REPOSITORY_SCHEMA_VERSION == 4
+def test_repository_schema_version_includes_coordinator_authority() -> None:
+    assert AUTHORITY_REPOSITORY_SCHEMA_VERSION == 5
 
 
 def test_admit_run_rejects_duplicate_and_returns_revision(tmp_path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ssl
 from pathlib import Path
 from typing import Sequence
 
@@ -20,6 +21,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1", help="host interface")
     parser.add_argument("--port", type=int, required=True, help="port to bind")
     parser.add_argument("--log-level", default="warning", help="uvicorn log level")
+    parser.add_argument("--tls-certificate", help="HTTPS server certificate")
+    parser.add_argument("--tls-private-key", help="HTTPS server private key")
+    parser.add_argument("--client-ca", help="CA used to require coordinator clients")
     return parser
 
 
@@ -34,15 +38,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     app = create_authority_app(services=services)
 
+    tls_values = (
+        namespace.tls_certificate,
+        namespace.tls_private_key,
+        namespace.client_ca,
+    )
+    if any(tls_values) and not all(tls_values):
+        raise SystemExit(
+            "--tls-certificate, --tls-private-key, and --client-ca are required together"
+        )
+
     import uvicorn
 
-    uvicorn.run(
-        app,
-        host=str(namespace.host),
-        port=int(namespace.port),
-        log_level=str(namespace.log_level),
-        access_log=False,
-    )
+    options: dict[str, object] = {
+        "host": str(namespace.host),
+        "port": int(namespace.port),
+        "log_level": str(namespace.log_level),
+        "access_log": False,
+    }
+    if all(tls_values):
+        options.update(
+            {
+                "ssl_certfile": str(namespace.tls_certificate),
+                "ssl_keyfile": str(namespace.tls_private_key),
+                "ssl_ca_certs": str(namespace.client_ca),
+                "ssl_cert_reqs": ssl.CERT_REQUIRED,
+            }
+        )
+    uvicorn.run(app, **options)  # type: ignore[arg-type]
     return 0
 
 

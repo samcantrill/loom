@@ -34,6 +34,7 @@ class AuthorityRouteGroup(StrEnum):
 
     SUPERVISOR = "supervisor"
     MUTATION = "authority_mutation"
+    COORDINATOR = "coordinator_authority"
 
 
 @dataclass(frozen=True, slots=True)

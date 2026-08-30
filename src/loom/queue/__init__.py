@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     )
     from ._remote_stage_execution import GpuDeviceDescriptor
     from .coordinator_authority import (
-        AuthenticatedCoordinatorAuthority,
         CoordinatorAuthorityFactory,
         CoordinatorAuthorityStore,
     )
@@ -184,7 +183,6 @@ _MANAGED_RESOURCE_EXPORTS = frozenset(
 
 def __getattr__(name: str) -> object:
     if name in {
-        "AuthenticatedCoordinatorAuthority",
         "CoordinatorAuthorityFactory",
         "CoordinatorAuthorityStore",
     }:
@@ -241,7 +239,6 @@ __all__ = [
     "AdmissionNotFoundError",
     "AgentControl",
     "CoordinatorSchedulingReload",
-    "AuthenticatedCoordinatorAuthority",
     "CoordinatorAuthorityFactory",
     "CoordinatorAuthorityStore",
     "LocalDaemonAdmission",

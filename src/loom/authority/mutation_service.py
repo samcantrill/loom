@@ -9,6 +9,12 @@ from typing import cast
 from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.offline_evidence import OfflineEvidenceManifest
+from loom.pipeline.reliability import (
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
@@ -25,11 +31,15 @@ from loom.pipeline.stores import (
     CleanupCandidate,
     CleanupReportFact,
     CleanupResultFact,
+    CancellationEpochRequest,
+    CoordinatorAdmissionRequest,
     LeaseRecord,
     LifecycleReason,
     OutputCommit,
     OutputCommitRecord,
+    PreparedAttemptRequest,
     RecoveryRecord,
+    ReliabilityPolicyFact,
     StageAttempt,
     SweepIdentity,
     ConcurrencyCounter,
@@ -43,6 +53,7 @@ from loom.pipeline.stores import (
     accepted_authority_response,
     rejected_authority_response,
 )
+from loom.pipeline.stores.authority import ExecutionFence
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData
 
@@ -103,10 +114,75 @@ class AuthorityMutationOperation(StrEnum):
     SET_RESOURCE_LIMIT = "set_resource_limit"
     ENSURE_RESOURCE_LIMITS = "ensure_resource_limits"
     READ_RESOURCE_LIMIT = "read_resource_limit"
+    COORDINATOR_OPEN_RUN = "coordinator_open_run"
+    COORDINATOR_TRANSITION_RUN = "coordinator_transition_run"
+    COORDINATOR_TRANSITION_STAGE = "coordinator_transition_stage"
+    BIND_COORDINATOR_ADMISSION = "bind_coordinator_admission"
+    INSTALL_CANCELLATION_EPOCH = "install_cancellation_epoch"
+    READ_CANCELLATION_EPOCH = "read_cancellation_epoch"
+    FINALIZE_CANCELLATION = "finalize_cancellation"
+    ENSURE_PREPARED_ATTEMPT = "ensure_prepared_attempt"
+    BIND_PREPARED_ATTEMPT = "bind_prepared_attempt"
+    UNBIND_PREPARED_ATTEMPT = "unbind_prepared_attempt"
+    GRANT_PREPARED_ATTEMPT = "grant_prepared_attempt"
+    CONFIRM_EXECUTION_STARTED = "confirm_execution_started"
+    RECORD_MANAGED_TERMINAL = "record_managed_terminal"
+    CLOSE_MANAGED_FENCE = "close_managed_fence"
+    RECORD_MANAGED_OUTPUT = "record_managed_output"
+    WRITE_RELIABILITY_POLICY = "write_reliability_policy"
+    LIST_RELIABILITY_POLICIES = "list_reliability_policies"
+    WRITE_RELIABILITY_STATUS = "write_reliability_status"
+    LIST_RELIABILITY_STATUSES = "list_reliability_statuses"
+    WRITE_ATTEMPT_TRANSACTION = "write_attempt_transaction"
+    READ_TRANSACTION_CHAIN = "read_transaction_chain"
+    LIST_ATTEMPT_TRANSACTIONS = "list_attempt_transactions"
+    WRITE_RETRY_DECISION = "write_retry_decision"
+    LIST_RETRY_DECISIONS = "list_retry_decisions"
+    WRITE_TIMEOUT_OUTCOME = "write_timeout_outcome"
+    LIST_TIMEOUT_OUTCOMES = "list_timeout_outcomes"
 
 
 class AuthorityMutationValidationError(ValueError):
     """Raised when a mutation request body cannot be adapted."""
+
+
+_COORDINATOR_EXECUTION_MUTATIONS = frozenset(
+    {
+        AuthorityMutationOperation.COORDINATOR_OPEN_RUN,
+        AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN,
+        AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE,
+        AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION,
+        AuthorityMutationOperation.INSTALL_CANCELLATION_EPOCH,
+        AuthorityMutationOperation.READ_CANCELLATION_EPOCH,
+        AuthorityMutationOperation.FINALIZE_CANCELLATION,
+        AuthorityMutationOperation.ENSURE_PREPARED_ATTEMPT,
+        AuthorityMutationOperation.BIND_PREPARED_ATTEMPT,
+        AuthorityMutationOperation.UNBIND_PREPARED_ATTEMPT,
+        AuthorityMutationOperation.GRANT_PREPARED_ATTEMPT,
+        AuthorityMutationOperation.CONFIRM_EXECUTION_STARTED,
+        AuthorityMutationOperation.RECORD_MANAGED_TERMINAL,
+        AuthorityMutationOperation.CLOSE_MANAGED_FENCE,
+        AuthorityMutationOperation.RECORD_MANAGED_OUTPUT,
+    }
+)
+_RELIABILITY_MUTATIONS = frozenset(
+    {
+        AuthorityMutationOperation.WRITE_RELIABILITY_POLICY,
+        AuthorityMutationOperation.LIST_RELIABILITY_POLICIES,
+        AuthorityMutationOperation.WRITE_RELIABILITY_STATUS,
+        AuthorityMutationOperation.LIST_RELIABILITY_STATUSES,
+        AuthorityMutationOperation.WRITE_ATTEMPT_TRANSACTION,
+        AuthorityMutationOperation.READ_TRANSACTION_CHAIN,
+        AuthorityMutationOperation.LIST_ATTEMPT_TRANSACTIONS,
+        AuthorityMutationOperation.WRITE_RETRY_DECISION,
+        AuthorityMutationOperation.LIST_RETRY_DECISIONS,
+        AuthorityMutationOperation.WRITE_TIMEOUT_OUTCOME,
+        AuthorityMutationOperation.LIST_TIMEOUT_OUTCOMES,
+    }
+)
+_SCOPED_COORDINATOR_MUTATIONS = (
+    _COORDINATOR_EXECUTION_MUTATIONS | _RELIABILITY_MUTATIONS
+)
 
 
 _OPERATION_KIND_BY_MUTATION: Mapping[
@@ -226,6 +302,14 @@ _OPERATION_KIND_BY_MUTATION: Mapping[
     AuthorityMutationOperation.READ_RESOURCE_LIMIT: (
         AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
     ),
+    **{
+        operation: AuthorityProtocolOperationKind.COORDINATOR_EXECUTION
+        for operation in _COORDINATOR_EXECUTION_MUTATIONS
+    },
+    **{
+        operation: AuthorityProtocolOperationKind.RELIABILITY_FACTS
+        for operation in _RELIABILITY_MUTATIONS
+    },
 }
 
 _COMPATIBILITY_CATEGORY_BY_KIND: Mapping[
@@ -286,6 +370,8 @@ class AuthorityMutationService:
         try:
             request = AuthorityProtocolRequest.from_dict(payload)
             metadata = request.metadata
+            if operation in _SCOPED_COORDINATOR_MUTATIONS:
+                self._require_coordinator_scope(operation, request)
             result = self._dispatch(operation, request)
             return accepted_authority_response(metadata, result)
         except AuthorityRepositoryCompatibilityError as exc:
@@ -422,6 +508,446 @@ class AuthorityMutationService:
                 return self._ensure_resource_limits(request)
             case AuthorityMutationOperation.READ_RESOURCE_LIMIT:
                 return self._read_resource_limit(request)
+            case AuthorityMutationOperation.BIND_COORDINATOR_ADMISSION:
+                return self._bind_coordinator_admission(request)
+            case AuthorityMutationOperation.COORDINATOR_OPEN_RUN:
+                return self._coordinator_open_run(request)
+            case AuthorityMutationOperation.COORDINATOR_TRANSITION_RUN:
+                return self._coordinator_transition_run(request)
+            case AuthorityMutationOperation.COORDINATOR_TRANSITION_STAGE:
+                return self._coordinator_transition_stage(request)
+            case AuthorityMutationOperation.INSTALL_CANCELLATION_EPOCH:
+                return self._install_cancellation_epoch(request)
+            case AuthorityMutationOperation.READ_CANCELLATION_EPOCH:
+                return self._read_cancellation_epoch(request)
+            case AuthorityMutationOperation.FINALIZE_CANCELLATION:
+                return self._finalize_cancellation(request)
+            case AuthorityMutationOperation.ENSURE_PREPARED_ATTEMPT:
+                return self._ensure_prepared_attempt(request)
+            case AuthorityMutationOperation.BIND_PREPARED_ATTEMPT:
+                return self._bind_prepared_attempt(request)
+            case AuthorityMutationOperation.UNBIND_PREPARED_ATTEMPT:
+                return self._unbind_prepared_attempt(request)
+            case AuthorityMutationOperation.GRANT_PREPARED_ATTEMPT:
+                return self._grant_prepared_attempt(request)
+            case AuthorityMutationOperation.CONFIRM_EXECUTION_STARTED:
+                return self._confirm_execution_started(request)
+            case AuthorityMutationOperation.RECORD_MANAGED_TERMINAL:
+                return self._record_managed_terminal(request)
+            case AuthorityMutationOperation.CLOSE_MANAGED_FENCE:
+                return self._close_managed_fence(request)
+            case AuthorityMutationOperation.RECORD_MANAGED_OUTPUT:
+                return self._record_managed_output(request)
+            case AuthorityMutationOperation.WRITE_RELIABILITY_POLICY:
+                return self._write_reliability_policy(request)
+            case AuthorityMutationOperation.LIST_RELIABILITY_POLICIES:
+                return self._list_reliability_policies(request)
+            case AuthorityMutationOperation.WRITE_RELIABILITY_STATUS:
+                return self._write_reliability_status(request)
+            case AuthorityMutationOperation.LIST_RELIABILITY_STATUSES:
+                return self._list_reliability_statuses(request)
+            case AuthorityMutationOperation.WRITE_ATTEMPT_TRANSACTION:
+                return self._write_attempt_transaction(request)
+            case AuthorityMutationOperation.READ_TRANSACTION_CHAIN:
+                return self._read_transaction_chain(request)
+            case AuthorityMutationOperation.LIST_ATTEMPT_TRANSACTIONS:
+                return self._list_attempt_transactions(request)
+            case AuthorityMutationOperation.WRITE_RETRY_DECISION:
+                return self._write_retry_decision(request)
+            case AuthorityMutationOperation.LIST_RETRY_DECISIONS:
+                return self._list_retry_decisions(request)
+            case AuthorityMutationOperation.WRITE_TIMEOUT_OUTCOME:
+                return self._write_timeout_outcome(request)
+            case AuthorityMutationOperation.LIST_TIMEOUT_OUTCOMES:
+                return self._list_timeout_outcomes(request)
+
+    def _require_coordinator_scope(
+        self,
+        operation: AuthorityMutationOperation,
+        request: AuthorityProtocolRequest,
+    ) -> None:
+        expected_kind = operation_kind_for(operation)
+        if request.metadata.operation_kind is not expected_kind:
+            raise AuthorityMutationValidationError(
+                "coordinator authority operation kind conflicts with route"
+            )
+        if request.metadata.service_generation != self._service_generation:
+            raise AuthorityRepositoryError("stale service generation")
+        if self._workspace_id is None:
+            raise AuthorityMutationValidationError(
+                "coordinator authority requires a configured workspace"
+            )
+        if request.metadata.workspace_id != self._workspace_id:
+            raise AuthorityMutationValidationError(
+                "coordinator authority workspace conflicts"
+            )
+
+    def _coordinator_open_run(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        snapshot = self._repository.open_run(_required_run_uri(request))
+        return _result(
+            revision=snapshot.revision,
+            service_generation=self._service_generation,
+            snapshot=snapshot,
+        )
+
+    def _coordinator_transition_run(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        transition = self._repository.transition_run(
+            _required_run_uri(request),
+            from_status=RunStatus(_required_body_value(request, "from_status")),
+            to_status=RunStatus(_required_body_value(request, "to_status")),
+            expected_revision=request.expected_revision,
+            intent=TransitionIntent(
+                cast(str, request.body.get("intent", TransitionIntent.NORMAL.value))
+            ),
+            reason=_optional_reason(request),
+        )
+        return _result(
+            revision=transition.revision,
+            service_generation=self._service_generation,
+            body={"transition": transition.to_dict()},
+        )
+
+    def _coordinator_transition_stage(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        raw_from = request.body.get("from_status")
+        transition = self._repository.transition_stage(
+            _required_run_uri(request),
+            _required_stage_name(request),
+            from_status=None if raw_from is None else StageStatus(raw_from),
+            to_status=StageStatus(_required_body_value(request, "to_status")),
+            expected_revision=request.expected_revision,
+            intent=TransitionIntent(
+                cast(str, request.body.get("intent", TransitionIntent.NORMAL.value))
+            ),
+            reason=_optional_reason(request),
+        )
+        return _result(
+            revision=transition.revision,
+            service_generation=self._service_generation,
+            body={"transition": transition.to_dict()},
+        )
+
+    def _bind_coordinator_admission(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        receipt = self._repository.bind_coordinator_admission(
+            _required_run_uri(request),
+            CoordinatorAdmissionRequest.from_dict(
+                _required_body_value(request, "request")
+            ),
+        )
+        return _result(
+            service_generation=self._service_generation,
+            body={"receipt": receipt.to_dict()},
+        )
+
+    def _install_cancellation_epoch(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        receipt = self._repository.install_cancellation_epoch(
+            _required_run_uri(request),
+            CancellationEpochRequest.from_dict(
+                _required_body_value(request, "request")
+            ),
+        )
+        return _result(
+            revision=self._repository.open_run(_required_run_uri(request)).revision,
+            service_generation=self._service_generation,
+            body={"receipt": receipt.to_dict()},
+        )
+
+    def _read_cancellation_epoch(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        receipt = self._repository.read_cancellation_epoch_receipt(
+            _required_run_uri(request),
+            _required_body_string(request, "operation_id"),
+        )
+        return _result(
+            service_generation=self._service_generation,
+            body={"receipt": None if receipt is None else receipt.to_dict()},
+        )
+
+    def _finalize_cancellation(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        status = self._repository.finalize_cancellation(
+            _required_run_uri(request),
+            CancellationEpochRequest.from_dict(
+                _required_body_value(request, "request")
+            ),
+        )
+        snapshot = self._repository.open_run(_required_run_uri(request))
+        return _result(
+            revision=snapshot.revision,
+            service_generation=self._service_generation,
+            body={"status": status.value},
+        )
+
+    def _ensure_prepared_attempt(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        receipt = self._repository.ensure_prepared_attempt(
+            _required_run_uri(request),
+            PreparedAttemptRequest.from_dict(
+                _required_body_value(request, "request")
+            ),
+        )
+        return _result(
+            revision=receipt.attempt.revision,
+            service_generation=self._service_generation,
+            body={"receipt": receipt.to_dict()},
+        )
+
+    def _bind_prepared_attempt(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        self._repository.bind_prepared_attempt(
+            _required_run_uri(request),
+            assignment_id=_required_body_string(request, "assignment_id"),
+            attempt_id=_required_body_string(request, "attempt_id"),
+        )
+        return self._coordinator_ack(request)
+
+    def _unbind_prepared_attempt(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        self._repository.unbind_prepared_attempt(
+            _required_run_uri(request),
+            assignment_id=_required_body_string(request, "assignment_id"),
+            attempt_id=_required_body_string(request, "attempt_id"),
+        )
+        return self._coordinator_ack(request)
+
+    def _grant_prepared_attempt(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        fence = self._repository.grant_prepared_attempt(
+            _required_run_uri(request),
+            assignment_id=_required_body_string(request, "assignment_id"),
+            attempt_id=_required_body_string(request, "attempt_id"),
+        )
+        snapshot = self._repository.open_run(_required_run_uri(request))
+        return _result(
+            revision=snapshot.revision,
+            service_generation=self._service_generation,
+            body={"fence": _execution_fence_dict(fence)},
+        )
+
+    def _confirm_execution_started(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        self._repository.confirm_execution_started(
+            _required_run_uri(request), fence=_execution_fence(request)
+        )
+        return self._coordinator_ack(request)
+
+    def _record_managed_terminal(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        transition = self._repository.record_managed_attempt_terminal(
+            _required_run_uri(request),
+            fence=_execution_fence(request),
+            status=StageStatus(_required_body_value(request, "status")),
+            reason=_required_reason(request),
+        )
+        return _result(
+            revision=transition.revision,
+            service_generation=self._service_generation,
+            body={"transition": transition.to_dict()},
+        )
+
+    def _close_managed_fence(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        expected_state_version = _required_body_value(
+            request, "expected_state_version"
+        )
+        if isinstance(expected_state_version, bool) or not isinstance(
+            expected_state_version, int
+        ):
+            raise AuthorityMutationValidationError(
+                "expected_state_version must be an integer"
+            )
+        transition = self._repository.close_managed_attempt_fence(
+            _required_run_uri(request),
+            recovery_id=_required_body_string(request, "recovery_id"),
+            fence=_execution_fence(request),
+            expected_state_version=expected_state_version,
+            status=StageStatus(_required_body_value(request, "status")),
+            reason=_required_reason(request),
+        )
+        return _result(
+            revision=transition.revision,
+            service_generation=self._service_generation,
+            body={"transition": transition.to_dict()},
+        )
+
+    def _record_managed_output(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        commit = self._repository.record_managed_output_commit(
+            _required_run_uri(request),
+            _required_stage_name(request),
+            assignment_id=_required_body_string(request, "assignment_id"),
+            attempt_id=_required_body_string(request, "attempt_id"),
+            fencing_token=_required_fencing_token(request),
+            outputs=_outputs(request),
+            supersedes_commit_id=_optional_body_string(
+                request, "supersedes_commit_id"
+            ),
+            reason=_optional_reason(request),
+        )
+        return _result(
+            revision=commit.commit.revision,
+            service_generation=self._service_generation,
+            body={"commit": commit.to_dict()},
+        )
+
+    def _write_reliability_policy(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        revision = self._repository.write_reliability_policy_fact(
+            _required_run_uri(request),
+            ReliabilityPolicyFact.from_dict(
+                _required_body_value(request, "fact")
+            ),
+        )
+        return _result(revision=revision, service_generation=self._service_generation)
+
+    def _list_reliability_policies(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        facts = self._repository.list_reliability_policy_facts(
+            _required_run_uri(request),
+            stage_name=_optional_body_string(request, "stage_name"),
+        )
+        return _result(
+            service_generation=self._service_generation,
+            body={"facts": [fact.to_dict() for fact in facts]},
+        )
+
+    def _write_reliability_status(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        revision = self._repository.write_reliability_status_detail(
+            _required_run_uri(request),
+            ReliabilityStatusDetail.from_dict(
+                _required_body_value(request, "detail")
+            ),
+        )
+        return _result(revision=revision, service_generation=self._service_generation)
+
+    def _list_reliability_statuses(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        details = self._repository.list_reliability_status_details(
+            _required_run_uri(request),
+            stage_name=_optional_body_string(request, "stage_name"),
+        )
+        return _result(
+            service_generation=self._service_generation,
+            body={"details": [detail.to_dict() for detail in details]},
+        )
+
+    def _write_attempt_transaction(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        revision = self._repository.write_stage_attempt_transaction(
+            _required_run_uri(request),
+            StageAttemptTransaction.from_dict(
+                _required_body_value(request, "transaction")
+            ),
+        )
+        return _result(revision=revision, service_generation=self._service_generation)
+
+    def _read_transaction_chain(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        transactions = self._repository.read_transaction_chain(
+            _required_run_uri(request),
+            _required_body_string(request, "transaction_id"),
+        )
+        return _result(
+            service_generation=self._service_generation,
+            body={
+                "transactions": [transaction.to_dict() for transaction in transactions]
+            },
+        )
+
+    def _list_attempt_transactions(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        transactions = self._repository.list_stage_attempt_transactions(
+            _required_run_uri(request),
+            stage_name=_optional_body_string(request, "stage_name"),
+        )
+        return _result(
+            service_generation=self._service_generation,
+            body={
+                "transactions": [transaction.to_dict() for transaction in transactions]
+            },
+        )
+
+    def _write_retry_decision(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        revision = self._repository.write_retry_decision(
+            _required_run_uri(request),
+            RetryDecisionRecord.from_dict(
+                _required_body_value(request, "decision")
+            ),
+        )
+        return _result(revision=revision, service_generation=self._service_generation)
+
+    def _list_retry_decisions(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        decisions = self._repository.list_retry_decisions(
+            _required_run_uri(request),
+            stage_name=_optional_body_string(request, "stage_name"),
+        )
+        return _result(
+            service_generation=self._service_generation,
+            body={"decisions": [decision.to_dict() for decision in decisions]},
+        )
+
+    def _write_timeout_outcome(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        revision = self._repository.write_timeout_outcome(
+            _required_run_uri(request),
+            TimeoutOutcomeRecord.from_dict(
+                _required_body_value(request, "outcome")
+            ),
+        )
+        return _result(revision=revision, service_generation=self._service_generation)
+
+    def _list_timeout_outcomes(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        outcomes = self._repository.list_timeout_outcomes(
+            _required_run_uri(request),
+            stage_name=_optional_body_string(request, "stage_name"),
+        )
+        return _result(
+            service_generation=self._service_generation,
+            body={"outcomes": [outcome.to_dict() for outcome in outcomes]},
+        )
+
+    def _coordinator_ack(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        snapshot = self._repository.open_run(_required_run_uri(request))
+        return _result(
+            revision=snapshot.revision,
+            service_generation=self._service_generation,
+        )
 
     def _admit_run(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
         revision = self._repository.admit_run(
@@ -1265,6 +1791,37 @@ def _outputs(request: AuthorityProtocolRequest) -> Mapping[str, ArtifactRef]:
         key: ArtifactRef.from_dict(artifact)
         for key, artifact in cast(Mapping[str, object], value).items()
     }
+
+
+def _execution_fence(request: AuthorityProtocolRequest) -> ExecutionFence:
+    value = _required_body_value(request, "fence")
+    if not isinstance(value, Mapping):
+        raise AuthorityMutationValidationError("fence must be a mapping")
+    allowed = {"assignment_id", "attempt_id", "fencing_token"}
+    if set(value) != allowed:
+        raise AuthorityMutationValidationError(
+            "fence must contain assignment_id, attempt_id, and fencing_token"
+        )
+    return ExecutionFence(
+        assignment_id=_mapping_string(value, "assignment_id"),
+        attempt_id=_mapping_string(value, "attempt_id"),
+        fencing_token=_mapping_string(value, "fencing_token"),
+    )
+
+
+def _execution_fence_dict(fence: ExecutionFence) -> dict[str, PlainData]:
+    return {
+        "assignment_id": fence.assignment_id,
+        "attempt_id": fence.attempt_id,
+        "fencing_token": fence.fencing_token,
+    }
+
+
+def _mapping_string(value: Mapping[str, PlainData], field: str) -> str:
+    item = value.get(field)
+    if not isinstance(item, str) or not item:
+        raise AuthorityMutationValidationError(f"{field} must be a non-empty string")
+    return item
 
 
 def _fallback_metadata(

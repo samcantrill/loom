@@ -1723,14 +1723,14 @@ class AgentSessionService:
                         conn.commit()
                         return None
                     try:
-                        from loom.pipeline.stores.sqlite_authority import (
-                            SQLitePerRunAuthorityStore,
-                        )
-
-                        receipt = SQLitePerRunAuthorityStore(
-                            str(cancellation["run_uri"])
-                        ).read_cancellation_epoch_receipt(
-                            str(cancellation["run_uri"]), str(operation_id)
+                        execution = self._daemon._execution  # type: ignore[attr-defined]
+                        if execution is None:
+                            raise QueueServiceError(
+                                "coordinator execution is unavailable"
+                            )
+                        receipt = execution.cancellation_epoch_receipt(
+                            str(cancellation["run_uri"]),
+                            str(operation_id),
                         )
                     except Exception:
                         receipt = None
