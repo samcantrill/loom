@@ -351,29 +351,18 @@ def _build_run_result_with_warnings(
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    bootstrap_run_store_root = _bootstrap_run_store_root(
-        composed.resolved, run_options
-    )
+    bootstrap_run_store_root = _bootstrap_run_store_root(composed.resolved, run_options)
     store = _create_default_run_store(
         root=bootstrap_run_store_root or "runs",
         authority_config=authority_config,
         authority_mode=authority_mode,
     )
-    checked_resume_run_uri: str | None = None
-    activation_warnings: tuple[CliWarning, ...] = ()
-    if run_options.resume:
-        checked_resume_run_uri = _resolve_run_uri_for_run(
-            store,
-            _resume_run_uri_before_plugin_import(composed.resolved, run_options),
-            open_existing=True,
-        )
-        if checked_resume_run_uri is None:
-            raise AssertionError("resume run URI resolution returned None")
-        activation_warnings = _validate_resume_plugin_activations(
-            store,
-            checked_resume_run_uri,
-            plugin_records,
-        )
+    checked_resume_run_uri, activation_warnings = _open_resume_run_before_plugin_import(
+        store,
+        config=composed.resolved,
+        run_options=run_options,
+        plugin_records=plugin_records,
+    )
     if unsupported_unregistered_executor:
         raise UnsupportedExecutorError(cast(str, run_options.executor))
     codecs: CodecRegistry | None = None
@@ -437,33 +426,11 @@ def _build_run_result_with_warnings(
     )
     if _is_slurm_executor(runtime_options.executor):
         raise SlurmLiveSubmissionDeferredError(cast(str, runtime_options.executor))
-    if checked_resume_run_uri is None:
-        run_uri = _resolve_run_uri_for_run(
-            store,
-            runtime_options.run_uri,
-            open_existing=False,
-        )
-    else:
-        validated_run_uri = runtime_options.run_uri
-        if validated_run_uri is None:
-            raise CliError(
-                "`loom run --resume` requires --run-uri.",
-                code="cli.run.resume_requires_run_uri",
-                hint="Pass --run-uri or configure runtime.run_uri for strict resume.",
-                exit_code=ExitCode.PIPELINE,
-            )
-        final_resume_run_uri = store.resolve_run_uri(validated_run_uri)
-        if final_resume_run_uri != checked_resume_run_uri:
-            raise CliError(
-                "resume run URI changed after runtime option validation",
-                code="cli.run.resume_run_uri_changed",
-                context={
-                    "checked_run_uri": checked_resume_run_uri,
-                    "validated_run_uri": final_resume_run_uri,
-                },
-                exit_code=ExitCode.PIPELINE,
-            )
-        run_uri = checked_resume_run_uri
+    run_uri = _resolve_run_uri_after_runtime_validation(
+        store,
+        runtime_options,
+        checked_resume_run_uri=checked_resume_run_uri,
+    )
     runtime_options = _with_resolved_run_uri(
         runtime_options,
         run_uri,
@@ -672,13 +639,17 @@ def build_slurm_dry_run_result(
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    bootstrap_run_store_root = _bootstrap_run_store_root(
-        composed.resolved, run_options
-    )
+    bootstrap_run_store_root = _bootstrap_run_store_root(composed.resolved, run_options)
     store = _create_default_run_store(
         root=bootstrap_run_store_root or "runs",
         authority_config=authority_config,
         owner_id="slurm-dry-run",
+    )
+    checked_resume_run_uri, activation_warnings = _open_resume_run_before_plugin_import(
+        store,
+        config=composed.resolved,
+        run_options=run_options,
+        plugin_records=plugin_records,
     )
     validator_registry = None
     activation_manifest = None
@@ -726,10 +697,10 @@ def build_slurm_dry_run_result(
     if not _is_slurm_executor(executor):
         raise UnsupportedExecutorError(executor)
 
-    run_uri = _resolve_run_uri_for_run(
+    run_uri = _resolve_run_uri_after_runtime_validation(
         store,
-        runtime_options.run_uri,
-        open_existing=run_options.resume,
+        runtime_options,
+        checked_resume_run_uri=checked_resume_run_uri,
     )
     if run_uri is None:
         raise CliError(
@@ -749,7 +720,7 @@ def build_slurm_dry_run_result(
         authority_config=authority_config,
         validator_registry=validator_registry,
     )
-    warnings = _preflight_cli_warnings(preflight)
+    warnings = (*activation_warnings, *_preflight_cli_warnings(preflight))
     runtime_options, container_build_results = _resolve_slurm_container_runtime_options(
         runtime_options,
         requested_by="slurm-dry-run",
@@ -1008,6 +979,62 @@ def _bootstrap_run_store_root(
 
     options = bootstrap_config_run_store_options(config, profile=run_options.profile)
     return None if options is None else options.root
+
+
+def _open_resume_run_before_plugin_import(
+    store: Any,
+    *,
+    config: Mapping[str, object],
+    run_options: RunCliOptions,
+    plugin_records: Sequence[object],
+) -> tuple[str | None, tuple[CliWarning, ...]]:
+    if not run_options.resume:
+        return None, ()
+    checked_run_uri = _resolve_run_uri_for_run(
+        store,
+        _resume_run_uri_before_plugin_import(config, run_options),
+        open_existing=True,
+    )
+    if checked_run_uri is None:
+        raise AssertionError("resume run URI resolution returned None")
+    return checked_run_uri, _validate_resume_plugin_activations(
+        store,
+        checked_run_uri,
+        plugin_records,
+    )
+
+
+def _resolve_run_uri_after_runtime_validation(
+    store: Any,
+    options: "RunOptions",
+    *,
+    checked_resume_run_uri: str | None,
+) -> str | None:
+    if checked_resume_run_uri is None:
+        return _resolve_run_uri_for_run(
+            store,
+            options.run_uri,
+            open_existing=False,
+        )
+    if options.run_uri is None:
+        raise CliError(
+            "`loom run --resume` requires --run-uri.",
+            code="cli.run.resume_requires_run_uri",
+            hint="Pass --run-uri or configure runtime.run_uri for strict resume.",
+            exit_code=ExitCode.PIPELINE,
+        )
+    final_resume_run_uri = store.resolve_run_uri(options.run_uri)
+    if final_resume_run_uri != checked_resume_run_uri:
+        raise CliError(
+            "resume run URI changed after runtime option validation",
+            code="cli.run.resume_run_uri_changed",
+            context={
+                "checked_run_uri": checked_resume_run_uri,
+                "validated_run_uri": final_resume_run_uri,
+            },
+            exit_code=ExitCode.PIPELINE,
+        )
+    return checked_resume_run_uri
 
 
 def _require_bootstrap_run_store_root(
@@ -1819,13 +1846,17 @@ def build_slurm_live_submission_result(
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
-    bootstrap_run_store_root = _bootstrap_run_store_root(
-        composed.resolved, run_options
-    )
+    bootstrap_run_store_root = _bootstrap_run_store_root(composed.resolved, run_options)
     store = _create_default_run_store(
         root=bootstrap_run_store_root or "runs",
         authority_config=authority_config,
         owner_id="slurm-live-submission",
+    )
+    checked_resume_run_uri, activation_warnings = _open_resume_run_before_plugin_import(
+        store,
+        config=composed.resolved,
+        run_options=run_options,
+        plugin_records=plugin_records,
     )
     validator_registry = None
     activation_manifest = None
@@ -1874,10 +1905,10 @@ def build_slurm_live_submission_result(
         raise UnsupportedExecutorError(executor)
     _require_slurm_live_authority(store, executor=executor)
 
-    run_uri = _resolve_run_uri_for_run(
+    run_uri = _resolve_run_uri_after_runtime_validation(
         store,
-        runtime_options.run_uri,
-        open_existing=run_options.resume,
+        runtime_options,
+        checked_resume_run_uri=checked_resume_run_uri,
     )
     if run_uri is None:
         raise CliError(
@@ -2023,6 +2054,12 @@ def build_slurm_live_submission_result(
             context={"run_uri": run_uri, **dict(exc.context)},
             exit_code=ExitCode.EXECUTOR,
         ) from exc
+    for warning in activation_warnings:
+        python_warnings.warn(
+            warning.message,
+            _PluginActivationEvidenceWarning,
+            stacklevel=2,
+        )
     return _slurm_live_cli_result(result)
 
 
