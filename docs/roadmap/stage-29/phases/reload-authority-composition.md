@@ -12,7 +12,8 @@
 - PR title: `Stage 29 phase 14: complete protected role composition`
 - Dependencies: remotely merged Phase 13A; Phase 13 remains read-only evidence
 - Workflow path: expanded; durable configuration identity and authority trust boundary
-- Blockers: none
+- Blockers: manager correction 2 is required for the incomplete protected
+  configuration-to-runtime boundary described under `Manager Review Findings`
 
 ## Objective And Context
 
@@ -166,6 +167,49 @@ Final commands:
 - Accepted debt: certificate/config rotation is explicit reload and active
   service connection replacement; distributed config coordination is deferred.
 
+## Manager Review Findings
+
+Correction 2/3 is qualified because each finding is reachable from a supported
+schema-v2 production role and violates FR-35 through FR-38:
+
+1. Immutable and reloadable fingerprints are not canonical protected-value
+   projections. Coordinator and outbound immutable projections include authored
+   filesystem/TLS paths, while active fingerprints are recomputed from runtime
+   objects, `repr`, executable paths, and incomplete fields. Coordinator reload
+   also fails to fence authority/service and supervisor-profile identity. The
+   smallest fix is to compute both fingerprints in `deployment.py` from explicit
+   non-secret, path-free authored projections, carry them on the role configs,
+   validate the immutable fingerprint on reload, and persist/verify the authored
+   reloadable fingerprint and epoch.
+2. A successful outbound reload persists and swaps only the inner HTTP client's
+   configuration. The service loop continues to publish offers from the original
+   `OutboundAgentServiceConfig` and reconnects with its original client, which is
+   then rejected by the newly persisted active fingerprint. The smallest fix is
+   one coherent reloadable outbound role snapshot used by offer publication,
+   reconnect, registration, operational timing, persistence, and restart.
+3. The protected schema does not construct the promised production composition.
+   Authenticated authority accepts only an arbitrary callable target rather than
+   the supported HTTPS service/workspace/TLS fields; nested trusted targets are
+   not constructed; a complete SLURM profile cannot compose its runner/private
+   provider; and outbound resident provider composition is absent. The smallest
+   fix is the explicit schema-v2 shapes from FR-37, eager recursive target
+   construction where a constructor argument is itself a target, structural
+   protocol validation, and causal loader/startup tests.
+4. `CoordinatorAuthorityStore` exposes only `open_run`, execution casts it to
+   `Any`, and the authenticated adapter implements only prepared-attempt calls.
+   The first production admission calls missing coordinator binding, lifecycle,
+   cancellation, and reliability methods. The agent-control path also still
+   imports `SQLitePerRunAuthorityStore` directly. The smallest fix is one typed
+   queue-owned protocol containing exactly the methods reached by coordinator
+   execution, concrete embedded/authenticated adapters owned at the store/service
+   boundary, explicit authenticated service calls with workspace/service scope
+   and typed replay/conflict semantics, and an import/search guard covering all
+   production queue execution paths.
+
+The correction must add the package, unit, contract, integration, and E2E
+coverage already required by this plan. Existing schema-fixture edits and
+unrelated older reload tests do not prove these new boundaries.
+
 ## Executor Handoff
 
 - Read section range: this entire phase plan plus Stage 29 planning FR-35-38 and
@@ -188,26 +232,24 @@ Final commands:
   fixes both fingerprint domains, trusted eager target construction, the narrow
   authority factory, and reload CLI semantics. Independent review remains
   required for the durable reload and authority trust boundaries.
-- Implementation: complete; protected role bindings now persist immutable
-  fingerprints while active scheduling/agent configurations persist their own
-  revision/fingerprint before live swap. Production loaders re-read the exact
-  protected source, execution receives a queue-owned authority factory, and
-  configured targets are eager/validated.
-- Refiner: not needed
+- Implementation: manager review found the executor result incomplete on the
+  four supported production paths recorded under `Manager Review Findings`
+- Refiner: correction 2/3 required; one bounded pass owns the four connected
+  configuration-to-runtime findings and their causal tests
 - Pre-submit gate: pending
 - Independent review: required for authority trust and durable reload/restart boundary
-- Blocker corrections: 1/3; correction 1 resolves the missing-capability stop
-  with the maintainer-approved narrow authenticated adapter and no direct
-  SQLite fallback
+- Blocker corrections: 2/3 in progress; correction 1 resolved the design stop,
+  and correction 2 addresses the incomplete implementation of that approved
+  design
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | `src/loom/queue/{coordinator_authority,deployment,local_daemon,local_daemon_execution,agent_session_transport}.py`, `src/loom/queue/__init__.py`, and `src/loom/cli/queue.py`: schema-v2 protected role projections, durable active revisions, eager trusted composition targets, source loaders, rejected-reload exit status, and embedded/authenticated run-scoped authority factories. `local_daemon_execution.py` no longer imports or constructs `SQLitePerRunAuthorityStore`. |
-| Tests added or updated | Updated protected coordinator/outbound test fixtures to schema v2 and reloadable-binding semantics in `tests/unit/loom/queue/test_deployment.py` and `tests/unit/loom/cli/test_queue.py`; existing reload and agent transport matrices cover durable replay and replacement rejection. |
+| Implementation and changed paths | Executor commit `b95e32c` added initial schema-v2 bindings, active-state scaffolding, trusted target loading, source-loader wiring, and an authority-factory seam. Manager review found the production boundary incomplete as recorded above; correction 2 is pending. |
+| Tests added or updated | Executor changed only schema fixtures in two unit files. The required projection, complete-composition, authenticated authority, source-reload/reconnect, package/import guard, and real service-command tests remain pending correction 2. |
 | Validated revision/tree state and evidence | `uv run --extra config pytest tests/unit/loom/queue/test_deployment.py tests/unit/loom/cli/test_queue.py -q` — 12 passed; `uv run --extra config pytest tests/unit/loom/queue/test_local_daemon.py -k reload -q` — 10 passed; `uv run --extra config pytest tests/integration/queue/test_agent_session_transport.py -k agent_reload -q` — 3 passed; `uv run --extra config pytest tests/contracts -q` — 305 passed. Ruff and Pyright pass on changed queue/CLI modules. |
 | Validation-relevant changes after evidence | Source, targeted tests, and this completion record changed after evidence revision `ee31fa6`; full repository gates remain manager-owned and were not run. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Configured authenticated authority factories must provide the existing prepared-attempt execution contract; no generic CRUD or SQLite fallback exists. Full integration-file and repository gates remain for manager pre-submit/review. |
+| Residual risk and cleanup | Do not advance to gates or independent review until correction 2 proves all four manager findings. Full integration-file and repository gates remain manager-owned. |
