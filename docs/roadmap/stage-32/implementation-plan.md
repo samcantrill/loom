@@ -5,7 +5,7 @@ Roadmap stage: 32
 Planning document: docs/roadmap/stage-32/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 1 `in_progress`
+Current phase: Phase 1 `pr_open`
 Blockers: none for Phase 1; Phase 2 waits for the Phase 1 remote merge
 Worktree root: `/home/can134/work/active/loom-worktrees`
 
@@ -55,7 +55,7 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
 
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | durable-many-run-admission | in_progress | docs/roadmap/stage-32/phases/durable-many-run-admission.md | agent/stage-32-p1-durable-many-run-admission | pending | queue request/receipt, service, SQLite schema/index, bounded reads and identity tests | Admit and replay large ordinary-run request streams without duplicate queue work. |
+| 1 | durable-many-run-admission | pr_open | docs/roadmap/stage-32/phases/durable-many-run-admission.md | agent/stage-32-p1-durable-many-run-admission | [#257](https://github.com/samcantrill/loom/pull/257) open | queue request/receipt, service, SQLite schema/index, bounded reads and identity tests | Admit and replay large ordinary-run request streams without duplicate queue work. |
 | 2 | service-less-slurm-driving | pending | docs/roadmap/stage-32/phases/service-less-slurm-driving.md | agent/stage-32-p2-service-less-slurm-driving | pending | delegated controller/CLI, prepared-run Slurm adapter, marker recovery, lifecycle join, HPC docs/tests | Submit and reconcile many single-job or `afterok` runs without a long-running coordinator. |
 
 ## Quality Gate
