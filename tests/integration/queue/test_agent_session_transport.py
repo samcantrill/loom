@@ -21,6 +21,7 @@ from typing import Any, cast
 
 import pytest
 
+import loom.queue.agent_session_transport as agent_session_transport
 import loom.queue.deployment as queue_deployment
 import loom.queue.local_daemon_execution as local_daemon_execution
 from loom.pipeline import PipelineSpec
@@ -45,6 +46,14 @@ from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import CpuResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.diagnostics import (
+    RunInspectionAxis,
+    RunInspectionAxisName,
+    RunInspectionResult,
+    RunInspectionStage,
+    RunInspectionTruncation,
+    decode_run_inspection_response,
+)
 from loom.pipeline.stores import (
     LocalArtifactStore,
     LocalRunStore,
@@ -87,7 +96,10 @@ from loom.queue.agent_session_transport import (
     LocalDaemonAgentHttpServer,
     _RemoteAgentJournal,
     _decode,
+    _decode_run_inspection_response,
     _resident_provider_descriptors,
+    RunInspectionHttpClient,
+    RunInspectionTlsClientConfig,
 )
 from loom.queue.deployment import (
     OutboundAgentRegistrationConfig,
@@ -3366,6 +3378,26 @@ def test_protocol_codec_rejects_duplicate_nonfinite_deep_and_oversized_json() ->
         _decode(b"{" + b" " * 65_536 + b"}")
 
 
+def test_run_inspection_response_decoder_preserves_phase_one_limits() -> None:
+    records = [{"index": index} for index in range(256)]
+    encoded = json.dumps({"ok": True, "result": {"records": records}}).encode()
+
+    assert _decode_run_inspection_response(encoded) == {
+        "ok": True,
+        "result": {"records": records},
+    }
+    with pytest.raises(QueueServiceError, match="collection is too large"):
+        _decode_run_inspection_response(
+            json.dumps(
+                {"ok": True, "result": {"records": records + [{"index": 256}]}}
+            ).encode()
+        )
+    with pytest.raises(QueueServiceError, match="JSON is invalid"):
+        _decode_run_inspection_response(b'{"ok":true,"ok":false}')
+    with pytest.raises(QueueServiceError, match="too large"):
+        _decode_run_inspection_response(b"{" + b" " * 1_048_576 + b"}")
+
+
 @pytest.mark.parametrize("old_version", ["5", "6"])
 def test_agent_client_rejects_an_old_protocol_without_compatibility(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, old_version: str
@@ -4550,6 +4582,294 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         agent.close()
         server.stop()
         daemon.stop()
+
+
+def test_loopback_query_role_is_read_only_current_policy_and_capability_gated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    policy = AgentPolicyConfig(
+        principals=(
+            TransportPrincipalPolicy("query-credential", "query-principal", "query"),
+            TransportPrincipalPolicy("client-credential", "client-principal", "client"),
+            TransportPrincipalPolicy(
+                "operator-credential", "operator-principal", "operator"
+            ),
+        )
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "agent-root",
+        tmp_path / "runs",
+        _local_launch_profile(),
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    inspected: list[str] = []
+    admission_reads: list[str] = []
+    owner_view_calls: list[str] = []
+
+    def admission_for_run_uri(run_uri: str) -> object:
+        admission_reads.append(run_uri)
+        if run_uri != "file:///runs/known":
+            raise LookupError("run is not admitted")
+        return object()
+
+    def forbidden_view(name: str) -> Any:
+        def open_view(*_args: object, **_kwargs: object) -> object:
+            owner_view_calls.append(name)
+            raise AssertionError(f"{name} view was reached")
+
+        return open_view
+
+    monkeypatch.setattr(daemon, "admission_for_run_uri", admission_for_run_uri)
+    for view_name in (
+        "client_view",
+        "operator_view",
+        "agent_view",
+        "slurm_bootstrap_view",
+    ):
+        monkeypatch.setattr(daemon, view_name, forbidden_view(view_name))
+    server_config = AgentTlsServerConfig(
+        "localhost",
+        0,
+        credentials["server"].with_suffix(".crt"),
+        credentials["server"].with_suffix(".key"),
+        credentials["ca"].with_suffix(".crt"),
+        {
+            _fingerprint(credentials["query"].with_suffix(".crt")): "query-credential",
+            _fingerprint(credentials["other"].with_suffix(".crt")): "client-credential",
+            _fingerprint(
+                credentials["agent"].with_suffix(".crt")
+            ): "operator-credential",
+        },
+    )
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        server_config,
+        inspect_run=lambda run_uri: (
+            inspected.append(run_uri) or {"schema_version": 1, "code": "not_found"}
+        ),
+    )
+    server.start()
+    query = RunInspectionHttpClient(
+        RunInspectionTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".key"),
+        )
+    )
+    mutation_client = LocalDaemonAgentHttpClient(
+        AgentTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".key"),
+        )
+    )
+    wrong_role = RunInspectionHttpClient(
+        RunInspectionTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".crt"),
+            credentials["other"].with_suffix(".key"),
+        )
+    )
+    wrong_operator_role = RunInspectionHttpClient(
+        RunInspectionTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".crt"),
+            credentials["agent"].with_suffix(".key"),
+        )
+    )
+    legacy_server = LocalDaemonAgentHttpServer(daemon, server_config)
+    legacy_server.start()
+    legacy = RunInspectionHttpClient(
+        RunInspectionTlsClientConfig(
+            f"https://localhost:{legacy_server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".key"),
+        )
+    )
+    try:
+        assert query.inspect_run("file:///runs/known") == {
+            "schema_version": 1,
+            "code": "not_found",
+        }
+        assert inspected == ["file:///runs/known"]
+        assert admission_reads == ["file:///runs/known"]
+
+        assert query.inspect_run("not-a-run-uri") == {
+            "schema_version": 1,
+            "code": "invalid_request",
+        }
+        assert query.inspect_run("file:///runs/\ud800") == {
+            "schema_version": 1,
+            "code": "invalid_request",
+        }
+        assert query.inspect_run("file:///runs/unadmitted") == {
+            "schema_version": 1,
+            "code": "not_found",
+        }
+        assert inspected == ["file:///runs/known"]
+        assert admission_reads == ["file:///runs/known", "file:///runs/unadmitted"]
+
+        with pytest.raises(QueueServiceError, match="agent protocol request failed"):
+            mutation_client._call(  # noqa: SLF001 - trust-boundary negative.
+                "inspect_run",
+                {"run_uri": "file:///runs/known", "principal": "spoofed"},
+                role="query",
+            )
+        for role, operation, value in (
+            ("client", "submit", {"request": {}}),
+            ("client", "cancel", {"queue_item_id": "item"}),
+            ("operator", "scheduling_reload", {"request": {}}),
+            ("slurm_bootstrap", "register", {}),
+        ):
+            with pytest.raises(
+                QueueServiceError, match="agent protocol request failed"
+            ):
+                mutation_client.call_application(role, operation, value)
+        with pytest.raises(QueueServiceError, match="agent protocol request failed"):
+            mutation_client.handshake(role="agent")
+        assert owner_view_calls == []
+
+        for client in (wrong_role, wrong_operator_role):
+            assert client.inspect_run("file:///runs/known") == {
+                "schema_version": 1,
+                "code": "unauthorized",
+            }
+        assert inspected == ["file:///runs/known"]
+        assert legacy.inspect_run("file:///runs/known") == {
+            "schema_version": 1,
+            "code": "unavailable",
+        }
+        assert admission_reads == ["file:///runs/known", "file:///runs/unadmitted"]
+
+        normal_decode = agent_session_transport._decode
+
+        def reject_handshake_response(raw: bytes) -> Mapping[str, object]:
+            if raw == b"{}":
+                return normal_decode(raw)
+            raise QueueServiceError("malformed handshake response")
+
+        with monkeypatch.context() as context:
+            context.setattr(
+                agent_session_transport, "_decode", reject_handshake_response
+            )
+            assert query.inspect_run("file:///runs/known") == {
+                "schema_version": 1,
+                "code": "unavailable",
+            }
+        assert inspected == ["file:///runs/known"]
+
+        daemon.replace_agent_policy(
+            AgentPolicyConfig(
+                revision="policy-2",
+                principals=(
+                    TransportPrincipalPolicy(
+                        "client-credential", "client-principal", "client"
+                    ),
+                ),
+            )
+        )
+        assert query.inspect_run("file:///runs/revoked") == {
+            "schema_version": 1,
+            "code": "unauthorized",
+        }
+        assert inspected == ["file:///runs/known"]
+        assert owner_view_calls == []
+    finally:
+        mutation_client.close()
+        legacy_server.stop()
+        server.stop()
+        daemon.stop()
+
+
+def test_loopback_query_preserves_a_256_record_phase_one_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    policy = AgentPolicyConfig(
+        principals=(
+            TransportPrincipalPolicy("query-credential", "query-principal", "query"),
+        )
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "agent-root",
+        tmp_path / "runs",
+        _local_launch_profile(),
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    result = RunInspectionResult(
+        run_uri="file:///runs/known",
+        as_of="2026-08-30T00:00:00Z",
+        summary="RUNNING",
+        queue_item_id="queue-known",
+        admission_id="admission-known",
+        axes=tuple(
+            RunInspectionAxis(
+                name,
+                "test",
+                "available",
+                "RUNNING",
+                1,
+                "2026-08-30T00:00:00Z",
+                "current",
+            )
+            for name in RunInspectionAxisName
+        ),
+        stages=tuple(
+            RunInspectionStage(f"stage-{index}", "RUNNING", 1) for index in range(256)
+        ),
+        locations=(),
+        truncation=(
+            RunInspectionTruncation("stages", 256, 256),
+            RunInspectionTruncation("locations", 0, 0),
+        ),
+    )
+    monkeypatch.setattr(daemon, "admission_for_run_uri", lambda _uri: object())
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(
+                    credentials["query"].with_suffix(".crt")
+                ): "query-credential",
+            },
+        ),
+        inspect_run=lambda _run_uri: result.to_dict(),
+    )
+    server.start()
+    client = RunInspectionHttpClient(
+        RunInspectionTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".key"),
+        )
+    )
+    try:
+        remote = client.inspect_run(result.run_uri)
+    finally:
+        server.stop()
+        daemon.stop()
+
+    assert decode_run_inspection_response(remote) == result
 
 
 def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(

@@ -452,6 +452,7 @@ class LocalDaemonRole(StrEnum):
     CLIENT = "client"
     OPERATOR = "operator"
     AGENT = "agent"
+    QUERY = "query"
     SLURM_BOOTSTRAP = "slurm_bootstrap"
 
 

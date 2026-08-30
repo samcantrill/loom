@@ -25,6 +25,7 @@ from .agent_session_transport import (
     AgentTlsClientConfig,
     AgentTlsServerConfig,
     LocalDaemonAgentHttpClient,
+    RunInspectionTlsClientConfig,
     _read_remote_agent_root_id,
 )
 from ._agent_process_supervisor import (
@@ -79,6 +80,14 @@ class OutboundAgentServiceConfig:
     source_path: Path
     immutable_fingerprint: str
     active_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class RunInspectionClientConfig:
+    """Protected configuration for the standalone read-only inspection client."""
+
+    client: RunInspectionTlsClientConfig
+    source_path: Path
 
 
 def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfig:
@@ -237,6 +246,35 @@ def load_outbound_agent_service_config(
         source,
         fingerprint,
         active_fingerprint,
+    )
+
+
+def load_run_inspection_client_config(path: str | Path) -> RunInspectionClientConfig:
+    """Load the strict protected v1 remote inspection client configuration."""
+
+    source, payload, _fingerprint = _load_protected_config(path)
+    _exact(
+        payload,
+        {
+            "schema_version",
+            "kind",
+            "url",
+            "server_ca_path",
+            "certificate_path",
+            "private_key_path",
+        },
+        "run inspection client config",
+    )
+    _header(payload, "loom.run-inspection-client", schema_version=1)
+    base = source.parent
+    return RunInspectionClientConfig(
+        RunInspectionTlsClientConfig(
+            url=_string(payload, "url"),
+            server_ca_path=_path(payload, "server_ca_path", base),
+            certificate_path=_path(payload, "certificate_path", base),
+            private_key_path=_path(payload, "private_key_path", base),
+        ),
+        source,
     )
 
 
@@ -826,9 +864,14 @@ def _without_paths(value: object) -> object:
     return value
 
 
-def _header(payload: Mapping[str, object], kind: str) -> None:
+def _header(
+    payload: Mapping[str, object],
+    kind: str,
+    *,
+    schema_version: int = DEPLOYMENT_CONFIG_SCHEMA_VERSION,
+) -> None:
     version = payload.get("schema_version")
-    if version != DEPLOYMENT_CONFIG_SCHEMA_VERSION or isinstance(version, bool):
+    if version != schema_version or isinstance(version, bool):
         raise QueueConfigError("deployment config schema version is unsupported")
     if payload.get("kind") != kind:
         raise QueueConfigError("deployment config kind is invalid")
@@ -1055,7 +1098,9 @@ __all__ = [
     "DEPLOYMENT_CONFIG_SCHEMA_VERSION",
     "OutboundAgentRegistrationConfig",
     "OutboundAgentServiceConfig",
+    "RunInspectionClientConfig",
     "load_coordinator_service_config",
     "load_outbound_agent_service_config",
+    "load_run_inspection_client_config",
     "run_outbound_agent_service",
 ]

@@ -31,6 +31,11 @@ def register_subparser(
     source.add_argument(
         "--endpoint", metavar="SOCKET", help="owner-only local daemon socket"
     )
+    source.add_argument(
+        "--remote-config",
+        metavar="CONFIG",
+        help="protected mTLS run-inspection client configuration",
+    )
     parser.add_argument(
         "--queue-config",
         metavar="CONFIG",
@@ -53,7 +58,10 @@ def register_subparser(
 
 
 def handle(namespace: argparse.Namespace) -> int:
-    if namespace.endpoint is not None and namespace.queue_config is not None:
+    if (
+        (namespace.endpoint is not None or namespace.remote_config is not None)
+        and namespace.queue_config is not None
+    ):
         raise CliError(
             "--queue-config is only valid with --direct",
             code="cli.inspect_run.invalid_source",
@@ -62,6 +70,7 @@ def handle(namespace: argparse.Namespace) -> int:
     result = build_inspect_run_result(
         str(namespace.run_uri),
         endpoint=namespace.endpoint,
+        remote_config=namespace.remote_config,
         queue_config=namespace.queue_config,
     )
     if output_format_from_namespace(namespace) is OutputFormat.JSON:
@@ -83,6 +92,7 @@ def build_inspect_run_result(
     run_uri: str,
     *,
     endpoint: str | Path | None = None,
+    remote_config: str | Path | None = None,
     queue_config: str | Path | None = None,
 ) -> "RunInspectionResponse":
     try:
@@ -91,13 +101,22 @@ def build_inspect_run_result(
             inspect_run,
         )
 
-        if endpoint is None:
+        if endpoint is None and remote_config is None:
             if queue_config is None:
                 return inspect_run(run_uri)
             return inspect_run(
                 run_uri,
                 queue_service=_read_only_queue_repository(queue_config),
             )
+        if remote_config is not None:
+            from loom.queue.agent_session_transport import RunInspectionHttpClient
+            from loom.queue.deployment import load_run_inspection_client_config
+
+            config = load_run_inspection_client_config(remote_config)
+            return decode_run_inspection_response(
+                RunInspectionHttpClient(config.client).inspect_run(run_uri)
+            )
+        assert endpoint is not None
         from loom.queue import LocalDaemonSocketClient
 
         return decode_run_inspection_response(

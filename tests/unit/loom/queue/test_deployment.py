@@ -18,6 +18,7 @@ from loom.queue.deployment import (
     _open_outbound_agent,
     load_coordinator_service_config,
     load_outbound_agent_service_config,
+    load_run_inspection_client_config,
 )
 from loom.queue.errors import QueueConfigError, QueueError, QueueServiceError
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
@@ -446,6 +447,28 @@ def test_protected_composition_rejects_targets_outside_existing_contracts(
         load_coordinator_service_config(
             _write_protected(tmp_path / f"coordinator-invalid-{field}.yaml", payload)
         )
+
+
+def test_run_inspection_client_config_is_protected_exact_and_path_bound(
+    tmp_path: Path,
+) -> None:
+    source = _write_protected(
+        tmp_path / "inspection.yaml",
+        {
+            "schema_version": 1,
+            "kind": "loom.run-inspection-client",
+            "url": "https://coordinator.example.test:8443",
+            "server_ca_path": "ca.pem",
+            "certificate_path": "query.pem",
+            "private_key_path": "query.key",
+        },
+    )
+    config = load_run_inspection_client_config(source)
+    assert config.client.url == "https://coordinator.example.test:8443"
+    assert config.client.server_ca_path == tmp_path / "ca.pem"
+    source.chmod(0o644)
+    with pytest.raises(QueueConfigError, match="owner-protected"):
+        load_run_inspection_client_config(source)
 
 
 def _coordinator_config(tmp_path: Path) -> Path:

@@ -2,20 +2,22 @@
 
 ## Metadata
 
-- Status: pending
+- Status: merged
 - Roadmap stage and phase: Stage 34, Phase 2
 - Manifest: docs/roadmap/stage-34/implementation-plan.md
 - Branch: agent/stage-34-p2-authenticated-run-inspection
-- Worktree root and path: use the manifest-recorded root;
-  `<root>/stage-34-p2-authenticated-run-inspection`
-- Base revision: current `origin/develop` after Phase 1 is remotely merged
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+  `/home/can134/work/active/loom-worktrees/stage-34-p2-authenticated-run-inspection`
+- Base revision: `0eb6a90df1517a0b51538241db8792359563e619`
 - PR target: develop
 - PR title: `Stage 34 phase 2: add authenticated run inspection`
+- PR: [#264](https://github.com/samcantrill/loom/pull/264)
 - Dependencies: Phase 1 merged; existing Stage 29 mTLS server, certificate
   fingerprint mapping, current-policy authorizer, and protected config loader
 - Workflow path: expanded; this phase changes an authenticated remote trust
   boundary and credential policy
-- Blockers: Phase 1 remote merge
+- Blockers: none; Phase 1 is remotely merged in
+  [#263](https://github.com/samcantrill/loom/pull/263)
 
 ## Objective And Context
 
@@ -189,24 +191,52 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 1 remote merge and exact base/worktree.
-- Expanded planning: stage design is complete; use a phase planner only if the
-  existing transport cannot preserve auth-before-read without contract change.
-- Implementation: pending.
-- Refiner: not needed.
-- Pre-submit gate: pending.
-- Independent review: expected if manager review leaves any material
-  authorization, redaction, or existing-role compatibility risk.
-- Blocker corrections: 0/3.
-- PR and merge: pending.
+- Manager preparation: complete; Phase 1 remote merge, exact base/worktree,
+  current transport dispatch, policy seam, and protected config loader verified.
+- Expanded planning: no planner pass needed. The existing mTLS handler resolves
+  the certificate fingerprint through the current policy and enforces the
+  mapped role/path before application dispatch, so an injected query callback
+  can remain downstream of authorization without a contract change.
+- Implementation: complete; the existing mTLS application server now composes
+  the injected Phase 1 inspection callable behind the role-exclusive `query`
+  principal, exact coordinator admission check, `run-inspection-v1` handshake,
+  protected inspection-client config, and explicit CLI remote source.
+- Refiner: one bounded pass completed in `56aadb1` for the qualified remote
+  decoder-limit blocker; no further refiner pass is available or needed.
+- Pre-submit gate: complete at `ab9c9d5`; manager review found no remaining
+  blocker against the authenticated trust contract, exact coordinator scope,
+  Phase 1 wire parity, existing-role compatibility, import direction, or
+  proportionality.
+- Independent review: required on the expanded path after PR submission because
+  this phase changes the remote credential and authorization boundary. The
+  review passed after its one localized failure-parity correction was applied
+  and revalidated; no product blocker or material residual risk remains.
+- Blocker corrections: 3/3 complete; exhausted. The remote client applied the
+  legacy agent-request decoder after reading a Phase 1-sized response, incorrectly
+  closing valid 65+ record results as unavailable. The correction gives only
+  query responses their fixed 1 MiB/256-record strict decoder, preserves the
+  existing 64 KiB/64-item agent decoder for request and handshake traffic, and
+  rejects wrong response content types or status/envelope combinations.
+  Correction 2/3 is complete: manager review found malformed run URIs reached
+  admission and became `not_found` instead of the Phase 1 `invalid_request`, and
+  malformed handshake JSON could escape the closed failure path. The correction
+  reuses the lower canonical run-URI validator before admission, closes handshake
+  decoding/status failures, and adds exact-scope, capability, role-isolation,
+  zero-owner-view, revocation, and remote CLI subprocess evidence.
+  Correction 3/3 closes the independent review's lone-surrogate URI case as
+  `invalid_request` rather than `unavailable`, matching Phase 1 without changing
+  authorization, admission, or public schemas.
+- PR and merge: PR #264 was verified against `develop`, approved after expanded
+  independent review and all local gates passed, and squash-merged as
+  `7fa9125` on 2026-08-31.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added the dedicated `query` role, exact authenticated `/v1/query/inspect_run` dispatch, capability handshake, bounded no-redirect HTTPS client, and strict protected `loom.run-inspection-client` v1 loader. `loom inspect-run --remote-config` decodes the unchanged Phase 1 model with no selected-source fallback. Coordinator serving now injects the Phase 1 callable into the existing mTLS server; user docs cover managed local, remote mTLS, and service-less SSH use. |
+| Tests added or updated | Added role-exclusivity and protected-config coverage, remote-selector no-fallback coverage, and a localhost mTLS matrix for query success, exact admitted/unadmitted scope, malformed identity/URI closure, mutation-role and query-role isolation with zero owner-view calls, missing capability, immediate policy revocation, and a 256-stage canonical-result round trip. Strict decoder tests cover duplicate keys, 257 records, and the 1-MiB limit. E2E coverage invokes `loom inspect-run --remote-config` as a subprocess against the real local mTLS server. |
+| Validated revision/tree state and evidence | At `ab9c9d5`, the complete phase-targeted unit, contract, and integration commands passed 52, 10, and 44 tests respectively; both direct/service-less and authenticated-remote inspect-run E2E journeys passed (2 tests). Focused Ruff, Pyright with 0 errors/warnings, and `git diff --check` passed. Fresh `make validate-pr` passed Ruff, Pyright with 0 errors/warnings, 2,734 default tests with 136 deselected, 157 config-extra tests with 3 expected skips and 2,737 deselected, plus source and wheel builds. Fresh `make test-summary` recorded 2,891 selected passes across package 119, unit 1,924, contract 300, integration 329, E2E 62, and config-extra 157, with the same 3 expected skips. |
+| Validation-relevant changes after evidence | None. Only phase and manifest evidence metadata changed after the validated source/test tree, so the receipt remains current under the repository freshness rule. |
+| PR, review, and merge | [#264](https://github.com/samcantrill/loom/pull/264) target, head, title, body, non-draft state, and clean mergeability were verified. Expanded independent review passed after its localized parity finding was corrected; manager review and all local gates passed; squash-merged to `develop` as `7fa9125` on 2026-08-31. |
+| Residual risk and cleanup | No known blocker or material residual risk; the correction budget is exhausted. Localhost mTLS proves Loom policy behavior but cannot certify site certificate issuance or path reachability. The dedicated worktree and exact local/remote phase branches were removed after the remote merge was verified. |

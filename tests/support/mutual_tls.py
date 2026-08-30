@@ -33,6 +33,7 @@ def mutual_tls_credentials(tmp_path: Path) -> dict[str, Path]:
         ("server-next", "/CN=localhost"),
         ("agent", "/CN=agent"),
         ("other", "/CN=other"),
+        ("query", "/CN=query"),
     ):
         _run(
             "req",
@@ -74,7 +75,7 @@ def mutual_tls_credentials(tmp_path: Path) -> dict[str, Path]:
         )
     return {
         name: tmp_path / name
-        for name in ("ca", "server", "server-next", "agent", "other")
+        for name in ("ca", "server", "server-next", "agent", "other", "query")
     }
 
 

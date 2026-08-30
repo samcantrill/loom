@@ -364,7 +364,12 @@ version must contain the complete final verifier/secret/composite-key schema or
 startup rejects it without repair.
 
 Client and operator status/admission operations can use the same protected mTLS
-adapter with their separately configured roles. The owner-only Unix client route
+adapter with their separately configured roles. The `query` role is separately
+mapped to a certificate fingerprint and has no action, agent, or pool scope. It
+can call only `/v1/query/inspect_run` after the current policy is checked; the
+coordinator verifies exact admission before the injected diagnostics projection
+reads owners. The query handshake advertises `run-inspection-v1`; clients reject
+older servers rather than falling back. The owner-only Unix client route
 continues unchanged. No authority application route is exposed here, and agent
 operations cannot submit/cancel runs, reserve/bind/grant assignments, read
 artifacts, prepare providers, or invoke launchers. Remote work delivery and

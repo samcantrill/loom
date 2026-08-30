@@ -495,7 +495,13 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     agent_server = (
         None
         if service.agent_server is None
-        else LocalDaemonAgentHttpServer(daemon, service.agent_server)
+        else LocalDaemonAgentHttpServer(
+            daemon,
+            service.agent_server,
+            inspect_run=projection_callable(
+                run_store=LocalRunStore(config.run_store_root), daemon=daemon
+            ),
+        )
     )
     try:
         status = daemon.start()
