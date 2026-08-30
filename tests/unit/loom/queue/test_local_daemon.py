@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 from shutil import copyfile
 import sqlite3
 import sys
+from threading import Event, Lock
+import time
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -39,9 +42,12 @@ from loom.queue import (
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.agent_sessions import (
     AgentControlKind,
+    AgentOffer,
+    AgentProviderDescriptor,
     AgentPolicyConfig,
     AgentPrincipalPolicy,
     AgentRegistration,
+    LocalOwnerOperatorPolicy,
     TransportPrincipalPolicy,
 )
 from loom.pipeline.orchestration import (
@@ -200,9 +206,10 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
     assert direct_detail.admission.admission_id == "admission-b"
     assert direct_detail.authority["availability"] == "unavailable"
     assert direct_detail.owners["queue_item_id"] == "item-1"
-    assert cast(Mapping[str, object], direct_detail.owners["assignment"])[
-        "owner"
-    ] == "coordinator-assignments"
+    assert (
+        cast(Mapping[str, object], direct_detail.owners["assignment"])["owner"]
+        == "coordinator-assignments"
+    )
     server = LocalDaemonSocketServer(daemon, config.endpoint)
     server.start()
     try:
@@ -215,9 +222,10 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
         server.stop()
     assert socket_detail.admission == direct_detail.admission
     assert socket_detail.authority["availability"] == "unavailable"
-    assert cast(Mapping[str, object], socket_detail.owners["assignment"])[
-        "owner"
-    ] == "coordinator-assignments"
+    assert (
+        cast(Mapping[str, object], socket_detail.owners["assignment"])["owner"]
+        == "coordinator-assignments"
+    )
     with pytest.raises(AdmissionNotFoundError):
         daemon.admission("missing-admission")
 
@@ -248,6 +256,323 @@ def test_admission_wait_observes_revision_without_status_history(
         daemon.wait_admission(
             "admission-1", expected_revision=changed.revision + 1, timeout=0
         )
+
+
+def test_admission_revision_is_targeted_and_noop_writes_are_isolated(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    with sqlite3.connect(config.control_database) as conn:
+        daemon._coordinator_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    for admission_id, queue_item_id in (
+        ("admission-a", "item-a"),
+        ("admission-b", "item-b"),
+    ):
+        with daemon._connection() as conn:
+            conn.execute(
+                "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, enqueue_sequence, cancellation_operation_id, blocked_reason) VALUES (?, ?, ?, ?, 'digest', 'managed-stage', 'ACTIVE', '2026-01-01T00:00:00Z', ?, 0, ?, NULL, NULL)",
+                (
+                    admission_id,
+                    queue_item_id,
+                    daemon._coordinator_id,
+                    f"file:///{queue_item_id}",
+                    f"operation-{queue_item_id}",
+                    1 if admission_id == "admission-a" else 2,
+                ),
+            )
+            conn.commit()
+    first = daemon.admission_for_queue_item("item-a")
+    daemon._set_state(
+        "admission-b", LocalDaemonAdmissionState.WAITING, reason="capacity"
+    )  # noqa: SLF001
+    assert (
+        daemon.wait_admission(
+            "admission-a", expected_revision=first.revision, timeout=0
+        ).kind.value
+        == "TIMEOUT"
+    )
+    daemon._set_state(
+        "admission-a", LocalDaemonAdmissionState.WAITING, reason="capacity"
+    )  # noqa: SLF001
+    changed = daemon.wait_admission(
+        "admission-a", expected_revision=first.revision, timeout=0
+    )
+    assert changed.kind.value == "CHANGED"
+    assert changed.revision == first.revision + 1
+    daemon._set_state(
+        "admission-a", LocalDaemonAdmissionState.WAITING, reason="capacity"
+    )  # noqa: SLF001
+    assert (
+        daemon.wait_admission(
+            "admission-a", expected_revision=changed.revision, timeout=0
+        ).kind.value
+        == "TIMEOUT"
+    )
+
+
+def test_socket_wait_saturation_reserves_status_control_and_shutdown_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = _config(tmp_path)
+    config = replace(
+        base,
+        agent_policy=AgentPolicyConfig(
+            principals=base.agent_policy.principals,
+            local_owner=LocalOwnerOperatorPolicy(
+                actions=("drain",), agent_ids=("agent-a",), pools=("default",)
+            ),
+        ),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    with daemon._connection() as conn:
+        conn.execute(
+            "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, enqueue_sequence, cancellation_operation_id, blocked_reason) VALUES ('saturated-admission', 'saturated-item', ?, 'file:///saturated', 'digest', 'managed-stage', 'ACTIVE', '2026-01-01T00:00:00Z', 'saturated-operation', 0, 1, NULL, NULL)",
+            (daemon._coordinator_id,),
+        )
+        conn.execute(
+            "INSERT INTO agent_sessions(session_id, agent_id, agent_root_id, principal_id, policy_revision, config_revision, inventory_revision, availability_revision, capabilities_json, pools_json, retirement_verifier, coordinator_epoch, state, created_at) VALUES ('saturation-session', 'agent-a', 'agent-root-a', 'agent-principal', 'policy-1', 'config-1', 'inventory-1', 'availability-1', '[\"python\"]', '[\"default\"]', '01', ?, 'ACTIVE', '2026-08-31T00:00:00Z')",
+            (daemon._epoch,),
+        )
+        conn.commit()
+    original_wait = daemon.wait_admission
+    entered = Event()
+    entered_lock = Lock()
+    entered_count = 0
+
+    def observed_wait(
+        admission_id: str, *, expected_revision: int, timeout: float | None
+    ):  # type: ignore[no-untyped-def]
+        nonlocal entered_count
+        with entered_lock:
+            entered_count += 1
+            if entered_count == 7:
+                entered.set()
+        return original_wait(
+            admission_id, expected_revision=expected_revision, timeout=timeout
+        )
+
+    monkeypatch.setattr(daemon, "wait_admission", observed_wait)
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server.start()
+    server_running = True
+    try:
+        client = LocalDaemonSocketClient(config.endpoint)
+        started = time.monotonic()
+        assert (
+            client.wait_admission(
+                "saturated-admission", expected_revision=1, timeout=1.1
+            ).kind.value
+            == "TIMEOUT"
+        )
+        assert time.monotonic() - started >= 0.9
+        entered_count = 0
+        entered.clear()
+        with ThreadPoolExecutor(max_workers=7) as workers:
+            waits = [
+                workers.submit(
+                    client.wait_admission,
+                    "saturated-admission",
+                    expected_revision=1,
+                    timeout=10,
+                )
+                for _ in range(7)
+            ]
+            assert entered.wait(timeout=2)
+            assert client.status().coordinator_id == daemon.status().coordinator_id
+            control = client.control_agent(
+                AgentControl(
+                    operation_id="saturation-drain",
+                    kind=AgentControlKind.DRAIN,
+                    agent_id="agent-a",
+                    expected_session_id="saturation-session",
+                    expected_config_revision="config-1",
+                    pool="default",
+                    cancel_active=False,
+                    reason="prove reserved management capacity",
+                )
+            )
+            assert control["state"] == "pending_delivery"
+            stop_started = time.monotonic()
+            server.stop()
+            server_running = False
+            assert time.monotonic() - stop_started < 2
+            for wait in waits:
+                with pytest.raises(QueueServiceError):
+                    wait.result(timeout=2)
+    finally:
+        if server_running:
+            server.stop()
+        daemon.stop()
+
+
+def test_management_agent_and_operation_reads_are_current_and_typed(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        with daemon._connection() as conn:
+            for session_id, created_at, state in (
+                # The retired ID sorts after the successor, so timestamp-only
+                # ordering would select the wrong session.
+                ("session-old", "2026-08-31T00:00:00Z", "REPLACED"),
+                ("session-current", "2026-08-31T00:00:00Z", "ACTIVE"),
+            ):
+                conn.execute(
+                    "INSERT INTO agent_sessions(session_id, agent_id, agent_root_id, principal_id, policy_revision, config_revision, inventory_revision, availability_revision, capabilities_json, pools_json, retirement_verifier, coordinator_epoch, state, created_at) VALUES (?, 'agent-a', 'root-a', 'principal-a', 'policy-1', 'config-1', 'inventory-1', 'availability-1', '[\"python\"]', '[\"default\"]', '01', ?, ?, ?)",
+                    (session_id, daemon._epoch, state, created_at),
+                )
+            conn.execute(
+                "INSERT INTO scheduling_reloads(operation_id, principal_id, request_json, state, result_code, scheduling_epoch, configuration_revision, replacement_fingerprint) VALUES ('reload-read', 'operator', '{}', 'applied', 'ok', 'epoch-2', 3, 'fingerprint-2')"
+            )
+            conn.execute(
+                "INSERT INTO agent_offers(offer_id, session_id, coordinator_epoch, availability_revision, offer_json, accepted_at, expires_at, current) VALUES ('expired-offer', 'session-current', ?, 'availability-1', '{}', '2026-08-30T00:00:00Z', '2026-08-30T00:00:01Z', 1)",
+                (daemon._epoch,),
+            )
+            conn.commit()
+
+        page = daemon.agents(limit=1)
+        assert page.next_cursor is None
+        assert page.agents[0].session_id == "session-current"
+        assert page.agents[0].pools == ("default",)
+        assert page.agents[0].available is False
+        assert daemon.agent("agent-a").to_dict() == page.agents[0].to_dict()
+        with daemon._connection() as conn:
+            conn.execute("UPDATE agent_offers SET expires_at = '9999-12-31T23:59:59Z'")
+            conn.commit()
+        assert daemon.agent("agent-a").available is True
+
+        operation = daemon.operation("reload-read")
+        assert operation.kind == "scheduling_reload"
+        assert operation.result == {
+            "scheduling_epoch": "epoch-2",
+            "configuration_revision": 3,
+            "replacement_fingerprint": "fingerprint-2",
+        }
+        waited = daemon.wait_operation("reload-read", timeout=0)
+        assert waited.kind.value == "TERMINAL"
+        assert waited.operation == operation
+        with daemon._connection() as conn:
+            conn.execute(
+                "INSERT INTO agent_controls(operation_id, principal_id, session_id, "
+                "agent_id, request_json, state, result_code, acknowledged) VALUES "
+                "('reload-read', 'operator', 'session-current', 'agent-a', '{}', "
+                "'pending_delivery', NULL, 0)"
+            )
+            conn.commit()
+        with pytest.raises(QueueConflictError, match="ambiguous"):
+            daemon.operation("reload-read")
+
+        with daemon._connection() as conn:
+            conn.execute(
+                "INSERT INTO session_replacements(operation_id, principal_id, request_json, request_digest, agent_id, old_session_id, successor_session_id, state, readiness, withholding_reason, decision_projection_json, decision_projection_digest, required_claim_ids_json, observed_claim_ids_json, successor_observation_digest, readiness_projection_digest, result_json, decided_at, ready_at) VALUES ('replacement-bound', 'operator', '{}', 'digest', 'agent-a', 'session-current', NULL, 'bound', 'pending', NULL, '{}', 'digest', '[]', '[]', NULL, NULL, '{\"receipt\":\"bound\"}', '2026-08-31T00:00:00Z', NULL)"
+            )
+            conn.commit()
+        assert (
+            daemon.wait_operation("replacement-bound", timeout=0).kind.value
+            == "TIMEOUT"
+        )
+        with daemon._connection() as conn:
+            conn.execute(
+                "UPDATE session_replacements SET state = 'ready', readiness = 'ready', ready_at = '2026-08-31T00:00:01Z' WHERE operation_id = 'replacement-bound'"
+            )
+            conn.commit()
+        replacement = daemon.wait_operation("replacement-bound", timeout=0)
+        assert replacement.kind.value == "TERMINAL"
+        assert replacement.operation.result == {"receipt": "bound"}
+    finally:
+        daemon.stop()
+
+
+def test_remote_candidate_expiry_uses_the_accepted_time_snapshot(
+    tmp_path: Path,
+) -> None:
+    now = ["2026-08-31T00:00:00Z"]
+    descriptor = ResidentProfileDescriptor(
+        "remote-profile", "v1", "project", "environment", "executor"
+    )
+    config = replace(
+        _config(tmp_path),
+        remote_profiles=(descriptor,),
+        agent_policy=AgentPolicyConfig(
+            agents=(
+                AgentPrincipalPolicy(
+                    "agent-credential",
+                    "agent-principal",
+                    "agent-a",
+                    ("default",),
+                    (
+                        "python",
+                        "remote-stage-execution-v3",
+                        "regular-file-relay-v1",
+                    ),
+                ),
+            )
+        ),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, clock=lambda: now[0])
+    daemon.start()
+    try:
+        agent = daemon.agent_view(
+            LocalDaemonPrincipal(
+                "agent-principal", LocalDaemonRole.AGENT, "agent-credential"
+            )
+        )
+        handshake = agent.handshake()
+        session = agent.register(
+            AgentRegistration(
+                idempotency_key="register-expiry-owner",
+                coordinator_id=str(handshake["coordinator_id"]),
+                coordinator_epoch=str(handshake["coordinator_epoch"]),
+                agent_root_id="remote-root",
+                config_revision="config-1",
+                inventory_revision="inventory-1",
+                availability_revision="availability-1",
+                declared_pools=("default",),
+                declared_capabilities=(
+                    "python",
+                    "remote-stage-execution-v3",
+                    "regular-file-relay-v1",
+                ),
+                retirement_verifier="01" * 32,
+            )
+        )
+        agent.publish_offer(
+            AgentOffer(
+                session_id=session.session_id,
+                coordinator_epoch=session.coordinator_epoch,
+                config_revision=session.config_revision,
+                inventory_revision=session.inventory_revision,
+                availability_revision=session.availability_revision,
+                cpu=1,
+                memory_bytes=0,
+                ttl_seconds=1,
+                provider_composition=(
+                    AgentProviderDescriptor(
+                        CpuResourcePlanner.descriptor,
+                        CpuResourcePlanner.claim_contracts,
+                    ),
+                ),
+                resident_profiles=(descriptor,),
+            ),
+            idempotency_key="offer-expiry-owner",
+        )
+        assert daemon._execution is not None  # noqa: SLF001
+        assert daemon._execution._remote_candidates()  # noqa: SLF001
+
+        now[0] = "2026-08-31T00:00:02Z"
+        assert daemon._execution._remote_candidates() == {}  # noqa: SLF001
+    finally:
+        daemon.stop()
 
 
 def test_recovery_persists_exact_evidence_before_close_and_replays_it(
@@ -428,6 +753,12 @@ def _config(tmp_path: Path) -> LocalDaemonConfig:
                     "operator",
                     actions=("recover_time", "scheduling_reload"),
                 ),
+                TransportPrincipalPolicy(
+                    "other-operator-credential",
+                    "other-operator",
+                    "operator",
+                    actions=("recover_time",),
+                ),
             )
         ),
     )
@@ -458,6 +789,35 @@ def test_initialize_start_restart_preserves_owner_and_rotates_epoch(
 
     assert second_status.coordinator_id == first_status.coordinator_id
     assert second_status.coordinator_epoch != first_status.coordinator_epoch
+
+
+def test_successful_service_cycle_clears_transient_reconciliation_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    runtime = daemon._thread  # noqa: SLF001 - isolate the service-loop contract
+    daemon._stop.set()  # noqa: SLF001
+    daemon._wake.set()  # noqa: SLF001
+    assert runtime is not None
+    runtime.join(timeout=2)
+    assert not runtime.is_alive()
+    daemon._thread = None  # noqa: SLF001
+    daemon._stop.clear()  # noqa: SLF001
+    daemon._service_error = "reconciliation_unavailable"  # noqa: SLF001
+
+    def reconcile_once() -> tuple[object, ...]:
+        daemon._stop.set()  # noqa: SLF001
+        return ()
+
+    monkeypatch.setattr(daemon, "reconcile_once", reconcile_once)
+    try:
+        daemon._serve()  # noqa: SLF001 - one deterministic successful loop
+        assert daemon._service_error is None  # noqa: SLF001
+    finally:
+        daemon.stop()
 
 
 def test_forward_clock_jump_degrades_without_advancing_and_requires_recovery(
@@ -503,6 +863,11 @@ def test_forward_clock_jump_degrades_without_advancing_and_requires_recovery(
         assert receipt.coordinator_epoch != initial.coordinator_epoch
         assert receipt.time_revision == 2
         assert operator.recover_time(request) == receipt
+        other_operator = daemon.operator_view(
+            LocalDaemonPrincipal("other-operator", LocalDaemonRole.OPERATOR)
+        )
+        with pytest.raises(QueueConflictError, match="different content"):
+            other_operator.recover_time(request)
         assert daemon.status().accepted_time_health == "healthy"
         with pytest.raises(QueueConflictError, match="different content"):
             operator.recover_time(replace(request, reason="changed assertion"))

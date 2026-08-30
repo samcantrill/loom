@@ -908,8 +908,10 @@ absent role root. Each uses a private sibling staging directory and one final
 rename, never overwrites an existing target, and leaves no requested target on
 a pre-publication failure. Startup accepts only a complete role binding made by
 the same config. See the
-[managed-local example](../../examples/operations/managed-local-queue/README.md)
-for the two exact config shapes.
+[managed deployment example](../../examples/operations/managed-local-queue/README.md)
+for the two exact protected config shapes, and the
+[remote operations journey](../../examples/operations/managed-remote-operations/README.md)
+for a runnable generated-CA deployment.
 
 A degraded accepted-time revision never heals itself. After repairing and
 verifying the site clock, recover the exact visible revision and epoch:
@@ -932,6 +934,8 @@ A typical `machine-B` maintenance cut-over is:
 
 ```bash
 loom queue daemon-status --endpoint COORDINATOR_SOCKET --format json
+loom queue daemon-agents --endpoint COORDINATOR_SOCKET --format json
+loom queue daemon-agent --endpoint COORDINATOR_SOCKET machine-B --format json
 
 loom queue daemon-agent-drain \
   --endpoint COORDINATOR_SOCKET \
@@ -951,7 +955,8 @@ loom queue daemon-agent-reload \
   --config-revision CURRENT_CONFIG \
   --reason trusted-config-updated
 
-# Read the applied revision from daemon-status before resuming.
+# Re-read agent detail and copy its applied configuration revision before resuming.
+loom queue daemon-agent --endpoint COORDINATOR_SOCKET machine-B --format json
 loom queue daemon-agent-resume \
   --endpoint COORDINATOR_SOCKET \
   --operation-id resume-machine-B-1 \
@@ -960,6 +965,42 @@ loom queue daemon-agent-resume \
   --config-revision RELOADED_CONFIG \
   --reason maintenance-complete
 ```
+
+The agent detail supplies the exact session, configuration, inventory, and
+availability revisions required by guarded maintenance commands. Admission and
+operation reads are likewise targeted or keyset-bounded; an operator can page
+admissions, inspect one admission, and wait for a durable control receipt
+without turning status into history export:
+
+```bash
+loom queue daemon-admissions --endpoint COORDINATOR_SOCKET --limit 50 --format json
+loom queue daemon-admission --endpoint COORDINATOR_SOCKET ADMISSION_ID --format json
+loom queue daemon-operation --endpoint COORDINATOR_SOCKET OPERATION_ID --format json
+loom queue daemon-operation-wait --endpoint COORDINATOR_SOCKET OPERATION_ID --timeout 30 --format json
+```
+
+Each admission carries its own monotonic `revision`. A Python client can wait
+against that exact value; changes to another admission and no-op reconciliation
+do not complete the wait:
+
+```python
+admission = client.admission(admission_id).admission
+changed = client.wait_admission(
+    admission_id,
+    expected_revision=admission.revision,
+    timeout=30,
+)
+```
+
+`daemon-status` remains constant-size and includes `accepted_time_revision` as
+the fence for clock recovery. Operation detail returns a typed `kind`, `state`,
+`code`, and bounded `result`; ready-stage SLURM waits remain open after scheduler
+acceptance and finish only at assignment release or conflict.
+
+Unix-socket operator access is opt-in in protected coordinator configuration:
+`agent_policy.local_owner` names its allowed actions, agent IDs, and pools.
+Loom resolves that rule only to the verified owner UID of the local socket;
+remote TLS identities must use their separately configured credential rule.
 
 Coordinator scheduling configuration is reloaded independently after its
 protected local file is edited:
@@ -1017,8 +1058,8 @@ loom queue daemon-wait --endpoint COORDINATOR_SOCKET QUEUE_ITEM
 
 Reuse the same operation ID when retrying a response-loss case. Changed content
 under that ID conflicts. This is a hard cut-over: initialize fresh daemon/agent
-roots and use the v4 CLI result shape with agent protocol and coordinator/agent
-state version 9. Loom does not upgrade or dual-read a previous control schema.
+roots and use the v5 CLI result shape, agent protocol 10, and coordinator/agent
+state version 12. Loom does not upgrade or dual-read a previous control schema.
 
 For a resident remote agent, initialize its protected root and detached
 supervisor before starting the agent application.  On an application restart,

@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from .local_daemon import (
         AdmissionNotFoundError,
         AdmissionPage,
+        AgentPage,
+        AgentProjection,
         AdmissionWaitKind,
         AdmissionWaitResult,
         AgentControl,
@@ -42,6 +44,9 @@ if TYPE_CHECKING:
         DaemonStatus,
         LocalDaemonPrincipal,
         LocalDaemonRole,
+        LocalDaemonOperation,
+        OperationWaitKind,
+        OperationWaitResult,
         ManagedRecoveryTarget,
         RecoverUnknownAssignment,
         SessionReplacementRequest,
@@ -54,6 +59,7 @@ if TYPE_CHECKING:
         LocalDaemonSocketServer,
     )
     from .local_daemon_runtime import prepare_managed_local_runtime_record
+    from .agent_sessions import LocalOwnerOperatorPolicy
     from loom.pipeline.orchestration import ExecutionRequirement
 from .config import (
     QUEUE_CONFIG_SCHEMA_VERSION,
@@ -155,8 +161,13 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
         "LocalDaemonSocketServer",
         "DaemonStatus",
         "AdmissionPage",
+        "AgentPage",
+        "AgentProjection",
         "AdmissionWaitKind",
         "AdmissionWaitResult",
+        "LocalDaemonOperation",
+        "OperationWaitKind",
+        "OperationWaitResult",
         "ManagedRecoveryTarget",
         "RecoverUnknownAssignment",
         "SessionReplacementRequest",
@@ -197,6 +208,10 @@ def __getattr__(name: str) -> object:
         from . import _managed_local
 
         return getattr(_managed_local, name)
+    if name == "LocalOwnerOperatorPolicy":
+        from .agent_sessions import LocalOwnerOperatorPolicy
+
+        return LocalOwnerOperatorPolicy
     if name in _LOCAL_DAEMON_EXPORTS:
         if name in {"LocalDaemonSocketClient", "LocalDaemonSocketServer"}:
             from . import local_daemon_transport
@@ -254,8 +269,13 @@ __all__ = [
     "LocalDaemonSocketServer",
     "DaemonStatus",
     "AdmissionPage",
+    "AgentPage",
+    "AgentProjection",
     "AdmissionWaitKind",
     "AdmissionWaitResult",
+    "LocalDaemonOperation",
+    "OperationWaitKind",
+    "OperationWaitResult",
     "ManagedRecoveryTarget",
     "MemoryResourceProvider",
     "ObserveRequest",
@@ -266,6 +286,7 @@ __all__ = [
     "SlurmRecoveryTarget",
     "TimeRecoveryReceipt",
     "TimeRecoveryRequest",
+    "LocalOwnerOperatorPolicy",
     "prepare_managed_local_runtime_record",
     "LaunchEnvironmentBindings",
     "NoOpResourceAssignmentProvider",

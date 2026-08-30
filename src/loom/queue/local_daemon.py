@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     )
 
 
-_LOCAL_DAEMON_SCHEMA_VERSION = 11
+_LOCAL_DAEMON_SCHEMA_VERSION = 12
 _MIN_RUN_PRIORITY = -1_000_000
 _MAX_RUN_PRIORITY = 1_000_000
 _MAX_ADMISSION_PAGE_SIZE = 100
@@ -995,6 +995,7 @@ class LocalDaemonAdmission:
     state: LocalDaemonAdmissionState
     accepted_at: str
     authority_operation_id: str
+    revision: int = 1
     run_priority: int = 0
     enqueue_sequence: int = 0
     cancellation_operation_id: str | None = None
@@ -1012,6 +1013,7 @@ class LocalDaemonAdmission:
             "state": self.state.value,
             "accepted_at": self.accepted_at,
             "authority_operation_id": self.authority_operation_id,
+            "revision": self.revision,
             "run_priority": self.run_priority,
             "enqueue_sequence": self.enqueue_sequence,
             "cancellation_operation_id": self.cancellation_operation_id,
@@ -1033,6 +1035,7 @@ class LocalDaemonAdmission:
                 "state",
                 "accepted_at",
                 "authority_operation_id",
+                "revision",
                 "run_priority",
                 "enqueue_sequence",
                 "cancellation_operation_id",
@@ -1051,6 +1054,7 @@ class LocalDaemonAdmission:
             state=LocalDaemonAdmissionState(_required_string(data, "state")),
             accepted_at=_required_string(data, "accepted_at"),
             authority_operation_id=_required_string(data, "authority_operation_id"),
+            revision=_positive_revision(_required_int(data, "revision")),
             run_priority=_run_priority(_required_int(data, "run_priority")),
             enqueue_sequence=_required_int(data, "enqueue_sequence"),
             cancellation_operation_id=_optional_string(
@@ -1129,6 +1133,7 @@ class DaemonStatus:
     running_assignments: int
     accepted_time_health: str
     accepted_time_diagnostic: str | None
+    accepted_time_revision: int
 
     @property
     def scheduling_ready(self) -> bool:
@@ -1150,6 +1155,7 @@ class DaemonStatus:
             "running_assignments": self.running_assignments,
             "accepted_time_health": self.accepted_time_health,
             "accepted_time_diagnostic": self.accepted_time_diagnostic,
+            "accepted_time_revision": self.accepted_time_revision,
         }
 
     @classmethod
@@ -1169,6 +1175,7 @@ class DaemonStatus:
                 "running_assignments",
                 "accepted_time_health",
                 "accepted_time_diagnostic",
+                "accepted_time_revision",
             },
             "local daemon status",
         )
@@ -1190,6 +1197,10 @@ class DaemonStatus:
             ),
             accepted_time_health=_required_string(data, "accepted_time_health"),
             accepted_time_diagnostic=_optional_string(data, "accepted_time_diagnostic"),
+            accepted_time_revision=_non_negative_int(
+                _required_int(data, "accepted_time_revision"),
+                "accepted_time_revision",
+            ),
         )
 
 
@@ -1203,6 +1214,169 @@ class AdmissionPage:
             "admissions": [item.to_dict() for item in self.admissions],
             "next_cursor": self.next_cursor,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class AgentPage:
+    """Bounded current agent-session projections for guarded controls."""
+
+    agents: tuple["AgentProjection", ...]
+    next_cursor: str | None
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "agents": [item.to_dict() for item in self.agents],
+            "next_cursor": self.next_cursor,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "AgentPage":
+        _exact_fields(data, {"agents", "next_cursor"}, "agent page")
+        agents = data.get("agents")
+        cursor = data.get("next_cursor")
+        if (
+            not isinstance(agents, list)
+            or not all(isinstance(item, Mapping) for item in agents)
+            or (cursor is not None and not isinstance(cursor, str))
+        ):
+            raise QueueServiceError("agent page response is invalid")
+        return cls(tuple(AgentProjection.from_dict(item) for item in agents), cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentProjection:
+    """Bounded current logical-agent state with the control freshness fences."""
+
+    agent_id: str
+    session_id: str
+    state: str
+    config_revision: str
+    inventory_revision: str
+    availability_revision: str
+    coordinator_epoch: str
+    pools: tuple[str, ...]
+    capabilities: tuple[str, ...]
+    available: bool
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "agent_id": self.agent_id,
+            "session_id": self.session_id,
+            "state": self.state,
+            "config_revision": self.config_revision,
+            "inventory_revision": self.inventory_revision,
+            "availability_revision": self.availability_revision,
+            "coordinator_epoch": self.coordinator_epoch,
+            "pools": list(self.pools),
+            "capabilities": list(self.capabilities),
+            "available": self.available,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "AgentProjection":
+        _exact_fields(
+            data,
+            {
+                "agent_id",
+                "session_id",
+                "state",
+                "config_revision",
+                "inventory_revision",
+                "availability_revision",
+                "coordinator_epoch",
+                "pools",
+                "capabilities",
+                "available",
+            },
+            "agent projection",
+        )
+        pools = data.get("pools")
+        capabilities = data.get("capabilities")
+        available = data.get("available")
+        if (
+            not isinstance(pools, list)
+            or not all(isinstance(item, str) and item for item in pools)
+            or not isinstance(capabilities, list)
+            or not all(isinstance(item, str) and item for item in capabilities)
+            or not isinstance(available, bool)
+        ):
+            raise QueueServiceError("agent projection is invalid")
+        return cls(
+            agent_id=_required_string(data, "agent_id"),
+            session_id=_required_string(data, "session_id"),
+            state=_required_string(data, "state"),
+            config_revision=_required_string(data, "config_revision"),
+            inventory_revision=_required_string(data, "inventory_revision"),
+            availability_revision=_required_string(data, "availability_revision"),
+            coordinator_epoch=_required_string(data, "coordinator_epoch"),
+            pools=tuple(pools),
+            capabilities=tuple(capabilities),
+            available=available,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LocalDaemonOperation:
+    """One durable management operation without an unbounded history surface."""
+
+    operation_id: str
+    kind: str
+    state: str
+    code: str | None
+    result: PlainData | None
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "kind": self.kind,
+            "state": self.state,
+            "code": self.code,
+            "result": self.result,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "LocalDaemonOperation":
+        _exact_fields(
+            data, {"operation_id", "kind", "state", "code", "result"}, "operation"
+        )
+        code = data.get("code")
+        if code is not None and not isinstance(code, str):
+            raise QueueServiceError("operation response is invalid")
+        return cls(
+            operation_id=_required_string(data, "operation_id"),
+            kind=_required_string(data, "kind"),
+            state=_required_string(data, "state"),
+            code=code,
+            result=freeze_plain_data(data.get("result"), path="operation result"),
+        )
+
+
+class OperationWaitKind(StrEnum):
+    TERMINAL = "TERMINAL"
+    TIMEOUT = "TIMEOUT"
+
+
+@dataclass(frozen=True, slots=True)
+class OperationWaitResult:
+    kind: OperationWaitKind
+    operation: LocalDaemonOperation
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {"kind": self.kind.value, "operation": self.operation.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "OperationWaitResult":
+        _exact_fields(data, {"kind", "operation"}, "operation wait")
+        kind = data.get("kind")
+        operation = data.get("operation")
+        if not isinstance(kind, str) or not isinstance(operation, Mapping):
+            raise QueueServiceError("operation wait response is invalid")
+        try:
+            return cls(
+                OperationWaitKind(kind), LocalDaemonOperation.from_dict(operation)
+            )
+        except ValueError as exc:
+            raise QueueServiceError("operation wait response is invalid") from exc
 
 
 class AdmissionWaitKind(StrEnum):
@@ -1259,6 +1433,7 @@ class LocalDaemon:
         self._cycle_lock = RLock()
         self._service_error: str | None = None
         self._agent_policy = config.agent_policy
+        self._verified_local_owner_subject: str | None = None
 
     @classmethod
     def initialize_deployment(cls, config: LocalDaemonConfig) -> None:
@@ -1287,9 +1462,7 @@ class LocalDaemon:
                 "role_kind": "coordinator-bundle",
                 "coordinator_id": coordinator_id,
                 "agent_id": agent_id,
-                "immutable_fingerprint": (
-                    staged.deployment_configuration_fingerprint
-                ),
+                "immutable_fingerprint": (staged.deployment_configuration_fingerprint),
             }
             binding_path = staging / _DEPLOYMENT_BINDING_FILE
             binding_path.write_text(
@@ -1398,6 +1571,9 @@ class LocalDaemon:
                 self.config.coordinator_root, role="coordinator"
             )
             agent_id = _open_root(self.config.agent_root, role="local-agent")
+            verified_local_owner_subject = (
+                f"uid:{self.config.coordinator_root.stat().st_uid}"
+            )
             owner_ids = coordinator_id, agent_id
             from ._agent_process_supervisor import (
                 AgentProcessSupervisorService,
@@ -1436,7 +1612,9 @@ class LocalDaemon:
                 or not configuration_revision.isdecimal()
                 or int(configuration_revision) < 1
             ):
-                raise QueueStorageError("active scheduling configuration is unavailable")
+                raise QueueStorageError(
+                    "active scheduling configuration is unavailable"
+                )
             # This is the same cross-owner proof used by normal shutdown.  It
             # rejects unavailable owner state before process creation and
             # identifies retained work that must keep a newly started service
@@ -1546,6 +1724,7 @@ class LocalDaemon:
         self._epoch = epoch
         self._scheduling_epoch = scheduling_epoch
         self._service_error = None
+        self._verified_local_owner_subject = verified_local_owner_subject
         self._stop.clear()
         self._wake.set()
         self._execution = execution
@@ -1603,6 +1782,7 @@ class LocalDaemon:
         self._agent_id = None
         self._epoch = None
         self._scheduling_epoch = None
+        self._verified_local_owner_subject = None
 
     def client_view(self, principal: LocalDaemonPrincipal) -> "LocalDaemonClientView":
         return LocalDaemonClientView(self, principal)
@@ -1642,9 +1822,15 @@ class LocalDaemon:
     def _require_view_role(
         self, principal: LocalDaemonPrincipal, role: LocalDaemonRole
     ) -> None:
+        self._authorizer().require_role(principal, role.value)
+
+    def _authorizer(self):  # type: ignore[no-untyped-def]
         from .agent_sessions import ScopedAuthorizer
 
-        ScopedAuthorizer(self._agent_policy).require_role(principal, role.value)
+        return ScopedAuthorizer(
+            self._agent_policy,
+            verified_local_owner_subject=self._verified_local_owner_subject,
+        )
 
     def status(self) -> DaemonStatus:
         coordinator_id = self._require_started()
@@ -1666,7 +1852,8 @@ class LocalDaemon:
                 str(row["key"]): str(row["value"])
                 for row in conn.execute(
                     "SELECT key, value FROM daemon_metadata WHERE key IN "
-                    "('accepted_time_health', 'accepted_time_diagnostic')"
+                    "('accepted_time_health', 'accepted_time_diagnostic', "
+                    "'accepted_time_revision')"
                 )
             }
         active = counts.get(LocalDaemonAdmissionState.ACTIVE.value, 0)
@@ -1750,6 +1937,10 @@ class LocalDaemon:
             running_assignments=running,
             accepted_time_health=time_health,
             accepted_time_diagnostic=diagnostic,
+            accepted_time_revision=_non_negative_int(
+                int(time_state.get("accepted_time_revision", "0")),
+                "accepted_time_revision",
+            ),
         )
 
     def admissions(
@@ -1781,12 +1972,6 @@ class LocalDaemon:
     def admission(self, admission_id: str) -> LocalDaemonAdmissionDetail:
         _required_string({"admission_id": admission_id}, "admission_id")
         admission = self._admission(admission_id)
-        with self._connection() as conn:
-            revision_row = conn.execute(
-                "SELECT revision FROM owner_status_revisions WHERE owner = 'admission'"
-            ).fetchone()
-        if revision_row is None:
-            raise QueueStorageError("coordinator admission status is unavailable")
         from .local_daemon_execution import build_local_daemon_owner_views
 
         views = build_local_daemon_owner_views(
@@ -1795,7 +1980,7 @@ class LocalDaemon:
             coordinator_id=self._require_started(),
             agent_id=self._require_agent_id(),
             clock=self._clock,
-            admission_revision=int(revision_row["revision"]),
+            admission_revision=admission.revision,
         )
         if len(views) != 1 or not isinstance(views[0].get("authority"), Mapping):
             raise QueueStorageError("targeted admission owner detail is unavailable")
@@ -1822,6 +2007,129 @@ class LocalDaemon:
         if row is None:
             raise AdmissionNotFoundError("managed admission was not found")
         return _admission_from_row(row)
+
+    def agents(
+        self, *, limit: int = _MAX_ADMISSION_PAGE_SIZE, cursor: str | None = None
+    ) -> AgentPage:
+        """Return a keyset-bounded session view with control fences intact."""
+
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise QueueServiceError("agent list limit must be in 1..100")
+        agent_id = _decode_agent_cursor(cursor) if cursor is not None else None
+        # A replacement may be recorded in the same accepted-time second as
+        # its predecessor.  Prefer the one open session first; only when an
+        # agent has no open session do reads fall back deterministically to its
+        # latest terminal receipt.
+        query = (
+            "SELECT * FROM agent_sessions AS current WHERE NOT EXISTS ("
+            "SELECT 1 FROM agent_sessions AS newer WHERE newer.agent_id = current.agent_id "
+            "AND ((CASE WHEN newer.state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END) "
+            "< (CASE WHEN current.state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END) OR "
+            "((CASE WHEN newer.state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END) "
+            "= (CASE WHEN current.state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END) "
+            "AND (newer.created_at > current.created_at OR "
+            "(newer.created_at = current.created_at AND newer.session_id > current.session_id))))"
+            ")"
+        )
+        values: tuple[object, ...] = ()
+        if agent_id is not None:
+            query += " AND current.agent_id > ?"
+            values = (agent_id,)
+        query += " ORDER BY current.agent_id LIMIT ?"
+        with self._connection() as conn:
+            rows = tuple(conn.execute(query, (*values, limit + 1)))
+            values_out = tuple(
+                _agent_projection(conn, row, coordinator_epoch=self._epoch)
+                for row in rows[:limit]
+            )
+        next_cursor = (
+            _encode_agent_cursor(str(rows[limit - 1]["agent_id"]))
+            if len(rows) > limit
+            else None
+        )
+        return AgentPage(values_out, next_cursor)
+
+    def agent(self, agent_id: str) -> AgentProjection:
+        _required_string({"agent_id": agent_id}, "agent_id")
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_sessions WHERE agent_id = ? ORDER BY "
+                "CASE WHEN state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END, "
+                "created_at DESC, session_id DESC LIMIT 1",
+                (agent_id,),
+            ).fetchone()
+            if row is None:
+                raise QueueServiceError("managed agent was not found")
+            return _agent_projection(conn, row, coordinator_epoch=self._epoch)
+
+    def operation(self, operation_id: str) -> LocalDaemonOperation:
+        """Read the one typed durable operation receipt without a history scan."""
+
+        _required_string({"operation_id": operation_id}, "operation_id")
+        slurm_operation: LocalDaemonOperation | None = None
+        execution = self._execution
+        if execution is not None:
+            projected = execution.operation_projection(operation_id)
+            if projected is not None:
+                projected_state = projected.get("state")
+                projected_code = projected.get("code")
+                if not isinstance(projected_state, str) or (
+                    projected_code is not None and not isinstance(projected_code, str)
+                ):
+                    raise QueueServiceError("SLURM operation projection is invalid")
+                slurm_operation = LocalDaemonOperation(
+                    operation_id=operation_id,
+                    kind="slurm_stage_assignment",
+                    state=projected_state,
+                    code=projected_code,
+                    result=projected["result"],
+                )
+        with self._connection() as conn:
+            management_operation = _operation_projection(conn, operation_id)
+        if slurm_operation is not None and management_operation is not None:
+            raise QueueConflictError("managed operation identity is ambiguous")
+        if slurm_operation is not None:
+            return slurm_operation
+        if management_operation is not None:
+            return management_operation
+        raise QueueServiceError("managed operation was not found")
+
+    def wait_operation(
+        self, operation_id: str, *, timeout: float | None
+    ) -> OperationWaitResult:
+        if timeout is not None and (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or timeout < 0
+        ):
+            raise QueueServiceError("operation wait timeout is invalid")
+        deadline = None if timeout is None else time.monotonic() + float(timeout)
+        while True:
+            operation = self.operation(operation_id)
+            state = operation.state
+            if operation.kind == "slurm_stage_assignment":
+                if state in {"released", "conflict"}:
+                    return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
+                if deadline is not None and time.monotonic() >= deadline:
+                    return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
+                time.sleep(min(self.config.poll_interval_seconds, 0.05))
+                continue
+            if state not in {
+                "pending_delivery",
+                "applying",
+                "pending",
+                "evidence_confirmed",
+                "decision",
+                "bound",
+            }:
+                return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
+            if deadline is not None and time.monotonic() >= deadline:
+                return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
+            time.sleep(min(self.config.poll_interval_seconds, 0.05))
 
     def wait_admission(
         self, admission_id: str, *, expected_revision: int, timeout: float | None
@@ -1851,14 +2159,9 @@ class LocalDaemon:
                     "SELECT * FROM managed_admissions WHERE admission_id = ?",
                     (admission_id,),
                 ).fetchone()
-                revision = conn.execute(
-                    "SELECT revision FROM owner_status_revisions WHERE owner = 'admission'"
-                ).fetchone()
             if row is None:
                 raise AdmissionNotFoundError("managed admission was not found")
-            if revision is None:
-                raise QueueStorageError("coordinator admission status is unavailable")
-            current = int(revision["revision"])
+            current = _positive_revision(int(row["revision"]))
             if expected_revision > current:
                 raise QueueConflictError(
                     "expected admission revision is ahead of current revision"
@@ -1989,6 +2292,8 @@ class LocalDaemon:
                 self.reconcile_once()
             except Exception:  # keep the durable owner alive and diagnosable
                 self._service_error = "reconciliation_unavailable"
+            else:
+                self._service_error = None
             self._wake.wait(self.config.poll_interval_seconds)
 
     def _submit(self, request: LocalDaemonAdmissionRequest) -> LocalDaemonAdmission:
@@ -2041,9 +2346,9 @@ class LocalDaemon:
                         admission_id, queue_item_id, coordinator_id, run_uri,
                         intent_digest, execution_owner, state, accepted_at,
                         authority_operation_id, run_priority, enqueue_sequence,
-                        cancellation_operation_id,
+                        revision, cancellation_operation_id,
                         blocked_reason
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL)
                     """,
                     (
                         admission_id,
@@ -2090,13 +2395,16 @@ class LocalDaemon:
                 "UPDATE managed_admissions SET state = ?, "
                 "cancellation_operation_id = ?, "
                 "cancellation_principal_id = COALESCE("
-                "cancellation_principal_id, ?), blocked_reason = NULL "
-                "WHERE admission_id = ?",
+                "cancellation_principal_id, ?), blocked_reason = NULL, "
+                "revision = revision + 1 WHERE admission_id = ? AND "
+                "(state != ? OR cancellation_operation_id IS NULL OR "
+                "cancellation_principal_id IS NULL OR blocked_reason IS NOT NULL)",
                 (
                     LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
                     operation_id,
                     principal_id,
                     admission.admission_id,
+                    LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
                 ),
             )
             conn.commit()
@@ -2108,9 +2416,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Commit one scoped control before the outbound agent may observe it."""
 
-        from .agent_sessions import ScopedAuthorizer
-
-        authorizer = ScopedAuthorizer(self._agent_policy)
+        authorizer = self._authorizer()
         authorizer.require_operator(
             principal,
             control.kind.value,
@@ -2215,8 +2521,11 @@ class LocalDaemon:
                         "cancellation_operation_id = COALESCE("
                         "cancellation_operation_id, ?), "
                         "cancellation_principal_id = COALESCE("
-                        "cancellation_principal_id, ?), blocked_reason = NULL "
-                        "WHERE run_uri = ? AND state NOT IN (?, ?, ?)",
+                        "cancellation_principal_id, ?), blocked_reason = NULL, "
+                        "revision = revision + 1 WHERE run_uri = ? AND "
+                        "state NOT IN (?, ?, ?) AND (state != ? OR "
+                        "cancellation_operation_id IS NULL OR "
+                        "cancellation_principal_id IS NULL OR blocked_reason IS NOT NULL)",
                         (
                             LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
                             cancellation_operation_id,
@@ -2225,6 +2534,7 @@ class LocalDaemon:
                             LocalDaemonAdmissionState.SUCCEEDED.value,
                             LocalDaemonAdmissionState.FAILED.value,
                             LocalDaemonAdmissionState.CANCELLED.value,
+                            LocalDaemonAdmissionState.CANCELLATION_REQUESTED.value,
                         ),
                     )
             conn.commit()
@@ -2245,11 +2555,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Install one complete protected coordinator scheduling epoch."""
 
-        from .agent_sessions import ScopedAuthorizer
-
-        ScopedAuthorizer(self._agent_policy).require_operator(
-            principal, "scheduling_reload"
-        )
+        self._authorizer().require_operator(principal, "scheduling_reload")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         with self._cycle_lock:
             replacement_fingerprint: str | None = None
@@ -2277,9 +2583,7 @@ class LocalDaemon:
                         raise QueueStorageError(
                             "scheduling reload intent is incomplete"
                         )
-                    replacement_fingerprint = str(
-                        prior["replacement_fingerprint"]
-                    )
+                    replacement_fingerprint = str(prior["replacement_fingerprint"])
                 if request.expected_scheduling_epoch != self._scheduling_epoch:
                     raise QueueConflictError("scheduling reload epoch is stale")
                 conn.commit()
@@ -2405,9 +2709,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Persist and advance one immutable guarded-recovery saga."""
 
-        from .agent_sessions import ScopedAuthorizer
-
-        authorizer = ScopedAuthorizer(self._agent_policy)
+        authorizer = self._authorizer()
         authorizer.require_operator(principal, "recover_unknown")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -2698,9 +3000,7 @@ class LocalDaemon:
             )
             conn.commit()
 
-    def _pending_scheduling_reload(
-        self, operation_id: str
-    ) -> Mapping[str, PlainData]:
+    def _pending_scheduling_reload(self, operation_id: str) -> Mapping[str, PlainData]:
         with self._connection() as conn:
             row = conn.execute(
                 "SELECT state, result_code, scheduling_epoch, "
@@ -2801,8 +3101,7 @@ class LocalDaemon:
                 or intent is None
                 or str(intent["state"]) != "applying"
                 or str(intent["request_json"]) != str(row["request_json"])
-                or str(intent["replacement_fingerprint"])
-                != configured_fingerprint
+                or str(intent["replacement_fingerprint"]) != configured_fingerprint
             ):
                 raise QueueStorageError("scheduling reload recovery conflicts")
             conn.execute(
@@ -2930,12 +3229,14 @@ class LocalDaemon:
     def _activate_admission(self, admission_id: str) -> None:
         with self._connection() as conn:
             conn.execute(
-                "UPDATE managed_admissions SET state = ?, blocked_reason = NULL "
+                "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
+                "revision = revision + 1 "
                 "WHERE admission_id = ? AND cancellation_operation_id IS NULL "
-                "AND state IN (?, ?, ?)",
+                "AND (state != ? OR blocked_reason IS NOT NULL) AND state IN (?, ?, ?)",
                 (
                     LocalDaemonAdmissionState.ACTIVE.value,
                     admission_id,
+                    LocalDaemonAdmissionState.ACTIVE.value,
                     LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
                     LocalDaemonAdmissionState.WAITING.value,
                     LocalDaemonAdmissionState.ACTIVE.value,
@@ -2972,9 +3273,10 @@ class LocalDaemon:
     ) -> None:
         with self._connection() as conn:
             conn.execute(
-                "UPDATE managed_admissions SET state = ?, blocked_reason = ? "
-                "WHERE admission_id = ?",
-                (state.value, reason, admission_id),
+                "UPDATE managed_admissions SET state = ?, blocked_reason = ?, "
+                "revision = revision + 1 WHERE admission_id = ? AND "
+                "(state != ? OR blocked_reason IS NOT ?)",
+                (state.value, reason, admission_id, state.value, reason),
             )
             conn.commit()
 
@@ -3027,9 +3329,7 @@ class LocalDaemon:
     def _recover_time(
         self, principal: LocalDaemonPrincipal, request: TimeRecoveryRequest
     ) -> TimeRecoveryReceipt:
-        from .agent_sessions import ScopedAuthorizer
-
-        ScopedAuthorizer(self._agent_policy).require_operator(principal, "recover_time")
+        self._authorizer().require_operator(principal, "recover_time")
         encoded = json.dumps(
             request.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
         )
@@ -3038,12 +3338,15 @@ class LocalDaemon:
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 existing = conn.execute(
-                    "SELECT request_digest, result_json FROM time_recoveries "
+                    "SELECT principal_id, request_digest, result_json FROM time_recoveries "
                     "WHERE operation_id = ?",
                     (request.operation_id,),
                 ).fetchone()
                 if existing is not None:
-                    if str(existing["request_digest"]) != digest:
+                    if (
+                        str(existing["principal_id"]) != principal.subject
+                        or str(existing["request_digest"]) != digest
+                    ):
                         raise QueueConflictError(
                             "time recovery operation was reused with different content"
                         )
@@ -3292,6 +3595,26 @@ class LocalDaemonClientView:
     def admission_for_queue_item(self, queue_item_id: str) -> LocalDaemonAdmission:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.admission_for_queue_item(queue_item_id)
+
+    def agents(
+        self, *, limit: int = _MAX_ADMISSION_PAGE_SIZE, cursor: str | None = None
+    ) -> AgentPage:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.agents(limit=limit, cursor=cursor)
+
+    def agent(self, agent_id: str) -> AgentProjection:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.agent(agent_id)
+
+    def operation(self, operation_id: str) -> LocalDaemonOperation:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.operation(operation_id)
+
+    def wait_operation(
+        self, operation_id: str, *, timeout: float | None
+    ) -> OperationWaitResult:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        return self._daemon.wait_operation(operation_id, timeout=timeout)
 
     def wait_admission(
         self, admission_id: str, *, expected_revision: int, timeout: float | None
@@ -3574,14 +3897,6 @@ def _initialize_root(path: Path, *, role: str) -> None:
                 "(epoch TEXT PRIMARY KEY, started_at TEXT NOT NULL)"
             )
             conn.execute(
-                "CREATE TABLE owner_status_revisions "
-                "(owner TEXT PRIMARY KEY, revision INTEGER NOT NULL)"
-            )
-            conn.execute(
-                "INSERT INTO owner_status_revisions(owner, revision) "
-                "VALUES ('admission', 0)"
-            )
-            conn.execute(
                 """
                 CREATE TABLE managed_admissions (
                     admission_id TEXT PRIMARY KEY,
@@ -3593,6 +3908,7 @@ def _initialize_root(path: Path, *, role: str) -> None:
                     state TEXT NOT NULL,
                     accepted_at TEXT NOT NULL,
                     authority_operation_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
                     run_priority INTEGER NOT NULL,
                     enqueue_sequence INTEGER NOT NULL UNIQUE,
                     cancellation_operation_id TEXT,
@@ -3630,18 +3946,6 @@ def _initialize_root(path: Path, *, role: str) -> None:
                 "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
                 "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
                 "result_json TEXT NOT NULL)"
-            )
-            conn.executescript(
-                """
-                CREATE TRIGGER admission_status_revision_insert
-                    AFTER INSERT ON managed_admissions
-                    BEGIN UPDATE owner_status_revisions
-                        SET revision = revision + 1 WHERE owner = 'admission'; END;
-                CREATE TRIGGER admission_status_revision_update
-                    AFTER UPDATE ON managed_admissions
-                    BEGIN UPDATE owner_status_revisions
-                        SET revision = revision + 1 WHERE owner = 'admission'; END;
-                """
             )
         initialize_agent_session_schema(conn, coordinator=role == "coordinator")
         conn.commit()
@@ -3740,6 +4044,7 @@ def _admission_from_row(row: sqlite3.Row) -> LocalDaemonAdmission:
         state=LocalDaemonAdmissionState(str(row["state"])),
         accepted_at=str(row["accepted_at"]),
         authority_operation_id=str(row["authority_operation_id"]),
+        revision=_positive_revision(int(row["revision"])),
         run_priority=_run_priority(int(row["run_priority"])),
         enqueue_sequence=_non_negative_int(
             int(row["enqueue_sequence"]), "enqueue_sequence"
@@ -3767,6 +4072,12 @@ def _required_string(data: Mapping[str, object], field: str) -> str:
     return value
 
 
+def _positive_revision(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise QueueStorageError("admission revision is invalid")
+    return value
+
+
 def _encode_admission_cursor(sequence: int, admission_id: str) -> str:
     """Opaque durable keyset cursor for the admission ordering contract."""
     value = json.dumps(
@@ -3777,6 +4088,135 @@ def _encode_admission_cursor(sequence: int, admission_id: str) -> str:
         + "."
         + value.encode("ascii").hex()
     )
+
+
+def _encode_agent_cursor(agent_id: str) -> str:
+    value = json.dumps(agent_id, separators=(",", ":"), ensure_ascii=True)
+    return (
+        hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+        + "."
+        + value.encode("utf-8").hex()
+    )
+
+
+def _decode_agent_cursor(cursor: str) -> str:
+    if not isinstance(cursor, str) or len(cursor) > 512 or "." not in cursor:
+        raise QueueServiceError("agent cursor is invalid")
+    digest, encoded = cursor.split(".", 1)
+    try:
+        raw = bytes.fromhex(encoded).decode("utf-8")
+        value = json.loads(raw)
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise QueueServiceError("agent cursor is invalid") from exc
+    if hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16] != digest or (
+        not isinstance(value, str) or not value
+    ):
+        raise QueueServiceError("agent cursor is invalid")
+    return value
+
+
+def _agent_projection(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    coordinator_epoch: str | None,
+) -> AgentProjection:
+    pools = json.loads(str(row["pools_json"]))
+    capabilities = json.loads(str(row["capabilities_json"]))
+    if not isinstance(pools, list) or not isinstance(capabilities, list):
+        raise QueueStorageError("agent session projection is invalid")
+    accepted = conn.execute(
+        "SELECT value FROM daemon_metadata WHERE key = 'accepted_time_high_water'"
+    ).fetchone()
+    accepted_at = None if accepted is None else str(accepted["value"])
+    offered = None
+    if (
+        accepted_at is not None
+        and coordinator_epoch is not None
+        and str(row["state"]) == "ACTIVE"
+        and str(row["coordinator_epoch"]) == coordinator_epoch
+    ):
+        offered = conn.execute(
+            "SELECT 1 FROM agent_offers WHERE session_id = ? "
+            "AND availability_revision = ? AND coordinator_epoch = ? "
+            "AND current = 1 AND expires_at >= ? LIMIT 1",
+            (
+                str(row["session_id"]),
+                str(row["availability_revision"]),
+                coordinator_epoch,
+                accepted_at,
+            ),
+        ).fetchone()
+    if not all(isinstance(item, str) and item for item in pools) or not all(
+        isinstance(item, str) and item for item in capabilities
+    ):
+        raise QueueStorageError("agent session projection is invalid")
+    return AgentProjection(
+        agent_id=str(row["agent_id"]),
+        session_id=str(row["session_id"]),
+        state=str(row["state"]),
+        config_revision=str(row["config_revision"]),
+        inventory_revision=str(row["inventory_revision"]),
+        availability_revision=str(row["availability_revision"]),
+        coordinator_epoch=str(row["coordinator_epoch"]),
+        pools=tuple(pools),
+        capabilities=tuple(capabilities),
+        available=offered is not None,
+    )
+
+
+def _operation_projection(
+    conn: sqlite3.Connection, operation_id: str
+) -> LocalDaemonOperation | None:
+    queries = (
+        (
+            "agent_control",
+            "SELECT state, result_code, effect_json FROM agent_controls WHERE operation_id = ?",
+        ),
+        (
+            "scheduling_reload",
+            "SELECT state, result_code, json_object('scheduling_epoch', scheduling_epoch, "
+            "'configuration_revision', configuration_revision, 'replacement_fingerprint', replacement_fingerprint) "
+            "AS effect_json FROM scheduling_reloads WHERE operation_id = ?",
+        ),
+        (
+            "time_recovery",
+            "SELECT 'applied' AS state, NULL AS result_code, result_json AS effect_json FROM time_recoveries WHERE operation_id = ?",
+        ),
+        (
+            "session_replacement",
+            "SELECT state, NULL AS result_code, result_json AS effect_json FROM session_replacements WHERE operation_id = ?",
+        ),
+        (
+            "recovery",
+            "SELECT state, NULL AS result_code, result_json AS effect_json FROM recovery_operations WHERE recovery_id = ?",
+        ),
+    )
+    matches: list[LocalDaemonOperation] = []
+    for kind, query in queries:
+        row = conn.execute(query, (operation_id,)).fetchone()
+        if row is None:
+            continue
+        result: PlainData | None = None
+        encoded = row["effect_json"]
+        if encoded is not None:
+            try:
+                decoded = json.loads(str(encoded))
+                result = freeze_plain_data(decoded, path="operation result")
+            except (json.JSONDecodeError, QueueServiceError) as exc:
+                raise QueueStorageError("operation result is invalid") from exc
+        matches.append(
+            LocalDaemonOperation(
+                operation_id=operation_id,
+                kind=kind,
+                state=str(row["state"]),
+                code=(None if row["result_code"] is None else str(row["result_code"])),
+                result=result,
+            )
+        )
+    if len(matches) > 1:
+        raise QueueConflictError("managed operation identity is ambiguous")
+    return matches[0] if matches else None
 
 
 def _decode_admission_cursor(cursor: str) -> tuple[int, str]:
@@ -3889,9 +4329,10 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
 
 
 def _scheduling_reload_epoch(operation_id: str, fingerprint: str) -> str:
-    return "scheduling-epoch-" + hashlib.sha256(
-        (operation_id + "\0" + fingerprint).encode()
-    ).hexdigest()
+    return (
+        "scheduling-epoch-"
+        + hashlib.sha256((operation_id + "\0" + fingerprint).encode()).hexdigest()
+    )
 
 
 def _scheduling_reload_receipt(

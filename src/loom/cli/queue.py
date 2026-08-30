@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 import time
 from pathlib import Path
@@ -44,7 +45,7 @@ QUEUE_STATUS_SCHEMA_VERSION = "loom.cli.queue.status.v1"
 QUEUE_CANCEL_SCHEMA_VERSION = "loom.cli.queue.cancel.v1"
 QUEUE_DRAIN_SCHEMA_VERSION = "loom.cli.queue.drain.v1"
 QUEUE_SLURM_DRIVE_SCHEMA_VERSION = "loom.cli.queue.slurm-drive.v1"
-LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v4"
+LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v5"
 _AGENT_RELOAD_RECEIPT_WAIT_SECONDS = 10.0
 _AGENT_RELOAD_RECEIPT_POLL_SECONDS = 0.05
 
@@ -220,6 +221,55 @@ def register_subparser(
             daemon_client.add_argument("--timeout", type=float, default=None)
         _add_output_options(daemon_client)
         daemon_client.set_defaults(handler=handler)
+
+    admissions = queue_subparsers.add_parser(
+        "daemon-admissions", help="list bounded managed admissions"
+    )
+    admissions.add_argument("--endpoint", required=True, type=Path)
+    admissions.add_argument("--limit", type=int, default=100)
+    admissions.add_argument("--cursor")
+    admissions.set_defaults(handler=handle_daemon_admissions)
+    _add_output_options(admissions)
+
+    admission = queue_subparsers.add_parser(
+        "daemon-admission", help="inspect one managed admission"
+    )
+    admission.add_argument("--endpoint", required=True, type=Path)
+    admission.add_argument("admission_id")
+    admission.set_defaults(handler=handle_daemon_admission)
+    _add_output_options(admission)
+
+    agents = queue_subparsers.add_parser("daemon-agents", help="list bounded agents")
+    agents.add_argument("--endpoint", required=True, type=Path)
+    agents.add_argument("--limit", type=int, default=100)
+    agents.add_argument("--cursor")
+    agents.set_defaults(handler=handle_daemon_agents)
+    _add_output_options(agents)
+
+    agent = queue_subparsers.add_parser(
+        "daemon-agent", help="inspect one managed agent"
+    )
+    agent.add_argument("--endpoint", required=True, type=Path)
+    agent.add_argument("agent_id")
+    agent.set_defaults(handler=handle_daemon_agent)
+    _add_output_options(agent)
+
+    operation = queue_subparsers.add_parser(
+        "daemon-operation", help="inspect one durable operation"
+    )
+    operation.add_argument("--endpoint", required=True, type=Path)
+    operation.add_argument("operation_id")
+    operation.set_defaults(handler=handle_daemon_operation)
+    _add_output_options(operation)
+
+    operation_wait = queue_subparsers.add_parser(
+        "daemon-operation-wait", help="wait for one durable operation"
+    )
+    operation_wait.add_argument("--endpoint", required=True, type=Path)
+    operation_wait.add_argument("operation_id")
+    operation_wait.add_argument("--timeout", type=float, default=None)
+    operation_wait.set_defaults(handler=handle_daemon_operation_wait)
+    _add_output_options(operation_wait)
 
     for kind in ("drain", "resume", "reload"):
         control = queue_subparsers.add_parser(
@@ -560,7 +610,19 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
         run_outbound_agent_service,
     )
 
+    stop = Event()
+    handled_signals = (signal.SIGINT, signal.SIGTERM)
+    previous_handlers = {
+        handled_signal: signal.getsignal(handled_signal)
+        for handled_signal in handled_signals
+    }
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop.set()
+
     try:
+        for handled_signal in handled_signals:
+            signal.signal(handled_signal, request_stop)
         service = load_outbound_agent_service_config(namespace.config)
         _emit_daemon_payload(
             namespace,
@@ -572,13 +634,16 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
         )
         run_outbound_agent_service(
             service,
-            stop=Event(),
+            stop=stop,
             trusted_config_loader=lambda: load_outbound_agent_service_config(
                 service.source_path
             ),
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
+    finally:
+        for handled_signal, previous_handler in previous_handlers.items():
+            signal.signal(handled_signal, previous_handler)
     return int(ExitCode.SUCCESS)
 
 
@@ -599,6 +664,76 @@ def handle_daemon_status(namespace: argparse.Namespace) -> int:
 
     try:
         result = LocalDaemonSocketClient(namespace.endpoint).status()
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_admissions(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).admissions(
+            limit=namespace.limit, cursor=namespace.cursor
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_admission(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).admission(
+            namespace.admission_id
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_agents(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).agents(
+            limit=namespace.limit, cursor=namespace.cursor
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_agent(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).agent(namespace.agent_id)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_operation(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).operation(
+            namespace.operation_id
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result.to_dict())
+
+
+def handle_daemon_operation_wait(namespace: argparse.Namespace) -> int:
+    from loom.queue import LocalDaemonSocketClient
+
+    try:
+        result = LocalDaemonSocketClient(namespace.endpoint).wait_operation(
+            namespace.operation_id, timeout_seconds=namespace.timeout
+        )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
@@ -658,10 +793,7 @@ def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
     return (
         int(ExitCode.PIPELINE)
         if result.get("code") == "reload_rejected"
-        or (
-            namespace.agent_control == "reload"
-            and result.get("state") != "applied"
-        )
+        or (namespace.agent_control == "reload" and result.get("state") != "applied")
         else exit_code
     )
 
@@ -682,8 +814,7 @@ def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
     exit_code = _emit_daemon_payload(namespace, result)
     return (
         int(ExitCode.PIPELINE)
-        if result.get("code") == "reload_rejected"
-        or result.get("state") != "applied"
+        if result.get("code") == "reload_rejected" or result.get("state") != "applied"
         else exit_code
     )
 
@@ -1047,10 +1178,16 @@ __all__ = [
     "handle_drain_foreground",
     "handle_drive_slurm_foreground",
     "handle_daemon_cancel",
+    "handle_daemon_admission",
+    "handle_daemon_admissions",
+    "handle_daemon_agent",
+    "handle_daemon_agents",
     "handle_daemon_agent_control",
     "handle_daemon_init",
     "handle_daemon_serve",
     "handle_daemon_status",
+    "handle_daemon_operation",
+    "handle_daemon_operation_wait",
     "handle_daemon_scheduling_reload",
     "handle_daemon_time_recover",
     "handle_daemon_replace_agent_session",

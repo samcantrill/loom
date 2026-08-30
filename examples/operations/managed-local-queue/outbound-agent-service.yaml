@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 kind: loom.outbound-agent-service
 agent_root: .state/outbound-agent
 url: https://localhost:8443

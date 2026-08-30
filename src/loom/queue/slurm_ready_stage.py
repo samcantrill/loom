@@ -912,6 +912,17 @@ class SQLiteSlurmStageAssignments:
                 raise QueueConflictError("SLURM operation is not retained")
             return self._record(row)
 
+    def find_operation(self, operation_id: str) -> SlurmStageRecord | None:
+        """Return one exact retained operation without weakening store failures."""
+
+        with _connect(self.path, require_existing=True) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            return None if row is None else self._record(row)
+
     def list_run_unreleased(self, run_uri: str) -> tuple[SlurmStageRecord, ...]:
         with _connect(self.path, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row

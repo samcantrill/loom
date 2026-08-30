@@ -44,6 +44,8 @@ from loom.queue.agent_sessions import (
     AgentSessionState,
     AgentStalePollError,
     SessionReplacementRequest,
+    LocalOwnerOperatorPolicy,
+    ScopedAuthorizer,
     TransportPrincipalPolicy,
     _REPLACEMENT_ASSIGNMENT_REFERENCE_CLASSES,
     _build_replacement_projection,
@@ -64,6 +66,38 @@ _TEST_RETIREMENT_SECRET = "01" * 32
 _TEST_RETIREMENT_VERIFIER = hashlib.sha256(
     bytes.fromhex(_TEST_RETIREMENT_SECRET)
 ).hexdigest()
+
+
+def test_local_owner_scope_uses_verified_owner_subject_not_process_uid() -> None:
+    policy = AgentPolicyConfig(
+        local_owner=LocalOwnerOperatorPolicy(
+            actions=("drain",), agent_ids=("agent-a",), pools=("default",)
+        )
+    )
+    owner = LocalDaemonPrincipal("uid:verified-owner", LocalDaemonRole.OPERATOR)
+    authorizer = ScopedAuthorizer(
+        policy, verified_local_owner_subject="uid:verified-owner"
+    )
+    authorizer.require_operator(owner, "drain", agent_id="agent-a", pool="default")
+    with pytest.raises(QueueServiceError, match="not authorized"):
+        ScopedAuthorizer(
+            policy, verified_local_owner_subject="uid:some-other-owner"
+        ).require_operator(owner, "drain", agent_id="agent-a", pool="default")
+    with pytest.raises(QueueServiceError, match="not authorized"):
+        authorizer.require_operator(owner, "drain", agent_id="agent-b", pool="default")
+    with pytest.raises(QueueServiceError, match="not authorized"):
+        authorizer.require_operator(owner, "drain", agent_id="agent-a", pool="other")
+    with pytest.raises(QueueServiceError, match="not authorized"):
+        authorizer.require_operator(
+            LocalDaemonPrincipal(
+                "uid:verified-owner",
+                LocalDaemonRole.OPERATOR,
+                "remote-certificate",
+            ),
+            "drain",
+            agent_id="agent-a",
+            pool="default",
+        )
 
 
 def _replacement_projection_connection() -> sqlite3.Connection:

@@ -1297,6 +1297,53 @@ class LocalDaemonExecution:
         except AgentProcessSupervisorError as exc:
             raise QueueConflictError(str(exc)) from exc
 
+    def operation_projection(
+        self, operation_id: str
+    ) -> dict[str, str | PlainData | None] | None:
+        """Project one ready-stage assignment through its owning execution seam.
+
+        The daemon management owner deliberately does not read the ready-stage
+        stores itself. This narrow projection preserves the execution owner's
+        schema and retention boundary while exposing the assignment lifecycle
+        that owns the public operation ID.
+        """
+
+        retained = self.slurm_assignments.find_operation(operation_id)
+        if retained is None:
+            return None
+        submission = self.slurm_submissions.find(operation_id)
+        if submission is None:
+            raise QueueServiceError("SLURM submission operation is unavailable")
+        result: dict[str, PlainData] = {
+            "assignment_id": retained.assignment.assignment_id,
+            "run_uri": retained.assignment.run_uri,
+            "stage_work_id": retained.assignment.stage_work_id,
+            "stage_name": retained.delivery.stage_name,
+            "profile_id": retained.assignment.profile_id,
+            "request_digest": retained.assignment.request_digest,
+            "job_id": submission.job_id,
+            "cluster": submission.cluster,
+            "submission_state": submission.state.value,
+            "submission_evidence": submission.evidence,
+            "scheduler_state": submission.scheduler_state,
+            "scheduler_source": submission.scheduler_source,
+            "scheduler_observed_at": submission.scheduler_observed_at,
+            "cancel_requested": submission.cancel_requested,
+            "start_consumed": submission.start_consumed,
+            "bootstrap_registered": retained.bootstrap_incarnation is not None,
+            "input_ready": retained.input_ready,
+            "fence_bound": retained.fence is not None,
+            "process_execution_id": retained.process_execution_id,
+            "loom_result_status": (
+                None if retained.report is None else retained.report.status.value
+            ),
+        }
+        return {
+            "state": retained.state,
+            "code": submission.evidence,
+            "result": freeze_plain_data(result, path="SLURM operation result"),
+        }
+
     def begin_cycle(self) -> None:
         """Observe completed exact assignment work before scheduling again."""
 
@@ -3966,6 +4013,7 @@ class LocalDaemonExecution:
     ) -> dict[str, tuple[Candidate, _RemoteCandidateTarget]]:
         if not self.config.remote_profiles:
             return {}
+        accepted_time, _snapshot_time = self._daemon_owner()._accepted_snapshot()
         configured = {
             profile.profile_id: profile for profile in self.config.remote_profiles
         }
@@ -3985,13 +4033,9 @@ class LocalDaemonExecution:
                     (self.coordinator_epoch, self.coordinator_epoch),
                 )
             )
-            accepted_row = conn.execute(
-                "SELECT value FROM daemon_metadata WHERE key = 'accepted_time'"
-            ).fetchone()
-            accepted_time = "" if accepted_row is None else str(accepted_row[0])
         targets: dict[str, tuple[Candidate, _RemoteCandidateTarget]] = {}
         for row in rows:
-            if accepted_time and str(row["expires_at"]) < accepted_time:
+            if str(row["expires_at"]) < accepted_time:
                 continue
             offer = AgentOffer.from_value(json.loads(str(row["offer_json"])))
             matching = tuple(

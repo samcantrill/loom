@@ -172,6 +172,19 @@ def embedded_coordinator_authority(run_uri: str):
     return authority
 
 
+def initialize_embedded_coordinator_authority(run_uri: str) -> None:
+    """Create the embedded authority record for one prepared managed run.
+
+    Project setup code uses this boundary before daemon admission. Runtime
+    execution continues to receive only the narrow coordinator-authority
+    adapter and never constructs or reaches into the concrete store.
+    """
+
+    from .sqlite_authority import SQLitePerRunAuthorityStore
+
+    SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=RunStatus.RUNNING)
+
+
 def authenticated_coordinator_authority_factory(
     client: AuthorityClient,
     *,
@@ -825,5 +838,6 @@ __all__ = [
     "CoordinatorAuthorityTlsConfig",
     "authenticated_coordinator_authority_factory",
     "embedded_coordinator_authority",
+    "initialize_embedded_coordinator_authority",
     "https_coordinator_authority_factory",
 ]

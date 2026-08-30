@@ -2,17 +2,24 @@
 
 ## Metadata
 
-- Status: planned
+- Status: approved
 - Roadmap stage and phase: Stage 29, Phase 15
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p15-management-cli-examples`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees/stage-29-p15-management-cli-examples`
-- Base revision: current `origin/develop` after Phase 14 merges
+- Base revision: `c4e3f6c` (`origin/develop` after Phase 14 merge metadata)
 - PR target: `develop`
 - PR title: `Stage 29 phase 15: complete management and examples`
 - Dependencies: remotely merged Phase 14
 - Workflow path: expanded; public CLI, concurrent IPC, and claimed example coverage
-- Blockers: none
+- Blockers: correction 1/3 fixed the initial management implementation. The
+  required independent review then confirmed four reachable blockers: current-
+  agent selection is ambiguous when replacement sessions share a timestamp;
+  ready-stage SLURM operation IDs are absent from public operation detail/wait;
+  public admission waits longer than the server slice return too early; and all
+  three `validation: full` journeys overclaim the product surfaces they invoke.
+  One bounded refiner correction (2/3) is in progress for this tight management-
+  and-evidence cluster.
 
 ## Objective And Context
 
@@ -180,22 +187,40 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planned at evidence revision `2f8dfd9`
-- Expanded planning: design-safety findings on supervisor epoch references and long-poll saturation were corrected; bounded plan review passed after narrowing Phase 14 CLI failure semantics
-- Implementation: pending
-- Refiner: not needed
-- Pre-submit gate: pending
-- Independent review: required for concurrent IPC and broad public example claims
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Manager preparation: complete in the dedicated worktree at base `c4e3f6c`;
+  current source and harness paths remain accurate
+- Expanded planning: no phase-planner pass needed; the approved expanded design-
+  safety and bounded plan-review findings already fixed supervisor epoch
+  references, long-poll saturation, and Phase 14 CLI scope
+- Implementation: complete at final reviewed tree `9c87de5`. The implementation
+  owns per-admission revisions, bounded renewable waits, bounded agent and
+  operation reads, verified local-owner scopes, accepted-time recovery fixes,
+  and three executable management journeys.
+- Refiner: complete. Correction 2/3 closed same-timestamp agent selection,
+  accepted-time offer availability, execution-owned SLURM operation projection,
+  and public wait renewal. Manager correction 3/3 then replaced all example
+  shortcuts, completed FR-43 evidence, fixed remote shutdown, and made manifest
+  claims exact.
+- Pre-submit gate: passed. `make validate-pr` passed at source/test revision
+  `76d770d`; the later documentation-only correction `9c87de5` passed all 29
+  documentation/example checks and does not stale that receipt. A fresh
+  `make test-summary` at `9c87de5` records 2,929 passes and 3 expected skips.
+- Independent review: complete. Every blocker reported against `92c248c` is
+  closed, including current-agent selection, ready-stage SLURM operations,
+  truthful public-surface examples, accepted-time and service-health evidence,
+  stale catalog IDs, and process cleanup. Final manager review found no blocker.
+- Blocker corrections: 3/3 complete
+- PR and merge: [#266](https://github.com/samcantrill/loom/pull/266) is open,
+  correctly targets `develop`, is not draft, is mergeable, and passed final
+  manager review at PR head `71b25a0`; automatic squash merge is approved
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | `src/loom/queue/local_daemon.py`, `local_daemon_transport.py`, `local_daemon_execution.py`, `agent_sessions.py`, `deployment.py`, and `slurm_ready_stage.py` own the lifecycle, bounded-read/wait, authorization, and SLURM projections. `src/loom/cli/queue.py` and intentional queue exports own CLI/public access. Three `examples/operations/managed-*` journeys, their exact manifests, and queue documentation own the supported examples. |
+| Tests added or updated | Causal admission A/B/no-op revisions; saturated long-poll status/control/stop; bounded agent/detail/operation reads; same-timestamp replacement and expiry; local-owner and remote-credential negatives; accepted-time/service-health/replay; SLURM rejection/restart/result/release; exact manifest-to-invocation and PID cleanup. |
+| Validated revision/tree state and evidence | Focused gates: 323 queue/CLI unit tests, 169 queue integration/E2E tests, 3 combined journey E2Es, 29 documentation/example checks, and the outbound reload lifecycle E2E passed. `make validate-pr` passed Ruff, zero-finding Pyright, 2,772 default tests, 157 configuration-extra tests with 3 expected skips, and both builds. Fresh `make test-summary` records 2,929 passed, 3 skipped, and zero failures/errors. |
+| Validation-relevant changes after evidence | Only this workflow record changes after the fresh validation and summary evidence; no source, test, dependency, build, or validation configuration changed. |
+| PR, review, and merge | [#266](https://github.com/samcantrill/loom/pull/266) is open against `develop`, is not draft, and is mergeable. Required independent review and final PR-head manager review passed with no blocker; automatic squash merge is approved. |
+| Residual risk and cleanup | No known phase blocker. Real site CA/prolog and production SLURM smoke validation remain intentionally opt-in; default validation uses generated localhost certificates and the deterministic fake scheduler gateway. Exact stale Phase 14 test supervisors were terminated; phase worktree/branch cleanup waits for merge. |

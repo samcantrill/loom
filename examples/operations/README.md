@@ -27,6 +27,8 @@ workflows.
 | `operations.cleanup-and-gc` | Preview and explicitly delete registered temporary candidates while preserving runs and committed outputs. |
 | `operations.slurm-live-jobs` | Manual scheduler-aware status and cancellation commands for a real submitted SLURM run. |
 | `operations.service-less-slurm-driving` | Bounded foreground submission of prepared whole runs on a shared SLURM filesystem. |
+| `operations.managed-remote-operations` | Authenticated remote discovery and exact guarded control fences. |
+| `operations.managed-ready-stage-slurm` | Explicit ready-stage SLURM operation lifecycle using the deterministic fake gateway. |
 
 ## Public Python API Workflows
 
@@ -34,7 +36,7 @@ workflows.
 | --- | --- |
 | `operations.captured-logs` | Captured local stdout/stderr, explicit file-backed output registration, and a separate workspace file. |
 | `operations.resource-leases` | Public authority-backed resource-limit and resource-lease coordination through the Python API. |
-| `operations.managed-local-queue` | Three local commands over two generic static slots with redacted pool status and separate logs. |
+| `operations.managed-local-basic` | Embedded managed-local lifecycle with terminal admission and supervisor cleanup. |
 
 ## Representative End-to-End Evidence
 
@@ -54,7 +56,9 @@ uv run python examples/operations/resource-leases/run_resource_leases.py
 uv run python examples/operations/offline-import-rejections/run_offline_import_rejections.py
 uv run python examples/operations/run-catalog-and-bundles/run_catalog_workflow.py
 uv run python examples/operations/cleanup-and-gc/run_cleanup_and_gc.py
-uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
+uv run python examples/operations/managed-local-basic/run_managed_local_basic.py
+uv run python examples/operations/managed-remote-operations/run_managed_remote_operations.py
+uv run python examples/operations/managed-ready-stage-slurm/run_managed_ready_stage_slurm.py
 uv run python examples/operations/service-less-slurm-driving/run_service_less_slurm.py
 ```
 
@@ -82,8 +86,12 @@ The following `validation: full` examples are supported by focused integration t
   `tests/integration/examples/test_example_workflows.py::test_example_run_catalog_and_bundles_compares_and_preserves_payload`
 - `operations.cleanup-and-gc`:
   `tests/integration/examples/test_example_workflows.py::test_example_cleanup_and_gc_is_preview_first_and_candidate_only`
-- `operations.managed-local-queue`:
-  `tests/e2e/test_queue_cli.py::test_managed_local_queue_example_is_rerunnable`
+- `operations.managed-local-basic`:
+  `tests/e2e/test_queue_cli.py::test_managed_local_basic_manifest_claims_match_journey`
+- `operations.managed-remote-operations`:
+  `tests/e2e/test_queue_cli.py::test_managed_remote_operations_manifest_claims_match_journey`
+- `operations.managed-ready-stage-slurm`:
+  `tests/e2e/test_queue_cli.py::test_managed_ready_stage_slurm_manifest_claims_match_journey`
 - `operations.service-less-slurm-driving`:
   `tests/e2e/test_example_journeys.py::test_e2e_example_service_less_slurm_reopens_without_a_service`
 
