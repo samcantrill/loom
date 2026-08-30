@@ -38,6 +38,7 @@ from .agent_sessions import (
     AgentPolicyConfig,
     AgentPrincipalPolicy,
     AgentRegistration,
+    LocalOwnerOperatorPolicy,
     TransportPrincipalPolicy,
 )
 from .errors import QueueConfigError, QueueConflictError, QueueError, QueueServiceError
@@ -164,7 +165,9 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
         agent_resource_providers=cast(Any, embedded_providers),
         slurm_profiles=cast(Any, slurm_profiles),
     )
-    return CoordinatorServiceConfig(daemon, server, source, fingerprint, active_fingerprint)
+    return CoordinatorServiceConfig(
+        daemon, server, source, fingerprint, active_fingerprint
+    )
 
 
 def load_outbound_agent_service_config(
@@ -377,9 +380,7 @@ def run_outbound_agent_service(
                     capacity_profile=profile,
                 )
                 gpu_atoms = tuple(
-                    atom
-                    for atom in capacity_atoms
-                    if atom.owner_resource_kind == "gpu"
+                    atom for atom in capacity_atoms if atom.owner_resource_kind == "gpu"
                 )
                 offer = AgentOffer(
                     session.session_id,
@@ -526,7 +527,9 @@ def _canonical_fingerprint(value: Mapping[str, object]) -> str:
     """Fingerprint only inert authored values, never source paths or objects."""
 
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
     ).hexdigest()
 
 
@@ -641,18 +644,12 @@ def _scheduling_composition(
         {"planners", "hard_evaluators", "preference_scorers", "policy"},
         "scheduling components",
     )
-    planners = _target_sequence(
-        components["planners"], "scheduling planners"
-    )
-    hard = _target_sequence(
-        components["hard_evaluators"], "scheduling hard evaluators"
-    )
+    planners = _target_sequence(components["planners"], "scheduling planners")
+    hard = _target_sequence(components["hard_evaluators"], "scheduling hard evaluators")
     preferences = _target_sequence(
         components["preference_scorers"], "scheduling preference scorers"
     )
-    policy = _trusted_target(
-        _mapping(components, "policy"), "scheduling policy"
-    )
+    policy = _trusted_target(_mapping(components, "policy"), "scheduling policy")
     resolver = _trusted_target(
         _mapping(mapping, "priority_resolver"), "priority resolver"
     )
@@ -729,9 +726,7 @@ def _slurm_profile_composition(value: object) -> tuple[object, ...]:
         if "_target_" in mapping:
             target = _trusted_target(mapping, label)
             if not isinstance(target, SlurmReadyStageProfile):
-                raise QueueConfigError(
-                    f"{label} target is not a ready-stage profile"
-                )
+                raise QueueConfigError(f"{label} target is not a ready-stage profile")
             profiles.append(target)
             continue
         _required_allowed(mapping, required, optional, label)
@@ -759,10 +754,14 @@ def _coordinator_immutable_projection(
     profile = _mapping(embedded, "descriptor")
     server = payload.get("agent_server")
     server_mapping = None if server is None else _mapping_value(server, "agent_server")
-    server_identity = None if server_mapping is None else {
-        "host": server_mapping.get("host"),
-        "port": server_mapping.get("port"),
-    }
+    server_identity = (
+        None
+        if server_mapping is None
+        else {
+            "host": server_mapping.get("host"),
+            "port": server_mapping.get("port"),
+        }
+    )
     return {
         "schema_version": payload["schema_version"],
         "kind": payload["kind"],
@@ -810,7 +809,9 @@ def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, o
         _without_paths(
             {
                 "poll_interval_seconds": payload["poll_interval_seconds"],
-                "max_accepted_time_step_seconds": payload["max_accepted_time_step_seconds"],
+                "max_accepted_time_step_seconds": payload[
+                    "max_accepted_time_step_seconds"
+                ],
                 "embedded_capacity": {
                     "cpu_capacity": embedded["cpu_capacity"],
                     "memory_capacity_bytes": embedded["memory_capacity_bytes"],
@@ -929,7 +930,9 @@ def _profile_descriptor(value: Mapping[str, object]) -> ResidentProfileDescripto
 
 
 def _agent_policy(value: Mapping[str, object]) -> AgentPolicyConfig:
-    _exact(value, {"revision", "agents", "principals"}, "agent_policy")
+    _required_allowed(
+        value, {"revision", "agents", "principals"}, {"local_owner"}, "agent_policy"
+    )
     agents: list[AgentPrincipalPolicy] = []
     for index, item in enumerate(_sequence(value, "agents")):
         agent = _mapping_value(item, f"agent_policy.agents[{index}]")
@@ -978,10 +981,21 @@ def _agent_policy(value: Mapping[str, object]) -> AgentPolicyConfig:
                 _strings(principal, "pools"),
             )
         )
+    local_owner_value = value.get("local_owner")
+    local_owner = None
+    if local_owner_value is not None:
+        scope = _mapping_value(local_owner_value, "agent_policy.local_owner")
+        _exact(scope, {"actions", "agent_ids", "pools"}, "agent_policy.local_owner")
+        local_owner = LocalOwnerOperatorPolicy(
+            _strings(scope, "actions", non_empty=True),
+            _strings(scope, "agent_ids"),
+            _strings(scope, "pools"),
+        )
     return AgentPolicyConfig(
         revision=_string(value, "revision"),
         agents=tuple(agents),
         principals=tuple(principals),
+        local_owner=local_owner,
     )
 
 

@@ -3966,6 +3966,7 @@ class LocalDaemonExecution:
     ) -> dict[str, tuple[Candidate, _RemoteCandidateTarget]]:
         if not self.config.remote_profiles:
             return {}
+        accepted_time, _snapshot_time = self._daemon_owner()._accepted_snapshot()
         configured = {
             profile.profile_id: profile for profile in self.config.remote_profiles
         }
@@ -3985,13 +3986,9 @@ class LocalDaemonExecution:
                     (self.coordinator_epoch, self.coordinator_epoch),
                 )
             )
-            accepted_row = conn.execute(
-                "SELECT value FROM daemon_metadata WHERE key = 'accepted_time'"
-            ).fetchone()
-            accepted_time = "" if accepted_row is None else str(accepted_row[0])
         targets: dict[str, tuple[Candidate, _RemoteCandidateTarget]] = {}
         for row in rows:
-            if accepted_time and str(row["expires_at"]) < accepted_time:
+            if str(row["expires_at"]) < accepted_time:
                 continue
             offer = AgentOffer.from_value(json.loads(str(row["offer_json"])))
             matching = tuple(

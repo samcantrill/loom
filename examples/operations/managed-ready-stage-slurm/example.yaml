@@ -1,0 +1,18 @@
+id: operations.managed-ready-stage-slurm
+title: Managed Ready-Stage SLURM
+summary: Exercise explicit ready-stage SLURM rejection, restart, result, and release handling.
+capability: operations
+level: advanced
+introduced_in: v29
+status: runnable
+validation: full
+surface: cli
+public_surfaces: [cli]
+owner_docs: [examples/operations/README.md, docs/features/queue.md]
+owner_stages: [v29]
+validation_path: tests/e2e/test_queue_cli.py::test_managed_ready_stage_slurm_manifest_claims_match_journey
+entrypoints:
+  - path: run_managed_ready_stage_slurm.py
+    kind: python
+    description: Print the explicit ready-stage SLURM journey entry point.
+tags: [queue, slurm, ready-stage, operations]

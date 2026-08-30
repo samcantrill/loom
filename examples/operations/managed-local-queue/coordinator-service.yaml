@@ -41,6 +41,10 @@ agent_policy:
         - regular-file-relay-v1
       gpu_devices: []
   principals: []
+  local_owner:
+    actions: [drain, resume, reload, cancel_active, scheduling_reload, recover_unknown, recover_time, replace_session]
+    agent_ids: [machine-B]
+    pools: [default]
 
 agent_server:
   host: 127.0.0.1

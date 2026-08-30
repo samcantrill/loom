@@ -642,6 +642,7 @@ def _daemon_status(
         running_assignments=0,
         accepted_time_health="healthy",
         accepted_time_diagnostic=None,
+        accepted_time_revision=1,
     )
 
 

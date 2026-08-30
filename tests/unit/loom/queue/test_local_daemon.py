@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 from shutil import copyfile
@@ -200,9 +201,10 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
     assert direct_detail.admission.admission_id == "admission-b"
     assert direct_detail.authority["availability"] == "unavailable"
     assert direct_detail.owners["queue_item_id"] == "item-1"
-    assert cast(Mapping[str, object], direct_detail.owners["assignment"])[
-        "owner"
-    ] == "coordinator-assignments"
+    assert (
+        cast(Mapping[str, object], direct_detail.owners["assignment"])["owner"]
+        == "coordinator-assignments"
+    )
     server = LocalDaemonSocketServer(daemon, config.endpoint)
     server.start()
     try:
@@ -215,9 +217,10 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
         server.stop()
     assert socket_detail.admission == direct_detail.admission
     assert socket_detail.authority["availability"] == "unavailable"
-    assert cast(Mapping[str, object], socket_detail.owners["assignment"])[
-        "owner"
-    ] == "coordinator-assignments"
+    assert (
+        cast(Mapping[str, object], socket_detail.owners["assignment"])["owner"]
+        == "coordinator-assignments"
+    )
     with pytest.raises(AdmissionNotFoundError):
         daemon.admission("missing-admission")
 
@@ -248,6 +251,96 @@ def test_admission_wait_observes_revision_without_status_history(
         daemon.wait_admission(
             "admission-1", expected_revision=changed.revision + 1, timeout=0
         )
+
+
+def test_admission_revision_is_targeted_and_noop_writes_are_isolated(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    with sqlite3.connect(config.control_database) as conn:
+        daemon._coordinator_id = conn.execute(
+            "SELECT value FROM root_metadata WHERE key = 'stable_id'"
+        ).fetchone()[0]
+    for admission_id, queue_item_id in (
+        ("admission-a", "item-a"),
+        ("admission-b", "item-b"),
+    ):
+        with daemon._connection() as conn:
+            conn.execute(
+                "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, enqueue_sequence, cancellation_operation_id, blocked_reason) VALUES (?, ?, ?, ?, 'digest', 'managed-stage', 'ACTIVE', '2026-01-01T00:00:00Z', ?, 0, ?, NULL, NULL)",
+                (
+                    admission_id,
+                    queue_item_id,
+                    daemon._coordinator_id,
+                    f"file:///{queue_item_id}",
+                    f"operation-{queue_item_id}",
+                    1 if admission_id == "admission-a" else 2,
+                ),
+            )
+            conn.commit()
+    first = daemon.admission_for_queue_item("item-a")
+    daemon._set_state(
+        "admission-b", LocalDaemonAdmissionState.WAITING, reason="capacity"
+    )  # noqa: SLF001
+    assert (
+        daemon.wait_admission(
+            "admission-a", expected_revision=first.revision, timeout=0
+        ).kind.value
+        == "TIMEOUT"
+    )
+    daemon._set_state(
+        "admission-a", LocalDaemonAdmissionState.WAITING, reason="capacity"
+    )  # noqa: SLF001
+    changed = daemon.wait_admission(
+        "admission-a", expected_revision=first.revision, timeout=0
+    )
+    assert changed.kind.value == "CHANGED"
+    assert changed.revision == first.revision + 1
+    daemon._set_state(
+        "admission-a", LocalDaemonAdmissionState.WAITING, reason="capacity"
+    )  # noqa: SLF001
+    assert (
+        daemon.wait_admission(
+            "admission-a", expected_revision=changed.revision, timeout=0
+        ).kind.value
+        == "TIMEOUT"
+    )
+
+
+def test_socket_wait_saturation_reserves_status_capacity(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    with daemon._connection() as conn:
+        conn.execute(
+            "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, enqueue_sequence, cancellation_operation_id, blocked_reason) VALUES ('saturated-admission', 'saturated-item', ?, 'file:///saturated', 'digest', 'managed-stage', 'ACTIVE', '2026-01-01T00:00:00Z', 'saturated-operation', 0, 1, NULL, NULL)",
+            (daemon._coordinator_id,),
+        )
+        conn.commit()
+    server = LocalDaemonSocketServer(daemon, config.endpoint)
+    server.start()
+    try:
+        client = LocalDaemonSocketClient(config.endpoint)
+        with ThreadPoolExecutor(max_workers=7) as workers:
+            waits = [
+                workers.submit(
+                    client.wait_admission,
+                    "saturated-admission",
+                    expected_revision=1,
+                    timeout=2,
+                )
+                for _ in range(7)
+            ]
+            # Every admitted long poll has a bounded server wait; status still
+            # has its reserved worker rather than waiting for a poll to finish.
+            assert client.status().coordinator_id == daemon.status().coordinator_id
+            assert all(wait.result(timeout=2).kind.value == "TIMEOUT" for wait in waits)
+    finally:
+        server.stop()
+        daemon.stop()
 
 
 def test_recovery_persists_exact_evidence_before_close_and_replays_it(

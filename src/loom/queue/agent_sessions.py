@@ -14,6 +14,7 @@ from functools import wraps
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -456,6 +457,7 @@ class AgentPolicyConfig:
     revision: str = "policy-1"
     agents: tuple[AgentPrincipalPolicy, ...] = ()
     principals: tuple[TransportPrincipalPolicy, ...] = ()
+    local_owner: "LocalOwnerOperatorPolicy | None" = None
 
     def __post_init__(self) -> None:
         _identifier(self.revision, "policy revision")
@@ -481,6 +483,39 @@ class AgentPolicyConfig:
                 raise QueueServiceError(
                     "one stable agent cannot have several principals"
                 )
+        if self.local_owner is not None and not isinstance(
+            self.local_owner, LocalOwnerOperatorPolicy
+        ):
+            raise QueueServiceError("local owner operator policy is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class LocalOwnerOperatorPolicy:
+    """Explicit local-only operator scopes resolved from verified Unix ownership."""
+
+    actions: tuple[str, ...]
+    agent_ids: tuple[str, ...] = ()
+    pools: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        allowed = {
+            "drain",
+            "resume",
+            "reload",
+            "cancel_active",
+            "scheduling_reload",
+            "recover_unknown",
+            "recover_time",
+            "replace_session",
+        }
+        _identifiers(self.actions, "local owner actions")
+        _identifiers(self.agent_ids, "local owner agent targets")
+        _identifiers(self.pools, "local owner pool targets")
+        if not set(self.actions).issubset(allowed):
+            raise QueueServiceError("local owner actions are invalid")
+        object.__setattr__(self, "actions", tuple(sorted(set(self.actions))))
+        object.__setattr__(self, "agent_ids", tuple(sorted(set(self.agent_ids))))
+        object.__setattr__(self, "pools", tuple(sorted(set(self.pools))))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1302,6 +1337,9 @@ class ScopedAuthorizer:
         if principal.credential_id is None:
             if role != "operator":
                 return
+            local_owner = self.policy.local_owner
+            if local_owner is not None and principal.subject == f"uid:{os.getuid()}":
+                return
             if any(
                 rule.principal_id == principal.subject and rule.role == role
                 for rule in self.policy.principals
@@ -1327,6 +1365,25 @@ class ScopedAuthorizer:
         """Authorize one exact protected operator action before mutation."""
 
         self.require_role(principal, "operator")
+        local_owner = self.policy.local_owner
+        if (
+            principal.credential_id is None
+            and local_owner is not None
+            and principal.subject == f"uid:{os.getuid()}"
+        ):
+            if action not in local_owner.actions:
+                raise QueueServiceError(
+                    "daemon principal is not authorized for this operation"
+                )
+            if agent_id is not None and agent_id not in local_owner.agent_ids:
+                raise QueueServiceError(
+                    "daemon principal is not authorized for this operation"
+                )
+            if pool is not None and pool not in local_owner.pools:
+                raise QueueServiceError(
+                    "daemon principal is not authorized for this operation"
+                )
+            return
         matches = [
             rule
             for rule in self.policy.principals

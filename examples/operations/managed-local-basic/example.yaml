@@ -1,0 +1,18 @@
+id: operations.managed-local-basic
+title: Managed Local Basic
+summary: Run the complete embedded managed-local lifecycle and verify teardown.
+capability: operations
+level: advanced
+introduced_in: v29
+status: runnable
+validation: full
+surface: python_api
+public_surfaces: [cli, python_api]
+owner_docs: [examples/operations/README.md, docs/features/queue.md]
+owner_stages: [v29]
+validation_path: tests/e2e/test_queue_cli.py::test_managed_local_basic_journey_is_rerunnable
+entrypoints:
+  - path: run_managed_local_basic.py
+    kind: python
+    description: Run the embedded daemon lifecycle through the public managed-local API.
+tags: [queue, managed-local, lifecycle, cleanup]

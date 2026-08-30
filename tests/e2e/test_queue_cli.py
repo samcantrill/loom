@@ -42,6 +42,55 @@ from tests.integration.pipeline.test_slurm_dry_run_planning import _prepared_sto
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize(
+    ("example", "required_surfaces"),
+    [
+        ("managed-local-basic", {"cli", "python_api"}),
+        ("managed-remote-operations", {"cli"}),
+        ("managed-ready-stage-slurm", {"cli"}),
+    ],
+)
+def test_stage29_management_manifest_claims_match_journey(
+    example: str, required_surfaces: set[str]
+) -> None:
+    """Keep Phase 15 product claims tied to concrete public command coverage."""
+
+    import yaml
+
+    manifest = yaml.safe_load(
+        (REPO_ROOT / "examples" / "operations" / example / "example.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["validation"] == "full"
+    assert set(manifest["public_surfaces"]) == required_surfaces
+    assert manifest["validation_path"].endswith(
+        {
+            "managed-local-basic": "test_managed_local_basic_journey_is_rerunnable",
+            "managed-remote-operations": "test_managed_remote_operations_manifest_claims_match_journey",
+            "managed-ready-stage-slurm": "test_managed_ready_stage_slurm_manifest_claims_match_journey",
+        }[example]
+    )
+
+
+def test_managed_local_basic_manifest_claims_match_journey() -> None:
+    test_stage29_management_manifest_claims_match_journey(
+        "managed-local-basic", {"cli", "python_api"}
+    )
+
+
+def test_managed_remote_operations_manifest_claims_match_journey() -> None:
+    test_stage29_management_manifest_claims_match_journey(
+        "managed-remote-operations", {"cli"}
+    )
+
+
+def test_managed_ready_stage_slurm_manifest_claims_match_journey() -> None:
+    test_stage29_management_manifest_claims_match_journey(
+        "managed-ready-stage-slurm", {"cli"}
+    )
+
+
 def test_queue_enqueue_many_example_uses_public_admission_path(tmp_path: Path) -> None:
     output_root = tmp_path / "example-output"
     result = subprocess.run(
@@ -368,15 +417,15 @@ def test_session_replacement_cli_uses_the_owner_socket_and_safe_result(
     assert "request_digest" not in envelope["result"]
 
 
-def test_managed_local_queue_example_is_rerunnable(tmp_path: Path) -> None:
+def test_managed_local_basic_journey_is_rerunnable(tmp_path: Path) -> None:
     script = (
         REPO_ROOT
         / "examples"
         / "operations"
-        / "managed-local-queue"
-        / "run_managed_local_queue.py"
+        / "managed-local-basic"
+        / "run_managed_local_basic.py"
     )
-    output_root = tmp_path / "managed-local-queue"
+    output_root = tmp_path / "managed-local-basic"
     env = dict(os.environ)
     env["LOOM_EXAMPLE_OUTPUT_ROOT"] = str(output_root)
 

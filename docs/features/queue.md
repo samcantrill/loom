@@ -908,7 +908,7 @@ absent role root. Each uses a private sibling staging directory and one final
 rename, never overwrites an existing target, and leaves no requested target on
 a pre-publication failure. Startup accepts only a complete role binding made by
 the same config. See the
-[managed-local example](../../examples/operations/managed-local-queue/README.md)
+[managed-local example](../../examples/operations/managed-local-basic/README.md)
 for the two exact config shapes.
 
 A degraded accepted-time revision never heals itself. After repairing and
@@ -932,6 +932,8 @@ A typical `machine-B` maintenance cut-over is:
 
 ```bash
 loom queue daemon-status --endpoint COORDINATOR_SOCKET --format json
+loom queue daemon-agents --endpoint COORDINATOR_SOCKET --format json
+loom queue daemon-agent --endpoint COORDINATOR_SOCKET machine-B --format json
 
 loom queue daemon-agent-drain \
   --endpoint COORDINATOR_SOCKET \
@@ -960,6 +962,24 @@ loom queue daemon-agent-resume \
   --config-revision RELOADED_CONFIG \
   --reason maintenance-complete
 ```
+
+The agent detail supplies the exact session, configuration, inventory, and
+availability revisions required by guarded maintenance commands. Admission and
+operation reads are likewise targeted or keyset-bounded; an operator can page
+admissions, inspect one admission, and wait for a durable control receipt
+without turning status into history export:
+
+```bash
+loom queue daemon-admissions --endpoint COORDINATOR_SOCKET --limit 50 --format json
+loom queue daemon-admission --endpoint COORDINATOR_SOCKET ADMISSION_ID --format json
+loom queue daemon-operation --endpoint COORDINATOR_SOCKET OPERATION_ID --format json
+loom queue daemon-operation-wait --endpoint COORDINATOR_SOCKET OPERATION_ID --timeout 30 --format json
+```
+
+Unix-socket operator access is opt-in in protected coordinator configuration:
+`agent_policy.local_owner` names its allowed actions, agent IDs, and pools.
+Loom resolves that rule only to the verified owner UID of the local socket;
+remote TLS identities must use their separately configured credential rule.
 
 Coordinator scheduling configuration is reloaded independently after its
 protected local file is edited:
@@ -1017,7 +1037,7 @@ loom queue daemon-wait --endpoint COORDINATOR_SOCKET QUEUE_ITEM
 
 Reuse the same operation ID when retrying a response-loss case. Changed content
 under that ID conflicts. This is a hard cut-over: initialize fresh daemon/agent
-roots and use the v4 CLI result shape with agent protocol and coordinator/agent
+roots and use the v5 CLI result shape with agent protocol and coordinator/agent
 state version 9. Loom does not upgrade or dual-read a previous control schema.
 
 For a resident remote agent, initialize its protected root and detached
