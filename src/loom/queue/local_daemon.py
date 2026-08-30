@@ -1220,16 +1220,163 @@ class AdmissionPage:
 class AgentPage:
     """Bounded current agent-session projections for guarded controls."""
 
-    agents: tuple[Mapping[str, PlainData], ...]
+    agents: tuple["AgentProjection", ...]
     next_cursor: str | None
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "agents": [
-                thaw_plain_data(item, path="agent page") for item in self.agents
-            ],
+            "agents": [item.to_dict() for item in self.agents],
             "next_cursor": self.next_cursor,
         }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "AgentPage":
+        _exact_fields(data, {"agents", "next_cursor"}, "agent page")
+        agents = data.get("agents")
+        cursor = data.get("next_cursor")
+        if (
+            not isinstance(agents, list)
+            or not all(isinstance(item, Mapping) for item in agents)
+            or (cursor is not None and not isinstance(cursor, str))
+        ):
+            raise QueueServiceError("agent page response is invalid")
+        return cls(tuple(AgentProjection.from_dict(item) for item in agents), cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentProjection:
+    """Bounded current logical-agent state with the control freshness fences."""
+
+    agent_id: str
+    session_id: str
+    state: str
+    config_revision: str
+    inventory_revision: str
+    availability_revision: str
+    coordinator_epoch: str
+    pools: tuple[str, ...]
+    capabilities: tuple[str, ...]
+    available: bool
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "agent_id": self.agent_id,
+            "session_id": self.session_id,
+            "state": self.state,
+            "config_revision": self.config_revision,
+            "inventory_revision": self.inventory_revision,
+            "availability_revision": self.availability_revision,
+            "coordinator_epoch": self.coordinator_epoch,
+            "pools": list(self.pools),
+            "capabilities": list(self.capabilities),
+            "available": self.available,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "AgentProjection":
+        _exact_fields(
+            data,
+            {
+                "agent_id",
+                "session_id",
+                "state",
+                "config_revision",
+                "inventory_revision",
+                "availability_revision",
+                "coordinator_epoch",
+                "pools",
+                "capabilities",
+                "available",
+            },
+            "agent projection",
+        )
+        pools = data.get("pools")
+        capabilities = data.get("capabilities")
+        available = data.get("available")
+        if (
+            not isinstance(pools, list)
+            or not all(isinstance(item, str) and item for item in pools)
+            or not isinstance(capabilities, list)
+            or not all(isinstance(item, str) and item for item in capabilities)
+            or not isinstance(available, bool)
+        ):
+            raise QueueServiceError("agent projection is invalid")
+        return cls(
+            agent_id=_required_string(data, "agent_id"),
+            session_id=_required_string(data, "session_id"),
+            state=_required_string(data, "state"),
+            config_revision=_required_string(data, "config_revision"),
+            inventory_revision=_required_string(data, "inventory_revision"),
+            availability_revision=_required_string(data, "availability_revision"),
+            coordinator_epoch=_required_string(data, "coordinator_epoch"),
+            pools=tuple(pools),
+            capabilities=tuple(capabilities),
+            available=available,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LocalDaemonOperation:
+    """One durable management operation without an unbounded history surface."""
+
+    operation_id: str
+    kind: str
+    state: str
+    code: str | None
+    result: PlainData | None
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "kind": self.kind,
+            "state": self.state,
+            "code": self.code,
+            "result": self.result,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "LocalDaemonOperation":
+        _exact_fields(
+            data, {"operation_id", "kind", "state", "code", "result"}, "operation"
+        )
+        code = data.get("code")
+        if code is not None and not isinstance(code, str):
+            raise QueueServiceError("operation response is invalid")
+        return cls(
+            operation_id=_required_string(data, "operation_id"),
+            kind=_required_string(data, "kind"),
+            state=_required_string(data, "state"),
+            code=code,
+            result=freeze_plain_data(data.get("result"), path="operation result"),
+        )
+
+
+class OperationWaitKind(StrEnum):
+    TERMINAL = "TERMINAL"
+    TIMEOUT = "TIMEOUT"
+
+
+@dataclass(frozen=True, slots=True)
+class OperationWaitResult:
+    kind: OperationWaitKind
+    operation: LocalDaemonOperation
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {"kind": self.kind.value, "operation": self.operation.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "OperationWaitResult":
+        _exact_fields(data, {"kind", "operation"}, "operation wait")
+        kind = data.get("kind")
+        operation = data.get("operation")
+        if not isinstance(kind, str) or not isinstance(operation, Mapping):
+            raise QueueServiceError("operation wait response is invalid")
+        try:
+            return cls(
+                OperationWaitKind(kind), LocalDaemonOperation.from_dict(operation)
+            )
+        except ValueError as exc:
+            raise QueueServiceError("operation wait response is invalid") from exc
 
 
 class AdmissionWaitKind(StrEnum):
@@ -1286,6 +1433,7 @@ class LocalDaemon:
         self._cycle_lock = RLock()
         self._service_error: str | None = None
         self._agent_policy = config.agent_policy
+        self._verified_local_owner_subject: str | None = None
 
     @classmethod
     def initialize_deployment(cls, config: LocalDaemonConfig) -> None:
@@ -1410,6 +1558,9 @@ class LocalDaemon:
         if self.config.deployment_root is not None:
             _validate_deployment_binding(self.config)
         _validate_distinct_roots(self.config)
+        self._verified_local_owner_subject = (
+            f"uid:{self.config.coordinator_root.stat().st_uid}"
+        )
         coordinator_lock = _acquire_lock(self.config.coordinator_root)
         try:
             agent_lock = _acquire_lock(self.config.agent_root)
@@ -1669,9 +1820,15 @@ class LocalDaemon:
     def _require_view_role(
         self, principal: LocalDaemonPrincipal, role: LocalDaemonRole
     ) -> None:
+        self._authorizer().require_role(principal, role.value)
+
+    def _authorizer(self):  # type: ignore[no-untyped-def]
         from .agent_sessions import ScopedAuthorizer
 
-        ScopedAuthorizer(self._agent_policy).require_role(principal, role.value)
+        return ScopedAuthorizer(
+            self._agent_policy,
+            verified_local_owner_subject=self._verified_local_owner_subject,
+        )
 
     def status(self) -> DaemonStatus:
         coordinator_id = self._require_started()
@@ -1860,26 +2017,33 @@ class LocalDaemon:
             or not 1 <= limit <= 100
         ):
             raise QueueServiceError("agent list limit must be in 1..100")
-        pair = _decode_agent_cursor(cursor) if cursor is not None else None
-        query = "SELECT * FROM agent_sessions"
+        agent_id = _decode_agent_cursor(cursor) if cursor is not None else None
+        # A renewed session supersedes its predecessor for every public read.
+        # Keep that choice in this bounded projection rather than exposing the
+        # unbounded session journal through the management API.
+        query = (
+            "SELECT * FROM agent_sessions AS current WHERE NOT EXISTS ("
+            "SELECT 1 FROM agent_sessions AS newer WHERE newer.agent_id = current.agent_id "
+            "AND (newer.created_at > current.created_at OR "
+            "(newer.created_at = current.created_at AND newer.session_id > current.session_id))"
+            ")"
+        )
         values: tuple[object, ...] = ()
-        if pair is not None:
-            query += " WHERE (agent_id, session_id) > (?, ?)"
-            values = pair
-        query += " ORDER BY agent_id, session_id LIMIT ?"
+        if agent_id is not None:
+            query += " AND current.agent_id > ?"
+            values = (agent_id,)
+        query += " ORDER BY current.agent_id LIMIT ?"
         with self._connection() as conn:
             rows = tuple(conn.execute(query, (*values, limit + 1)))
             values_out = tuple(_agent_projection(conn, row) for row in rows[:limit])
         next_cursor = (
-            _encode_agent_cursor(
-                str(rows[limit - 1]["agent_id"]), str(rows[limit - 1]["session_id"])
-            )
+            _encode_agent_cursor(str(rows[limit - 1]["agent_id"]))
             if len(rows) > limit
             else None
         )
         return AgentPage(values_out, next_cursor)
 
-    def agent(self, agent_id: str) -> Mapping[str, PlainData]:
+    def agent(self, agent_id: str) -> AgentProjection:
         _required_string({"agent_id": agent_id}, "agent_id")
         with self._connection() as conn:
             row = conn.execute(
@@ -1891,7 +2055,7 @@ class LocalDaemon:
                 raise QueueServiceError("managed agent was not found")
             return _agent_projection(conn, row)
 
-    def operation(self, operation_id: str) -> Mapping[str, PlainData]:
+    def operation(self, operation_id: str) -> LocalDaemonOperation:
         """Read the one typed durable operation receipt without a history scan."""
 
         _required_string({"operation_id": operation_id}, "operation_id")
@@ -1900,7 +2064,7 @@ class LocalDaemon:
 
     def wait_operation(
         self, operation_id: str, *, timeout: float | None
-    ) -> Mapping[str, PlainData]:
+    ) -> OperationWaitResult:
         if timeout is not None and (
             isinstance(timeout, bool)
             or not isinstance(timeout, (int, float))
@@ -1910,17 +2074,18 @@ class LocalDaemon:
         deadline = None if timeout is None else time.monotonic() + float(timeout)
         while True:
             operation = self.operation(operation_id)
-            state = operation["state"]
+            state = operation.state
             if state not in {
                 "pending_delivery",
                 "applying",
                 "pending",
                 "evidence_confirmed",
                 "decision",
+                "bound",
             }:
-                return {"kind": "TERMINAL", "operation": operation}
+                return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
             if deadline is not None and time.monotonic() >= deadline:
-                return {"kind": "TIMEOUT", "operation": operation}
+                return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
             time.sleep(min(self.config.poll_interval_seconds, 0.05))
 
     def wait_admission(
@@ -2208,9 +2373,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Commit one scoped control before the outbound agent may observe it."""
 
-        from .agent_sessions import ScopedAuthorizer
-
-        authorizer = ScopedAuthorizer(self._agent_policy)
+        authorizer = self._authorizer()
         authorizer.require_operator(
             principal,
             control.kind.value,
@@ -2349,11 +2512,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Install one complete protected coordinator scheduling epoch."""
 
-        from .agent_sessions import ScopedAuthorizer
-
-        ScopedAuthorizer(self._agent_policy).require_operator(
-            principal, "scheduling_reload"
-        )
+        self._authorizer().require_operator(principal, "scheduling_reload")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         with self._cycle_lock:
             replacement_fingerprint: str | None = None
@@ -2507,9 +2666,7 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Persist and advance one immutable guarded-recovery saga."""
 
-        from .agent_sessions import ScopedAuthorizer
-
-        authorizer = ScopedAuthorizer(self._agent_policy)
+        authorizer = self._authorizer()
         authorizer.require_operator(principal, "recover_unknown")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -3129,9 +3286,7 @@ class LocalDaemon:
     def _recover_time(
         self, principal: LocalDaemonPrincipal, request: TimeRecoveryRequest
     ) -> TimeRecoveryReceipt:
-        from .agent_sessions import ScopedAuthorizer
-
-        ScopedAuthorizer(self._agent_policy).require_operator(principal, "recover_time")
+        self._authorizer().require_operator(principal, "recover_time")
         encoded = json.dumps(
             request.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
         )
@@ -3404,17 +3559,17 @@ class LocalDaemonClientView:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.agents(limit=limit, cursor=cursor)
 
-    def agent(self, agent_id: str) -> Mapping[str, PlainData]:
+    def agent(self, agent_id: str) -> AgentProjection:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.agent(agent_id)
 
-    def operation(self, operation_id: str) -> Mapping[str, PlainData]:
+    def operation(self, operation_id: str) -> LocalDaemonOperation:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.operation(operation_id)
 
     def wait_operation(
         self, operation_id: str, *, timeout: float | None
-    ) -> Mapping[str, PlainData]:
+    ) -> OperationWaitResult:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.wait_operation(operation_id, timeout=timeout)
 
@@ -3892,8 +4047,8 @@ def _encode_admission_cursor(sequence: int, admission_id: str) -> str:
     )
 
 
-def _encode_agent_cursor(agent_id: str, session_id: str) -> str:
-    value = json.dumps([agent_id, session_id], separators=(",", ":"), ensure_ascii=True)
+def _encode_agent_cursor(agent_id: str) -> str:
+    value = json.dumps(agent_id, separators=(",", ":"), ensure_ascii=True)
     return (
         hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
         + "."
@@ -3901,7 +4056,7 @@ def _encode_agent_cursor(agent_id: str, session_id: str) -> str:
     )
 
 
-def _decode_agent_cursor(cursor: str) -> tuple[str, str]:
+def _decode_agent_cursor(cursor: str) -> str:
     if not isinstance(cursor, str) or "." not in cursor:
         raise QueueServiceError("agent cursor is invalid")
     digest, encoded = cursor.split(".", 1)
@@ -3911,17 +4066,13 @@ def _decode_agent_cursor(cursor: str) -> tuple[str, str]:
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise QueueServiceError("agent cursor is invalid") from exc
     if hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16] != digest or (
-        not isinstance(value, list)
-        or len(value) != 2
-        or not all(isinstance(item, str) and item for item in value)
+        not isinstance(value, str) or not value
     ):
         raise QueueServiceError("agent cursor is invalid")
-    return value[0], value[1]
+    return value
 
 
-def _agent_projection(
-    conn: sqlite3.Connection, row: sqlite3.Row
-) -> Mapping[str, PlainData]:
+def _agent_projection(conn: sqlite3.Connection, row: sqlite3.Row) -> AgentProjection:
     pools = json.loads(str(row["pools_json"]))
     capabilities = json.loads(str(row["capabilities_json"]))
     if not isinstance(pools, list) or not isinstance(capabilities, list):
@@ -3930,26 +4081,27 @@ def _agent_projection(
         "SELECT 1 FROM agent_offers WHERE session_id = ? AND current = 1 LIMIT 1",
         (str(row["session_id"]),),
     ).fetchone()
-    return freeze_plain_data(
-        {
-            "agent_id": str(row["agent_id"]),
-            "session_id": str(row["session_id"]),
-            "state": str(row["state"]),
-            "config_revision": str(row["config_revision"]),
-            "inventory_revision": str(row["inventory_revision"]),
-            "availability_revision": str(row["availability_revision"]),
-            "coordinator_epoch": str(row["coordinator_epoch"]),
-            "pools": pools,
-            "capabilities": capabilities,
-            "available": offered is not None,
-        },
-        path="agent projection",
+    if not all(isinstance(item, str) and item for item in pools) or not all(
+        isinstance(item, str) and item for item in capabilities
+    ):
+        raise QueueStorageError("agent session projection is invalid")
+    return AgentProjection(
+        agent_id=str(row["agent_id"]),
+        session_id=str(row["session_id"]),
+        state=str(row["state"]),
+        config_revision=str(row["config_revision"]),
+        inventory_revision=str(row["inventory_revision"]),
+        availability_revision=str(row["availability_revision"]),
+        coordinator_epoch=str(row["coordinator_epoch"]),
+        pools=tuple(pools),
+        capabilities=tuple(capabilities),
+        available=offered is not None,
     )
 
 
 def _operation_projection(
     conn: sqlite3.Connection, operation_id: str
-) -> Mapping[str, PlainData]:
+) -> LocalDaemonOperation:
     queries = (
         (
             "agent_control",
@@ -3957,7 +4109,9 @@ def _operation_projection(
         ),
         (
             "scheduling_reload",
-            "SELECT state, result_code, NULL AS effect_json FROM scheduling_reloads WHERE operation_id = ?",
+            "SELECT state, result_code, json_object('scheduling_epoch', scheduling_epoch, "
+            "'configuration_revision', configuration_revision, 'replacement_fingerprint', replacement_fingerprint) "
+            "AS effect_json FROM scheduling_reloads WHERE operation_id = ?",
         ),
         (
             "time_recovery",
@@ -3987,15 +4141,12 @@ def _operation_projection(
                 result = freeze_plain_data(decoded, path="operation result")
             except (json.JSONDecodeError, QueueServiceError) as exc:
                 raise QueueStorageError("operation result is invalid") from exc
-        return freeze_plain_data(
-            {
-                "operation_id": operation_id,
-                "kind": kind,
-                "state": str(row["state"]),
-                "code": None if row["result_code"] is None else str(row["result_code"]),
-                "result": result,
-            },
-            path="operation projection",
+        return LocalDaemonOperation(
+            operation_id=operation_id,
+            kind=kind,
+            state=str(row["state"]),
+            code=None if row["result_code"] is None else str(row["result_code"]),
+            result=result,
         )
     raise QueueServiceError("managed operation was not found")
 

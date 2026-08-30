@@ -686,7 +686,7 @@ def handle_daemon_agents(namespace: argparse.Namespace) -> int:
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result)
+    return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_daemon_agent(namespace: argparse.Namespace) -> int:
@@ -696,7 +696,7 @@ def handle_daemon_agent(namespace: argparse.Namespace) -> int:
         result = LocalDaemonSocketClient(namespace.endpoint).agent(namespace.agent_id)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result)
+    return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_daemon_operation(namespace: argparse.Namespace) -> int:
@@ -708,7 +708,7 @@ def handle_daemon_operation(namespace: argparse.Namespace) -> int:
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result)
+    return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_daemon_operation_wait(namespace: argparse.Namespace) -> int:
@@ -720,7 +720,7 @@ def handle_daemon_operation_wait(namespace: argparse.Namespace) -> int:
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result)
+    return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_daemon_wait(namespace: argparse.Namespace) -> int:

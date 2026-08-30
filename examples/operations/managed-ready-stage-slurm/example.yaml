@@ -10,9 +10,9 @@ surface: cli
 public_surfaces: [cli]
 owner_docs: [examples/operations/README.md, docs/features/queue.md]
 owner_stages: [v29]
-validation_path: tests/e2e/test_queue_cli.py::test_managed_ready_stage_slurm_manifest_claims_match_journey
+validation_path: tests/e2e/test_queue_cli.py::test_managed_ready_stage_slurm_journey_restarts_and_releases
 entrypoints:
   - path: run_managed_ready_stage_slurm.py
     kind: python
-    description: Print the explicit ready-stage SLURM journey entry point.
+    description: Run every fake-gateway rejection, restart, and release boundary.
 tags: [queue, slurm, ready-stage, operations]

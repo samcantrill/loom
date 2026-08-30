@@ -26,6 +26,8 @@ from .errors import (
 from .local_daemon import (
     AdmissionNotFoundError,
     AgentControl,
+    AgentPage,
+    AgentProjection,
     CoordinatorSchedulingReload,
     LocalDaemon,
     LocalDaemonAdmission,
@@ -36,6 +38,9 @@ from .local_daemon import (
     LocalDaemonAdmissionRequest,
     LocalDaemonPrincipal,
     LocalDaemonRole,
+    LocalDaemonOperation,
+    OperationWaitKind,
+    OperationWaitResult,
     RecoverUnknownAssignment,
     SessionReplacementRequest,
     TimeRecoveryReceipt,
@@ -128,26 +133,15 @@ class LocalDaemonSocketServer:
                     return
                 continue
             try:
-                uid = _peer_uid(connection)
-                payload = _read_message(connection)
-                long_poll = payload.get("operation") in {
-                    "wait_admission",
-                    "wait_operation",
-                }
-                if long_poll and not self._long_poll_slots.acquire(blocking=False):
-                    _write_error(connection, "local_daemon_wait_capacity_exhausted")
-                    connection.close()
-                    continue
                 if not self._worker_slots.acquire(blocking=False):
-                    if long_poll:
-                        self._long_poll_slots.release()
                     _write_error(connection, "local_daemon_worker_capacity_exhausted")
                     connection.close()
                     continue
                 workers = self._workers
                 if workers is None:
+                    self._worker_slots.release()
                     raise QueueServiceError("local daemon socket server is stopping")
-                workers.submit(self._handle, connection, uid, payload, long_poll)
+                workers.submit(self._handle, connection)
             except Exception as exc:
                 try:
                     _write_error(connection, _safe_error_code(exc))
@@ -157,11 +151,19 @@ class LocalDaemonSocketServer:
     def _handle(
         self,
         connection: socket.socket,
-        uid: int,
-        payload: Mapping[str, object],
-        long_poll: bool,
     ) -> None:
+        long_poll = False
+        long_poll_acquired = False
         try:
+            uid = _peer_uid(connection)
+            payload = _read_message(connection)
+            long_poll = payload.get("operation") in {
+                "wait_admission",
+                "wait_operation",
+            }
+            if long_poll and not self._long_poll_slots.acquire(blocking=False):
+                raise QueueServiceError("local daemon wait capacity is exhausted")
+            long_poll_acquired = long_poll
             if uid != os.getuid():
                 raise QueueServiceError("local daemon peer is not authorized")
             operation = payload.get("operation")
@@ -214,12 +216,12 @@ class LocalDaemonSocketServer:
                 agent_id = payload.get("agent_id")
                 if not isinstance(agent_id, str):
                     raise QueueServiceError("agent ID is invalid")
-                result = dict(client.agent(agent_id))
+                result = client.agent(agent_id).to_dict()
             elif operation == "operation":
                 operation_id = payload.get("operation_id")
                 if not isinstance(operation_id, str):
                     raise QueueServiceError("operation ID is invalid")
-                result = dict(client.operation(operation_id))
+                result = client.operation(operation_id).to_dict()
             elif operation == "wait_operation":
                 operation_id = payload.get("operation_id")
                 timeout = payload.get("timeout")
@@ -230,9 +232,9 @@ class LocalDaemonSocketServer:
                 capped_timeout = _SERVER_WAIT_SECONDS
                 if timeout is not None:
                     capped_timeout = min(capped_timeout, float(timeout))
-                result = dict(
-                    client.wait_operation(operation_id, timeout=capped_timeout)
-                )
+                result = client.wait_operation(
+                    operation_id, timeout=capped_timeout
+                ).to_dict()
             elif operation == "inspect_run":
                 run_uri = payload.get("run_uri")
                 if not isinstance(run_uri, str) or self._inspect_run is None:
@@ -321,7 +323,7 @@ class LocalDaemonSocketServer:
         finally:
             connection.close()
             self._worker_slots.release()
-            if long_poll:
+            if long_poll_acquired:
                 self._long_poll_slots.release()
 
 
@@ -361,20 +363,24 @@ class LocalDaemonSocketClient:
             self._call({"operation": "admission", "admission_id": admission_id})
         )
 
-    def agents(
-        self, *, limit: int = 100, cursor: str | None = None
-    ) -> Mapping[str, object]:
-        return self._call({"operation": "agents", "limit": limit, "cursor": cursor})
+    def agents(self, *, limit: int = 100, cursor: str | None = None) -> AgentPage:
+        return AgentPage.from_dict(
+            self._call({"operation": "agents", "limit": limit, "cursor": cursor})
+        )
 
-    def agent(self, agent_id: str) -> Mapping[str, object]:
-        return self._call({"operation": "agent", "agent_id": agent_id})
+    def agent(self, agent_id: str) -> AgentProjection:
+        return AgentProjection.from_dict(
+            self._call({"operation": "agent", "agent_id": agent_id})
+        )
 
-    def operation(self, operation_id: str) -> Mapping[str, object]:
-        return self._call({"operation": "operation", "operation_id": operation_id})
+    def operation(self, operation_id: str) -> LocalDaemonOperation:
+        return LocalDaemonOperation.from_dict(
+            self._call({"operation": "operation", "operation_id": operation_id})
+        )
 
     def wait_operation(
         self, operation_id: str, *, timeout_seconds: float | None = None
-    ) -> Mapping[str, object]:
+    ) -> OperationWaitResult:
         deadline = (
             None if timeout_seconds is None else time.monotonic() + timeout_seconds
         )
@@ -389,10 +395,11 @@ class LocalDaemonSocketClient:
                     "timeout": remaining,
                 }
             )
-            if result.get("kind") != "TIMEOUT":
-                return result
+            parsed = OperationWaitResult.from_dict(result)
+            if parsed.kind is not OperationWaitKind.TIMEOUT:
+                return parsed
             if deadline is not None and time.monotonic() >= deadline:
-                return result
+                return parsed
 
     def wait_admission(
         self, admission_id: str, *, expected_revision: int, timeout: float | None = None
@@ -451,6 +458,8 @@ class LocalDaemonSocketClient:
             if result.kind.value == "TERMINAL":
                 return admission
             if result.kind.value == "TIMEOUT":
+                if deadline is None or time.monotonic() < deadline:
+                    continue
                 raise TimeoutError(
                     "managed local admission did not reach terminal state"
                 )

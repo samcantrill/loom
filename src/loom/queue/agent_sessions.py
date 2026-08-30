@@ -14,7 +14,6 @@ from functools import wraps
 import hashlib
 import hmac
 import json
-import os
 from pathlib import Path
 import re
 import sqlite3
@@ -1269,8 +1268,14 @@ class _ReplacementOfferAdmission:
 class ScopedAuthorizer:
     """The one current-policy check used by direct and transport adapters."""
 
-    def __init__(self, policy: AgentPolicyConfig) -> None:
+    def __init__(
+        self,
+        policy: AgentPolicyConfig,
+        *,
+        verified_local_owner_subject: str | None = None,
+    ) -> None:
         self.policy = policy
+        self.verified_local_owner_subject = verified_local_owner_subject
 
     def agent(self, principal: "LocalDaemonPrincipal") -> AgentPrincipalPolicy:
         credential_id = principal.credential_id
@@ -1338,7 +1343,10 @@ class ScopedAuthorizer:
             if role != "operator":
                 return
             local_owner = self.policy.local_owner
-            if local_owner is not None and principal.subject == f"uid:{os.getuid()}":
+            if (
+                local_owner is not None
+                and principal.subject == self.verified_local_owner_subject
+            ):
                 return
             if any(
                 rule.principal_id == principal.subject and rule.role == role
@@ -1369,7 +1377,7 @@ class ScopedAuthorizer:
         if (
             principal.credential_id is None
             and local_owner is not None
-            and principal.subject == f"uid:{os.getuid()}"
+            and principal.subject == self.verified_local_owner_subject
         ):
             if action not in local_owner.actions:
                 raise QueueServiceError(
@@ -3974,7 +3982,7 @@ def replace_agent_session(
     only place that allocates the successor identity.
     """
 
-    ScopedAuthorizer(daemon._agent_policy).require_operator(  # type: ignore[attr-defined]
+    daemon._authorizer().require_operator(  # type: ignore[attr-defined]
         principal, "replace_session", agent_id=request.agent_id
     )
     encoded = _canonical_json(request.to_dict())

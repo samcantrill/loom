@@ -10,9 +10,9 @@ surface: cli
 public_surfaces: [cli]
 owner_docs: [examples/operations/README.md, docs/features/queue.md]
 owner_stages: [v29]
-validation_path: tests/e2e/test_queue_cli.py::test_managed_remote_operations_manifest_claims_match_journey
+validation_path: tests/e2e/test_queue_cli.py::test_managed_remote_operations_journey_generates_tls_and_cleans_up
 entrypoints:
   - path: run_managed_remote_operations.py
     kind: python
-    description: Print the documented authenticated remote operations invocation.
+    description: Run generated-CA mutual-TLS registration, policy recheck, and shutdown.
 tags: [queue, remote-agent, operations, tls]

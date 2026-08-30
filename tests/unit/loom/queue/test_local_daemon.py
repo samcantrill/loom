@@ -343,6 +343,66 @@ def test_socket_wait_saturation_reserves_status_capacity(tmp_path: Path) -> None
         daemon.stop()
 
 
+def test_management_agent_and_operation_reads_are_current_and_typed(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        with daemon._connection() as conn:
+            for session_id, created_at, state in (
+                ("session-old", "2026-08-30T00:00:00Z", "REPLACED"),
+                ("session-current", "2026-08-31T00:00:00Z", "ACTIVE"),
+            ):
+                conn.execute(
+                    "INSERT INTO agent_sessions(session_id, agent_id, agent_root_id, principal_id, policy_revision, config_revision, inventory_revision, availability_revision, capabilities_json, pools_json, retirement_verifier, coordinator_epoch, state, created_at) VALUES (?, 'agent-a', 'root-a', 'principal-a', 'policy-1', 'config-1', 'inventory-1', 'availability-1', '[\"python\"]', '[\"default\"]', '01', ?, ?, ?)",
+                    (session_id, daemon._epoch, state, created_at),
+                )
+            conn.execute(
+                "INSERT INTO scheduling_reloads(operation_id, principal_id, request_json, state, result_code, scheduling_epoch, configuration_revision, replacement_fingerprint) VALUES ('reload-read', 'operator', '{}', 'applied', 'ok', 'epoch-2', 3, 'fingerprint-2')"
+            )
+            conn.commit()
+
+        page = daemon.agents(limit=1)
+        assert page.next_cursor is None
+        assert page.agents[0].session_id == "session-current"
+        assert page.agents[0].pools == ("default",)
+        assert daemon.agent("agent-a").to_dict() == page.agents[0].to_dict()
+
+        operation = daemon.operation("reload-read")
+        assert operation.kind == "scheduling_reload"
+        assert operation.result == {
+            "scheduling_epoch": "epoch-2",
+            "configuration_revision": 3,
+            "replacement_fingerprint": "fingerprint-2",
+        }
+        waited = daemon.wait_operation("reload-read", timeout=0)
+        assert waited.kind.value == "TERMINAL"
+        assert waited.operation == operation
+
+        with daemon._connection() as conn:
+            conn.execute(
+                "INSERT INTO session_replacements(operation_id, principal_id, request_json, request_digest, agent_id, old_session_id, successor_session_id, state, readiness, withholding_reason, decision_projection_json, decision_projection_digest, required_claim_ids_json, observed_claim_ids_json, successor_observation_digest, readiness_projection_digest, result_json, decided_at, ready_at) VALUES ('replacement-bound', 'operator', '{}', 'digest', 'agent-a', 'session-current', NULL, 'bound', 'pending', NULL, '{}', 'digest', '[]', '[]', NULL, NULL, '{\"receipt\":\"bound\"}', '2026-08-31T00:00:00Z', NULL)"
+            )
+            conn.commit()
+        assert (
+            daemon.wait_operation("replacement-bound", timeout=0).kind.value
+            == "TIMEOUT"
+        )
+        with daemon._connection() as conn:
+            conn.execute(
+                "UPDATE session_replacements SET state = 'ready', readiness = 'ready', ready_at = '2026-08-31T00:00:01Z' WHERE operation_id = 'replacement-bound'"
+            )
+            conn.commit()
+        replacement = daemon.wait_operation("replacement-bound", timeout=0)
+        assert replacement.kind.value == "TERMINAL"
+        assert replacement.operation.result == {"receipt": "bound"}
+    finally:
+        daemon.stop()
+
+
 def test_recovery_persists_exact_evidence_before_close_and_replays_it(
     tmp_path: Path,
 ) -> None:
