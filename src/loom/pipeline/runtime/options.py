@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
+from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
@@ -58,9 +60,11 @@ _RUN_OPTIONS_FIELDS = frozenset(
         "environment",
         "adapter_options",
         "reliability",
+        "run_store",
     }
 )
 _EXECUTION_OPTIONS_FIELDS = frozenset({"settings"})
+_RUN_STORE_OPTIONS_FIELDS = frozenset({"root"})
 _STAGE_RUNTIME_OPTIONS_FIELDS = frozenset(
     {"resources", "execution", "environment", "reliability", "adapter_options"}
 )
@@ -113,6 +117,45 @@ class ExecutionOptions:
 
     def to_safe_metadata(self) -> dict[str, PlainData]:
         return {"setting_keys": cast(list[PlainData], sorted(self.settings))}
+
+
+@dataclass(frozen=True, slots=True)
+class RunStoreOptions:
+    """Optional local run-collection selection for CLI-created stores.
+
+    An explicit root is normalized to an absolute canonical path without
+    touching the filesystem. ``None`` preserves the CLI's historical ``runs``
+    collection default.
+    """
+
+    root: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.root is None:
+            return
+        root = _string_value(self.root, path="RunStoreOptions.root")
+        path = Path(root)
+        if not path.is_absolute():
+            raise RuntimeResourceError("RunStoreOptions.root must be an absolute path")
+        object.__setattr__(self, "root", os.path.normpath(root))
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {"root": self.root}
+
+    def to_safe_metadata(self) -> dict[str, PlainData]:
+        """Return the operational path evidence safe to persist in runtime metadata."""
+
+        return self.to_dict()
+
+    @classmethod
+    def from_dict(cls, data: object) -> "RunStoreOptions":
+        mapping = _object_mapping(data, path="RunStoreOptions")
+        _reject_unknown(
+            mapping, allowed=_RUN_STORE_OPTIONS_FIELDS, path="RunStoreOptions"
+        )
+        return cls(
+            root=_optional_string(mapping.get("root"), path="RunStoreOptions.root")
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +351,7 @@ class RunOptions:
     environment: RunEnvironmentRequest | Mapping[str, object] = field(
         default_factory=RunEnvironmentRequest
     )
+    run_store: RunStoreOptions | Mapping[str, object] | None = None
     adapter_options: Mapping[str, PlainData] = field(default_factory=dict)
     reliability: ReliabilityPolicy | Mapping[str, object] | None = None
     schema_version: int = RUN_OPTIONS_SCHEMA_VERSION
@@ -376,6 +420,11 @@ class RunOptions:
         )
         object.__setattr__(
             self,
+            "run_store",
+            _coerce_run_store_options(self.run_store, path="RunOptions.run_store"),
+        )
+        object.__setattr__(
+            self,
             "adapter_options",
             _freeze_plain_mapping(
                 self.adapter_options, path="RunOptions.adapter_options"
@@ -392,6 +441,7 @@ class RunOptions:
         resume = cast("ResumeOptions", self.resume)
         execution = cast(ExecutionOptions, self.execution)
         environment = cast(RunEnvironmentRequest, self.environment)
+        run_store = cast(RunStoreOptions | None, self.run_store)
         reliability = cast(ReliabilityPolicy | None, self.reliability)
         return {
             "schema_version": self.schema_version,
@@ -412,6 +462,7 @@ class RunOptions:
                 ).items()
             },
             "environment": environment.to_dict(),
+            **({"run_store": run_store.to_dict()} if run_store is not None else {}),
             **(
                 {"reliability": reliability.to_dict()}
                 if reliability is not None
@@ -464,6 +515,9 @@ class RunOptions:
                 mapping.get("environment", {}),
                 path="RunOptions.environment",
             ),
+            run_store=_coerce_run_store_options(
+                mapping.get("run_store"), path="RunOptions.run_store"
+            ),
             reliability=_coerce_reliability(
                 mapping.get("reliability"),
                 path="RunOptions.reliability",
@@ -484,6 +538,7 @@ class RunOptions:
     def to_safe_metadata(self) -> dict[str, PlainData]:
         execution = cast(ExecutionOptions, self.execution)
         environment = cast(RunEnvironmentRequest, self.environment)
+        run_store = cast(RunStoreOptions | None, self.run_store)
         selectors = cast("PlanSelectors", self.selectors)
         resume = cast("ResumeOptions", self.resume)
         reliability = cast(ReliabilityPolicy | None, self.reliability)
@@ -506,6 +561,11 @@ class RunOptions:
                 ).items()
             },
             "environment": environment.to_safe_metadata(),
+            **(
+                {"run_store": run_store.to_safe_metadata()}
+                if run_store is not None
+                else {}
+            ),
             "reliability": reliability.to_dict() if reliability is not None else None,
             "adapter_options": _safe_adapter_metadata(self.adapter_options),
         }
@@ -597,6 +657,14 @@ def _coerce_run_environment(value: object, *, path: str) -> RunEnvironmentReques
     if isinstance(value, RunEnvironmentRequest):
         return value
     return RunEnvironmentRequest.from_dict(_object_mapping(value, path=path))
+
+
+def _coerce_run_store_options(value: object, *, path: str) -> RunStoreOptions | None:
+    if value is None:
+        return None
+    if isinstance(value, RunStoreOptions):
+        return value
+    return RunStoreOptions.from_dict(_object_mapping(value, path=path))
 
 
 def _coerce_reliability(
@@ -840,6 +908,7 @@ __all__ = [
     "ExecutionOptions",
     "ParallelExecutionOptions",
     "RunOptions",
+    "RunStoreOptions",
     "StageRuntimeOptions",
     "parallel_execution_options",
     "parse_run_options",

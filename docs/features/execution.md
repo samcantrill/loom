@@ -452,9 +452,32 @@ launches the prepared worker command inside `docker run`.
 ### 5.8 Runtime Options And Profiles
 
 `RunOptions` is the runtime package's canonical invocation-policy model for
-Python callers. It owns run URI, executor, dry-run, selected profile name, tags,
-notes, selector/resume adapter inputs, execution settings, exact stage runtime
-options, environment requests, and adapter options.
+Python callers. It owns run URI, executor, dry-run, selected profile name,
+optional run-store selection, tags, notes, selector/resume adapter inputs,
+execution settings, exact stage runtime options, environment requests, and
+adapter options.
+
+`runtime.run_store.root` selects the local collection for stores created by the
+CLI. It is optional: omission keeps the historical `runs` default. An explicit
+root must be a non-empty absolute path and is normalized to one canonical
+spelling without creating or probing the directory. It can be set in `runtime`
+or in the selected `runtime_profiles` entry; the normal base, selected-profile,
+and explicit runtime-source precedence applies. For example:
+
+```yaml
+runtime:
+  profile: cluster
+runtime_profiles:
+  cluster:
+    run_store:
+      root: /srv/loom/project-runs
+```
+
+Fresh runs, resume, `loom plan` with an explicit run, SLURM preparation, and
+offline-first CLI runs use that same collection. The machine path is operational
+runtime evidence, not a pipeline or scientific fingerprint. Direct Python
+runners that receive an already constructed store retain that caller-supplied
+store as their authority; `run_store` does not replace it.
 
 The execution `RunRequest` remains the runner envelope for config, pipeline,
 provenance, stores, and lifecycle inputs. Its `options` field is the canonical
@@ -468,11 +491,11 @@ The runner resolves `RunOptions` once per run into typed
 directly; they should not read persisted metadata to decide execution behavior.
 
 Local runs also write a schema-versioned `runtime.json` observability document.
-The document records safe summaries only: executor/profile/tags/notes,
-selector and resume summaries, resource entry summaries, execution setting
-keys, environment counts, and adapter namespace names/counts. It does not
-record environment variable names or values, raw adapter payloads, or semantic
-fingerprint inputs.
+The document records safe summaries only: executor/profile/tags/notes, an
+explicitly configured operational run-store root, selector and resume summaries,
+resource entry summaries, execution setting keys, environment counts, and
+adapter namespace names/counts. It does not record environment variable names
+or values, raw adapter payloads, or semantic fingerprint inputs.
 
 The managed-local daemon has a separate private exact runtime record, written
 only during trusted managed-local preparation. It carries validated execution

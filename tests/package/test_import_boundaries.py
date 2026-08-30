@@ -1199,6 +1199,7 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "ParallelExecutionOptions",
             "RunEnvironmentRequest",
             "RunOptions",
+            "RunStoreOptions",
             "ResolvedStageRuntimeOptions",
             "ResolvedStagePlacement",
             "RESOLVED_STAGE_PLACEMENT_SCHEMA_VERSION",

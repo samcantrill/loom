@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: planned
+- Status: ready to merge
 - Roadmap stage and phase: Stage 35, Phase 1
 - Manifest: `docs/roadmap/stage-35/implementation-plan.md`
 - Branch: `agent/stage-35-p1-configurable-run-store-root`
@@ -10,7 +10,7 @@
   `/nas/home/can134/work/loom-worktrees/stage-35-p1-configurable-run-store-root`
 - Base revision: current `origin/develop` after the planning packet merges
 - PR target: develop
-- PR title: `Stage 35 phase 1: add configurable run-store roots`
+- PR title: `Stage 35 phase 1: configure CLI run store roots`
 - Dependencies: approved Stage 35 planning packet and existing authority-backed
   run-store factories
 - Workflow path: expanded; optional public runtime shape plus resume/plugin
@@ -171,22 +171,34 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending planning merge.
+- Manager preparation: completed; implementation started from approved
+  `8da9536d351dba46c6737465839a40802f547f5b` and was cleanly rebased before PR
+  onto current `develop` at `a3a4507` with no overlapping path.
 - Expanded planning: completed; the bounded review found no run-store blocker.
-- Implementation: pending.
+- Implementation: completed in `e2b0f002e9f14ffcd43adacb0666ca43289c7f32`;
+  the bounded resume trust-order correction is
+  `23dc239efa90f3277585e63ce3dba730d5bda627`; the bounded sparse-merge and
+  lexical-path correction is
+  `842a8d05f6e4927287491bc8cb4d1fc9617d7c96`.
 - Refiner: not needed unless a qualified blocker appears.
-- Pre-submit gate: pending.
-- Independent review: required for resume/bootstrap risk.
-- Blocker corrections: 0/3.
-- PR and merge: pending.
+- Pre-submit gate: passed on corrected source/test revision
+  `842a8d05f6e4927287491bc8cb4d1fc9617d7c96`.
+- Independent review: completed for resume/bootstrap and configured-root trust
+  boundaries. Its sparse nested-merge and filesystem-probing blockers, plus the
+  localized runtime-metadata documentation correction, are resolved and
+  manager-verified.
+- Blocker corrections: 2/3 correction passes consumed. Slurm resume validates
+  persisted activation before plugin imports; empty nested overlays preserve a
+  lower root, explicit null clears it, and path normalization is lexical.
+- PR and merge: #258 is ready for its corrected branch update and merge.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Added `RunStoreOptions` and optional `RunOptions.run_store`, sparse runtime profile/config bootstrap projection, CLI run/plan authority/offline/Slurm root wiring, public exports, and feature documentation. Changed `src/loom/pipeline/runtime/{options,profiles,config,__init__}.py`, `src/loom/pipeline/__init__.py`, `src/loom/cli/{run,plan}.py`, and `docs/features/{execution,cli}.md`. Manager correction `23dc239e` made the existing resume-store/activation check common to normal, Slurm dry-run, and Slurm live entrypoints. Manager correction `842a8d0` preserved authored nested-field sparsity and replaced filesystem-resolving normalization with lexical normalization. |
+| Tests added or updated | Added option/path and profile-precedence tests, sparse empty-overlay and explicit-null tests for bootstrap and full merging, a symlink-containing lexical-path regression, resume/bootstrap and plan factory-spy tests, public export checks, a real profile-selected fresh/resume CLI journey under the configured collection, and both Slurm resume import-order failure cases. |
+| Validated revision/tree state and evidence | Corrected source/test revision `842a8d05f6e4927287491bc8cb4d1fc9617d7c96`; fresh `make validate-pr` passed (Ruff; Pyright with zero errors; default: 2,631 passed/135 deselected; config-extra: 156 passed/3 skipped/2,634 deselected; sdist and wheel built). The earlier executor `make test-summary` receipt at the equivalent pre-rebase implementation had one unrelated queue timestamp-race failure; its isolated rerun passed without a source change. |
+| Validation-relevant changes after evidence | none; this completion metadata only |
+| PR, review, and merge | PR #258; independent review completed, all blockers corrected and manager-verified; merge pending. |
+| Residual risk and cleanup | No Phase 1 blocker. Direct per-factory Slurm root assertions remain optional hardening because existing factory-spy and integration coverage exercise the shared root path. The earlier `make test-summary` anomaly remains classified as an unrelated `scheduler_observed_at` timestamp race because its isolated rerun passed and the fresh required pre-submit gate passed. Worktree and branch remain through merge verification. |

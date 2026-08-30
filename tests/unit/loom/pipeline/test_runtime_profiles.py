@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -13,6 +14,7 @@ from loom.pipeline import (
     ResourceRequest,
     RunEnvironmentRequest,
     RunOptions,
+    RunStoreOptions,
     RuntimeProfile,
     RuntimeProfileCollection,
     StageEnvironmentRequest,
@@ -87,6 +89,43 @@ def test_runtime_profile_serializes_sparse_core_fields_and_adapter_sections() ->
         cast(Any, profile.options)["executor"] = "local"
     with pytest.raises(TypeError):
         cast(Any, profile.options["adapter_options"])["local"] = {}
+
+
+def test_run_store_profile_merge_uses_base_profile_and_explicit_precedence(
+    tmp_path: Path,
+) -> None:
+    result = merge_run_options(
+        base={
+            "profile": "cluster",
+            "run_store": {"root": str(tmp_path / "base")},
+        },
+        profiles={
+            "cluster": {"run_store": {"root": str(tmp_path / "profile")}},
+        },
+        explicit={"run_store": {"root": str(tmp_path / "explicit")}},
+    )
+
+    assert isinstance(result.run_store, RunStoreOptions)
+    assert result.run_store.root == str(tmp_path / "explicit")
+
+
+def test_run_store_profile_merge_preserves_sparse_members_and_allows_clearing(
+    tmp_path: Path,
+) -> None:
+    base_root = str(tmp_path / "base")
+
+    preserved = merge_run_options(
+        base={"profile": "cluster", "run_store": {"root": base_root}},
+        profiles={"cluster": {"run_store": {}}},
+        explicit={"run_store": {}},
+    )
+    cleared = merge_run_options(
+        base={"profile": "cluster", "run_store": {"root": base_root}},
+        profiles={"cluster": {"run_store": {"root": None}}},
+    )
+
+    assert preserved.run_store == RunStoreOptions(root=base_root)
+    assert cleared.run_store == RunStoreOptions(root=None)
 
 
 @pytest.mark.parametrize(
@@ -356,9 +395,7 @@ def test_merge_run_options_applies_base_profile_explicit_precedence() -> None:
                     },
                     "adapter_options": {"docker": {"image": "profile"}},
                 },
-                "evaluate": {
-                    "resources": {"entries": {}}
-                },
+                "evaluate": {"resources": {"entries": {}}},
             },
         }
     }
