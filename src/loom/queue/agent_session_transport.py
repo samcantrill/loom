@@ -48,6 +48,8 @@ from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.stores.atomic import atomic_write_bytes
+from loom.pipeline.stores.errors import InvalidRunURIError
+from loom.pipeline.stores.run_uri import validate_run_uri
 from loom.scheduling import CapacityAtom
 
 from .agent_sessions import (
@@ -1518,10 +1520,17 @@ class RunInspectionHttpClient:
                 return _run_inspection_failure("unavailable")
             if handshake.getheader("Content-Type") != "application/json":
                 return _run_inspection_failure("unavailable")
-            handshake_value = _decode(handshake_raw)
-            _exact(handshake_value, {"ok", "result"})
+            try:
+                handshake_value = _decode(handshake_raw)
+                _exact(handshake_value, {"ok", "result"})
+            except QueueError:
+                return _run_inspection_failure("unavailable")
             handshake_result = handshake_value.get("result")
             if _is_run_inspection_failure(handshake_result):
+                if handshake.status != _run_inspection_http_status(
+                    cast(Mapping[str, object], handshake_result)
+                ):
+                    return _run_inspection_failure("unavailable")
                 return freeze_plain_data(
                     handshake_result, path="run inspection handshake failure"
                 )
@@ -1566,20 +1575,14 @@ class RunInspectionHttpClient:
         result = payload.get("result")
         if not isinstance(result, Mapping):
             return _run_inspection_failure("unavailable")
-        code = result.get("code")
-        expected_status = {
-            "invalid_request": 400,
-            "not_found": 404,
-            "unauthorized": 403,
-            "unavailable": 503,
-            "internal": 503,
-        }.get(code if isinstance(code, str) else "", 200)
+        expected_status = _run_inspection_http_status(result)
         if response.status != expected_status:
             return _run_inspection_failure("unavailable")
         return cast(
             Mapping[str, PlainData],
             thaw_plain_data(result, path="run inspection HTTP response"),
         )
+
 
 def _run_inspection_failure(code: str) -> Mapping[str, PlainData]:
     """Build the closed Phase 1 error shape without importing diagnostics."""
@@ -1599,6 +1602,17 @@ def _is_run_inspection_failure(value: object) -> bool:
         in {"invalid_request", "not_found", "unauthorized", "unavailable", "internal"}
         and set(value) == {"schema_version", "code"}
     )
+
+
+def _run_inspection_http_status(value: Mapping[str, object]) -> int:
+    code = value.get("code")
+    return {
+        "invalid_request": 400,
+        "not_found": 404,
+        "unauthorized": 403,
+        "unavailable": 503,
+        "internal": 503,
+    }.get(code if isinstance(code, str) else "", 200)
 
 
 class LocalDaemonAgentHttpClient:
@@ -3935,15 +3949,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._reply(500, {"ok": False, "error": "agent_protocol_indeterminate"})
 
     def _reply_query_result(self, result: Mapping[str, PlainData]) -> None:
-        code = result.get("code")
-        code_name = code if isinstance(code, str) else ""
-        status = {
-            "invalid_request": 400,
-            "not_found": 404,
-            "unauthorized": 403,
-            "unavailable": 503,
-            "internal": 503,
-        }.get(code_name, 200)
+        status = _run_inspection_http_status(result)
         payload = {"ok": True, "result": result}
         encoded = json.dumps(
             thaw_plain_data(payload, path="run inspection HTTP response"),
@@ -4277,6 +4283,10 @@ def _dispatch_application(
         except QueueError as exc:
             raise _RunInspectionHttpError("invalid_request", 400) from exc
         if len(run_uri.encode("utf-8")) > 4 * 1024:
+            return {"schema_version": 1, "code": "invalid_request"}
+        try:
+            run_uri = validate_run_uri(run_uri)
+        except (InvalidRunURIError, OSError, ValueError):
             return {"schema_version": 1, "code": "invalid_request"}
         try:
             daemon._require_view_role(principal, LocalDaemonRole.QUERY)
