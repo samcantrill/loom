@@ -197,9 +197,13 @@ Final commands:
 - Refiner: not needed. Manager correction 1/3 added direct causal coverage for
   a retained failed handle beside a different current handle and for withholding
   all-complete wording when any accepted handle lacks current/retained evidence.
+- Independent-review correction 2/3 makes append order break equal timestamp
+  ties for retained per-handle facts and covers same-second `RUNNING` then
+  `FAILED` observations followed by pruned accounting.
 - Pre-submit gate: pending.
-- Independent review: required for the two prior external-boundary findings.
-- Blocker corrections: 1/3.
+- Independent review: one blocker found for equal-timestamp retained fact
+  ordering; correction 2/3 applied and revalidation/review pending.
+- Blocker corrections: 2/3.
 - PR and merge: pending.
 
 ## Completion Record
@@ -207,8 +211,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Queue SLURM adapter/controller and CLI; existing live-manifest operation/snapshot seams; queue/SLURM docs; deterministic service-less operations example. |
-| Tests added or updated | Prepared proof rejection/proven matrix; observe-then-prune retained failure; per-handle current-over-retained join; retained failure beside a different current handle; missing-handle all-complete guard; existing controller, CLI, live-model, and example journey coverage updated for explicit proof. |
+| Tests added or updated | Prepared proof rejection/proven matrix; same-second observe-then-prune retained failure; per-handle current-over-retained join; retained failure beside a different current handle; missing-handle all-complete guard; existing controller, CLI, live-model, and example journey coverage updated for explicit proof. |
 | Validated revision/tree state and evidence | Executor candidate: focused queue matrix 24 passed; live-model/CLI/example matrix 15 passed; scoped Ruff and Pyright passed; `make validate-pr` and `make test-summary` passed with 2,842 tests and 3 skips. Manager correction 1 focused file: 20 passed with Ruff and Pyright. Fresh full gate pending. |
-| Validation-relevant changes after evidence | Two integration tests were added after the executor receipt; a fresh full gate is required. |
+| Validation-relevant changes after evidence | Retained fact tie-breaking and its integration test changed after the passing 2,844-test receipt; a fresh full gate is required. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Blocked Phase 2 worktree remains until replacement merge is verified. |

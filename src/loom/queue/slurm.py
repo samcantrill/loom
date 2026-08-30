@@ -1111,7 +1111,7 @@ def _retained_scheduler_facts(
         if snapshot.scheduler_job_id not in accepted:
             continue
         previous = latest.get(snapshot.scheduler_job_id)
-        if previous is None or snapshot.captured_at > previous.captured_at:
+        if previous is None or snapshot.captured_at >= previous.captured_at:
             latest[snapshot.scheduler_job_id] = snapshot
     return {
         scheduler_job_id: _SchedulerFact(

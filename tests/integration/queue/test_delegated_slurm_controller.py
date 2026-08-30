@@ -634,6 +634,23 @@ def test_prepared_inspection_uses_retained_failure_snapshot_when_accounting_is_p
     item = service.read_item("retained-item")
     operation = store.latest_submitted_operation(run_uri)
     assert item is not None and operation is not None
+    running = SlurmQueueDispatchAdapter(
+        command_runner=FakeSlurmCommandRunner(
+            scripted_results={
+                "sacct": [
+                    SlurmCommandResult(
+                        "sacct", ("sacct",), 0, stdout="950|RUNNING|0:0\n"
+                    )
+                ]
+            }
+        ),
+        run_store=store,
+        clock=_clock("2026-08-30T00:01:00Z"),
+    ).inspect(item)
+
+    assert running.terminal is False
+    assert running.status is QueueItemStatus.DISPATCHED
+
     observed = SlurmQueueDispatchAdapter(
         command_runner=FakeSlurmCommandRunner(
             scripted_results={
@@ -656,7 +673,7 @@ def test_prepared_inspection_uses_retained_failure_snapshot_when_accounting_is_p
         for snapshot in cast(
             tuple[SlurmSchedulerStatusSnapshot, ...], manifest.status_snapshots
         )
-    ] == ["FAILED"]
+    ] == ["RUNNING", "FAILED"]
 
     inspection = SlurmQueueDispatchAdapter(
         command_runner=FakeSlurmCommandRunner(), run_store=store
