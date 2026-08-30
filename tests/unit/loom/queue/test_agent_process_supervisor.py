@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import subprocess
 from dataclasses import replace
@@ -127,6 +128,101 @@ def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
     supervisor.launch(launch)
 
     assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+
+
+def test_clean_shutdown_accepts_an_exited_group_that_is_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "agent").mkdir()
+    supervisor = AgentProcessSupervisor.initialize(
+        tmp_path / "agent", agent_id="agent-A", profiles=(_profile(),)
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    launch = _launch(supervisor, workspace)
+    original_popen = subprocess.Popen
+
+    def start_root(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        return cast(Any, original_popen([sys.executable, "-c", "pass"], **kwargs))
+
+    monkeypatch.setattr(
+        "loom.queue._agent_process_supervisor.subprocess.Popen", start_root
+    )
+    supervisor.launch(launch)
+    deadline = monotonic() + 2
+    while supervisor.query(launch).state is not SupervisorLaunchState.EXITED:
+        assert monotonic() < deadline
+        sleep(0.01)
+
+    supervisor.mark_clean_shutdown()
+    supervisor.rotate_clean_continuity()
+
+
+def test_clean_shutdown_contains_descendant_after_root_exits(tmp_path: Path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    executable = tmp_path / "exiting-root"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "from pathlib import Path\n"
+        "import subprocess, sys\n"
+        "workspace = Path(sys.argv[sys.argv.index('--workspace') + 1])\n"
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "\"import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "time.sleep(30)\"])\n"
+        "(workspace / 'descendant.pid').write_text(str(child.pid))\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    profile = ResidentWorkerLaunchProfile(
+        project_root=Path.cwd(),
+        python_executable=executable,
+        descriptor={
+            "profile_id": "exiting-root",
+            "kind": "test-resident",
+            "version": 1,
+        },
+    )
+    from loom.queue._agent_process_supervisor import SupervisorLaunchConfiguration
+
+    configuration = SupervisorLaunchConfiguration("agent-A", (profile,))
+    client = AgentProcessSupervisorService.initialize(agent, configuration=configuration)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    launch = replace(_launch(client, workspace), profile=profile)
+    try:
+        client.launch(launch)
+        descendant_file = workspace / "descendant.pid"
+        deadline = monotonic() + 2
+        while not descendant_file.exists() and monotonic() < deadline:
+            sleep(0.01)
+        descendant_pid = int(descendant_file.read_text(encoding="utf-8"))
+        deadline = monotonic() + 2
+        while client.query(launch).state is not SupervisorLaunchState.EXITED:
+            assert monotonic() < deadline
+            sleep(0.01)
+        os.kill(descendant_pid, 0)
+
+        client.shutdown_clean()
+        with sqlite3.connect(agent / "supervisor" / "supervisor.sqlite") as conn:
+            state = conn.execute(
+                "SELECT state FROM launches WHERE operation_id = ?",
+                (launch.launch_operation_id,),
+            ).fetchone()[0]
+        assert state == SupervisorLaunchState.CONTAINED.value
+
+        deadline = monotonic() + 2
+        while monotonic() < deadline:
+            try:
+                os.kill(descendant_pid, 0)
+            except ProcessLookupError:
+                break
+            sleep(0.01)
+        with pytest.raises(ProcessLookupError):
+            os.kill(descendant_pid, 0)
+    finally:
+        if client._endpoint.exists():  # noqa: SLF001
+            client.shutdown_for_test()
 
 
 def test_separate_service_is_profile_set_bound_and_continuous(tmp_path: Path) -> None:

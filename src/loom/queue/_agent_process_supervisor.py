@@ -492,19 +492,27 @@ class AgentProcessSupervisor:
         """Return positive local evidence that no launch needs this service."""
 
         with self._connect() as conn:
-            rows = tuple(conn.execute("SELECT state FROM launches"))
-        return all(
-            str(row["state"])
-            in {
-                SupervisorLaunchState.EXITED.value,
-                SupervisorLaunchState.CONTAINED.value,
-            }
-            for row in rows
-        )
+            rows = tuple(conn.execute("SELECT state, launch_json FROM launches"))
+        for row in rows:
+            state = SupervisorLaunchState(str(row["state"]))
+            if state is SupervisorLaunchState.CONTAINED:
+                continue
+            if state is not SupervisorLaunchState.EXITED:
+                return False
+            launch = _launch_from_value(json.loads(str(row["launch_json"])))
+            if launch.continuity_epoch != self.continuity_epoch:
+                # A prior clean epoch is durable terminal history, not current
+                # process ownership.
+                continue
+            child = self._children.get(launch.launch_operation_id)
+            if child is None or _process_group_alive(child):
+                return False
+        return True
 
     def mark_clean_shutdown(self) -> None:
         """Persist the proved terminal cut owned by this process service."""
 
+        self._contain_current_exited_groups()
         if not self.quiescent():
             raise AgentProcessSupervisorError(
                 "managed supervisor has non-quiescent launches"
@@ -516,6 +524,24 @@ class AgentProcessSupervisor:
                 (self.continuity_epoch,),
             )
             conn.commit()
+
+    def _contain_current_exited_groups(self) -> None:
+        """Contain descendants of roots that exited in this service epoch."""
+
+        with self._connect() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT launch_json FROM launches WHERE state = ?",
+                    (SupervisorLaunchState.EXITED.value,),
+                )
+            )
+        for row in rows:
+            launch = _launch_from_value(json.loads(str(row["launch_json"])))
+            if launch.continuity_epoch != self.continuity_epoch:
+                continue
+            child = self._children.get(launch.launch_operation_id)
+            if child is not None and _process_group_alive(child):
+                self.contain(launch)
 
     def rotate_clean_continuity(self) -> None:
         """Start a fresh epoch only after a persisted clean terminal cut."""

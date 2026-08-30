@@ -177,21 +177,23 @@ Final commands:
 - Implementation: correction 1/3 complete; owner-store/execution-journal
   validation and the shared retained-work proof now run before supervisor
   creation, and created-service cleanup reuses that proof before clean shutdown
-- Refiner: pending only for a qualified blocker
+- Refiner: complete; correction 2/3 closes the current-epoch exited-root
+  containment gap before a clean shutdown can retire the service owner
 - Pre-submit gate: pending
 - Independent review: required for the corrected detached-process boundary
-- Blocker corrections: 1/3; manager found that direct constructor cleanup
-  bypassed the cross-owner retained-work proof, and the bounded correction is
-  complete
+- Blocker corrections: 2/3; correction 1 closes direct constructor cleanup's
+  retained-work-proof bypass. Correction 2 contains a current epoch's exited
+  root group before clean shutdown when owned group evidence shows descendants
+  remain; historical clean-epoch terminal rows remain restartable.
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Selectively reused the Phase 13 source/test candidate under `src/loom/queue` and directly relevant queue tests, then changed `LocalDaemon.start()` and `LocalDaemonAgentHttpClient` construction to preserve created-versus-joined supervisor ownership. Correction 1 centralizes the local retained-work proof with normal shutdown, validates owner stores/journals before process creation, and permits created-service cleanup only after a fresh empty proof. |
-| Tests added or updated | Added process-level proof for changed local scheduling rejection, mismatched outbound deployment binding, unavailable local owner-store and outbound execution-journal rejection, retained local owner preservation without a clean marker, and rejection that leaves a valid pre-existing outbound supervisor's PID and epoch reachable. |
-| Validated revision/tree state and evidence | Original focused tests passed (3); targeted lifecycle matrix passed: 85 tests in 377.39s; targeted SLURM/session/CLI/E2E matrix passed: 69 tests in 121.57s. Correction 1 focused constructor/shutdown matrix passed: 7 tests in 2.25s; changed-file Ruff and Pyright passed. |
-| Validation-relevant changes after evidence | Correction 1 changed local/outbound preflight and cleanup; its focused matrix and Ruff/Pyright ran afterward. |
+| Implementation and changed paths | Selectively reused the Phase 13 source/test candidate under `src/loom/queue` and directly relevant queue tests, then changed `LocalDaemon.start()` and `LocalDaemonAgentHttpClient` construction to preserve created-versus-joined supervisor ownership. Correction 1 centralizes the local retained-work proof with normal shutdown, validates owner stores/journals before process creation, and permits created-service cleanup only after a fresh empty proof. Correction 2 changes `AgentProcessSupervisor` clean shutdown to contain an exited current-epoch root's still-live owned process group before writing the clean marker. |
+| Tests added or updated | Added process-level proof for changed local scheduling rejection, mismatched outbound deployment binding, unavailable local owner-store and outbound execution-journal rejection, retained local owner preservation without a clean marker, and rejection that leaves a valid pre-existing outbound supervisor's PID and epoch reachable. Correction 2 adds supervisor proof that a gone exited group permits epoch rotation, and that clean service shutdown records containment and leaves no TERM-ignoring descendant alive after its root exits. |
+| Validated revision/tree state and evidence | Original focused tests passed (3); targeted lifecycle matrix passed: 85 tests in 377.39s; targeted SLURM/session/CLI/E2E matrix passed: 69 tests in 121.57s. Correction 1 focused constructor/shutdown matrix passed: 7 tests in 2.25s; changed-file Ruff and Pyright passed. Correction 2 focused supervisor suite passed: 7 tests in 0.82s; changed-file Ruff and Pyright passed. |
+| Validation-relevant changes after evidence | Correction 2 changes the supervisor clean-shutdown proof; its focused supervisor suite and changed-file Ruff/Pyright ran afterward. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
