@@ -49,6 +49,13 @@ Roadmap commands for remote stores, additional container executors, and other
 future operational surfaces remain intentionally deferred. The later-command
 sections in this document distinguish current support from future shape.
 
+V34 adds `loom inspect-run RUN_URI --direct` for bounded metadata-only
+inspection of one canonical local run URI. `--endpoint SOCKET` instead selects
+the owner-only local daemon socket and never falls back to a direct read.
+`--queue-config CONFIG` is direct-only. JSON output uses the separate
+`loom.cli.inspect_run.v1` envelope; locations report recorded availability but
+the command never reads artifact or log bytes.
+
 The v2 CLI should answer:
 
 ```text

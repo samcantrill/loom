@@ -202,9 +202,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
+| Implementation and changed paths | Added `loom.diagnostics.run_inspection` strict v1 models/projection and lazy exports; owner-only injected Unix operation/client; indexed daemon run-URI lookup; direct/Unix CLI selection, docs, and public import expectation. |
+| Tests added or updated | Added run-inspection codec/bounds and CLI selector tests; updated diagnostics public-import assertion. |
+| Validated revision/tree state and evidence | Focused lint and Pyright passed. `pytest tests/package/test_import.py tests/unit/loom/diagnostics/test_run_inspection.py tests/unit/loom/cli/test_inspect_run.py tests/unit/loom/queue/test_local_daemon.py` passed (52 tests). Earlier `make test-summary` found the public-import expectation omission; all other suites passed, and the targeted correction passed. |
+| Validation-relevant changes after evidence | The public-import test expectation was updated after the broad summary; focused validation above is current. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Residual risk and cleanup | No implementation blocker. A fresh broad `make validate-pr`/`make test-summary` receipt is still required after the final public-import test correction. |
