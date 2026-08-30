@@ -11,6 +11,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import cast
 
+from loom.fingerprints import validate_digest
 from loom.pipeline.stores.atomic import atomic_write_json
 from loom.serialization import (
     PlainData,
@@ -63,6 +64,22 @@ _LIVE_OPTIONAL_FIELDS = frozenset(
         "completed_at",
         "submit_host",
         "submit_user",
+        "queue_item_id",
+        "scheduler_operations",
+    }
+)
+_SCHEDULER_OPERATION_FIELDS = frozenset(
+    {
+        "operation_id",
+        "operation_digest",
+        "logical_key",
+        "marker",
+        "script_relative_path",
+        "dependency_job_ids",
+        "created_at",
+        "updated_at",
+        "state",
+        "evidence",
     }
 )
 _SUBMITTED_JOB_FIELDS = frozenset(
@@ -121,6 +138,110 @@ class SlurmLiveSubmissionStatus(StrEnum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     UNKNOWN = "UNKNOWN"
+
+
+class SlurmSchedulerOperationState(StrEnum):
+    """Durable state of one exact scheduler-call boundary."""
+
+    INTENT = "INTENT"
+    SUBMITTING = "SUBMITTING"
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    UNKNOWN = "UNKNOWN"
+    CONFLICT = "CONFLICT"
+
+
+@dataclass(frozen=True, slots=True)
+class SlurmSchedulerOperation:
+    """One persisted call identity; submitted jobs remain the handle inventory."""
+
+    operation_id: str
+    operation_digest: str
+    logical_key: str
+    marker: str
+    script_relative_path: str
+    dependency_job_ids: Sequence[str]
+    created_at: str
+    updated_at: str
+    state: SlurmSchedulerOperationState | str
+    evidence: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "operation_id", _safe_text(self.operation_id, path="operation_id")
+        )
+        try:
+            object.__setattr__(
+                self, "operation_digest", validate_digest(self.operation_digest)
+            )
+        except Exception as exc:
+            raise SlurmManifestError(
+                "operation_digest must be a canonical digest"
+            ) from exc
+        object.__setattr__(
+            self,
+            "logical_key",
+            validate_logical_job_key(self.logical_key, path="logical_key"),
+        )
+        object.__setattr__(self, "marker", _safe_text(self.marker, path="marker"))
+        object.__setattr__(
+            self,
+            "script_relative_path",
+            _relative_path(self.script_relative_path, path="script_relative_path"),
+        )
+        object.__setattr__(
+            self,
+            "dependency_job_ids",
+            tuple(
+                _scheduler_job_id(job_id, path=f"dependency_job_ids[{index}]")
+                for index, job_id in enumerate(
+                    _sequence(self.dependency_job_ids, path="dependency_job_ids")
+                )
+            ),
+        )
+        _timestamp(self.created_at, path="created_at")
+        _timestamp(self.updated_at, path="updated_at")
+        object.__setattr__(self, "state", SlurmSchedulerOperationState(self.state))
+        if self.evidence is not None:
+            _safe_text(self.evidence, path="evidence")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "operation_id": self.operation_id,
+            "operation_digest": self.operation_digest,
+            "logical_key": self.logical_key,
+            "marker": self.marker,
+            "script_relative_path": self.script_relative_path,
+            "dependency_job_ids": list(self.dependency_job_ids),
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "state": SlurmSchedulerOperationState(self.state).value,
+            "evidence": self.evidence,
+        }
+
+    @classmethod
+    def from_dict(
+        cls, data: object, *, path: str = "SlurmSchedulerOperation"
+    ) -> "SlurmSchedulerOperation":
+        mapping = _mapping(data, path=path)
+        _reject_unknown(mapping, _SCHEDULER_OPERATION_FIELDS, path=path)
+        _require_fields(
+            mapping,
+            set(_SCHEDULER_OPERATION_FIELDS - {"evidence"}),
+            path=path,
+        )
+        return cls(
+            operation_id=cast(str, mapping["operation_id"]),
+            operation_digest=cast(str, mapping["operation_digest"]),
+            logical_key=cast(str, mapping["logical_key"]),
+            marker=cast(str, mapping["marker"]),
+            script_relative_path=cast(str, mapping["script_relative_path"]),
+            dependency_job_ids=cast(Sequence[str], mapping["dependency_job_ids"]),
+            created_at=cast(str, mapping["created_at"]),
+            updated_at=cast(str, mapping["updated_at"]),
+            state=cast(str, mapping["state"]),
+            evidence=cast(str | None, mapping.get("evidence")),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,6 +663,8 @@ class SlurmLiveSubmissionManifest:
     completed_at: str | None = None
     submit_host: str | None = None
     submit_user: str | None = None
+    queue_item_id: str | None = None
+    scheduler_operations: Sequence[SlurmSchedulerOperation | Mapping[str, object]] = ()
     dry_run: bool = False
     schema_version: int = SLURM_LIVE_SUBMISSION_SCHEMA_VERSION
 
@@ -681,6 +804,20 @@ class SlurmLiveSubmissionManifest:
             _safe_text(self.submit_host, path="submit_host")
         if self.submit_user is not None:
             _safe_text(self.submit_user, path="submit_user")
+        if self.queue_item_id is not None:
+            _safe_text(self.queue_item_id, path="queue_item_id")
+        object.__setattr__(
+            self,
+            "scheduler_operations",
+            tuple(
+                item
+                if isinstance(item, SlurmSchedulerOperation)
+                else SlurmSchedulerOperation.from_dict(
+                    item, path=f"scheduler_operations[{index}]"
+                )
+                for index, item in enumerate(self.scheduler_operations)
+            ),
+        )
         self._validate_live_consistency()
 
     @property
@@ -730,7 +867,7 @@ class SlurmLiveSubmissionManifest:
             tuple[SlurmCancellationAttempt, ...], self.cancellation_attempts
         )
         generated = cast(tuple[SlurmCommandArgv, ...], self.generated_command_argv)
-        return {
+        result: dict[str, PlainData] = {
             "schema_version": self.schema_version,
             "run_uri": self.run_uri,
             "mode": mode.value,
@@ -756,6 +893,16 @@ class SlurmLiveSubmissionManifest:
             "status_snapshots": [snapshot.to_dict() for snapshot in snapshots],
             "cancellation_attempts": [attempt.to_dict() for attempt in cancellations],
         }
+        operations = cast(
+            tuple[SlurmSchedulerOperation, ...], self.scheduler_operations
+        )
+        if self.queue_item_id is not None:
+            result["queue_item_id"] = self.queue_item_id
+        if operations:
+            result["scheduler_operations"] = [
+                operation.to_dict() for operation in operations
+            ]
+        return result
 
     @classmethod
     def from_dict(cls, data: object) -> "SlurmLiveSubmissionManifest":
@@ -810,6 +957,18 @@ class SlurmLiveSubmissionManifest:
             completed_at=cast(str | None, mapping.get("completed_at")),
             submit_host=cast(str | None, mapping.get("submit_host")),
             submit_user=cast(str | None, mapping.get("submit_user")),
+            queue_item_id=cast(str | None, mapping.get("queue_item_id")),
+            scheduler_operations=tuple(
+                SlurmSchedulerOperation.from_dict(
+                    item, path=f"scheduler_operations[{index}]"
+                )
+                for index, item in enumerate(
+                    _sequence(
+                        mapping.get("scheduler_operations", ()),
+                        path="scheduler_operations",
+                    )
+                )
+            ),
             submitted_jobs=tuple(
                 SlurmSubmittedJob.from_dict(item, path=f"submitted_jobs[{index}]")
                 for index, item in enumerate(
@@ -891,6 +1050,47 @@ class SlurmLiveSubmissionManifest:
                 raise SlurmManifestError(
                     f"failed submission {failed.logical_key!r} has no matching planned job"
                 )
+        operations = cast(
+            tuple[SlurmSchedulerOperation, ...], self.scheduler_operations
+        )
+        operation_ids = [operation.operation_id for operation in operations]
+        operation_keys = [operation.logical_key for operation in operations]
+        if len(operation_ids) != len(set(operation_ids)):
+            raise SlurmManifestError("scheduler operation IDs must be unique")
+        if len(operation_keys) != len(set(operation_keys)):
+            raise SlurmManifestError(
+                "each planned job may have one scheduler operation"
+            )
+        if any(operation.logical_key not in planned_by_key for operation in operations):
+            raise SlurmManifestError("scheduler operation has no matching planned job")
+        if self.queue_item_id is not None:
+            operations_by_key = {
+                operation.logical_key: operation for operation in operations
+            }
+            for job in submitted:
+                operation = operations_by_key.get(job.logical_key)
+                if (
+                    operation is None
+                    or operation.state is not SlurmSchedulerOperationState.ACCEPTED
+                ):
+                    raise SlurmManifestError(
+                        f"queued submitted job {job.logical_key!r} requires one accepted scheduler operation"
+                    )
+                if (
+                    operation.script_relative_path != job.script_relative_path
+                    or operation.dependency_job_ids != job.dependency_job_ids
+                ):
+                    raise SlurmManifestError(
+                        f"queued submitted job {job.logical_key!r} disagrees with its scheduler operation"
+                    )
+            if any(
+                operation.state is SlurmSchedulerOperationState.ACCEPTED
+                and operation.logical_key not in submitted_by_key
+                for operation in operations
+            ):
+                raise SlurmManifestError(
+                    "accepted queued scheduler operation has no submitted job"
+                )
 
 
 def live_manifest_from_planned_submission(
@@ -900,6 +1100,7 @@ def live_manifest_from_planned_submission(
     updated_at: str | None = None,
     submit_host: str | None = None,
     submit_user: str | None = None,
+    queue_item_id: str | None = None,
 ) -> SlurmLiveSubmissionManifest:
     """Create a live manifest draft from a v6 planned submission."""
 
@@ -924,6 +1125,7 @@ def live_manifest_from_planned_submission(
         submitted_at=now if status != SlurmLiveSubmissionStatus.PREPARED else None,
         submit_host=submit_host or socket.gethostname(),
         submit_user=submit_user or getpass.getuser(),
+        queue_item_id=queue_item_id,
     )
 
 
@@ -1074,6 +1276,8 @@ __all__ = [
     "SlurmFailedSubmission",
     "SlurmLiveSubmissionManifest",
     "SlurmLiveSubmissionStatus",
+    "SlurmSchedulerOperation",
+    "SlurmSchedulerOperationState",
     "SlurmSchedulerStatusSnapshot",
     "SlurmSubmittedJob",
     "live_manifest_from_planned_submission",

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+import json
 from pathlib import Path
 from typing import Any, cast
 
+from loom.fingerprints import hash_mapping
 from loom.pipeline.execution.lifecycle import write_run_submitted, write_stage_submitted
 from loom.pipeline.stores import AuthorityConfig
 from loom.pipeline.stores.authority import PerRunAuthorityStore
@@ -26,7 +28,10 @@ from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
 
 from loom.pipeline.executors.slurm.artifacts import SlurmDryRunPlanningResult
-from loom.pipeline.executors.slurm.authority import SlurmLiveAuthorityFacts, slurm_live_authority_facts
+from loom.pipeline.executors.slurm.authority import (
+    SlurmLiveAuthorityFacts,
+    slurm_live_authority_facts,
+)
 from loom.pipeline.executors.slurm.commands import (
     SlurmCommandResult,
     SlurmCommandRunner,
@@ -45,8 +50,11 @@ from loom.pipeline.executors.slurm.live import (
     SlurmFailedSubmission,
     SlurmLiveSubmissionManifest,
     SlurmLiveSubmissionStatus,
+    SlurmSchedulerOperation,
+    SlurmSchedulerOperationState,
     SlurmSubmittedJob,
     live_manifest_from_planned_submission,
+    read_slurm_live_manifest,
     write_slurm_live_manifest,
 )
 from loom.pipeline.executors.slurm.manifest import SlurmMode, SlurmPlannedJob
@@ -55,6 +63,7 @@ from loom.pipeline.executors.slurm.submission import (
     SlurmLiveSubmissionResult,
     default_slurm_command_runner as _executor_default_slurm_command_runner,
 )
+from loom.pipeline.executors.slurm.ready_stage import operation_marker
 
 RunStore = LegacyRunStore
 
@@ -84,7 +93,9 @@ class SlurmSubmissionServices:
         if self.authority_config is not None and not isinstance(
             self.authority_config, AuthorityConfig
         ):
-            raise TypeError("SlurmSubmissionServices.authority_config must be AuthorityConfig")
+            raise TypeError(
+                "SlurmSubmissionServices.authority_config must be AuthorityConfig"
+            )
         if self.authority_store is not None and not isinstance(
             self.authority_store, PerRunAuthorityStore
         ):
@@ -160,6 +171,7 @@ def _submit_single_job_slurm(
     planning_result: SlurmDryRunPlanningResult,
     command_runner: SlurmCommandRunner | None = None,
     submitted_at: str | None = None,
+    queue_item_id: str | None = None,
 ) -> SlurmLiveSubmissionResult:
     """Submit a v6 single-job SLURM script and persist live submission facts."""
 
@@ -169,6 +181,15 @@ def _submit_single_job_slurm(
     if submission.mode != SlurmMode.SINGLE_JOB:
         raise SlurmPlanningError("submit_single_job_slurm requires slurm-single-job")
     _require_slurm_live_authority(run_store, operation="single-job submission")
+    if queue_item_id is not None:
+        return _submit_or_resume_queued_slurm(
+            run_store=run_store,
+            run_uri=run_uri,
+            planning_result=planning_result,
+            command_runner=command_runner,
+            submitted_at=submitted_at,
+            queue_item_id=queue_item_id,
+        )
 
     _raise_if_active_submission(run_store=run_store, run_uri=run_uri)
     runner = command_runner or default_slurm_command_runner()
@@ -178,6 +199,7 @@ def _submit_single_job_slurm(
         submission,
         status=SlurmLiveSubmissionStatus.SUBMITTING,
         updated_at=now,
+        queue_item_id=queue_item_id,
     )
     _write_manifest_and_registry(
         run_store=run_store,
@@ -236,7 +258,10 @@ def _submit_single_job_slurm(
         )
 
     try:
-        command_result = runner.sbatch(script.local_path)
+        command_result = runner.sbatch(
+            script.local_path,
+            comment=_queue_operation_marker(draft, job.logical_key),
+        )
     except SlurmCommandUnavailableError as exc:
         command_result = command_result_from_exception(
             command="sbatch",
@@ -388,6 +413,7 @@ def _submit_afterok_slurm(
     planning_result: SlurmDryRunPlanningResult,
     command_runner: SlurmCommandRunner | None = None,
     submitted_at: str | None = None,
+    queue_item_id: str | None = None,
 ) -> SlurmLiveSubmissionResult:
     """Submit a v6 afterok SLURM DAG and persist accepted scheduler jobs."""
 
@@ -397,6 +423,15 @@ def _submit_afterok_slurm(
     if submission.mode != SlurmMode.AFTEROK:
         raise SlurmPlanningError("submit_afterok_slurm requires slurm-afterok")
     _require_slurm_live_authority(run_store, operation="afterok submission")
+    if queue_item_id is not None:
+        return _submit_or_resume_queued_slurm(
+            run_store=run_store,
+            run_uri=run_uri,
+            planning_result=planning_result,
+            command_runner=command_runner,
+            submitted_at=submitted_at,
+            queue_item_id=queue_item_id,
+        )
 
     _raise_if_active_submission(run_store=run_store, run_uri=run_uri)
     runner = command_runner or default_slurm_command_runner()
@@ -406,6 +441,7 @@ def _submit_afterok_slurm(
         submission,
         status=SlurmLiveSubmissionStatus.SUBMITTING,
         updated_at=now,
+        queue_item_id=queue_item_id,
     )
     registry = _write_manifest_and_registry(
         run_store=run_store,
@@ -456,6 +492,7 @@ def _submit_afterok_slurm(
             command_result = runner.sbatch(
                 script.local_path,
                 dependency_job_ids=dependency_job_ids,
+                comment=_queue_operation_marker(current, job.logical_key),
             )
         except SlurmCommandUnavailableError as exc:
             command_result = command_result_from_exception(
@@ -661,6 +698,543 @@ def _submit_afterok_slurm(
     )
 
 
+def _submit_or_resume_queued_slurm(
+    *,
+    run_store: RunStore,
+    run_uri: str,
+    planning_result: SlurmDryRunPlanningResult,
+    command_runner: SlurmCommandRunner | None,
+    submitted_at: str | None,
+    queue_item_id: str,
+) -> SlurmLiveSubmissionResult:
+    """Drive one queued whole-run manifest through exact scheduler-call facts."""
+
+    submission = planning_result.submission
+    runner = command_runner or default_slurm_command_runner()
+    manifest_path = planning_result.manifest_artifact.local_path
+    latest = run_store.latest_submitted_operation(run_uri)
+    if latest is None:
+        now = submitted_at or utc_timestamp()
+        current = live_manifest_from_planned_submission(
+            submission,
+            status=SlurmLiveSubmissionStatus.SUBMITTING,
+            updated_at=now,
+            queue_item_id=queue_item_id,
+        )
+        _write_manifest_and_registry(
+            run_store=run_store,
+            run_uri=run_uri,
+            manifest_path=manifest_path,
+            manifest=current,
+            state=SubmittedOperationState.SUBMITTING,
+        )
+    else:
+        queue = latest.backend_metadata.get("queue")
+        if (
+            latest.submission_id != submission.planning_id
+            or latest.mode != SlurmMode(submission.mode).value
+            or latest.manifest_relative_path != submission.manifest_relative_path
+            or not isinstance(queue, Mapping)
+            or queue.get("queue_item_id") != queue_item_id
+        ):
+            raise SlurmActiveSubmissionError(
+                "active submitted work belongs to another prepared queue launch"
+            )
+        try:
+            current = read_slurm_live_manifest(
+                json.loads(manifest_path.read_text(encoding="utf-8"))
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            raise SlurmManifestUpdateError(
+                "queued SLURM live manifest is unreadable"
+            ) from exc
+        if current.queue_item_id != queue_item_id:
+            raise SlurmActiveSubmissionError(
+                "queued SLURM live manifest has another queue item owner"
+            )
+        if current.submission_status is SlurmLiveSubmissionStatus.SUBMITTED:
+            return _live_result(
+                manifest=current,
+                planning_result=planning_result,
+                status=SlurmLiveSubmissionStatus.SUBMITTED,
+            )
+
+    jobs = cast(tuple[SlurmPlannedJob, ...], submission.jobs)
+    submitted_jobs = list(cast(tuple[SlurmSubmittedJob, ...], current.submitted_jobs))
+    submitted_by_key = {job.logical_key: job for job in submitted_jobs}
+    operations = list(
+        cast(tuple[SlurmSchedulerOperation, ...], current.scheduler_operations)
+    )
+    operations_by_key = {operation.logical_key: operation for operation in operations}
+
+    for job in jobs:
+        if job.logical_key in submitted_by_key:
+            continue
+        dependency_job_ids = tuple(
+            submitted_by_key[key].scheduler_job_id
+            for key in job.dependency_job_keys
+            if key in submitted_by_key
+        )
+        if len(dependency_job_ids) != len(job.dependency_job_keys):
+            return _record_queued_unknown(
+                run_store=run_store,
+                run_uri=run_uri,
+                manifest_path=manifest_path,
+                manifest=current,
+                planning_result=planning_result,
+                evidence="slurm_queue_dependency_handle_missing",
+            )
+        script = planning_result.script_artifacts.get(job.logical_key)
+        if script is None or job.script_relative_path is None:
+            raise SlurmPlanningError("queued SLURM job has no prepared script")
+        operation = operations_by_key.get(job.logical_key)
+        if operation is None:
+            operation = _queued_operation(
+                manifest=current,
+                job=job,
+                dependency_job_ids=dependency_job_ids,
+                now=utc_timestamp(),
+            )
+            operations.append(operation)
+            operations_by_key[job.logical_key] = operation
+            current = replace(current, scheduler_operations=tuple(operations))
+            _write_manifest_and_registry(
+                run_store=run_store,
+                run_uri=run_uri,
+                manifest_path=manifest_path,
+                manifest=current,
+                state=SubmittedOperationState.SUBMITTING,
+            )
+        else:
+            _validate_queued_operation_identity(
+                manifest=current,
+                job=job,
+                dependency_job_ids=dependency_job_ids,
+                operation=operation,
+            )
+
+        if operation.state in {
+            SlurmSchedulerOperationState.SUBMITTING,
+            SlurmSchedulerOperationState.UNKNOWN,
+        }:
+            discovery = _discover_queued_operation(runner, operation)
+            if discovery is None or len(discovery) == 0:
+                operation = replace(
+                    operation,
+                    state=SlurmSchedulerOperationState.UNKNOWN,
+                    updated_at=utc_timestamp(),
+                    evidence="slurm_operation_not_found"
+                    if discovery is not None
+                    else "slurm_discovery_unknown",
+                )
+                operations = _replace_scheduler_operation(operations, operation)
+                current = replace(current, scheduler_operations=tuple(operations))
+                return _record_queued_unknown(
+                    run_store=run_store,
+                    run_uri=run_uri,
+                    manifest_path=manifest_path,
+                    manifest=current,
+                    planning_result=planning_result,
+                    evidence=cast(str, operation.evidence),
+                )
+            if len(discovery) > 1:
+                operation = replace(
+                    operation,
+                    state=SlurmSchedulerOperationState.CONFLICT,
+                    updated_at=utc_timestamp(),
+                    evidence="slurm_operation_multiple_matches",
+                )
+                operations = _replace_scheduler_operation(operations, operation)
+                current = replace(current, scheduler_operations=tuple(operations))
+                return _record_queued_unknown(
+                    run_store=run_store,
+                    run_uri=run_uri,
+                    manifest_path=manifest_path,
+                    manifest=current,
+                    planning_result=planning_result,
+                    evidence="slurm_operation_multiple_matches",
+                )
+            scheduler_job_id, scheduler_cluster = next(iter(discovery))
+            command_result = SlurmCommandResult(
+                command="slurm-operation-discovery",
+                argv=("discover", operation.marker),
+                returncode=0,
+                stdout=scheduler_job_id,
+            )
+            submitted_job = _queued_submitted_job(
+                job=job,
+                scheduler_job_id=scheduler_job_id,
+                scheduler_cluster=scheduler_cluster,
+                command_result=command_result,
+                dependency_job_ids=dependency_job_ids,
+                submitted_at=utc_timestamp(),
+            )
+            operation = replace(
+                operation,
+                state=SlurmSchedulerOperationState.ACCEPTED,
+                updated_at=utc_timestamp(),
+                evidence="slurm_operation_reconciled",
+            )
+        elif operation.state is SlurmSchedulerOperationState.INTENT:
+            operation = replace(
+                operation,
+                state=SlurmSchedulerOperationState.SUBMITTING,
+                updated_at=utc_timestamp(),
+                evidence="slurm_submit_call_started",
+            )
+            operations = _replace_scheduler_operation(operations, operation)
+            current = replace(current, scheduler_operations=tuple(operations))
+            _write_manifest_and_registry(
+                run_store=run_store,
+                run_uri=run_uri,
+                manifest_path=manifest_path,
+                manifest=current,
+                state=SubmittedOperationState.SUBMITTING,
+            )
+            try:
+                command_result = runner.sbatch(
+                    script.local_path,
+                    dependency_job_ids=dependency_job_ids,
+                    comment=operation.marker,
+                )
+            except Exception:
+                operation = replace(
+                    operation,
+                    state=SlurmSchedulerOperationState.UNKNOWN,
+                    updated_at=utc_timestamp(),
+                    evidence="slurm_submit_unknown",
+                )
+                operations = _replace_scheduler_operation(operations, operation)
+                current = replace(current, scheduler_operations=tuple(operations))
+                return _record_queued_unknown(
+                    run_store=run_store,
+                    run_uri=run_uri,
+                    manifest_path=manifest_path,
+                    manifest=current,
+                    planning_result=planning_result,
+                    evidence="slurm_submit_unknown",
+                )
+            if not command_result.ok:
+                return _record_queued_rejection(
+                    run_store=run_store,
+                    run_uri=run_uri,
+                    manifest_path=manifest_path,
+                    manifest=current,
+                    planning_result=planning_result,
+                    operations=operations,
+                    operation=operation,
+                    job=job,
+                    command_result=command_result,
+                    dependency_job_ids=dependency_job_ids,
+                )
+            try:
+                parsed = parse_sbatch_parsable_output(command_result.stdout)
+            except SlurmJobIdParseError:
+                operation = replace(
+                    operation,
+                    state=SlurmSchedulerOperationState.UNKNOWN,
+                    updated_at=utc_timestamp(),
+                    evidence="slurm_submit_unusable_success",
+                )
+                operations = _replace_scheduler_operation(operations, operation)
+                current = replace(current, scheduler_operations=tuple(operations))
+                return _record_queued_unknown(
+                    run_store=run_store,
+                    run_uri=run_uri,
+                    manifest_path=manifest_path,
+                    manifest=current,
+                    planning_result=planning_result,
+                    evidence="slurm_submit_unusable_success",
+                )
+            submitted_job = _queued_submitted_job(
+                job=job,
+                scheduler_job_id=parsed.job_id,
+                scheduler_cluster=parsed.cluster,
+                command_result=command_result,
+                dependency_job_ids=dependency_job_ids,
+                submitted_at=utc_timestamp(),
+            )
+            operation = replace(
+                operation,
+                state=SlurmSchedulerOperationState.ACCEPTED,
+                updated_at=utc_timestamp(),
+                evidence="slurm_submit_accepted",
+            )
+        else:
+            return _record_queued_unknown(
+                run_store=run_store,
+                run_uri=run_uri,
+                manifest_path=manifest_path,
+                manifest=current,
+                planning_result=planning_result,
+                evidence="slurm_operation_not_resumable",
+            )
+
+        operations = _replace_scheduler_operation(operations, operation)
+        submitted_jobs.append(submitted_job)
+        submitted_by_key[job.logical_key] = submitted_job
+        current = replace(
+            current,
+            updated_at=utc_timestamp(),
+            submitted_jobs=tuple(submitted_jobs),
+            scheduler_operations=tuple(operations),
+        )
+        registry = _write_manifest_and_registry(
+            run_store=run_store,
+            run_uri=run_uri,
+            manifest_path=manifest_path,
+            manifest=current,
+            state=SubmittedOperationState.SUBMITTING,
+        )
+        if SlurmMode(submission.mode) is SlurmMode.AFTEROK:
+            _write_submitted_stage(
+                run_store=run_store,
+                run_uri=run_uri,
+                job=job,
+                submitted_job=submitted_job,
+                registry=registry,
+                submitted_at=submitted_job.submitted_at,
+            )
+
+    submitted = replace(
+        current,
+        submission_status=SlurmLiveSubmissionStatus.SUBMITTED,
+        updated_at=utc_timestamp(),
+        submitted_at=current.submitted_at or utc_timestamp(),
+        submitted_jobs=tuple(submitted_jobs),
+        scheduler_operations=tuple(operations),
+    )
+    _write_manifest_and_registry(
+        run_store=run_store,
+        run_uri=run_uri,
+        manifest_path=manifest_path,
+        manifest=submitted,
+        state=SubmittedOperationState.SUBMITTED,
+    )
+    _write_run_submitted(
+        run_store=run_store,
+        run_uri=run_uri,
+        manifest=submitted,
+        message="queued SLURM submission accepted by scheduler",
+    )
+    return _live_result(
+        manifest=submitted,
+        planning_result=planning_result,
+        status=SlurmLiveSubmissionStatus.SUBMITTED,
+    )
+
+
+def _queued_operation(
+    *,
+    manifest: SlurmLiveSubmissionManifest,
+    job: SlurmPlannedJob,
+    dependency_job_ids: tuple[str, ...],
+    now: str,
+) -> SlurmSchedulerOperation:
+    if manifest.queue_item_id is None or job.script_relative_path is None:
+        raise SlurmPlanningError("queued operation requires queue identity and script")
+    semantic: dict[str, PlainData] = {
+        "schema_version": 1,
+        "queue_item_id": manifest.queue_item_id,
+        "run_uri": manifest.run_uri,
+        "submission_id": manifest.submission_id,
+        "logical_key": job.logical_key,
+        "script_relative_path": job.script_relative_path,
+        "dependency_job_ids": list(dependency_job_ids),
+    }
+    digest = hash_mapping(semantic)
+    return SlurmSchedulerOperation(
+        operation_id=digest,
+        operation_digest=digest,
+        logical_key=job.logical_key,
+        marker=operation_marker(digest),
+        script_relative_path=job.script_relative_path,
+        dependency_job_ids=dependency_job_ids,
+        created_at=now,
+        updated_at=now,
+        state=SlurmSchedulerOperationState.INTENT,
+        evidence="slurm_submit_intent_persisted",
+    )
+
+
+def _validate_queued_operation_identity(
+    *,
+    manifest: SlurmLiveSubmissionManifest,
+    job: SlurmPlannedJob,
+    dependency_job_ids: tuple[str, ...],
+    operation: SlurmSchedulerOperation,
+) -> None:
+    expected = _queued_operation(
+        manifest=manifest,
+        job=job,
+        dependency_job_ids=dependency_job_ids,
+        now=operation.created_at,
+    )
+    if (
+        operation.operation_id != expected.operation_id
+        or operation.operation_digest != expected.operation_digest
+        or operation.marker != expected.marker
+        or operation.script_relative_path != expected.script_relative_path
+        or operation.dependency_job_ids != expected.dependency_job_ids
+    ):
+        raise SlurmManifestUpdateError(
+            "queued SLURM operation identity changed after persistence"
+        )
+
+
+def _discover_queued_operation(
+    runner: SlurmCommandRunner,
+    operation: SlurmSchedulerOperation,
+) -> set[tuple[str, str | None]] | None:
+    try:
+        live = runner.discover_live_operations()
+        retained = runner.discover_accounted_operations(
+            started_after=operation.created_at
+        )
+    except Exception:
+        return None
+    if not live.ok or not retained.ok:
+        return None
+    matches_by_job: dict[str, set[str | None]] = {}
+    try:
+        for raw in live.stdout.splitlines():
+            fields = raw.strip().split("|")
+            if len(fields) == 2 and fields[1] == operation.marker:
+                if not fields[0].isdecimal():
+                    return None
+                matches_by_job.setdefault(fields[0], set()).add(None)
+        for raw in retained.stdout.splitlines():
+            fields = raw.strip().split("|")
+            if len(fields) == 3 and fields[1] == operation.marker:
+                if not fields[0].isdecimal():
+                    return None
+                matches_by_job.setdefault(fields[0], set()).add(fields[2] or None)
+    except Exception:
+        return None
+    matches: set[tuple[str, str | None]] = set()
+    for job_id, clusters in matches_by_job.items():
+        named = {cluster for cluster in clusters if cluster is not None}
+        if len(named) <= 1:
+            matches.add((job_id, next(iter(named)) if named else None))
+        else:
+            matches.update((job_id, cluster) for cluster in named)
+    return matches
+
+
+def _queued_submitted_job(
+    *,
+    job: SlurmPlannedJob,
+    scheduler_job_id: str,
+    scheduler_cluster: str | None,
+    command_result: SlurmCommandResult,
+    dependency_job_ids: tuple[str, ...],
+    submitted_at: str,
+) -> SlurmSubmittedJob:
+    return SlurmSubmittedJob(
+        logical_key=job.logical_key,
+        scheduler_job_id=scheduler_job_id,
+        scheduler_cluster=scheduler_cluster,
+        raw_job_id_output=scheduler_job_id,
+        submitted_at=submitted_at,
+        command_record=command_result,
+        dependency_job_ids=dependency_job_ids,
+        script_relative_path=job.script_relative_path,
+        stdout_relative_path=job.stdout_relative_path,
+        stderr_relative_path=job.stderr_relative_path,
+    )
+
+
+def _replace_scheduler_operation(
+    operations: Sequence[SlurmSchedulerOperation],
+    replacement: SlurmSchedulerOperation,
+) -> list[SlurmSchedulerOperation]:
+    return [
+        replacement if item.operation_id == replacement.operation_id else item
+        for item in operations
+    ]
+
+
+def _record_queued_unknown(
+    *,
+    run_store: RunStore,
+    run_uri: str,
+    manifest_path: Path,
+    manifest: SlurmLiveSubmissionManifest,
+    planning_result: SlurmDryRunPlanningResult,
+    evidence: str,
+) -> SlurmLiveSubmissionResult:
+    unknown = replace(
+        manifest,
+        submission_status=SlurmLiveSubmissionStatus.UNKNOWN,
+        updated_at=utc_timestamp(),
+    )
+    _write_manifest_and_registry(
+        run_store=run_store,
+        run_uri=run_uri,
+        manifest_path=manifest_path,
+        manifest=unknown,
+        state=SubmittedOperationState.UNKNOWN,
+    )
+    return _live_result(
+        manifest=unknown,
+        planning_result=planning_result,
+        status=SlurmLiveSubmissionStatus.UNKNOWN,
+    )
+
+
+def _record_queued_rejection(
+    *,
+    run_store: RunStore,
+    run_uri: str,
+    manifest_path: Path,
+    manifest: SlurmLiveSubmissionManifest,
+    planning_result: SlurmDryRunPlanningResult,
+    operations: Sequence[SlurmSchedulerOperation],
+    operation: SlurmSchedulerOperation,
+    job: SlurmPlannedJob,
+    command_result: SlurmCommandResult,
+    dependency_job_ids: tuple[str, ...],
+) -> SlurmLiveSubmissionResult:
+    rejected_operation = replace(
+        operation,
+        state=SlurmSchedulerOperationState.REJECTED,
+        updated_at=utc_timestamp(),
+        evidence="slurm_submit_definitely_rejected",
+    )
+    failed = _failed_manifest(
+        manifest,
+        logical_key=job.logical_key,
+        reason=command_result.stderr or "sbatch returned a nonzero exit code",
+        command_record=command_result,
+        dependency_job_ids=dependency_job_ids,
+    )
+    has_jobs = bool(manifest.submitted_jobs)
+    failed = replace(
+        failed,
+        submission_status=SlurmLiveSubmissionStatus.PARTIAL
+        if has_jobs
+        else SlurmLiveSubmissionStatus.FAILED,
+        scheduler_operations=tuple(
+            _replace_scheduler_operation(operations, rejected_operation)
+        ),
+    )
+    state = (
+        SubmittedOperationState.PARTIAL if has_jobs else SubmittedOperationState.FAILED
+    )
+    _write_manifest_and_registry(
+        run_store=run_store,
+        run_uri=run_uri,
+        manifest_path=manifest_path,
+        manifest=failed,
+        state=state,
+    )
+    return _live_result(
+        manifest=failed,
+        planning_result=planning_result,
+        status=SlurmLiveSubmissionStatus(failed.submission_status),
+    )
+
+
 def _raise_if_active_submission(*, run_store: RunStore, run_uri: str) -> None:
     active = run_store.latest_active_submitted_operation(run_uri)
     if active is None:
@@ -708,6 +1282,11 @@ def _write_manifest_and_registry(
             backend_metadata={
                 "live_schema_version": manifest.schema_version,
                 "manifest_kind": "loom.slurm_live_manifest",
+                **(
+                    {}
+                    if manifest.queue_item_id is None
+                    else {"queue": {"queue_item_id": manifest.queue_item_id}}
+                ),
                 **_authority_backend_metadata(run_store),
             },
         )
@@ -911,6 +1490,21 @@ def _dependency_job_ids(
     )
 
 
+def _queue_operation_marker(
+    manifest: SlurmLiveSubmissionManifest, logical_key: str
+) -> str | None:
+    """Return the bounded scheduler-visible marker for one queued call."""
+
+    if manifest.queue_item_id is None:
+        return None
+    marker = (
+        f"loom-queue-v1:{manifest.queue_item_id}:{manifest.submission_id}:{logical_key}"
+    )
+    if len(marker) > 120:
+        raise SlurmPlanningError("queued SLURM operation marker is too long")
+    return marker
+
+
 def _sbatch_argv(
     script_path: Path, dependency_job_ids: Sequence[str]
 ) -> tuple[str, ...]:
@@ -1011,17 +1605,21 @@ def submit_single_job_slurm(
     planning_result: SlurmDryRunPlanningResult,
     command_runner: SlurmCommandRunner | None = None,
     submitted_at: str | None = None,
+    queue_item_id: str | None = None,
 ) -> SlurmLiveSubmissionResult:
     """Run the single-job durable workflow with explicit services."""
 
     if not isinstance(services, SlurmSubmissionServices):
-        raise SlurmPlanningError("submit_single_job_slurm requires SlurmSubmissionServices")
+        raise SlurmPlanningError(
+            "submit_single_job_slurm requires SlurmSubmissionServices"
+        )
     return _submit_single_job_slurm(
         run_store=cast(LegacyRunStore, cast(Any, _SlurmStoreFacade)(services)),
         run_uri=run_uri,
         planning_result=planning_result,
         command_runner=command_runner,
         submitted_at=submitted_at,
+        queue_item_id=queue_item_id,
     )
 
 
@@ -1032,17 +1630,21 @@ def submit_afterok_slurm(
     planning_result: SlurmDryRunPlanningResult,
     command_runner: SlurmCommandRunner | None = None,
     submitted_at: str | None = None,
+    queue_item_id: str | None = None,
 ) -> SlurmLiveSubmissionResult:
     """Run the afterok durable workflow with explicit services."""
 
     if not isinstance(services, SlurmSubmissionServices):
-        raise SlurmPlanningError("submit_afterok_slurm requires SlurmSubmissionServices")
+        raise SlurmPlanningError(
+            "submit_afterok_slurm requires SlurmSubmissionServices"
+        )
     return _submit_afterok_slurm(
         run_store=cast(LegacyRunStore, cast(Any, _SlurmStoreFacade)(services)),
         run_uri=run_uri,
         planning_result=planning_result,
         command_runner=command_runner,
         submitted_at=submitted_at,
+        queue_item_id=queue_item_id,
     )
 
 

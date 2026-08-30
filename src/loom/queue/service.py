@@ -298,10 +298,12 @@ class QueueService:
         self._ensure_running()
         return self.repository.list_items(limit=limit, cursor=cursor)
 
-    def recovery_items(self) -> tuple[QueueItem, ...]:
+    def recovery_items(
+        self, *, limit: int | None = None, pool_name: str | None = None
+    ) -> tuple[QueueItem, ...]:
         self._ensure_running()
         items: list[QueueItem] = []
-        for record in self.repository.scan_recovery():
+        for record in self.repository.scan_recovery(limit=limit, pool_name=pool_name):
             item = self.repository.read_item(record.queue_item_id)
             if item is not None:
                 items.append(item)
@@ -381,9 +383,11 @@ class QueueService:
             queue_item_id, reason_code=reason_code, expected=expected
         )
 
-    def scan_recovery(self) -> tuple[QueueRecoveryRecord, ...]:
+    def scan_recovery(
+        self, *, limit: int | None = None
+    ) -> tuple[QueueRecoveryRecord, ...]:
         self._ensure_running()
-        return self.repository.scan_recovery()
+        return self.repository.scan_recovery(limit=limit)
 
     def list_audit_events(self, queue_item_id: str) -> tuple[QueueAuditEvent, ...]:
         self._ensure_running()

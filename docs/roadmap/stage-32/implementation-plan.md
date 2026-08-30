@@ -5,7 +5,7 @@ Roadmap stage: 32
 Planning document: docs/roadmap/stage-32/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 3 `pending`
+Current phase: Phase 3 `in_progress`
 Blockers: none; Phase 2 is explicitly blocked and its replacement is approved
 Worktree root: `/home/can134/work/active/loom-worktrees`
 
@@ -58,7 +58,7 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | durable-many-run-admission | merged | docs/roadmap/stage-32/phases/durable-many-run-admission.md | agent/stage-32-p1-durable-many-run-admission | [#257](https://github.com/samcantrill/loom/pull/257) merged | queue request/receipt, service, SQLite schema/index, bounded reads and identity tests | Admit and replay large ordinary-run request streams without duplicate queue work. |
 | 2 | service-less-slurm-driving | blocked | docs/roadmap/stage-32/phases/service-less-slurm-driving.md | agent/stage-32-p2-service-less-slurm-driving | not opened | rejected delegated controller/CLI candidate retained for review evidence | Record the exhausted candidate and its FR-9/FR-10 review blockers. |
-| 3 | service-less-slurm-completion | pending | docs/roadmap/stage-32/phases/service-less-slurm-completion.md | agent/stage-32-p3-service-less-slurm-completion | pending | complete delegated controller/CLI and prepared-run Slurm outcome, per-job snapshot fallback, shared-workspace proof, HPC docs/tests | Deliver the full service-less Slurm outcome in one replacement PR from current `develop`. |
+| 3 | service-less-slurm-completion | in_progress | docs/roadmap/stage-32/phases/service-less-slurm-completion.md | agent/stage-32-p3-service-less-slurm-completion | pending | complete delegated controller/CLI and prepared-run Slurm outcome, per-job snapshot fallback, shared-workspace proof, HPC docs/tests | Deliver the full service-less Slurm outcome in one replacement PR from current `develop`. |
 
 ## Quality Gate
 

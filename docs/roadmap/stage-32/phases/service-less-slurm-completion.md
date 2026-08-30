@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 32, Phase 3
 - Manifest: docs/roadmap/stage-32/implementation-plan.md
 - Branch: agent/stage-32-p3-service-less-slurm-completion
 - Worktree root and path: `/home/can134/work/active/loom-worktrees/stage-32-p3-service-less-slurm-completion`
-- Base revision: record current `origin/develop` during manager preparation
+- Base revision: `cae37be038419b6dc3b134af30ced0d54b626c5a`
 - PR target: develop
 - PR title: `Stage 32 phase 3: complete service-less SLURM driving`
 - Dependencies: Stage 32 Phase 1 remotely merged; Phase 2 explicitly blocked;
@@ -187,9 +187,13 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending.
+- Manager preparation: passed; dedicated worktree created from current
+  `origin/develop` at `cae37be`, exact branch/PR metadata verified, and the
+  executor packet remains within the planned bounded scope.
 - Expanded planning: fixed by the approved replan; no planner pass required.
-- Implementation: pending.
+- Implementation: complete; carried the replacement service-less controller,
+  exact operation recovery, CLI/example/docs, explicit shared-workspace
+  attestation gate, and per-handle current/retained scheduler-fact join.
 - Refiner: not needed; 0/3 corrections consumed.
 - Pre-submit gate: pending.
 - Independent review: required for the two prior external-boundary findings.
@@ -200,9 +204,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | none |
+| Implementation and changed paths | Queue SLURM adapter/controller and CLI; existing live-manifest operation/snapshot seams; queue/SLURM docs; deterministic service-less operations example. |
+| Tests added or updated | Prepared proof rejection/proven matrix; observe-then-prune retained failure; per-handle current-over-retained join; existing controller, CLI, live-model, and example journey coverage updated for explicit proof. |
+| Validated revision/tree state and evidence | Focused queue matrix: 24 passed; live-model/CLI/example matrix: 15 passed; scoped Ruff and Pyright passed. `make validate-pr` passed. `make test-summary` passed: 2,842 passed, 3 skipped. |
+| Validation-relevant changes after evidence | Phase completion record only. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Blocked Phase 2 worktree remains until replacement merge is verified. |

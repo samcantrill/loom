@@ -12,14 +12,21 @@ import sys
 import pytest
 
 from loom.cli.main import main
+from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+from loom.pipeline.executors.slurm.planning import plan_single_job_slurm_dry_run
 from loom.queue import (
+    LaunchContract,
     LocalDaemon,
     LocalDaemonConfig,
     LocalDaemonPrincipal,
     LocalDaemonRole,
     LocalDaemonSocketServer,
     ResidentWorkerLaunchProfile,
+    QueueEnqueueRequest,
+    QueueItemStatus,
+    QueueService,
     SQLiteQueueRepository,
+    load_queue_spec,
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.agent_sessions import (
@@ -28,6 +35,8 @@ from loom.queue.agent_sessions import (
     AgentRegistration,
     TransportPrincipalPolicy,
 )
+from loom.queue.slurm import prepared_slurm_launch
+from tests.integration.pipeline.test_slurm_dry_run_planning import _prepared_store
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -159,6 +168,101 @@ def test_queue_cli_pool_status_uses_existing_v1_envelope(tmp_path: Path) -> None
         "counts",
         "active_attempts",
     }
+
+
+def test_queue_cli_service_less_slurm_drive_emits_stable_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("yaml")
+    store, run_uri = _prepared_store(
+        tmp_path / "prepared",
+        {"only": ()},
+        authority_backed=True,
+    )
+    planning = plan_single_job_slurm_dry_run(
+        run_store=store,
+        run_uri=run_uri,
+        planning_id="cli-service-less",
+        created_at="2026-08-30T00:00:00Z",
+    )
+    queue_path = tmp_path / "queue.sqlite"
+    config_path = tmp_path / "queue.yaml"
+    config_path.write_text(
+        f"""
+        queue:
+          service:
+            db_path: {queue_path}
+          pools:
+            - pool_name: slurm-pool
+              mode: delegated
+              metadata:
+                workspace_assumptions_acknowledged: true
+          queues:
+            - queue_name: slurm
+              pool_name: slurm-pool
+        """,
+        encoding="utf-8",
+    )
+    service = QueueService.from_spec(load_queue_spec(config_path))
+    service.start()
+    launch = prepared_slurm_launch(planning)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="cli-prepared",
+            queue_name="slurm",
+            run_uri=run_uri,
+            launch_contract=LaunchContract(
+                adapter="slurm",
+                entrypoint="prepared-run",
+                snapshot=launch.to_snapshot(),
+                delegated_verification={"shared_workspace": True},
+            ),
+        )
+    )
+    service.stop()
+    runner = FakeSlurmCommandRunner(starting_job_id=1700)
+    monkeypatch.setattr(
+        "loom.pipeline.execution.create_authority_backed_serial_run_store",
+        lambda *_args, **_kwargs: store,
+    )
+    monkeypatch.setattr(
+        "loom.queue.slurm.SubprocessSlurmCommandRunner",
+        lambda: runner,
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "queue",
+                "drive-slurm-foreground",
+                str(config_path),
+                "--pool",
+                "slurm-pool",
+                "--run-root",
+                str(tmp_path / "prepared" / "runs"),
+                "--once",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    assert stderr.getvalue() == ""
+    envelope = json.loads(stdout.getvalue())
+    assert set(envelope) == {"schema_version", "ok", "warnings", "result"}
+    assert envelope["schema_version"] == "loom.cli.queue.slurm-drive.v1"
+    assert envelope["result"]["cycle_count"] == 1
+    assert envelope["result"]["dispatched_count"] == 1
+    assert envelope["result"]["quiescent"] is False
+    assert [call[0] for call in runner.calls].count("sbatch") == 1
+    item = SQLiteQueueRepository(queue_path).read_item("cli-prepared")
+    assert item is not None and item.status is QueueItemStatus.DISPATCHED
 
 
 def test_session_replacement_cli_uses_the_owner_socket_and_safe_result(

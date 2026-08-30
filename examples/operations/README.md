@@ -26,6 +26,7 @@ workflows.
 | `operations.run-catalog-and-bundles` | Index and compare two runs, then export, inspect, import, and verify one payload. |
 | `operations.cleanup-and-gc` | Preview and explicitly delete registered temporary candidates while preserving runs and committed outputs. |
 | `operations.slurm-live-jobs` | Manual scheduler-aware status and cancellation commands for a real submitted SLURM run. |
+| `operations.service-less-slurm-driving` | Bounded foreground submission of prepared whole runs on a shared SLURM filesystem. |
 
 ## Public Python API Workflows
 
@@ -54,6 +55,7 @@ uv run python examples/operations/offline-import-rejections/run_offline_import_r
 uv run python examples/operations/run-catalog-and-bundles/run_catalog_workflow.py
 uv run python examples/operations/cleanup-and-gc/run_cleanup_and_gc.py
 uv run python examples/operations/managed-local-queue/run_managed_local_queue.py
+uv run python examples/operations/service-less-slurm-driving/run_service_less_slurm.py
 ```
 
 Set `LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to redirect generated
@@ -82,6 +84,8 @@ The following `validation: full` examples are supported by focused integration t
   `tests/integration/examples/test_example_workflows.py::test_example_cleanup_and_gc_is_preview_first_and_candidate_only`
 - `operations.managed-local-queue`:
   `tests/e2e/test_queue_cli.py::test_managed_local_queue_example_is_rerunnable`
+- `operations.service-less-slurm-driving`:
+  `tests/e2e/test_example_journeys.py::test_e2e_example_service_less_slurm_reopens_without_a_service`
 
 ## Internal Demos
 
