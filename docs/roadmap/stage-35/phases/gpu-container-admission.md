@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: ready
+- Status: ready to merge
 - Roadmap stage and phase: Stage 35, Phase 2
 - Manifest: `docs/roadmap/stage-35/implementation-plan.md`
 - Branch: `agent/stage-35-p2-gpu-container-admission`
 - Worktree root and path: `/nas/home/can134/work/loom-worktrees`;
   `/nas/home/can134/work/loom-worktrees/stage-35-p2-gpu-container-admission`
-- Base revision: current `origin/develop` after Phase 1 remotely merges
+- Base revision: `bb4744895deea11cb92d95ecfab77e8be1fc8a20`
 - PR target: develop
 - PR title: `Stage 35 phase 2: add GPU container admission`
 - Dependencies: merged Stage 35 Phase 1 and existing resource, Apptainer, and
@@ -188,12 +188,20 @@ Final commands:
 - Manager preparation: completed after planning and verified Phase 1 merge.
 - Expanded planning: completed; all three concrete findings were resolved in
   the stage planning document.
-- Implementation: completed in `2990953`.
+- Implementation: completed in `2990953`; reviewer correction completed in
+  `04bb2f052fe875c509eca00a269977bed151efec`.
 - Refiner: not needed unless a qualified blocker appears.
-- Pre-submit gate: passed at `2990953` (Ruff, Pyright, default, config-extra,
-  and build).
-- Independent review: required for scheduler/container boundary.
-- Blocker corrections: 0/3.
+- Pre-submit gate: passed on corrected source/test revision
+  `04bb2f052fe875c509eca00a269977bed151efec` (Ruff; Pyright with zero errors;
+  default: 2,666 passed/135 deselected; config-extra: 156 passed/3 skipped/
+  2,669 deselected; sdist and wheel built).
+- Independent review: completed for the scheduler/container boundary. Its one
+  blocker found that generated Slurm shell validation accepted leading
+  punctuation that the public Python validator rejected; the grammars are now
+  aligned and manager-verified with executable rendered-script cases.
+- Blocker corrections: 1/3 correction passes consumed. The correction rejects
+  malformed leading characters in both admission paths while preserving valid
+  opaque GPU and MIG tokens.
 - PR and merge: pending.
 
 ## Completion Record
@@ -201,8 +209,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | `2990953` adds the executor-owned GPU visibility helper; direct Apptainer/Singularity admission and redacted forwarding; afterok Slurm `--nv` projection and allocation-time validation; preflight alignment; container feature docs; and package, unit, integration, and e2e coverage. |
-| Tests added or updated | Focused pure token/projection, direct executor, Slurm wrapper/planner/script, preflight, package-import, direct integration, Slurm dry-run integration, and CLI dry-run e2e tests. |
-| Validated revision/tree state and evidence | Targeted suite: 193 passed. `make validate-pr` passed (Ruff, Pyright, default 2,656 passed/135 deselected, config-extra 156 passed/3 skipped, build). `make test-summary` passed package 119, unit 1,892, contract 297, e2e 59, and config-extra 156, but its integration lane had two timestamp-only `scheduler_observed_at` flakes; both passed on immediate focused rerun. |
-| Validation-relevant changes after evidence | Workflow metadata only. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | No live CUDA, Apptainer/Singularity, or Slurm environment was required; scheduler allocation behavior remains covered by hermetic rendered-script and dry-run tests. Independent review remains pending. |
+| Tests added or updated | Focused pure token/projection, direct executor, Slurm wrapper/planner/script, preflight, package-import, direct integration, Slurm dry-run integration, and CLI dry-run e2e tests. Reviewer correction adds executable Bash cases for valid opaque GPU/MIG identifiers and missing, mismatched, duplicate, empty, or malformed scheduler visibility. |
+| Validated revision/tree state and evidence | Corrected source/test revision `04bb2f052fe875c509eca00a269977bed151efec`; focused correction suite: 27 passed; fresh `make validate-pr` passed (Ruff; Pyright with zero errors; default: 2,666 passed/135 deselected; config-extra: 156 passed/3 skipped/2,669 deselected; sdist and wheel built). The earlier implementation `make test-summary` passed package 119, unit 1,892, contract 297, e2e 59, and config-extra 156, but its integration lane had two timestamp-only `scheduler_observed_at` flakes; both passed on immediate focused rerun. |
+| Validation-relevant changes after evidence | none; this completion metadata only |
+| PR, review, and merge | Independent review completed; its sole blocker was corrected and manager-verified. PR and merge pending. |
+| Residual risk and cleanup | No phase blocker. No live CUDA, Apptainer/Singularity, or Slurm environment was required; scheduler allocation behavior remains covered by hermetic executable rendered-script and public dry-run tests. The earlier `make test-summary` anomaly remains classified as an unrelated `scheduler_observed_at` timestamp race because both focused reruns and the fresh required pre-submit gate passed. Branch and worktree cleanup follow verified merge. |
