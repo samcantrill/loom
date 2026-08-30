@@ -194,10 +194,12 @@ Final commands:
 - Implementation: complete; carried the replacement service-less controller,
   exact operation recovery, CLI/example/docs, explicit shared-workspace
   attestation gate, and per-handle current/retained scheduler-fact join.
-- Refiner: not needed; 0/3 corrections consumed.
+- Refiner: not needed. Manager correction 1/3 added direct causal coverage for
+  a retained failed handle beside a different current handle and for withholding
+  all-complete wording when any accepted handle lacks current/retained evidence.
 - Pre-submit gate: pending.
 - Independent review: required for the two prior external-boundary findings.
-- Blocker corrections: 0/3.
+- Blocker corrections: 1/3.
 - PR and merge: pending.
 
 ## Completion Record
@@ -205,8 +207,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Queue SLURM adapter/controller and CLI; existing live-manifest operation/snapshot seams; queue/SLURM docs; deterministic service-less operations example. |
-| Tests added or updated | Prepared proof rejection/proven matrix; observe-then-prune retained failure; per-handle current-over-retained join; existing controller, CLI, live-model, and example journey coverage updated for explicit proof. |
-| Validated revision/tree state and evidence | Focused queue matrix: 24 passed; live-model/CLI/example matrix: 15 passed; scoped Ruff and Pyright passed. `make validate-pr` passed. `make test-summary` passed: 2,842 passed, 3 skipped. |
-| Validation-relevant changes after evidence | Phase completion record only. |
+| Tests added or updated | Prepared proof rejection/proven matrix; observe-then-prune retained failure; per-handle current-over-retained join; retained failure beside a different current handle; missing-handle all-complete guard; existing controller, CLI, live-model, and example journey coverage updated for explicit proof. |
+| Validated revision/tree state and evidence | Executor candidate: focused queue matrix 24 passed; live-model/CLI/example matrix 15 passed; scoped Ruff and Pyright passed; `make validate-pr` and `make test-summary` passed with 2,842 tests and 3 skips. Manager correction 1 focused file: 20 passed with Ruff and Pyright. Fresh full gate pending. |
+| Validation-relevant changes after evidence | Two integration tests were added after the executor receipt; a fresh full gate is required. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | Blocked Phase 2 worktree remains until replacement merge is verified. |

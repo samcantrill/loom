@@ -903,6 +903,161 @@ def test_prepared_inspection_uses_current_fact_per_handle_before_retained_fact(
     assert inspection.evidence["current_scheduler_facts_persisted"] == 1
 
 
+def test_prepared_inspection_uses_retained_failure_for_missing_handle(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepared_store(
+        tmp_path, {"left": (), "right": ()}, authority_backed=True
+    )
+    planning = plan_afterok_slurm_dry_run(
+        run_store=store,
+        run_uri=run_uri,
+        planning_id="retained-missing-handle",
+        created_at="2026-08-30T00:00:00Z",
+    )
+    service = _started_service(tmp_path, clock=_clock("2026-08-30T00:00:00Z"))
+    launch = prepared_slurm_launch(planning)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="retained-missing-handle-item",
+            queue_name="slurm",
+            run_uri=run_uri,
+            launch_contract=LaunchContract(
+                adapter="slurm",
+                entrypoint="prepared-run",
+                snapshot=launch.to_snapshot(),
+                delegated_verification={"shared_workspace": True},
+            ),
+        )
+    )
+    QueueController(
+        service,
+        adapters={
+            "slurm": SlurmQueueDispatchAdapter(
+                command_runner=FakeSlurmCommandRunner(starting_job_id=1200),
+                run_store=store,
+            )
+        },
+    ).run_cycle(pool_name="slurm-pool")
+    item = service.read_item("retained-missing-handle-item")
+    assert item is not None
+    jobs = cast(
+        tuple[SlurmSubmittedJob, ...],
+        _live_manifest(store, run_uri).submitted_jobs,
+    )
+    first = SlurmQueueDispatchAdapter(
+        command_runner=FakeSlurmCommandRunner(
+            scripted_results={
+                "sacct": [
+                    SlurmCommandResult(
+                        "sacct",
+                        ("sacct",),
+                        0,
+                        stdout=(
+                            f"{jobs[0].scheduler_job_id}|RUNNING|0:0\n"
+                            f"{jobs[1].scheduler_job_id}|FAILED|1:0\n"
+                        ),
+                    )
+                ]
+            }
+        ),
+        run_store=store,
+        clock=_clock("2026-08-30T00:01:00Z"),
+    ).inspect(item)
+
+    assert first.terminal is True
+    assert first.status is QueueItemStatus.FAILED
+
+    reopened = SlurmQueueDispatchAdapter(
+        command_runner=FakeSlurmCommandRunner(
+            scripted_results={
+                "sacct": [
+                    SlurmCommandResult(
+                        "sacct",
+                        ("sacct",),
+                        0,
+                        stdout=f"{jobs[0].scheduler_job_id}|RUNNING|0:0\n",
+                    )
+                ]
+            }
+        ),
+        run_store=store,
+        clock=_clock("2026-08-30T00:02:00Z"),
+    ).inspect(item)
+
+    assert reopened.terminal is True
+    assert reopened.status is QueueItemStatus.FAILED
+    assert reopened.evidence["retained_scheduler_snapshots_used"] is True
+    assert reopened.evidence["current_scheduler_facts_persisted"] == 1
+
+
+def test_prepared_inspection_requires_a_fact_for_every_completed_handle(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepared_store(
+        tmp_path, {"left": (), "right": ()}, authority_backed=True
+    )
+    planning = plan_afterok_slurm_dry_run(
+        run_store=store,
+        run_uri=run_uri,
+        planning_id="missing-completed-handle",
+        created_at="2026-08-30T00:00:00Z",
+    )
+    service = _started_service(tmp_path, clock=_clock("2026-08-30T00:00:00Z"))
+    launch = prepared_slurm_launch(planning)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="missing-completed-handle-item",
+            queue_name="slurm",
+            run_uri=run_uri,
+            launch_contract=LaunchContract(
+                adapter="slurm",
+                entrypoint="prepared-run",
+                snapshot=launch.to_snapshot(),
+                delegated_verification={"shared_workspace": True},
+            ),
+        )
+    )
+    QueueController(
+        service,
+        adapters={
+            "slurm": SlurmQueueDispatchAdapter(
+                command_runner=FakeSlurmCommandRunner(starting_job_id=1300),
+                run_store=store,
+            )
+        },
+    ).run_cycle(pool_name="slurm-pool")
+    item = service.read_item("missing-completed-handle-item")
+    assert item is not None
+    jobs = cast(
+        tuple[SlurmSubmittedJob, ...],
+        _live_manifest(store, run_uri).submitted_jobs,
+    )
+
+    inspection = SlurmQueueDispatchAdapter(
+        command_runner=FakeSlurmCommandRunner(
+            scripted_results={
+                "sacct": [
+                    SlurmCommandResult(
+                        "sacct",
+                        ("sacct",),
+                        0,
+                        stdout=f"{jobs[0].scheduler_job_id}|COMPLETED|0:0\n",
+                    )
+                ]
+            }
+        ),
+        run_store=store,
+        clock=_clock("2026-08-30T00:01:00Z"),
+    ).inspect(item)
+
+    assert inspection.terminal is False
+    assert inspection.status is QueueItemStatus.DISPATCHED
+    assert inspection.reason == "SLURM work remains active or is settling"
+    assert inspection.evidence["retained_scheduler_snapshots_used"] is False
+    assert inspection.evidence["current_scheduler_facts_persisted"] == 1
+
+
 def test_service_less_driver_pages_many_active_and_queued_items(
     tmp_path: Path,
 ) -> None:
