@@ -139,6 +139,7 @@ from ._remote_stage_execution import (
 )
 from ._agent_process_supervisor import (
     AgentProcessSupervisorClient,
+    AgentProcessSupervisorError,
     SupervisorLaunchState,
     SupervisorLaunchConfiguration,
 )
@@ -568,6 +569,36 @@ def local_daemon_owner_stores_available(
         ) and agent_revision is not None
     except Exception:
         return False
+
+
+def local_daemon_owner_work_is_retained(
+    config: LocalDaemonConfig,
+    *,
+    coordinator_id: str,
+    agent_id: str,
+) -> bool:
+    """Return only a validated cross-owner retained-work result."""
+
+    if not local_daemon_owner_stores_available(
+        config, coordinator_id=coordinator_id, agent_id=agent_id
+    ):
+        raise QueueServiceError("retained daemon owner state is unavailable")
+    try:
+        journal = SQLiteAgentJournal(config.agent_journal, _allow_initialize=False)
+        coordinator = SQLiteCoordinatorAssignments(
+            config.execution_database,
+            _coordinator_capacity(config),
+            _allow_initialize=False,
+        )
+        journal._open_existing()
+        coordinator._open_existing()
+        return bool(journal.retained_claim_commands()) or bool(
+            coordinator.retained_assignments(agent_id=config.machine_id)
+        )
+    except ManagedLocalError as exc:
+        raise QueueServiceError(
+            "local daemon retained-work proof is unavailable"
+        ) from exc
 
 
 def _bind_owner_store(path: Path, *, role: str, stable_id: str) -> None:
@@ -1192,6 +1223,7 @@ class LocalDaemonExecution:
             thread_name_prefix="loom-local-assignment",
         )
         self._local_assignment_futures: dict[str, Future[None]] = {}
+        self._pending_local_assignment_reconciliation: dict[str, str] = {}
         self._cycle_contexts: dict[
             str, tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]
         ] = {}
@@ -1201,12 +1233,186 @@ class LocalDaemonExecution:
 
         self._local_assignment_workers.shutdown(wait=True)
         self._local_assignment_futures.clear()
+        self._pending_local_assignment_reconciliation.clear()
         self._cycle_contexts.clear()
+
+    def shutdown_clean(self) -> None:
+        """Use all local authoritative owners before retiring the supervisor."""
+
+        if local_daemon_owner_work_is_retained(
+            self.config,
+            coordinator_id=self.coordinator_id,
+            agent_id=self.agent_id,
+        ):
+            raise QueueConflictError("local daemon has retained work")
+        try:
+            self.supervisor.shutdown_clean()
+        except AgentProcessSupervisorError as exc:
+            raise QueueConflictError(str(exc)) from exc
 
     def begin_cycle(self) -> None:
-        """Discard the prior cycle's admission projection contexts."""
+        """Observe completed exact assignment work before scheduling again."""
 
+        for assignment_id, future in tuple(self._local_assignment_futures.items()):
+            if not future.done():
+                continue
+            self._local_assignment_futures.pop(assignment_id, None)
+            try:
+                future.result()
+            except Exception:
+                # The retained assignment is the replay identity; a failed
+                # observer must not disappear and permit replacement work.
+                run_uri = self._retained_local_assignment_run_uri(assignment_id)
+                if run_uri is not None:
+                    self._pending_local_assignment_reconciliation[assignment_id] = (
+                        run_uri
+                    )
+                    self._record_assignment_health(run_uri, "unavailable")
+            else:
+                run_uri = self._pending_local_assignment_reconciliation.get(
+                    assignment_id
+                )
+                if run_uri is not None:
+                    self._record_assignment_health(run_uri, "healthy")
+                    self._pending_local_assignment_reconciliation.pop(
+                        assignment_id, None
+                    )
+        for assignment_id in tuple(self._pending_local_assignment_reconciliation):
+            if assignment_id in self._local_assignment_futures:
+                continue
+            future = self._local_assignment_workers.submit(
+                self._reconcile_exact_local_assignment, assignment_id
+            )
+            daemon = self.daemon
+            if daemon is not None:
+
+                def wake_daemon(
+                    _future: Future[None], target: LocalDaemon = daemon
+                ) -> None:
+                    target._wake.set()
+
+                future.add_done_callback(wake_daemon)
+            self._local_assignment_futures[assignment_id] = future
         self._cycle_contexts.clear()
+
+    def _record_assignment_health(self, run_uri: str, health: str) -> None:
+        daemon = self.daemon
+        if daemon is not None:
+            daemon._record_admission_health_for_run(run_uri, health)
+
+    def local_assignment_reconciliation_pending(self, run_uri: str) -> bool:
+        """Report the one live health override owned by exact replay."""
+
+        return run_uri in self._pending_local_assignment_reconciliation.values()
+
+    def _retained_local_assignment_run_uri(self, assignment_id: str) -> str | None:
+        for assignment, _receipt in self.coordinator.retained_assignments(
+            agent_id=self.config.machine_id
+        ):
+            if assignment.assignment_id == assignment_id:
+                return assignment.run_uri
+        return None
+
+    def _reconcile_exact_local_assignment(self, assignment_id: str) -> None:
+        matches = tuple(
+            item
+            for item in self.coordinator.retained_assignments(
+                agent_id=self.config.machine_id
+            )
+            if item[0].assignment_id == assignment_id
+        )
+        if not matches:
+            return
+        if len(matches) != 1:
+            raise QueueConflictError("retained local assignment identity conflicts")
+        assignment, decision_receipt = matches[0]
+        if not self._reconcile_retained_local_assignment(
+            assignment,
+            decision_receipt,
+            suspend_requested=(
+                None if self.daemon is None else self.daemon._stop.is_set
+            ),
+        ):
+            raise ManagedLocalError("retained local assignment is intentionally held")
+
+    def _reconcile_retained_local_assignment(
+        self,
+        assignment: ManagedAssignment,
+        decision_receipt: Mapping[str, PlainData],
+        *,
+        suspend_requested: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Replay one exact durable assignment without allocating replacement work."""
+
+        if self._recovery_retains_assignment(assignment.assignment_id):
+            return False
+        workspace = _ResidentAssignmentWorkspace(
+            self.config.agent_root, assignment.assignment_id
+        )
+        request = workspace.request()
+        if (
+            request.assignment_id != assignment.assignment_id
+            or request.stage_work_id != assignment.stage_work_id
+            or request.stage_name != assignment.stage_name
+            or request.attempt != assignment.attempt
+            or request.attempt_id != assignment.attempt_id
+            or request.offer_id != assignment.offer_id
+            or request.claim_id != assignment.claim_id
+        ):
+            raise QueueConflictError(
+                "retained resident bundle conflicts with coordinator identity"
+            )
+        raw_worker_request = self.run_store.read_stage_worker_request(
+            assignment.run_uri,
+            assignment.stage_name,
+            attempt=assignment.attempt,
+        )
+        if raw_worker_request is None:
+            raise QueueConflictError(
+                "retained local assignment has no prepared worker request"
+            )
+        authority_store = SQLitePerRunAuthorityStore(assignment.run_uri)
+        authority_store.open_run(assignment.run_uri)
+        intent = load_managed_local_intent(
+            self.config,
+            assignment.run_uri,
+            slurm_profiles=self._scheduling.available_slurm_profiles(),
+        )
+        scoped_authority = _ScopedCoordinatorAuthority(
+            authority_store,
+            run_uri=assignment.run_uri,
+            coordinator_id=self.coordinator_id,
+            ordinary_mutation_frozen=self._ordinary_mutation_frozen,
+        )
+        try:
+            run_managed_local_assignment(
+                coordinator=self.coordinator,
+                authority=scoped_authority,
+                journal=self.journal,
+                assignment=assignment,
+                worker_request=StageWorkerRequest.from_dict(raw_worker_request),
+                claims=request.claims,
+                providers=self.providers,
+                run_store=self.run_store,
+                max_parallel_stages=intent.max_parallel_stages,
+                cancellation_requested=lambda: (
+                    self._install_run_cancellation_if_requested(
+                        assignment.run_uri,
+                        scoped_authority,
+                        intent.plan.stage_order,
+                    )
+                ),
+                decision_receipt=decision_receipt,
+                agent_root=self.config.agent_root,
+                supervisor=self.supervisor,
+                resident_launch_profile=self.config.resident_worker_launch_profile,
+                suspend_requested=suspend_requested,
+            )
+        except ManagedLocalError:
+            if not self._is_exact_retained_unknown(assignment.assignment_id):
+                raise
+            return False
+        return True
 
     def resume_retained_local_work(self) -> None:
         """Join every local supervisor operation before daemon availability."""
@@ -1215,73 +1421,9 @@ class LocalDaemonExecution:
         for assignment, decision_receipt in self.coordinator.retained_assignments(
             agent_id=self.config.machine_id
         ):
-            if self._recovery_retains_assignment(assignment.assignment_id):
-                intentionally_retained.add(assignment.assignment_id)
-                continue
-            workspace = _ResidentAssignmentWorkspace(
-                self.config.agent_root, assignment.assignment_id
-            )
-            request = workspace.request()
-            if (
-                request.assignment_id != assignment.assignment_id
-                or request.stage_work_id != assignment.stage_work_id
-                or request.stage_name != assignment.stage_name
-                or request.attempt != assignment.attempt
-                or request.attempt_id != assignment.attempt_id
-                or request.offer_id != assignment.offer_id
-                or request.claim_id != assignment.claim_id
+            if not self._reconcile_retained_local_assignment(
+                assignment, decision_receipt
             ):
-                raise QueueConflictError(
-                    "retained resident bundle conflicts with coordinator identity"
-                )
-            raw_worker_request = self.run_store.read_stage_worker_request(
-                assignment.run_uri,
-                assignment.stage_name,
-                attempt=assignment.attempt,
-            )
-            if raw_worker_request is None:
-                raise QueueConflictError(
-                    "retained local assignment has no prepared worker request"
-                )
-            authority_store = SQLitePerRunAuthorityStore(assignment.run_uri)
-            authority_store.open_run(assignment.run_uri)
-            intent = load_managed_local_intent(
-                self.config,
-                assignment.run_uri,
-                slurm_profiles=self._scheduling.available_slurm_profiles(),
-            )
-            scoped_authority = _ScopedCoordinatorAuthority(
-                authority_store,
-                run_uri=assignment.run_uri,
-                coordinator_id=self.coordinator_id,
-                ordinary_mutation_frozen=self._ordinary_mutation_frozen,
-            )
-            try:
-                run_managed_local_assignment(
-                    coordinator=self.coordinator,
-                    authority=scoped_authority,
-                    journal=self.journal,
-                    assignment=assignment,
-                    worker_request=StageWorkerRequest.from_dict(raw_worker_request),
-                    claims=request.claims,
-                    providers=self.providers,
-                    run_store=self.run_store,
-                    max_parallel_stages=intent.max_parallel_stages,
-                    cancellation_requested=lambda: (
-                        self._install_run_cancellation_if_requested(
-                            assignment.run_uri,
-                            scoped_authority,
-                            intent.plan.stage_order,
-                        )
-                    ),
-                    decision_receipt=decision_receipt,
-                    agent_root=self.config.agent_root,
-                    supervisor=self.supervisor,
-                    resident_launch_profile=self.config.resident_worker_launch_profile,
-                )
-            except ManagedLocalError:
-                if not self._is_exact_retained_unknown(assignment.assignment_id):
-                    raise
                 intentionally_retained.add(assignment.assignment_id)
         retained_commands = self.journal.retained_claim_commands()
         if any(
@@ -1822,6 +1964,23 @@ class LocalDaemonExecution:
         ).job_private_file_provider.revoke(capability)
         self.slurm_assignments.release(assignment_id)
 
+    def _reject_slurm_assignment(
+        self, record: SlurmStageRecord, authority: _ScopedCoordinatorAuthority
+    ) -> None:
+        """Perform the definite-rejection release saga in its only safe order."""
+
+        if record.state != "rejected":
+            raise QueueConflictError("SLURM assignment is not definitely rejected")
+        # The authority call is idempotent.  It is intentionally separate from
+        # every release owner so a crash leaves the same rejected record for
+        # replay and can never free capacity while the fence is still bound.
+        authority.unbind_prepared_attempt(
+            record.assignment.run_uri,
+            assignment_id=record.assignment.assignment_id,
+            attempt_id=record.assignment.attempt_id,
+        )
+        self._release_slurm_assignment(record.assignment.assignment_id)
+
     def _reconcile_slurm_run(
         self,
         run_uri: str,
@@ -1840,12 +1999,9 @@ class LocalDaemonExecution:
             if record.state in {"logical_released", "terminal", "rejected"}:
                 try:
                     if record.state == "rejected":
-                        authority.unbind_prepared_attempt(
-                            record.assignment.run_uri,
-                            assignment_id=assignment_id,
-                            attempt_id=record.assignment.attempt_id,
-                        )
-                    self._release_slurm_assignment(assignment_id)
+                        self._reject_slurm_assignment(record, authority)
+                    else:
+                        self._release_slurm_assignment(assignment_id)
                 except SlurmPlanningError:
                     in_flight = True
                     diagnostic = diagnostic or "slurm_release_awaiting_acknowledgement"
@@ -1902,7 +2058,9 @@ class LocalDaemonExecution:
                     cluster=submission.cluster,
                 )
                 if state == "rejected":
-                    self._release_slurm_assignment(assignment_id)
+                    self._reject_slurm_assignment(
+                        self.slurm_assignments.read(assignment_id), authority
+                    )
                     diagnostic = diagnostic or "slurm_submission_rejected"
                     continue
                 if state == "conflict":
@@ -4314,11 +4472,6 @@ class LocalDaemonExecution:
                 # Preserve the existing saga failure semantics; an unaccepted
                 # launch is never reported as a background start.
                 prior.result()
-        self._local_assignment_futures = {
-            key: future
-            for key, future in self._local_assignment_futures.items()
-            if not future.done()
-        }
         return True
 
     def _remote_delivery_retained(self, assignment_id: str) -> bool:

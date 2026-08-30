@@ -22,6 +22,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from threading import Thread
 from time import monotonic, sleep
 from typing import Mapping, cast
 from uuid import uuid4
@@ -487,6 +488,88 @@ class AgentProcessSupervisor:
             ).fetchone()
         return self._receipt(launch, row)
 
+    def quiescent(self) -> bool:
+        """Return positive local evidence that no launch needs this service."""
+
+        with self._connect() as conn:
+            rows = tuple(conn.execute("SELECT state, launch_json FROM launches"))
+        for row in rows:
+            state = SupervisorLaunchState(str(row["state"]))
+            if state is SupervisorLaunchState.CONTAINED:
+                continue
+            if state is not SupervisorLaunchState.EXITED:
+                return False
+            launch = _launch_from_value(json.loads(str(row["launch_json"])))
+            if launch.continuity_epoch != self.continuity_epoch:
+                # A prior clean epoch is durable terminal history, not current
+                # process ownership.
+                continue
+            child = self._children.get(launch.launch_operation_id)
+            if child is None or _process_group_alive(child):
+                return False
+        return True
+
+    def mark_clean_shutdown(self) -> None:
+        """Persist the proved terminal cut owned by this process service."""
+
+        self._contain_current_exited_groups()
+        if not self.quiescent():
+            raise AgentProcessSupervisorError(
+                "managed supervisor has non-quiescent launches"
+            )
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO metadata(key, value) VALUES ('clean_shutdown_epoch', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (self.continuity_epoch,),
+            )
+            conn.commit()
+
+    def _contain_current_exited_groups(self) -> None:
+        """Contain descendants of roots that exited in this service epoch."""
+
+        with self._connect() as conn:
+            rows = tuple(
+                conn.execute(
+                    "SELECT launch_json FROM launches WHERE state = ?",
+                    (SupervisorLaunchState.EXITED.value,),
+                )
+            )
+        for row in rows:
+            launch = _launch_from_value(json.loads(str(row["launch_json"])))
+            if launch.continuity_epoch != self.continuity_epoch:
+                continue
+            child = self._children.get(launch.launch_operation_id)
+            if child is not None and _process_group_alive(child):
+                self.contain(launch)
+
+    def rotate_clean_continuity(self) -> None:
+        """Start a fresh epoch only after a persisted clean terminal cut."""
+
+        with self._connect() as conn:
+            launches = int(conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0])
+            marker = conn.execute(
+                "SELECT value FROM metadata WHERE key = 'clean_shutdown_epoch'"
+            ).fetchone()
+            if marker is None:
+                if not launches:
+                    # A process-free root has no predecessor epoch to retire.
+                    return
+                raise AgentProcessSupervisorError(
+                    "managed supervisor continuity requires clean shutdown"
+                )
+            if str(marker["value"]) != self.continuity_epoch:
+                raise AgentProcessSupervisorError(
+                    "managed supervisor continuity requires clean shutdown"
+                )
+            self.continuity_epoch = f"supervisor-epoch-{uuid4()}"
+            conn.execute(
+                "UPDATE metadata SET value = ? WHERE key = 'continuity_epoch'",
+                (self.continuity_epoch,),
+            )
+            conn.execute("DELETE FROM metadata WHERE key = 'clean_shutdown_epoch'")
+            conn.commit()
+
     def _validate_launch(self, launch: ResidentWorkerLaunch) -> None:
         if (
             launch.supervisor_id != self.supervisor_id
@@ -712,6 +795,10 @@ class AgentProcessSupervisorClient:
     def shutdown_for_test(self) -> None:
         self._shutdown()
 
+    def shutdown_clean(self) -> None:
+        self._call("shutdown_clean", None)
+        self._wait_for_shutdown()
+
     def shutdown_empty_for_relocation(self) -> None:
         """Stop an initialized owner only before it has accepted any launch."""
 
@@ -732,6 +819,9 @@ class AgentProcessSupervisorClient:
 
     def _shutdown(self) -> None:
         self._call("shutdown", None)
+        self._wait_for_shutdown()
+
+    def _wait_for_shutdown(self) -> None:
         deadline = monotonic() + 2
         while self._endpoint.exists():
             if monotonic() >= deadline:
@@ -774,15 +864,15 @@ class AgentProcessSupervisorService:
     _CONFIG_NAME = "service-config.json"
 
     @classmethod
-    def initialize(
+    def initialize_process_free(
         cls, agent_root: Path, *, configuration: SupervisorLaunchConfiguration
-    ) -> AgentProcessSupervisorClient:
+    ) -> None:
+        """Durably initialize a supervisor root without starting a process."""
+
         root = Path(agent_root).resolve() / "supervisor"
         if root.exists():
             raise AgentProcessSupervisorError("supervisor root already exists")
         root.mkdir(mode=0o700)
-        # The database is initialized before the endpoint can exist, so launch
-        # acceptance is always durable before a service accepts a request.
         AgentProcessSupervisor(
             root,
             agent_id=configuration.agent_id,
@@ -808,6 +898,12 @@ class AgentProcessSupervisorService:
         secret = root / "service.secret"
         secret.write_bytes(secrets.token_bytes(32))
         secret.chmod(0o600)
+
+    @classmethod
+    def initialize(
+        cls, agent_root: Path, *, configuration: SupervisorLaunchConfiguration
+    ) -> AgentProcessSupervisorClient:
+        cls.initialize_process_free(agent_root, configuration=configuration)
         return cls._start(agent_root, configuration)
 
     @classmethod
@@ -822,22 +918,10 @@ class AgentProcessSupervisorService:
             raise AgentProcessSupervisorError(
                 "managed_supervisor_state_requires_reinitialization"
             )
-        AgentProcessSupervisor(
-            root,
-            agent_id=configuration.agent_id,
-            profiles=configuration.profiles,
+        supervisor = AgentProcessSupervisor(
+            root, agent_id=configuration.agent_id, profiles=configuration.profiles
         )
-        try:
-            with sqlite3.connect(root / "supervisor.sqlite") as conn:
-                launches = int(conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0])
-        except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
-            raise AgentProcessSupervisorError(
-                "managed_supervisor_state_requires_reinitialization"
-            ) from exc
-        if launches:
-            raise AgentProcessSupervisorError(
-                "managed supervisor continuity cannot restart after launch"
-            )
+        supervisor.rotate_clean_continuity()
         return cls._start(agent_root, configuration)
 
     @staticmethod
@@ -845,7 +929,7 @@ class AgentProcessSupervisorService:
         agent_root: Path, configuration: SupervisorLaunchConfiguration
     ) -> AgentProcessSupervisorClient:
         root = Path(agent_root).resolve() / "supervisor"
-        subprocess.Popen(
+        process = subprocess.Popen(
             [
                 sys.executable,
                 "-m",
@@ -859,6 +943,14 @@ class AgentProcessSupervisorService:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        # The service is intentionally detached from application lifetime, but
+        # while this parent remains alive it must still reap a cleanly stopped
+        # child rather than accumulating supervisor zombies.
+        Thread(
+            target=process.wait,
+            name=f"loom-supervisor-reaper-{process.pid}",
+            daemon=True,
+        ).start()
         deadline = monotonic() + 5
         while True:
             try:
@@ -948,6 +1040,7 @@ def _serve(root: Path) -> None:
                         "supervisor_id": supervisor.supervisor_id,
                         "continuity_epoch": supervisor.continuity_epoch,
                         "configuration_fingerprint": configuration.fingerprint,
+                        "service_process_id": os.getpid(),
                     }
                 elif operation == "launch":
                     response = _receipt_value(
@@ -973,6 +1066,10 @@ def _serve(root: Path) -> None:
                         supervisor.contain(cast(ResidentWorkerLaunch, launch))
                     )
                 elif operation == "shutdown":
+                    response = None
+                    running = False
+                elif operation == "shutdown_clean":
+                    supervisor.mark_clean_shutdown()
                     response = None
                     running = False
                 else:
