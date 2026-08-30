@@ -526,7 +526,7 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
             stop=Event(),
             trusted_config_loader=lambda: load_outbound_agent_service_config(
                 service.source_path
-            ).client,
+            ),
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc

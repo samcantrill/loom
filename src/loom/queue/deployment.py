@@ -58,6 +58,8 @@ class CoordinatorServiceConfig:
     daemon: LocalDaemonConfig
     agent_server: AgentTlsServerConfig | None
     source_path: Path
+    immutable_fingerprint: str
+    active_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +77,8 @@ class OutboundAgentServiceConfig:
     registration: OutboundAgentRegistrationConfig
     reconnect_seconds: float
     source_path: Path
+    immutable_fingerprint: str
+    active_fingerprint: str
 
 
 def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfig:
@@ -99,9 +103,8 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
         "coordinator service config",
     )
     _header(payload, "loom.coordinator-service")
-    fingerprint = _canonical_fingerprint(
-        _coordinator_immutable_projection(payload)
-    )
+    fingerprint = _canonical_fingerprint(_coordinator_immutable_projection(payload))
+    active_fingerprint = _canonical_fingerprint(_coordinator_active_projection(payload))
     base = source.parent
     root = _path(payload, "deployment_root", base)
     embedded = _resident_profile(
@@ -136,6 +139,7 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
         resident_worker_launch_profile=embedded.launch_profile,
         deployment_root=root,
         deployment_configuration_fingerprint=fingerprint,
+        active_configuration_fingerprint=active_fingerprint,
         machine_id=_string(payload, "machine_id"),
         cpu_capacity=embedded.cpu_capacity,
         memory_capacity_bytes=embedded.memory_capacity_bytes,
@@ -155,7 +159,7 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
         agent_resource_providers=cast(Any, embedded_providers),
         slurm_profiles=cast(Any, slurm_profiles),
     )
-    return CoordinatorServiceConfig(daemon, server, source)
+    return CoordinatorServiceConfig(daemon, server, source, fingerprint, active_fingerprint)
 
 
 def load_outbound_agent_service_config(
@@ -180,6 +184,7 @@ def load_outbound_agent_service_config(
     )
     _header(payload, "loom.outbound-agent-service")
     fingerprint = _canonical_fingerprint(_outbound_immutable_projection(payload))
+    active_fingerprint = _canonical_fingerprint(_outbound_active_projection(payload))
     base = source.parent
     profiles = tuple(
         _resident_profile(
@@ -218,12 +223,15 @@ def load_outbound_agent_service_config(
         agent_root=_path(payload, "agent_root", base),
         resident_profiles=profiles,
         deployment_configuration_fingerprint=fingerprint,
+        active_configuration_fingerprint=active_fingerprint,
     )
     return OutboundAgentServiceConfig(
         client,
         registration,
         _positive_number(payload, "reconnect_seconds"),
         source,
+        fingerprint,
+        active_fingerprint,
     )
 
 
@@ -231,12 +239,31 @@ def run_outbound_agent_service(
     config: OutboundAgentServiceConfig,
     *,
     stop: Event,
-    trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
+    trusted_config_loader: Callable[[], OutboundAgentServiceConfig] | None = None,
 ) -> None:
     """Run one foreground agent role with bounded reconnect and poll loops."""
 
+    active = config
+    pending: OutboundAgentServiceConfig | None = None
+
+    def load_client() -> AgentTlsClientConfig:
+        nonlocal pending
+        if trusted_config_loader is None:
+            raise QueueServiceError("trusted agent configuration loader is unavailable")
+        pending = trusted_config_loader()
+        return pending.client
+
+    def install(replacement: AgentTlsClientConfig) -> None:
+        nonlocal active, pending
+        if pending is None or pending.client != replacement:
+            raise QueueServiceError("trusted agent role snapshot is unavailable")
+        active = pending
+        pending = None
+
     client: LocalDaemonAgentHttpClient | None = _open_outbound_agent(
-        config.client, trusted_config_loader=trusted_config_loader
+        active.client,
+        trusted_config_loader=None if trusted_config_loader is None else load_client,
+        on_reload=install,
     )
     while True:
         try:
@@ -244,7 +271,11 @@ def run_outbound_agent_service(
                 return
             if client is None:
                 client = _open_outbound_agent(
-                    config.client, trusted_config_loader=trusted_config_loader
+                    active.client,
+                    trusted_config_loader=(
+                        None if trusted_config_loader is None else load_client
+                    ),
+                    on_reload=install,
                 )
             client.resume_retained_work()
             handshake = client.handshake()
@@ -255,7 +286,7 @@ def run_outbound_agent_service(
                 operation_id = _operation_id(
                     "register",
                     client.agent_root_id,
-                    config.registration.config_revision,
+                    active.registration.config_revision,
                 )
                 session = client.register(
                     AgentRegistration(
@@ -263,11 +294,11 @@ def run_outbound_agent_service(
                         coordinator_id,
                         coordinator_epoch,
                         client.agent_root_id,
-                        config.registration.config_revision,
-                        config.registration.inventory_revision,
-                        config.registration.availability_revision,
-                        config.registration.pools,
-                        config.registration.capabilities,
+                        active.registration.config_revision,
+                        active.registration.inventory_revision,
+                        active.registration.availability_revision,
+                        active.registration.pools,
+                        active.registration.capabilities,
                     )
                 )
             elif session.coordinator_epoch != coordinator_epoch:
@@ -283,7 +314,7 @@ def run_outbound_agent_service(
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
-                profile = config.client.resident_profiles[0]
+                profile = active.client.resident_profiles[0]
                 gpu_descriptors = tuple(item.descriptor for item in profile.gpu_devices)
                 gpu_atoms = tuple(
                     item.descriptor.capacity_atom()
@@ -302,7 +333,7 @@ def run_outbound_agent_service(
                     _resident_provider_descriptors(profile, session.agent_id),
                     pools=session.pools,
                     resident_profiles=tuple(
-                        item.descriptor for item in config.client.resident_profiles
+                        item.descriptor for item in active.client.resident_profiles
                     ),
                     gpu_devices=gpu_descriptors,
                     gpu_atoms=gpu_atoms,
@@ -332,7 +363,7 @@ def run_outbound_agent_service(
         except QueueError:
             if stop.is_set():
                 return
-            stop.wait(config.reconnect_seconds)
+            stop.wait(active.reconnect_seconds)
         finally:
             if client is not None:
                 closing = client
@@ -355,10 +386,11 @@ def _open_outbound_agent(
     config: AgentTlsClientConfig,
     *,
     trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
+    on_reload: Callable[[AgentTlsClientConfig], None] | None = None,
 ) -> LocalDaemonAgentHttpClient:
     try:
         return LocalDaemonAgentHttpClient(
-            config, trusted_config_loader=trusted_config_loader
+            config, trusted_config_loader=trusted_config_loader, on_reload=on_reload
         )
     except QueueServiceError as exc:
         if str(exc) != "managed supervisor endpoint is unavailable":
@@ -375,7 +407,9 @@ def _open_outbound_agent(
         )
     except AgentProcessSupervisorError as exc:
         raise QueueServiceError(str(exc)) from exc
-    return LocalDaemonAgentHttpClient(config, trusted_config_loader=trusted_config_loader)
+    return LocalDaemonAgentHttpClient(
+        config, trusted_config_loader=trusted_config_loader, on_reload=on_reload
+    )
 
 
 def _load_protected_config(
@@ -448,7 +482,11 @@ def _trusted_target(value: Mapping[str, object], label: str) -> object:
 
     target = _string(value, "_target_")
     kwargs = {
-        key: item
+        key: (
+            _trusted_target(cast(Mapping[str, object], item), f"{label}.{key}")
+            if isinstance(item, Mapping) and "_target_" in item
+            else item
+        )
         for key, item in value.items()
         if key != "_target_"
     }
@@ -534,16 +572,12 @@ def _coordinator_immutable_projection(
     return {
         "schema_version": payload["schema_version"],
         "kind": payload["kind"],
-        "deployment_root": payload["deployment_root"],
-        "run_store_root": payload["run_store_root"],
         "machine_id": payload["machine_id"],
         "embedded_profile": {
             "descriptor": dict(profile),
-            "project_root": embedded["project_root"],
-            "python_executable": embedded["python_executable"],
         },
-        "agent_server": server,
-        "authority": _mapping(payload, "authority"),
+        "agent_server": _without_paths(server),
+        "authority": _without_paths(_mapping(payload, "authority")),
     }
 
 
@@ -558,20 +592,59 @@ def _outbound_immutable_projection(
         profiles.append(
             {
                 "descriptor": dict(_mapping(profile, "descriptor")),
-                "project_root": profile["project_root"],
-                "python_executable": profile["python_executable"],
             }
         )
     return {
         "schema_version": payload["schema_version"],
         "kind": payload["kind"],
-        "agent_root": payload["agent_root"],
         "url": payload["url"],
-        "server_ca_path": payload["server_ca_path"],
-        "certificate_path": payload["certificate_path"],
-        "private_key_path": payload["private_key_path"],
         "resident_profiles": profiles,
     }
+
+
+def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, object]:
+    return cast(
+        dict[str, object],
+        _without_paths(
+            {
+                "poll_interval_seconds": payload["poll_interval_seconds"],
+                "max_accepted_time_step_seconds": payload["max_accepted_time_step_seconds"],
+                "agent_policy": payload["agent_policy"],
+                "remote_profiles": payload["remote_profiles"],
+                "scheduling": payload.get("scheduling"),
+                "embedded_agent": payload.get("embedded_agent"),
+                "slurm_profiles": payload.get("slurm_profiles"),
+            }
+        ),
+    )
+
+
+def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, object]:
+    return cast(
+        dict[str, object],
+        _without_paths(
+            {
+                "registration": payload["registration"],
+                "reconnect_seconds": payload["reconnect_seconds"],
+                "resident_profiles": payload["resident_profiles"],
+            }
+        ),
+    )
+
+
+def _without_paths(value: object) -> object:
+    """Keep canonical authored values without locations or secret-bearing values."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _without_paths(item)
+            for key, item in value.items()
+            if not str(key).endswith("_path")
+            and str(key) not in {"project_root", "python_executable", "environment"}
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_without_paths(item) for item in value]
+    return value
 
 
 def _header(payload: Mapping[str, object], kind: str) -> None:

@@ -643,6 +643,7 @@ class LocalDaemonConfig:
     max_accepted_time_step_seconds: float = 3600.0
     deployment_root: Path | None = None
     deployment_configuration_fingerprint: str | None = None
+    active_configuration_fingerprint: str | None = None
     coordinator_authority_factory: Callable[[str], object] | None = None
 
     def __post_init__(self) -> None:
@@ -661,6 +662,15 @@ class LocalDaemonConfig:
             )
         ):
             raise QueueServiceError("deployment configuration fingerprint is invalid")
+        if self.active_configuration_fingerprint is not None and (
+            not isinstance(self.active_configuration_fingerprint, str)
+            or len(self.active_configuration_fingerprint) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.active_configuration_fingerprint
+            )
+        ):
+            raise QueueServiceError("active configuration fingerprint is invalid")
         authority_factory = self.coordinator_authority_factory
         if authority_factory is None:
             from .coordinator_authority import embedded_coordinator_authority
@@ -2640,15 +2650,17 @@ class LocalDaemon:
     def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig) -> None:
         if not isinstance(replacement, LocalDaemonConfig):
             raise QueueServiceError("trusted scheduling configuration is invalid")
+        if (
+            replacement.deployment_configuration_fingerprint
+            != self.config.deployment_configuration_fingerprint
+        ):
+            raise QueueConflictError(
+                "scheduling reload cannot replace immutable role configuration"
+            )
         immutable = (
             "coordinator_root",
             "agent_root",
             "run_store_root",
-            "machine_id",
-            "cpu_capacity",
-            "memory_capacity_bytes",
-            "gpu_devices",
-            "poll_interval_seconds",
         )
         if any(
             getattr(replacement, name) != getattr(self.config, name)
@@ -3644,6 +3656,8 @@ def _exact_fields(data: Mapping[str, object], fields: set[str], label: str) -> N
 
 
 def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
+    if config.active_configuration_fingerprint is not None:
+        return config.active_configuration_fingerprint
     payload = {
         "machine_id": config.machine_id,
         "cpu_capacity": config.cpu_capacity,

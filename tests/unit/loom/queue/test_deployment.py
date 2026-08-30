@@ -126,7 +126,7 @@ def test_outbound_agent_publication_is_atomic_and_config_bound(
         source.chmod(0o600)
         changed = load_outbound_agent_service_config(source)
         # Reconnect timing is reloadable and preserves the immutable binding.
-        with pytest.raises(QueueServiceError, match="already locked"):
+        with pytest.raises(QueueServiceError, match="changed without reload"):
             LocalDaemonAgentHttpClient(changed.client)
     finally:
         if client._supervisor is not None:  # noqa: SLF001

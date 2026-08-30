@@ -183,6 +183,7 @@ class AgentTlsClientConfig:
         | None
     ) = None
     deployment_configuration_fingerprint: str | None = None
+    active_configuration_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
@@ -234,6 +235,13 @@ class AgentTlsClientConfig:
             raise QueueServiceError(
                 "agent deployment configuration fingerprint is invalid"
             )
+        active = self.active_configuration_fingerprint
+        if active is not None and (
+            not isinstance(active, str)
+            or len(active) != 64
+            or any(character not in "0123456789abcdef" for character in active)
+        ):
+            raise QueueServiceError("agent active configuration fingerprint is invalid")
 
 
 def _default_remote_providers(
@@ -1467,9 +1475,11 @@ class LocalDaemonAgentHttpClient:
         config: AgentTlsClientConfig,
         *,
         trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
+        on_reload: Callable[[AgentTlsClientConfig], None] | None = None,
     ) -> None:
         self._config = config
         self._trusted_config_loader = trusted_config_loader
+        self._on_reload = on_reload
         self._connection: http.client.HTTPSConnection | None = None
         self._supervisor: AgentProcessSupervisorClient | None = None
         # The journal validates the durable deployment binding and obtains the
@@ -1962,6 +1972,8 @@ class LocalDaemonAgentHttpClient:
                         }
                     )
                 self._config = replacement
+                if self._on_reload is not None:
+                    self._on_reload(replacement)
                 self._profiles = {
                     item.descriptor.profile_id: item
                     for item in replacement.resident_profiles
@@ -2012,6 +2024,13 @@ class LocalDaemonAgentHttpClient:
     def _validate_reload_config(self, replacement: AgentTlsClientConfig) -> None:
         if not isinstance(replacement, AgentTlsClientConfig):
             raise QueueServiceError("trusted agent configuration is invalid")
+        if (
+            replacement.deployment_configuration_fingerprint
+            != self._config.deployment_configuration_fingerprint
+        ):
+            raise QueueConflictError(
+                "agent reload cannot replace immutable role configuration"
+            )
         if (
             replacement.agent_root != self._config.agent_root
             or replacement.url != self._config.url
@@ -4572,6 +4591,8 @@ def _agent_inventory_revision(config: AgentTlsClientConfig) -> str:
 
 
 def _agent_active_fingerprint(config: AgentTlsClientConfig) -> str:
+    if config.active_configuration_fingerprint is not None:
+        return config.active_configuration_fingerprint
     return _agent_revision(
         "active",
         {
