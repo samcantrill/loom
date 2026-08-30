@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 13A
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p13a-lifecycle-startup-failure-closure`
@@ -10,6 +10,7 @@
 - Base revision: `f9b18c1cc7dba59de90310ceac4fbae8f4e1b837`
 - PR target: `develop`
 - PR title: `Stage 29 phase 13A: close supervisor startup failure leaks`
+- PR: [#262](https://github.com/samcantrill/loom/pull/262)
 - Dependencies: merged Phase 12 plus read-only Phase 13 candidate `748f938`
 - Workflow path: expanded; a detached-process ownership boundary requires one
   independent review after validation
@@ -193,7 +194,8 @@ Final commands:
   remain; historical clean-epoch terminal rows remain restartable. Correction
   3 carries the initially opened outbound client through the normal cleanup
   owner so a stop arriving during close cannot bypass clean shutdown.
-- PR and merge: pending
+- PR and merge: [#262](https://github.com/samcantrill/loom/pull/262) is open,
+  non-draft, targets `develop`, and was verified cleanly mergeable; merge pending
 
 ## Completion Record
 
@@ -203,5 +205,5 @@ Final commands:
 | Tests added or updated | Added process-level proof for changed local scheduling rejection, mismatched outbound deployment binding, unavailable local owner-store and outbound execution-journal rejection, retained local owner preservation without a clean marker, and rejection that leaves a valid pre-existing outbound supervisor's PID and epoch reachable. Correction 2 adds supervisor proof that a gone exited group permits epoch rotation, and that clean service shutdown records containment and leaves no TERM-ignoring descendant alive after its root exits. Correction 3 adds a deterministic stop-during-initial-close handoff test with an exact supervisor-process assertion. |
 | Validated revision/tree state and evidence | Original focused tests passed (3); targeted lifecycle matrix passed: 85 tests in 377.39s; targeted SLURM/session/CLI/E2E matrix passed: 69 tests in 121.57s. Correction 1 focused constructor/shutdown matrix passed: 7 tests in 2.25s; changed-file Ruff and Pyright passed. Correction 2 focused supervisor suite passed: 7 tests in 0.82s; changed-file Ruff and Pyright passed. Correction 3 passed its two causal service tests, the complete 38-test outbound/session integration file, Ruff, Pyright with zero findings, and an exact empty post-test process scan. At final source/test revision `6a578f8`, refreshed `make validate-pr` passed Ruff, Pyright with zero findings, 2,685 default tests, 156 configuration-extra tests with 3 expected skips, and source/wheel builds. Fresh `make test-summary` recorded 2,841 categorized passes and 3 expected skips in `build/test-summary.md`. |
 | Validation-relevant changes after evidence | None. This final completion-record update is documentation-only. |
-| PR, review, and merge | Required independent review found one supported outbound stop-handoff leak. Correction 3 closed it, and the same reviewer returned PASS after bounded confirmation. PR and merge remain pending. |
+| PR, review, and merge | Required independent review found one supported outbound stop-handoff leak. Correction 3 closed it, and the same reviewer returned PASS after bounded confirmation. [#262](https://github.com/samcantrill/loom/pull/262) is open, non-draft, targets `develop`, and was verified cleanly mergeable; merge pending. |
 | Residual risk and cleanup | An exact post-gate working-directory scan found no process created by either successful gate. One empty supervisor from an earlier deliberately interrupted pre-gate test run was identified by its exact worktree and durable root, stopped through its authenticated test-only shutdown operation, and repeated exact scans after cleanup, correction 3 tests, and the refreshed full gates were empty. No known phase blocker remains. |
