@@ -70,5 +70,5 @@ Blockers: none
 
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
-| 1 | pending | post-rebase pre-submit refresh pending | no phase blocker | worktree retained for review |
+| 1 | pending | post-rebase pre-submit gate passed at `f316d0a` | no phase blocker | worktree retained for review |
 | 2 | pending | pending | pending | pending |

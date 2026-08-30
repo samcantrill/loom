@@ -179,7 +179,8 @@ Final commands:
   the bounded resume trust-order correction is
   `23dc239efa90f3277585e63ce3dba730d5bda627`.
 - Refiner: not needed unless a qualified blocker appears.
-- Pre-submit gate: refresh pending after the non-overlapping `develop` rebase.
+- Pre-submit gate: passed on the post-rebase tree at
+  `f316d0a1c46ebf40447556bea91b2393191c70a6`.
 - Independent review: required for resume/bootstrap risk.
 - Blocker corrections: 1/3; Slurm resume now validates persisted activation
   evidence before importing selected plugin targets.
@@ -191,7 +192,7 @@ Final commands:
 | --- | --- |
 | Implementation and changed paths | Added `RunStoreOptions` and optional `RunOptions.run_store`, runtime profile/config bootstrap projection, CLI run/plan authority/offline/Slurm root wiring, public exports, and feature documentation. Changed `src/loom/pipeline/runtime/{options,profiles,config,__init__}.py`, `src/loom/pipeline/__init__.py`, `src/loom/cli/{run,plan}.py`, and `docs/features/{execution,cli}.md`. Manager correction `23dc239e` made the existing resume-store/activation check common to normal, Slurm dry-run, and Slurm live entrypoints. |
 | Tests added or updated | Added option/path and profile-precedence tests, resume/bootstrap and plan factory-spy tests, public export checks, a real profile-selected fresh/resume CLI journey under the configured collection, and both Slurm resume import-order failure cases. |
-| Validated revision/tree state and evidence | Corrected source/test commit `23dc239efa90f3277585e63ce3dba730d5bda627`; pre-rebase `make validate-pr` passed (Ruff, Pyright, default: 2,614 passed/135 deselected; config-extra: 156 passed/3 skipped; sdist and wheel built). A fresh post-rebase gate is pending. The earlier executor `make test-summary` receipt at the equivalent pre-rebase implementation had one unrelated queue timestamp-race failure; its isolated rerun passed without a source change. |
-| Validation-relevant changes after evidence | none; this completion record only |
+| Validated revision/tree state and evidence | Post-rebase tree `f316d0a1c46ebf40447556bea91b2393191c70a6`, containing corrected source/test commit `23dc239efa90f3277585e63ce3dba730d5bda627`; fresh `make validate-pr` passed (Ruff, Pyright, default: 2,627 passed/135 deselected; config-extra: 156 passed/3 skipped; sdist and wheel built). The earlier executor `make test-summary` receipt at the equivalent pre-rebase implementation had one unrelated queue timestamp-race failure; its isolated rerun passed without a source change. |
+| Validation-relevant changes after evidence | none; this completion metadata only |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | No Phase 1 blocker. The earlier `make test-summary` anomaly remains classified as an unrelated `scheduler_observed_at` timestamp race because its isolated rerun passed and the fresh required pre-submit gate passed. Worktree and branch remain for independent review and PR. |
