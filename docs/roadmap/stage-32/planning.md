@@ -1,14 +1,15 @@
 # Roadmap Stage 32 Planning: Resumable Many-Run SLURM Throughput
 
-Status: approved
+Status: approved corrective replan
 Roadmap stage: 32
-Evidence tree: `/home/can134/work/active/loom` at `c55892f5bd04691938da1a5a8ba76a4f4a0fabc9`; relevant dirty paths: the prior unapproved `docs/roadmap/stage-32/` draft, replaced by this packet
+Evidence tree: `/home/can134/work/active/loom` at `135773663d899d6fc28e6251d4f99fb8641cf3b6`; retained blocked Phase 2 candidate at `c9cbd2ccbdff0a55c7b3924ec7afeca45af8bfc6`; relevant dirty paths: none before this replan
 Planning route: expanded; admission identity changes durable whole-run queue state, and crash-safe SLURM submission crosses the filesystem and external-scheduler boundary
-Current gate: passed; Phase 1 is merged and Phase 2 may begin
+Current gate: passed; Phase 1 is merged, Phase 2 is review-blocked, and the approved Phase 3 replacement may begin
 Blockers: none
 
 Approved: behavior/fingerprints 2026-08-28; packet 2026-08-29; Stage 34
-run-to-item reference 2026-08-30. No new owner is added.
+run-to-item reference 2026-08-30; corrective replacement phase 2026-08-30.
+No new owner is added.
 
 ## Current State
 
@@ -18,8 +19,8 @@ run-to-item reference 2026-08-30. No new owner is added.
 | Functionality | Project code generates ordinary prepared-run requests; Loom admits them durably and idempotently, then a restartable foreground driver hands them to SLURM. | None. | Preserve per-run and scheduler ownership. |
 | Design | Exact replay uses existing `queue_item_id` as the stable submission identity; optional scientific deduplication uses a project-supplied canonical fingerprint; force requires a new queue item ID. | None. | Hard-cut the whole-run queue schema. |
 | Validation | Fake scheduler/process tests cover 2,000-run replay and causal crash boundaries; one shared-filesystem HPC journey covers both Slurm modes. | None. | Keep real Slurm opt-in. |
-| Detailed plan | Two vertical phases separate durable admission from external-scheduler driving. | None. | Use the linked phase plans. |
-| Approval | Behavior direction, fingerprint choice, run-to-item reference, and the completed packet are accepted. | None. | Begin Phase 2 after the Phase 1 merge. |
+| Detailed plan | Phase 1 is merged; blocked Phase 2 records the rejected candidate; Phase 3 replaces the complete external-scheduler vertical slice from current `develop` and closes only the two review gaps. | None. | Use the linked Phase 3 plan. |
+| Approval | Behavior direction, fingerprint choice, run-to-item reference, and the FR-9/FR-10 corrective replacement are accepted. | None. | Begin Phase 3 from current `develop`. |
 
 ## Evidence And Scope
 
@@ -167,6 +168,8 @@ run-to-item reference 2026-08-30. No new owner is added.
 | Prior deployment factories/remote-agent applications duplicate Stage 29 Phase 12. | FQ-3, FR-11 | Competing production composition. | Remove from Stage 32. | resolved |
 | Sweep authority and remote byte/log stores add owners not needed for replay. | FQ-1, FR-1, FR-10 | Item idempotency and shared storage already meet the outcome. | Keep streaming enqueue and references only. | resolved |
 | Intermittent ready-stage coordination requires the endpoint while absent. | FQ-3, FR-7 | Violates the deployment constraint. | Use single-job/`afterok`. | resolved |
+| The Phase 2 driver reads manually injected retained snapshots only when every current fact is missing and does not persist its own observations. | FR-9, DQ-6 | Partial accounting loss can hide a retained failed job, while complete accounting loss can regress a previously observed terminal scheduler fact to unknown. | Persist current per-job observations in the existing run-local snapshot owner and fill only each missing job from its newest retained fact. | locked for Phase 3 |
+| Phase 2 checks prepared files on the submit host but does not require evidence that compute sees the same workspace. | FR-10, DQ-7 | `sbatch` can accept a job that cannot read run state or write results. | Require positive existing `delegated_verification.shared_workspace` evidence before any prepared scheduler call. | locked for Phase 3 |
 
 ## Examples And Validation
 
@@ -176,8 +179,8 @@ run-to-item reference 2026-08-30. No new owner is added.
 | Null/semantic/forced identities | Dedupe/repeat drift | admission index | canonical duplicate, null independence, force replay/new force | planned |
 | Foreground service-less driver | Process exit stalls or loses accepted work | queue controller plus Slurm manifests | submit, exit, scheduler progress, reopen/reconcile/continue | planned |
 | Ambiguous scheduler submission | Duplicate scheduler jobs | persisted operation and marker discovery | before call, after acceptance, after handle return, one/zero/multiple matches | planned |
-| Old completed job | Accounting expires after result | authority/run store then scheduler | terminal run succeeds without `sacct`; missing terminal plus missing accounting is unknown | planned |
-| Shared-filesystem journey | Compute paths unavailable | project store/preflight | both modes fake e2e plus manual live checklist | planned |
+| Old completed job | Accounting expires after result or one job disappears before authority terminal | authority/run store, current scheduler facts, then run-local per-job snapshots | persist observations through the driver; current facts win per handle; retained facts fill only missing handles; authority terminal still wins | planned for Phase 3 |
+| Shared-filesystem journey | Submit-host paths exist but compute visibility is unproven | launch-contract verification before scheduler boundary | absent/false/unsupported proof rejects before `sbatch`; explicit proven shared workspace permits both fake modes | planned for Phase 3 |
 
 Causal interactions requiring combined coverage:
 
@@ -192,10 +195,14 @@ Causal interactions requiring combined coverage:
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Durable many-run admission | Project code streams ordinary requests and safely replays any admitted prefix with optional scientific deduplication and explicit forced repeats. | Queue request/receipt, service, SQLite schema/index, bounded reads and tests; no Slurm behavior. | Stage 29 Phase 12 merged to avoid queue CLI/schema conflicts. | Identity matrix and 2,000-run prefix restart pass. | pending |
-| 2. Service-less Slurm driving | A foreground driver submits prepared single-job or `afterok` runs, exits, and later reconciles exact scheduler/run state without duplicate submission or false success. | Queue controller/CLI, existing Slurm manifests/status/marker seams, HPC docs/tests; no managed bootstrap, remote query, store, or reporting protocol. | Phase 1 remotely merged. | Both modes, ambiguity matrix, old-job reconciliation, bounds and full gates pass. | pending |
+| 1. Durable many-run admission | Project code streams ordinary requests and safely replays any admitted prefix with optional scientific deduplication and explicit forced repeats. | Queue request/receipt, service, SQLite schema/index, bounded reads and tests; no Slurm behavior. | Stage 29 Phase 12 merged to avoid queue CLI/schema conflicts. | Identity matrix and 2,000-run prefix restart pass. | merged |
+| 2. Service-less Slurm driving | Historical rejected candidate for the foreground-driver outcome. | Same intended ownership as Phase 3; retained only to record the exhausted correction/review result. | Phase 1 remotely merged. | Fully validated candidate failed independent review on FR-9 and FR-10; no PR opened. | blocked |
+| 3. Service-less Slurm completion | A foreground driver submits prepared single-job or `afterok` runs, exits, and later reconciles exact scheduler/run state without duplicate submission, false success, lost per-job evidence, or unproven compute paths. | One replacement PR carries the Phase 2 implementation from current `develop`, persists/merges per-job snapshots, enforces existing shared-workspace proof, and retains all prior docs/tests; no managed bootstrap, remote query/store, or reporting protocol. | Phase 1 remotely merged; Phase 2 explicitly blocked; maintainer approved replacement. | All Phase 2 behavior plus partial/pruned accounting and pre-`sbatch` proof matrix, full gates, and independent review pass. | pending |
 
-Two phases separate generic admission from the external-scheduler boundary.
+Three recorded phases preserve the blocked Phase 2 result while keeping the
+implementation architecture at two vertical outcomes. Phase 3 is a complete
+replacement PR based on current `develop`, not a stacked continuation of the
+unmerged Phase 2 branch.
 
 ## Quality Gate
 
@@ -206,11 +213,12 @@ Two phases separate generic admission from the external-scheduler boundary.
 | Complexity delta proportionate | Sweep, dynamic controller, remote data, query gateway, and reporting durability are removed. | pass |
 | Contracts and private discretion clear | Identity, force, manifests, owner order, hard cut, and deferrals are fixed; helper layout remains private. | pass |
 | Invariant ownership and validation proportionate | Admission, run lifecycle, scheduler state, and bytes each have one owner with causal boundary tests. | pass |
-| Phases vertical and reviewable | Two phases split durable admission from external scheduler operation. | pass |
-| No unresolved blocker | No planning blocker remains; Stage 29 Phase 12 is an explicit implementation dependency. | pass |
+| Phases vertical and reviewable | Phase 1 owns admission; Phase 3 replaces the blocked external-scheduler slice in one current-`develop` PR. | pass |
+| No unresolved blocker | Phase 1 and its Stage 29 dependency are merged; Phase 2 is explicitly blocked; the approved replacement has no unresolved planning decision. | pass |
 
-Gate result: approved by the maintainer on 2026-08-29; no product or design
-blocker remains. Phase 1 begins only after Stage 29 Phase 12 merges.
+Gate result: originally approved on 2026-08-29 and corrective replacement
+approved by the maintainer on 2026-08-30; no product or design blocker remains.
+Phase 3 begins from current `develop` after the explicitly blocked Phase 2.
 
 Accepted risks: fingerprints trusted; accounting-free work remains
 unknown; queue databases hard-cut; shared filesystem required;
