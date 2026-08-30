@@ -7,10 +7,10 @@
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p14-reload-authority-composition`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees/stage-29-p14-reload-authority-composition`
-- Base revision: current `origin/develop` after Phase 13 merges
+- Base revision: current `origin/develop` after Phase 13A merges
 - PR target: `develop`
 - PR title: `Stage 29 phase 14: complete protected role composition`
-- Dependencies: remotely merged Phase 13
+- Dependencies: remotely merged Phase 13A; Phase 13 remains read-only evidence
 - Workflow path: expanded; durable configuration identity and authority trust boundary
 - Blockers: none
 
@@ -19,9 +19,9 @@
 - Vertical outcome: the protected coordinator/outbound-agent YAML constructs and
   safely reloads the full supported scheduling, provider, SLURM, and authority
   composition, then restarts from the persisted active revision.
-- Earlier dependency: Phase 13 defines serve-owned supervisor lifetime and offer
-  publication versus renewal; reload that changes availability must use those
-  semantics.
+- Earlier dependency: Phase 13A delivers the validated Phase 13 serve-owned
+  supervisor lifetime and offer publication versus renewal; reload that changes
+  availability must use those semantics.
 - Later work explicitly out of scope: new management read commands, portable
   local-owner policy, and example journeys belong to Phase 15.
 
@@ -155,7 +155,7 @@ Final commands:
   silently falls back to direct SQLite.
 - Stop if: existing authenticated authority APIs cannot implement an operation
   required by the production daemon without a material public authority design
-  decision; target construction needs untrusted loading; or Phase 13's immutable
+  decision; target construction needs untrusted loading; or Phase 13A's immutable
   supervisor profile decision is contradicted.
 - Accepted debt: certificate/config rotation is explicit reload and active
   service connection replacement; distributed config coordination is deferred.

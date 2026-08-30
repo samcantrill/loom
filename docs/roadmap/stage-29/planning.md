@@ -1,20 +1,23 @@
 # Roadmap Stage 29 Planning: Durable Dependency-Aware Stage Scheduling
 
-Status: lifecycle, composition, and management correction approved; Phases
-13-15 pending after the merged Phases 1-12 baseline
+Status: lifecycle, composition, and management correction approved; Phase 13
+is blocked evidence, and Phase 13A plus Phases 14-15 are pending after the
+merged Phases 1-12 baseline
 Roadmap stage: 29
-Evidence baseline: clean `develop` source at
-`2f8dfd93c98bb60a67fe8033075e5fc316c1b8f9`; Phases 10-12 are merged as
-`c2dab20`, `5fac22c`, and `4097729`; earlier blocked branches remain historical
-read-only evidence.
+Evidence baseline: clean `develop` at
+`cae37be038419b6dc3b134af30ced0d54b626c5a`; Phases 10-12 are merged as
+`c2dab20`, `5fac22c`, and `4097729`; Phase 13 candidate head `824e935` and
+earlier blocked branches remain historical read-only evidence.
 Planning route: expanded because the approved correction changes durable
 session/admission/configuration state, the coordinator-authority trust boundary,
 supervisor process continuity, and public CLI behavior.
 Current gate: the maintainer supplied and approved the lifecycle,
-configuration, management, CLI, and example correction below. Three fresh
-linked execution plans own it in dependency order; Phase 13 is next.
-Blockers: none. The merged Stage 29 scheduler remains the base, but the accepted
-correction is incomplete until Phases 13-15 merge.
+configuration, management, CLI, and example correction below. Required review
+blocked the validated Phase 13 candidate on two reproduced startup-failure
+process leaks. Fresh Phase 13A owns only that closure and is next.
+Blockers: none at the planning level. Phase 13 remains read-only blocked
+evidence; the accepted correction is incomplete until Phase 13A and Phases
+14-15 merge.
 
 This file is the current Stage 29 authority. It supersedes the earlier Stage 29
 whole-run placement design. A user still submits, observes, and cancels a run,
@@ -215,7 +218,7 @@ could otherwise be misread; fresh example/deployment roots are required.
 | Phase 9F execution evidence | Corrected source/test `eb0537d` completes guarded different-session replacement, complete owner classification, fresh successor readiness, old-root provider-release proof before capacity restoration, fresh coordinator offer identities after withholding changes, bounded status, and all adapters/guidance. The 179-test phase matrix, `make validate-pr`, and a fresh 2,720-pass summary succeeded; required review findings closed at correction 2/3. | None. PR #249 squash-merged as `a6cd482`; hosted CI is intentionally disabled. | Preserve the hard-cut version 7 replacement and cleanup contracts; no Phase 9F workflow action remains. |
 | Approval | The maintainer approved the original Stage 29 hard cut-over, explicitly rejected candidate-schema compatibility or migration, approved the Slurm job-private capability contract and recovery closures, and approved Phase 9F implementation after each blocker explanation. | None. | Preserve the merged baseline and historical evidence. |
 | Production correction | The maintainer supplied and approved the global-scheduling, assignment-execution, resident-agent, bounded-operations, time-health, initialization, deployment, and three-phase hard-cut requirements recorded above. | None; compatibility is explicitly unnecessary. | Execute Phases 10-12 in order, starting with Phase 10. |
-| Lifecycle/composition/management correction | The maintainer approved FR-31 through FR-44 after review demonstrated idle-offer expiry, discarded future failures, unsafe SLURM rejection release, detached supervisor leaks, incoherent reload identity, incomplete protected composition/authority injection, global-wake/single-connection management, missing bounded CLI reads, and overclaimed examples. | None; affected schemas may hard cut and compatibility is unnecessary. | Execute Phases 13-15 in order, starting with Phase 13. |
+| Lifecycle/composition/management correction | The maintainer approved FR-31 through FR-44 after review demonstrated idle-offer expiry, discarded future failures, unsafe SLURM rejection release, detached supervisor leaks, incoherent reload identity, incomplete protected composition/authority injection, global-wake/single-connection management, missing bounded CLI reads, and overclaimed examples. | None; affected schemas may hard cut and compatibility is unnecessary. | Preserve blocked Phase 13 as evidence; execute Phase 13A and Phases 14-15 in order. |
 
 ## Evidence And Scope
 
@@ -1968,12 +1971,13 @@ should be tested at their owning boundary rather than as a Cartesian matrix.
 | 10 — global scheduler and assignment concurrency | One bounded coordinator-wide cycle projects all active admissions, schedules the ordered ready window, and runs assignment-scoped work concurrently. | Durable priority/enqueue order, per-admission health, exact local/remote/SLURM assignment futures, and same-run concurrency; no execution-profile/provider redesign. | Phase 9. | Global ordering, bounded-window, background assignment, health isolation, and full validation passed in PR #250. | merged |
 | 11 — resident agent correctness and security | Every managed placement pins one executable resident profile and explicit conforming provider composition, and workers receive only an allowlisted environment. | Execution requirement/profile identity, provider/planner contracts, and launch environment; no management/deployment expansion. | Phase 10. | Profile/provider/environment matrices and full validation passed in PR #253. | merged |
 | 12 — operational bounds and deployment | The coordinator exposes bounded status/admission/poll behavior, accepted-time health/recovery, atomic fresh roots, and protected coordinator/outbound-agent service commands. | Constant summary, bounded pages/detail/wait, one poll replay state, time fencing, atomic publication, and initial protected schema; no lifecycle renewal, complete composition, or extra CLI reads. | Phase 11. | Operation/deployment tests and full validation passed in PR #254. | merged |
-| 13 — lifecycle and recovery correctness | Idle offers renew in bounded sequence, exact assignment failures reconcile continuously, definite SLURM rejection unbinds before release, and supervisors have serve-owned clean quiescent lifetime. | Offer/session journal, local assignment notification/replay, SLURM rejection order, supervisor continuity and cleanup; no config/management expansion. | Phase 12. | Three-TTL assignment, future failure, every rejection crash arrow, init/serve/shutdown, and leak tests plus full gate. | pending |
-| 14 — reload and authority composition | Protected configs construct/reload the complete supported role and restart from the persisted active revision through the configured authority adapter. | Immutable/active fingerprints, loaders, trusted targets, scheduling/SLURM/providers, authority factory, CLI failure; no list/detail/example expansion. | Phase 13. | Reload/restart crash matrix, target contracts, direct/HTTPS authority, service command, and full gate. | pending |
+| 13 — blocked lifecycle and recovery candidate | Validated candidate renews idle offers, replays exact assignment failures, orders definite SLURM rejection, and adds process-free/quiescent supervisor lifetime, but cannot merge. | Read-only evidence. Required review reproduced a newly started empty supervisor surviving changed local scheduling configuration and mismatched outbound deployment binding rejection. | Phase 12. | Focused lifecycle matrices and `make validate-pr` passed; required review blocked after correction 3/3. | blocked |
+| 13A — lifecycle startup-failure closure | The complete Phase 13 behavior is retained and every supported role-construction rejection cleans only the empty supervisor it created while preserving any pre-existing or retained-work owner. | Selective Phase 13 reuse plus validation ordering, ownership-aware construction cleanup, and causal local/outbound/pre-existing-owner tests; no Phase 14 expansion. | Phase 12 plus read-only Phase 13 evidence. | Both reproduced rejection paths leave no new process, an existing owner remains reachable, the Phase 13 causal matrix and full gate pass. | pending |
+| 14 — reload and authority composition | Protected configs construct/reload the complete supported role and restart from the persisted active revision through the configured authority adapter. | Immutable/active fingerprints, loaders, trusted targets, scheduling/SLURM/providers, authority factory, CLI failure; no list/detail/example expansion. | Phase 13A. | Reload/restart crash matrix, target contracts, direct/HTTPS authority, service command, and full gate. | pending |
 | 15 — management, CLI, and examples | Per-admission waits are causal, management remains responsive during bounded long polls, guarded fences are discoverable, local policy is portable, and three journeys prove every claimed surface. | Admission revision, worker pool/client renewal, bounded reads/CLI, policy/defects, docs/examples; no unbounded UI or external default dependency. | Phase 14. | A/B/no-op waits, concurrency/shutdown, discover-control, local/remote/SLURM E2Es, manifest and leak checks, and full gate. | pending |
 
 Nine numbered phases plus Phase 3B, Phase 3C, Phase 3D, Phase 4A, Phase 5A,
-Phase 7A, and Phase 7B
+Phase 7A, Phase 7B, and Phase 13A
 recovery subphases are an explicit exception to the normal one-to-three
 preference. Phase 3B was a fresh
 replacement after Phase 3A exhausted its correction budget; it then exhausted
@@ -2059,12 +2063,14 @@ route choices remain in phase-executor discretion.
 | No unresolved planning blocker | The Phase 9D2 plan owns only the exact review finding, reuses existing private states and remote precedent, preserves the hard cut, and leaves Phase 9E/9F unchanged. | pass |
 | Lifecycle/composition/management behavior locked | The maintainer supplied FR-31 through FR-44 and the renewal, reconciliation, release, supervisor, configuration, authority, management, CLI, policy, defect, and example contracts are explicit. | pass |
 | New additions proportionate | Each new state/API corresponds to a demonstrated supported-path failure or an already documented unreachable service capability; HA, generic plugins, forced shutdown, unbounded reads, and real external default dependencies remain deferred. | pass |
-| New phases vertical and reviewable | Phase 13 owns lifecycle/recovery, Phase 14 owns protected composition/reload/authority, and Phase 15 owns bounded management/CLI/examples in causal dependency order. | pass |
-| No current planning blocker | Three linked execution plans cover every new requirement with owners, stop conditions, causal tests, and final gates. | pass |
+| New phases vertical and reviewable | Phase 13 is blocked evidence; Phase 13A owns only its startup-failure process leak, Phase 14 owns protected composition/reload/authority, and Phase 15 owns bounded management/CLI/examples in causal dependency order. | pass |
+| Phase 13 recovery evidence | Candidate source/test `748f938` passed the focused lifecycle matrices and full validation. Required review reproduced two newly started empty supervisor leaks after expected local and outbound configuration rejection; correction 3/3 is exhausted and no PR was opened. Fresh Phase 13A reuses the validated candidate and owns only validation ordering, ownership-aware cleanup, and three causal process tests. | pass |
+| No current planning blocker | Phase 13A plus the existing Phase 14-15 plans cover every remaining requirement with owners, stop conditions, causal tests, and final gates. | pass |
 
-Gate result: the lifecycle, composition, and management correction is approved
-with no unresolved planning blocker. Blocked historical phases remain read-only
-evidence; Phase 13 is ready for manager preparation from current `develop`.
+Gate result: the lifecycle, composition, and management correction remains
+approved with no unresolved planning blocker. Blocked historical phases remain
+read-only evidence; fresh Phase 13A is ready for manager preparation from
+current `develop`.
 The previous expanded design,
 startup, extension/security, phase-shaping, deep scheduler, manager-local
 whole-stage correctness, deployment clarification, and explicit ready-stage

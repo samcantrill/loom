@@ -2,17 +2,20 @@
 
 ## Metadata
 
-- Status: planned
+- Status: blocked
 - Roadmap stage and phase: Stage 29, Phase 13
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p13-lifecycle-recovery-correctness`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees/stage-29-p13-lifecycle-recovery-correctness`
-- Base revision: current `origin/develop` after the planning commit
+- Base revision: `135773663d899d6fc28e6251d4f99fb8641cf3b6`
 - PR target: `develop`
 - PR title: `Stage 29 phase 13: close lifecycle recovery gaps`
 - Dependencies: merged Phase 12 and current Stage 29 correction agreement
 - Workflow path: expanded; durable cross-owner lifecycle and detached-process continuity require independent review
-- Blockers: none
+- Blockers: required independent review reproduced two expected construction-
+  rejection paths that start a fresh empty detached supervisor and then fail
+  without stopping it. Correction 3/3 is exhausted; candidate head `824e935`
+  is read-only blocked evidence and no PR was opened.
 
 ## Objective And Context
 
@@ -176,22 +179,22 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planned at evidence revision `2f8dfd9`
+- Manager preparation: passed at base `1357736`
 - Expanded planning: design-safety findings on supervisor epoch references and long-poll saturation were corrected; bounded plan review passed after narrowing Phase 14 CLI failure semantics
-- Implementation: pending
-- Refiner: not needed
-- Pre-submit gate: pending
-- Independent review: required because supervisor and multi-owner release order are material residual risks
-- Blocker corrections: 0/3
-- PR and merge: pending
+- Implementation: candidate complete at source/test revision `748f938`; renewal rollover, durable exact-future replay, definite-rejection ordering, and process-free/clean supervisor lifecycle landed
+- Refiner: complete; correction budget 3/3 is exhausted
+- Pre-submit gate: targeted lifecycle matrices and fresh `make validate-pr` passed; `make test-summary` was stopped after review found the blocker because a closure correction makes the receipt stale
+- Independent review: blocked submission after reproducing a leaked supervisor on changed local scheduling configuration and mismatched outbound deployment fingerprint
+- Blocker corrections: 3/3
+- PR and merge: no PR opened; preserve branch `agent/stage-29-p13-lifecycle-recovery-correctness` at `824e935` as read-only evidence
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Candidate adds renewal/session transport and hard-cut schemas, unchanged-offer outbound renewal, completed-future observation, authority-unbind-before-release rejection replay, and process-free/quiescent supervisor lifecycle. |
+| Tests added or updated | Renewal replay/gap/stale/bounded-row, three-TTL idle assignment, two-failure exact local replay, six SLURM rejection crash cuts, and process-free/busy/retained/clean supervisor coverage. |
+| Validated revision/tree state and evidence | Source/test `748f938` plus documentation head `824e935`; focused lifecycle matrices and fresh `make validate-pr` passed with Ruff, pyright, 2,676 default tests, 156 configuration-extra tests plus three skips, and source/wheel builds. |
+| Validation-relevant changes after evidence | Documentation only after `748f938`. |
+| PR, review, and merge | Required independent review blocked submission; no PR opened and correction 3/3 is exhausted. |
+| Residual risk and cleanup | Expected local and outbound configuration rejection can leak a newly started empty detached supervisor because service start precedes complete durable validation. The reviewer reproduced and cleaned both exact processes. Other reviewed FR-31 through FR-34 behavior had no blocker. |

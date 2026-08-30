@@ -1,0 +1,193 @@
+# Phase 13A Execution Plan: Lifecycle Startup-Failure Closure
+
+## Metadata
+
+- Status: planned
+- Roadmap stage and phase: Stage 29, Phase 13A
+- Manifest: `docs/roadmap/stage-29/implementation-plan.md`
+- Branch: `agent/stage-29-p13a-lifecycle-startup-failure-closure`
+- Worktree root and path: set during manager preparation
+- Base revision: current `origin/develop` after this planning commit
+- PR target: `develop`
+- PR title: `Stage 29 phase 13A: close supervisor startup failure leaks`
+- Dependencies: merged Phase 12 plus read-only Phase 13 candidate `748f938`
+- Workflow path: expanded; a detached-process ownership boundary requires one
+  independent review after validation
+- Blockers: none
+
+## Objective And Context
+
+- Vertical outcome: retain the validated Phase 13 renewal, exact assignment
+  replay, SLURM rejection, and supervisor lifecycle work while making both
+  supported role constructors leak-free when protected configuration is
+  rejected after process-free initialization.
+- Earlier dependency: Phase 13 candidate `748f938` passed its focused matrices
+  and full validation, but required review reproduced a newly started empty
+  supervisor surviving local scheduling-fingerprint rejection and outbound
+  deployment-fingerprint rejection. Phase 13 exhausted correction 3/3 and is
+  read-only blocked evidence.
+- Later work explicitly out of scope: reloadable configuration identity,
+  complete protected authority/composition, management reads, CLI expansion,
+  and examples remain Phases 14-15.
+
+## Current Source And Harness
+
+- `src/loom/queue/local_daemon.py` owns local role construction. The candidate
+  starts or joins the supervisor before the durable scheduling fingerprint and
+  later execution construction have completed; its exception path closes role
+  locks but does not distinguish a newly started empty service from a joined
+  pre-existing owner.
+- `src/loom/queue/agent_session_transport.py` owns outbound construction. The
+  candidate opens or starts the supervisor before validating the protected
+  journal and deployment binding, so a binding rejection can leave the new
+  service detached.
+- `src/loom/queue/_agent_process_supervisor.py` already owns process-free
+  initialization, start/join, launch quiescence, continuity epochs, and clean
+  shutdown. Reuse those operations; do not add a second process owner.
+- Existing Phase 13 tests cover process-free init, busy refusal, retained-
+  journal refusal, clean rotation, production cleanup, and exact supervisor PID
+  containment. Add only the two rejected-construction paths and the causal
+  pre-existing-owner negative.
+
+## Scope
+
+In scope:
+
+- Selectively reuse the complete validated Phase 13 source and causal tests.
+- Complete all non-mutating durable role/configuration checks that can reject a
+  supported startup before creating a supervisor process.
+- Where later construction can still fail, track whether this invocation
+  created an empty supervisor and invoke the existing clean shutdown operation
+  on that exact owner before releasing construction state.
+- Preserve a supervisor that was already running or that contains/retains work;
+  a rejected second opener must not terminate another role instance.
+- Add process-level tests for changed local scheduling configuration, mismatched
+  outbound deployment fingerprint, and rejection while a valid pre-existing
+  supervisor remains available.
+
+Out of scope:
+
+- Forced process termination, inference that unknown work is empty, migration,
+  compatibility, another supervisor protocol, or broad constructor refactoring.
+- Changing the accepted Phase 13 renewal/replay/release state machines.
+- Phase 14 protected reload semantics or Phase 15 example/management changes.
+
+Assumptions:
+
+- The existing supervisor clean-shutdown proof is the only authority allowed to
+  terminate the service.
+- Protected configuration is trusted project code but still must match durable
+  role bindings and active fingerprints before a role becomes live.
+
+## Fixed Contracts And Private Discretion
+
+- Observable behavior: fresh initialization remains process-free. Successful
+  serve starts or joins one supervisor. An expected local or outbound
+  configuration rejection leaves no newly created supervisor process.
+- Ownership behavior: a failed constructor may clean only the empty supervisor
+  it created. It must never stop a joined pre-existing service or bypass
+  retained-launch/agent-journal quiescence checks.
+- Public or durable shapes: retain the candidate's protocol v10, root schema
+  v10, supervisor schema/continuity marker, renewal records, and assignment
+  identities without another format change unless a demonstrated format
+  conflict requires the manager to stop.
+- Trust and failure boundaries: validate durable role identity and protected
+  configuration before process creation where possible; later exception
+  cleanup must be ownership-aware and use the normal protected shutdown proof.
+- Reproducibility and compatibility: preserve the accepted hard cut; no
+  migration or dual read.
+- Private choices: validation ordering, a private started-versus-joined return
+  value, and localized context-manager/try-finally structure are discretionary
+  if the fixed ownership behavior and tests hold.
+
+## Proportionality
+
+- Existing seams reused: Phase 13 candidate source/tests and the existing
+  supervisor start/join and `shutdown_clean` operations.
+- Material addition: only ownership-aware construction cleanup and three causal
+  tests correspond to the independently reproduced leak.
+- Deferred: generic resource transaction helpers, forced administrative kill,
+  automatic unknown-work cleanup, and constructor framework abstractions.
+
+## Invariant Ownership
+
+| Invariant | Owner | Reachable invalid producer or boundary | Consequence | Coverage |
+| --- | --- | --- | --- | --- |
+| Local rejected startup leaves no service it newly created | `LocalDaemon.start()` construction transaction | changed protected scheduling fingerprint or later owner-construction failure | detached empty supervisor survives a failed role start | changed-config PID/process sentinel |
+| Outbound rejected construction leaves no service it newly created | `LocalDaemonAgentHttpClient` construction transaction | deployment binding or journal rejection after supervisor start | detached empty supervisor survives a failed client open | mismatched-fingerprint PID/process sentinel |
+| Failed opening never terminates another owner | existing supervisor plus clean-shutdown proof | second invalid opener encounters an already-running or retained-work service | live/recoverable work loses its process owner | pre-existing-service remains reachable and same epoch/PID |
+
+## Implementation Slices
+
+1. Selectively apply Phase 13 source/test changes to the fresh branch and verify
+   that the diff contains no blocked-branch workflow metadata.
+2. Reorder safe durable validation and add ownership-aware cleanup for the
+   remaining post-start failure windows in local and outbound construction.
+3. Add the three process-level causal tests, rerun the focused Phase 13 matrix,
+   then run the full implementation gate and durable summary.
+
+## Test And Validation Plan
+
+| Suite | Required or deferred | Behavior or risk | Minimal assertions or reason |
+| --- | --- | --- | --- |
+| Package | required if exports change | public import hard cut | no accidental export or dependency change |
+| Unit | required | private ownership/cleanup decisions | created versus joined service is distinguished exactly |
+| Contract | required for candidate protocol reuse | protocol/schema v10 | existing Phase 13 hard-cut tests remain green |
+| Integration | required | both reproduced rejection paths and retained owner safety | rejection, zero new PID, existing PID/epoch remains reachable |
+| E2E | required | init/serve/stop and production leak containment | exact process sentinel and normal cleanup |
+
+Targeted commands:
+
+    uv run pytest tests/unit/loom/queue/test_agent_process_supervisor.py tests/integration/queue/test_local_daemon_production.py tests/integration/queue/test_agent_session_transport.py
+    uv run pytest tests/integration/queue/test_slurm_ready_stage.py tests/unit/loom/queue/test_agent_sessions.py tests/unit/loom/cli/test_queue.py tests/e2e/test_queue_cli.py
+
+Final commands:
+
+    make validate-pr
+    make test-summary
+
+## Risks, Review, And Stops
+
+- Main risk: cleanup cannot infer ownership from endpoint presence alone and
+  must not convert a failed opener into termination of pre-existing or retained
+  work.
+- Review focus: construction ordering, exact created-versus-joined ownership,
+  clean-shutdown proof reuse, and process-level negative assertions.
+- Stop if: the closure requires force-killing unknown work, changing the Phase
+  13 durable state machines, weakening configuration validation, or expanding
+  into Phase 14.
+- Accepted debt: genuinely unknown or retained work deliberately keeps its
+  supervisor alive; administrative forced termination remains deferred.
+
+## Executor Handoff
+
+- Read section range: this entire phase plan plus Phase 13's `Workflow State`
+  and `Completion Record` only.
+- Safe implementation slices: 1-3 above, in order.
+- Decisions not to revisit: selective candidate reuse, process-free init,
+  quiescence-only shutdown, and preservation of a joined/pre-existing owner.
+- Conditions requiring manager action: any format/public contract change,
+  inability to distinguish ownership safely, or need to touch Phase 14 scope.
+
+## Workflow State
+
+- Manager preparation: pending
+- Expanded planning: not needed; the independent Phase 13 finding fixes the
+  accepted behavior and supplies the smallest remedy/test boundary
+- Implementation: pending
+- Refiner: pending only for a qualified blocker
+- Pre-submit gate: pending
+- Independent review: required for the corrected detached-process boundary
+- Blocker corrections: 0/3
+- PR and merge: pending
+
+## Completion Record
+
+| Item | Result |
+| --- | --- |
+| Implementation and changed paths | pending |
+| Tests added or updated | pending |
+| Validated revision/tree state and evidence | pending |
+| Validation-relevant changes after evidence | pending |
+| PR, review, and merge | pending |
+| Residual risk and cleanup | pending |
