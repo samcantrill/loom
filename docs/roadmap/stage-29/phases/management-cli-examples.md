@@ -185,9 +185,10 @@ Final commands:
 - Expanded planning: no phase-planner pass needed; the approved expanded design-
   safety and bounded plan-review findings already fixed supervisor epoch
   references, long-poll saturation, and Phase 14 CLI scope
-- Implementation: pending
+- Implementation: complete at `6907c14`
 - Refiner: not needed
-- Pre-submit gate: pending
+- Pre-submit gate: passed at `6907c14`; `make validate-pr` and `make test-summary`
+  completed with no validation-relevant changes afterwards
 - Independent review: required for concurrent IPC and broad public example claims
 - Blocker corrections: 0/3
 - PR and merge: pending
@@ -196,9 +197,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | `6907c14`: per-admission row revisions and targeted waits; bounded Unix workers/client renewal; admission/agent/operation discovery and CLI; explicit local-owner scope; accepted-time/service-health/replay corrections; queue docs and three managed-operation journey manifests. |
+| Tests added or updated | Causal admission A/B/no-op and socket-saturation/status tests; management manifest/journey coverage; CLI schema and Python-example catalog updates; status-fixture hard-cut update. |
+| Validated revision/tree state and evidence | `6907c14` implementation tree; `make validate-pr` passed. Fresh `make test-summary` passed: 2,929 passed, 3 skipped, 0 failures/errors; receipt: `build/test-summary.md`. Targeted queue unit/CLI, queue integration/E2E, and managed-journey selections also passed during implementation. |
+| Validation-relevant changes after evidence | None. This completion-record-only update is excluded from the validation-relevant tree. |
+| PR, review, and merge | pending manager preparation, required independent review, and merge. |
+| Residual risk and cleanup | No implementation blocker. Default journeys retain deterministic local TLS/fake-SLURM evidence; production site smoke tests remain opt-in. |
