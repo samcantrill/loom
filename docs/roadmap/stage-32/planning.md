@@ -1,10 +1,10 @@
 # Roadmap Stage 32 Planning: Resumable Many-Run SLURM Throughput
 
-Status: approved corrective replan
+Status: complete
 Roadmap stage: 32
-Evidence tree: `/home/can134/work/active/loom` at `135773663d899d6fc28e6251d4f99fb8641cf3b6`; retained blocked Phase 2 candidate at `c9cbd2ccbdff0a55c7b3924ec7afeca45af8bfc6`; relevant dirty paths: none before this replan
+Evidence tree: `/home/can134/work/active/loom` at Stage 32 merge `0bee2332bf53d610cf112193e6a42fe5915c2078`; the superseded blocked Phase 2 candidate was `c9cbd2ccbdff0a55c7b3924ec7afeca45af8bfc6`
 Planning route: expanded; admission identity changes durable whole-run queue state, and crash-safe SLURM submission crosses the filesystem and external-scheduler boundary
-Current gate: passed; Phase 1 is merged, Phase 2 is review-blocked, and the approved Phase 3 replacement may begin
+Current gate: complete; Phase 1 and replacement Phase 3 are merged, and Phase 2 remains the superseded blocked record
 Blockers: none
 
 Approved: behavior/fingerprints 2026-08-28; packet 2026-08-29; Stage 34
@@ -19,8 +19,8 @@ No new owner is added.
 | Functionality | Project code generates ordinary prepared-run requests; Loom admits them durably and idempotently, then a restartable foreground driver hands them to SLURM. | None. | Preserve per-run and scheduler ownership. |
 | Design | Exact replay uses existing `queue_item_id` as the stable submission identity; optional scientific deduplication uses a project-supplied canonical fingerprint; force requires a new queue item ID. | None. | Hard-cut the whole-run queue schema. |
 | Validation | Fake scheduler/process tests cover 2,000-run replay and causal crash boundaries; one shared-filesystem HPC journey covers both Slurm modes. | None. | Keep real Slurm opt-in. |
-| Detailed plan | Phase 1 is merged; blocked Phase 2 records the rejected candidate; Phase 3 replaces the complete external-scheduler vertical slice from current `develop` and closes only the two review gaps. | None. | Use the linked Phase 3 plan. |
-| Approval | Behavior direction, fingerprint choice, run-to-item reference, and the FR-9/FR-10 corrective replacement are accepted. | None. | Begin Phase 3 from current `develop`. |
+| Detailed plan | Phase 1 and replacement Phase 3 are merged; blocked Phase 2 records the rejected candidate and the two review gaps closed by Phase 3. | None. | Complete. |
+| Approval | Behavior direction, fingerprint choice, run-to-item reference, and the FR-9/FR-10 corrective replacement were accepted and implemented. | None. | Complete. |
 
 ## Evidence And Scope
 

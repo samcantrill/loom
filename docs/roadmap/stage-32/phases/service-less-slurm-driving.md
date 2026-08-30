@@ -247,8 +247,8 @@ Final commands:
   worktree used base `2f8dfd9`.
 - Expanded planning: stage-level minimum design is complete; one phase-plan
   refinement is permitted only for a concrete external-call ownership ambiguity.
-- Implementation: not merge-eligible; candidate `c9cbd2c` is implemented and
-  fully validated, but review found the two accepted-contract blockers above.
+- Implementation: superseded; candidate `c9cbd2c` was fully validated but not
+  merge-eligible, and replacement Phase 3 closed both accepted-contract gaps.
 - Refiner: correction 1/3 applied; two later manager corrections completed the
   recovery and operator surfaces.
 - Pre-submit gate: passed at `c9cbd2c`; Ruff, Pyright, default/config-extra
@@ -263,9 +263,9 @@ Final commands:
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Retained locally in the blocked complete service-less driver candidate. |
+| Implementation and changed paths | Superseded blocked candidate; replacement Phase 3 carries the accepted implementation from current `develop`. |
 | Tests added or updated | Both modes, exact recovery, partial `afterok`, bounds, authority joins, CLI JSON, and fake reopen journey. |
 | Validated revision/tree state and evidence | Candidate `c9cbd2c`: 2,676 default and 157 config-extra tests passed with 3 expected skips; Ruff, Pyright, source/wheel build, and 2,833-test summary passed. |
 | Validation-relevant changes after evidence | Blocked-status documentation only. |
 | PR, review, and merge | Independent review blocked FR-9 and FR-10; no PR opened or merged. |
-| Residual risk and cleanup | Local branch/worktree retained as Phase 3 replacement input; never merge Phase 2. |
+| Residual risk and cleanup | Never merge Phase 2. Its clean worktree and local branch were removed after replacement Phase 3 merged; no remote branch existed. |
