@@ -1,23 +1,23 @@
 # Roadmap Stage 29 Planning: Durable Dependency-Aware Stage Scheduling
 
 Status: lifecycle, composition, and management correction approved; Phase 13
-is blocked evidence, and Phase 13A plus Phases 14-15 are pending after the
-merged Phases 1-12 baseline
+is blocked evidence, Phase 13A is merged, and Phases 14-15 are pending after
+the merged Phases 1-13A baseline
 Roadmap stage: 29
 Evidence baseline: clean `develop` at
 `cae37be038419b6dc3b134af30ced0d54b626c5a`; Phases 10-12 are merged as
-`c2dab20`, `5fac22c`, and `4097729`; Phase 13 candidate head `824e935` and
-earlier blocked branches remain historical read-only evidence.
+`c2dab20`, `5fac22c`, `4097729`, and `8ff2d3c`; Phase 13 candidate head
+`824e935` and earlier blocked branches remain historical read-only evidence.
 Planning route: expanded because the approved correction changes durable
 session/admission/configuration state, the coordinator-authority trust boundary,
 supervisor process continuity, and public CLI behavior.
 Current gate: the maintainer supplied and approved the lifecycle,
 configuration, management, CLI, and example correction below. Required review
 blocked the validated Phase 13 candidate on two reproduced startup-failure
-process leaks. Fresh Phase 13A owns only that closure and is next.
+process leaks. Fresh Phase 13A closed that lifecycle boundary and merged;
+Phase 14 is next.
 Blockers: none at the planning level. Phase 13 remains read-only blocked
-evidence; the accepted correction is incomplete until Phase 13A and Phases
-14-15 merge.
+evidence; the accepted correction is incomplete until Phases 14-15 merge.
 
 This file is the current Stage 29 authority. It supersedes the earlier Stage 29
 whole-run placement design. A user still submits, observes, and cancels a run,
@@ -1972,7 +1972,7 @@ should be tested at their owning boundary rather than as a Cartesian matrix.
 | 11 — resident agent correctness and security | Every managed placement pins one executable resident profile and explicit conforming provider composition, and workers receive only an allowlisted environment. | Execution requirement/profile identity, provider/planner contracts, and launch environment; no management/deployment expansion. | Phase 10. | Profile/provider/environment matrices and full validation passed in PR #253. | merged |
 | 12 — operational bounds and deployment | The coordinator exposes bounded status/admission/poll behavior, accepted-time health/recovery, atomic fresh roots, and protected coordinator/outbound-agent service commands. | Constant summary, bounded pages/detail/wait, one poll replay state, time fencing, atomic publication, and initial protected schema; no lifecycle renewal, complete composition, or extra CLI reads. | Phase 11. | Operation/deployment tests and full validation passed in PR #254. | merged |
 | 13 — blocked lifecycle and recovery candidate | Validated candidate renews idle offers, replays exact assignment failures, orders definite SLURM rejection, and adds process-free/quiescent supervisor lifetime, but cannot merge. | Read-only evidence. Required review reproduced a newly started empty supervisor surviving changed local scheduling configuration and mismatched outbound deployment binding rejection. | Phase 12. | Focused lifecycle matrices and `make validate-pr` passed; required review blocked after correction 3/3. | blocked |
-| 13A — lifecycle startup-failure closure | The complete Phase 13 behavior is retained and every supported role-construction rejection cleans only the empty supervisor it created while preserving any pre-existing or retained-work owner. | Selective Phase 13 reuse plus validation ordering, ownership-aware construction cleanup, and causal local/outbound/pre-existing-owner tests; no Phase 14 expansion. | Phase 12 plus read-only Phase 13 evidence. | Both reproduced rejection paths leave no new process, an existing owner remains reachable, the Phase 13 causal matrix and full gate pass. | pr_open |
+| 13A — lifecycle startup-failure closure | The complete Phase 13 behavior is retained and every supported role-construction rejection cleans only the empty supervisor it created while preserving any pre-existing or retained-work owner. | Selective Phase 13 reuse plus validation ordering, ownership-aware construction cleanup, and causal local/outbound/pre-existing-owner tests; no Phase 14 expansion. | Phase 12 plus read-only Phase 13 evidence. | Required review findings closed at correction 3/3; fresh full validation and the 2,841-pass categorized summary passed in PR #262. | merged |
 | 14 — reload and authority composition | Protected configs construct/reload the complete supported role and restart from the persisted active revision through the configured authority adapter. | Immutable/active fingerprints, loaders, trusted targets, scheduling/SLURM/providers, authority factory, CLI failure; no list/detail/example expansion. | Phase 13A. | Reload/restart crash matrix, target contracts, direct/HTTPS authority, service command, and full gate. | pending |
 | 15 — management, CLI, and examples | Per-admission waits are causal, management remains responsive during bounded long polls, guarded fences are discoverable, local policy is portable, and three journeys prove every claimed surface. | Admission revision, worker pool/client renewal, bounded reads/CLI, policy/defects, docs/examples; no unbounded UI or external default dependency. | Phase 14. | A/B/no-op waits, concurrency/shutdown, discover-control, local/remote/SLURM E2Es, manifest and leak checks, and full gate. | pending |
 
@@ -2065,12 +2065,13 @@ route choices remain in phase-executor discretion.
 | New additions proportionate | Each new state/API corresponds to a demonstrated supported-path failure or an already documented unreachable service capability; HA, generic plugins, forced shutdown, unbounded reads, and real external default dependencies remain deferred. | pass |
 | New phases vertical and reviewable | Phase 13 is blocked evidence; Phase 13A owns only its startup-failure process leak, Phase 14 owns protected composition/reload/authority, and Phase 15 owns bounded management/CLI/examples in causal dependency order. | pass |
 | Phase 13 recovery evidence | Candidate source/test `748f938` passed the focused lifecycle matrices and full validation. Required review reproduced two newly started empty supervisor leaks after expected local and outbound configuration rejection; correction 3/3 is exhausted and no PR was opened. Fresh Phase 13A reuses the validated candidate and owns only validation ordering, ownership-aware cleanup, and three causal process tests. | pass |
-| No current planning blocker | Phase 13A plus the existing Phase 14-15 plans cover every remaining requirement with owners, stop conditions, causal tests, and final gates. | pass |
+| Phase 13A execution evidence | Source/test `6a578f8` passed the focused lifecycle matrices, refreshed `make validate-pr`, and a fresh 2,841-pass categorized summary with 3 expected skips. Required review reproduced the final outbound stop-handoff leak, correction 3/3 closed it, bounded confirmation passed, and PR #262 squash-merged as `8ff2d3c`. | pass |
+| No current planning blocker | The existing Phase 14-15 plans cover every remaining requirement with owners, stop conditions, causal tests, and final gates. | pass |
 
 Gate result: the lifecycle, composition, and management correction remains
 approved with no unresolved planning blocker. Blocked historical phases remain
-read-only evidence; fresh Phase 13A is ready for manager preparation from
-current `develop`.
+read-only evidence; Phase 14 is ready for manager preparation from current
+`develop`.
 The previous expanded design,
 startup, extension/security, phase-shaping, deep scheduler, manager-local
 whole-stage correctness, deployment clarification, and explicit ready-stage
