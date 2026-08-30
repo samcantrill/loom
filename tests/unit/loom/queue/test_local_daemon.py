@@ -575,6 +575,201 @@ def test_scheduling_reload_is_local_atomic_and_durable(tmp_path: Path) -> None:
     restarted.stop()
 
 
+def test_scheduling_reload_replaces_idle_provider_capacity_and_authority_factory(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    replacement_factory = cast(Any, lambda _run_uri: object())
+    replacement = replace(
+        config,
+        cpu_capacity=2,
+        agent_resource_providers=None,
+        coordinator_authority_factory=replacement_factory,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    execution = cast(Any, daemon._execution)
+    original_providers = execution.providers
+    try:
+        receipt = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                "reload-provider-capacity",
+                before.scheduling_epoch,
+                "increase protected local capacity",
+            )
+        )
+        assert receipt["state"] == "applied"
+        assert execution.providers is not original_providers
+        cpu = next(
+            atom
+            for atom in execution.local_capacity
+            if atom.owner_resource_kind == "cpu"
+        )
+        assert cpu.amount.numerator == 2
+        assert execution._authority_for_run is replacement_factory
+    finally:
+        daemon.stop()
+
+    restarted = LocalDaemon(replacement)
+    restarted.start()
+    restarted.stop()
+
+
+def test_scheduling_reload_prepares_and_installs_role_owned_service_state(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    replacement = replace(
+        config,
+        active_configuration_fingerprint="2" * 64,
+        poll_interval_seconds=0.02,
+    )
+    events: list[str] = []
+
+    def prepare(candidate: LocalDaemonConfig):
+        assert candidate is replacement
+        events.append("prepare")
+
+        def install() -> None:
+            events.append("install")
+
+        return install
+
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(
+        config,
+        trusted_scheduling_loader=lambda: replacement,
+        prepare_role_reload=prepare,
+    )
+    before = daemon.start()
+    try:
+        receipt = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                "reload-role-owned-service",
+                before.scheduling_epoch,
+                "rotate role-owned service configuration",
+            )
+        )
+        assert receipt["state"] == "applied"
+        assert events == ["prepare", "install"]
+        assert daemon.config is replacement
+    finally:
+        daemon.stop()
+
+
+def test_scheduling_reload_rejects_before_persistence_when_role_prepare_fails(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    replacement = replace(
+        config,
+        active_configuration_fingerprint="2" * 64,
+        poll_interval_seconds=0.02,
+    )
+
+    def reject(_candidate: LocalDaemonConfig):
+        raise QueueServiceError("replacement TLS context is invalid")
+
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(
+        config,
+        trusted_scheduling_loader=lambda: replacement,
+        prepare_role_reload=reject,
+    )
+    before = daemon.start()
+    try:
+        receipt = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                "reload-invalid-role-service",
+                before.scheduling_epoch,
+                "invalid role-owned service configuration",
+            )
+        )
+        assert receipt["state"] == "failed"
+        assert receipt["code"] == "reload_rejected"
+        assert daemon.config is config
+    finally:
+        daemon.stop()
+
+    restarted = LocalDaemon(config)
+    restarted.start()
+    restarted.stop()
+
+
+def test_scheduling_reload_rejects_capacity_change_while_claims_are_retained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    replacement = replace(
+        config,
+        cpu_capacity=2,
+        agent_resource_providers=None,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    execution = cast(Any, daemon._execution)
+    original_providers = execution.providers
+    monkeypatch.setattr(
+        execution.journal, "retained_claim_commands", lambda: (object(),)
+    )
+    try:
+        receipt = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                "reload-live-provider-capacity",
+                before.scheduling_epoch,
+                "unsafe live capacity change",
+            )
+        )
+        assert receipt["state"] == "failed"
+        assert receipt["code"] == "reload_rejected"
+        assert execution.providers is original_providers
+        assert execution.config is config
+    finally:
+        daemon.stop()
+
+
+def test_scheduling_reload_rejects_changed_supervisor_launch_identity(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    alternate_project = tmp_path / "alternate-project"
+    alternate_project.mkdir()
+    replacement = replace(
+        config,
+        resident_worker_launch_profile=replace(
+            config.resident_worker_launch_profile,
+            project_root=alternate_project,
+        ),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        receipt = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        ).reload_scheduling(
+            CoordinatorSchedulingReload(
+                "reload-supervisor-identity",
+                before.scheduling_epoch,
+                "attempt executable identity change",
+            )
+        )
+        assert receipt["state"] == "failed"
+        assert daemon.config is config
+    finally:
+        daemon.stop()
+
+
 def test_complete_component_epoch_retains_old_bindings_and_activates_new_ones(
     tmp_path: Path,
 ) -> None:

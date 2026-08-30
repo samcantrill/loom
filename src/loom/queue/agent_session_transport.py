@@ -327,6 +327,26 @@ def _resident_provider_descriptors(
     return tuple(result)
 
 
+def _wire_capacity_atom(atom: CapacityAtom, agent_id: str) -> CapacityAtom:
+    """Remove the private agent namespace and normalize the wire memory unit."""
+
+    prefix = f"{agent_id}:"
+    local_key = atom.local_capacity_key
+    if local_key.startswith(prefix):
+        local_key = local_key[len(prefix) :]
+    return CapacityAtom(
+        atom.owner_resource_kind,
+        local_key,
+        atom.amount,
+        (
+            "byte"
+            if atom.owner_resource_kind == "memory" and atom.unit == "B"
+            else atom.unit
+        ),
+        atom.granularity,
+    )
+
+
 class _RemoteAgentJournal:
     """The outbound agent's private, replayable session evidence.
 
@@ -424,6 +444,19 @@ class _RemoteAgentJournal:
                 (_agent_active_fingerprint(config),),
             )
             conn.commit()
+
+    def availability_drained(self) -> bool:
+        """Return the durable owner-local withdrawal state."""
+
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM root_metadata WHERE key = 'availability_state'"
+            ).fetchone()
+        if row is None:
+            return False
+        if str(row[0]) not in {"active", "drained"}:
+            raise QueueServiceError("remote agent availability state is invalid")
+        return str(row[0]) == "drained"
 
     def _connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -675,12 +708,18 @@ class _RemoteAgentJournal:
             conn.commit()
 
     def next_offer_renewal(self, session_id: str) -> AgentOfferRenewal | None:
+        session = self.session(session_id)
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT offer_id, availability_revision, sequence, result_json FROM agent_offer_renewals_local WHERE session_id = ?",
+                "SELECT r.offer_id, r.availability_revision, r.sequence, "
+                "r.result_json FROM agent_offer_renewals_local r "
+                "JOIN agent_offers_local o ON o.session_id = r.session_id "
+                "WHERE r.session_id = ? AND o.state = 'ACTIVE'",
                 (session_id,),
             ).fetchone()
-        if row is None:
+        if row is None or str(row["availability_revision"]) != (
+            session.availability_revision
+        ):
             return None
         sequence = int(row["sequence"])
         return AgentOfferRenewal(
@@ -906,9 +945,18 @@ class _RemoteAgentJournal:
                     (session.session_id,),
                 )
                 conn.execute(
+                    "DELETE FROM agent_offer_renewals_local WHERE session_id = ?",
+                    (session.session_id,),
+                )
+                conn.execute(
                     "UPDATE agent_poll_state_local SET state = 'FENCED' "
                     "WHERE session_id = ?",
                     (session.session_id,),
+                )
+                conn.execute(
+                    "INSERT INTO root_metadata(key, value) VALUES "
+                    "('availability_state', 'drained') ON CONFLICT(key) "
+                    "DO UPDATE SET value = excluded.value"
                 )
             conn.commit()
         return None
@@ -947,6 +995,12 @@ class _RemoteAgentJournal:
                     "WHERE session_id = ?",
                     (_canonical_json(updated.value()), updated.session_id),
                 )
+                if control.kind.value == "resume":
+                    conn.execute(
+                        "INSERT INTO root_metadata(key, value) VALUES "
+                        "('availability_state', 'active') ON CONFLICT(key) "
+                        "DO UPDATE SET value = excluded.value"
+                    )
             elif (
                 effect.config_revision != session.config_revision
                 or effect.inventory_revision != session.inventory_revision
@@ -1437,13 +1491,7 @@ class LocalDaemonAgentHttpServer:
     def start(self) -> None:
         if self._server is not None:
             raise QueueServiceError("agent TLS server is already started")
-        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.verify_mode = ssl.CERT_REQUIRED
-        context.load_cert_chain(
-            self._config.certificate_path, self._config.private_key_path
-        )
-        context.load_verify_locations(cafile=self._config.client_ca_path)
+        context = _agent_server_context(self._config)
         server = _MutualTlsHttpServer(
             (self._config.host, self._config.port),
             context,
@@ -1455,6 +1503,25 @@ class LocalDaemonAgentHttpServer:
             target=server.serve_forever, daemon=True, name="loom-agent-mtls"
         )
         self._thread.start()
+
+    def prepare_reload(self, config: AgentTlsServerConfig) -> Callable[[], None]:
+        """Prepare a non-failing TLS-context swap for the resident listener."""
+
+        server = self._server
+        if server is None:
+            raise QueueServiceError("agent TLS server is not started")
+        if (config.host, config.port) != (self._config.host, self._config.port):
+            raise QueueConflictError(
+                "agent TLS reload cannot replace the resident endpoint"
+            )
+        context = _agent_server_context(config)
+        fingerprints = dict(config.credential_fingerprints)
+
+        def install() -> None:
+            server.replace_tls(context, fingerprints)
+            self._config = config
+
+        return install
 
     def stop(self) -> None:
         server = self._server
@@ -1475,11 +1542,13 @@ class LocalDaemonAgentHttpClient:
         config: AgentTlsClientConfig,
         *,
         trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
-        on_reload: Callable[[AgentTlsClientConfig], None] | None = None,
+        prepare_role_reload: (
+            Callable[[AgentTlsClientConfig], Callable[[], None]] | None
+        ) = None,
     ) -> None:
         self._config = config
         self._trusted_config_loader = trusted_config_loader
-        self._on_reload = on_reload
+        self._prepare_role_reload = prepare_role_reload
         self._connection: http.client.HTTPSConnection | None = None
         self._supervisor: AgentProcessSupervisorClient | None = None
         # The journal validates the durable deployment binding and obtains the
@@ -1541,7 +1610,11 @@ class LocalDaemonAgentHttpClient:
                 if self._journal is not None
                 else ()
             )
-            self._drained = False
+            self._drained = (
+                self._journal.availability_drained()
+                if self._journal is not None
+                else False
+            )
             self._control_lock = RLock()
         except Exception:
             supervisor = self._supervisor
@@ -1618,6 +1691,10 @@ class LocalDaemonAgentHttpClient:
                 conn.execute(
                     "INSERT INTO root_metadata(key, value) VALUES (?, ?)",
                     ("active_configuration_fingerprint", _agent_active_fingerprint(config)),
+                )
+                conn.execute(
+                    "INSERT INTO root_metadata(key, value) VALUES "
+                    "('availability_state', 'active')"
                 )
                 conn.commit()
             journal = _RemoteAgentJournal(
@@ -1957,31 +2034,45 @@ class LocalDaemonAgentHttpClient:
                     )
                 try:
                     replacement = loader()
-                    self._validate_reload_config(replacement)
+                    retained = self._has_retained_agent_work()
+                    self._validate_reload_config(
+                        replacement, retained_work=retained
+                    )
+                    next_profiles = {
+                        item.descriptor.profile_id: item
+                        for item in replacement.resident_profiles
+                    }
+                    next_retained_profiles = dict(self._retained_profiles)
+                    if retained:
+                        next_retained_profiles.update(
+                            {
+                                _resident_profile_key(item): item
+                                for item in self._profiles.values()
+                            }
+                        )
+
+                    def install_role() -> None:
+                        return
+
+                    if self._prepare_role_reload is not None:
+                        install_role = self._prepare_role_reload(replacement)
+                        if not callable(install_role):
+                            raise QueueServiceError(
+                                "trusted agent role reload plan is unavailable"
+                            )
+                    config_revision = _agent_config_revision(replacement)
+                    inventory_revision = _agent_inventory_revision(replacement)
                     self._require_journal().record_active_configuration(replacement)
                 except (QueueError, OSError, TypeError, ValueError):
                     return self._unchanged_control_effect(
                         control, session, "reload_rejected"
                     )
-                retained = self._has_retained_agent_work()
-                if retained:
-                    self._retained_profiles.update(
-                        {
-                            _resident_profile_key(item): item
-                            for item in self._profiles.values()
-                        }
-                    )
                 self._config = replacement
-                if self._on_reload is not None:
-                    self._on_reload(replacement)
-                self._profiles = {
-                    item.descriptor.profile_id: item
-                    for item in replacement.resident_profiles
-                }
+                install_role()
+                self._profiles = next_profiles
+                self._retained_profiles = next_retained_profiles
                 if not retained:
                     self._reset_runtime_providers()
-                config_revision = _agent_config_revision(replacement)
-                inventory_revision = _agent_inventory_revision(replacement)
             else:
                 config_revision = session.config_revision
                 inventory_revision = session.inventory_revision
@@ -2021,7 +2112,12 @@ class LocalDaemonAgentHttpClient:
             availability_revision=session.availability_revision,
         )
 
-    def _validate_reload_config(self, replacement: AgentTlsClientConfig) -> None:
+    def _validate_reload_config(
+        self,
+        replacement: AgentTlsClientConfig,
+        *,
+        retained_work: bool | None = None,
+    ) -> None:
         if not isinstance(replacement, AgentTlsClientConfig):
             raise QueueServiceError("trusted agent configuration is invalid")
         if (
@@ -2048,10 +2144,20 @@ class LocalDaemonAgentHttpClient:
                 "agent reload requires fresh agent-root initialization for "
                 "resident profile set"
             )
+        if retained_work is None:
+            retained_work = self._has_retained_agent_work()
+        if retained_work and _agent_active_fingerprint(
+            replacement
+        ) != _agent_active_fingerprint(self._config):
+            raise QueueConflictError(
+                "agent reload cannot replace active configuration with retained work"
+            )
         existing = (*self._profiles.values(), *self._retained_profiles.values())
         for candidate in replacement.resident_profiles:
             for retained in existing:
                 if (
+                    retained_work
+                    and
                     retained.descriptor == candidate.descriptor
                     and _resident_profile_key(retained)
                     != _resident_profile_key(candidate)
@@ -3491,6 +3597,54 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError("remote agent provider identity changed")
         return dict(self._providers)
 
+    def _offer_provider_snapshot(
+        self,
+        *,
+        session_id: str,
+        availability_revision: str,
+        capacity_profile: ResidentExecutionProfile,
+    ) -> tuple[
+        tuple[AgentProviderDescriptor, ...],
+        tuple[CapacityAtom, ...],
+        tuple[str, ...],
+    ]:
+        """Observe the configured factory once and project its safe wire facts."""
+
+        session = self._require_journal().session(session_id)
+        providers = self._provider_composition(session.agent_id, capacity_profile)
+        atoms: list[CapacityAtom] = []
+        live_claim_ids: set[str] = set()
+        for kind, provider in sorted(providers.items()):
+            observed = provider.observe(
+                ObserveRequest(
+                    session.agent_id,
+                    session_id,
+                    f"offer:{availability_revision}:observe:{kind}",
+                )
+            )
+            atoms.extend(
+                _wire_capacity_atom(atom, session.agent_id) for atom in observed.atoms
+            )
+            live_claim_ids.update(observed.live_claim_ids)
+        members = self._configured_provider_members
+        if members is None:
+            raise QueueConflictError("remote agent provider composition is missing")
+        return (
+            tuple(
+                sorted(
+                    (
+                        AgentProviderDescriptor(
+                            provider.descriptor, provider.claim_contracts
+                        )
+                        for provider in members
+                    ),
+                    key=lambda item: item.descriptor.key,
+                )
+            ),
+            tuple(sorted(atoms, key=lambda item: item.key)),
+            tuple(sorted(live_claim_ids)),
+        )
+
     def _validate_offer_provider_capacity(
         self, offer: AgentOffer, agent_id: str
     ) -> None:
@@ -3504,23 +3658,7 @@ class LocalDaemonAgentHttpClient:
                 )
             )
             for atom in result.atoms:
-                prefix = f"{agent_id}:"
-                local_key = atom.local_capacity_key
-                if local_key.startswith(prefix):
-                    local_key = local_key[len(prefix) :]
-                observed.append(
-                    CapacityAtom(
-                        atom.owner_resource_kind,
-                        local_key,
-                        atom.amount,
-                        (
-                            "byte"
-                            if atom.owner_resource_kind == "memory" and atom.unit == "B"
-                            else atom.unit
-                        ),
-                        atom.granularity,
-                    )
-                )
+                observed.append(_wire_capacity_atom(atom, agent_id))
         if tuple(sorted(observed, key=lambda item: item.key)) != offer.capacity_atoms:
             raise QueueConflictError(
                 "offer capacity differs from configured provider observations"
@@ -3695,6 +3833,25 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         except Exception:
             connection.close()
             raise
+
+    def replace_tls(
+        self,
+        context: ssl.SSLContext,
+        credential_fingerprints: Mapping[str, str],
+    ) -> None:
+        """Install a fully prepared context for subsequent requests."""
+
+        self._context = context
+        self.credential_fingerprints = credential_fingerprints
+
+
+def _agent_server_context(config: AgentTlsServerConfig) -> ssl.SSLContext:
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.load_cert_chain(config.certificate_path, config.private_key_path)
+    context.load_verify_locations(cafile=config.client_ca_path)
+    return context
 
 
 class _Handler(BaseHTTPRequestHandler):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 from textwrap import dedent
 
 import pytest
@@ -681,6 +682,36 @@ def test_import_queue_local_adapter_avoids_private_authority_and_scheduler_modul
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_queue_authority_surface_is_lazy_and_production_has_no_sqlite_fallback() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.queue
+
+        if "loom.pipeline.stores.sqlite_authority" in sys.modules:
+            raise SystemExit("queue imported the SQLite authority implementation")
+        assert loom.queue.CoordinatorAuthorityFactory
+        assert loom.queue.CoordinatorAuthorityStore
+        if "loom.pipeline.stores.sqlite_authority" in sys.modules:
+            raise SystemExit("queue authority surface imported its SQLite adapter")
+        print("ok")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+    queue_root = Path(__file__).resolve().parents[2] / "src/loom/queue"
+    production = "\n".join(
+        path.read_text(encoding="utf-8") for path in queue_root.rglob("*.py")
+    )
+    assert "SQLitePerRunAuthorityStore" not in production
+    assert "sqlite_authority" not in production
 
 
 def test_import_queue_slurm_adapter_uses_public_scheduler_boundary_only() -> None:

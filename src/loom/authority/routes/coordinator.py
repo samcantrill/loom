@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hmac
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from loom.pipeline.stores.coordinator_authority import (
     COORDINATOR_AUTHORITY_ROUTE_PREFIX,
+    COORDINATOR_AUTHORITY_SERVICE_HEADER,
 )
 from loom.serialization import PlainData
 
@@ -16,7 +18,11 @@ from ..mutation_service import (
     AuthorityMutationOperation,
     unsupported_mutation_response,
 )
-from ..services import AuthorityAppServices, AuthorityRouteGroup
+from ..services import (
+    AUTHORITY_PEER_CERTIFICATE_FINGERPRINT_STATE_KEY,
+    AuthorityAppServices,
+    AuthorityRouteGroup,
+)
 
 
 router = APIRouter(
@@ -56,11 +62,13 @@ _ROUTES = {
 
 def _endpoint(
     operation: AuthorityMutationOperation,
-) -> Callable[[dict[str, object], AuthorityAppServices], dict[str, PlainData]]:
+) -> Callable[..., dict[str, PlainData]]:
     def apply(
         payload: dict[str, object],
+        request: Request,
         services: AuthorityAppServices = Depends(get_authority_services),
     ) -> dict[str, PlainData]:
+        _require_coordinator_principal(request, services)
         service = services.mutation_service
         if service is None:
             return unsupported_mutation_response(
@@ -74,6 +82,33 @@ def _endpoint(
     apply.__name__ = operation.value
     apply.__doc__ = f"Apply the {operation.value} coordinator authority operation."
     return apply
+
+
+def _require_coordinator_principal(
+    request: Request, services: AuthorityAppServices
+) -> None:
+    """Bind the application service ID to the verified mTLS peer certificate."""
+
+    credentials = services.coordinator_credentials
+    if credentials is None:
+        # Explicit in-process composition is already inside the trusted owner.
+        return
+    service_id = request.headers.get(COORDINATOR_AUTHORITY_SERVICE_HEADER)
+    peer_fingerprint = getattr(
+        request.state,
+        AUTHORITY_PEER_CERTIFICATE_FINGERPRINT_STATE_KEY,
+        None,
+    )
+    expected = None if service_id is None else credentials.get(service_id)
+    if (
+        expected is None
+        or not isinstance(peer_fingerprint, str)
+        or not hmac.compare_digest(expected, peer_fingerprint)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="coordinator authority principal is not authorized",
+        )
 
 
 for _path, _operation in _ROUTES.items():

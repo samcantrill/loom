@@ -10,9 +10,9 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+import socket
 import ssl
 import sqlite3
-import subprocess
 import sys
 from collections.abc import Mapping
 from threading import Event, Thread
@@ -114,6 +114,11 @@ from loom.scheduling import (
     SchedulingComponentDescriptor,
 )
 from loom.serialization import PlainData, json_dumps_pretty
+from tests.support.mutual_tls import (
+    certificate_fingerprint as _fingerprint,
+    mutual_tls_credentials as _credentials,
+)
+from tests.support.stage29_composition import ResidentProviderFactory
 
 
 def _local_launch_profile() -> ResidentWorkerLaunchProfile:
@@ -147,80 +152,6 @@ def _provider_descriptors(*kinds: str) -> tuple[AgentProviderDescriptor, ...]:
     )
 
 
-def _run(*args: str, cwd: Path) -> None:
-    subprocess.run(["openssl", *args], cwd=cwd, check=True, capture_output=True)
-
-
-def _credentials(tmp_path: Path) -> dict[str, Path]:
-    tmp_path.mkdir()
-    _run(
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-keyout",
-        "ca.key",
-        "-out",
-        "ca.crt",
-        "-subj",
-        "/CN=loom-test-ca",
-        "-days",
-        "1",
-        cwd=tmp_path,
-    )
-    for name, subject in (
-        ("server", "/CN=localhost"),
-        ("agent", "/CN=agent"),
-        ("other", "/CN=other"),
-    ):
-        _run(
-            "req",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-keyout",
-            f"{name}.key",
-            "-out",
-            f"{name}.csr",
-            "-subj",
-            subject,
-            cwd=tmp_path,
-        )
-        extension = (
-            "subjectAltName=DNS:localhost"
-            if name == "server"
-            else "extendedKeyUsage=clientAuth"
-        )
-        (tmp_path / f"{name}.ext").write_text(extension, encoding="utf-8")
-        _run(
-            "x509",
-            "-req",
-            "-in",
-            f"{name}.csr",
-            "-CA",
-            "ca.crt",
-            "-CAkey",
-            "ca.key",
-            "-CAcreateserial",
-            "-out",
-            f"{name}.crt",
-            "-days",
-            "1",
-            "-sha256",
-            "-extfile",
-            f"{name}.ext",
-            cwd=tmp_path,
-        )
-    return {name: tmp_path / name for name in ("ca", "server", "agent", "other")}
-
-
-def _fingerprint(certificate: Path) -> str:
-    return hashlib.sha256(
-        ssl.PEM_cert_to_DER_cert(certificate.read_text(encoding="utf-8"))
-    ).hexdigest()
-
-
 def _policy() -> AgentPolicyConfig:
     return AgentPolicyConfig(
         agents=(
@@ -235,6 +166,21 @@ def _policy() -> AgentPolicyConfig:
     )
 
 
+def _server_peer_fingerprint(port: int, credentials: Mapping[str, Path]) -> str:
+    context = ssl.create_default_context(
+        cafile=str(credentials["ca"].with_suffix(".crt"))
+    )
+    context.load_cert_chain(
+        credentials["agent"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".key"),
+    )
+    with socket.create_connection(("localhost", port), timeout=2.0) as connection:
+        with context.wrap_socket(connection, server_hostname="localhost") as secured:
+            certificate = secured.getpeercert(binary_form=True)
+    assert certificate is not None
+    return hashlib.sha256(certificate).hexdigest()
+
+
 def _request(handshake: Mapping[str, object], agent_root_id: str) -> AgentRegistration:
     return AgentRegistration(
         idempotency_key="register-1",
@@ -247,6 +193,68 @@ def _request(handshake: Mapping[str, object], agent_root_id: str) -> AgentRegist
         declared_pools=("default",),
         declared_capabilities=("python",),
     )
+
+
+def test_agent_listener_prepares_tls_rotation_before_atomic_install(
+    tmp_path: Path,
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "coordinator-agent",
+        tmp_path / "runs",
+        _local_launch_profile(),
+        agent_policy=_policy(),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    initial = AgentTlsServerConfig(
+        "localhost",
+        0,
+        credentials["server"].with_suffix(".crt"),
+        credentials["server"].with_suffix(".key"),
+        credentials["ca"].with_suffix(".crt"),
+        {
+            _fingerprint(credentials["agent"].with_suffix(".crt")): (
+                "agent-credential"
+            )
+        },
+    )
+    server = LocalDaemonAgentHttpServer(daemon, initial)
+    server.start()
+    try:
+        assert _server_peer_fingerprint(server.port, credentials) == _fingerprint(
+            credentials["server"].with_suffix(".crt")
+        )
+        invalid = replace(
+            initial,
+            certificate_path=tmp_path / "missing.crt",
+            private_key_path=tmp_path / "missing.key",
+        )
+        with pytest.raises(OSError):
+            server.prepare_reload(invalid)
+        assert _server_peer_fingerprint(server.port, credentials) == _fingerprint(
+            credentials["server"].with_suffix(".crt")
+        )
+
+        install = server.prepare_reload(
+            replace(
+                initial,
+                certificate_path=credentials["server-next"].with_suffix(".crt"),
+                private_key_path=credentials["server-next"].with_suffix(".key"),
+            )
+        )
+        assert _server_peer_fingerprint(server.port, credentials) == _fingerprint(
+            credentials["server"].with_suffix(".crt")
+        )
+        install()
+        assert _server_peer_fingerprint(server.port, credentials) == _fingerprint(
+            credentials["server-next"].with_suffix(".crt")
+        )
+    finally:
+        server.stop()
+        daemon.stop()
 
 
 def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
@@ -312,6 +320,7 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
         Path(__file__).resolve().parents[3],
         Path(sys.executable),
     )
+    provider_factory = ResidentProviderFactory(capacity=1)
     client_config = AgentTlsClientConfig(
         f"https://localhost:{server.port}",
         credentials["ca"].with_suffix(".crt"),
@@ -319,6 +328,7 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
         credentials["agent"].with_suffix(".key"),
         _fresh_remote_agent_root(tmp_path),
         (profile,),
+        agent_resource_provider_factory=provider_factory,
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(client_config)
     monkeypatch.setattr(queue_deployment, "_OUTBOUND_OFFER_TTL_SECONDS", 1)
@@ -350,6 +360,8 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
         ),
         0.01,
         tmp_path / "agent.yaml",
+        "0" * 64,
+        "1" * 64,
     )
     stop = Event()
     failure: list[BaseException] = []
@@ -405,6 +417,9 @@ def test_outbound_service_renews_idle_offer_then_assigns_and_stops_cleanly(
             is LocalDaemonAdmissionState.SUCCEEDED
         )
         assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+        # One composition per client incarnation; the injected lost response
+        # deliberately forces one reconnect, never one reconstruction per offer.
+        assert 1 <= provider_factory.calls <= 2
     finally:
         stop.set()
         thread.join(timeout=7)
@@ -451,6 +466,8 @@ def test_outbound_service_stop_during_initial_close_cleans_its_supervisor(
         ),
         0.01,
         tmp_path / "agent.yaml",
+        "0" * 64,
+        "1" * 64,
     )
     stop = Event()
     original_close = LocalDaemonAgentHttpClient.close
@@ -930,6 +947,7 @@ def test_agent_reload_rejects_profile_set_addition_and_requires_resume(
         assert effect.code == "reload_rejected"
         assert effect.config_revision == "config-1"
         assert client._drained is True
+        assert client._require_journal().availability_drained() is True
         assert client._config is base  # noqa: SLF001 - rejected reload has no swap
         assert client._profiles == {}  # noqa: SLF001 - no profile can be added live
         acknowledgements: list[Mapping[str, PlainData]] = []
@@ -973,6 +991,45 @@ def test_agent_reload_rejects_profile_set_addition_and_requires_resume(
         client._require_journal().record_control_effect(resume, resumed)
         assert resumed.code == "applied"
         assert client._drained is False
+        assert client._require_journal().availability_drained() is False
+    finally:
+        client.close()
+
+
+def test_agent_reload_allows_idle_capacity_change_but_not_retained_reinterpretation(
+    tmp_path: Path,
+) -> None:
+    root = _fresh_remote_agent_root(tmp_path)
+    original = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "python", "1", "project-1", "environment-1", "executor-1"
+        ),
+        tmp_path,
+        Path(sys.executable),
+        cpu_capacity=1,
+    )
+    base = AgentTlsClientConfig(
+        "https://localhost",
+        tmp_path / "ca.crt",
+        tmp_path / "agent.crt",
+        tmp_path / "agent.key",
+        agent_root=root,
+        resident_profiles=(original,),
+    )
+    LocalDaemonAgentHttpClient.initialize_agent_root(base)
+    client = LocalDaemonAgentHttpClient(base)
+    replacement = replace(
+        base,
+        resident_profiles=(replace(original, cpu_capacity=2),),
+    )
+    try:
+        client._validate_reload_config(  # noqa: SLF001 - exact reload boundary
+            replacement, retained_work=False
+        )
+        with pytest.raises(QueueConflictError, match="retained work"):
+            client._validate_reload_config(  # noqa: SLF001 - exact reload boundary
+                replacement, retained_work=True
+            )
     finally:
         client.close()
 

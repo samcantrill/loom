@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -44,6 +45,8 @@ QUEUE_CANCEL_SCHEMA_VERSION = "loom.cli.queue.cancel.v1"
 QUEUE_DRAIN_SCHEMA_VERSION = "loom.cli.queue.drain.v1"
 QUEUE_SLURM_DRIVE_SCHEMA_VERSION = "loom.cli.queue.slurm-drive.v1"
 LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v4"
+_AGENT_RELOAD_RECEIPT_WAIT_SECONDS = 10.0
+_AGENT_RELOAD_RECEIPT_POLL_SECONDS = 0.05
 
 
 def register_subparser(
@@ -442,11 +445,43 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     config = service.daemon
+    pending_service = None
+    agent_server = None
+
+    def load_replacement():  # type: ignore[no-untyped-def]
+        nonlocal pending_service
+        pending_service = load_coordinator_service_config(service.source_path)
+        return pending_service.daemon
+
+    def prepare_role_reload(replacement):  # type: ignore[no-untyped-def]
+        nonlocal pending_service
+        prepared = pending_service
+        if prepared is None or prepared.daemon is not replacement:
+            raise QueueServiceError("trusted coordinator role snapshot is unavailable")
+        if agent_server is None:
+            if prepared.agent_server is not None:
+                raise QueueServiceError("agent TLS listener cannot be added by reload")
+
+            def install_absent() -> None:
+                nonlocal pending_service
+                pending_service = None
+
+            return install_absent
+        if prepared.agent_server is None:
+            raise QueueServiceError("agent TLS listener cannot be removed by reload")
+        install_server = agent_server.prepare_reload(prepared.agent_server)
+
+        def install() -> None:
+            nonlocal pending_service
+            install_server()
+            pending_service = None
+
+        return install
+
     daemon = LocalDaemon(
         config,
-        trusted_scheduling_loader=lambda: load_coordinator_service_config(
-            service.source_path
-        ).daemon,
+        trusted_scheduling_loader=load_replacement,
+        prepare_role_reload=prepare_role_reload,
     )
     server = LocalDaemonSocketServer(daemon, config.endpoint)
     agent_server = (
@@ -583,24 +618,33 @@ def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
     from loom.queue import AgentControl, LocalDaemonSocketClient
 
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).control_agent(
-            AgentControl(
-                operation_id=namespace.operation_id,
-                kind=namespace.agent_control,
-                agent_id=namespace.agent_id,
-                expected_session_id=namespace.session_id,
-                expected_config_revision=namespace.config_revision,
-                pool=namespace.pool,
-                cancel_active=bool(namespace.cancel_active),
-                reason=namespace.reason,
-            )
+        control = AgentControl(
+            operation_id=namespace.operation_id,
+            kind=namespace.agent_control,
+            agent_id=namespace.agent_id,
+            expected_session_id=namespace.session_id,
+            expected_config_revision=namespace.config_revision,
+            pool=namespace.pool,
+            cancel_active=bool(namespace.cancel_active),
+            reason=namespace.reason,
         )
+        client = LocalDaemonSocketClient(namespace.endpoint)
+        result = client.control_agent(control)
+        if namespace.agent_control == "reload":
+            deadline = time.monotonic() + _AGENT_RELOAD_RECEIPT_WAIT_SECONDS
+            while (
+                result.get("state") in {"pending_delivery", "applying"}
+                and time.monotonic() < deadline
+            ):
+                time.sleep(_AGENT_RELOAD_RECEIPT_POLL_SECONDS)
+                result = client.control_agent(control)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     exit_code = _emit_daemon_payload(namespace, result)
     return (
         int(ExitCode.PIPELINE)
         if result.get("code") == "reload_rejected"
+        or (namespace.agent_control == "reload" and result.get("state") == "failed")
         else exit_code
     )
 

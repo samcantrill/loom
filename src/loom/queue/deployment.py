@@ -26,7 +26,6 @@ from .agent_session_transport import (
     AgentTlsServerConfig,
     LocalDaemonAgentHttpClient,
     _read_remote_agent_root_id,
-    _resident_provider_descriptors,
 )
 from ._agent_process_supervisor import (
     AgentProcessSupervisorError,
@@ -117,11 +116,7 @@ def load_coordinator_service_config(path: str | Path) -> CoordinatorServiceConfi
     )
     scheduling, priority_resolver = _scheduling_composition(payload.get("scheduling"))
     embedded_providers = _embedded_provider_composition(payload.get("embedded_agent"))
-    slurm_profiles = (
-        ()
-        if payload.get("slurm_profiles") is None
-        else _target_sequence(payload.get("slurm_profiles"), "slurm_profiles")
-    )
+    slurm_profiles = _slurm_profile_composition(payload.get("slurm_profiles"))
     server_value = payload["agent_server"]
     server = (
         None
@@ -167,7 +162,7 @@ def load_outbound_agent_service_config(
     path: str | Path,
 ) -> OutboundAgentServiceConfig:
     source, payload, _ = _load_protected_config(path)
-    _exact(
+    _required_allowed(
         payload,
         {
             "schema_version",
@@ -181,6 +176,7 @@ def load_outbound_agent_service_config(
             "registration",
             "reconnect_seconds",
         },
+        {"provider_factory"},
         "outbound agent service config",
     )
     _header(payload, "loom.outbound-agent-service")
@@ -216,6 +212,13 @@ def load_outbound_agent_service_config(
         pools=_strings(registration_value, "pools", non_empty=True),
         capabilities=_strings(registration_value, "capabilities", non_empty=True),
     )
+    provider_factory = None
+    if payload.get("provider_factory") is not None:
+        provider_factory = _trusted_target(
+            _mapping(payload, "provider_factory"), "remote provider factory"
+        )
+        if not callable(provider_factory):
+            raise QueueConfigError("remote provider factory target is invalid")
     client = AgentTlsClientConfig(
         url=_string(payload, "url"),
         server_ca_path=_path(payload, "server_ca_path", base),
@@ -223,6 +226,7 @@ def load_outbound_agent_service_config(
         private_key_path=_path(payload, "private_key_path", base),
         agent_root=_path(payload, "agent_root", base),
         resident_profiles=profiles,
+        agent_resource_provider_factory=cast(Any, provider_factory),
         deployment_configuration_fingerprint=fingerprint,
         active_configuration_fingerprint=active_fingerprint,
     )
@@ -254,17 +258,25 @@ def run_outbound_agent_service(
         pending = trusted_config_loader()
         return pending.client
 
-    def install(replacement: AgentTlsClientConfig) -> None:
-        nonlocal active, pending
+    def prepare_install(
+        replacement: AgentTlsClientConfig,
+    ) -> Callable[[], None]:
+        nonlocal pending
         if pending is None or pending.client != replacement:
             raise QueueServiceError("trusted agent role snapshot is unavailable")
-        active = pending
-        pending = None
+        snapshot = pending
+
+        def install() -> None:
+            nonlocal active, pending
+            active = snapshot
+            pending = None
+
+        return install
 
     client: LocalDaemonAgentHttpClient | None = _open_outbound_agent(
         active.client,
         trusted_config_loader=None if trusted_config_loader is None else load_client,
-        on_reload=install,
+        prepare_role_reload=prepare_install,
     )
     while True:
         try:
@@ -276,7 +288,7 @@ def run_outbound_agent_service(
                     trusted_config_loader=(
                         None if trusted_config_loader is None else load_client
                     ),
-                    on_reload=install,
+                    prepare_role_reload=prepare_install,
                 )
             client.resume_retained_work()
             handshake = client.handshake()
@@ -317,10 +329,19 @@ def run_outbound_agent_service(
                     raise QueueServiceError("agent session ended without retirement")
                 profile = active.client.resident_profiles[0]
                 gpu_descriptors = tuple(item.descriptor for item in profile.gpu_devices)
+                (
+                    provider_descriptors,
+                    capacity_atoms,
+                    reflected_claim_ids,
+                ) = client._offer_provider_snapshot(  # noqa: SLF001
+                    session_id=session.session_id,
+                    availability_revision=session.availability_revision,
+                    capacity_profile=profile,
+                )
                 gpu_atoms = tuple(
-                    item.descriptor.capacity_atom()
-                    for item in profile.gpu_devices
-                    if item.descriptor.healthy
+                    atom
+                    for atom in capacity_atoms
+                    if atom.owner_resource_kind == "gpu"
                 )
                 offer = AgentOffer(
                     session.session_id,
@@ -328,16 +349,26 @@ def run_outbound_agent_service(
                     session.config_revision,
                     session.inventory_revision,
                     session.availability_revision,
-                    profile.cpu_capacity,
-                    profile.memory_capacity_bytes,
+                    sum(
+                        atom.amount.numerator
+                        for atom in capacity_atoms
+                        if atom.owner_resource_kind == "cpu"
+                    ),
+                    sum(
+                        atom.amount.numerator
+                        for atom in capacity_atoms
+                        if atom.owner_resource_kind == "memory"
+                    ),
                     _OUTBOUND_OFFER_TTL_SECONDS,
-                    _resident_provider_descriptors(profile, session.agent_id),
+                    provider_descriptors,
                     pools=session.pools,
+                    reflected_claim_ids=reflected_claim_ids,
                     resident_profiles=tuple(
                         item.descriptor for item in active.client.resident_profiles
                     ),
                     gpu_devices=gpu_descriptors,
                     gpu_atoms=gpu_atoms,
+                    capacity_atoms=capacity_atoms,
                 )
                 # Availability revisions publish a new offer.  An unchanged
                 # revision retains that offer identity and only renews its TTL.
@@ -387,11 +418,15 @@ def _open_outbound_agent(
     config: AgentTlsClientConfig,
     *,
     trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
-    on_reload: Callable[[AgentTlsClientConfig], None] | None = None,
+    prepare_role_reload: (
+        Callable[[AgentTlsClientConfig], Callable[[], None]] | None
+    ) = None,
 ) -> LocalDaemonAgentHttpClient:
     try:
         return LocalDaemonAgentHttpClient(
-            config, trusted_config_loader=trusted_config_loader, on_reload=on_reload
+            config,
+            trusted_config_loader=trusted_config_loader,
+            prepare_role_reload=prepare_role_reload,
         )
     except QueueServiceError as exc:
         if str(exc) != "managed supervisor endpoint is unavailable":
@@ -409,7 +444,9 @@ def _open_outbound_agent(
     except AgentProcessSupervisorError as exc:
         raise QueueServiceError(str(exc)) from exc
     return LocalDaemonAgentHttpClient(
-        config, trusted_config_loader=trusted_config_loader, on_reload=on_reload
+        config,
+        trusted_config_loader=trusted_config_loader,
+        prepare_role_reload=prepare_role_reload,
     )
 
 
@@ -515,11 +552,7 @@ def _trusted_target(value: Mapping[str, object], label: str) -> object:
 
     target = _string(value, "_target_")
     kwargs = {
-        key: (
-            _trusted_target(cast(Mapping[str, object], item), f"{label}.{key}")
-            if isinstance(item, Mapping) and "_target_" in item
-            else item
-        )
+        key: _construct_trusted_value(item, f"{label}.{key}")
         for key, item in value.items()
         if key != "_target_"
     }
@@ -538,6 +571,23 @@ def _trusted_target(value: Mapping[str, object], label: str) -> object:
         raise QueueConfigError(f"{label} target is invalid") from exc
 
 
+def _construct_trusted_value(value: object, label: str) -> object:
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[str, object], value)
+        if "_target_" in mapping:
+            return _trusted_target(mapping, label)
+        return {
+            str(key): _construct_trusted_value(item, f"{label}.{key}")
+            for key, item in mapping.items()
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(
+            _construct_trusted_value(item, f"{label}[{index}]")
+            for index, item in enumerate(value)
+        )
+    return value
+
+
 def _scheduling_composition(
     value: object,
 ) -> tuple[LocalDaemonSchedulingComponents, Callable[[str], int]]:
@@ -546,17 +596,25 @@ def _scheduling_composition(
 
         return _default_scheduling_components(), lambda _run_uri: 0
     mapping = _mapping_value(value, "scheduling")
+    _exact(mapping, {"priority_resolver", "components"}, "scheduling")
+    components = _mapping(mapping, "components")
     _exact(
-        mapping,
-        {"planners", "hard_evaluators", "preference_scorers", "policy", "priority_resolver"},
-        "scheduling",
+        components,
+        {"planners", "hard_evaluators", "preference_scorers", "policy"},
+        "scheduling components",
     )
-    planners = _target_sequence(mapping["planners"], "scheduling planners")
-    hard = _target_sequence(mapping["hard_evaluators"], "scheduling hard evaluators")
+    planners = _target_sequence(
+        components["planners"], "scheduling planners"
+    )
+    hard = _target_sequence(
+        components["hard_evaluators"], "scheduling hard evaluators"
+    )
     preferences = _target_sequence(
-        mapping["preference_scorers"], "scheduling preference scorers"
+        components["preference_scorers"], "scheduling preference scorers"
     )
-    policy = _trusted_target(_mapping(mapping, "policy"), "scheduling policy")
+    policy = _trusted_target(
+        _mapping(components, "policy"), "scheduling policy"
+    )
     resolver = _trusted_target(
         _mapping(mapping, "priority_resolver"), "priority resolver"
     )
@@ -594,6 +652,66 @@ def _target_sequence(value: object, label: str) -> tuple[object, ...]:
     )
 
 
+def _slurm_profile_composition(value: object) -> tuple[object, ...]:
+    """Construct complete ready-stage profiles from one protected source."""
+
+    if value is None:
+        return ()
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise QueueConfigError("slurm_profiles must be a sequence")
+    from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
+
+    profiles: list[SlurmReadyStageProfile] = []
+    required = {
+        "profile_id",
+        "partition",
+        "max_outstanding",
+        "runner",
+        "command_adapter_fingerprint",
+        "bootstrap_principal_id",
+        "credential_reference",
+        "coordinator_endpoint",
+        "project_fingerprint",
+        "environment_fingerprint",
+        "executor_fingerprint",
+        "job_private_file_provider",
+    }
+    optional = {
+        "executor_name",
+        "credential_policy_revision",
+        "account",
+        "qos",
+        "cluster",
+        "available",
+        "containment_helper",
+    }
+    for index, item in enumerate(value):
+        label = f"slurm_profiles[{index}]"
+        mapping = _mapping_value(item, label)
+        if "_target_" in mapping:
+            target = _trusted_target(mapping, label)
+            if not isinstance(target, SlurmReadyStageProfile):
+                raise QueueConfigError(
+                    f"{label} target is not a ready-stage profile"
+                )
+            profiles.append(target)
+            continue
+        _required_allowed(mapping, required, optional, label)
+        kwargs = {
+            key: _construct_trusted_value(item_value, f"{label}.{key}")
+            for key, item_value in mapping.items()
+        }
+        kwargs["bootstrap_argv"] = ("loom", "slurm-bootstrap")
+        try:
+            profile = SlurmReadyStageProfile(**cast(Any, kwargs))
+        except Exception as exc:
+            raise QueueConfigError(f"{label} is invalid") from exc
+        profiles.append(profile)
+    if len({profile.profile_id for profile in profiles}) != len(profiles):
+        raise QueueConfigError("slurm profile IDs must be unique")
+    return cast(tuple[object, ...], tuple(profiles))
+
+
 def _coordinator_immutable_projection(
     payload: Mapping[str, object],
 ) -> dict[str, object]:
@@ -602,6 +720,11 @@ def _coordinator_immutable_projection(
     embedded = _mapping(payload, "embedded_profile")
     profile = _mapping(embedded, "descriptor")
     server = payload.get("agent_server")
+    server_mapping = None if server is None else _mapping_value(server, "agent_server")
+    server_identity = None if server_mapping is None else {
+        "host": server_mapping.get("host"),
+        "port": server_mapping.get("port"),
+    }
     return {
         "schema_version": payload["schema_version"],
         "kind": payload["kind"],
@@ -609,7 +732,7 @@ def _coordinator_immutable_projection(
         "embedded_profile": {
             "descriptor": dict(profile),
         },
-        "agent_server": _without_paths(server),
+        "agent_server": server_identity,
         "authority": _without_paths(_mapping(payload, "authority")),
     }
 
@@ -636,13 +759,27 @@ def _outbound_immutable_projection(
 
 
 def _coordinator_active_projection(payload: Mapping[str, object]) -> dict[str, object]:
+    embedded = _mapping(payload, "embedded_profile")
+    server = payload.get("agent_server")
+    server_mapping = None if server is None else _mapping_value(server, "agent_server")
+    server_credentials = (
+        None
+        if server_mapping is None
+        else server_mapping.get("credential_fingerprints")
+    )
     return cast(
         dict[str, object],
         _without_paths(
             {
                 "poll_interval_seconds": payload["poll_interval_seconds"],
                 "max_accepted_time_step_seconds": payload["max_accepted_time_step_seconds"],
+                "embedded_capacity": {
+                    "cpu_capacity": embedded["cpu_capacity"],
+                    "memory_capacity_bytes": embedded["memory_capacity_bytes"],
+                    "gpu_devices": embedded["gpu_devices"],
+                },
                 "agent_policy": payload["agent_policy"],
+                "agent_server_credentials": server_credentials,
                 "remote_profiles": payload["remote_profiles"],
                 "scheduling": payload.get("scheduling"),
                 "embedded_agent": payload.get("embedded_agent"),
@@ -660,6 +797,7 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
                 "registration": payload["registration"],
                 "reconnect_seconds": payload["reconnect_seconds"],
                 "resident_profiles": payload["resident_profiles"],
+                "provider_factory": payload.get("provider_factory"),
             }
         ),
     )

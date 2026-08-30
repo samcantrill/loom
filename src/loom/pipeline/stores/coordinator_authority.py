@@ -52,6 +52,7 @@ from .read_models import (
 
 
 COORDINATOR_AUTHORITY_ROUTE_PREFIX = "/v1/authority/coordinator"
+COORDINATOR_AUTHORITY_SERVICE_HEADER = "X-Loom-Authority-Service"
 COORDINATOR_OPEN_RUN_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/open"
 COORDINATOR_TRANSITION_RUN_PATH = (
     f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/runs/transition"
@@ -203,7 +204,7 @@ def https_coordinator_authority_factory(
         raise AuthorityStoreError("authenticated authority endpoint must use HTTPS")
     if not isinstance(tls, CoordinatorAuthorityTlsConfig):
         raise AuthorityStoreError("authenticated authority TLS config is invalid")
-    transport = _MutualTlsJsonTransport(tls)
+    transport = _MutualTlsJsonTransport(tls, service_id=service_id)
     readiness = AuthorityProtocolReadiness.from_dict(
         transport.get(f"{endpoint}/ready", timeout_seconds)
     )
@@ -684,7 +685,9 @@ class AuthenticatedCoordinatorAuthority:
 
 
 class _MutualTlsJsonTransport:
-    def __init__(self, config: CoordinatorAuthorityTlsConfig) -> None:
+    def __init__(
+        self, config: CoordinatorAuthorityTlsConfig, *, service_id: str
+    ) -> None:
         context = ssl.create_default_context(cafile=str(config.ca_path))
         context.load_cert_chain(
             certfile=str(config.certificate_path),
@@ -693,6 +696,7 @@ class _MutualTlsJsonTransport:
         context.check_hostname = True
         context.verify_mode = ssl.CERT_REQUIRED
         self._context = context
+        self._service_id = _non_empty(service_id, "service_id")
 
     def __call__(
         self,
@@ -707,7 +711,11 @@ class _MutualTlsJsonTransport:
             url,
             data=encoded,
             method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                COORDINATOR_AUTHORITY_SERVICE_HEADER: self._service_id,
+            },
         )
         with request.urlopen(
             req, timeout=timeout_seconds, context=self._context
@@ -715,7 +723,14 @@ class _MutualTlsJsonTransport:
             return _json_mapping(response.read())
 
     def get(self, url: str, timeout_seconds: float | None) -> Mapping[str, object]:
-        req = request.Request(url, method="GET", headers={"Accept": "application/json"})
+        req = request.Request(
+            url,
+            method="GET",
+            headers={
+                "Accept": "application/json",
+                COORDINATOR_AUTHORITY_SERVICE_HEADER: self._service_id,
+            },
+        )
         with request.urlopen(
             req, timeout=timeout_seconds, context=self._context
         ) as response:

@@ -127,7 +127,10 @@ from loom.serialization import (
 from loom.timestamps import utc_timestamp
 
 from .errors import QueueConflictError, QueueServiceError
-from .coordinator_authority import CoordinatorAuthorityStore
+from .coordinator_authority import (
+    CoordinatorAuthorityFactory,
+    CoordinatorAuthorityStore,
+)
 from ._remote_stage_execution import (
     MAX_TRANSFER_BYTES,
     ResidentProfileDescriptor,
@@ -221,6 +224,31 @@ def _validate_agent_provider_composition(
         return _compose_agent_resource_providers(providers)
     except ManagedLocalError as exc:
         raise QueueServiceError(str(exc)) from exc
+
+
+def _provider_composition_fingerprint(
+    providers: Mapping[str, AgentResourceProvider],
+) -> str:
+    """Compare provider contracts by their public, configuration-owned identity."""
+
+    payload = [
+        {
+            "resource_kind": kind,
+            "descriptor": provider.descriptor.to_dict(),
+            "claim_contracts": [
+                contract.to_dict()
+                for contract in sorted(
+                    provider.claim_contracts, key=lambda item: item.key
+                )
+            ],
+        }
+        for kind, provider in sorted(providers.items())
+    ]
+    return hashlib.sha256(
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _production_preference_scorers() -> Mapping[str, PreferenceScorer]:
@@ -342,6 +370,18 @@ class _CoordinatorSchedulingEpoch:
             policy=policy,
             component_epoch=self.epoch_id,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _CoordinatorReloadPlan:
+    """Complete validated owner-local replacement installed by one live swap."""
+
+    scheduling: _CoordinatorSchedulingEpoch
+    providers: Mapping[str, AgentResourceProvider]
+    local_capacity: tuple[CapacityAtom, ...]
+    capacity: tuple[CapacityAtom, ...]
+    coordinator: SQLiteCoordinatorAssignments
+    authority_for_run: CoordinatorAuthorityFactory
 
 
 def _add_exact_descriptor(
@@ -3140,31 +3180,57 @@ class LocalDaemonExecution:
         self,
         replacement: LocalDaemonConfig,
         scheduling_epoch: str,
-    ) -> _CoordinatorSchedulingEpoch:
+    ) -> _CoordinatorReloadPlan:
         """Build the complete replacement epoch before any durable mutation."""
 
-        replacement_capacity = _coordinator_capacity(replacement)
-        if replacement_capacity != self.capacity:
-            raise QueueConflictError(
-                "scheduling reload cannot reinterpret configured capacity"
-            )
         replacement_planners = {
             item.resource_kind: item
             for item in replacement.scheduling_components.planners
         }
-        for kind, provider in self.providers.items():
-            planner = replacement_planners.get(kind)
-            if (
-                planner is None
-                or not planner.claim_contracts
-                or any(
-                    contract not in provider.claim_contracts
-                    for contract in planner.claim_contracts
-                )
-            ):
+        replacement_providers = _validate_agent_provider_composition(
+            tuple(replacement.agent_resource_providers or ()),
+            replacement_planners,
+        )
+        replacement_local_capacity = replacement.agent_resource_capacity
+        replacement_capacity = _coordinator_capacity(replacement)
+        provider_changed = (
+            replacement_local_capacity != self.local_capacity
+            or replacement_capacity != self.capacity
+            or _provider_composition_fingerprint(replacement_providers)
+            != _provider_composition_fingerprint(self.providers)
+        )
+        if provider_changed:
+            try:
+                retained_claims = self.journal.retained_claim_commands()
+                with sqlite3.connect(self.config.execution_database) as conn:
+                    retained_assignment = conn.execute(
+                        "SELECT 1 FROM coordinator_assignments "
+                        "WHERE state != 'released' LIMIT 1"
+                    ).fetchone()
+            except (ManagedLocalError, sqlite3.DatabaseError) as exc:
                 raise QueueConflictError(
-                    "scheduling reload planner is incompatible with the local provider"
+                    "scheduling reload cannot prove provider quiescence"
+                ) from exc
+            if retained_claims or retained_assignment is not None:
+                raise QueueConflictError(
+                    "scheduling reload cannot replace capacity with retained work"
                 )
+            replacement_coordinator = SQLiteCoordinatorAssignments(
+                replacement.execution_database,
+                replacement_capacity,
+                _allow_initialize=False,
+            )
+            try:
+                replacement_coordinator._open_existing()
+            except ManagedLocalError as exc:
+                raise QueueConflictError(
+                    "replacement coordinator capacity is unavailable"
+                ) from exc
+        else:
+            replacement_providers = self.providers
+            replacement_local_capacity = self.local_capacity
+            replacement_capacity = self.capacity
+            replacement_coordinator = self.coordinator
         runtime_placements = self._referenced_runtime_placements()
         retained: dict[tuple[str, str], SlurmReadyStageProfile] = {}
         for placement in runtime_placements:
@@ -3219,25 +3285,40 @@ class LocalDaemonExecution:
                 raise QueueConflictError(
                     "scheduling reload cannot reinterpret a retained credential"
                 )
-        return _build_scheduling_epoch(
-            epoch_id=scheduling_epoch,
-            composition=replacement.scheduling_components,
-            active_slurm_profiles=active,
-            retained_slurm_profiles=retained,
-            current=self._scheduling,
-            referenced_descriptors=self._referenced_component_descriptors(
-                runtime_placements
+        authority_for_run = replacement.coordinator_authority_factory
+        if authority_for_run is None:
+            raise QueueConflictError("replacement coordinator authority is unavailable")
+        return _CoordinatorReloadPlan(
+            scheduling=_build_scheduling_epoch(
+                epoch_id=scheduling_epoch,
+                composition=replacement.scheduling_components,
+                active_slurm_profiles=active,
+                retained_slurm_profiles=retained,
+                current=self._scheduling,
+                referenced_descriptors=self._referenced_component_descriptors(
+                    runtime_placements
+                ),
             ),
+            providers=MappingProxyType(dict(replacement_providers)),
+            local_capacity=tuple(replacement_local_capacity),
+            capacity=tuple(replacement_capacity),
+            coordinator=replacement_coordinator,
+            authority_for_run=authority_for_run,
         )
 
     def apply_scheduling_reload(
         self,
         replacement: LocalDaemonConfig,
-        plan: _CoordinatorSchedulingEpoch,
+        plan: _CoordinatorReloadPlan,
     ) -> None:
         """Install one already-validated scheduling plan without fallible work."""
 
-        self._scheduling = plan
+        self._scheduling = plan.scheduling
+        self.providers = dict(plan.providers)
+        self.local_capacity = plan.local_capacity
+        self.capacity = plan.capacity
+        self.coordinator = plan.coordinator
+        self._authority_for_run = plan.authority_for_run
         self.config = replacement
 
     def _referenced_component_descriptors(

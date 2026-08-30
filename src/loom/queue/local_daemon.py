@@ -1237,10 +1237,14 @@ class LocalDaemon:
         *,
         clock: Callable[[], str] = utc_timestamp,
         trusted_scheduling_loader: Callable[[], LocalDaemonConfig] | None = None,
+        prepare_role_reload: (
+            Callable[[LocalDaemonConfig], Callable[[], None]] | None
+        ) = None,
     ) -> None:
         self.config = config
         self._clock = clock
         self._trusted_scheduling_loader = trusted_scheduling_loader
+        self._prepare_role_reload = prepare_role_reload
         self._coordinator_lock: object | None = None
         self._agent_lock: object | None = None
         self._coordinator_id: str | None = None
@@ -2105,28 +2109,9 @@ class LocalDaemon:
                 agent_id=control.agent_id,
                 pool=control.pool,
             )
+        encoded = json.dumps(control.value(), sort_keys=True, separators=(",", ":"))
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            session = conn.execute(
-                "SELECT session_id, agent_id, config_revision, pools_json, state "
-                "FROM agent_sessions WHERE session_id = ?",
-                (control.expected_session_id,),
-            ).fetchone()
-            if session is None or str(session["state"]) != "ACTIVE":
-                raise QueueConflictError("agent control session is stale")
-            if (
-                str(session["agent_id"]) != control.agent_id
-                or str(session["config_revision"]) != control.expected_config_revision
-            ):
-                raise QueueConflictError("agent control revision is stale")
-            pools = json.loads(str(session["pools_json"]))
-            if control.pool is not None and control.pool not in pools:
-                raise QueueServiceError("agent control pool is not authorized")
-            if control.pool is not None and set(pools) != {control.pool}:
-                raise QueueServiceError(
-                    "pool-scoped control requires an independently controllable agent"
-                )
-            encoded = json.dumps(control.value(), sort_keys=True, separators=(",", ":"))
             prior = conn.execute(
                 "SELECT principal_id, request_json, state, result_code FROM agent_controls "
                 "WHERE operation_id = ?",
@@ -2146,6 +2131,25 @@ class LocalDaemon:
                         "code": prior["result_code"],
                     },
                     path="agent control receipt",
+                )
+            session = conn.execute(
+                "SELECT session_id, agent_id, config_revision, pools_json, state "
+                "FROM agent_sessions WHERE session_id = ?",
+                (control.expected_session_id,),
+            ).fetchone()
+            if session is None or str(session["state"]) != "ACTIVE":
+                raise QueueConflictError("agent control session is stale")
+            if (
+                str(session["agent_id"]) != control.agent_id
+                or str(session["config_revision"]) != control.expected_config_revision
+            ):
+                raise QueueConflictError("agent control revision is stale")
+            pools = json.loads(str(session["pools_json"]))
+            if control.pool is not None and control.pool not in pools:
+                raise QueueServiceError("agent control pool is not authorized")
+            if control.pool is not None and set(pools) != {control.pool}:
+                raise QueueServiceError(
+                    "pool-scoped control requires an independently controllable agent"
                 )
             active = conn.execute(
                 "SELECT operation_id FROM agent_controls WHERE session_id = ? "
@@ -2280,6 +2284,16 @@ class LocalDaemon:
                     )
                 replacement = loader()
                 self._validate_scheduling_replacement(replacement)
+
+                def apply_role_reload() -> None:
+                    return
+
+                if self._prepare_role_reload is not None:
+                    apply_role_reload = self._prepare_role_reload(replacement)
+                    if not callable(apply_role_reload):
+                        raise QueueServiceError(
+                            "trusted role reload plan is unavailable"
+                        )
                 execution = self._execution
                 if execution is None:
                     raise QueueServiceError("coordinator execution is unavailable")
@@ -2342,6 +2356,9 @@ class LocalDaemon:
                     )
                     conn.commit()
                 execution.apply_scheduling_reload(replacement, reload_plan)
+                # The trusted preparer performs every fallible action before
+                # persistence and returns an assignment-only installer.
+                apply_role_reload()
                 self.config = replacement
                 self._agent_policy = replacement.agent_policy
                 self._scheduling_epoch = next_epoch
@@ -2668,6 +2685,9 @@ class LocalDaemon:
         if any(
             getattr(replacement, name) != getattr(self.config, name)
             for name in immutable
+        ) or (
+            replacement.resident_worker_launch_profile.fingerprint
+            != self.config.resident_worker_launch_profile.fingerprint
         ):
             raise QueueConflictError(
                 "scheduling reload cannot replace process or agent-owned configuration"
