@@ -5,7 +5,7 @@ Roadmap stage: 34
 Planning document: docs/roadmap/stage-34/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 2 `pending`
+Current phase: Phase 2 `in_progress`
 Blockers: none; Stage 32 replacement Phase 3 is remotely merged
 Worktree root: `/home/can134/work/active/loom-worktrees`
 
@@ -57,7 +57,7 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | singular-run-inspection-core | merged | docs/roadmap/stage-34/phases/singular-run-inspection-core.md | agent/stage-34-p1-singular-run-inspection-core | [#263](https://github.com/samcantrill/loom/pull/263) | diagnostics model/projection, targeted owner reads, Unix operation, direct/Unix CLI/API and tests | Deliver safe singular-run inspection locally and through the owner socket. |
-| 2 | authenticated-run-inspection | pending | docs/roadmap/stage-34/phases/authenticated-run-inspection.md | agent/stage-34-p2-authenticated-run-inspection | pending | query policy/HTTP operation and client config, remote CLI, security/parity tests and final docs | Deliver the same model through least-privilege mTLS inspection. |
+| 2 | authenticated-run-inspection | in_progress | docs/roadmap/stage-34/phases/authenticated-run-inspection.md | agent/stage-34-p2-authenticated-run-inspection | pending | query policy/HTTP operation and client config, remote CLI, security/parity tests and final docs | Deliver the same model through least-privilege mTLS inspection. |
 
 ## Quality Gate
 

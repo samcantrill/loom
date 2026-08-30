@@ -2,20 +2,21 @@
 
 ## Metadata
 
-- Status: pending
+- Status: in_progress
 - Roadmap stage and phase: Stage 34, Phase 2
 - Manifest: docs/roadmap/stage-34/implementation-plan.md
 - Branch: agent/stage-34-p2-authenticated-run-inspection
-- Worktree root and path: use the manifest-recorded root;
-  `<root>/stage-34-p2-authenticated-run-inspection`
-- Base revision: current `origin/develop` after Phase 1 is remotely merged
+- Worktree root and path: `/home/can134/work/active/loom-worktrees`;
+  `/home/can134/work/active/loom-worktrees/stage-34-p2-authenticated-run-inspection`
+- Base revision: `0eb6a90df1517a0b51538241db8792359563e619`
 - PR target: develop
 - PR title: `Stage 34 phase 2: add authenticated run inspection`
 - Dependencies: Phase 1 merged; existing Stage 29 mTLS server, certificate
   fingerprint mapping, current-policy authorizer, and protected config loader
 - Workflow path: expanded; this phase changes an authenticated remote trust
   boundary and credential policy
-- Blockers: Phase 1 remote merge
+- Blockers: none; Phase 1 is remotely merged in
+  [#263](https://github.com/samcantrill/loom/pull/263)
 
 ## Objective And Context
 
@@ -189,9 +190,12 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: pending Phase 1 remote merge and exact base/worktree.
-- Expanded planning: stage design is complete; use a phase planner only if the
-  existing transport cannot preserve auth-before-read without contract change.
+- Manager preparation: complete; Phase 1 remote merge, exact base/worktree,
+  current transport dispatch, policy seam, and protected config loader verified.
+- Expanded planning: no planner pass needed. The existing mTLS handler resolves
+  the certificate fingerprint through the current policy and enforces the
+  mapped role/path before application dispatch, so an injected query callback
+  can remain downstream of authorization without a contract change.
 - Implementation: pending.
 - Refiner: not needed.
 - Pre-submit gate: pending.
