@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: approved
+- Status: pr_open
 - Roadmap stage and phase: Stage 29, Phase 15
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p15-management-cli-examples`
@@ -210,7 +210,9 @@ Final commands:
   truthful public-surface examples, accepted-time and service-health evidence,
   stale catalog IDs, and process cleanup. Final manager review found no blocker.
 - Blocker corrections: 3/3 complete
-- PR and merge: pending
+- PR and merge: [#266](https://github.com/samcantrill/loom/pull/266) is open,
+  correctly targets `develop`, is not draft, and is mergeable; merge remains
+  pending final manager approval
 
 ## Completion Record
 
@@ -220,5 +222,5 @@ Final commands:
 | Tests added or updated | Causal admission A/B/no-op revisions; saturated long-poll status/control/stop; bounded agent/detail/operation reads; same-timestamp replacement and expiry; local-owner and remote-credential negatives; accepted-time/service-health/replay; SLURM rejection/restart/result/release; exact manifest-to-invocation and PID cleanup. |
 | Validated revision/tree state and evidence | Focused gates: 323 queue/CLI unit tests, 169 queue integration/E2E tests, 3 combined journey E2Es, 29 documentation/example checks, and the outbound reload lifecycle E2E passed. `make validate-pr` passed Ruff, zero-finding Pyright, 2,772 default tests, 157 configuration-extra tests with 3 expected skips, and both builds. Fresh `make test-summary` records 2,929 passed, 3 skipped, and zero failures/errors. |
 | Validation-relevant changes after evidence | Only this workflow record changes after the fresh validation and summary evidence; no source, test, dependency, build, or validation configuration changed. |
-| PR, review, and merge | Required independent review and manager review passed with no remaining blocker. PR creation and automatic squash merge remain manager-owned. |
+| PR, review, and merge | [#266](https://github.com/samcantrill/loom/pull/266) is open against `develop`, is not draft, and is mergeable. Required independent review passed; final PR-head manager approval and automatic squash merge remain manager-owned. |
 | Residual risk and cleanup | No known phase blocker. Real site CA/prolog and production SLURM smoke validation remain intentionally opt-in; default validation uses generated localhost certificates and the deterministic fake scheduler gateway. Exact stale Phase 14 test supervisors were terminated; phase worktree/branch cleanup waits for merge. |
