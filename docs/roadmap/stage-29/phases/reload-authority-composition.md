@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Roadmap stage and phase: Stage 29, Phase 14
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p14-reload-authority-composition`
@@ -266,8 +266,8 @@ unrelated older reload tests do not prove these new boundaries.
 - Independent review: passed on bounded follow-up with no supported-path blocker
   remaining for reload crash recovery or coordinator-principal ownership.
 - Blocker corrections: 3/3 complete; no known blocker remains.
-- PR: [#265](https://github.com/samcantrill/loom/pull/265), open against
-  `develop`; merge pending
+- PR: [#265](https://github.com/samcantrill/loom/pull/265), squash-merged as
+  `41fbae3`
 
 ## Completion Record
 
@@ -277,5 +277,5 @@ unrelated older reload tests do not prove these new boundaries.
 | Tests added or updated | Unit/contract/package guards cover projections, nested targets, schema/migration, CLI outcomes, and import direction. Integration/E2E tests cover real coordinator/outbound reload and restart, service reconnection, TLS rotation, live mTLS authority calls, same-CA rejection, two-valid-principal isolation, and crash recovery after each durable reload intent. |
 | Validated revision/tree state and evidence | At source/test revision `308ed41`, fresh `make validate-pr` passed Ruff, Pyright with zero findings, 2,764 default tests with 136 deselected, 157 config-extra tests with 3 expected skips, and both builds. Fresh `make test-summary` recorded package 120, unit 1,943, contract 300, integration 337, E2E 64, and config-extra 157: 2,921 passes, zero failures/errors, 3 expected skips. |
 | Validation-relevant changes after evidence | Only this roadmap evidence and matching manifest metadata changed after the validated source/test revision; no source, test, dependency, build, or validation configuration changed. |
-| PR, review, and merge | Independent review and bounded follow-up passed; [PR #265](https://github.com/samcantrill/loom/pull/265) is open against `develop`, with automatic merge pending. |
-| Residual risk and cleanup | No known phase blocker. Protected role roots/configs remain an intentional hard cut. Migrated authority v5 admissions have no authenticated service identity and therefore remain fail-closed on the new authenticated routes rather than being guessed or claimed. Worktree/branch cleanup follows verified remote merge. |
+| PR, review, and merge | Independent review and bounded follow-up passed; [PR #265](https://github.com/samcantrill/loom/pull/265) squash-merged into `develop` as `41fbae3`. |
+| Residual risk and cleanup | No known phase blocker. Protected role roots/configs remain an intentional hard cut. Migrated authority v5 admissions have no authenticated service identity and therefore remain fail-closed on the new authenticated routes rather than being guessed or claimed. The dedicated worktree and local/remote phase branches were removed after the verified merge. |
