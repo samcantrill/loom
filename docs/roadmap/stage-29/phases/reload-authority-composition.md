@@ -85,6 +85,12 @@ Assumptions:
 - Trust boundary: only protected local source creates `_target_` objects.
   Configured persistent authority uses authenticated least privilege; embedded
   direct access is an explicit trusted composition.
+- Authenticated authority boundary: expose only the existing
+  `PreparedAttemptExecutionAuthority` operations as explicit coordinator- and
+  run-scoped service calls. Exact retries reuse the existing durable operation,
+  assignment, attempt, fence, recovery, and output identities and typed
+  conflict/error semantics; do not add generic authority CRUD or a SQLite
+  fallback.
 - Cross-phase contracts: Phase 15 reads scheduling/time/configuration revisions
   but does not mutate fingerprint ownership.
 - Reproducibility: fingerprints use canonical non-secret authored values; live
@@ -182,22 +188,24 @@ Final commands:
   fixes both fingerprint domains, trusted eager target construction, the narrow
   authority factory, and reload CLI semantics. Independent review remains
   required for the durable reload and authority trust boundaries.
-- Implementation: blocked — the configured authenticated authority API lacks
-  the prepared-attempt/coordinator-mutation operations required by the existing
-  production daemon; substituting direct SQLite would violate FR-38.
+- Implementation: resumed after maintainer approval of the attached three-phase
+  correction; the missing authenticated operations will narrowly mirror the
+  existing prepared-attempt execution authority contract
 - Refiner: not needed
 - Pre-submit gate: pending
 - Independent review: required for authority trust and durable reload/restart boundary
-- Blocker corrections: 0/3
+- Blocker corrections: 1/3; correction 1 resolves the missing-capability stop
+  with the maintainer-approved narrow authenticated adapter and no direct
+  SQLite fallback
 - PR and merge: pending
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Blocked before source changes; the authenticated authority API exposes no `ensure_prepared_attempt`, prepared-attempt bind/grant/unbind, execution-start confirmation, managed-terminal, or fence-close operation. The current daemon directly uses these SQLite-only operations in `local_daemon_execution.py`. |
-| Tests added or updated | None; no safe in-scope implementation exists without a new authority API design. |
+| Implementation and changed paths | Initial executor stopped before source changes because the authenticated authority API exposes no `ensure_prepared_attempt`, prepared-attempt bind/grant/unbind, execution-start confirmation, managed-terminal, or fence-close operation. The maintainer then approved the attached three-phase design, including a narrow authenticated coordinator-authority adapter and removal of direct SQLite construction; implementation resumed. |
+| Tests added or updated | Pending resumed implementation; the authenticated and embedded adapters must share the existing prepared-attempt execution authority contract and causal replay/error matrix. |
 | Validated revision/tree state and evidence | Evidence revision `ee31fa6`; clean source tree before this completion-record update. `rg` confirms those methods exist on `SQLitePerRunAuthorityStore` but not on the configured authenticated client/service adapters. |
 | Validation-relevant changes after evidence | Completion-record update only; targeted/full validation not run because no implementation was authorized after the stop condition. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | Qualified blocker: FR-38 cannot provide persistent authenticated authority composition without defining and implementing a public authenticated authority mutation contract (including replay/error semantics) for the current coordinator operations. Manager decision required; no source fallback or cleanup action taken. |
+| Residual risk and cleanup | The qualified FR-38 capability blocker is resolved by explicit maintainer approval of the attached narrow authenticated authority design. Implementation and validation remain pending; no direct SQLite fallback is permitted. |
