@@ -12,11 +12,11 @@
 - PR title: `Stage 29 phase 15: complete management and examples`
 - Dependencies: remotely merged Phase 14
 - Workflow path: expanded; public CLI, concurrent IPC, and claimed example coverage
-- Blockers: manager verification found that internal finite server polls escape
-  as premature caller timeouts, the accept thread still owns blocking request
-  reads, agent/operation projections and tests do not yet close their fixed
-  contracts, and the remote/SLURM example entrypoints describe rather than run
-  their claimed journeys. Correction 1/3 is in progress.
+- Blockers: correction 1/3 fixed the initial management implementation, but
+  manager verification found that the two CLI-labelled example entrypoints run
+  pytest instead of the claimed Loom public surfaces and that the fixed FR-40/
+  FR-43 causal matrix remains incomplete. Required independent review is in
+  progress before the bounded refiner pass.
 
 ## Objective And Context
 
@@ -189,14 +189,16 @@ Final commands:
 - Expanded planning: no phase-planner pass needed; the approved expanded design-
   safety and bounded plan-review findings already fixed supervisor epoch
   references, long-poll saturation, and Phase 14 CLI scope
-- Implementation: `6907c14` plus correction `92c248c`; correction 1/3 closed
-  the management-concurrency, projection, policy/defect-evidence, and
-  executable-example blockers
-- Refiner: not needed
-- Pre-submit gate: fresh `make validate-pr` and `make test-summary` passed on
-  the corrected tree
-- Independent review: required for concurrent IPC and broad public example claims
-- Blocker corrections: 1/3 closed
+- Implementation: corrected candidate `92c248c`; one bounded refiner pass is
+  pending the required independent review of remaining example and causal-test
+  gaps
+- Refiner: pending after independent review
+- Pre-submit gate: not passed; the correction-1 validation receipt is stale for
+  submission because accepted example claims and causal coverage remain open
+- Independent review: in progress for concurrent IPC and broad public example
+  claims
+- Blocker corrections: 1/3 complete; a refiner correction will consume 2/3
+  after the independent findings are consolidated
 - PR and merge: pending
 
 ## Completion Record
@@ -207,5 +209,5 @@ Final commands:
 | Tests added or updated | Admission A/B/no-op and socket saturation/status; current logical agent, operation result/bound wait, verified-owner different-UID/scope negatives; CLI/E2E process journeys; targeted queue unit/CLI and remote/SLURM integration selections. |
 | Validated revision/tree state and evidence | Fresh `make validate-pr` passed. Fresh `make test-summary` passed: 2,927 passed, 3 skipped, 0 failures/errors (2,930 total); receipt: `build/test-summary.md`, generated `2026-08-30T18:25:03+00:00`. Targeted queue tests passed: 91 queue unit tests, 12 queue CLI E2E tests, and 19 selected CLI/remote/SLURM integration tests. |
 | Validation-relevant changes after evidence | None. This completion-record-only update is excluded from the validation-relevant tree. |
-| PR, review, and merge | pending required independent review and manager PR/merge workflow. |
-| Residual risk and cleanup | No concrete Phase 15 implementation blocker. Remote and SLURM examples use generated local credentials and the repository fake gateway only; they assert normal cleanup in their invoked journeys. |
+| PR, review, and merge | pending required independent review, bounded refiner correction, refreshed manager pre-submit gate, and merge. |
+| Residual risk and cleanup | Corrected candidate `92c248c` is not submission-ready: CLI-labelled entrypoints shell out to pytest rather than invoking the documented Loom surface, and the accepted long-wait/shutdown plus expiry/health/principal causal matrix is not yet present. |
