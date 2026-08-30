@@ -955,7 +955,8 @@ loom queue daemon-agent-reload \
   --config-revision CURRENT_CONFIG \
   --reason trusted-config-updated
 
-# Read the applied revision from daemon-status before resuming.
+# Re-read agent detail and copy its applied configuration revision before resuming.
+loom queue daemon-agent --endpoint COORDINATOR_SOCKET machine-B --format json
 loom queue daemon-agent-resume \
   --endpoint COORDINATOR_SOCKET \
   --operation-id resume-machine-B-1 \
