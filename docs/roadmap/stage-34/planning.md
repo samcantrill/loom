@@ -197,8 +197,8 @@ Causal interactions requiring combined coverage:
 
 | Phase | Vertical outcome | Ownership and exclusions | Dependencies | Acceptance and tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1. Singular run inspection core | Python API and `loom inspect-run` work through direct and owner-only Unix sources for managed and service-less runs. | Typed projection, exact reads, socket operation, direct/Unix CLI; no HTTP policy/client. | Stage 32 replacement Phase 3 merged with the approved run-to-item reference. | Allowlist/bounds, mixed-owner and service-less journeys, socket parity, CLI compatibility. | in_progress |
-| 2. Authenticated run inspection | The same command/model works through a dedicated read-only mTLS query credential and documented remote journey. | Query policy/dispatch/client config, HTTP adapter, security/parity tests and final docs; no mutation or bytes. | Phase 1 merged. | Auth-before-read, role/revocation/capability failures, three-source parity, full gates. | pending |
+| 1. Singular run inspection core | Python API and `loom inspect-run` work through direct and owner-only Unix sources for managed and service-less runs. | Typed projection, exact reads, socket operation, direct/Unix CLI; no HTTP policy/client. | Stage 32 replacement Phase 3 merged with the approved run-to-item reference. | Allowlist/bounds, mixed-owner and service-less journeys, socket parity, CLI compatibility. | merged |
+| 2. Authenticated run inspection | The same command/model works through a dedicated read-only mTLS query credential and documented remote journey. | Query policy/dispatch/client config, HTTP adapter, security/parity tests and final docs; no mutation or bytes. | Phase 1 merged. | Auth-before-read, role/revocation/capability failures, three-source parity, full gates. | in_progress |
 
 Two phases isolate the stable projection and useful local/SSH path from the
 remote trust boundary without creating a model-only or transport-only PR.

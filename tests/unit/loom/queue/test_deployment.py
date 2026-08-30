@@ -18,6 +18,7 @@ from loom.queue.deployment import (
     _open_outbound_agent,
     load_coordinator_service_config,
     load_outbound_agent_service_config,
+    load_run_inspection_client_config,
 )
 from loom.queue.errors import QueueConfigError, QueueServiceError
 
@@ -138,6 +139,28 @@ def test_outbound_agent_publication_is_atomic_and_config_bound(
         if restarted._supervisor is not None:  # noqa: SLF001
             restarted._supervisor.shutdown_for_test()  # noqa: SLF001
         restarted.close()
+
+
+def test_run_inspection_client_config_is_protected_exact_and_path_bound(
+    tmp_path: Path,
+) -> None:
+    source = _write_protected(
+        tmp_path / "inspection.yaml",
+        {
+            "schema_version": 1,
+            "kind": "loom.run-inspection-client",
+            "url": "https://coordinator.example.test:8443",
+            "server_ca_path": "ca.pem",
+            "certificate_path": "query.pem",
+            "private_key_path": "query.key",
+        },
+    )
+    config = load_run_inspection_client_config(source)
+    assert config.client.url == "https://coordinator.example.test:8443"
+    assert config.client.server_ca_path == tmp_path / "ca.pem"
+    source.chmod(0o644)
+    with pytest.raises(QueueConfigError, match="owner-protected"):
+        load_run_inspection_client_config(source)
 
 
 def _coordinator_config(tmp_path: Path) -> Path:

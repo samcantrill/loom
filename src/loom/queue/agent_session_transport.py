@@ -48,6 +48,8 @@ from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.stores.atomic import atomic_write_bytes
+from loom.pipeline.stores.errors import InvalidRunURIError
+from loom.pipeline.stores.run_uri import validate_run_uri
 from loom.scheduling import CapacityAtom
 
 from .agent_sessions import (
@@ -97,6 +99,7 @@ from ._agent_process_supervisor import (
 )
 from .errors import QueueConflictError, QueueError, QueueServiceError
 from .local_daemon import (
+    AdmissionNotFoundError,
     CoordinatorSchedulingReload,
     LocalDaemon,
     LocalDaemonAdmissionRequest,
@@ -109,6 +112,7 @@ from .local_daemon import (
 
 
 _MAX_BODY_BYTES = 65_536
+_MAX_QUERY_RESPONSE_BYTES = 1_048_576
 _MAX_JSON_DEPTH = 8
 _MAX_JSON_COLLECTION = 64
 _HTTP_TIMEOUT_SECONDS = 10
@@ -145,6 +149,15 @@ def _supervisor_containment_evidence(
 
 class _IndeterminateAgentProtocolError(QueueServiceError):
     """The request may have mutated its durable owner before transport failed."""
+
+
+class _RunInspectionHttpError(QueueServiceError):
+    """One safe query failure with its fixed HTTP status."""
+
+    def __init__(self, code: str, status: int) -> None:
+        super().__init__("run inspection request was rejected")
+        self.code = code
+        self.status = status
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +246,36 @@ class AgentTlsClientConfig:
         ):
             raise QueueServiceError(
                 "agent deployment configuration fingerprint is invalid"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class RunInspectionTlsClientConfig:
+    """One protected mTLS identity for the read-only inspection operation."""
+
+    url: str
+    server_ca_path: Path
+    certificate_path: Path
+    private_key_path: Path
+
+    def __post_init__(self) -> None:
+        parsed = urlsplit(self.url)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise QueueServiceError("run inspection TLS URL is invalid") from exc
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or (port is not None and not 1 <= port <= 65535)
+            or parsed.path not in ("", "/")
+            or parsed.username is not None
+            or parsed.password is not None
+            or bool(parsed.query)
+            or bool(parsed.fragment)
+        ):
+            raise QueueServiceError(
+                "run inspection TLS URL must be one HTTPS service identity"
             )
 
 
@@ -1383,9 +1426,16 @@ def _canonical_digest(value: Mapping[str, PlainData]) -> str:
 class LocalDaemonAgentHttpServer:
     """Loopback/deployment server; it exposes no inbound agent listener."""
 
-    def __init__(self, daemon: LocalDaemon, config: AgentTlsServerConfig) -> None:
+    def __init__(
+        self,
+        daemon: LocalDaemon,
+        config: AgentTlsServerConfig,
+        *,
+        inspect_run: Callable[[str], Mapping[str, PlainData]] | None = None,
+    ) -> None:
         self._daemon = daemon
         self._config = config
+        self._inspect_run = inspect_run
         self._server: _MutualTlsHttpServer | None = None
         self._thread: Thread | None = None
 
@@ -1410,6 +1460,7 @@ class LocalDaemonAgentHttpServer:
             context,
             self._daemon,
             dict(self._config.credential_fingerprints),
+            self._inspect_run,
         )
         self._server = server
         self._thread = Thread(
@@ -1426,6 +1477,142 @@ class LocalDaemonAgentHttpServer:
         if self._thread is not None:
             self._thread.join(timeout=2)
         self._thread = None
+
+
+class RunInspectionHttpClient:
+    """No-redirect HTTPS client for one configured read-only query identity."""
+
+    def __init__(self, config: RunInspectionTlsClientConfig) -> None:
+        self._config = config
+
+    def inspect_run(self, run_uri: str) -> Mapping[str, PlainData]:
+        """Return the exact server result envelope or fail closed on transport."""
+
+        parsed = urlsplit(self._config.url)
+        assert parsed.hostname is not None
+        body = json.dumps(
+            {"run_uri": run_uri}, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        if len(body) > _MAX_BODY_BYTES:
+            return _run_inspection_failure("invalid_request")
+        connection: http.client.HTTPSConnection | None = None
+        try:
+            context = ssl.create_default_context(cafile=self._config.server_ca_path)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(
+                self._config.certificate_path, self._config.private_key_path
+            )
+            connection = http.client.HTTPSConnection(
+                parsed.hostname,
+                parsed.port or 443,
+                context=context,
+                timeout=_HTTP_TIMEOUT_SECONDS,
+            )
+            connection.request(
+                "POST",
+                "/v1/query/handshake",
+                body=b"{}",
+                headers={"Content-Type": "application/json"},
+            )
+            handshake = connection.getresponse()
+            handshake_raw = handshake.read(_MAX_BODY_BYTES + 1)
+            if len(handshake_raw) > _MAX_BODY_BYTES:
+                return _run_inspection_failure("unavailable")
+            if handshake.getheader("Content-Type") != "application/json":
+                return _run_inspection_failure("unavailable")
+            try:
+                handshake_value = _decode(handshake_raw)
+                _exact(handshake_value, {"ok", "result"})
+            except QueueError:
+                return _run_inspection_failure("unavailable")
+            handshake_result = handshake_value.get("result")
+            if _is_run_inspection_failure(handshake_result):
+                if handshake.status != _run_inspection_http_status(
+                    cast(Mapping[str, object], handshake_result)
+                ):
+                    return _run_inspection_failure("unavailable")
+                return freeze_plain_data(
+                    handshake_result, path="run inspection handshake failure"
+                )
+            capabilities = (
+                handshake_result.get("capabilities")
+                if isinstance(handshake_result, Mapping)
+                else None
+            )
+            if (
+                handshake.status != 200
+                or handshake_value.get("ok") is not True
+                or not isinstance(capabilities, Sequence)
+                or isinstance(capabilities, (str, bytes))
+                or "run-inspection-v1" not in capabilities
+            ):
+                return _run_inspection_failure("unavailable")
+            connection.request(
+                "POST",
+                "/v1/query/inspect_run",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            raw = response.read(_MAX_QUERY_RESPONSE_BYTES + 1)
+        except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+            del exc
+            return _run_inspection_failure("unavailable")
+        finally:
+            if connection is not None:
+                connection.close()
+        if len(raw) > _MAX_QUERY_RESPONSE_BYTES:
+            return _run_inspection_failure("unavailable")
+        if response.getheader("Content-Type") != "application/json":
+            return _run_inspection_failure("unavailable")
+        try:
+            payload = _decode_run_inspection_response(raw)
+            _exact(payload, {"ok", "result"})
+        except QueueError:
+            return _run_inspection_failure("unavailable")
+        if payload.get("ok") is not True:
+            return _run_inspection_failure("unavailable")
+        result = payload.get("result")
+        if not isinstance(result, Mapping):
+            return _run_inspection_failure("unavailable")
+        expected_status = _run_inspection_http_status(result)
+        if response.status != expected_status:
+            return _run_inspection_failure("unavailable")
+        return cast(
+            Mapping[str, PlainData],
+            thaw_plain_data(result, path="run inspection HTTP response"),
+        )
+
+
+def _run_inspection_failure(code: str) -> Mapping[str, PlainData]:
+    """Build the closed Phase 1 error shape without importing diagnostics."""
+
+    return freeze_plain_data(
+        {"schema_version": 1, "code": code}, path="run inspection failure"
+    )
+
+
+def _is_run_inspection_failure(value: object) -> bool:
+    code = value.get("code") if isinstance(value, Mapping) else None
+    return (
+        isinstance(value, Mapping)
+        and value.get("schema_version") == 1
+        and isinstance(code, str)
+        and code
+        in {"invalid_request", "not_found", "unauthorized", "unavailable", "internal"}
+        and set(value) == {"schema_version", "code"}
+    )
+
+
+def _run_inspection_http_status(value: Mapping[str, object]) -> int:
+    code = value.get("code")
+    return {
+        "invalid_request": 400,
+        "not_found": 404,
+        "unauthorized": 403,
+        "unavailable": 503,
+        "internal": 503,
+    }.get(code if isinstance(code, str) else "", 200)
 
 
 class LocalDaemonAgentHttpClient:
@@ -3615,10 +3802,12 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         context: ssl.SSLContext,
         daemon: LocalDaemon,
         credential_fingerprints: Mapping[str, str],
+        inspect_run: Callable[[str], Mapping[str, PlainData]] | None,
     ) -> None:
         self._context = context
         self.daemon_owner = daemon
         self.credential_fingerprints = credential_fingerprints
+        self.inspect_run = inspect_run
         super().__init__(address, _Handler)
 
     def get_request(self) -> tuple[ssl.SSLSocket, tuple[str, int]]:
@@ -3641,6 +3830,8 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
     def do_POST(self) -> None:  # noqa: N802
+        query_path = self.path.startswith("/v1/query/")
+        query_credential = False
         try:
             certificate = cast(ssl.SSLSocket, self.connection).getpeercert(
                 binary_form=True
@@ -3664,6 +3855,7 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 principal_id = slurm_profile.bootstrap_principal_id
                 mapped_role = LocalDaemonRole.SLURM_BOOTSTRAP.value
+            query_credential = mapped_role == LocalDaemonRole.QUERY.value
             if self.headers.get("Content-Type") != "application/json":
                 raise QueueServiceError("agent protocol content type is invalid")
             lengths = self.headers.get_all("Content-Length", [])
@@ -3723,8 +3915,14 @@ class _Handler(BaseHTTPRequestHandler):
                     role_name,
                     operation,
                     payload,
+                    inspect_run=self._daemon_server.inspect_run,
                 )
-            self._reply(200, {"ok": True, "result": result})
+            if role_name == LocalDaemonRole.QUERY.value:
+                self._reply_query_result(result)
+            else:
+                self._reply(200, {"ok": True, "result": result})
+        except _RunInspectionHttpError as exc:
+            self._reply_query_failure(exc.code, exc.status)
         except AgentPollActiveError:
             self._reply(409, {"ok": False, "error": "agent_poll_active"})
         except AgentStalePollError:
@@ -3739,9 +3937,36 @@ class _Handler(BaseHTTPRequestHandler):
         except QueueConflictError:
             self._reply(409, {"ok": False, "error": "agent_protocol_conflict"})
         except QueueError:
-            self._reply(403, {"ok": False, "error": "agent_protocol_rejected"})
+            if query_path or query_credential:
+                code = "invalid_request" if query_credential else "unauthorized"
+                self._reply_query_failure(code, 400 if query_credential else 403)
+            else:
+                self._reply(403, {"ok": False, "error": "agent_protocol_rejected"})
         except Exception:
-            self._reply(500, {"ok": False, "error": "agent_protocol_indeterminate"})
+            if query_path:
+                self._reply_query_failure("unavailable", 503)
+            else:
+                self._reply(500, {"ok": False, "error": "agent_protocol_indeterminate"})
+
+    def _reply_query_result(self, result: Mapping[str, PlainData]) -> None:
+        status = _run_inspection_http_status(result)
+        payload = {"ok": True, "result": result}
+        encoded = json.dumps(
+            thaw_plain_data(payload, path="run inspection HTTP response"),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        if len(encoded) > _MAX_QUERY_RESPONSE_BYTES:
+            self._reply_query_failure("unavailable", 503)
+            return
+        self._reply(status, payload)
+
+    def _reply_query_failure(self, code: str, status: int) -> None:
+        self._reply(
+            status,
+            {"ok": True, "result": {"schema_version": 1, "code": code}},
+        )
 
     def _reply(self, status: int, payload: Mapping[str, object]) -> None:
         body = json.dumps(
@@ -4014,6 +4239,8 @@ def _dispatch_application(
     role: str,
     operation: str,
     value: Mapping[str, object],
+    *,
+    inspect_run: Callable[[str], Mapping[str, PlainData]] | None = None,
 ) -> Mapping[str, PlainData]:
     if operation == "handshake":
         _exact(value, set())
@@ -4023,7 +4250,11 @@ def _dispatch_application(
         return freeze_plain_data(
             {
                 "protocol_version": "1",
-                "capabilities": ["authenticated-application-v1"],
+                "capabilities": (
+                    ["authenticated-application-v1", "run-inspection-v1"]
+                    if role == LocalDaemonRole.QUERY.value and inspect_run is not None
+                    else ["authenticated-application-v1"]
+                ),
                 "coordinator_id": daemon._require_started(),
                 "coordinator_epoch": daemon._epoch or "",
                 "role": role,
@@ -4043,6 +4274,38 @@ def _dispatch_application(
             if not isinstance(request, Mapping):
                 raise QueueServiceError("client admission request is invalid")
             return view.submit(LocalDaemonAdmissionRequest.from_dict(request)).to_dict()
+    elif role == LocalDaemonRole.QUERY.value:
+        if operation != "inspect_run" or inspect_run is None:
+            raise _RunInspectionHttpError("invalid_request", 400)
+        try:
+            _exact(value, {"run_uri"})
+            run_uri = _string(value, "run_uri")
+        except QueueError as exc:
+            raise _RunInspectionHttpError("invalid_request", 400) from exc
+        try:
+            run_uri_bytes = run_uri.encode("utf-8")
+        except UnicodeEncodeError:
+            return {"schema_version": 1, "code": "invalid_request"}
+        if len(run_uri_bytes) > 4 * 1024:
+            return {"schema_version": 1, "code": "invalid_request"}
+        try:
+            run_uri = validate_run_uri(run_uri)
+        except (InvalidRunURIError, OSError, ValueError):
+            return {"schema_version": 1, "code": "invalid_request"}
+        try:
+            daemon._require_view_role(principal, LocalDaemonRole.QUERY)
+        except QueueError as exc:
+            raise _RunInspectionHttpError("unauthorized", 403) from exc
+        try:
+            daemon.admission_for_run_uri(run_uri)
+        except (AdmissionNotFoundError, FileNotFoundError, LookupError):
+            return {"schema_version": 1, "code": "not_found"}
+        except Exception:
+            return {"schema_version": 1, "code": "unavailable"}
+        try:
+            return inspect_run(run_uri)
+        except Exception:
+            return {"schema_version": 1, "code": "unavailable"}
     elif role == "operator":
         view = daemon.operator_view(principal)
         if operation == "status":
@@ -4401,21 +4664,40 @@ def _decode(raw: bytes) -> Mapping[str, object]:
     return value
 
 
-def _bounded_json(value: object, *, depth: int) -> None:
+def _decode_run_inspection_response(raw: bytes) -> Mapping[str, object]:
+    """Decode the bounded Phase 1 result envelope without widening agent input."""
+
+    if len(raw) > _MAX_QUERY_RESPONSE_BYTES:
+        raise QueueServiceError("run inspection response is too large")
+    try:
+        value = json.loads(
+            raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise QueueServiceError("run inspection response JSON is invalid") from exc
+    if not isinstance(value, Mapping):
+        raise QueueServiceError("run inspection response is not an object")
+    _bounded_json(value, depth=0, max_collection=256)
+    return value
+
+
+def _bounded_json(
+    value: object, *, depth: int, max_collection: int = _MAX_JSON_COLLECTION
+) -> None:
     if depth > _MAX_JSON_DEPTH:
         raise QueueServiceError("agent protocol JSON is too deeply nested")
     if isinstance(value, Mapping):
-        if len(value) > _MAX_JSON_COLLECTION:
+        if len(value) > max_collection:
             raise QueueServiceError("agent protocol object is too large")
         for key, item in value.items():
             if not isinstance(key, str) or not key or len(key) > 160:
                 raise QueueServiceError("agent protocol object key is invalid")
-            _bounded_json(item, depth=depth + 1)
+            _bounded_json(item, depth=depth + 1, max_collection=max_collection)
     elif isinstance(value, list):
-        if len(value) > _MAX_JSON_COLLECTION:
+        if len(value) > max_collection:
             raise QueueServiceError("agent protocol collection is too large")
         for item in value:
-            _bounded_json(item, depth=depth + 1)
+            _bounded_json(item, depth=depth + 1, max_collection=max_collection)
     elif value is not None and not isinstance(value, (str, int, bool)):
         raise QueueServiceError("agent protocol JSON value is invalid")
 
@@ -4550,4 +4832,6 @@ __all__ = [
     "AgentTlsServerConfig",
     "LocalDaemonAgentHttpClient",
     "LocalDaemonAgentHttpServer",
+    "RunInspectionHttpClient",
+    "RunInspectionTlsClientConfig",
 ]

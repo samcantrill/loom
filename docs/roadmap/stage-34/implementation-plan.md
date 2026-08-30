@@ -5,7 +5,7 @@ Roadmap stage: 34
 Planning document: docs/roadmap/stage-34/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 2 `pending`
+Current phase: Phase 2 `approved`
 Blockers: none; Stage 32 replacement Phase 3 is remotely merged
 Worktree root: `/home/can134/work/active/loom-worktrees`
 
@@ -57,7 +57,7 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
 | Phase | Slug | Status | Phase plan | Branch | PR | Ownership | Goal |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | singular-run-inspection-core | merged | docs/roadmap/stage-34/phases/singular-run-inspection-core.md | agent/stage-34-p1-singular-run-inspection-core | [#263](https://github.com/samcantrill/loom/pull/263) | diagnostics model/projection, targeted owner reads, Unix operation, direct/Unix CLI/API and tests | Deliver safe singular-run inspection locally and through the owner socket. |
-| 2 | authenticated-run-inspection | pending | docs/roadmap/stage-34/phases/authenticated-run-inspection.md | agent/stage-34-p2-authenticated-run-inspection | pending | query policy/HTTP operation and client config, remote CLI, security/parity tests and final docs | Deliver the same model through least-privilege mTLS inspection. |
+| 2 | authenticated-run-inspection | approved | docs/roadmap/stage-34/phases/authenticated-run-inspection.md | agent/stage-34-p2-authenticated-run-inspection | [#264](https://github.com/samcantrill/loom/pull/264) | query policy/HTTP operation and client config, remote CLI, security/parity tests and final docs | Deliver the same model through least-privilege mTLS inspection. |
 
 ## Quality Gate
 
@@ -83,4 +83,4 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
 | Phase | PR and merge | Implementation and validation | Residual risk | Cleanup |
 | --- | --- | --- | --- | --- |
 | 1 | [#263](https://github.com/samcantrill/loom/pull/263) squash-merged as `1f3f7fa` | Implementation and fresh repository validation passed; exact Stage 32 references, bounded projection, and direct/Unix parity are covered. | No known blocker; very large runs intentionally truncate without paging. | Worktree and local/remote phase branches removed. |
-| 2 | pending | pending | Local TLS tests cannot certify site certificate issuance or path reachability. | pending |
+| 2 | [#264](https://github.com/samcantrill/loom/pull/264) open and approved; expanded independent review passed after one localized parity correction | Implementation, targeted trust tests, fresh `make validate-pr`, and a 2,891-pass test summary passed at `ab9c9d5`. | No known blocker; local TLS tests cannot certify site certificate issuance or path reachability. | pending |

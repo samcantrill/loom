@@ -239,6 +239,17 @@ def _policy(
     )
 
 
+def test_query_transport_principal_is_role_exclusive() -> None:
+    policy = TransportPrincipalPolicy("query-credential", "query", "query")
+    assert policy.actions == ()
+    assert policy.agent_ids == ()
+    assert policy.pools == ()
+    with pytest.raises(QueueServiceError, match="cannot define operator scopes"):
+        TransportPrincipalPolicy(
+            "query-credential", "query", "query", actions=("drain",)
+        )
+
+
 def _config(
     tmp_path: Path, policy: AgentPolicyConfig | None = None
 ) -> LocalDaemonConfig:

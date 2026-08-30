@@ -24,6 +24,7 @@ from .agent_session_transport import (
     AgentTlsClientConfig,
     AgentTlsServerConfig,
     LocalDaemonAgentHttpClient,
+    RunInspectionTlsClientConfig,
     _read_remote_agent_root_id,
     _resident_provider_descriptors,
 )
@@ -69,6 +70,14 @@ class OutboundAgentServiceConfig:
     client: AgentTlsClientConfig
     registration: OutboundAgentRegistrationConfig
     reconnect_seconds: float
+    source_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class RunInspectionClientConfig:
+    """Protected configuration for the standalone read-only inspection client."""
+
+    client: RunInspectionTlsClientConfig
     source_path: Path
 
 
@@ -197,6 +206,35 @@ def load_outbound_agent_service_config(
         client,
         registration,
         _positive_number(payload, "reconnect_seconds"),
+        source,
+    )
+
+
+def load_run_inspection_client_config(path: str | Path) -> RunInspectionClientConfig:
+    """Load the strict protected v1 remote inspection client configuration."""
+
+    source, payload, _fingerprint = _load_protected_config(path)
+    _exact(
+        payload,
+        {
+            "schema_version",
+            "kind",
+            "url",
+            "server_ca_path",
+            "certificate_path",
+            "private_key_path",
+        },
+        "run inspection client config",
+    )
+    _header(payload, "loom.run-inspection-client")
+    base = source.parent
+    return RunInspectionClientConfig(
+        RunInspectionTlsClientConfig(
+            url=_string(payload, "url"),
+            server_ca_path=_path(payload, "server_ca_path", base),
+            certificate_path=_path(payload, "certificate_path", base),
+            private_key_path=_path(payload, "private_key_path", base),
+        ),
         source,
     )
 
@@ -589,7 +627,9 @@ __all__ = [
     "DEPLOYMENT_CONFIG_SCHEMA_VERSION",
     "OutboundAgentRegistrationConfig",
     "OutboundAgentServiceConfig",
+    "RunInspectionClientConfig",
     "load_coordinator_service_config",
     "load_outbound_agent_service_config",
+    "load_run_inspection_client_config",
     "run_outbound_agent_service",
 ]

@@ -52,9 +52,30 @@ sections in this document distinguish current support from future shape.
 V34 adds `loom inspect-run RUN_URI --direct` for bounded metadata-only
 inspection of one canonical local run URI. `--endpoint SOCKET` instead selects
 the owner-only local daemon socket and never falls back to a direct read.
-`--queue-config CONFIG` is direct-only. JSON output uses the separate
+`--remote-config CONFIG` selects the authenticated existing coordinator over
+mTLS; it is mutually exclusive with the local selectors and also never falls
+back. Its owner-protected `loom.run-inspection-client` v1 YAML names only the
+HTTPS service URL and CA, certificate, and private-key paths. Relative paths
+resolve beside that file; key material never appears in command arguments or
+output. `--queue-config CONFIG` is direct-only. JSON output uses the separate
 `loom.cli.inspect_run.v1` envelope; locations report recorded availability but
 the command never reads artifact or log bytes.
+
+For a managed local deployment, use `--endpoint` on the coordinator host or
+`--remote-config` from a host that can reach that coordinator and its TLS name.
+The remote credential must be a distinct protected `query` certificate mapped
+by the coordinator's current policy; `client`, `operator`, and `agent`
+credentials cannot inspect runs, and a query credential cannot mutate. The
+observation is a non-atomic owner join: `as_of`, per-axis revisions, and
+freshness describe what was observed, not one global instant. A returned
+`file://` location can be coordinator-local, shared-but-unknown, or external;
+it is not a content-transfer capability.
+
+For a service-less SLURM deployment, run the direct or owner-only command where
+the run and its configured queue are available, optionally through site-owned
+SSH. Loom supplies no SSH client, certificate issuance, endpoint discovery, or
+artifact/log relay. The inspection command returns metadata and locations only;
+use site transfer tooling or an accessible shared mount for content.
 
 The v2 CLI should answer:
 

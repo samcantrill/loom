@@ -405,7 +405,7 @@ class AgentPrincipalPolicy:
 
 @dataclass(frozen=True, slots=True)
 class TransportPrincipalPolicy:
-    """Protected client/operator credential mapping for the HTTP adapter."""
+    """Protected application credential mapping for the HTTP adapter."""
 
     credential_id: str
     principal_id: str
@@ -417,7 +417,7 @@ class TransportPrincipalPolicy:
     def __post_init__(self) -> None:
         _identifier(self.credential_id, "credential_id")
         _identifier(self.principal_id, "principal_id")
-        if self.role not in {"client", "operator"}:
+        if self.role not in {"client", "operator", "query"}:
             raise QueueServiceError("transport principal role is unsupported")
         actions = tuple(self.actions)
         agent_ids = tuple(self.agent_ids)
@@ -441,7 +441,9 @@ class TransportPrincipalPolicy:
             _identifiers(agent_ids, "operator agent targets")
             _identifiers(pools, "operator pool targets")
         elif actions or agent_ids or pools:
-            raise QueueServiceError("client principals cannot define operator scopes")
+            raise QueueServiceError(
+                "client and query principals cannot define operator scopes"
+            )
         object.__setattr__(self, "actions", tuple(sorted(set(actions))))
         object.__setattr__(self, "agent_ids", tuple(sorted(set(agent_ids))))
         object.__setattr__(self, "pools", tuple(sorted(set(pools))))
