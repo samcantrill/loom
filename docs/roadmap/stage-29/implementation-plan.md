@@ -1,12 +1,12 @@
 # Roadmap Stage 29 Implementation Plan
 
 Status: lifecycle, composition, and management correction approved; Phase 13
-is blocked evidence, Phases 13A and 14 are merged, and Phase 15 is pending
+is blocked evidence, Phases 13A and 14 are merged, and Phase 15 is in progress
 Roadmap stage: 29
 Planning document: `docs/roadmap/stage-29/planning.md`
 Artifact layout: `manifest-and-phase-plans-v1`
 Target branch: `develop`
-Current phase: Phase 15 `pending`
+Current phase: Phase 15 `in_progress`
 Blockers: none at the stage level. Phase 13 candidate `748f938` passed its
 focused and full gates, but required review reproduced two expected startup-
 rejection supervisor leaks after correction 3/3. Fresh Phase 13A selectively
@@ -715,7 +715,7 @@ No phase may claim exactly-once user effects. The fixed cross-phase trace is:
 | 13 | `lifecycle-recovery-correctness` | blocked | `docs/roadmap/stage-29/phases/lifecycle-recovery-correctness.md` | `agent/stage-29-p13-lifecycle-recovery-correctness` | No PR opened | Validated sequenced renewal, continuous exact-assignment reconciliation, authoritative definite-SLURM-rejection order, and process-free/quiescent supervisor lifecycle candidate | Required review reproduced a newly started empty supervisor surviving changed local scheduling configuration and mismatched outbound deployment binding rejection after correction 3/3; preserve `824e935` read-only. |
 | 13A | `lifecycle-startup-failure-closure` | merged | `docs/roadmap/stage-29/phases/lifecycle-startup-failure-closure.md` | `agent/stage-29-p13a-lifecycle-startup-failure-closure` | [#262](https://github.com/samcantrill/loom/pull/262) merged | Selective Phase 13 reuse plus pre-start durable validation and ownership-aware cleanup of only a newly created empty supervisor | Required review findings closed at correction 3/3; fresh full validation and the 2,841-pass categorized summary passed; squash-merged as `8ff2d3c`. |
 | 14 | `reload-authority-composition` | merged | `docs/roadmap/stage-29/phases/reload-authority-composition.md` | `agent/stage-29-p14-reload-authority-composition` | [#265](https://github.com/samcantrill/loom/pull/265) merged | Immutable role binding versus reloadable active configuration; production trusted loaders; complete protected scheduling/SLURM/provider/authority composition; injected coordinator-authority factory; reload CLI failure semantics | A protected service config can construct and reload every supported production component, restart from its active revision, and reach authority only through the configured adapter. |
-| 15 | `management-cli-examples` | pending | `docs/roadmap/stage-29/phases/management-cli-examples.md` | `agent/stage-29-p15-management-cli-examples` | pending | Per-admission semantic revisions; bounded concurrent long polls; bounded admission/agent/operation reads and CLI; portable local-owner operator policy; smaller defect fixes; three fully validated journeys | Operators can discover guarded fences and safely control/observe the service while waits are active, and examples truthfully prove every documented public surface without leaked processes. |
+| 15 | `management-cli-examples` | in_progress | `docs/roadmap/stage-29/phases/management-cli-examples.md` | `agent/stage-29-p15-management-cli-examples` | pending | Per-admission semantic revisions; bounded concurrent long polls; bounded admission/agent/operation reads and CLI; portable local-owner operator policy; smaller defect fixes; three fully validated journeys | Operators can discover guarded fences and safely control/observe the service while waits are active, and examples truthfully prove every documented public surface without leaked processes. |
 
 Phase 1 is the pure-kernel/preparation/projection architectural gate: its only
 new authoritative lifecycle operation is idempotent creation of an unassigned

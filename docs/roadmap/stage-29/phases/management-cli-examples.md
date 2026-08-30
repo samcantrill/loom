@@ -2,12 +2,12 @@
 
 ## Metadata
 
-- Status: planned
+- Status: in_progress
 - Roadmap stage and phase: Stage 29, Phase 15
 - Manifest: `docs/roadmap/stage-29/implementation-plan.md`
 - Branch: `agent/stage-29-p15-management-cli-examples`
 - Worktree root and path: `/home/can134/work/active/loom-worktrees/stage-29-p15-management-cli-examples`
-- Base revision: current `origin/develop` after Phase 14 merges
+- Base revision: `c4e3f6c` (`origin/develop` after Phase 14 merge metadata)
 - PR target: `develop`
 - PR title: `Stage 29 phase 15: complete management and examples`
 - Dependencies: remotely merged Phase 14
@@ -180,8 +180,11 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planned at evidence revision `2f8dfd9`
-- Expanded planning: design-safety findings on supervisor epoch references and long-poll saturation were corrected; bounded plan review passed after narrowing Phase 14 CLI failure semantics
+- Manager preparation: complete in the dedicated worktree at base `c4e3f6c`;
+  current source and harness paths remain accurate
+- Expanded planning: no phase-planner pass needed; the approved expanded design-
+  safety and bounded plan-review findings already fixed supervisor epoch
+  references, long-poll saturation, and Phase 14 CLI scope
 - Implementation: pending
 - Refiner: not needed
 - Pre-submit gate: pending
