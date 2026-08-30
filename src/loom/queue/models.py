@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import cast
 
 from loom._validation import require_schema_version
+from loom.fingerprints import hash_mapping, validate_digest
 from loom.serialization import (
     PlainData,
     SchemaVersionError,
@@ -22,7 +23,7 @@ from loom.timestamps import parse_timestamp
 
 from .errors import QueueValidationError
 
-QUEUE_RECORD_SCHEMA_VERSION = 1
+QUEUE_RECORD_SCHEMA_VERSION = 2
 
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 _TERMINAL_ITEM_STATUSES = frozenset(
@@ -52,6 +53,14 @@ class QueueItemStatus(StrEnum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     UNKNOWN = "UNKNOWN"
+
+
+class QueueEnqueueDisposition(StrEnum):
+    """Durable classification of one enqueue request."""
+
+    ENQUEUED = "enqueued"
+    SUBMISSION_REPLAY = "submission_replay"
+    SCIENTIFIC_DUPLICATE = "scientific_duplicate"
 
 
 @dataclass(frozen=True, slots=True)
@@ -455,6 +464,9 @@ class QueueItem:
     dispatch_handle: DispatchHandle | None = None
     cancellation: CancellationRecord | None = None
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    scientific_fingerprint: str | None = None
+    scientific_deduplication_bypassed: bool = False
+    admission_digest: str | None = None
     schema_version: int = QUEUE_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -511,6 +523,26 @@ class QueueItem:
             "metadata",
             _freeze_mapping(self.metadata, "metadata"),
         )
+        if self.scientific_fingerprint is not None:
+            object.__setattr__(
+                self,
+                "scientific_fingerprint",
+                _digest(self.scientific_fingerprint, "scientific_fingerprint"),
+            )
+        if not isinstance(self.scientific_deduplication_bypassed, bool):
+            raise QueueValidationError(
+                "scientific_deduplication_bypassed must be a boolean"
+            )
+        expected_admission_digest = _admission_digest(self)
+        if self.admission_digest is None:
+            object.__setattr__(self, "admission_digest", expected_admission_digest)
+        else:
+            admission_digest = _digest(self.admission_digest, "admission_digest")
+            if admission_digest != expected_admission_digest:
+                raise QueueValidationError(
+                    "admission_digest must match immutable enqueue content"
+                )
+            object.__setattr__(self, "admission_digest", admission_digest)
         _validate_schema(self.schema_version)
         _validate_item_state(self)
 
@@ -539,6 +571,9 @@ class QueueItem:
             if self.cancellation is None
             else self.cancellation.to_dict(),
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
+            "scientific_fingerprint": self.scientific_fingerprint,
+            "scientific_deduplication_bypassed": self.scientific_deduplication_bypassed,
+            "admission_digest": self.admission_digest,
         }
 
     @classmethod
@@ -561,8 +596,15 @@ class QueueItem:
                 "dispatch_handle",
                 "cancellation",
                 "metadata",
+                "scientific_fingerprint",
+                "scientific_deduplication_bypassed",
+                "admission_digest",
             },
         )
+        if payload["admission_digest"] is None:
+            raise QueueValidationError(
+                "QueueItem.admission_digest must be non-null and supported"
+            )
         return cls(
             queue_item_id=cast(str, payload["queue_item_id"]),
             queue_name=cast(str, payload["queue_name"]),
@@ -584,6 +626,81 @@ class QueueItem:
             if payload["cancellation"] is None
             else CancellationRecord.from_dict(payload["cancellation"]),
             metadata=cast(Mapping[str, PlainData], payload["metadata"]),
+            scientific_fingerprint=cast(str | None, payload["scientific_fingerprint"]),
+            scientific_deduplication_bypassed=cast(
+                bool, payload["scientific_deduplication_bypassed"]
+            ),
+            admission_digest=cast(str, payload["admission_digest"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class QueueEnqueueReceipt:
+    """The repository-owned classification for one enqueue request."""
+
+    disposition: QueueEnqueueDisposition | str
+    requested_queue_item_id: str
+    canonical_queue_item_id: str
+    queue_item: QueueItem
+    accepted_at: str
+    schema_version: int = QUEUE_RECORD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "disposition", QueueEnqueueDisposition(self.disposition)
+        )
+        object.__setattr__(
+            self,
+            "requested_queue_item_id",
+            validate_queue_id(self.requested_queue_item_id, "requested_queue_item_id"),
+        )
+        object.__setattr__(
+            self,
+            "canonical_queue_item_id",
+            validate_queue_id(self.canonical_queue_item_id, "canonical_queue_item_id"),
+        )
+        if not isinstance(self.queue_item, QueueItem):
+            raise QueueValidationError("queue_item must be a QueueItem")
+        if self.canonical_queue_item_id != self.queue_item.queue_item_id:
+            raise QueueValidationError(
+                "canonical_queue_item_id must match queue_item.queue_item_id"
+            )
+        object.__setattr__(
+            self, "accepted_at", _timestamp(self.accepted_at, "accepted_at")
+        )
+        if self.accepted_at != self.queue_item.enqueued_at:
+            raise QueueValidationError("accepted_at must match queue_item.enqueued_at")
+        _validate_schema(self.schema_version)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "disposition": QueueEnqueueDisposition(self.disposition).value,
+            "requested_queue_item_id": self.requested_queue_item_id,
+            "canonical_queue_item_id": self.canonical_queue_item_id,
+            "queue_item": self.queue_item.to_dict(),
+            "accepted_at": self.accepted_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "QueueEnqueueReceipt":
+        payload = _load_record(
+            data,
+            "QueueEnqueueReceipt",
+            required={
+                "disposition",
+                "requested_queue_item_id",
+                "canonical_queue_item_id",
+                "queue_item",
+                "accepted_at",
+            },
+        )
+        return cls(
+            disposition=cast(str, payload["disposition"]),
+            requested_queue_item_id=cast(str, payload["requested_queue_item_id"]),
+            canonical_queue_item_id=cast(str, payload["canonical_queue_item_id"]),
+            queue_item=QueueItem.from_dict(payload["queue_item"]),
+            accepted_at=cast(str, payload["accepted_at"]),
         )
 
 
@@ -846,6 +963,33 @@ def _timestamp(value: object, field_name: str) -> str:
     return text
 
 
+def _digest(value: object, field_name: str) -> str:
+    try:
+        return validate_digest(value)
+    except (
+        Exception
+    ) as exc:  # fingerprint errors intentionally become queue validation.
+        raise QueueValidationError(f"{field_name} must be a supported digest") from exc
+
+
+def _admission_digest(item: QueueItem) -> str:
+    """Hash the immutable normalized enqueue intent, never lifecycle facts."""
+
+    return hash_mapping(
+        {
+            "queue_item_id": item.queue_item_id,
+            "queue_name": item.queue_name,
+            "pool_name": item.pool_name,
+            "run_uri": item.run_uri,
+            "run_intent": item.run_intent.to_dict(),
+            "launch_contract": item.launch_contract.to_dict(),
+            "metadata": thaw_plain_data(item.metadata, path="metadata"),
+            "scientific_fingerprint": item.scientific_fingerprint,
+            "scientific_deduplication_bypassed": item.scientific_deduplication_bypassed,
+        }
+    )
+
+
 __all__ = [
     "QUEUE_RECORD_SCHEMA_VERSION",
     "CancellationRecord",
@@ -854,6 +998,8 @@ __all__ = [
     "QueueAuditEvent",
     "QueueClaim",
     "QueueDefinition",
+    "QueueEnqueueDisposition",
+    "QueueEnqueueReceipt",
     "QueueItem",
     "QueueItemStatus",
     "QueuePool",

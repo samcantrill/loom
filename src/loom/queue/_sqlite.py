@@ -17,14 +17,16 @@ from .models import (
     DispatchHandle,
     QueueAuditEvent,
     QueueClaim,
+    QueueEnqueueDisposition,
+    QueueEnqueueReceipt,
     QueueItem,
     QueueItemStatus,
     QueueRecoveryRecord,
     validate_queue_id,
 )
-from .repository import QueuePoolSnapshot
+from .repository import QueueItemPage, QueuePoolSnapshot
 
-QUEUE_DB_SCHEMA_VERSION = 1
+QUEUE_DB_SCHEMA_VERSION = 2
 _BUSY_TIMEOUT_MS = 5000
 _ACTIVE_RECOVERY_STATUSES = (
     QueueItemStatus.CLAIMED,
@@ -55,21 +57,55 @@ class SQLiteQueueRepository:
             _ensure_schema(conn)
 
     def enqueue(self, item: QueueItem) -> QueueItem:
+        """Compatibility operation returning the canonical queue item only."""
+
+        return self.admit(item).queue_item
+
+    def admit(self, item: QueueItem) -> QueueEnqueueReceipt:
+        """Classify one immutable enqueue in one SQLite transaction."""
+
         if QueueItemStatus(item.status) is not QueueItemStatus.QUEUED:
             raise QueueConflictError("only QUEUED items can be enqueued")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
                 "SELECT item_json FROM queue_items WHERE queue_item_id = ?",
                 (item.queue_item_id,),
             ).fetchone()
-            item_json = _item_json(item)
             if existing is not None:
-                if cast(str, existing["item_json"]) == item_json:
-                    return item
+                existing_item = _item_from_json(cast(str, existing["item_json"]))
+                if existing_item.admission_digest == item.admission_digest:
+                    return _receipt(
+                        QueueEnqueueDisposition.SUBMISSION_REPLAY,
+                        requested_queue_item_id=item.queue_item_id,
+                        queue_item=existing_item,
+                    )
                 raise QueueConflictError(
                     f"queue item already exists: {item.queue_item_id}"
                 )
-            _insert_item(conn, item, item_json=item_json)
+            if (
+                item.scientific_fingerprint is not None
+                and not item.scientific_deduplication_bypassed
+            ):
+                scientific_match = conn.execute(
+                    """
+                    SELECT item_json
+                    FROM queue_items
+                    WHERE scientific_fingerprint = ?
+                      AND scientific_deduplication_bypassed = 0
+                    """,
+                    (item.scientific_fingerprint,),
+                ).fetchone()
+                if scientific_match is not None:
+                    canonical_item = _item_from_json(
+                        cast(str, scientific_match["item_json"])
+                    )
+                    return _receipt(
+                        QueueEnqueueDisposition.SCIENTIFIC_DUPLICATE,
+                        requested_queue_item_id=item.queue_item_id,
+                        queue_item=canonical_item,
+                    )
+            _insert_item(conn, item)
             _append_audit_event(
                 conn,
                 queue_item_id=item.queue_item_id,
@@ -82,7 +118,11 @@ class SQLiteQueueRepository:
                 },
             )
             conn.commit()
-            return item
+            return _receipt(
+                QueueEnqueueDisposition.ENQUEUED,
+                requested_queue_item_id=item.queue_item_id,
+                queue_item=item,
+            )
 
     def read_item(self, queue_item_id: str) -> QueueItem | None:
         queue_item_id = validate_queue_id(queue_item_id, "queue_item_id")
@@ -118,6 +158,40 @@ class SQLiteQueueRepository:
             pool_name=pool_name,
             items=tuple(_item_from_json(cast(str, row["item_json"])) for row in rows),
         )
+
+    def list_items(self, *, limit: int, cursor: str | None = None) -> QueueItemPage:
+        """Read a bounded FIFO page without routing through status summaries."""
+
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 0 < limit <= 1000
+        ):
+            raise QueueConflictError("list limit must be an integer between 1 and 1000")
+        cursor_parts = _decode_cursor(cursor)
+        query = """
+            SELECT item_json, enqueued_at, queue_item_id
+            FROM queue_items
+        """
+        values: tuple[object, ...] = ()
+        if cursor_parts is not None:
+            query += """
+                WHERE enqueued_at > ?
+                   OR (enqueued_at = ? AND queue_item_id > ?)
+            """
+            values = (cursor_parts[0], cursor_parts[0], cursor_parts[1])
+        query += " ORDER BY enqueued_at, queue_item_id LIMIT ?"
+        with self._connect() as conn:
+            rows = conn.execute(query, (*values, limit + 1)).fetchall()
+        page_rows = rows[:limit]
+        items = tuple(_item_from_json(cast(str, row["item_json"])) for row in page_rows)
+        next_cursor = None
+        if len(rows) > limit and page_rows:
+            last = page_rows[-1]
+            next_cursor = _encode_cursor(
+                cast(str, last["enqueued_at"]), cast(str, last["queue_item_id"])
+            )
+        return QueueItemPage(items=items, next_cursor=next_cursor)
 
     def _read_selection_candidates(
         self, pool_name: str, *, limit: int
@@ -163,7 +237,9 @@ class SQLiteQueueRepository:
             or isinstance(expected_dispatch_attempt, bool)
             or expected_dispatch_attempt <= 0
         ):
-            raise QueueConflictError("expected_dispatch_attempt must be a positive integer")
+            raise QueueConflictError(
+                "expected_dispatch_attempt must be a positive integer"
+            )
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -485,6 +561,9 @@ def _create_schema(conn: Any) -> None:
             dispatch_attempt INTEGER NOT NULL,
             enqueued_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            admission_digest TEXT NOT NULL,
+            scientific_fingerprint TEXT,
+            scientific_deduplication_bypassed INTEGER NOT NULL,
             item_json TEXT NOT NULL
         )
         """
@@ -493,6 +572,20 @@ def _create_schema(conn: Any) -> None:
         """
         CREATE INDEX IF NOT EXISTS queue_items_fifo_idx
         ON queue_items(pool_name, status, enqueued_at, queue_item_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS queue_items_listing_idx
+        ON queue_items(enqueued_at, queue_item_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS queue_items_scientific_identity_idx
+        ON queue_items(scientific_fingerprint)
+        WHERE scientific_fingerprint IS NOT NULL
+          AND scientific_deduplication_bypassed = 0
         """
     )
     conn.execute(
@@ -523,9 +616,10 @@ def _insert_item(conn: Any, item: QueueItem, *, item_json: str | None = None) ->
         """
         INSERT INTO queue_items (
             queue_item_id, queue_name, pool_name, run_uri, status,
-            dispatch_attempt, enqueued_at, updated_at, item_json
+            dispatch_attempt, enqueued_at, updated_at, admission_digest,
+            scientific_fingerprint, scientific_deduplication_bypassed, item_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         _item_row_values(item, item_json=item_json),
     )
@@ -537,7 +631,9 @@ def _update_item(
     query = """
         UPDATE queue_items
         SET queue_name = ?, pool_name = ?, run_uri = ?, status = ?,
-            dispatch_attempt = ?, enqueued_at = ?, updated_at = ?, item_json = ?
+            dispatch_attempt = ?, enqueued_at = ?, updated_at = ?, admission_digest = ?,
+            scientific_fingerprint = ?, scientific_deduplication_bypassed = ?,
+            item_json = ?
         WHERE queue_item_id = ?
     """
     values: list[object] = [
@@ -548,6 +644,9 @@ def _update_item(
         item.dispatch_attempt,
         item.enqueued_at,
         item.updated_at,
+        item.admission_digest,
+        item.scientific_fingerprint,
+        int(item.scientific_deduplication_bypassed),
         _item_json(item),
         item.queue_item_id,
     ]
@@ -575,6 +674,9 @@ def _item_row_values(
         item.dispatch_attempt,
         item.enqueued_at,
         item.updated_at,
+        item.admission_digest,
+        item.scientific_fingerprint,
+        int(item.scientific_deduplication_bypassed),
         _item_json(item) if item_json is None else item_json,
     )
 
@@ -632,6 +734,40 @@ def _item_json(item: QueueItem) -> str:
 
 def _item_from_json(text: str) -> QueueItem:
     return QueueItem.from_dict(json_loads(text, path="QueueItem"))
+
+
+def _receipt(
+    disposition: QueueEnqueueDisposition,
+    *,
+    requested_queue_item_id: str,
+    queue_item: QueueItem,
+) -> QueueEnqueueReceipt:
+    return QueueEnqueueReceipt(
+        disposition=disposition,
+        requested_queue_item_id=requested_queue_item_id,
+        canonical_queue_item_id=queue_item.queue_item_id,
+        queue_item=queue_item,
+        accepted_at=queue_item.enqueued_at,
+    )
+
+
+def _encode_cursor(enqueued_at: str, queue_item_id: str) -> str:
+    return f"{enqueued_at}|{queue_item_id}"
+
+
+def _decode_cursor(cursor: str | None) -> tuple[str, str] | None:
+    if cursor is None:
+        return None
+    if not isinstance(cursor, str):
+        raise QueueConflictError("list cursor must be a string or None")
+    try:
+        enqueued_at, queue_item_id = cursor.rsplit("|", 1)
+    except ValueError as exc:
+        raise QueueConflictError("list cursor is invalid") from exc
+    if not enqueued_at or not queue_item_id:
+        raise QueueConflictError("list cursor is invalid")
+    validate_queue_id(queue_item_id, "cursor queue_item_id")
+    return enqueued_at, queue_item_id
 
 
 def _audit_event_json(event: QueueAuditEvent) -> str:

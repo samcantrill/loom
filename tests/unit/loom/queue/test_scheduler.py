@@ -50,6 +50,7 @@ def test_selection_evaluator_filters_before_default_or_custom_preference() -> No
         launch_contract=LaunchContract(
             adapter="local", entrypoint="entry", resources={"gpu": 2}
         ),
+        admission_digest=None,
     )
     younger_small = _item("a-needs-one", "gpu", "2020-01-01T00:00:01Z")
     younger_small = replace(
@@ -57,6 +58,7 @@ def test_selection_evaluator_filters_before_default_or_custom_preference() -> No
         launch_contract=LaunchContract(
             adapter="local", entrypoint="entry", resources={"gpu": 1}
         ),
+        admission_digest=None,
     )
     policy = _ChoosingPolicy()
 

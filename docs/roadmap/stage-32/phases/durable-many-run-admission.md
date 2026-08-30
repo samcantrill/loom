@@ -2,19 +2,19 @@
 
 ## Metadata
 
-- Status: planned
+- Status: pr_open
 - Roadmap stage and phase: Stage 32, Phase 1
 - Manifest: docs/roadmap/stage-32/implementation-plan.md
 - Branch: agent/stage-32-p1-durable-many-run-admission
 - Worktree root and path: use the manifest-recorded root;
   `<root>/stage-32-p1-durable-many-run-admission`
-- Base revision: current `origin/develop` after Stage 29 Phase 12 is remotely merged
+- Base revision: `8da9536d351dba46c6737465839a40802f547f5b`
 - PR target: develop
 - PR title: `Stage 32 phase 1: add durable many-run admission`
 - Dependencies: completed Stage 29 production correction and existing whole-run queue service/repository
 - Requirements and decisions: FR-1 through FR-5; FQ-1, FQ-2; DQ-1 through DQ-3
 - Workflow path: expanded; public request/receipt and hard-cut durable queue identity are fixed by the stage plan
-- Blockers: Stage 29 Phase 12 merge
+- Blockers: none
 
 ## Objective And Context
 
@@ -31,7 +31,7 @@
 
 - Relevant files and symbols: `QueueEnqueueRequest`, `QueueService.enqueue`,
   `QueueItem`/`RunIntent`, `SQLiteQueueRepository.enqueue`, schema creation,
-  bounded selection reads, queue client/public exports, and queue CLI JSON
+  bounded selection reads, `QueueClient`, package exports, and queue CLI JSON
   formatting.
 - Existing tests and seams: model serialization, SQLite exact updates/FIFO,
   service lifecycle, concurrent selection, queue status, and deterministic sweep
@@ -89,9 +89,9 @@ Assumptions:
 
 - One queue database is one deduplication scope. Projects sharing it include
   project identity in their normalized scientific content when required.
-- The caller fully consumes `enqueue_many` receipts when it wants all requests
-  admitted; unconsumed iterable suffixes were never accepted.
-- Authored project code and its fingerprint normalization are trusted.
+- Complete admission requires consuming `enqueue_many` receipts; unconsumed
+  suffixes were never accepted.
+- Project fingerprint normalization is trusted.
 
 ## Fixed Contracts And Private Discretion
 
@@ -159,7 +159,7 @@ Assumptions:
 Targeted commands:
 
     uv run pytest tests/unit/loom/queue/test_queue_models.py tests/unit/loom/queue/test_service_client.py
-    uv run pytest tests/integration/queue/test_sqlite_repository.py tests/integration/queue/test_queue_service.py
+    uv run pytest tests/integration/queue/test_sqlite_repository.py tests/integration/queue/test_service_lifecycle.py
     uv run pytest tests/e2e/test_queue_cli.py -k enqueue
     uv run ruff check src/loom/queue tests/unit/loom/queue tests/integration/queue
     uv run pyright src/loom/queue tests/unit/loom/queue tests/integration/queue
@@ -198,25 +198,40 @@ Final commands:
 
 ## Workflow State
 
-- Manager preparation: planning approved; pending Stage 29 Phase 12 merge and
-  exact implementation base recording.
-- Expanded planning: stage-level minimum design is complete; no phase refinement
-  unless implementation exposes a concrete schema/transaction ambiguity.
-- Implementation: pending.
-- Refiner: not needed.
-- Pre-submit gate: pending.
-- Independent review: expected only if the durable identity/index diff departs
-  from the fixed single-transaction design.
-- Blocker corrections: 0/3.
-- PR and merge: pending.
+- Manager preparation: passed; Stage 29 Phase 12 is remotely merged, the branch
+  and dedicated worktree are rebased on current `origin/develop` at `8da9536`,
+  and the executor packet is current.
+- Expanded planning: not needed; the approved stage-level design fixes the
+  schema/transaction contract. Reconsider only for a concrete ambiguity.
+- Implementation: complete; immutable admission records, atomic SQLite
+  classification, streaming receipts, bounded listing, public imports, and the
+  normalized project example are committed on the phase branch.
+- Refiner: complete; correction 2/3 aligned stale queue-record contract
+  expectations and local/Slurm/scheduler reconstruction helpers with the
+  approved v2 hard cut.
+- Pre-submit gate: passed; manager review found no scope drift, second identity
+  owner, migration, unbounded admission, or future-phase work. Fresh
+  `make validate-pr` and `make test-summary` evidence is recorded below.
+- Independent review: not needed; the final repository/index diff retains the
+  approved single-transaction design and manager review found no material
+  residual risk requiring a spawned pass.
+- Blocker corrections: 3/3 — correction 1/3 corrected the approved public
+  `submission_replay` disposition and completed the admission identity matrix;
+  correction 2/3 updated stale v1 queue-record test fixtures and reconstruction
+  helpers to v2, including regenerated admission digests after fixture mutation,
+  without adding a migration or dual read; correction 3/3 rejects null persisted
+  admission digests instead of silently repairing corrupt v2 records.
+- PR and merge: [#257](https://github.com/samcantrill/loom/pull/257) is open;
+  base, head, title, non-draft state, mergeability, scope, body, local evidence,
+  and manager review are verified with no blocker.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | pending |
-| Tests added or updated | pending |
-| Validated revision/tree state and evidence | pending |
-| Validation-relevant changes after evidence | pending |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | pending |
+| Implementation and changed paths | Queue record/schema v2 admission identity, SQLite classification/indexes, service/client streaming and pages, intentional exports, queue docs/example, and phase-scoped tests. |
+| Tests added or updated | Queue model/receipt and null-digest validation; SQLite exact replay, concurrent scientific dedupe, null identity, canonical run-URI retention, force conflict, pages; request digest/force validation; streaming interruption/restart across 2,000 requests; public example E2E. |
+| Validated revision/tree state and evidence | `make validate-pr` passed at `ec31668`: ruff, pyright, 2,615 default tests, 155 config-extra tests with 3 skips, and sdist/wheel build. `make test-summary` passed: package 118, unit 1,855, contract 297, integration 286, E2E 59, config-extra 155; overall 2,770 passed and 3 skipped. The rebase to `8da9536` added only upstream Stage 35 roadmap documents. |
+| Validation-relevant changes after evidence | None. The post-validation rebase added only upstream roadmap documents; this evidence/phase metadata update changes no source, test, dependency, build, or validation configuration. |
+| PR, review, and merge | [#257](https://github.com/samcantrill/loom/pull/257) targets `develop`; manager review passed with no blocker; merge pending final recheck. |
+| Residual risk and cleanup | Manager review passed. Trusted project fingerprints can still over/under-deduplicate and old queue databases are intentionally rejected; worktree/branch cleanup waits for merge. |

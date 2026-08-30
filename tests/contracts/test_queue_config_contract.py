@@ -9,6 +9,7 @@ import pytest
 from loom.queue import (
     QueueConfigError,
     QueueControllerSpec,
+    QUEUE_RECORD_SCHEMA_VERSION,
     normalize_queue_spec,
 )
 
@@ -47,7 +48,7 @@ def test_queue_service_spec_contract_shape() -> None:
         "service": {"db_path": "queue.sqlite"},
         "pools": [
             {
-                "schema_version": 1,
+                "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
                 "pool_name": "gpu-pool",
                 "mode": "managed",
                 "resources": {"gpu": 1},
@@ -56,7 +57,7 @@ def test_queue_service_spec_contract_shape() -> None:
         ],
         "queues": [
             {
-                "schema_version": 1,
+                "schema_version": QUEUE_RECORD_SCHEMA_VERSION,
                 "queue_name": "gpu",
                 "pool_name": "gpu-pool",
                 "metadata": {"priority": "normal"},

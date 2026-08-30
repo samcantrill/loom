@@ -19,6 +19,7 @@ from loom.queue import (
     LocalDaemonRole,
     LocalDaemonSocketServer,
     ResidentWorkerLaunchProfile,
+    SQLiteQueueRepository,
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue.agent_sessions import (
@@ -30,6 +31,39 @@ from loom.queue.agent_sessions import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_queue_enqueue_many_example_uses_public_admission_path(tmp_path: Path) -> None:
+    output_root = tmp_path / "example-output"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(
+                REPO_ROOT
+                / "examples"
+                / "operations"
+                / "durable-many-run-admission"
+                / "run_many.py"
+            ),
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "LOOM_EXAMPLE_OUTPUT_ROOT": str(output_root)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "enqueued: example-0000",
+        "enqueued: example-0001",
+    ]
+    assert [
+        item.queue_item_id
+        for item in SQLiteQueueRepository(output_root / "queue.sqlite")
+        .list_items(limit=10)
+        .items
+    ] == ["example-0000", "example-0001"]
 
 
 def test_queue_cli_preflight_and_start_smoke(tmp_path: Path) -> None:
