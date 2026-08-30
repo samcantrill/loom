@@ -1516,7 +1516,10 @@ class RunInspectionHttpClient:
             handshake_raw = handshake.read(_MAX_BODY_BYTES + 1)
             if len(handshake_raw) > _MAX_BODY_BYTES:
                 return _run_inspection_failure("unavailable")
+            if handshake.getheader("Content-Type") != "application/json":
+                return _run_inspection_failure("unavailable")
             handshake_value = _decode(handshake_raw)
+            _exact(handshake_value, {"ok", "result"})
             handshake_result = handshake_value.get("result")
             if _is_run_inspection_failure(handshake_result):
                 return freeze_plain_data(
@@ -1551,8 +1554,11 @@ class RunInspectionHttpClient:
                 connection.close()
         if len(raw) > _MAX_QUERY_RESPONSE_BYTES:
             return _run_inspection_failure("unavailable")
+        if response.getheader("Content-Type") != "application/json":
+            return _run_inspection_failure("unavailable")
         try:
-            payload = _decode(raw)
+            payload = _decode_run_inspection_response(raw)
+            _exact(payload, {"ok", "result"})
         except QueueError:
             return _run_inspection_failure("unavailable")
         if payload.get("ok") is not True:
@@ -1560,7 +1566,20 @@ class RunInspectionHttpClient:
         result = payload.get("result")
         if not isinstance(result, Mapping):
             return _run_inspection_failure("unavailable")
-        return freeze_plain_data(result, path="run inspection HTTP response")
+        code = result.get("code")
+        expected_status = {
+            "invalid_request": 400,
+            "not_found": 404,
+            "unauthorized": 403,
+            "unavailable": 503,
+            "internal": 503,
+        }.get(code if isinstance(code, str) else "", 200)
+        if response.status != expected_status:
+            return _run_inspection_failure("unavailable")
+        return cast(
+            Mapping[str, PlainData],
+            thaw_plain_data(result, path="run inspection HTTP response"),
+        )
 
 def _run_inspection_failure(code: str) -> Mapping[str, PlainData]:
     """Build the closed Phase 1 error shape without importing diagnostics."""
@@ -4631,21 +4650,40 @@ def _decode(raw: bytes) -> Mapping[str, object]:
     return value
 
 
-def _bounded_json(value: object, *, depth: int) -> None:
+def _decode_run_inspection_response(raw: bytes) -> Mapping[str, object]:
+    """Decode the bounded Phase 1 result envelope without widening agent input."""
+
+    if len(raw) > _MAX_QUERY_RESPONSE_BYTES:
+        raise QueueServiceError("run inspection response is too large")
+    try:
+        value = json.loads(
+            raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise QueueServiceError("run inspection response JSON is invalid") from exc
+    if not isinstance(value, Mapping):
+        raise QueueServiceError("run inspection response is not an object")
+    _bounded_json(value, depth=0, max_collection=256)
+    return value
+
+
+def _bounded_json(
+    value: object, *, depth: int, max_collection: int = _MAX_JSON_COLLECTION
+) -> None:
     if depth > _MAX_JSON_DEPTH:
         raise QueueServiceError("agent protocol JSON is too deeply nested")
     if isinstance(value, Mapping):
-        if len(value) > _MAX_JSON_COLLECTION:
+        if len(value) > max_collection:
             raise QueueServiceError("agent protocol object is too large")
         for key, item in value.items():
             if not isinstance(key, str) or not key or len(key) > 160:
                 raise QueueServiceError("agent protocol object key is invalid")
-            _bounded_json(item, depth=depth + 1)
+            _bounded_json(item, depth=depth + 1, max_collection=max_collection)
     elif isinstance(value, list):
-        if len(value) > _MAX_JSON_COLLECTION:
+        if len(value) > max_collection:
             raise QueueServiceError("agent protocol collection is too large")
         for item in value:
-            _bounded_json(item, depth=depth + 1)
+            _bounded_json(item, depth=depth + 1, max_collection=max_collection)
     elif value is not None and not isinstance(value, (str, int, bool)):
         raise QueueServiceError("agent protocol JSON value is invalid")
 

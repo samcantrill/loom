@@ -45,6 +45,14 @@ from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import CpuResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.diagnostics import (
+    RunInspectionAxis,
+    RunInspectionAxisName,
+    RunInspectionResult,
+    RunInspectionStage,
+    RunInspectionTruncation,
+    decode_run_inspection_response,
+)
 from loom.pipeline.stores import (
     LocalArtifactStore,
     LocalRunStore,
@@ -87,6 +95,7 @@ from loom.queue.agent_session_transport import (
     LocalDaemonAgentHttpServer,
     _RemoteAgentJournal,
     _decode,
+    _decode_run_inspection_response,
     _resident_provider_descriptors,
     RunInspectionHttpClient,
     RunInspectionTlsClientConfig,
@@ -3315,6 +3324,26 @@ def test_protocol_codec_rejects_duplicate_nonfinite_deep_and_oversized_json() ->
         _decode(b"{" + b" " * 65_536 + b"}")
 
 
+def test_run_inspection_response_decoder_preserves_phase_one_limits() -> None:
+    records = [{"index": index} for index in range(256)]
+    encoded = json.dumps({"ok": True, "result": {"records": records}}).encode()
+
+    assert _decode_run_inspection_response(encoded) == {
+        "ok": True,
+        "result": {"records": records},
+    }
+    with pytest.raises(QueueServiceError, match="collection is too large"):
+        _decode_run_inspection_response(
+            json.dumps(
+                {"ok": True, "result": {"records": records + [{"index": 256}]}}
+            ).encode()
+        )
+    with pytest.raises(QueueServiceError, match="JSON is invalid"):
+        _decode_run_inspection_response(b'{"ok":true,"ok":false}')
+    with pytest.raises(QueueServiceError, match="too large"):
+        _decode_run_inspection_response(b"{" + b" " * 1_048_576 + b"}")
+
+
 @pytest.mark.parametrize("old_version", ["5", "6"])
 def test_agent_client_rejects_an_old_protocol_without_compatibility(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, old_version: str
@@ -4599,6 +4628,86 @@ def test_loopback_query_role_is_read_only_current_policy_and_capability_gated(
         mutation_client.close()
         server.stop()
         daemon.stop()
+
+
+def test_loopback_query_preserves_a_256_record_phase_one_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    credentials = _credentials(tmp_path / "tls")
+    policy = AgentPolicyConfig(
+        principals=(
+            TransportPrincipalPolicy("query-credential", "query-principal", "query"),
+        )
+    )
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator",
+        tmp_path / "agent-root",
+        tmp_path / "runs",
+        _local_launch_profile(),
+        agent_policy=policy,
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    result = RunInspectionResult(
+        run_uri="file:///runs/known",
+        as_of="2026-08-30T00:00:00Z",
+        summary="RUNNING",
+        queue_item_id="queue-known",
+        admission_id="admission-known",
+        axes=tuple(
+            RunInspectionAxis(
+                name,
+                "test",
+                "available",
+                "RUNNING",
+                1,
+                "2026-08-30T00:00:00Z",
+                "current",
+            )
+            for name in RunInspectionAxisName
+        ),
+        stages=tuple(
+            RunInspectionStage(f"stage-{index}", "RUNNING", 1)
+            for index in range(256)
+        ),
+        locations=(),
+        truncation=(
+            RunInspectionTruncation("stages", 256, 256),
+            RunInspectionTruncation("locations", 0, 0),
+        ),
+    )
+    monkeypatch.setattr(daemon, "admission_for_run_uri", lambda _uri: object())
+    server = LocalDaemonAgentHttpServer(
+        daemon,
+        AgentTlsServerConfig(
+            "localhost",
+            0,
+            credentials["server"].with_suffix(".crt"),
+            credentials["server"].with_suffix(".key"),
+            credentials["ca"].with_suffix(".crt"),
+            {
+                _fingerprint(credentials["query"].with_suffix(".crt")): "query-credential",
+            },
+        ),
+        inspect_run=lambda _run_uri: result.to_dict(),
+    )
+    server.start()
+    client = RunInspectionHttpClient(
+        RunInspectionTlsClientConfig(
+            f"https://localhost:{server.port}",
+            credentials["ca"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".crt"),
+            credentials["query"].with_suffix(".key"),
+        )
+    )
+    try:
+        remote = client.inspect_run(result.run_uri)
+    finally:
+        server.stop()
+        daemon.stop()
+
+    assert decode_run_inspection_response(remote) == result
 
 
 def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(

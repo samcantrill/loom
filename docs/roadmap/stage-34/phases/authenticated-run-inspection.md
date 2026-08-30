@@ -204,7 +204,12 @@ Final commands:
 - Pre-submit gate: pending.
 - Independent review: expected if manager review leaves any material
   authorization, redaction, or existing-role compatibility risk.
-- Blocker corrections: 0/3.
+- Blocker corrections: 1/3 complete. The remote client applied the legacy
+  agent-request decoder after reading a Phase 1-sized response, incorrectly
+  closing valid 65+ record results as unavailable. The correction gives only
+  query responses their fixed 1 MiB/256-record strict decoder, preserves the
+  existing 64 KiB/64-item agent decoder for request and handshake traffic, and
+  rejects wrong response content types or status/envelope combinations.
 - PR and merge: pending.
 
 ## Completion Record
@@ -212,8 +217,8 @@ Final commands:
 | Item | Result |
 | --- | --- |
 | Implementation and changed paths | Added the dedicated `query` role, exact authenticated `/v1/query/inspect_run` dispatch, capability handshake, bounded no-redirect HTTPS client, and strict protected `loom.run-inspection-client` v1 loader. `loom inspect-run --remote-config` decodes the unchanged Phase 1 model with no selected-source fallback. Coordinator serving now injects the Phase 1 callable into the existing mTLS server; user docs cover managed local, remote mTLS, and service-less SSH use. |
-| Tests added or updated | Added role-exclusivity and protected-config coverage, remote-selector no-fallback coverage, and a localhost mTLS matrix for query success, mutation-role denial, capability/role denial, and immediate policy revocation before the projection callback. |
-| Validated revision/tree state and evidence | Focused Ruff and Pyright on all changed runtime files passed with 0 errors/warnings; `git diff --check` passed. Focused query-role localhost mTLS test passed. The Phase-plan unit suite and contract suite passed earlier in this implementation pass (52 and 10 tests respectively). |
+| Tests added or updated | Added role-exclusivity and protected-config coverage, remote-selector no-fallback coverage, and a localhost mTLS matrix for query success, mutation-role denial, capability/role denial, and immediate policy revocation before the projection callback. Correction coverage adds a real mTLS 256-stage canonical-result round trip plus strict query-response duplicate-key, 257-record, and 1-MiB closure cases. |
+| Validated revision/tree state and evidence | Focused Ruff and Pyright on all changed runtime files passed with 0 errors/warnings; `git diff --check` passed. The focused query-response decoder and localhost mTLS 256-stage parity tests passed. The Phase-plan unit suite and contract suite passed (52 and 10 tests respectively); integration evidence is refreshed after this correction. |
 | Validation-relevant changes after evidence | None after the final focused Ruff, Pyright, diff, and query-role mTLS checks. |
 | PR, review, and merge | pending |
 | Residual risk and cleanup | pending |
