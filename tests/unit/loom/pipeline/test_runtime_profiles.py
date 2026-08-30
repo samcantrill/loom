@@ -109,6 +109,25 @@ def test_run_store_profile_merge_uses_base_profile_and_explicit_precedence(
     assert result.run_store.root == str(tmp_path / "explicit")
 
 
+def test_run_store_profile_merge_preserves_sparse_members_and_allows_clearing(
+    tmp_path: Path,
+) -> None:
+    base_root = str(tmp_path / "base")
+
+    preserved = merge_run_options(
+        base={"profile": "cluster", "run_store": {"root": base_root}},
+        profiles={"cluster": {"run_store": {}}},
+        explicit={"run_store": {}},
+    )
+    cleared = merge_run_options(
+        base={"profile": "cluster", "run_store": {"root": base_root}},
+        profiles={"cluster": {"run_store": {"root": None}}},
+    )
+
+    assert preserved.run_store == RunStoreOptions(root=base_root)
+    assert cleared.run_store == RunStoreOptions(root=None)
+
+
 @pytest.mark.parametrize(
     "data",
     [
@@ -376,9 +395,7 @@ def test_merge_run_options_applies_base_profile_explicit_precedence() -> None:
                     },
                     "adapter_options": {"docker": {"image": "profile"}},
                 },
-                "evaluate": {
-                    "resources": {"entries": {}}
-                },
+                "evaluate": {"resources": {"entries": {}}},
             },
         }
     }

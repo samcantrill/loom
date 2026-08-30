@@ -126,10 +126,20 @@ def test_run_store_options_normalize_explicit_absolute_root_and_round_trip(
 
     assert options.run_store == RunStoreOptions(root=str(tmp_path / "runs"))
     assert options.to_dict()["run_store"] == {"root": str(tmp_path / "runs")}
-    assert options.to_safe_metadata()["run_store"] == {
-        "root": str(tmp_path / "runs")
-    }
+    assert options.to_safe_metadata()["run_store"] == {"root": str(tmp_path / "runs")}
     assert RunOptions.from_dict(options.to_dict()) == options
+
+
+def test_run_store_options_normalize_lexically_without_resolving_symlinks(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+    authored = str(link / "runs")
+
+    assert RunStoreOptions(root=authored).root == authored
 
 
 @pytest.mark.parametrize(
@@ -236,7 +246,6 @@ def test_reliability_is_supported_with_merge_contracts() -> None:
         lambda: RunOptions.from_dict({"timeout_seconds": 120}),
     ],
 )
-
 def test_runtime_options_reject_unknown_and_invalid_fields(factory: Any) -> None:
     with pytest.raises(RuntimeResourceError):
         factory()
@@ -244,9 +253,7 @@ def test_runtime_options_reject_unknown_and_invalid_fields(factory: Any) -> None
 
 def test_run_options_invalid_max_attempts_is_rejected() -> None:
     with pytest.raises(RuntimeResourceError):
-        RunOptions(
-            reliability={"retry": {"enabled": True, "max_attempts": 0}}
-        )
+        RunOptions(reliability={"retry": {"enabled": True, "max_attempts": 0}})
 
 
 @pytest.mark.parametrize(

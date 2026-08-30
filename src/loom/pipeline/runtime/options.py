@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
@@ -135,16 +136,8 @@ class RunStoreOptions:
         root = _string_value(self.root, path="RunStoreOptions.root")
         path = Path(root)
         if not path.is_absolute():
-            raise RuntimeResourceError(
-                "RunStoreOptions.root must be an absolute path"
-            )
-        try:
-            canonical = str(path.resolve(strict=False))
-        except OSError as exc:
-            raise RuntimeResourceError(
-                f"RunStoreOptions.root cannot be canonicalized: {exc}"
-            ) from exc
-        object.__setattr__(self, "root", canonical)
+            raise RuntimeResourceError("RunStoreOptions.root must be an absolute path")
+        object.__setattr__(self, "root", os.path.normpath(root))
 
     def to_dict(self) -> dict[str, PlainData]:
         return {"root": self.root}
@@ -469,11 +462,7 @@ class RunOptions:
                 ).items()
             },
             "environment": environment.to_dict(),
-            **(
-                {"run_store": run_store.to_dict()}
-                if run_store is not None
-                else {}
-            ),
+            **({"run_store": run_store.to_dict()} if run_store is not None else {}),
             **(
                 {"reliability": reliability.to_dict()}
                 if reliability is not None
@@ -670,9 +659,7 @@ def _coerce_run_environment(value: object, *, path: str) -> RunEnvironmentReques
     return RunEnvironmentRequest.from_dict(_object_mapping(value, path=path))
 
 
-def _coerce_run_store_options(
-    value: object, *, path: str
-) -> RunStoreOptions | None:
+def _coerce_run_store_options(value: object, *, path: str) -> RunStoreOptions | None:
     if value is None:
         return None
     if isinstance(value, RunStoreOptions):

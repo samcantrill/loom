@@ -371,8 +371,13 @@ def _normalize_run_field(
     if key in {"run_uri", "executor", "profile"}:
         return _optional_string(value, path=path)
     if key == "run_store":
+        if value is None:
+            return None
+        mapping = _object_mapping(value, path=path)
         options = _coerce_run_store_options(value, path=path)
-        return None if options is None else options.to_dict()
+        if options is None or "root" not in mapping:
+            return {}
+        return {"root": options.root}
     if key == "dry_run":
         return _bool_value(value, path=path)
     if key == "tags":
@@ -544,9 +549,10 @@ def _merge_run_source(target: dict[str, object], source: Mapping[str, object]) -
             "profile",
             "dry_run",
             "notes",
-            "run_store",
         }:
             target[key] = value
+        elif key == "run_store":
+            _merge_run_store_field(target, value)
         elif key == "tags":
             _merge_mapping_field(target, key, cast(Mapping[str, object], value))
         elif key == "selectors":
@@ -628,6 +634,21 @@ def _merge_mapping_field(
     current = dict(cast(Mapping[str, object], target.get(key, {})))
     current.update(source)
     target[key] = current
+
+
+def _merge_run_store_field(target: dict[str, object], source: object) -> None:
+    if source is None:
+        target["run_store"] = None
+        return
+    members = cast(Mapping[str, object], source)
+    if not members:
+        return
+    current_value = target.get("run_store")
+    current = (
+        {} if current_value is None else dict(cast(Mapping[str, object], current_value))
+    )
+    current.update(members)
+    target["run_store"] = current
 
 
 def _merge_mapping_members(

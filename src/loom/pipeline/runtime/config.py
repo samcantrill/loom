@@ -147,7 +147,9 @@ def bootstrap_config_run_store_options(
             runtime["profile"], path=f"$.{RUNTIME_CONFIG_SECTION}.profile"
         )
 
-    selected = runtime.get("run_store")
+    authored_values: list[object] = []
+    if "run_store" in runtime:
+        authored_values.append(runtime["run_store"])
     if selected_profile is not None:
         profiles_value = mapping.get(RUNTIME_PROFILES_CONFIG_SECTION)
         if profiles_value is None:
@@ -167,11 +169,31 @@ def bootstrap_config_run_store_options(
             path=f"$.{RUNTIME_PROFILES_CONFIG_SECTION}[{selected_profile!r}]",
         )
         if "run_store" in selected_profile_options:
-            selected = selected_profile_options["run_store"]
+            authored_values.append(selected_profile_options["run_store"])
 
-    if selected is None:
+    return _merge_bootstrap_run_store_options(authored_values)
+
+
+def _merge_bootstrap_run_store_options(
+    authored_values: Iterable[object],
+) -> RunStoreOptions | None:
+    merged: dict[str, object] | None = {}
+    authored = False
+    for value in authored_values:
+        authored = True
+        if value is None:
+            merged = None
+            continue
+        mapping = _object_mapping(value, path="run_store")
+        parsed = RunStoreOptions.from_dict(mapping)
+        if "root" not in mapping:
+            continue
+        if merged is None:
+            merged = {}
+        merged["root"] = parsed.root
+    if not authored or not merged:
         return None
-    return RunStoreOptions.from_dict(selected)
+    return RunStoreOptions.from_dict(merged)
 
 
 def _object_mapping(value: object, *, path: str) -> Mapping[str, object]:

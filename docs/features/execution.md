@@ -491,11 +491,11 @@ The runner resolves `RunOptions` once per run into typed
 directly; they should not read persisted metadata to decide execution behavior.
 
 Local runs also write a schema-versioned `runtime.json` observability document.
-The document records safe summaries only: executor/profile/tags/notes,
-selector and resume summaries, resource entry summaries, execution setting
-keys, environment counts, and adapter namespace names/counts. It does not
-record environment variable names or values, raw adapter payloads, or semantic
-fingerprint inputs.
+The document records safe summaries only: executor/profile/tags/notes, an
+explicitly configured operational run-store root, selector and resume summaries,
+resource entry summaries, execution setting keys, environment counts, and
+adapter namespace names/counts. It does not record environment variable names
+or values, raw adapter payloads, or semantic fingerprint inputs.
 
 The managed-local daemon has a separate private exact runtime record, written
 only during trusted managed-local preparation. It carries validated execution
