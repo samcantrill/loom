@@ -119,6 +119,7 @@ class RunInspectionStage:
     stage_name: str
     state: str
     attempt: int | None = None
+    code: str | None = None
 
     def __post_init__(self) -> None:
         for field in ("stage_name", "state"):
@@ -131,17 +132,29 @@ class RunInspectionStage:
             or self.attempt < 1
         ):
             raise RunInspectionError("stage attempt must be a positive integer or None")
+        if self.code is not None and (not isinstance(self.code, str) or not self.code):
+            raise RunInspectionError("stage code must be a non-empty string or None")
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "stage_name": self.stage_name,
             "state": self.state,
             "attempt": self.attempt,
+            "code": self.code,
         }
 
     @classmethod
     def from_dict(cls, data: object) -> "RunInspectionStage":
-        return cls(**_exact_mapping(data, {"stage_name", "state", "attempt"}, "stage"))  # type: ignore[arg-type]
+        return cls(
+            **cast(
+                Any,
+                _exact_mapping(
+                    data,
+                    {"stage_name", "state", "attempt", "code"},
+                    "stage",
+                ),
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,8 +477,15 @@ class RunInspectionProjection:
             )
             for stage in snapshot.stages:
                 attempt = stage.attempts[-1].attempt if stage.attempts else None
+                reason = getattr(stage, "reason", None)
+                code = getattr(reason, "code", None)
                 stages.append(
-                    RunInspectionStage(stage.stage_name, stage.status.value, attempt)
+                    RunInspectionStage(
+                        stage.stage_name,
+                        stage.status.value,
+                        attempt,
+                        code if isinstance(code, str) and code else None,
+                    )
                 )
                 _append_stage_log_locations(
                     local_store,
@@ -624,6 +644,7 @@ class RunInspectionProjection:
             ("scheduling", RunInspectionAxisName.SCHEDULING),
             ("assignment", RunInspectionAxisName.ASSIGNMENT),
             ("slurm", RunInspectionAxisName.EXTERNAL_SCHEDULER),
+            ("execution", RunInspectionAxisName.TRANSFER_RESULT),
             ("cancellation", RunInspectionAxisName.CANCELLATION),
             ("service", RunInspectionAxisName.SERVICE_HEALTH),
         ):

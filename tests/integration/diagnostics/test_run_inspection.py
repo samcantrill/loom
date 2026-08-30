@@ -98,7 +98,7 @@ def test_managed_inspection_projects_targeted_owners_through_unix_socket(
 ) -> None:
     del supervisor_cleanup
     run_root = tmp_path / "runs"
-    run_store, run_uri, _pipeline = _persist_single_stage_run(run_root, skip=True)
+    run_store, run_uri, _pipeline = _persist_single_stage_run(run_root)
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
     config = LocalDaemonConfig(
@@ -132,7 +132,7 @@ def test_managed_inspection_projects_targeted_owners_through_unix_socket(
         assert direct.summary == "SUCCEEDED"
         assert direct.admission_id == admitted.admission_id
         assert direct.queue_item_id == "managed-inspection-item"
-        assert {stage.state for stage in direct.stages} == {"SKIPPED"}
+        assert {stage.state for stage in direct.stages} == {"SUCCEEDED"}
         for name in (
             RunInspectionAxisName.ADMISSION,
             RunInspectionAxisName.LIFECYCLE,
@@ -141,8 +141,12 @@ def test_managed_inspection_projects_targeted_owners_through_unix_socket(
             RunInspectionAxisName.CANCELLATION,
             RunInspectionAxisName.MATERIALIZATION,
             RunInspectionAxisName.SERVICE_HEALTH,
+            RunInspectionAxisName.TRANSFER_RESULT,
         ):
             assert _axis(direct, name).availability == "available"
+        transfer_result = _axis(direct, RunInspectionAxisName.TRANSFER_RESULT)
+        assert transfer_result.owner == "local-agent"
+        assert transfer_result.state == "populated"
 
         server = LocalDaemonSocketServer(
             daemon,
@@ -156,10 +160,35 @@ def test_managed_inspection_projects_targeted_owners_through_unix_socket(
         )
 
         assert isinstance(via_socket, RunInspectionResult)
-        assert via_socket.to_dict() == direct.to_dict()
+        assert via_socket.run_uri == direct.run_uri
+        assert via_socket.summary == direct.summary
+        assert via_socket.queue_item_id == direct.queue_item_id
+        assert via_socket.admission_id == direct.admission_id
+        assert via_socket.stages == direct.stages
+        for name in RunInspectionAxisName:
+            direct_axis = _axis(direct, name)
+            socket_axis = _axis(via_socket, name)
+            assert (
+                socket_axis.owner,
+                socket_axis.availability,
+                socket_axis.state,
+                socket_axis.freshness,
+                socket_axis.code,
+            ) == (
+                direct_axis.owner,
+                direct_axis.availability,
+                direct_axis.state,
+                direct_axis.freshness,
+                direct_axis.code,
+            )
+            if isinstance(direct_axis.revision, int) and isinstance(
+                socket_axis.revision, int
+            ):
+                assert socket_axis.revision >= direct_axis.revision
         encoded = json.dumps(via_socket.to_dict(), sort_keys=True)
         assert "intent_digest" not in encoded
         assert '"assignments":' not in encoded
+        assert '"journal":' not in encoded
         assert "test-project" not in encoded
     finally:
         if server is not None:

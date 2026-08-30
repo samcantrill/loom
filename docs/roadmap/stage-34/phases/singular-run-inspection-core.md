@@ -207,19 +207,26 @@ Final commands:
   correction adds one read-only existing-database open, fixed-axis/identity and
   truncation invariants, exact managed and both Stage 32 Slurm journeys,
   no-content/secret checks, and direct/Unix parity without new persistence.
+- Manager correction 3/3: complete. Pre-submit review found that a reachable
+  populated local-agent execution/result owner was omitted from the fixed axes
+  and that authoritative per-stage lifecycle reason codes were omitted from the
+  v1 stage record. The correction projects the allowlisted local-agent owner as
+  `transfer_result`, adds the optional stable stage `code`, and exercises a real
+  managed stage through direct and Unix reads while preserving non-atomic
+  revision semantics.
 - Pre-submit gate: pending.
 - Independent review: reconsider only for a material residual public-contract or
   cross-owner correctness risk after manager review.
-- Blocker corrections: 2/3.
+- Blocker corrections: 3/3; exhausted.
 - PR and merge: pending.
 
 ## Completion Record
 
 | Item | Result |
 | --- | --- |
-| Implementation and changed paths | Added `loom.diagnostics.run_inspection` strict v1 models/projection and lazy exports; owner-only injected Unix operation/client; indexed daemon run-URI lookup; direct/Unix CLI selection, docs, and public import expectation. Corrections compose the production callback, return queue/admission IDs, project targeted managed and service-less owners, expose safe artifact/log locations, enforce fixed axes/cardinality/socket size, and open an existing queue database read-only for direct inspection. |
-| Tests added or updated | Added strict codec/failure/bounds/precedence/no-content units; direct queue-config and no-fallback CLI units; direct/Unix and read-only queue contracts; real managed socket and both Stage 32 Slurm-mode integrations; an after-driver-exit subprocess JSON journey; and diagnostics public-import coverage. |
-| Validated revision/tree state and evidence | Correction 2 focused evidence: required unit target passed (52 tests), contract target passed (3 tests), required integration target passed (45 tests), and the subprocess E2E passed (1 test). Ruff, Pyright, and `git diff --check` passed for the changed source/tests. |
-| Validation-relevant changes after evidence | No source or test change after the focused correction evidence. A fresh broad gate remains required before PR preparation. |
+| Implementation and changed paths | Added `loom.diagnostics.run_inspection` strict v1 models/projection and lazy exports; owner-only injected Unix operation/client; indexed daemon run-URI lookup; direct/Unix CLI selection, docs, and public import expectation. Corrections compose the production callback, return queue/admission IDs, project targeted managed and service-less owners including local-agent execution/result, expose safe artifact/log locations and stage reason codes, enforce fixed axes/cardinality/socket size, and open an existing queue database read-only for direct inspection. |
+| Tests added or updated | Added strict codec/failure/bounds/precedence/reason/no-content units; direct queue-config and no-fallback CLI units; direct/Unix and read-only queue contracts; real managed execution/socket and both Stage 32 Slurm-mode integrations; an after-driver-exit subprocess JSON journey; and diagnostics public-import coverage. |
+| Validated revision/tree state and evidence | Correction 3 focused model/contract/integration matrix passed (16 tests); Ruff, targeted Pyright, and `git diff --check` passed. The earlier broad gate at `bb562f3` passed Ruff, Pyright, 2,708 default tests, 157 config-extra tests with 3 expected skips, and builds, and its summary recorded 2,865 passes, but correction 3 makes that receipt stale. |
+| Validation-relevant changes after evidence | Correction 3 changed the public stage codec, managed owner projection, and causal tests. A fresh broad gate and summary are required before PR preparation. |
 | PR, review, and merge | pending |
-| Residual risk and cleanup | No implementation blocker. A fresh broad `make validate-pr`/`make test-summary` receipt and manager diff review remain required. |
+| Residual risk and cleanup | No known implementation blocker; correction budget is exhausted. A fresh broad `make validate-pr`/`make test-summary` receipt and final manager diff review remain required. |

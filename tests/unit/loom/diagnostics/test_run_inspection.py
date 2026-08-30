@@ -81,7 +81,7 @@ def test_result_codec_is_strict_and_round_trips() -> None:
                 "current",
             ),
         ),
-        stages=(RunInspectionStage("train", "SUCCEEDED", 1),),
+        stages=(RunInspectionStage("train", "SUCCEEDED", 1, "stage.completed"),),
         locations=(
             RunInspectionLocation(
                 "artifact:train:model",
@@ -214,7 +214,15 @@ def test_authority_lifecycle_wins_a_disagreeing_managed_admission(
             sequence=7,
             created_at="2026-08-30T00:00:00Z",
         ),
-        stages=(),
+        stages=(
+            SimpleNamespace(
+                stage_name="train",
+                status=SimpleNamespace(value="SUCCEEDED"),
+                attempts=(),
+                artifact_facts=(),
+                reason=SimpleNamespace(code="stage.completed"),
+            ),
+        ),
     )
     monkeypatch.setattr(
         "loom.diagnostics.inspection._authoritative_read",
@@ -246,6 +254,9 @@ def test_authority_lifecycle_wins_a_disagreeing_managed_admission(
     assert result.summary == "SUCCEEDED"
     assert _axis(result, RunInspectionAxisName.LIFECYCLE).state == "SUCCEEDED"
     assert _axis(result, RunInspectionAxisName.ADMISSION).state == "FAILED"
+    assert result.stages == (
+        RunInspectionStage("train", "SUCCEEDED", code="stage.completed"),
+    )
     assert result.admission_id == "admission-1"
     assert result.queue_item_id == "queue-1"
     assert "SECRET_OWNER_FAILURE" not in json.dumps(result.to_dict())
