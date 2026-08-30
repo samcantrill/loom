@@ -182,8 +182,9 @@ Final commands:
 - Pre-submit gate: pending refresh after correction 3; the complete gate and
   summary passed at prior source/test revision `a59c1ec` but are stale after
   the outbound stop-handoff change in `6a578f8`
-- Independent review: blocker found at the pre-loop outbound stop handoff;
-  correction implemented and bounded confirmation pending
+- Independent review: passed after the reviewer reproduced the pre-loop
+  outbound stop-handoff leak and confirmed correction 3 closes every return
+  after the initially opened client through retained-work-aware cleanup
 - Blocker corrections: 3/3; correction 1 closes direct constructor cleanup's
   retained-work-proof bypass. Correction 2 contains a current epoch's exited
   root group before clean shutdown when owned group evidence shows descendants
@@ -200,5 +201,5 @@ Final commands:
 | Tests added or updated | Added process-level proof for changed local scheduling rejection, mismatched outbound deployment binding, unavailable local owner-store and outbound execution-journal rejection, retained local owner preservation without a clean marker, and rejection that leaves a valid pre-existing outbound supervisor's PID and epoch reachable. Correction 2 adds supervisor proof that a gone exited group permits epoch rotation, and that clean service shutdown records containment and leaves no TERM-ignoring descendant alive after its root exits. Correction 3 adds a deterministic stop-during-initial-close handoff test with an exact supervisor-process assertion. |
 | Validated revision/tree state and evidence | Original focused tests passed (3); targeted lifecycle matrix passed: 85 tests in 377.39s; targeted SLURM/session/CLI/E2E matrix passed: 69 tests in 121.57s. Correction 1 focused constructor/shutdown matrix passed: 7 tests in 2.25s; changed-file Ruff and Pyright passed. Correction 2 focused supervisor suite passed: 7 tests in 0.82s; changed-file Ruff and Pyright passed. At source/test revision `a59c1ec`, `make validate-pr` passed Ruff, Pyright with zero findings, 2,684 default tests, 156 configuration-extra tests with 3 expected skips, and source/wheel builds; fresh `make test-summary` recorded 2,840 categorized passes and 3 expected skips. Correction 3 passed its two causal service tests, the complete 38-test outbound/session integration file, Ruff, Pyright with zero findings, and an exact empty post-test process scan. |
 | Validation-relevant changes after evidence | Correction 3 at `6a578f8` changes the outbound service loop after the complete gate and summary; both durable receipts require refresh. |
-| PR, review, and merge | pending |
-| Residual risk and cleanup | An exact post-gate working-directory scan found no process created by either earlier successful gate. One empty supervisor from an earlier deliberately interrupted pre-gate test run was identified by its exact worktree and durable root, stopped through its authenticated test-only shutdown operation, and repeated exact scans after cleanup and correction 3 tests were empty. Correction confirmation and refreshed full gates remain pending. |
+| PR, review, and merge | Required independent review found one supported outbound stop-handoff leak. Correction 3 closed it, and the same reviewer returned PASS after bounded confirmation. PR and merge remain pending. |
+| Residual risk and cleanup | An exact post-gate working-directory scan found no process created by either earlier successful gate. One empty supervisor from an earlier deliberately interrupted pre-gate test run was identified by its exact worktree and durable root, stopped through its authenticated test-only shutdown operation, and repeated exact scans after cleanup and correction 3 tests were empty. No known phase blocker remains; refreshed full gates are pending. |
