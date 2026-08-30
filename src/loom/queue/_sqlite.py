@@ -449,16 +449,39 @@ class SQLiteQueueRepository:
             conn.commit()
             return deferred
 
-    def scan_recovery(self) -> tuple[QueueRecoveryRecord, ...]:
+    def scan_recovery(
+        self, *, limit: int | None = None, pool_name: str | None = None
+    ) -> tuple[QueueRecoveryRecord, ...]:
+        if limit is not None and (
+            not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0
+        ):
+            raise QueueConflictError(
+                "recovery limit must be a positive integer or None"
+            )
+        if pool_name is not None:
+            pool_name = validate_queue_id(pool_name, "pool_name")
+        where_pool = "" if pool_name is None else " AND pool_name = ?"
+        suffix = "" if limit is None else " LIMIT ?"
+        parameters: list[str | int] = [
+            status.value for status in _ACTIVE_RECOVERY_STATUSES
+        ]
+        if pool_name is not None:
+            parameters.append(pool_name)
+        if limit is not None:
+            parameters.append(limit)
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT queue_item_id, status, dispatch_attempt, item_json
                 FROM queue_items
                 WHERE status IN (?, ?)
+                """
+                + where_pool
+                + """
                 ORDER BY updated_at, queue_item_id
-                """,
-                tuple(status.value for status in _ACTIVE_RECOVERY_STATUSES),
+                """
+                + suffix,
+                tuple(parameters),
             ).fetchall()
         records: list[QueueRecoveryRecord] = []
         for row in rows:

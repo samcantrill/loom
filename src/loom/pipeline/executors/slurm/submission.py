@@ -71,6 +71,7 @@ def submit_single_job_slurm(
     planning_result: "SlurmDryRunPlanningResult",
     command_runner: "SlurmCommandRunner | None" = None,
     submitted_at: str | None = None,
+    queue_item_id: str | None = None,
 ) -> "SlurmLiveSubmissionResult":
     from loom.pipeline.execution.slurm_controller import (
         SlurmSubmissionServices,
@@ -83,6 +84,7 @@ def submit_single_job_slurm(
         planning_result=planning_result,
         command_runner=command_runner,
         submitted_at=submitted_at,
+        queue_item_id=queue_item_id,
     )
 
 
@@ -93,6 +95,7 @@ def submit_afterok_slurm(
     planning_result: "SlurmDryRunPlanningResult",
     command_runner: "SlurmCommandRunner | None" = None,
     submitted_at: str | None = None,
+    queue_item_id: str | None = None,
 ) -> "SlurmLiveSubmissionResult":
     from loom.pipeline.execution.slurm_controller import (
         SlurmSubmissionServices,
@@ -105,6 +108,7 @@ def submit_afterok_slurm(
         planning_result=planning_result,
         command_runner=command_runner,
         submitted_at=submitted_at,
+        queue_item_id=queue_item_id,
     )
 
 

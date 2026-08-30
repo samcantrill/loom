@@ -34,6 +34,7 @@ from .selection import (
 from .service import QueueService
 
 _SELECTION_LIMIT = 32
+_RECOVERY_WINDOW = 32
 _POLICY_STOPPED_REASON_CODE = "queue_selection.policy_stopped"
 _SELECTION_LIMIT_EXHAUSTED_REASON_CODE = "queue_selection.selection_limit_exhausted"
 _SAFE_REASON_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -338,6 +339,29 @@ class QueueDrainResult:
 
 
 @dataclass(frozen=True, slots=True)
+class QueueForegroundDriveResult:
+    """Bounded foreground controller work which never waits for delegated jobs."""
+
+    cycles: tuple[QueueCycleResult, ...]
+    quiescent: bool
+
+    def to_dict(self) -> dict[str, PlainData]:
+        dispatched = sum(
+            step.outcome == "dispatched"
+            for cycle in self.cycles
+            for step in cycle.dispatch_steps
+        )
+        reconciled = sum(len(cycle.reconciliation_steps) for cycle in self.cycles)
+        return {
+            "cycles": [cycle.to_dict() for cycle in self.cycles],
+            "quiescent": self.quiescent,
+            "cycle_count": len(self.cycles),
+            "dispatched_count": dispatched,
+            "reconciled_count": reconciled,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class QueueCycleResult:
     """Plain-data result of reconciling and filling one selected pool."""
 
@@ -347,6 +371,7 @@ class QueueCycleResult:
     capacity_blocked: bool
     next_maintenance_at: str | None
     selection_stop_reason: str | None = None
+    reconciliation_pending: bool = False
 
     def __post_init__(self) -> None:
         allowed = {
@@ -370,6 +395,7 @@ class QueueCycleResult:
             "capacity_blocked": self.capacity_blocked,
             "next_maintenance_at": self.next_maintenance_at,
             "selection_stop_reason": self.selection_stop_reason,
+            "reconciliation_pending": self.reconciliation_pending,
         }
 
 
@@ -424,6 +450,7 @@ class QueueController:
         self._session_id = uuid4().hex
         self._owned_handle_ids: set[str] = set()
         self._pending_start_compensations: dict[str, QueueItem] = {}
+        self._recovery_cursors: dict[str, str | None] = {}
         self._selection_policies = self._selection_policies_by_pool(selection_policies)
         self._selection_reader, self._selection_claimer = (
             self._bind_selection_repository_capabilities()
@@ -433,17 +460,22 @@ class QueueController:
         """Reconcile one pool then fill it within its controller-local budgets."""
         if not isinstance(pool_name, str) or not pool_name:
             raise QueueServiceError("run_cycle requires one non-empty pool_name")
-        reconciliation, degraded, deadlines = self._reconcile_all(pool_name)
+        reconciliation, degraded, deadlines, reconciliation_pending = (
+            self._reconcile_all(pool_name)
+        )
         active_count = self._active_count(pool_name)
         dispatch_steps: list[QueueControllerStep] = []
         capacity_blocked = False
         selection_stop_reason: str | None = None
         attempted_item_ids: set[str] = set()
         if not degraded:
+            pool = self._pool(pool_name)
             limit = self._service.spec.controller.max_active_items
             budget = self._service.spec.controller.max_dispatches_per_cycle or limit
             selection_steps_remaining = _SELECTION_LIMIT
-            while active_count < limit and len(dispatch_steps) < budget:
+            while (
+                pool.mode is QueuePoolMode.DELEGATED or active_count < limit
+            ) and len(dispatch_steps) < budget:
                 if selection_steps_remaining <= 0:
                     selection_stop_reason = _SELECTION_LIMIT_EXHAUSTED_REASON_CODE
                     break
@@ -474,7 +506,40 @@ class QueueController:
             capacity_blocked=capacity_blocked,
             next_maintenance_at=min(deadlines) if deadlines else None,
             selection_stop_reason=selection_stop_reason,
+            reconciliation_pending=reconciliation_pending,
         )
+
+    def drive_foreground(
+        self,
+        *,
+        pool_name: str,
+        until_quiescent: bool = False,
+    ) -> QueueForegroundDriveResult:
+        """Run one or more bounded cycles without awaiting delegated completion.
+
+        A delegated handoff is durable scheduler work, not Loom-managed capacity.
+        The loop therefore submits another protected page when work remains, but
+        exits as soon as no local reconciliation or dispatch transition is ready.
+        """
+
+        cycles: list[QueueCycleResult] = []
+        while True:
+            cycle = self.run_cycle(pool_name=pool_name)
+            cycles.append(cycle)
+            progressed = (
+                bool(cycle.dispatch_steps)
+                or any(
+                    step.outcome
+                    in {"dispatched", "completed", "cancelled", "unknown"}
+                    for step in cycle.reconciliation_steps
+                )
+                or cycle.reconciliation_pending
+            )
+            if not until_quiescent or not progressed:
+                return QueueForegroundDriveResult(
+                    cycles=tuple(cycles),
+                    quiescent=not progressed,
+                )
 
     def classify_recovery(self, *, pool_name: str) -> QueueRecoveryClassification:
         """Classify active selected-pool work without inspecting or mutating it."""
@@ -498,7 +563,9 @@ class QueueController:
             raise QueueServiceError(
                 "reconcile_current_session requires one non-empty pool_name"
             )
-        reconciliation, degraded, deadlines = self._reconcile_all(pool_name)
+        reconciliation, degraded, deadlines, reconciliation_pending = (
+            self._reconcile_all(pool_name)
+        )
         classification = self.classify_recovery(pool_name=pool_name)
         return QueueCycleResult(
             reconciliation_steps=tuple(reconciliation),
@@ -506,6 +573,7 @@ class QueueController:
             active_count=len(classification.current_items),
             capacity_blocked=degraded,
             next_maintenance_at=min(deadlines) if deadlines else None,
+            reconciliation_pending=reconciliation_pending,
         )
 
     def run_once(
@@ -995,13 +1063,29 @@ class QueueController:
 
     def _reconcile_all(
         self, pool_name: str
-    ) -> tuple[list[QueueControllerStep], bool, list[str]]:
+    ) -> tuple[list[QueueControllerStep], bool, list[str], bool]:
         steps: list[QueueControllerStep] = []
         degraded = False
         deadlines: list[str] = []
-        for item in self._service.recovery_items():
-            if item.pool_name != pool_name:
-                continue
+        pool = self._pool(pool_name)
+        if pool.mode is QueuePoolMode.DELEGATED:
+            page = self._service.list_items(
+                limit=_RECOVERY_WINDOW,
+                cursor=self._recovery_cursors.get(pool_name),
+            )
+            self._recovery_cursors[pool_name] = page.next_cursor
+            candidates = tuple(
+                item
+                for item in page.items
+                if item.pool_name == pool_name
+                and QueueItemStatus(item.status)
+                in {QueueItemStatus.CLAIMED, QueueItemStatus.DISPATCHED}
+            )
+            reconciliation_pending = page.next_cursor is not None
+        else:
+            candidates = self._service.recovery_items(pool_name=pool_name)
+            reconciliation_pending = False
+        for item in candidates:
             if not self._owned_by_current_session(item):
                 continue
             try:
@@ -1013,7 +1097,7 @@ class QueueController:
             steps.append(step)
             if step.outcome in {"unknown", "degraded"}:
                 degraded = True
-        return steps, degraded, deadlines
+        return steps, degraded, deadlines, reconciliation_pending
 
     def _reconcile_item(
         self, item: QueueItem, deadlines: list[str]
@@ -1021,6 +1105,12 @@ class QueueController:
         if item.queue_item_id in self._pending_start_compensations:
             return self._reconcile_pending_start(item, deadlines)
         if QueueItemStatus(item.status) is QueueItemStatus.CLAIMED:
+            adapter = self._adapters.get(item.launch_contract.adapter)
+            recover_claim = getattr(adapter, "recover_claim", None)
+            if callable(recover_claim):
+                recovered = recover_claim(item)
+                if isinstance(recovered, QueueDispatchResult):
+                    return self._apply_dispatch_result(item, recovered, deadlines).step
             return self._complete_unknown(
                 item,
                 reason="queue item was claimed but no dispatch handle was recorded",
@@ -1067,20 +1157,32 @@ class QueueController:
         )
 
     def _active_count(self, pool_name: str) -> int:
+        pool = self._pool(pool_name)
+        recovery_limit = (
+            _RECOVERY_WINDOW if pool.mode is QueuePoolMode.DELEGATED else None
+        )
         return sum(
             1
-            for item in self._service.recovery_items()
-            if item.pool_name == pool_name
-            and QueueItemStatus(item.status)
+            for item in self._service.recovery_items(
+                limit=recovery_limit, pool_name=pool_name
+            )
+            if QueueItemStatus(item.status)
             in {QueueItemStatus.CLAIMED, QueueItemStatus.DISPATCHED}
         )
 
     def _owned_by_current_session(self, item: QueueItem) -> bool:
         if QueueItemStatus(item.status) is QueueItemStatus.CLAIMED:
-            return (
+            current_session = (
                 item.claim is not None
                 and item.claim.owner_id == self._owner_id
                 and f":{self._session_id}:" in item.claim.claim_id
+            )
+            if current_session:
+                return True
+            adapter = self._adapters.get(item.launch_contract.adapter)
+            return (
+                self._pool(item.pool_name).mode is QueuePoolMode.DELEGATED
+                and callable(getattr(adapter, "recover_claim", None))
             )
         if item.dispatch_handle is None:
             return False
@@ -1217,6 +1319,7 @@ __all__ = [
     "QueueDispatchNonStartCause",
     "QueueDispatchResult",
     "QueueDrainResult",
+    "QueueForegroundDriveResult",
     "QueueInspectableDispatchAdapter",
     "QueuePreStartCleanupStatus",
 ]

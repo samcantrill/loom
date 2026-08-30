@@ -83,6 +83,7 @@ from .controller import (
     QueueDispatchNonStartCause,
     QueueDispatchResult,
     QueueDrainResult,
+    QueueForegroundDriveResult,
     QueueInspectableDispatchAdapter,
     QueuePreStartCleanupStatus,
 )
@@ -278,6 +279,7 @@ __all__ = [
     "QueueDispatchNonStartCause",
     "QueueDispatchResult",
     "QueueDrainResult",
+    "QueueForegroundDriveResult",
     "QueueEnqueueRequest",
     "QueueEnqueueDisposition",
     "QueueEnqueueReceipt",

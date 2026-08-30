@@ -47,6 +47,43 @@ and continues to reuse the same handle instead of resubmitting.
 See [queue.md](queue.md) for the queue config, CLI, and preflight surfaces for
 delegated SLURM pools.
 
+### Stage 32 Service-Less Whole-Run Driving
+
+Stage 32 adds a separate prepared-run queue path for shared-filesystem clusters.
+Project code enqueues a closed reference to an existing single-job or `afterok`
+dry-run manifest. The queue dispatch handle points back to that run-local
+manifest and submitted-operation record instead of copying scheduler jobs into
+the queue. A bounded `loom queue drive-slurm-foreground` invocation reconciles
+and submits protected pages, then exits locally quiescent; it is safe to run
+again but does not wait for scheduler completion or require a persistent Loom
+service.
+
+Run authority remains the scientific lifecycle owner. Scheduler terminal
+failure/cancellation can close dispatch, while `COMPLETED` without a terminal
+Loom result remains settling. The route requires compute-visible project paths
+and does not transfer artifacts, logs, credentials, or reports.
+
+Before each queued `sbatch` call, Loom retains an exact operation digest and a
+bounded scheduler-visible comment marker. A reopen queries both live queue and
+retained accounting comments before continuing an uncertain call. One exact
+match repairs the missing handle; no match remains unknown, and multiple
+matches are a conflict. Neither uncertain case licenses blind resubmission.
+Prepared queue submissions also require project-authored
+`delegated_verification.shared_workspace` evidence of `true` or
+`{"status": "proven"}` before their first `sbatch`; Loom does not copy data,
+mount paths, or probe compute nodes on the project's behalf.
+For `afterok`, every accepted job handle is written before the next logical job
+is considered, so recovered dependencies use the retained scheduler IDs.
+
+Each foreground cycle reads a bounded delegated reconciliation page and admits
+at most the configured `max_dispatches_per_cycle`. Until-quiescent mode advances
+across those pages but exits as soon as there is no immediately available local
+transition; it does not poll for running jobs. The queue row retains only the
+manifest/operation reference and safe summary evidence. Scheduler wrapper logs,
+worker results, and artifacts remain at the paths owned by the configured run
+store. See the [service-less operation example](../../examples/operations/service-less-slurm-driving/README.md)
+for the fake reopen journey and manual HPC checklist.
+
 Generated single-job scripts call the generic whole-run continuation command:
 
 ```bash

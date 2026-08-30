@@ -25,6 +25,36 @@ dependency-aware placement of each ready managed stage attempt, including an
 explicit named-profile SLURM target, without turning Loom into a general cluster
 manager or silently changing the historical v11 delegated-pool owner.
 
+## Deployment Choice
+
+Use the Stage 29 coordinator/agent route when an allowed host can keep the
+coordinator reachable while dependencies become ready. That route owns dynamic
+ready-stage scheduling and joined cross-run status. On sites that prohibit a
+long-running login-node service, project code can instead prepare ordinary
+whole runs for `slurm-single-job` or static `slurm-afterok`, enqueue them in a
+delegated pool, and invoke:
+
+```sh
+loom queue drive-slurm-foreground queue.yaml --pool slurm-pool --run-root runs
+```
+
+The command performs bounded reconciliation and submission and exits at local
+quiescence; it never stays alive waiting for scheduler completion. `--once`
+runs one bounded cycle. Reopening the same queue database and shared run root
+continues from retained queue, manifest, and scheduler-call facts. This path is
+not an intermittent Stage 29 coordinator: it cannot make new output-dependent
+stage decisions after exit. Operate only one foreground driver for a queue
+database at a time; concurrent takeover and coordinator high availability are
+outside this service-less route.
+
+Coordinator-wide reporters and webhooks belong beside the Stage 29 coordinator,
+where one lifecycle join can produce one notification stream. Service-less
+drivers and compute jobs do not send equivalent lifecycle hooks independently,
+and no real-time external delivery is promised while the driver is absent.
+Remote queue queries, byte/log proxying, and a remote store are not part of this
+route; operators currently inspect the configured host and project-owned shared
+filesystem through their normal site access.
+
 ## Ownership Model
 
 Queue state records:
@@ -90,6 +120,16 @@ queue:
 
 `workspace_assumptions_acknowledged` records that delegated SLURM dispatch still
 assumes a pre-staged or shared workspace in v11. Bundle transport is later work.
+
+For the prepared whole-run driver, the queue item carries a closed
+`loom.slurm-prepared-run.v1` reference rather than a raw script. The referenced
+run-local SLURM manifest is the only scheduler-job inventory and retains the
+agreeing queue item ID. See [slurm.md](slurm.md) and the
+[service-less example](../../examples/operations/service-less-slurm-driving/README.md).
+Project code must explicitly attest compute visibility before first submission
+with `delegated_verification={"shared_workspace": True}` (or
+`{"shared_workspace": {"status": "proven"}}`). Loom trusts that authored
+attestation; it does not mount, copy, or probe a compute node.
 
 ## Python Operation
 

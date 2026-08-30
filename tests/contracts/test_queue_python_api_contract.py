@@ -188,6 +188,7 @@ def test_queue_cycle_selection_evidence_contract_is_narrow_plain_data() -> None:
         "capacity_blocked": True,
         "next_maintenance_at": None,
         "selection_stop_reason": "queue_selection.policy_error",
+        "reconciliation_pending": False,
     }
 
 

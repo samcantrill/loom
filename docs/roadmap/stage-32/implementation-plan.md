@@ -5,7 +5,7 @@ Roadmap stage: 32
 Planning document: docs/roadmap/stage-32/planning.md
 Artifact layout: manifest-and-phase-plans-v1
 Target branch: develop
-Current phase: Phase 3 `pending`
+Current phase: Phase 3 `pr_open`
 Blockers: none; Phase 2 is explicitly blocked and its replacement is approved
 Worktree root: `/home/can134/work/active/loom-worktrees`
 
@@ -58,7 +58,7 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | durable-many-run-admission | merged | docs/roadmap/stage-32/phases/durable-many-run-admission.md | agent/stage-32-p1-durable-many-run-admission | [#257](https://github.com/samcantrill/loom/pull/257) merged | queue request/receipt, service, SQLite schema/index, bounded reads and identity tests | Admit and replay large ordinary-run request streams without duplicate queue work. |
 | 2 | service-less-slurm-driving | blocked | docs/roadmap/stage-32/phases/service-less-slurm-driving.md | agent/stage-32-p2-service-less-slurm-driving | not opened | rejected delegated controller/CLI candidate retained for review evidence | Record the exhausted candidate and its FR-9/FR-10 review blockers. |
-| 3 | service-less-slurm-completion | pending | docs/roadmap/stage-32/phases/service-less-slurm-completion.md | agent/stage-32-p3-service-less-slurm-completion | pending | complete delegated controller/CLI and prepared-run Slurm outcome, per-job snapshot fallback, shared-workspace proof, HPC docs/tests | Deliver the full service-less Slurm outcome in one replacement PR from current `develop`. |
+| 3 | service-less-slurm-completion | pr_open | docs/roadmap/stage-32/phases/service-less-slurm-completion.md | agent/stage-32-p3-service-less-slurm-completion | [#261](https://github.com/samcantrill/loom/pull/261) open | complete delegated controller/CLI and prepared-run Slurm outcome, per-job snapshot fallback, shared-workspace proof, HPC docs/tests | Deliver the full service-less Slurm outcome in one replacement PR from current `develop`. |
 
 ## Quality Gate
 
@@ -86,4 +86,4 @@ Worktree root: `/home/can134/work/active/loom-worktrees`
 | --- | --- | --- | --- | --- |
 | 1 | [#257](https://github.com/samcantrill/loom/pull/257) squash-merged as `b93d4ac` | Full local gate passed: 2,770 tests overall plus package build, Ruff, and Pyright. | Project semantic normalization can be incorrect. | Dedicated worktree and local/remote phase branches removed. |
 | 2 | No PR; blocked after independent review. | Candidate `c9cbd2c` passed Ruff, Pyright, package build, 2,676 default tests, and 157 config-extra tests (3 expected skips); `make test-summary` reported 2,833 passing tests. | FR-9 retained scheduler facts were not persisted/merged per missing job; FR-10 lacked positive compute-visible-path proof before `sbatch`. | Retained locally as replacement input; never merge this branch. |
-| 3 | pending | pending | Fake Slurm cannot certify site accounting visibility or shared-mount policy beyond explicit project evidence. | pending |
+| 3 | [#261](https://github.com/samcantrill/loom/pull/261) open | Full local gate and expanded review passed; merge pending. | Fake Slurm cannot certify site accounting visibility or shared-mount policy beyond explicit project evidence. | pending |

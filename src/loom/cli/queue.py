@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from loom.pipeline.stores import AuthorityConfig
-    from loom.queue import QueueDrainResult, QueueService
+    from loom.queue import QueueDrainResult, QueueForegroundDriveResult, QueueService
     from loom.queue.controller import (
         QueueDispatchAdapter,
         QueueInspectableDispatchAdapter,
@@ -42,6 +42,7 @@ QUEUE_PREFLIGHT_SCHEMA_VERSION = "loom.cli.queue.preflight.v1"
 QUEUE_STATUS_SCHEMA_VERSION = "loom.cli.queue.status.v1"
 QUEUE_CANCEL_SCHEMA_VERSION = "loom.cli.queue.cancel.v1"
 QUEUE_DRAIN_SCHEMA_VERSION = "loom.cli.queue.drain.v1"
+QUEUE_SLURM_DRIVE_SCHEMA_VERSION = "loom.cli.queue.slurm-drive.v1"
 LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v4"
 
 
@@ -146,6 +147,27 @@ def register_subparser(
     )
     _add_output_options(drain)
     drain.set_defaults(handler=handle_drain_foreground)
+
+    slurm_drive = queue_subparsers.add_parser(
+        "drive-slurm-foreground",
+        help="submit and reconcile prepared SLURM runs without a persistent service",
+    )
+    _add_config_argument(slurm_drive)
+    slurm_drive.add_argument("--pool", dest="pool_name", metavar="POOL")
+    slurm_drive.add_argument(
+        "--once",
+        action="store_true",
+        help="run one bounded controller cycle instead of driving to local quiescence",
+    )
+    slurm_drive.add_argument(
+        "--run-root",
+        default="runs",
+        metavar="PATH",
+        help="shared local root containing prepared run state and SLURM artifacts",
+    )
+    add_authority_options(slurm_drive)
+    _add_output_options(slurm_drive)
+    slurm_drive.set_defaults(handler=handle_drive_slurm_foreground)
 
     daemon_init = queue_subparsers.add_parser(
         "daemon-init",
@@ -348,6 +370,38 @@ def handle_drain_foreground(namespace: argparse.Namespace) -> int:
         )
     else:
         sys.stdout.write(format_queue_drain_text(result) + "\n")
+    return int(ExitCode.SUCCESS)
+
+
+def handle_drive_slurm_foreground(namespace: argparse.Namespace) -> int:
+    """Handle bounded service-less prepared-run SLURM driving."""
+
+    result = build_slurm_drive_result(
+        namespace.config,
+        pool_name=namespace.pool_name,
+        run_root=namespace.run_root,
+        authority_config=authority_config_from_namespace(namespace),
+        until_quiescent=not bool(namespace.once),
+    )
+    output_format = output_format_from_namespace(namespace)
+    if output_format is OutputFormat.JSON:
+        sys.stdout.write(
+            format_json_envelope(
+                schema_version=QUEUE_SLURM_DRIVE_SCHEMA_VERSION,
+                ok=True,
+                warnings=[],
+                payload_name="result",
+                payload=result.to_dict(),
+            )
+        )
+    else:
+        dispatched = result.to_dict()["dispatched_count"]
+        sys.stdout.write(
+            "SLURM foreground drive: "
+            f"cycles={len(result.cycles)} "
+            f"dispatched={dispatched} "
+            f"quiescent={str(result.quiescent).lower()}\n"
+        )
     return int(ExitCode.SUCCESS)
 
 
@@ -714,6 +768,49 @@ def build_queue_drain_result(
         raise _queue_cli_error(exc) from exc
 
 
+def build_slurm_drive_result(
+    config_path: str | Path,
+    *,
+    pool_name: str | None,
+    run_root: str | Path,
+    authority_config: "AuthorityConfig | None",
+    until_quiescent: bool,
+) -> "QueueForegroundDriveResult":
+    """Compose the one foreground driver with project-owned run storage."""
+
+    from loom.pipeline.execution import create_authority_backed_serial_run_store
+    from loom.queue.controller import QueueController
+    from loom.queue.slurm import SLURM_QUEUE_ADAPTER_NAME, SlurmQueueDispatchAdapter
+
+    service = _started_service(config_path)
+    selected_pool = pool_name or service.spec.controller.default_pool_name
+    if selected_pool is None:
+        raise CliError(
+            "SLURM foreground drive requires --pool or controller.default_pool_name",
+            code="cli.queue.slurm_drive_pool_required",
+            exit_code=ExitCode.USAGE,
+        )
+    try:
+        run_store = create_authority_backed_serial_run_store(
+            run_root,
+            authority_config=authority_config,
+            owner_id="queue-slurm-foreground",
+        )
+        return QueueController(
+            service,
+            adapters={
+                SLURM_QUEUE_ADAPTER_NAME: SlurmQueueDispatchAdapter(
+                    run_store=run_store
+                )
+            },
+        ).drive_foreground(
+            pool_name=selected_pool,
+            until_quiescent=until_quiescent,
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+
+
 def _emit_status_result(
     result: "QueueOperationalStatus",
     namespace: argparse.Namespace,
@@ -854,17 +951,20 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
 __all__ = [
     "QUEUE_CANCEL_SCHEMA_VERSION",
     "QUEUE_DRAIN_SCHEMA_VERSION",
+    "QUEUE_SLURM_DRIVE_SCHEMA_VERSION",
     "QUEUE_PREFLIGHT_SCHEMA_VERSION",
     "QUEUE_STATUS_SCHEMA_VERSION",
     "LOCAL_DAEMON_SCHEMA_VERSION",
     "build_queue_cancel_result",
     "build_queue_drain_result",
+    "build_slurm_drive_result",
     "build_queue_preflight_result",
     "build_queue_status_result",
     "handle_agent_init",
     "handle_agent_serve",
     "handle_cancel",
     "handle_drain_foreground",
+    "handle_drive_slurm_foreground",
     "handle_daemon_cancel",
     "handle_daemon_agent_control",
     "handle_daemon_init",

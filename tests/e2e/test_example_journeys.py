@@ -87,6 +87,30 @@ def test_e2e_example_slurm_dry_run_basics(tmp_path: Path) -> None:
         assert "executor.slurm.sbatch" in _require_str(summary["warnings"])
 
 
+def test_e2e_example_service_less_slurm_reopens_without_a_service(
+    tmp_path: Path,
+) -> None:
+    script = (
+        EXAMPLES_ROOT
+        / "operations"
+        / "service-less-slurm-driving"
+        / "run_service_less_slurm.py"
+    )
+    payload = _parse_summary(_run_example_script(script, tmp_path / "service-less"))
+
+    summary = payload["service_less_slurm"]
+    assert isinstance(summary, dict)
+    assert summary == {
+        "prepared_runs": 2,
+        "modes": "slurm-single-job,slurm-afterok",
+        "first_cycle_dispatched": 1,
+        "reopened_cycle_dispatched": 1,
+        "scheduler_job_count": 3,
+        "completed_queue_items": 2,
+        "no_network_service": True,
+    }
+
+
 def test_e2e_example_docker_executor_smoke_and_failure_diagnostics(tmp_path: Path) -> None:
     script = EXAMPLES_ROOT / "execution" / "containers" / "docker" / "run_docker_pipeline.py"
     failure_script = (
